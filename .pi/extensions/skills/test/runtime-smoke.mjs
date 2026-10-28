@@ -62,23 +62,25 @@ async function smoke(discovered) {
   const pending = new Map();
   const dialogs = [];
   const invocation = (value) => [
-    ["Skills", "Configure model invocation"],
+    ["Skills", "Manage skills"],
     [
-      "Configure model invocation",
-      `linked · ${value === "automatic" ? "Automatic" : "Manual only"} · user · ${join(linked, "SKILL.md")}`,
+      "Manage skills",
+      `linked · ${value === "automatic" ? "Automatic" : "Manual only"} · User (Pi) · ${join(linked, "SKILL.md")}`,
     ],
+    ["linked · User (Pi)", "Model invocation"],
     ["Review invocation target", "Open invocation setting"],
     ["Model invocation", `Model invocation (${value})`],
     ["Model invocation", "Back"],
     ["Review invocation target", "Back"],
-    ["Configure model invocation", "Back"],
+    ["linked · User (Pi)", "Back"],
+    ["Manage skills", "Back"],
     ["Skills", "Reload now"],
   ];
   const script = [
     ...invocation("automatic"),
     ...invocation("manual only"),
-    ["Skills", "Manage installed skills"],
-    ["Manage installed skills", `sample · Project (Pi) · ${skill}`],
+    ["Skills", "Manage skills"],
+    ["Manage skills", `sample · Automatic · Project (Pi) · ${join(skill, "SKILL.md")}`],
     ["sample · Project (Pi)", "Remove…"],
     ["Confirm skill changes", "Apply changes"],
     ["Skill changes", "Reload now"],
@@ -183,6 +185,7 @@ async function smoke(discovered) {
     const afterMenu = await request("get_messages");
     assert.deepEqual(afterMenu, beforeMenu, "Ordinary manager UI must not rewrite model-visible messages");
     assert.equal(script.length, 0);
+    assert.equal(dialogs.length, 28);
     child.stdin.end();
     const deadline = setTimeout(() => child.kill("SIGKILL"), 5_000);
     try {

@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteItem, Component } from "@earendil-works/pi-tui";
+import { type AutocompleteItem, type Component, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test, vi } from "vitest";
 import type { SettingsWriter } from "../src/settings.js";
@@ -145,6 +146,111 @@ test("starts empty without polling or showing a widget", async () => {
 
   await harness.emit("session_shutdown", current.ctx);
   assert.deepEqual(current.widgets.at(-1), [WIDGET_KEY, undefined, undefined]);
+});
+
+test("mounts the Kit widget with callback themes and keeps publication snapshots after polling", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn(successfulResponse);
+  vi.stubGlobal("fetch", fetchMock);
+  const harness = createHarness();
+  const current = await createContext();
+  await writeFile(join(current.cwd, SETTINGS_FILE_NAME), '{"symbols":["NVDA"]}\n');
+
+  await harness.emit("session_start", current.ctx);
+  const loadingFactory = current.widgets.find((record) => typeof record[1] === "function")?.[1];
+  assert.equal(typeof loadingFactory, "function");
+  if (typeof loadingFactory !== "function") throw new Error("Missing loading widget");
+  const loadingWidget = loadingFactory(undefined as never, identityTheme);
+  const loadingFrame = loadingWidget.render(80);
+  assert.match(loadingFrame.join("\n"), /updating…/);
+
+  await vi.advanceTimersByTimeAsync(0);
+  const publication = current.widgets.at(-1);
+  assert.equal(publication?.[0], WIDGET_KEY);
+  assert.deepEqual(publication?.[2], { placement: "aboveEditor" });
+  const factory = publication?.[1];
+  if (typeof factory !== "function") throw new Error("Missing quote widget");
+  const calls: [string, string][] = [];
+  let color = "\u001b[31m";
+  const callbackTheme = {
+    fg: (role: string, text: string) => {
+      calls.push([role, text]);
+      return `${color}${text}\u001b[39m`;
+    },
+    bold: (text: string) => `\u001b[1m${text}\u001b[22m`,
+  } as unknown as Theme;
+  const widget = factory(undefined as never, callbackTheme);
+  assert.ok(widget instanceof EditorStatusWidget);
+  const frame = widget.render(80);
+  const plainFrame = frame.map(stripTerminalSequences);
+  assert.equal(frame[0], `\u001b[31m${"─".repeat(80)}\u001b[39m`);
+  assert.ok(calls.some(([role]) => role === "muted"));
+  assert.ok(calls.some(([role]) => role === "accent"));
+  assert.ok(calls.some(([role]) => role === "text"));
+  assert.ok(calls.some(([role]) => role === "success"));
+  assert.ok(calls.some(([role]) => role === "dim"));
+  assert.ok(calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(80)));
+  assert.match(plainFrame.join("\n"), /NVDA \$110\.00/);
+
+  color = "\u001b[36m";
+  widget.invalidate();
+  const recolored = widget.render(80);
+  assert.ok(recolored.every((line) => line.includes(color) && !line.includes("\u001b[31m")));
+  assert.deepEqual(recolored.map(stripTerminalSequences), plainFrame);
+  const narrow = widget.render(7);
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 7));
+  assert.deepEqual(widget.render(0), [""]);
+  assert.deepEqual(widget.render(80).map(stripTerminalSequences), plainFrame);
+
+  fetchMock.mockImplementation(async () => new Response("unavailable", { status: 503 }));
+  await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+  assert.equal(fetchMock.mock.calls.length, 2);
+  assert.match(render(current.widgets.at(-1))?.join("\n") ?? "", /stale/);
+  assert.deepEqual(widget.render(80).map(stripTerminalSequences), plainFrame);
+  assert.deepEqual(loadingWidget.render(80), loadingFrame);
+  await harness.emit("session_shutdown", current.ctx);
+  assert.deepEqual(current.widgets.at(-1), [WIDGET_KEY, undefined, undefined]);
+  assert.equal(vi.getTimerCount(), 0);
+});
+
+test("aborts replaced requests and leaves no timers or late publications after shutdown", async () => {
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+    const signal = init?.signal;
+    assert.ok(signal);
+    signals.push(signal);
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const harness = createHarness();
+  assert.equal(vi.getTimerCount(), 0);
+  const current = await createContext();
+  await writeFile(join(current.cwd, SETTINGS_FILE_NAME), '{"symbols":["NVDA"]}\n');
+  await harness.emit("session_start", current.ctx);
+  assert.equal(signals.length, 1);
+  const replacement = {
+    ...current.ctx,
+    sessionManager: {} as ExtensionContext["sessionManager"],
+  } as ExtensionContext;
+  const replacing = harness.emit("session_start", replacement);
+  assert.equal(signals[0]?.aborted, true);
+  await replacing;
+  assert.equal(signals.length, 2);
+  assert.equal(signals[1]?.aborted, false);
+  await harness.emit("session_shutdown", current.ctx);
+  assert.equal(signals[1]?.aborted, false);
+  await harness.emit("session_shutdown", replacement);
+  await harness.emit("session_shutdown", replacement);
+  assert.equal(signals[1]?.aborted, true);
+  assert.deepEqual(current.widgets.at(-1), [WIDGET_KEY, undefined, undefined]);
+  const publications = current.widgets.length;
+  await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + REQUEST_TIMEOUT_MS);
+  assert.equal(fetchMock.mock.calls.length, 2);
+  assert.equal(current.widgets.length, publications);
+  assert.equal(vi.getTimerCount(), 0);
 });
 
 test("ignores project-local ticker settings", async () => {
@@ -301,6 +407,7 @@ test("keeps the last successful update time when every refresh request fails", a
 });
 
 test("uses plain RPC widgets and rejects commands without a UI", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   const fetchMock = vi.fn(successfulResponse);
   vi.stubGlobal("fetch", fetchMock);
   const harness = createHarness();
@@ -310,7 +417,25 @@ test("uses plain RPC widgets and rejects commands without a UI", async () => {
   await harness.emit("session_start", rpc.ctx);
   await vi.waitFor(() => assert.equal(fetchMock.mock.calls.length, 1));
   await vi.waitFor(() => assert.match(render(rpc.widgets.at(-1))?.join("\n") ?? "", /NVDA \$110\.00/));
-  assert.ok(Array.isArray(rpc.widgets.at(-1)?.[1]));
+  const quoteLines = rpc.widgets.at(-1)?.[1];
+  assert.ok(Array.isArray(quoteLines));
+  assert.deepEqual(quoteLines, [
+    `Stocks · updated ${new Date(Date.now()).toLocaleTimeString()}`,
+    "NVDA $110.00 +10.00 (+10.00%)",
+  ]);
+  const savedLines = [...quoteLines];
+  fetchMock.mockImplementation(async () => new Response("unavailable", { status: 503 }));
+  await harness.command.handler("refresh", rpc.ctx);
+  await vi.waitFor(() => assert.match(render(rpc.widgets.at(-1))?.join("\n") ?? "", /stale/));
+  assert.deepEqual(quoteLines, savedLines);
+  for (const [key, content, options] of rpc.widgets) {
+    assert.equal(key, WIDGET_KEY);
+    if (content === undefined) continue;
+    assert.ok(Array.isArray(content));
+    assert.deepEqual(options, { placement: "aboveEditor" });
+    assert.ok(content.every((line) => line === stripTerminalSequences(line) && !line.includes("─")));
+  }
+  assert.ok(rpc.widgets.some((record) => Array.isArray(record[1]) && record[1][0] === "Stocks · updating"));
   await harness.command.handler("help", rpc.ctx);
   assert.match(rpc.notifications.at(-1)?.[0] ?? "", /Usage: \/ticker.*reset/);
   await harness.emit("session_shutdown", rpc.ctx);

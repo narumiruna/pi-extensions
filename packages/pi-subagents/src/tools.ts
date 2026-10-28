@@ -224,7 +224,8 @@ export function registerSubagentTools(
         throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
       }
       const { provider, model } = resolveChildModel(ctx, params, attachments.extensions.length > 0);
-      const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? ctx.thinkingLevel ?? pi.getThinkingLevel());
+      const defaultThinkingLevel = resolveThinkingLevel(ctx.thinkingLevel ?? pi.getThinkingLevel());
+      const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? defaultThinkingLevel);
       resolveTimeoutMs(params.timeout);
       assertChildCommandCapacity(
         {
@@ -252,6 +253,7 @@ export function registerSubagentTools(
           provider,
           model,
           thinkingLevel,
+          defaultThinkingLevel,
           cwd,
           timeout: params.timeout,
           projectTrusted,

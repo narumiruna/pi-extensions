@@ -4,8 +4,9 @@ import { test } from "vitest";
 import type { ChatSnapshot } from "../src/chat-session.js";
 import { ChatView } from "../src/chat-view.js";
 import { createPrivateRoom } from "../src/protocol.js";
+import type { WidgetMode } from "../src/settings.js";
 import { sanitizeChatText, sanitizeSingleLine } from "../src/text.js";
-import { renderChatWidget } from "../src/widget.js";
+import { createChatWidget } from "../src/widget.js";
 
 const room = createPrivateRoom(Buffer.alloc(32, 4));
 
@@ -28,6 +29,15 @@ const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 };
+
+function renderChatWidget(state: ChatSnapshot, mode: WidgetMode, width: number, callbackTheme: unknown, rows = 24) {
+  return createChatWidget({
+    theme: callbackTheme as never,
+    getSnapshot: () => state,
+    getMode: () => mode,
+    getTerminalRows: () => rows,
+  }).render(width);
+}
 
 test("sanitizes terminal and bidi controls before line handling", () => {
   const hostile = "safe\u001b]8;;https://evil\u0007link\u001b]8;;\u0007\nred\u001b[31m!\u202e";
@@ -92,7 +102,8 @@ test("room dock keeps status, bounded recent messages, and the real input target
     transcript,
   });
   const wide = renderDock(state, 64, 30);
-  assert.match(wide[0] ?? "", /ROOM.*private/u);
+  assert.equal(wide[0], "─".repeat(64));
+  assert.match(wide[1] ?? "", /ROOM.*private/u);
   assert.doesNotMatch(wide.join("\n"), /old/u);
   assert.match(wide.join("\n"), /one/u);
   assert.match(wide.join("\n"), /three/u);
@@ -106,7 +117,8 @@ test("room dock keeps status, bounded recent messages, and the real input target
     true,
   );
   const low = renderDock(state, 20, 8);
-  assert.equal(low.length <= 3, true);
+  assert.equal(low.length <= 4, true);
+  assert.doesNotMatch(low.join("\n"), /one|two|three/u);
   assert.equal(
     low.every((line) => visibleWidth(line) <= 20),
     true,

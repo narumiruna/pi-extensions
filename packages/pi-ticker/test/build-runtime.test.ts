@@ -29,6 +29,11 @@ function validMetadata(): BuildMetadata {
             external: true,
           },
           {
+            path: "@narumitw/pi-tui-kit/editor-status-widget",
+            kind: "import-statement",
+            external: true,
+          },
+          {
             path: "@narumitw/pi-tui-kit/terminal-text",
             kind: "import-statement",
             external: true,

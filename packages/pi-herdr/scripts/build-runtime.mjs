@@ -13,7 +13,11 @@ export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publish
   ].join("\n"),
   forbiddenEagerInputs: ["src/herdr-menu.ts"],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
-  allowedEagerExternals: ["@narumitw/pi-tui-kit/editor-status-widget", "@narumitw/pi-tui-kit/terminal-text"],
+  allowedEagerExternals: [
+    "@narumitw/pi-tui-kit/editor-status-widget",
+    "@narumitw/pi-tui-kit/editor-status-publisher",
+    "@narumitw/pi-tui-kit/terminal-text",
+  ],
 });
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;

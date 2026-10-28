@@ -1,11 +1,10 @@
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PI_EXTENSION_MENU_API_VERSION, resolveMenuScreen } from "@narumitw/pi-tui-kit";
+import { PI_EXTENSION_MENU_API_VERSION } from "@narumitw/pi-tui-kit";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import { createInitialShowcaseState, createShowcaseMenu } from "../scripts/showcase/menu.js";
 
 test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async (t) => {
   const agentDir = mkdtempSync(path.join(os.tmpdir(), "kit-showcase-smoke-"));
@@ -41,14 +40,8 @@ test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async 
   try {
     await tui.waitForOpen();
     expect(tui.render().join("\n")).toContain("Pi TUI Kit Showcase");
-    const main = resolveMenuScreen(
-      createShowcaseMenu({ requestStandalone() {} }),
-      "main",
-      createInitialShowcaseState(),
-    );
-    const runtimeIndex = main.kind === "actions" ? main.items.findIndex(({ id }) => id === "runtime") : -1;
-    expect(runtimeIndex).toBeGreaterThanOrEqual(0);
-    for (let index = 0; index < runtimeIndex; index += 1) tui.press("tui.select.down");
+    tui.type("built module origin");
+    expect(tui.render().join("\n")).toContain("Runtime information");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     // The Jiti-loaded runtime itself reports this native built identity.

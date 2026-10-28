@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { ExtensionCommandContext, Skill } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
@@ -10,7 +11,7 @@ import type { Environment, Guard } from "../types.ts";
 
 beforeAll(() => initTheme("dark"));
 const env: Environment = { cwd: "/workspace", homeDir: "/home", agentDir: "/agent", isProjectTrusted: () => true };
-const header = "Loaded skills. Select one to change model invocation.";
+const header = "Select a skill to manage it. Loaded and detected skills are listed.";
 function native(name = "Alpha", manual = false, scope: "user" | "project" = "user"): Skill {
   return {
     name,
@@ -69,10 +70,10 @@ function fixture(loaded = [native()], mode: "tui" | "rpc" = "tui", ui: object = 
     getSystemPromptOptions: () => ({ skills: loaded }),
     ui: { ...ui, notify: vi.fn() },
   } as unknown as ExtensionCommandContext;
-  const menu = createSkillsMenu(state, "invocation", env, guard, services, mode);
+  const menu = createSkillsMenu(state, "manage", env, guard, services, mode);
   const list = () => {
-    const screen = menu.screens.invocation({ state });
-    if (screen.kind !== "choice") throw new Error("Expected invocation choices");
+    const screen = menu.screens.manage({ state });
+    if (screen.kind !== "choice") throw new Error("Expected managed skill choices");
     return screen;
   };
   const main = () => {
@@ -81,9 +82,16 @@ function fixture(loaded = [native()], mode: "tui" | "rpc" = "tui", ui: object = 
     return screen;
   };
   const invoke = (action: keyof typeof menu.actions, values: { itemId?: string; value?: string } = {}) =>
-    menu.actions[action]({ ctx, state, signal: guard.signal, itemId: loaded[0].filePath, ...values });
+    menu.actions[action]({
+      ctx,
+      state,
+      signal: guard.signal,
+      itemId: resolve(loaded[0]?.filePath ?? "/missing/SKILL.md"),
+      ...values,
+    });
   const open = async () => {
-    await invoke("select-invocation");
+    await invoke("manage-skill");
+    await invoke("select-invocation", { itemId: "model-invocation" });
     await invoke("review-invocation");
   };
   return { loaded, controller, guard, state, disk, services, ctx, menu, list, main, invoke, open };
@@ -93,22 +101,110 @@ async function waitFrame(tui: ReturnType<typeof createTuiHarness>, expected: str
 }
 
 describe("compact invocation list", () => {
+  it.each(["manage", "manage-scan"] as const)("reads and clones the native catalog lazily for %s", async (action) => {
+    const f = fixture();
+    const read = vi.spyOn(f.ctx, "getSystemPromptOptions");
+    f.state.loadedSkills = [];
+    expect(f.main().items.find((item) => item.id === "manage")).toMatchObject({
+      label: "Manage skills",
+      action: "manage",
+    });
+    expect(f.main().items.some((item) => item.label === "Configure model invocation")).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+    const result = await f.invoke(action);
+    expect(result).toEqual({ kind: "to", screen: action === "manage" ? "manage" : "inventory-path" });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(f.state.loadedSkills).toEqual(f.loaded);
+    expect(f.state.loadedSkills).not.toBe(f.loaded);
+    expect(f.state.loadedSkills[0]).not.toBe(f.loaded[0]);
+    expect(f.state.loadedSkills[0].sourceInfo).not.toBe(f.loaded[0].sourceInfo);
+    expect(f.services.readInvocation).not.toHaveBeenCalled();
+  });
+
+  it.each(["native-only", "loaded-local", "protected-local", "inventory-only"] as const)(
+    "keeps per-skill action order and protection for %s",
+    async (kind) => {
+      const selected = native();
+      selected.filePath = "/skills/Alpha/../Alpha/SKILL.md";
+      const loaded = kind !== "inventory-only";
+      const f = fixture(loaded ? [selected] : []);
+      if (kind !== "native-only")
+        f.state.inventory.skills = [
+          {
+            id: "inventory-alpha",
+            name: selected.name,
+            description: selected.description,
+            path: selected.baseDir,
+            directoryPath: selected.baseDir,
+            location: { id: "project-pi", label: "Project (Pi)", path: "/skills", scope: "project" },
+            content: "instructions",
+            fingerprint: "before",
+            warnings: [],
+            ...(kind === "protected-local" ? { readOnlyReason: "Linked skill is read-only" } : {}),
+          },
+        ];
+      f.state.invocation = { filePath: "/previous/SKILL.md", canonicalPath: "/old-target/SKILL.md", enabled: true };
+      f.state.invocationReviewed = true;
+      const id = resolve(selected.filePath);
+      expect(f.list().items).toHaveLength(1);
+      expect(f.list().items[0].id).toBe(id);
+      expect(f.list().items[0].description).toBe(
+        `${loaded ? "Automatic" : "Not loaded"} · ${kind === "native-only" ? "User" : "Project (Pi)"}`,
+      );
+      expect(await f.invoke("manage-skill", { itemId: id })).toEqual({ kind: "to", screen: "skill-actions" });
+      expect(f.state.managedId).toBe(id);
+      expect(f.state.invocation).toBeUndefined();
+      expect(f.state.invocationReviewed).toBe(false);
+      const actions = f.menu.screens["skill-actions"]({ state: f.state });
+      if (actions.kind !== "actions") throw new Error("Expected per-skill actions");
+      const model = actions.items.find((item) => item.id === "model-invocation");
+      expect(model).toMatchObject({
+        action: "select-invocation",
+        busyLabel: "Inspecting invocation target…",
+        disabled: !loaded,
+      });
+      expect(actions.items.map((item) => item.id)).toEqual(
+        loaded
+          ? ["model-invocation", "move-one", "remove-one", "copy-directory", "back"]
+          : ["move-one", "remove-one", "copy-directory", "model-invocation", "back"],
+      );
+      for (const action of ["move-one", "remove-one"]) {
+        expect(actions.items.find((item) => item.id === action)?.disabled).toBe(
+          kind === "native-only" || kind === "protected-local",
+        );
+      }
+      if (loaded) {
+        await f.invoke("select-invocation", { itemId: "model-invocation" });
+        expect(f.services.readInvocation).toHaveBeenCalledWith(f.state.loadedSkills[0], expect.any(Object));
+        expect(f.services.readInvocation.mock.calls[0][0].filePath).toBe(selected.filePath);
+      } else {
+        await expect(f.invoke("select-invocation", { itemId: "model-invocation" })).rejects.toThrow(
+          "currently loaded Pi skill",
+        );
+        expect(f.services.readInvocation).not.toHaveBeenCalled();
+        expect(f.list().items[0].details).toContain("Not currently loaded by Pi.");
+      }
+      expect(f.services.updateInvocation).not.toHaveBeenCalled();
+      expect(selected.disableModelInvocation).toBe(false);
+    },
+  );
+
   it("keeps names in labels and puts modes, scopes, and complete selected identities in their own fields", () => {
     const first = native("configure-pi-starship");
     const second = native("a-very-long-name-that-must-remain-readable-in-the-selected-details", true, "project");
     const f = fixture([first, second]);
     const screen = f.list();
     expect(screen.lines).toEqual([header]);
-    expect(screen.items.map((item) => item.label)).toEqual([first.name, second.name]);
-    expect(screen.items.map((item) => item.description)).toEqual(["Automatic · User", "Manual only · Project"]);
-    expect(screen.items[1].details).toEqual([
+    expect(screen.items.map((item) => item.label)).toEqual([second.name, first.name]);
+    expect(screen.items.map((item) => item.description)).toEqual(["Manual only · Project", "Automatic · User"]);
+    expect(screen.items[0].details).toEqual([
       `Skill: ${second.name}`,
       `File: ${second.filePath}`,
       "Source: Project · npm:example-skills",
       "Active: Manual only",
     ]);
-    expect(screen.items[1].id).toBe(second.filePath);
-    expect(screen.items[1].searchText).toContain(second.description);
+    expect(screen.items[0].id).toBe(resolve(second.filePath));
+    expect(screen.items[0].searchText).toContain(second.description);
     expect(JSON.stringify(screen.items.map(({ searchText: _hidden, ...display }) => display))).not.toContain(
       "MODEL_ROUTING_DESCRIPTION",
     );
@@ -169,10 +265,14 @@ describe("compact invocation list", () => {
         expect(frame).toContain("Unnamed skill");
         expect(f.list().items[0].label).toBe("Unnamed skill");
         expect(fixture([skill], "rpc").list().items[0].label).toBe(
-          "Unnamed skill · Automatic · user · /skills/bad path/SKILL.md",
+          "Unnamed skill · Automatic · User · /skills/bad path/SKILL.md",
         );
         expect(f.list().items[0].id).toBe(skill.filePath);
         expect(f.list().items[0].details).toContain("File: /skills/bad path/SKILL.md");
+        tui.press("tui.select.confirm");
+        await waitFrame(tui, /→.*Model invocation/);
+        expect(f.state.managedId).toBe(resolve(skill.filePath));
+        expect(f.services.readInvocation).not.toHaveBeenCalled();
         tui.press("tui.select.confirm");
         await waitFrame(tui, "Review invocation target");
         expect(f.services.readInvocation.mock.calls[0][0].filePath).toBe(skill.filePath);
@@ -257,12 +357,14 @@ describe("compact invocation list", () => {
       {
         kind: "select",
         options: [
-          "Same · Automatic · user · /skills/Same/SKILL.md",
-          "Same · Manual only · user · /other/SKILL.md",
+          "Same · Automatic · User · /skills/Same/SKILL.md",
+          "Same · Manual only · User · /other/SKILL.md",
           "Back",
         ],
-        response: "Same · Manual only · user · /other/SKILL.md",
+        response: "Same · Manual only · User · /other/SKILL.md",
       },
+      { kind: "select", response: "Model invocation" },
+      { kind: "select", response: "Back" },
       { kind: "select", response: "Back" },
       { kind: "select", response: "Back" },
     ]);
@@ -285,7 +387,7 @@ describe("saved invocation list state", () => {
       canonicalPath: "/canonical/Alpha/SKILL.md",
       enabled: false,
     });
-    await f.invoke("configure-invocation");
+    await f.invoke("manage");
     await f.open();
     expect(f.list().items[0].description).toBe("Manual only · User · Reload pending");
     expect(f.list().items[0].details).toContain("Active: Automatic · Saved: Manual only (reload pending)");
@@ -302,7 +404,7 @@ describe("saved invocation list state", () => {
     await f.open();
     await f.invoke("save-invocation", { value: "manual only" });
     expect(f.list().items[0].description).toBe("Manual only · User · Reload pending");
-    await f.invoke("configure-invocation");
+    await f.invoke("manage");
     expect(f.list().items[0].description).toBe("Manual only · User · Reload pending");
     await f.open();
     await f.invoke("save-invocation", { value: "automatic" });
@@ -368,7 +470,8 @@ describe("saved invocation list state", () => {
       f.controller.abort();
       return { filePath: skill.filePath, canonicalPath: "/canonical/Alpha/SKILL.md", enabled: false };
     });
-    await expect(f.invoke("select-invocation")).rejects.toThrow();
+    await f.invoke("manage-skill");
+    await expect(f.invoke("select-invocation", { itemId: "model-invocation" })).rejects.toThrow();
     expect(f.state.invocationValues.size).toBe(0);
     expect(f.state.invocationChanged).toBe(false);
     expect(f.loaded[0].disableModelInvocation).toBe(false);

@@ -1,5 +1,11 @@
 # @narumitw/pi-chat
 
+## 0.1.9
+
+### Patch Changes
+
+- 209ff7a: Use Pi TUI Kit's existing `EditorStatusWidget` for passive editor widgets. Share the muted separator and terminal-width bounds while retaining extension-owned content, refresh scheduling, cleanup, and RPC behavior. Sanitize untrusted display values before styling and wrapping without changing raw payloads.
+
 ## 0.1.8
 
 ### Patch Changes

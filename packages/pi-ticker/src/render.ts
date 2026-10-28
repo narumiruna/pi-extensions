@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { Quote } from "./quotes.js";
 
 export interface TickerItem {
@@ -15,17 +16,16 @@ export interface TickerView {
   updatedAt?: number;
 }
 
-export function renderTickerWidget(view: TickerView, theme: Theme, width: number): string[] {
-  const renderWidth = Math.max(0, width);
-  if (renderWidth === 0) return [""];
+export function renderTickerBody(view: TickerView, theme: Theme, width: number): string[] {
+  if (width === 0) return [];
   const heading = renderHeading(view, theme);
   const separator = theme.fg("dim", "  │  ");
   const quotes = packItems(
     view.items.map((item) => renderItem(item, theme)),
     separator,
-    renderWidth,
+    width,
   );
-  return [theme.fg("borderMuted", "─".repeat(renderWidth)), ...fitLines(heading, renderWidth), ...quotes];
+  return [...wrapTextWithAnsi(heading, width), ...quotes];
 }
 
 export function formatTickerPlain(view: TickerView): string[] {
@@ -60,7 +60,7 @@ function renderHeading(view: TickerView, theme: Theme): string {
 }
 
 function renderItem(item: TickerItem, theme: Theme): string {
-  const symbol = theme.fg("accent", theme.bold(item.symbol));
+  const symbol = theme.fg("accent", theme.bold(sanitizeTerminalText(item.symbol)));
   if (!item.quote) return `${symbol} ${theme.fg("error", "unavailable")}`;
   const changeRole = item.quote.change >= 0 ? "success" : "error";
   const content = `${symbol} ${theme.fg("text", formatPrice(item.quote))} ${theme.fg(
@@ -71,8 +71,9 @@ function renderItem(item: TickerItem, theme: Theme): string {
 }
 
 function formatItemPlain(item: TickerItem): string {
-  if (!item.quote) return `${item.symbol} unavailable`;
-  const content = `${item.symbol} ${formatPrice(item.quote)} ${formatChange(item.quote)}`;
+  const symbol = sanitizeTerminalText(item.symbol);
+  if (!item.quote) return `${symbol} unavailable`;
+  const content = `${symbol} ${formatPrice(item.quote)} ${formatChange(item.quote)}`;
   return item.stale ? `${content} stale` : content;
 }
 
@@ -125,7 +126,7 @@ function currencyPrefix(currency: string | undefined): string {
     case "TWD":
       return "NT$";
     default:
-      return currency ? `${currency} ` : "";
+      return currency ? `${sanitizeTerminalText(currency)} ` : "";
   }
 }
 
@@ -135,7 +136,7 @@ function packItems(items: readonly string[], separator: string, width: number): 
   for (const item of items) {
     if (visibleWidth(item) > width) {
       if (current) rows.push(current);
-      rows.push(...fitLines(item, width));
+      rows.push(...wrapTextWithAnsi(item, width));
       current = "";
       continue;
     }
@@ -149,8 +150,4 @@ function packItems(items: readonly string[], separator: string, width: number): 
   }
   if (current) rows.push(current);
   return rows;
-}
-
-function fitLines(content: string, width: number): string[] {
-  return wrapTextWithAnsi(content, width).map((line) => truncateToWidth(line, width, ""));
 }

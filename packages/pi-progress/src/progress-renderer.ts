@@ -8,6 +8,10 @@ import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettings } from "./settings.js"
 export interface RenderProgressWidgetOptions {
   settings?: Readonly<ProgressSettings>;
   terminalRows?: number;
+  /** Total rows, including the separator. Fewer than two rows hide the frame. */
+  maxRows?: number;
+  viewMode?: "default" | "expanded" | "compact" | "hidden";
+  items?: readonly { value: ProgressStep; mode: "expanded" | "compact" }[];
 }
 
 interface RenderedProgressStep {
@@ -21,13 +25,30 @@ export function renderProgressWidget(
   width: number,
   options: RenderProgressWidgetOptions = {},
 ): string[] {
-  const renderWidth = Math.max(0, width);
+  const renderWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
   const settings = options.settings ?? DEFAULT_PROGRESS_SETTINGS;
+  const maxRows =
+    options.maxRows === undefined
+      ? undefined
+      : Number.isFinite(options.maxRows)
+        ? Math.max(0, Math.floor(options.maxRows))
+        : widgetRowBudget(options.terminalRows);
+  if (options.viewMode === "hidden" || (maxRows !== undefined && maxRows < 2)) return [];
+  const items = options.items ?? steps.map((value) => ({ value, mode: "expanded" as const }));
+  if (options.items && items.length === 0) return [];
+  const removed = steps.length - items.length;
+  if (options.viewMode === "compact") return renderCompactProgress(steps, removed, theme, renderWidth);
+  const presentationChanged = removed > 0 || items.some((item) => item.mode === "compact");
   const header = renderHeader(steps, theme, renderWidth, settings.showProgress);
-  const rendered = steps.map((step) => ({ step, lines: renderStep(step, theme, renderWidth) }));
+  if (presentationChanged) header[1] = theme.fg("muted", progressSummary(steps, removed));
+  const rendered = items.map(({ value: step, mode }) => ({
+    step,
+    lines: renderStep(step, theme, renderWidth, mode === "compact"),
+  }));
+  const displayMode = options.viewMode === "expanded" ? "expanded" : settings.displayMode;
 
   let lines: string[];
-  switch (settings.displayMode) {
+  switch (displayMode) {
     case "expanded":
       lines = renderExpanded(header, rendered, settings, theme, renderWidth);
       break;
@@ -49,10 +70,59 @@ export function renderProgressWidget(
     }
   }
 
+  const omittedBlocked = rendered.some(
+    ({ step, lines: detail }) => step.status === "blocked" && !lines.includes(detail[0] ?? ""),
+  );
+  if (omittedBlocked && lines.length > 1) lines[1] = theme.fg("warning", progressSummary(steps, removed));
+  if (maxRows !== undefined && lines.length > maxRows) {
+    // Under a cap, keep attention work ahead of pending/completed detail and
+    // reserve a truthful aggregate instead of silently slicing off blocked work.
+    if (maxRows === 2) return renderCompactProgress(steps, steps.length, theme, renderWidth);
+    const priority = [...rendered].sort((a, b) => stepPriority(a.step) - stepPriority(b.step));
+    const body: string[] = [];
+    let shown = 0;
+    for (const item of priority) {
+      if (!settings.showCompleted && item.step.status === "completed") continue;
+      if (settings.maxVisibleItems !== null && shown >= settings.maxVisibleItems) break;
+      const available = maxRows - 2 - body.length - 1;
+      if (available <= 0) break;
+      body.push(...clipLines(item.lines, available, renderWidth));
+      shown++;
+    }
+    lines = [header[0] ?? "", theme.fg("muted", progressSummary(steps, steps.length - shown)), ...body];
+    if (body.length > 0 && steps.length > shown && lines.length < maxRows)
+      lines.push(theme.fg("dim", `… ${steps.length - shown} hidden or omitted`));
+  }
   return lines.map((line) => truncateToWidth(line, renderWidth, ""));
 }
 
-export function renderCompletionSummary(total: number, theme: Theme, width: number): string[] {
+function stepPriority(step: ProgressStep): number {
+  return { in_progress: 0, blocked: 1, pending: 2, completed: 3 }[step.status];
+}
+
+export function progressSummary(steps: readonly ProgressStep[], hidden = 0): string {
+  const completed = steps.filter((step) => step.status === "completed").length;
+  const blocked = steps.filter((step) => step.status === "blocked").length;
+  const active = steps.filter((step) => step.status === "in_progress").length;
+  return [
+    blocked > 0 ? `⚠ ${blocked} blocked` : "Progress",
+    `${completed}/${steps.length} complete`,
+    ...(active ? [`${active} active`] : []),
+    ...(hidden ? [`${hidden} hidden`] : []),
+  ].join(" · ");
+}
+
+function renderCompactProgress(steps: readonly ProgressStep[], hidden: number, theme: Theme, width: number): string[] {
+  return new EditorStatusWidget({
+    theme,
+    renderBody: () => [
+      theme.fg(steps.some((step) => step.status === "blocked") ? "warning" : "muted", progressSummary(steps, hidden)),
+    ],
+  }).render(width);
+}
+
+export function renderCompletionSummary(total: number, theme: Theme, width: number, maxRows = 2): string[] {
+  if (Number.isFinite(maxRows) && maxRows < 2) return [];
   return new EditorStatusWidget({
     theme,
     renderBody: () => [theme.fg("success", `✓ ${total}/${total} steps completed`)],
@@ -80,7 +150,7 @@ function renderHeader(steps: readonly ProgressStep[], theme: Theme, width: numbe
   }).render(width);
 }
 
-function renderStep(step: ProgressStep, theme: Theme, width: number): string[] {
+function renderStep(step: ProgressStep, theme: Theme, width: number, compact = false): string[] {
   const text = sanitizeProgressText(step.text) || "(text hidden after sanitization)";
   let prefix: string;
   let styledText: string;
@@ -104,6 +174,7 @@ function renderStep(step: ProgressStep, theme: Theme, width: number): string[] {
       break;
   }
 
+  if (compact) return [truncateToWidth(`${prefix}${styledText}`, width, "…")];
   if (width <= 2) return [prefix];
   const wrapped = wrapTextWithAnsi(styledText, width - 2);
   return wrapped.map((line, index) => `${index === 0 ? prefix : "  "}${line}`);
@@ -178,6 +249,6 @@ function renderCollapsed(
 function clipLines(lines: readonly string[], count: number, width: number): string[] {
   const clipped = lines.slice(0, count);
   const last = clipped.at(-1);
-  if (last !== undefined) clipped[clipped.length - 1] = truncateToWidth(`${last}…`, width, "…");
+  if (last !== undefined && lines.length > count) clipped[clipped.length - 1] = truncateToWidth(`${last}…`, width, "…");
   return clipped;
 }

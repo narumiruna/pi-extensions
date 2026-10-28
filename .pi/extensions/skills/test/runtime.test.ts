@@ -66,8 +66,8 @@ describe("real Pi Jiti resource loader", () => {
       const command = extension?.commands.get("skills");
       if (!command) throw new Error("Skills command did not load");
       const rpc = createRpcHarness([
-        { kind: "select", response: "Manage installed skills" },
-        { kind: "select", response: `sample · Project (Pi) · ${skill}` },
+        { kind: "select", response: "Manage skills" },
+        { kind: "select", response: `sample · Automatic · Project (Pi) · ${join(skill, "SKILL.md")}` },
         { kind: "select", response: "Remove…" },
         { kind: "select", response: "Apply changes" },
         { kind: "select", response: "Close without reload" },
@@ -79,6 +79,7 @@ describe("real Pi Jiti resource loader", () => {
         hasUI: true,
         sessionManager: {},
         isProjectTrusted: () => true,
+        getSystemPromptOptions: () => ({ skills: loader.getSkills().skills }),
         ui: { ...rpc.ui, notify },
         reload: vi.fn(),
       } as unknown as ExtensionCommandContext;
@@ -94,14 +95,16 @@ describe("real Pi Jiti resource loader", () => {
       expect(loader.getSkills().skills.some((item) => item.name === "sample")).toBe(false);
     },
   );
-  it.each([false, true])(
-    "configures a loaded linked skill through Jiti without changing the catalog before reload (auto-discovery=%s)",
-    async (discovered) => {
+  it.each([false, true].flatMap((discovered) => [false, true].map((nativeOnly) => ({ discovered, nativeOnly }))))(
+    "configures a linked skill without changing the catalog before reload (auto-discovery=$discovered, native-only=$nativeOnly)",
+    async ({ discovered, nativeOnly }) => {
       const target = join(root, "source", "sample");
-      const linked = join(agentDir, "skills", "sample");
+      const linked = nativeOnly ? join(root, "registered", "sample") : join(agentDir, "skills", "sample");
       await seed(target);
       await mkdir(dirname(linked), { recursive: true });
       await symlink(target, linked, "dir");
+      if (nativeOnly)
+        await writeFile(join(agentDir, "settings.json"), JSON.stringify({ skills: [join(linked, "SKILL.md")] }));
       const original = await readFile(join(target, "SKILL.md"), "utf8");
       const { loader } = await resources(discovered);
       const native = loader.getSkills().skills;
@@ -113,11 +116,19 @@ describe("real Pi Jiti resource loader", () => {
         .extensions.find((item) => item.commands.has("skills"))
         ?.commands.get("skills");
       if (!command) throw new Error("Skills command did not load");
+      const scope = nativeOnly ? "User" : "User (Pi)";
+      const blocked = nativeOnly
+        ? "Bundle actions require a scanned inventory entry"
+        : "Symbolic link directory is read-only";
       const rpc = createRpcHarness([
-        { kind: "select", response: "Configure model invocation" },
-        { kind: "select", response: `sample · Automatic · user · ${join(linked, "SKILL.md")}` },
+        { kind: "select", response: "Manage skills" },
+        { kind: "select", response: `sample · Automatic · ${scope} · ${join(linked, "SKILL.md")}` },
+        { kind: "select", response: `[-] Move… (unavailable: ${blocked})` },
+        { kind: "select", response: `[-] Remove… (unavailable: ${blocked})` },
+        { kind: "select", response: "Model invocation" },
         { kind: "select", response: "Open invocation setting" },
         { kind: "select", response: "Model invocation (automatic)" },
+        { kind: "select", response: "Back" },
         { kind: "select", response: "Back" },
         { kind: "select", response: "Back" },
         { kind: "select", response: "Back" },
@@ -137,6 +148,14 @@ describe("real Pi Jiti resource loader", () => {
       await command.handler("", ctx);
       rpc.assertConsumed();
       expect(notify).not.toHaveBeenCalled();
+      const actions = rpc.dialogs.find((dialog) => dialog.title.startsWith(`sample · ${scope}`));
+      expect(actions?.options).toEqual([
+        "Model invocation",
+        `[-] Move… (unavailable: ${blocked})`,
+        `[-] Remove… (unavailable: ${blocked})`,
+        "[-] Copy directory path (unavailable: Clipboard copy requires Pi TUI)",
+        "Back",
+      ]);
       expect(rpc.dialogs.some((dialog) => dialog.title.includes(`Writes target: ${join(target, "SKILL.md")}`))).toBe(
         true,
       );

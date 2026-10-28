@@ -159,62 +159,77 @@ for (const scenario of [
   });
 }
 
-test("fullscreen handoff release propagates the Kit API floor to both real consumers", () => {
-  const fixture = mkdtempSync(path.join(tmpdir(), "pi-fullscreen-release-"));
-  try {
-    const packageNames = ["pi-tui-kit", "pi-starship", "pi-btw"];
-    const manifests = packageNames.map((name) =>
-      JSON.parse(readFileSync(path.join(repositoryRoot, "packages", name, "package.json"), "utf8")),
-    );
-    const [kit, ...consumers] = manifests;
-    const [major, minor] = kit.version.split(".").map(Number);
-    assert.equal(major, 0, "Revisit the caret-floor fixture when Kit reaches a stable major");
-    const apiVersion = `${major}.${minor + 1}.0`;
-    writeJson(path.join(fixture, "package.json"), {
-      name: "fullscreen-release-fixture",
-      private: true,
-      workspaces: ["packages/*"],
-    });
-    writeJson(path.join(fixture, "package-lock.json"), {
-      lockfileVersion: 3,
-      packages: { "": { name: "fullscreen-release-fixture", workspaces: ["packages/*"] } },
-    });
-    mkdirSync(path.join(fixture, ".changeset"));
-    copyFileSync(changesetConfig, path.join(fixture, ".changeset/config.json"));
-    for (const manifest of manifests) {
-      writeJson(path.join(fixture, "packages", path.basename(manifest.name), "package.json"), {
-        name: manifest.name,
-        version: manifest.version,
-        ...(manifest.name === kitName ? {} : { dependencies: { [kitName]: manifest.dependencies[kitName] } }),
+for (const { label, packageNames, minorConsumers } of [
+  { label: "fullscreen handoff", packageNames: ["pi-tui-kit", "pi-starship", "pi-btw"], minorConsumers: [] },
+  {
+    label: "editor status presentation",
+    packageNames: ["pi-tui-kit", "pi-progress", "pi-subagents", "pi-herdr"],
+    minorConsumers: ["@narumitw/pi-progress", "@narumitw/pi-subagents"],
+  },
+]) {
+  test(`${label} release propagates the Kit API floor to its real consumers`, () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "pi-kit-api-release-"));
+    try {
+      const manifests = packageNames.map((name) =>
+        JSON.parse(readFileSync(path.join(repositoryRoot, "packages", name, "package.json"), "utf8")),
+      );
+      const [kit, ...consumers] = manifests;
+      const [major, minor] = kit.version.split(".").map(Number);
+      assert.equal(major, 0, "Revisit the caret-floor fixture when Kit reaches a stable major");
+      const apiVersion = `${major}.${minor + 1}.0`;
+      writeJson(path.join(fixture, "package.json"), {
+        name: "kit-api-release-fixture",
+        private: true,
+        workspaces: ["packages/*"],
       });
+      writeJson(path.join(fixture, "package-lock.json"), {
+        lockfileVersion: 3,
+        packages: { "": { name: "kit-api-release-fixture", workspaces: ["packages/*"] } },
+      });
+      mkdirSync(path.join(fixture, ".changeset"));
+      copyFileSync(changesetConfig, path.join(fixture, ".changeset/config.json"));
+      for (const manifest of manifests) {
+        writeJson(path.join(fixture, "packages", path.basename(manifest.name), "package.json"), {
+          name: manifest.name,
+          version: manifest.version,
+          ...(manifest.name === kitName ? {} : { dependencies: { [kitName]: manifest.dependencies[kitName] } }),
+        });
+      }
+      writeFileSync(
+        path.join(fixture, ".changeset/kit-api.md"),
+        [
+          "---",
+          `"${kit.name}": minor`,
+          ...consumers.map(
+            (consumer) => `"${consumer.name}": ${minorConsumers.includes(consumer.name) ? "minor" : "patch"}`,
+          ),
+          "---",
+          "",
+          `Release ${label} without moving consumer input or domain state.`,
+          "",
+        ].join("\n"),
+      );
+      // Versioning is local only: no install, registry access, publication, or Git tags.
+      execFileSync(process.execPath, [changesetBin, "version"], { cwd: fixture, stdio: "pipe" });
+      assert.equal(readJson(path.join(fixture, "packages/pi-tui-kit/package.json")).version, apiVersion);
+      for (const consumer of consumers) {
+        const released = readJson(path.join(fixture, "packages", path.basename(consumer.name), "package.json"));
+        const [consumerMajor, consumerMinor, consumerPatch] = consumer.version.split(".").map(Number);
+        assert.equal(
+          released.version,
+          minorConsumers.includes(consumer.name)
+            ? `${consumerMajor}.${consumerMinor + 1}.0`
+            : `${consumerMajor}.${consumerMinor}.${consumerPatch + 1}`,
+        );
+        assert.equal(released.dependencies?.[kitName], `^${apiVersion}`);
+        assert.notEqual(released.dependencies?.[kitName], consumer.dependencies[kitName]);
+      }
+      assert.deepEqual(readdirSync(path.join(fixture, ".changeset")).sort(), ["config.json"]);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
     }
-    writeFileSync(
-      path.join(fixture, ".changeset/fullscreen.md"),
-      [
-        "---",
-        `"${kit.name}": minor`,
-        ...consumers.map((consumer) => `"${consumer.name}": patch`),
-        "---",
-        "",
-        "Share physical fullscreen terminal handoff without moving consumer input or domain state.",
-        "",
-      ].join("\n"),
-    );
-    // Versioning is local only: no install, registry access, publication, or Git tags.
-    execFileSync(process.execPath, [changesetBin, "version"], { cwd: fixture, stdio: "pipe" });
-    assert.equal(readJson(path.join(fixture, "packages/pi-tui-kit/package.json")).version, apiVersion);
-    for (const consumer of consumers) {
-      const released = readJson(path.join(fixture, "packages", path.basename(consumer.name), "package.json"));
-      const [consumerMajor, consumerMinor, consumerPatch] = consumer.version.split(".").map(Number);
-      assert.equal(released.version, `${consumerMajor}.${consumerMinor}.${consumerPatch + 1}`);
-      assert.equal(released.dependencies?.[kitName], `^${apiVersion}`);
-      assert.notEqual(released.dependencies?.[kitName], consumer.dependencies[kitName]);
-    }
-    assert.deepEqual(readdirSync(path.join(fixture, ".changeset")).sort(), ["config.json"]);
-  } finally {
-    rmSync(fixture, { recursive: true, force: true });
-  }
-});
+  });
+}
 
 test("sequential publishing reports a failure and continues with later packages", () => {
   const fixture = mkdtempSync(path.join(tmpdir(), "pi-sequential-publish-"));

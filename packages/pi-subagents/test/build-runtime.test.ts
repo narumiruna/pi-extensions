@@ -13,7 +13,12 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-subagents",
   forbiddenEagerInputs: ["src/menu.ts", "src/settings-ui.ts"],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
-  allowedEagerExternals: ["@narumitw/pi-tui-kit/editor-status-widget"],
+  allowedEagerExternals: [
+    "@narumitw/pi-tui-kit/editor-status-widget",
+    "@narumitw/pi-tui-kit/editor-status-publisher",
+    "@narumitw/pi-tui-kit/editor-status-view",
+    "@narumitw/pi-tui-kit/editor-status-collection",
+  ],
   entries: {
     index: "src/index.ts",
     "child-communication-bridge": "src/child-communication-bridge.ts",

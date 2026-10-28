@@ -16,7 +16,7 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 - Gives every child `subagent_wait` for an answer to a child-originated request.
 - Lets the main agent question a queued or running job through Pi RPC steering without retaining the child after completion.
 - Publishes one asynchronous terminal completion and shows active-job progress above the editor.
-- Provides a job manager with confirmed cancellation and immediate widget display settings.
+- Provides a job manager with confirmed cancellation, immediate display settings, and session-local widget controls.
 - Exposes privacy-filtered metadata without task text, output, prompts, selected tools, or broker credentials.
 - Cancels session-owned work and closes the broker during replacement, reload, or shutdown.
 
@@ -63,11 +63,7 @@ Call `subagent_spawn` with a self-contained task and only the work tools that ta
 The call returns a `jobId` immediately, and the job continues in the background.
 Continue useful main-agent work until the result is required or a completion arrives.
 
-In TUI mode, each active-job row shows a preview of its existing `task` after the job ID by default; no new parameter is required.
-The preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened.
-It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
-Task text is visible in this local widget, but `subagent_inspect` continues to omit it.
-Rows are clipped to the available terminal width, so trailing state, thinking level, timing, or tools can be hidden on narrow terminals.
+In TUI mode, the widget above the editor shows queued and running tasks; no new parameter is required.
 
 Use messaging only when needed:
 
@@ -79,11 +75,6 @@ Completion messages and child requests and responses follow Pi's global tool-out
 Collapsed messages show a summary and the configured expansion key; expanded messages show the full content.
 This display state does not change the content sent to the model.
 
-In TUI mode, the above-editor widget shows each queued or running job's ID, state, thinking level, elapsed time, timeout, and selected core and extension tool names.
-The `thinking: <level>` field shows the resolved configuration passed at spawn, including `off`, even when IDs, timing, and tools are hidden.
-Later main-agent changes do not change this field; it does not track child-side normalization or later setting changes.
-It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.
-
 ## 💬 Commands
 
 `/subagents` opens a manager for current-session job metadata, confirmed cancellation of active jobs, display settings, status, and help.
@@ -94,6 +85,48 @@ The manager supports TUI and RPC modes. RPC uses dialogs and reports the setting
 Print and JSON modes reject these interactive commands with an error; the model tools remain available.
 Job lists and details always show job IDs, regardless of widget preferences, and omit task text and child output.
 Jobs do not survive reload or session replacement.
+
+## 🖥️ Widget presentation
+
+The widget is TUI-only and contains only queued or running jobs. Each row starts with `▶` for running or `○` for queued, followed by a task preview. Job IDs and tool names are hidden by default.
+For example, with a main-agent thinking level of `high` at spawn:
+
+```text
+Subagents · 2 active
+▶ Review widget tests · 12s
+○ Audit settings · thinking: medium · queued
+```
+
+The `thinking: <level>` field appears only when the job's resolved thinking level differs from the main agent's effective level captured at spawn, including an `off` override. An explicit value equal to that default is also hidden.
+Later main-agent changes do not change this comparison. The field describes the configuration passed at spawn, not child-side normalization or later changes.
+Running rows show elapsed time and a timeout only when one is set. Queued rows show `queued` and a configured timeout, without elapsed time. **Show timing** controls both time fields.
+
+The task preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened. It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
+Task text is visible in this local widget, but `subagent_inspect` continues to omit it. Optional tool names include selected core and extension tools, not fixed communication tools.
+The widget omits attachment paths and resource totals, disappears when no jobs remain active, and clears when the session ends.
+
+Ordinary updates refresh the mounted widget without changing its position among other widgets. Hiding and showing it again can change that position.
+The widget uses at most ten rows, including one separator, and reserves eight terminal rows for the editor and footer. This is a local height limit, not a calculation of space left by other widgets.
+With fewer than two available rows it renders nothing. Short layouts use a summary with active, running, queued, and omitted-row counts. Narrow layouts clip each line to the terminal width.
+
+In `/subagents`, **Widget view** provides details, summary, hide/show, pin/unpin, automatic compaction, and item-view reset controls.
+These controls are session-local and do not write settings. Manual hide remains in effect across job changes until you show the widget again.
+A pin prevents automatic compaction, but does not override `showWidget: false`, width limits, or row limits. Unpinning does not immediately compact the view.
+An explicit details, summary, or hide/show choice cancels the pending automatic rule.
+
+Automatic compaction is off by default. Choose **Next consumed user message** to compact when Pi emits `message_start` for a user message, including extension-generated user messages and queued messages when consumed. Input submission, rejected input, and unconsumed queues do not count.
+Choose **Next eligible settled cycle** to wait for `agent_settled` after later consumed user activity in that same cycle. The cycle already active when the rule is armed is excluded, including run preparation before `agent_start` and a cycle that started during settings loading.
+Retries, tool turns, continuations, automatic context compaction, and batched queued messages can share one cycle. Tree navigation and manual context compaction are not response cycles.
+Eligibility requires a non-aborted settlement and a latest observed turn outcome other than error or abort; a non-aborted settlement alone is insufficient.
+A pending rule rearms on meaningful active-job changes, but not elapsed-time refreshes, repaint, or resize. A rule that compacts is consumed once; otherwise it stays pending. Pins, disabled settings, and manual hide prevent automatic compaction.
+
+If maintenance ends and an extension starts a custom run without an observed idle gap, the rule can wait one extra cycle. Pi exposes no exact run-activity query to extensions.
+
+An active job's manager detail screen can compact or remove only that job's widget row. Removal does not cancel the job or suppress completion messages.
+Removal remains in effect across active-job snapshots until **Reset item views**, or until the job ID leaves the active snapshot. Reset restores the current active rows and their item details, not the overall view, pin, or trigger.
+If all items are removed, the widget and separator disappear. The summary counts include removed and otherwise omitted rows; the manager still lists the jobs.
+Widget presentation choices reset on `session_start` (including reload and session replacement), `session_tree` navigation, and shutdown. Tree navigation resets presentation without cancelling active jobs.
+Jobs, saved preferences, tool definitions, model context, and completion delivery are not changed by widget controls.
 
 ## 🛠️ Tools
 
@@ -138,14 +171,14 @@ See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/
 ## ⚙️ Settings
 
 Use `/subagents settings` or the manager's Settings action to edit user display preferences.
-All four fields accept JSON booleans and default to `true`:
+All four fields accept JSON booleans:
 
-| Field | Effect |
-| --- | --- |
-| `showWidget` | Show the above-editor widget. |
-| `showJobId` | Show job IDs in widget rows. |
-| `showTools` | Show selected tool names in widget rows. |
-| `showTiming` | Show elapsed time and timeout in widget rows. |
+| Field | Default | Effect |
+| --- | --- | --- |
+| `showWidget` | `true` | Show the above-editor widget. |
+| `showJobId` | `false` | Show job IDs in widget rows. |
+| `showTools` | `false` | Show selected tool names in widget rows. |
+| `showTiming` | `true` | Show running elapsed time and configured timeouts. |
 
 Successful UI saves apply immediately. Hiding the widget does not stop jobs, change model tools, or suppress completion messages.
 Showing it again displays currently active jobs with the other saved preferences. Job state and the task preview remain visible when the widget is enabled.
@@ -153,7 +186,7 @@ Escape returns or closes without undoing completed saves; Ctrl+C closes the enti
 Settings uses Pi's configured selection keys. Its footer shows only the hard-cancel key to avoid displaying fixed keys that do not match your bindings.
 
 Preferences are saved in `<getAgentDir()>/pi-subagents.json`, normally `~/.pi/agent/pi-subagents.json`.
-Only user settings are supported; project files and legacy settings are not read. User fields override code defaults.
+Only user settings are supported; project files and legacy settings are not read. User fields override code defaults, including saved values from before a default change.
 Manual file edits are re-read on `session_start`, including `/reload`, and before each UI save.
 Reading defaults creates no file. Invalid values produce diagnostics and use their defaults; malformed documents block saves until repaired.
 Saves preserve unknown fields, publish atomically, and keep reads and writes ordered within one Pi process. Separate Pi processes are not locked.
@@ -298,7 +331,9 @@ packages/pi-subagents/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
 │   ├── subagents.ts                   # Commands and session lifecycle
-│   ├── menu.ts                        # Job manager
+│   ├── menu.ts                        # Job manager and session-local display controls
+│   ├── widget.ts                      # Retained widget ownership and event policies
+│   ├── widget-renderer.ts             # Bounded rows and active-job summaries
 │   ├── settings.ts                    # User preferences and atomic storage
 │   └── settings-ui.ts                 # Native settings editor
 ├── dist/                              # Generated Jiti runtime, child bridge, and readiness probe

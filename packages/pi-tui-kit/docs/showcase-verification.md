@@ -6,6 +6,8 @@ The repository showcase uses the local built Kit, not a separately installed dem
 
 ## Implemented boundaries
 
+The main menu uses Kit's existing searchable choice screen to filter demo names and descriptions. Every demo route remains available; search uses native Input editing and paste behavior.
+
 Runtime information resolves the actual ESM export, checks function and API identity, and displays a sanitized real module origin plus its manifest version. The launcher builds before starting Pi; the extension loads Kit only when `/tui-kit-showcase` runs.
 
 Secret input uses synthetic values and discards submitted payload references. Model and thinking selectors change only in-memory demo state, including save-default intent. Theme samples use callback roles, `theme.style()`, concrete colors, and appearance without changing host settings. Tasks have separate success, failure, and cancellation cases, with bounded timers and abort cleanup.
@@ -96,7 +98,7 @@ Ctrl+C: close all demo overlays, including under neste
 
 **Responsible role:** maintainer or tester with the target terminal/client. **Prerequisite:** a local build and passing deterministic checks; use synthetic data only. **Action:** perform the steps below. **Expected result:** correct focus, native input ownership, bounded layout, and complete source capture. **Unverified behavior:** hardware cursor, IME placement, terminal negotiation, subjective colors, OS clipboard access, and remote OSC 52 acceptance. **Restriction:** simulated output does not establish physical acceptance; automated checks must not overwrite a real clipboard.
 
-1. Run `npm run showcase:tui-kit`, then `/tui-kit-showcase` without arguments; inspect Runtime information and confirm the origin belongs to this checkout's built Kit.
+1. Run `npm run showcase:tui-kit`, then `/tui-kit-showcase` without arguments. Type `built module origin` to find Runtime information by its description; open it and confirm the origin belongs to this checkout's built Kit. Return to the menu, test a query with no matches, then clear the query and verify that the entries return.
 2. Exercise secret masking, editable prefill, selector search/current/default markers, save-default intent, task success/failure/cancellation, and menu return; verify that no real model or settings changed.
 3. Inspect theme samples; close the view before manually changing Pi's Theme or Show hardware cursor setting. Reopen input examples with hardware cursor off and on, test IME composition and narrow resize, then restore the host settings.
 4. In fullscreen mode, test pointer press/click/drag, handled and unhandled wheel, nested overlay completion, Ctrl+C, and an unrelated overlay. To compare regular mode after building, run `pi --no-extensions --no-skills --no-session --tui-mode regular -e ./packages/pi-tui-kit/scripts/showcase/extension.ts`.

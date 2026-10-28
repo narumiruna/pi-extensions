@@ -8,7 +8,7 @@ import {
   subagentSettingsPath,
 } from "./settings.js";
 import { registerSubagentTools, type SubagentToolsDependencies } from "./tools.js";
-import { createSubagentWidgetController } from "./widget.js";
+import { createSubagentWidgetController, type SubagentCyclePhase } from "./widget.js";
 
 export interface SubagentsDependencies extends SubagentToolsDependencies {
   settingsStore?: Pick<SubagentSettingsStore, "userPath" | "load" | "save" | "flush">;
@@ -24,9 +24,20 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
   let owner = new AbortController();
   let ready = false;
   let menuOpen = false;
+  let cyclePhase: SubagentCyclePhase = "idle";
   let settings: SubagentSettings = { ...DEFAULT_SUBAGENT_SETTINGS };
   const menuTasks = new Set<Promise<void>>();
-  const ownsSession = (ctx: ExtensionContext) => ctx.sessionManager === activeContext?.sessionManager;
+  const ownsSession = (ctx: ExtensionContext) =>
+    activeContext !== undefined && ctx.sessionManager === activeContext.sessionManager;
+
+  const joinCleanup = async (steps: (() => void | Promise<void>)[], errors: unknown[] = []): Promise<void> => {
+    const results = await Promise.allSettled(steps.map(async (step) => step()));
+    for (const result of results) {
+      if (result.status === "rejected") errors.push(result.reason);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Subagents session cleanup failed");
+  };
 
   const openSettings = async (
     ctx: ExtensionCommandContext,
@@ -79,7 +90,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
       menuOpen = true;
       const generation = sessionGeneration;
       const signal = owner.signal;
-      const isCurrent = () => generation === sessionGeneration && ownsSession(ctx) && !signal.aborted;
+      const isCurrent = () => generation === sessionGeneration && !signal.aborted && ownsSession(ctx);
       const task = (async () => {
         if (route === "settings") {
           await openSettings(ctx, signal, isCurrent);
@@ -101,6 +112,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
             await tools.runtime.cancel(jobId);
           },
           showSettings: (actionSignal) => openSettings(ctx, actionSignal, isCurrent),
+          widget: widget.controls(ctx),
         });
       })();
       menuTasks.add(task);
@@ -118,24 +130,39 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    owner.abort();
-    if (activeContext) widget.shutdown(activeContext);
-    owner = new AbortController();
-    activeContext = ctx;
+    const previousContext = activeContext;
+    const generation = ++sessionGeneration;
     ready = false;
     menuOpen = false;
-    const generation = ++sessionGeneration;
-    const isCurrent = () => generation === sessionGeneration && ownsSession(ctx) && !owner.signal.aborted;
-    // Stop old children and broker delivery before waiting for slow UI storage work.
-    await tools.startSession();
-    if (!isCurrent()) return;
-    await Promise.allSettled([...menuTasks]);
+    owner.abort();
+    owner = new AbortController();
+    const signal = owner.signal;
+    activeContext = ctx;
+    cyclePhase = ctx.signal === undefined ? "idle" : "running";
+    const isCurrent = () => generation === sessionGeneration && !signal.aborted && ownsSession(ctx);
+    const errors: unknown[] = [];
+    try {
+      if (previousContext) widget.shutdown(previousContext);
+    } catch (error) {
+      errors.push(error);
+    }
+    // A failed UI handoff must still stop old children, menus, and pending saves.
+    // Do not initialize another runtime or widget after that failure.
+    const failedHandoff = errors.length > 0;
+    await joinCleanup(
+      [
+        () => (failedHandoff ? tools.shutdown() : tools.startSession()),
+        ...[...menuTasks].map((task) => () => task),
+        ...(failedHandoff ? [() => store.flush()] : []),
+      ],
+      errors,
+    );
     if (!isCurrent()) return;
     const loaded = await store.load();
     if (!isCurrent()) return;
     settings = { ...loaded.settings };
+    widget.start(ctx, settings, cyclePhase);
     ready = true;
-    widget.start(ctx, settings);
     if (loaded.diagnostics.length > 0) {
       const message = sanitizeSubagentDisplayText(`Subagent settings: ${loaded.diagnostics.join(" ")}`);
       if (ctx.hasUI) ctx.ui.notify(message, "warning");
@@ -143,16 +170,81 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
     }
   });
 
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "preparing";
+    if (ready) widget.preparing(ctx);
+  });
+  pi.on("session_before_compact", (event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    if (event.reason === "manual") {
+      cyclePhase = "maintenance";
+      if (ready) widget.maintenance(ctx);
+    } else {
+      if (cyclePhase !== "running") cyclePhase = "auto-preparing";
+      if (ready) widget.automaticCompaction(ctx);
+    }
+  });
+  pi.on("session_before_tree", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "maintenance";
+    if (ready) widget.maintenance(ctx);
+  });
+  pi.on("input", (_event, ctx) => {
+    // Discard a canceled maintenance/preparation guard before a new idle prompt.
+    // Do not count input as a consumed user message.
+    if (!ownsSession(ctx) || !ctx.isIdle()) return;
+    cyclePhase = "idle";
+    if (ready) widget.clearCycle(ctx);
+  });
+  pi.on("agent_start", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "running";
+    if (ready) widget.agentStarted(ctx);
+  });
+  pi.on("message_start", (event, ctx) => {
+    // Input submission is not consumption. Extension-generated user messages count too.
+    if (ready && ownsSession(ctx) && event.message.role === "user") widget.userMessage(ctx);
+  });
+  pi.on("turn_end", (event, ctx) => {
+    if (ready && ownsSession(ctx) && event.message.role === "assistant")
+      widget.turnEnded(ctx, event.message.stopReason);
+  });
+  pi.on("agent_settled", (event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "idle";
+    if (ready) widget.settled(ctx, event.aborted);
+  });
+  pi.on("session_tree", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "maintenance";
+    if (!ready) return;
+    sessionGeneration++;
+    ready = false;
+    menuOpen = false;
+    owner.abort();
+    owner = new AbortController();
+    widget.start(ctx, settings, cyclePhase);
+    ready = true;
+  });
+
   pi.on("session_shutdown", async (_event, ctx) => {
     if (!ownsSession(ctx)) return;
     sessionGeneration++;
-    owner.abort();
     ready = false;
     menuOpen = false;
     activeContext = undefined;
-    widget.shutdown(ctx);
-    const results = await Promise.allSettled([tools.shutdown(), ...menuTasks, store.flush()]);
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed?.status === "rejected") throw failed.reason;
+    cyclePhase = "idle";
+    owner.abort();
+    const errors: unknown[] = [];
+    try {
+      widget.shutdown(ctx);
+    } catch (error) {
+      errors.push(error);
+    }
+    await joinCleanup(
+      [() => tools.shutdown(), ...[...menuTasks].map((task) => () => task), () => store.flush()],
+      errors,
+    );
   });
 }

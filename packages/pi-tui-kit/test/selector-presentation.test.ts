@@ -1,15 +1,92 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  KeybindingsManager,
+  renderFakeCursor,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMenuScreenComponent } from "../src/components/index.js";
 import { createPiSelector } from "../src/components/pi-selectors.js";
+import { selectedLabelFallback } from "../src/components/rendering.js";
 import type { MenuScreen } from "../src/types.js";
 import { rendererTheme } from "./fixtures/renderer-theme.js";
 
 const keys = new KeybindingsManager(TUI_KEYBINDINGS);
 const theme = { fg: (_role: string, text: string) => text, bold: (text: string) => text };
 const plain = (lines: readonly string[]) => lines.map(stripVTControlCharacters).join("\n");
+
+test.each([
+  { name: "missing label and row", label: undefined, row: undefined, expected: [] },
+  { name: "missing label", label: undefined, row: "→ Selected", expected: [] },
+  { name: "empty label", label: "", row: "→ Selected", expected: [] },
+  { name: "missing row", label: "Selected", row: undefined, expected: ["Selected"] },
+  { name: "empty row", label: "Selected", row: "", expected: ["Selected"] },
+  { name: "complete label", label: "Selected", row: "→ Selected", expected: [] },
+  { name: "absent label", label: "Selected", row: "→ Other", expected: ["Selected"] },
+  { name: "clipped label", label: "Selected", row: "→ Selec…", expected: ["Selected"] },
+  { name: "Unicode label", label: "讀取 📖 e\u0301", row: "→ 讀取 📖 e\u0301", expected: [] },
+  {
+    name: "clipped Unicode label keeps the original value",
+    label: " 讀取 📖 e\u0301 ",
+    row: "→ 讀取…",
+    expected: [" 讀取 📖 e\u0301 "],
+  },
+  { name: "SGR around the label", label: "Selected", row: "→ \x1b[31mSelected\x1b[0m", expected: [] },
+  { name: "SGR within the label", label: "Selected", row: "→ Se\x1b[31mlect\x1b[0med", expected: [] },
+  {
+    name: "OSC 8 link with BEL terminators",
+    label: "Selected",
+    row: "→ \x1b]8;;https://example.test\x07Selected\x1b]8;;\x07",
+    expected: [],
+  },
+  {
+    name: "OSC 8 link with ST terminators",
+    label: "Selected",
+    row: "→ \x1b]8;;https://example.test\x1b\\Selected\x1b]8;;\x1b\\",
+    expected: [],
+  },
+  {
+    name: "link metadata is not visible label text",
+    label: "Selected",
+    row: "→ \x1b]8;;https://example.test/Selected\x07Other\x1b]8;;\x07",
+    expected: ["Selected"],
+  },
+  {
+    name: "Pi cursor markers around the label",
+    label: "Selected",
+    row: `→ ${CURSOR_MARKER}${renderFakeCursor("Selected")}`,
+    expected: [],
+  },
+  {
+    name: "Pi cursor markers within the label",
+    label: "Selected",
+    row: `→ Se${CURSOR_MARKER}${renderFakeCursor("l")}ected`,
+    expected: [],
+  },
+  {
+    name: "APC with an ST terminator within the label",
+    label: "Selected",
+    row: "→ Se\x1b_pi:c\x1b\\lected",
+    expected: [],
+  },
+  {
+    name: "Pi cursor metadata is not visible label text",
+    label: "pi:c",
+    row: `${CURSOR_MARKER}→ Other`,
+    expected: ["pi:c"],
+  },
+  {
+    name: "Pi cursor markers do not conceal label clipping",
+    label: "Selected",
+    row: `→ Selec${CURSOR_MARKER}${renderFakeCursor("…")}`,
+    expected: ["Selected"],
+  },
+])("selected label fallback: $name", ({ label, row, expected }) => {
+  assert.deepEqual(selectedLabelFallback(label, row), expected);
+});
 
 function menu(screen: MenuScreen<"screen", "apply">, rows = 30, selectedItemId = "selected") {
   return createMenuScreenComponent({

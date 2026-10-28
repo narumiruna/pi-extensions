@@ -1,5 +1,13 @@
 import { stripVTControlCharacters } from "node:util";
-import { type Input, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  type Input,
+  type SelectItem,
+  SelectList,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { renderBoundedFrameLayout } from "../bounded-frame.js";
 import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
@@ -8,6 +16,46 @@ import type { ActionMenuItem } from "../types.js";
 import type { MenuKeybindings, MenuScreenComponentOptions } from "./contracts.js";
 
 export { safeMenuText } from "../text.js";
+
+/** Keep native list geometry and use its public layout hook for explicit primary clipping. */
+export function createMenuSelectList(
+  items: SelectItem[],
+  viewportSize: number,
+  theme: MenuScreenComponentOptions<string, string>["theme"],
+  currentItemId?: string,
+) {
+  // Native SelectList falls back to the raw value for an empty label; IDs are payloads, not display text.
+  const displayItems = items.map((item) => ({ ...item, label: item.label || "(unnamed)" }));
+  const widestPrimary = Math.max(1, ...displayItems.map((item) => visibleWidth(item.label))) + 2;
+  return new SelectList(
+    displayItems,
+    Math.min(items.length, viewportSize),
+    {
+      selectedPrefix: (text) => theme.fg("accent", text),
+      selectedText: (text) => theme.fg("accent", text),
+      description: (text) => theme.fg("muted", text),
+      scrollInfo: (text) => theme.fg("dim", text),
+      noMatch: (text) => theme.fg("warning", text),
+    },
+    {
+      minPrimaryColumnWidth: Math.min(32, widestPrimary),
+      maxPrimaryColumnWidth: widestPrimary,
+      truncatePrimary: ({ text, maxWidth, item }) => {
+        const cells = Math.max(0, maxWidth);
+        const marker = item.value === currentItemId ? " ✓ current" : "";
+        if (marker && cells > visibleWidth(marker) + 1) {
+          return `${truncateToWidth(text.slice(0, -marker.length), cells - visibleWidth(marker), "…")}${marker}`;
+        }
+        return truncateToWidth(text, cells, cells > 1 ? "…" : "");
+      },
+    },
+  );
+}
+
+/** Inspect the rendered selected row instead of predicting native inline-column branches. */
+export function selectedLabelFallback(label: string | undefined, row: string | undefined): string[] {
+  return label && !stripTerminalSequences(row ?? "").includes(label) ? [label] : [];
+}
 
 export function actionMenuItemPresentation(item: ActionMenuItem<string, string>): {
   label: string;
@@ -134,7 +182,7 @@ function priorityRowIndexes(
 }
 
 function selectedRowIndex(rows: readonly string[]) {
-  return rows.findIndex((line) => /^[→›]\s/u.test(stripVTControlCharacters(line)));
+  return rows.findIndex((line) => /^[→›](?:\s|$)/u.test(stripVTControlCharacters(line)));
 }
 
 export function componentRows(rows: number) {

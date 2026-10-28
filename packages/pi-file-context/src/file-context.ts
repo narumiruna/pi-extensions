@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { editProjectFileInExternalEditor } from "./external-editor.js";
 import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-explorer.js";
 import { type FileContextMenuQuote, showFileContextMenu } from "./file-context-menu.js";
@@ -279,6 +282,37 @@ export function formatQuoteContext(quotes: readonly FileQuote[]): string {
   return `${blocks.join("\n\n")}\n\n${description}`;
 }
 
+export function publishPendingQuoteWidget(ctx: ExtensionContext, quotes: readonly FileQuote[]): void {
+  if (!ctx.hasUI) return;
+  if (quotes.length === 0) {
+    ctx.ui.setWidget(WIDGET_KEY, undefined);
+    return;
+  }
+  const totalBytes = quotes.reduce((total, quote) => total + Buffer.byteLength(quote.text, "utf8"), 0);
+  const lines = [
+    `Next prompt context · ${quotes.length} ${quotes.length === 1 ? "snippet" : "snippets"} · ~${estimateTokens(totalBytes)} tokens · /file-context to review`,
+    ...quotes.map(
+      (quote, index) =>
+        `${index + 1}. ${sanitizeTerminalText(escapeTerminalControls(quote.path))} · lines ${quote.startLine}-${quote.endLine} · ~${estimateTokens(Buffer.byteLength(quote.text, "utf8"))} tokens`,
+    ),
+  ];
+  const renderLines = (theme: Pick<Theme, "fg">) =>
+    lines.map((line, index) => theme.fg(index === 0 ? "accent" : "muted", line));
+  if (ctx.mode !== "tui") {
+    ctx.ui.setWidget(WIDGET_KEY, renderLines(ctx.ui.theme));
+    return;
+  }
+  ctx.ui.setWidget(
+    WIDGET_KEY,
+    (_tui, theme) =>
+      new EditorStatusWidget({
+        theme,
+        renderBody: (width) =>
+          width === 0 ? lines.map(() => "") : renderLines(theme).flatMap((line) => wrapTextWithAnsi(line, width)),
+      }),
+  );
+}
+
 interface FileQuoteExtensionDependencies {
   settingsPath?: string;
   loadSettings?: () => Promise<LoadedFileContextSettings>;
@@ -306,26 +340,11 @@ export async function registerFileQuoteExtension(
   let activeExplorerLaunch: { promise: Promise<void> } | undefined;
   let activeMenuLaunch: { promise: Promise<void> } | undefined;
 
-  const updatePendingWidget = (ctx: ExtensionContext) => {
-    if (!ctx.hasUI) return;
-    if (pendingQuotes.length === 0) {
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-      return;
-    }
-    const totalBytes = pendingQuotes.reduce((total, item) => total + Buffer.byteLength(item.quote.text, "utf8"), 0);
-    ctx.ui.setWidget(WIDGET_KEY, [
-      ctx.ui.theme.fg(
-        "accent",
-        `Next prompt context · ${pendingQuotes.length} ${pendingQuotes.length === 1 ? "snippet" : "snippets"} · ~${estimateTokens(totalBytes)} tokens · /file-context to review`,
-      ),
-      ...pendingQuotes.map(({ quote }, index) =>
-        ctx.ui.theme.fg(
-          "muted",
-          `${index + 1}. ${escapeTerminalControls(quote.path)} · lines ${quote.startLine}-${quote.endLine} · ~${estimateTokens(Buffer.byteLength(quote.text, "utf8"))} tokens`,
-        ),
-      ),
-    ]);
-  };
+  const updatePendingWidget = (ctx: ExtensionContext) =>
+    publishPendingQuoteWidget(
+      ctx,
+      pendingQuotes.map((item) => item.quote),
+    );
 
   const clearPending = (ctx: ExtensionContext) => {
     pendingQuotes = [];

@@ -74,6 +74,14 @@ export function publishProgress(ctx: ExtensionContext, lines: readonly string[])
 Sanitize untrusted values before styling or width-sensitive formatting, and perform product-specific wrapping in `renderBody()`.
 Publish plain string arrays separately when an extension supports Pi RPC widgets because RPC ignores component factories.
 
+Optional focused helpers provide stable publication (`createEditorStatusPublisher`), session-local view transitions (`createEditorStatusView`), and bounded whole-snapshot items (`createEditorStatusCollection`).
+Their subpaths are `editor-status-publisher`, `editor-status-view`, and `editor-status-collection`; the same functions and types are available from the root export.
+The publisher retains visible TUI components and adapts RPC snapshots, while owners keep data, settings, timing, events, and priority policy.
+See [editor status presentation](./editor-status-presentation.md) for ownership, exact event semantics, capacity failures, two-consumer admission, recovery, and terminal/release limits.
+No `upsert`, `push`, `append`, shared registry, or sidebar API is provided.
+
+Optional [editor status presentation helpers](./editor-status-presentation.md) provide stable snapshot publication, explicit session-local view transitions, and bounded whole-snapshot item collections. Use the focused `editor-status-publisher`, `editor-status-view`, and `editor-status-collection` subpaths, or their root exports. The frame remains unchanged; owners retain data, policy, events, timers, row reservations, and cleanup. No helper coordinates extensions or adds a right sidebar.
+
 ## Bounded frames
 
 Use `renderBoundedFrame()` to share the standard menu's height-bounded presentation without adopting its input or save lifecycle. It accepts already sanitized, styled, wrapped single-line rows and a rendered horizontal rule. The caller owns terminal row reservations, themes, input, persistence, and which content must survive clipping. This is a stateless layout primitive, not another screen or lifecycle API.
@@ -726,7 +734,9 @@ They remain separate so a custom or legacy current value can focus a safe fallba
 A confirmed row invokes the screen action with its raw `itemId`; moving the cursor only changes selected details.
 Rejected or thrown actions retain the selection.
 Disabled rows stay focusable for their explanation but never invoke the action.
-Action and choice screens wrap the selected description below the list when it does not fit inline.
+Action and choice screens mark clipped names with an ellipsis and wrap the complete selected label below the list when it does not fit inline.
+Choices use adaptive primary columns and preserve the textual current marker when enough cells remain for both it and a label fragment.
+The selected description also wraps below the list when it does not fit inline.
 At constrained heights, the selected row takes priority; a filtered empty state keeps its recovery guidance ahead of the search field.
 RPC flattens choice rows to unique dialog labels while preserving raw identity.
 
@@ -759,6 +769,7 @@ const profileScreen = {
 Set `enableSearch: true` when a choice list needs local filtering, and provide optional `searchText` for safe aliases or metadata that should not be rendered.
 TUI fuzzy-searches sanitized labels, descriptions, and explicit search text.
 It preserves raw stable IDs, query and selection after a rejected action, disabled explanations, and IME focus.
+A muted count below the query shows the catalog total or filtered results, separately from cursor position.
 Details and raw IDs are not searched implicitly.
 RPC deliberately keeps one deterministic unfiltered selector and ignores interactive search metadata.
 
@@ -768,6 +779,8 @@ Use standalone `runLiveChoice()` when its list-and-shortcut contract fits; keep 
 Browse rows only reveal information and never invoke domain actions. An exact detail document can opt into the separate [full-source copy callback](#full-source-document-copy).
 TUI fuzzy-searches each sanitized label, textual `statusText`, description, and optional non-rendered `searchText`.
 Enter opens an adaptive scrolling detail view; Escape returns to the list without losing the query or selected raw id, then returns to the parent, while Ctrl+C closes the menu.
+List rows reserve name cells before bounding status text, and mark clipped names or status with an ellipsis.
+Query editing remains available when a constrained height hides the search field, but the hidden field has no cursor or focus.
 Omitted or `"adaptive"` viewport size uses the live terminal row budget; a positive number caps item rows without disabling terminal bounds.
 RPC intentionally keeps one deterministic unfiltered list, then presents bounded detail pages; `searchText` is never rendered.
 Set `enableDetailSearch: true` to add literal, case-insensitive search over the displayed legacy or exact detail text in TUI mode.
@@ -830,7 +843,9 @@ Use `choice` when confirmation invokes a domain action; use `browse` when select
 Domain status meaning, catalog construction, and data freshness remain consumer-owned.
 
 TUI settings screens retain the extension title and supporting context above Pi's familiar search field.
-They use aligned label and value columns, a ten-row viewport, a position indicator, a selected-row description, and a keyboard hint.
+They use width-bounded aligned label and value columns, a ten-row viewport, a position indicator, selected-row context, and a keyboard hint.
+Values retain space at narrow widths; clipped selected labels or values appear in full below the list when height permits, followed by the description.
+Rows below six columns prioritize the cursor and label rather than attempting two columns.
 Typing fuzzy-filters labels, arrows navigate, and Enter or Space changes the selected value.
 Changes save immediately, so Back or Close never implies rollback.
 The embedded search input forwards focus for IME positioning.
@@ -1157,6 +1172,10 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `hardWrapTerminalDocument()` — sanitizes, expands tabs, and hard-wraps exact multiline display text by terminal cells; `@narumitw/pi-tui-kit/terminal-document` also exports it.
 - `sanitizeTerminalText()` — removes terminal and bidirectional controls from untrusted single-line display text without changing raw payloads; `@narumitw/pi-tui-kit/terminal-text` also exports it.
 - `EditorStatusWidget` — frames passive editor status rows with a muted top rule and terminal-width guard; `@narumitw/pi-tui-kit/editor-status-widget` exports it and its options.
+- `createEditorStatusPublisher` — retains one owner-scoped TUI mount and publishes plain RPC snapshots; its focused subpath is `editor-status-publisher`.
+- `createEditorStatusView` — applies session-local manual modes and explicitly armed one-shot compaction; its focused subpath is `editor-status-view`.
+- `createEditorStatusCollection` — holds bounded whole-snapshot items with independent presentation controls; its focused subpath is `editor-status-collection`.
+- `createEditorStatusPublisher`, `createEditorStatusView`, and `createEditorStatusCollection` — optional [owner-local presentation helpers](./editor-status-presentation.md); each has a dependency-free focused subpath with the corresponding `editor-status-*` name.
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
 - `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
 - `renderBoundedFrameLayout()`, `BoundedFrameLayout`, and `BoundedFrameContentRow` — provide the same frame with original content indexes for caller-owned coordinate mapping.

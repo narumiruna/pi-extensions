@@ -1,4 +1,3 @@
-import type { ExtensionCommandContext, Skill } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
   isKittyProtocolActive,
@@ -10,130 +9,29 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { runMenu } from "@narumitw/pi-tui-kit";
-import { createRpcHarness, createTuiHarness, type RpcHarnessStep } from "@narumitw/pi-tui-kit/testing";
+import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { InvocationSnapshot } from "../invocation.ts";
-import { createSkillsMenu, defaultServices, type Services, showSkillsMenu } from "../menu.ts";
-import type { Environment, Guard, Inventory, LocalSkill, Location } from "../types.ts";
+import { createSkillsMenu, showSkillsMenu } from "../menu.ts";
+import type { Guard, Inventory } from "../types.ts";
+import {
+  deferred,
+  env,
+  fixture,
+  label,
+  local,
+  openInvocation,
+  openManage,
+  project,
+  select,
+  skill,
+  stateFixture,
+  waitFrame,
+} from "./invocation-test-helpers.ts";
 
 beforeAll(() => initTheme("dark"));
 
-const env: Environment = { cwd: "/workspace", agentDir: "/agent", homeDir: "/home", isProjectTrusted: () => true };
-const project: Location = { id: "project-pi", label: "Project (Pi)", path: "/workspace/.pi/skills", scope: "project" };
-const local: LocalSkill = {
-  id: "/workspace/.pi/skills/scanned",
-  path: "/workspace/.pi/skills/scanned",
-  directoryPath: "/workspace/.pi/skills/scanned",
-  name: "Scanned only",
-  description: "Not loaded by Pi",
-  location: project,
-  content: "Scanned instructions",
-  fingerprint: "before-save",
-  warnings: [],
-};
-function skill(name = "Alpha", filePath = "/package/alpha/SKILL.md", manual = false): Skill {
-  return {
-    name,
-    description: `${name} instructions`,
-    filePath,
-    baseDir: filePath.slice(0, filePath.lastIndexOf("/")),
-    disableModelInvocation: manual,
-    sourceInfo: { path: filePath, source: "npm:loaded-skills", scope: "user", origin: "package" },
-  };
-}
-function label(loaded: Skill) {
-  return `${loaded.name} · ${loaded.disableModelInvocation ? "Manual only" : "Automatic"} · ${loaded.sourceInfo.scope} · ${loaded.filePath}`;
-}
-function select(response: string | undefined): RpcHarnessStep {
-  return { kind: "select", response };
-}
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-function fixture(loaded: Skill[] = [skill()]) {
-  const controller = new AbortController();
-  const guard: Guard = {
-    signal: controller.signal,
-    check: () => controller.signal.throwIfAborted(),
-    isProjectTrusted: () => true,
-  };
-  const saved = new Map<string, InvocationSnapshot>();
-  const services = {
-    ...defaultServices,
-    loadLocations: vi.fn<Services["loadLocations"]>(async () => ({ locations: [project], warnings: [] })),
-    scanInventory: vi.fn<Services["scanInventory"]>(async () => ({ skills: [local], warnings: [] })),
-    readInvocation: vi.fn<Services["readInvocation"]>(
-      async (entry) =>
-        saved.get(entry.filePath) ?? {
-          filePath: entry.filePath,
-          canonicalPath: `/real-target/${entry.name}/SKILL.md`,
-          enabled: !entry.disableModelInvocation,
-        },
-    ),
-    updateInvocation: vi.fn<Services["updateInvocation"]>(async (snapshot, enabled) => {
-      const next = { ...snapshot, enabled };
-      saved.set(next.filePath, next);
-      return { snapshot: next, changed: snapshot.enabled !== enabled };
-    }),
-    prepareOperation: vi.fn<Services["prepareOperation"]>(),
-    copyToClipboard: vi.fn<Services["copyToClipboard"]>(),
-  };
-  function context(ui: object, mode: "tui" | "rpc") {
-    return {
-      cwd: env.cwd,
-      mode,
-      hasUI: true,
-      ui: { ...ui, notify: vi.fn() },
-      sessionManager: {},
-      reload: vi.fn(),
-      getSystemPromptOptions: vi.fn(() => ({ skills: loaded })),
-      isProjectTrusted: () => true,
-    } as unknown as ExtensionCommandContext;
-  }
-  return { controller, guard, services, context, loaded, saved };
-}
-type Tui = ReturnType<typeof createTuiHarness>;
-async function waitFrame(tui: Tui, text: string | RegExp) {
-  await vi.waitFor(() => {
-    expect(tui.isOpen).toBe(true);
-    expect(tui.render().join("\n")).toMatch(text);
-  });
-}
-async function openInvocation(tui: Tui) {
-  await waitFrame(tui, "Skills");
-  tui.press("tui.select.down");
-  tui.press("tui.select.confirm");
-  await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
-}
-function stateFixture(f: ReturnType<typeof fixture>) {
-  const state: Parameters<typeof createSkillsMenu>[0] = {
-    mode: "remove",
-    source: "",
-    selected: new Set([local.id]),
-    locations: [project],
-    inventory: { skills: [local], warnings: [] },
-    warnings: [],
-    registrationScope: "none",
-    confirmed: false,
-    afterScan: "manage",
-    loadedSkills: f.loaded.map((entry) => ({ ...entry, sourceInfo: { ...entry.sourceInfo } })),
-    invocationId: f.loaded[0].filePath,
-    invocation: { filePath: f.loaded[0].filePath, canonicalPath: "/actual/linked/SKILL.md", enabled: true },
-    invocationChanged: false,
-    invocationValues: new Map(),
-    invocationReviewed: true,
-    reload: false,
-    batch: { kind: "remove", summary: ["Old fingerprint"], apply: vi.fn() },
-  };
-  return state;
-}
-
 describe("loaded model invocation catalog", () => {
-  it("reads native skills only on selection, clones them, and does not use the scanned inventory", async () => {
+  it("reads native skills lazily, clones them, and combines them with scanned inventory", async () => {
     const native = skill("Manual package", "/package/manual.md", true);
     const before = structuredClone(native);
     const f = fixture([native]);
@@ -144,7 +42,6 @@ describe("loaded model invocation catalog", () => {
       await waitFrame(tui, "Skills");
       expect(ctx.getSystemPromptOptions).not.toHaveBeenCalled();
       expect(f.services.readInvocation).not.toHaveBeenCalled();
-      tui.press("tui.select.down");
       tui.press("tui.select.confirm");
       await waitFrame(tui, "→ Manual package");
       const catalog = tui.render().join("\n");
@@ -155,7 +52,11 @@ describe("loaded model invocation catalog", () => {
       expect(catalog).toContain("Active: Manual only");
       expect(catalog).not.toContain("Saved:");
       expect(ctx.getSystemPromptOptions).toHaveBeenCalledTimes(1);
-      expect(tui.render().join("\n")).not.toContain("Scanned only");
+      expect(catalog).toContain("Scanned only");
+      expect(catalog).toContain("Not loaded · Project (Pi)");
+      expect(f.services.readInvocation).not.toHaveBeenCalled();
+      tui.press("tui.select.confirm");
+      await waitFrame(tui, /→.*Model invocation/);
       expect(f.services.readInvocation).not.toHaveBeenCalled();
       tui.press("tui.select.confirm");
       await waitFrame(tui, "Writes target: /real-target/Manual package/SKILL.md");
@@ -179,17 +80,35 @@ describe("loaded model invocation catalog", () => {
     }
   });
 
-  it("handles an empty native list without falling back to disk inventory", async () => {
+  it("keeps scanned skills manageable but disables invocation when the native list is empty", async () => {
     const f = fixture([]);
+    const blocked = "Model invocation settings require a currently loaded Pi skill";
     const rpc = createRpcHarness([
-      select("Configure model invocation"),
-      { kind: "select", options: ["Back"], response: "Back" },
+      select("Manage skills"),
+      {
+        kind: "select",
+        options: [`Scanned only · Not loaded · Project (Pi) · ${local.path}/SKILL.md`, "Back"],
+        response: `Scanned only · Not loaded · Project (Pi) · ${local.path}/SKILL.md`,
+      },
+      {
+        kind: "select",
+        options: [
+          "Move…",
+          "Remove…",
+          "[-] Copy directory path (unavailable: Clipboard copy requires Pi TUI)",
+          `[-] Model invocation (unavailable: ${blocked})`,
+          "Back",
+        ],
+        response: `[-] Model invocation (unavailable: ${blocked})`,
+      },
+      select("Back"),
+      select("Back"),
       select("Close"),
     ]);
     const ctx = f.context(rpc.ui, "rpc");
     expect(await showSkillsMenu(ctx, { kind: "main" }, env, f.guard, f.services)).toBe(false);
     rpc.assertConsumed();
-    expect(rpc.dialogs[1].title).toContain("No loaded skills were found.");
+    expect(rpc.dialogs[1].title).toContain("Loaded and detected skills are listed.");
     expect(f.services.readInvocation).not.toHaveBeenCalled();
     expect(f.services.updateInvocation).not.toHaveBeenCalled();
     expect(ctx.ui.notify).not.toHaveBeenCalled();
@@ -200,10 +119,21 @@ describe("loaded model invocation catalog", () => {
     const second = skill("Same", "/package/\u001b[31msame.md");
     const f = fixture([first, second]);
     const rpc = createRpcHarness([
-      select("Configure model invocation"),
-      { kind: "select", options: [label(first), `${label(first)} [2]`, "Back"], response: `${label(first)} [2]` },
+      select("Manage skills"),
+      {
+        kind: "select",
+        options: [
+          label(first),
+          `${label(first)} [2]`,
+          `Scanned only · Not loaded · Project (Pi) · ${local.path}/SKILL.md`,
+          "Back",
+        ],
+        response: `${label(first)} [2]`,
+      },
+      select("Model invocation"),
       select("Open invocation setting"),
       select("Model invocation (automatic)"),
+      select("Back"),
       select("Back"),
       select("Back"),
       select("Back"),
@@ -226,7 +156,7 @@ describe("loaded model invocation catalog", () => {
     const tui = createTuiHarness({ width: 150 });
     const work = showSkillsMenu(f.context({ custom: tui.custom }, "tui"), { kind: "main" }, env, f.guard, f.services);
     try {
-      await openInvocation(tui);
+      await openManage(tui);
       tui.type("Zebra");
       expect(tui.render().join("\n")).not.toContain("Alpha");
       for (const _character of "Zebra") tui.send("\x7f");
@@ -239,6 +169,8 @@ describe("loaded model invocation catalog", () => {
       expect(filtered).not.toContain("title");
       // Native Input emits its own cursor markers; reject the untrusted controls, not host markup.
       for (const control of ["\u001b[31m", "\u001b]0;", "\u202e"]) expect(filtered).not.toContain(control);
+      tui.press("tui.select.confirm");
+      await waitFrame(tui, /→.*Model invocation/);
       tui.press("tui.select.confirm");
       await waitFrame(tui, "Source file: /package/unique path/SKILL.md");
       expect(f.services.readInvocation.mock.calls[0][0]).toEqual(untrusted);
@@ -253,9 +185,11 @@ describe("loaded model invocation catalog", () => {
     const f = fixture();
     f.services.readInvocation.mockRejectedValueOnce(new Error("Target unavailable\u001b[31m"));
     const rpc = createRpcHarness([
-      select("Configure model invocation"),
+      select("Manage skills"),
       select(label(f.loaded[0])),
-      select(label(f.loaded[0])),
+      select("Model invocation"),
+      select("Model invocation"),
+      select("Back"),
       select("Back"),
       select("Back"),
       select("Close"),
@@ -275,11 +209,13 @@ describe("immediate invocation settings", () => {
     const initial = enabled ? "automatic" : "manual only";
     const next = enabled ? "manual only" : "automatic";
     const rpc = createRpcHarness([
-      select("Configure model invocation"),
+      select("Manage skills"),
       select(label(f.loaded[0])),
+      select("Model invocation"),
       select("Open invocation setting"),
       { kind: "select", options: [`Model invocation (${initial})`, "Back"], response: `Model invocation (${initial})` },
       { kind: "select", options: [`Model invocation (${next})`, "Back"], response: "Back" },
+      select("Back"),
       select("Back"),
       select("Back"),
       select("Close without reload"),
@@ -304,7 +240,7 @@ describe("immediate invocation settings", () => {
       "Model invocation settings saved on disk. Reload to refresh Pi's skill catalog.",
     );
     expect(rpc.dialogs.at(-2)?.options).toContain(
-      `Alpha · ${enabled ? "Manual only" : "Automatic"} (reload pending) · user · /link/alpha/SKILL.md`,
+      `Alpha · ${enabled ? "Manual only" : "Automatic"} (reload pending) · User · /link/alpha/SKILL.md`,
     );
     expect(f.loaded[0].disableModelInvocation).toBe(!enabled);
     expect(ctx.reload).not.toHaveBeenCalled();
@@ -315,10 +251,12 @@ describe("immediate invocation settings", () => {
     const f = fixture();
     f.services.updateInvocation.mockImplementation(async (snapshot) => ({ snapshot, changed: false }));
     const rpc = createRpcHarness([
-      select("Configure model invocation"),
+      select("Manage skills"),
       select(label(f.loaded[0])),
+      select("Model invocation"),
       select("Open invocation setting"),
       select("Model invocation (automatic)"),
+      select("Back"),
       select("Back"),
       select("Back"),
       select("Back"),
@@ -346,11 +284,10 @@ describe("immediate invocation settings", () => {
     const ctx = f.context({ custom: tui.custom }, "tui");
     const work = showSkillsMenu(ctx, { kind: "main" }, env, f.guard, f.services);
     try {
-      await waitFrame(tui, "Skills");
+      await openManage(tui, "\x19");
       tui.send("\x0e");
       tui.send("\x19");
-      await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
-      tui.send("\x0e");
+      await waitFrame(tui, /→.*Model invocation/);
       tui.send("\x19");
       await waitFrame(tui, "Review invocation target");
       expect(tui.render().join("\n")).toContain("Writes target: /real-target/Beta/SKILL.md");
@@ -370,6 +307,8 @@ describe("immediate invocation settings", () => {
       expect(f.services.scanInventory).toHaveBeenCalledTimes(3);
       tui.send("\x07");
       await waitFrame(tui, "Review invocation target");
+      tui.send("\x07");
+      await waitFrame(tui, /→.*Model invocation/);
       tui.send("\x07");
       await waitFrame(tui, /→.*Beta/);
       tui.send("\x07");
@@ -422,19 +361,17 @@ describe("immediate invocation settings", () => {
   );
 
   it("keeps Move and Remove restrictions after invocation saves", async () => {
-    const f = fixture();
+    const f = fixture([skill(local.name, `${local.path}/SKILL.md`)]);
     const reason = "Linked skill is read-only";
     f.services.scanInventory.mockResolvedValue({ skills: [{ ...local, readOnlyReason: reason }], warnings: [] });
     const rpc = createRpcHarness([
-      select("Configure model invocation"),
-      select(label(f.loaded[0])),
+      select("Manage skills"),
+      select(`${local.name} · Automatic · ${project.label} · ${local.path}/SKILL.md`),
+      select("Model invocation"),
       select("Open invocation setting"),
       select("Model invocation (automatic)"),
       select("Back"),
       select("Back"),
-      select("Back"),
-      select("Manage installed skills"),
-      select(`${local.name} · ${project.label} · ${local.path}`),
       select(`[-] Move… (unavailable: ${reason})`),
       select(`[-] Remove… (unavailable: ${reason})`),
       select("Back"),
@@ -466,12 +403,16 @@ describe("invocation target review", () => {
       enabled: true,
     });
     const state = stateFixture(f);
-    const menu = createSkillsMenu(state, "invocation", env, f.guard, f.services);
+    const menu = createSkillsMenu(state, "manage", env, f.guard, f.services);
     const tui = createTuiHarness(size);
     const ctx = f.context({ custom: tui.custom }, "tui");
     const work = runMenu(ctx, menu, { getState: () => state, signal: f.guard.signal });
     try {
       await waitFrame(tui, /→.*Alpha/);
+      tui.press("tui.select.confirm");
+      await waitFrame(tui, /→.*Model invocation/);
+      expect(state.invocation).toBeUndefined();
+      expect(state.invocationReviewed).toBe(false);
       tui.press("tui.select.confirm");
       await waitFrame(tui, "Review invocation target");
       expect(state.invocationReviewed).toBe(false);
@@ -502,9 +443,9 @@ describe("invocation target review", () => {
       expect(frames.join("\n")).toContain("Writes target:");
       expect(frames.join("\n").replace(/\s/g, "")).toContain("lastsegment/SKILL.md");
       expect(f.services.updateInvocation).not.toHaveBeenCalled();
-      // Back from review never opens settings or writes. Selecting again requires review again.
+      // Back from review returns to this skill's actions; reopening requires review again.
       tui.press("tui.select.cancel");
-      await waitFrame(tui, /→.*Alpha/);
+      await waitFrame(tui, /→.*Model invocation/);
       tui.press("tui.select.confirm");
       await waitFrame(tui, "Review invocation target");
       expect(state.invocationReviewed).toBe(false);
@@ -533,15 +474,19 @@ describe("invocation target review", () => {
       enabled: true,
     });
     const state = stateFixture(f);
-    const menu = createSkillsMenu(state, "invocation", env, f.guard, f.services, "rpc");
+    const menu = createSkillsMenu(state, "manage", env, f.guard, f.services, "rpc");
     const reviewTitles: string[] = [];
     const reviewed: boolean[] = [];
     let phase = "select";
     const choose = vi.fn(async (title: string, options: string[]) => {
       reviewed.push(Boolean(state.invocationReviewed));
       if (phase === "select") {
-        phase = "review";
+        phase = "actions";
         return label(f.loaded[0]);
+      }
+      if (phase === "actions") {
+        phase = "review";
+        return "Model invocation";
       }
       if (phase === "review") {
         reviewTitles.push(title);
@@ -550,7 +495,8 @@ describe("invocation target review", () => {
         return "Open invocation setting";
       }
       if (phase === "settings") phase = "back-review";
-      else if (phase === "back-review") phase = "back-list";
+      else if (phase === "back-review") phase = "back-actions";
+      else if (phase === "back-actions") phase = "back-list";
       return "Back";
     });
     const ctx = f.context({ select: choose }, "rpc");
@@ -561,9 +507,9 @@ describe("invocation target review", () => {
     expect(document.replace(/\s/g, "")).toContain(`Writestarget:${cleanTarget.replace(/\s/g, "")}`);
     expect(document).toContain("User/shared edits can affect other projects");
     for (const control of ["\u001b", "\u202e"]) expect(document).not.toContain(control);
-    expect(reviewed.slice(1, 1 + reviewTitles.length)).toEqual(reviewTitles.map(() => false));
-    expect(choose.mock.calls[1 + reviewTitles.length][0]).toMatch(/^Model invocation/);
-    expect(choose.mock.calls[2 + reviewTitles.length][0]).toMatch(/^Review invocation target/);
+    expect(reviewed.slice(2, 2 + reviewTitles.length)).toEqual(reviewTitles.map(() => false));
+    expect(choose.mock.calls[2 + reviewTitles.length][0]).toMatch(/^Model invocation/);
+    expect(choose.mock.calls[3 + reviewTitles.length][0]).toMatch(/^Review invocation target/);
     expect(f.services.updateInvocation).not.toHaveBeenCalled();
     expect(ctx.ui.notify).not.toHaveBeenCalled();
   });
@@ -632,10 +578,7 @@ describe("invocation cancellation key equivalence", () => {
     const ctx = f.context({ custom: tui.custom }, "tui");
     const work = showSkillsMenu(ctx, { kind: "main" }, env, f.guard, f.services);
     try {
-      await waitFrame(tui, "Skills");
-      tui.send("\x0e");
-      tui.send("\x19");
-      await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
+      await openInvocation(tui, "\x19");
       tui.send("\x19");
       await waitFrame(tui, "Review invocation target");
       tui.send("\x19");
@@ -698,8 +641,11 @@ describe("invocation task ownership", () => {
           await waitFrame(tui, "Review invocation target");
           expect(tui.openCount).toBe(openings + 1);
           tui.send("\x07");
-          await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
+          await waitFrame(tui, /→.*Model invocation/);
           expect(tui.openCount).toBe(openings + 2);
+          tui.send("\x07");
+          await waitFrame(tui, "Select a skill to manage it.");
+          expect(tui.openCount).toBe(openings + 3);
           tui.press("ctrl+c");
           expect(await work).toBe(false);
         }
@@ -806,10 +752,7 @@ describe("invocation task ownership", () => {
       const ctx = f.context({ custom: tui.custom }, "tui");
       const work = showSkillsMenu(ctx, { kind: "main" }, env, f.guard, f.services);
       try {
-        await waitFrame(tui, "Skills");
-        tui.send("\x0e");
-        tui.send("\x19");
-        await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
+        await openInvocation(tui, "\x19");
         tui.send("\x19");
         await waitFrame(tui, "Review invocation target");
         tui.send("\x19");
@@ -832,7 +775,7 @@ describe("invocation task ownership", () => {
         expect(ctx.ui.notify).not.toHaveBeenCalled();
         expect(f.saved.has(f.loaded[0].filePath)).toBe(committed);
         tui.send("\x07");
-        await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
+        await waitFrame(tui, /→.*Model invocation/);
         tui.send("\x19");
         await waitFrame(tui, "Review invocation target");
         expect(f.services.updateInvocation).toHaveBeenCalledTimes(1);
@@ -846,7 +789,9 @@ describe("invocation task ownership", () => {
         tui.send("\x07");
         await waitFrame(tui, "Review invocation target");
         tui.send("\x07");
-        await waitFrame(tui, "Loaded skills. Select one to change model invocation.");
+        await waitFrame(tui, /→.*Model invocation/);
+        tui.send("\x07");
+        await waitFrame(tui, "Select a skill to manage it.");
         tui.send("\x07");
         await waitFrame(tui, committed ? "Close without reload" : "Workspace:");
         expect(tui.render().join("\n").includes("Reload now")).toBe(committed);
@@ -937,9 +882,12 @@ describe("invocation screen framing", () => {
       expect(tui.render().join("\n")).toMatch(focused);
     }
     try {
-      await openInvocation(tui);
+      await openManage(tui);
       tui.press("tui.select.down");
       checkFrames(/→.*Beta/);
+      tui.press("tui.select.confirm");
+      await waitFrame(tui, /→.*Model invocation/);
+      checkFrames(/→.*Model invocation/);
       tui.press("tui.select.confirm");
       await waitFrame(tui, "Writes target:");
       expect(tui.render().join("\n")).toContain("Writes target: /real-target/Beta/SKILL.md");

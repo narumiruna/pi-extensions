@@ -1,4 +1,10 @@
-import { defineMenu, type MenuDefinition, type ModelSelectorItem, type ThinkingLevel } from "@narumitw/pi-tui-kit";
+import {
+  defineMenu,
+  type MenuChoiceItem,
+  type MenuDefinition,
+  type ModelSelectorItem,
+  type ThinkingLevel,
+} from "@narumitw/pi-tui-kit";
 import { runtimeInfoLines, type ShowcaseRuntimeInfo } from "./runtime-info.js";
 
 export type ShowcaseScreen =
@@ -23,12 +29,8 @@ export type ShowcaseAction =
   | "toggleFeature"
   | "selectAllFeatures"
   | "resetFeatures"
-  | "openTask"
-  | "openConfirmation"
-  | "openLiveChoice"
-  | "openQuestionnaire"
   | "submitPrefill"
-  | "openDemo";
+  | "openExample";
 
 export type ShowcaseStandaloneInteraction =
   | "task"
@@ -64,6 +66,145 @@ export interface ShowcaseMenuRuntime {
   requestStandalone(interaction: ShowcaseStandaloneInteraction): void;
 }
 
+type ShowcaseMenuItem = MenuChoiceItem &
+  ({ to: ShowcaseScreen } | { interaction: ShowcaseStandaloneInteraction } | { close: true });
+
+const SHOWCASE_ITEMS: readonly ShowcaseMenuItem[] = [
+  {
+    id: "actions",
+    label: "Actions screen",
+    description: "Navigation, busy labels, disabled rows",
+    to: "actions",
+  },
+  {
+    id: "detail",
+    label: "Detail screen",
+    description: "Read-only wrapped prose",
+    to: "detail",
+  },
+  {
+    id: "browse",
+    label: "Browse screen",
+    description: "Searchable read-only catalog with exact details",
+    to: "browse",
+  },
+  {
+    id: "choice",
+    label: "Choice screen",
+    description: "Single selected value with details",
+    to: "choice",
+  },
+  {
+    id: "settings",
+    label: "Settings screen",
+    description: "In-memory settings-list presentation",
+    to: "settings",
+  },
+  {
+    id: "input",
+    label: "Input screen",
+    description: "Single-line value entry",
+    to: "input",
+  },
+  {
+    id: "review",
+    label: "Review screen",
+    description: "Exact text, code, or diff review with confirmation",
+    to: "review",
+  },
+  {
+    id: "multi-select",
+    label: "Multi-select screen",
+    description: "Toggles, search, and bulk actions",
+    to: "multiSelect",
+  },
+  {
+    id: "questionnaire",
+    label: "Questionnaire",
+    description: "Closes this menu, shows runQuestionnaire(), then reopens",
+    interaction: "questionnaire",
+  },
+  {
+    id: "task",
+    label: "Task loader",
+    description: "Closes this menu, shows runTask(), then reopens",
+    interaction: "task",
+  },
+  {
+    id: "confirmation",
+    label: "Confirmation",
+    description: "Closes this menu, shows runConfirmation(), then reopens",
+    interaction: "confirmation",
+  },
+  {
+    id: "live-choice",
+    label: "Live choice",
+    description: "Closes this menu, shows runLiveChoice(), then reopens",
+    interaction: "liveChoice",
+  },
+  {
+    id: "runtime",
+    label: "Runtime information",
+    description: "Version, API, and actual built module origin",
+    to: "runtime",
+  },
+  {
+    id: "prefill",
+    label: "Editable prefill",
+    description: "Edit a synthetic draft; memory only",
+    to: "prefill",
+  },
+  {
+    id: "secret",
+    label: "Synthetic secret input",
+    description: "Use fake text only; no payload in history",
+    interaction: "secret",
+  },
+  {
+    id: "model",
+    label: "Synthetic model selector",
+    description: "Current, default, selection, and memory-only save intent",
+    interaction: "model",
+  },
+  {
+    id: "thinking",
+    label: "Synthetic thinking selector",
+    description: "No real thinking-level or settings change",
+    interaction: "thinking",
+  },
+  {
+    id: "theme",
+    label: "Theme and style samples",
+    description: "Active host roles versus sample palettes; no host changes",
+    interaction: "theme",
+  },
+  {
+    id: "taskFailure",
+    label: "Task failure and retry",
+    description: "Bounded synthetic failure; select again to retry",
+    interaction: "taskFailure",
+  },
+  {
+    id: "taskCancel",
+    label: "Task cancellation",
+    description: "Cancel before a bounded safety deadline",
+    interaction: "taskCancel",
+  },
+  {
+    id: "native",
+    label: "Native pointer, wheel, and overlays",
+    description: "Native routing demo with keyboard alternatives",
+    interaction: "native",
+  },
+  {
+    id: "copy",
+    label: "In-memory copy capture",
+    description: "Synthetic exact source, failure/retry; NO OS clipboard",
+    interaction: "copy",
+  },
+  { id: "close", label: "Close", close: true },
+];
+
 export function createInitialShowcaseState(): ShowcaseState {
   return {
     profile: "Balanced",
@@ -92,7 +233,7 @@ export function createShowcaseMenu(
     start: "main",
     screens: {
       main: ({ state }) => ({
-        kind: "actions",
+        kind: "choice",
         title: "Pi TUI Kit Showcase",
         lines: [
           "Local demo for maintainers.",
@@ -101,142 +242,9 @@ export function createShowcaseMenu(
           `Synthetic model: ${state.model.id} · default: ${state.defaultModel.id}`,
           `Synthetic thinking: ${state.thinking} · default: ${state.defaultThinking}`,
         ],
-        items: [
-          {
-            id: "actions",
-            label: "Actions screen",
-            description: "Navigation, busy labels, disabled rows",
-            to: "actions",
-          },
-          {
-            id: "detail",
-            label: "Detail screen",
-            description: "Read-only wrapped prose",
-            to: "detail",
-          },
-          {
-            id: "browse",
-            label: "Browse screen",
-            description: "Searchable read-only catalog with exact details",
-            to: "browse",
-          },
-          {
-            id: "choice",
-            label: "Choice screen",
-            description: "Single selected value with details",
-            to: "choice",
-          },
-          {
-            id: "settings",
-            label: "Settings screen",
-            description: "In-memory settings-list presentation",
-            to: "settings",
-          },
-          {
-            id: "input",
-            label: "Input screen",
-            description: "Single-line value entry",
-            to: "input",
-          },
-          {
-            id: "review",
-            label: "Review screen",
-            description: "Exact text, code, or diff review with confirmation",
-            to: "review",
-          },
-          {
-            id: "multi-select",
-            label: "Multi-select screen",
-            description: "Toggles, search, and bulk actions",
-            to: "multiSelect",
-          },
-          {
-            id: "questionnaire",
-            label: "Questionnaire",
-            description: "Closes this menu, shows runQuestionnaire(), then reopens",
-            action: "openQuestionnaire",
-          },
-          {
-            id: "task",
-            label: "Task loader",
-            description: "Closes this menu, shows runTask(), then reopens",
-            action: "openTask",
-            busyLabel: "Preparing task",
-          },
-          {
-            id: "confirmation",
-            label: "Confirmation",
-            description: "Closes this menu, shows runConfirmation(), then reopens",
-            action: "openConfirmation",
-          },
-          {
-            id: "live-choice",
-            label: "Live choice",
-            description: "Closes this menu, shows runLiveChoice(), then reopens",
-            action: "openLiveChoice",
-          },
-          {
-            id: "runtime",
-            label: "Runtime information",
-            description: "Version, API, and actual built module origin",
-            to: "runtime",
-          },
-          {
-            id: "prefill",
-            label: "Editable prefill",
-            description: "Edit a synthetic draft; memory only",
-            to: "prefill",
-          },
-          {
-            id: "secret",
-            label: "Synthetic secret input",
-            description: "Use fake text only; no payload in history",
-            action: "openDemo",
-          },
-          {
-            id: "model",
-            label: "Synthetic model selector",
-            description: "Current, default, selection, and memory-only save intent",
-            action: "openDemo",
-          },
-          {
-            id: "thinking",
-            label: "Synthetic thinking selector",
-            description: "No real thinking-level or settings change",
-            action: "openDemo",
-          },
-          {
-            id: "theme",
-            label: "Theme and style samples",
-            description: "Active host roles versus sample palettes; no host changes",
-            action: "openDemo",
-          },
-          {
-            id: "taskFailure",
-            label: "Task failure and retry",
-            description: "Bounded synthetic failure; select again to retry",
-            action: "openDemo",
-          },
-          {
-            id: "taskCancel",
-            label: "Task cancellation",
-            description: "Cancel before a bounded safety deadline",
-            action: "openDemo",
-          },
-          {
-            id: "native",
-            label: "Native pointer, wheel, and overlays",
-            description: "Native routing demo with keyboard alternatives",
-            action: "openDemo",
-          },
-          {
-            id: "copy",
-            label: "In-memory copy capture",
-            description: "Synthetic exact source, failure/retry; NO OS clipboard",
-            action: "openDemo",
-          },
-          { id: "close", label: "Close", close: true },
-        ],
+        items: SHOWCASE_ITEMS,
+        action: "openExample",
+        enableSearch: true,
         hint: "close",
       }),
       runtime: ({ state }) => ({
@@ -467,8 +475,11 @@ export function createShowcaseMenu(
       }),
     },
     actions: {
-      openDemo: ({ itemId }) => {
-        if (isDemoInteraction(itemId)) runtime.requestStandalone(itemId);
+      openExample: ({ itemId }) => {
+        const item = SHOWCASE_ITEMS.find((candidate) => candidate.id === itemId);
+        if (!item) return { kind: "rejected" };
+        if ("to" in item) return { kind: "to", screen: item.to };
+        if ("interaction" in item) runtime.requestStandalone(item.interaction);
         return { kind: "close" };
       },
       submitPrefill: ({ state, value }) => {
@@ -519,28 +530,8 @@ export function createShowcaseMenu(
         appendLog(state, "Multi-select rows reset.");
         return { kind: "stay" };
       },
-      openTask: () => {
-        runtime.requestStandalone("task");
-        return { kind: "close" };
-      },
-      openConfirmation: () => {
-        runtime.requestStandalone("confirmation");
-        return { kind: "close" };
-      },
-      openLiveChoice: () => {
-        runtime.requestStandalone("liveChoice");
-        return { kind: "close" };
-      },
-      openQuestionnaire: () => {
-        runtime.requestStandalone("questionnaire");
-        return { kind: "close" };
-      },
     },
   });
-}
-
-function isDemoInteraction(value: string): value is ShowcaseStandaloneInteraction {
-  return ["secret", "model", "thinking", "theme", "taskFailure", "taskCancel", "native", "copy"].includes(value);
 }
 
 const FEATURE_IDS = ["search", "details", "bulk"] as const;

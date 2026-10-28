@@ -38,6 +38,18 @@
       "types": "./dist/document-review.d.ts",
       "import": "./dist/document-review.js"
     },
+    "./editor-status-collection": {
+      "types": "./dist/editor-status-collection.d.ts",
+      "import": "./dist/editor-status-collection.js"
+    },
+    "./editor-status-publisher": {
+      "types": "./dist/editor-status-publisher.d.ts",
+      "import": "./dist/editor-status-publisher.js"
+    },
+    "./editor-status-view": {
+      "types": "./dist/editor-status-view.d.ts",
+      "import": "./dist/editor-status-view.js"
+    },
     "./editor-status-widget": {
       "types": "./dist/editor-status-widget.d.ts",
       "import": "./dist/editor-status-widget.js"

@@ -50,9 +50,9 @@ Applied MUST rules for this revision are verified as follows:
 
 Regression tests cover action navigation without raw-content pages, per-skill move/removal, confirmation cancellation, duplicate path identity, protected resources, raw directory copying, standalone Markdown parents, clipboard failure/retry, non-default keys, selected-row restoration, main-menu custom scanning after a prior batch, and clipboard cancellation/disposal/owner replacement. Native clipboard writes are mocked so tests do not modify the operator's clipboard. An independent read-only review of the revision found no remaining actionable findings.
 
-## Model invocation migration
+## Initial model invocation migration
 
-The manager now exposes Configure model invocation for Pi's current loaded skill list. It does not replace that list with the disk inventory, add a loader or prompt hook, introduce a JSON override, register `/skill-settings`, or disable the user-level predecessor. Existing settings remain in native skill files. The complete implementation and its tests remain project-local.
+The initial migration exposed Configure model invocation for Pi's current loaded skill list; the per-skill follow-up below replaces that entrypoint. It does not replace that list with the disk inventory, add a loader or prompt hook, introduce a JSON override, register `/skill-settings`, or disable the user-level predecessor. Existing settings remain in native skill files. The complete implementation and its tests remain project-local.
 
 Select a skill, review the source and canonical target in a standard scrollable Kit review, confirm Open invocation setting, then change the native setting. The review remains usable for long paths and constrained terminals. Settings save immediately; Back and cancellation do not roll back committed writes. The main menu offers Reload now after a save. Until reload, native loaded objects and the advertised catalog remain unchanged. Inventory is refreshed after each completed save; an interrupted or failed refresh cannot leave old fingerprints available for bundle actions.
 
@@ -78,7 +78,7 @@ Independent reviews found four failure classes: cancellation before a queued cal
 
 The explicit compatibility limits are source-file edits rather than project overrides, immediate persistence with explicit reload instead of the predecessor's automatic reload, linked/package-source edits only after review, rejection of hard-linked or unsupported metadata files, and no copying of extended ACLs or other extended attributes. Files that rely on those attributes must be edited manually.
 
-## Invocation list UI revision
+## Initial invocation list UI revision
 
 The screenshot review identified three presentation problems: missing invocation state, clipped identity labels, and repeated model-facing descriptions. The revised TUI list uses name-only primary labels and compact mode/scope descriptions. Complete selected identity and active/saved states appear below the list. Full descriptions remain hidden search data. The header is one sentence. RPC labels retain mode, scope, and complete identifying paths because Kit's RPC choice adapter does not render descriptions or selected details.
 
@@ -94,6 +94,31 @@ The 24 focused list tests cover screenshot-shaped rendering without routing pros
 Independent review found a display fallback branch: Pi loads invalid names with warnings, and `SelectList` renders the raw value when its normalized label is empty. Invocation labels now have a nonempty sanitized Unnamed skill fallback, while raw path IDs remain unchanged. Public-harness regressions reproduced and verified the fix for empty, control-only, ASCII-whitespace, and Unicode-whitespace names with control-bearing paths. The complete incremental diff was audited for this class and for state accuracy, cancellation, native immutability, and path identity; no unresolved implementation finding remains.
 
 Physical-terminal acceptance remains part of the retained handoff below. Inspect the revised list on a wide terminal like the screenshot and after narrow resize, including selected path details and active/saved/pending state. Automated public-harness rendering is not physical-terminal evidence.
+
+## Per-skill invocation actions
+
+The current route is `/skills` → Manage skills → select a skill → Model invocation → target review → settings. There is no separate main-menu configuration list. PR #1727 was merged before this follow-up, so the change starts from its merged main revision.
+
+Manage combines disk inventory and the native loaded snapshot using normalized absolute skill-file identities. Bundles map to their SKILL.md file; standalone Markdown keeps its own file path. Exact matches retain the original inventory authorization and attach the native skill. Loaded-only entries are visible without acquiring an inventory record or bundle permissions. Names and inferred physical/canonical aliases never authorize a join; distinct aliases remain separate rows. All native loaded package, ancestor, linked, and standalone paths remain available independently.
+
+Applied [extension conventions](../../../docs/extension-conventions.md) and [settings conventions](../../../docs/extension-settings.md):
+
+- **Commands/UI — Test/Review/Smoke:** keep public slash-command grammar and modes, standard Kit screens/keys/framing, safe name-only rows, status/details/search, raw operation payloads, and the exact target review. Read and clone native skills only when entering Manage or a management scan. Use Kit's cancellable task presentation for target inspection.
+- **Authorization — Test/Review:** only a native loaded match enables Model invocation; only an existing eligible LocalSkill enables Move/Remove. Preserve protected bundle restrictions and pass the original inventory entry/ID to preparation. Loaded-only entries cannot invent location, fingerprint, or write authorization. Copy remains TUI-only and sends the selected raw directory path.
+- **Lifecycle/state — Test/Review:** changing selection clears the reviewed snapshot. After target inspection, revalidate selection and the native reference. After an awaited save, retain plain committed values, dirty state, and inventory invalidation, but never replace a newer selection/snapshot/catalog continuation with the old result. Preserve abort/disposal/drain and all previous pre/post-commit cancellation behavior.
+- **Persistence/prefix/boundaries — Test/Review/Smoke:** reuse the existing writer, field format, ownership checks, and tree/file queues; keep native objects and ordinary prompt/messages/tools unchanged until explicit reload. Add no package, dependency, Kit, root-test, Changeset, or predecessor change. Keep catalog and test-fixture responsibilities local and source files below the responsibility limit.
+
+Pure catalog tables cover bundle/standalone identity, directories named like Markdown files, native-only sources, duplicate names/paths, lexical path normalization, aliases, immutable inputs, raw paths, and first-entry authorization. Per-skill policy tests cover loaded/scanned/protected combinations, loaded-only source classes, original mutation identity, malformed removable bundles, exact-match-only invocation, management scanning, and stale selected-resource awaits. Existing UI/key/state/search/rendering/cancellation regressions remain in scope. Real Jiti tests include both a scanned linked skill and a registered loaded-only linked source in explicit and trusted-project loading modes.
+
+An independent read-only review found no introduced actionable finding. It identified an inherited overlapping-root issue: repeated inventory entries reached Move/Remove and were rejected as overlapping sources. Selection, preview, conflict warnings, and mutation preparation now retain the same first original entry as Manage. Regressions cover single and bulk Move/Remove, first-entry protection, original object identity, and a real overlapping-root scan followed by removal without affecting a sibling. The final complete-diff audit checked every inventory consumer, selected-resource await, cancellation/disposal path, native-state boundary, and changed route against both guides. No new guide deviation was introduced; existing deliberate limits remain below.
+
+Completed on 2026-10-27:
+
+- Dependencies were synchronized with `npm install` without manifest or lockfile changes, and Kit was rebuilt before consumer tests.
+- Local no-emit TypeScript and warning-free Biome passed. Extension-local Vitest passed 714 tests across 16 files, including all earlier invocation, cancellation, source-file, and native-loading regressions.
+- Root `npm run check` passed builds, Biome, package boundaries, and workspace typechecks. Root `npm test` passed 14,994 tests with two existing skips and no unhandled errors.
+- CLI RPC smoke passed explicit entrypoint loading and trusted-project discovery, with 28 dialogs each. Both cases exercised the new action route, linked-target off/on saves, manual-only retention after explicit reload, bundle removal, retained commands, and unchanged ordinary message serialization.
+- Print and JSON smokes rejected observably before mutation and preserved protocol output. No smoke used credentials or made model requests. Physical-terminal acceptance remains unverified, as described in the external handoff.
 
 ## Deliberate limits
 
@@ -115,6 +140,6 @@ Run the documented interactive load command:
 pi --no-extensions -e ./.pi/extensions/skills/index.ts
 ```
 
-Verify per-skill action navigation and Back, native clipboard delivery, checkbox selection/search, exact path review, non-default keys, IME positioning, bracketed paste, mouse interaction, fullscreen and regular mode, narrow resize, hard cancellation, trusted-project auto-discovery, and `/reload`. For model invocation, inspect a linked target and a long path in the review before enabling settings, toggle both values, cancel before and during a pending save, and verify explicit reload. Confirm that Back follows settings → review → loaded list and that source-file changes can affect other projects. Expected result: standard Pi/Kit interaction, no unintended mutation, and refreshed skill discovery only after explicit reload.
+Verify per-skill action navigation and Back, native clipboard delivery, checkbox selection/search, exact path review, non-default keys, IME positioning, bracketed paste, mouse interaction, fullscreen and regular mode, narrow resize, hard cancellation, trusted-project auto-discovery, and `/reload`. For model invocation, inspect a linked target and a long path in the review before enabling settings, toggle both values, cancel before and during a pending save, and verify explicit reload. Confirm that Back follows settings → review → skill actions → Manage skills, that loaded-only/protected entries cannot Move/Remove bundles, and that source-file changes can affect other projects. Expected result: standard Pi/Kit interaction, no unintended mutation, and refreshed skill discovery only after explicit reload.
 
 These physical-terminal paths remain unverified because the agent must not launch an interactive TUI from Bash. The automated loader and RPC smokes are completed evidence, not a substitute for that terminal review. No package publication, visibility change, version tag, or release workflow is authorized by this handoff.

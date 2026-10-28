@@ -21,7 +21,7 @@ This is not a separately published package. It needs the repository's installed 
 
 ## Commands
 
-1. `/skills` opens Manage installed skills, Configure model invocation, Add from GitHub, Remove skills, Move skills, Scan custom directory, Help, and Close.
+1. `/skills` opens Manage skills, Add from GitHub, Remove skills, Move skills, Scan custom directory, Help, and Close.
 2. `/skills add` asks for a public GitHub repository.
 3. `/skills add narumiruna/skills` discovers repository skills directly.
 4. `/skills remove` selects exact local paths for permanent removal.
@@ -33,14 +33,14 @@ These commands require Pi TUI or an RPC client with extension dialogs. Print and
 
 ## Model invocation
 
-Open `/skills` → Configure model invocation, select a skill, inspect Source file and Writes target in the scrollable review, choose Open invocation setting, then change Model invocation:
+Open `/skills` → Manage skills → select a skill → Model invocation, inspect Source file and Writes target in the scrollable review, choose Open invocation setting, then change Model invocation:
 
 1. `automatic`: remove the native `disable-model-invocation` field and use Pi's default model discovery.
 2. `manual only`: write `disable-model-invocation: true` to hide the skill from Pi's advertised catalog. Explicit `/skill:name` commands still work. This setting is not an access-control boundary: a model that already knows the file path can still read it.
 
-This list comes from `ctx.getSystemPromptOptions().skills`, not the disk inventory. It includes currently loaded manual-only, package, ancestor, and standalone Markdown skills. Pi keeps its discovery, filtering, and collision precedence. Newly installed or externally registered skills appear only after reload.
+Invocation availability follows `ctx.getSystemPromptOptions().skills`, not a separate loader. Manage skills combines that native loaded list with the disk inventory, including manual-only, package, ancestor, linked, and standalone Markdown sources. Only currently loaded entries enable Model invocation. Loaded-only entries cannot Move or Remove bundles. Pi keeps its discovery, filtering, and collision precedence. Newly installed or externally registered skills become loaded only after reload.
 
-Rows show the skill name, invocation mode, and scope without repeating the skill's model-facing instructions. Selected-item details show the complete source path, source, and active mode. Full descriptions remain searchable. RPC labels include mode and complete identifying paths because RPC choices do not display secondary descriptions.
+Rows show the skill name, invocation mode or Not loaded, and scope without repeating model-facing instructions. Selected-item details show the complete source path, source, active mode, warnings, and bundle restrictions. Full descriptions remain searchable. RPC labels include mode and complete identifying skill-file paths because RPC choices do not display secondary descriptions.
 
 Active describes Pi's current loaded catalog. Saved appears after inspecting the source file or completing a save. If the saved mode differs from the active mode, the row shows Reload pending and the main menu offers Reload now, including for differences already present on disk. Returning to the active value clears the row marker; reload remains available after a completed write. These UI values never modify native loaded skill objects.
 
@@ -88,11 +88,11 @@ Only native Pi resource settings are written; there is no extension settings fil
 
 ## Manage, remove, and move
 
-Manage installed skills uses a searchable choice list. Selecting a skill opens Move, Remove, Copy directory path, and Back actions, not a `SKILL.md` detail page. The action menu shows its scope, exact path, warnings, and read-only reasons. Back returns to the previous selected row. Protected skills stay selectable, but their mutation actions are disabled. The top-level Remove and Move actions remain available for multi-selection; per-skill actions use the same preparation and final confirmation.
+Manage skills uses one searchable choice list. Selecting a skill opens Model invocation, Move, Remove, Copy directory path, and Back actions, not a `SKILL.md` detail page. Model invocation requires a native loaded entry; Move and Remove require an eligible scanned bundle. The action menu shows scope, exact file path, warnings, and bundle restrictions. Back returns to the previous selected row. Protected skills stay selectable without gaining bundle mutation rights. The top-level Remove and Move actions remain available for multi-selection; per-skill bundle actions use the same preparation and final confirmation.
 
 Copy directory path is TUI-only and uses Pi's public clipboard helper; RPC shows the unavailable reason and never invokes that helper. It sends the exact raw directory path, including characters hidden by the terminal preview. For a standalone Markdown skill, it copies the enclosing directory. Copy does not edit files, run the skill, or close the action menu. Pi's clipboard API has no abort signal: accepted writes can finish after cancellation, while the flow drains the work and suppresses stale feedback. A successful dispatch does not prove that a remote terminal accepted OSC 52 clipboard content. Physical clipboard delivery remains part of the terminal handoff.
 
-The manager reports detected-on-disk skills from the four supported roots and concrete configured custom roots. Scan custom directory can inspect another container, including a previous Copy only destination. This is not a complete list of currently loaded Pi resources. Identical names remain separate path-keyed rows, and name conflicts are warnings rather than a replacement policy. Pi keeps its own discovery precedence.
+The disk inventory covers the four supported roots and concrete configured custom roots. Manage skills also retains every native loaded skill, including sources outside that inventory. Scan custom directory can inspect another container, including a previous Copy only destination. Entries join only by normalized absolute skill-file path, never by name or inferred canonical target. Overlapping inventory roots retain the first scanned entry and its bundle restrictions; single-skill and bulk operations use that entry only once. Distinct aliases remain separate rows; only the exact native loaded path enables invocation settings. Name conflicts are warnings rather than a replacement policy. Pi keeps its own discovery precedence.
 
 Remove confirms an exact list of directories and deletes complete selected bundles, never their container or unrelated siblings. Locally malformed `SKILL.md` directories remain visible and removable. Removal is permanent; it does not erase skill instructions already present in the conversation.
 
@@ -134,4 +134,4 @@ See [verification and terminal handoff](./verification.md) for completed evidenc
 
 ## Files
 
-`index.ts` forwards registration to `skills-extension.ts`. `command.ts` owns argument grammar. `menu.ts` owns Kit screens and operation drafts. `github.ts` owns remote snapshots and bounded downloads. `metadata.ts` delegates validation to Pi. `locations.ts` owns targets and native path registration. `filesystem.ts` owns inventory, snapshots, and safe per-skill bundle operations. `invocation.ts` owns loaded-skill settings snapshots and atomic saves; `frontmatter.ts` changes only the native invocation field. `mutation-queue.ts` serializes tree operations and metadata edits. `types.ts` defines contracts; `invariant.ts` checks required operation data. Tests, isolated runtime smokes, and their local configuration stay inside this directory.
+`index.ts` forwards registration to `skills-extension.ts`. `command.ts` owns argument grammar. `menu.ts` owns Kit screens and operation drafts. `github.ts` owns remote snapshots and bounded downloads. `metadata.ts` delegates validation to Pi. `locations.ts` owns targets and native path registration. `filesystem.ts` owns inventory, snapshots, and safe per-skill bundle operations. `managed-skills.ts` joins disk and loaded entries without granting bundle permissions. `invocation.ts` owns loaded-skill settings snapshots and atomic saves; `frontmatter.ts` changes only the native invocation field. `mutation-queue.ts` serializes tree operations and metadata edits. `types.ts` defines contracts; `invariant.ts` checks required operation data. Tests, isolated runtime smokes, and their local configuration stay inside this directory.

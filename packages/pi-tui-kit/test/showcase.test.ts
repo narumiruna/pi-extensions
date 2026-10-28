@@ -25,7 +25,7 @@ describe("Pi TUI Kit showcase", () => {
     ].map((screen) => resolveMenuScreen(menu, screen, state).kind);
 
     expect(screenKinds).toEqual([
-      "actions",
+      "choice",
       "actions",
       "detail",
       "browse",
@@ -37,8 +37,9 @@ describe("Pi TUI Kit showcase", () => {
     ]);
 
     const main = resolveMenuScreen(menu, "main", state);
-    expect(main.kind).toBe("actions");
-    if (main.kind !== "actions") return;
+    expect(main.kind).toBe("choice");
+    if (main.kind !== "choice") return;
+    expect(main.enableSearch).toBe(true);
     expect(main.items.map((item) => item.label)).toEqual(
       expect.arrayContaining(["Questionnaire", "Task loader", "Confirmation", "Live choice"]),
     );
@@ -60,7 +61,7 @@ describe("Pi TUI Kit showcase", () => {
       "main",
       createInitialShowcaseState(),
     );
-    const detailIndex = main.kind === "actions" ? main.items.findIndex((item) => item.id === "detail") : -1;
+    const detailIndex = main.kind === "choice" ? main.items.findIndex((item) => item.id === "detail") : -1;
     expect(detailIndex).toBeGreaterThanOrEqual(0);
     for (let index = 0; index < detailIndex; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
@@ -87,7 +88,7 @@ describe("Pi TUI Kit showcase", () => {
       createInitialShowcaseState(),
     );
     const questionnaireIndex =
-      main.kind === "actions" ? main.items.findIndex((item) => item.id === "questionnaire") : -1;
+      main.kind === "choice" ? main.items.findIndex((item) => item.id === "questionnaire") : -1;
     expect(questionnaireIndex).toBeGreaterThanOrEqual(0);
     for (let index = 0; index < questionnaireIndex; index += 1) {
       tui.press("tui.select.down");

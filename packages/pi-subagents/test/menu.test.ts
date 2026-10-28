@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test, vi } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { showSubagentsMenu } from "../src/menu.js";
+import type { ActiveJobDisplay, SubagentRuntime } from "../src/runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../src/settings.js";
 import { JOB_STATES, type JobSummary } from "../src/types.js";
+import { createSubagentWidgetController, SUBAGENT_WIDGET_KEY } from "../src/widget.js";
 
 initTheme("dark");
 
@@ -127,8 +131,8 @@ test("RPC Status, Help, empty Jobs and Settings use one manager with observable 
   assert.match(status, /Active jobs: 0/u);
   assert.match(status, /Omitted jobs: 2/u);
   assert.match(status, /Show widget: true/u);
-  assert.match(status, /Show job ID: true/u);
-  assert.match(status, /Show tools: true/u);
+  assert.match(status, /Show job ID: false/u);
+  assert.match(status, /Show tools: false/u);
   assert.match(status, /Show timing: true/u);
   assert.match(status, /User settings: \/user\/pi-subagents.json/u);
   assert.doesNotMatch(status, /hidden|\p{Bidi_Control}/u);
@@ -280,6 +284,166 @@ test("manager frame uses callback theme, bounds all heights and supports custom 
   assert.ok(roles.includes("border"));
   assert.ok(roles.includes("muted"));
   assert.equal(tui.isOpen, false);
+});
+
+const widgetCleanups: (() => void)[] = [];
+afterEach(() => {
+  for (const dispose of widgetCleanups.splice(0)) dispose();
+});
+
+function presentationFixture() {
+  const current = fixture();
+  const bindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+    "tui.select.down": "ctrl+n",
+    "tui.select.confirm": "ctrl+y",
+    "tui.select.cancel": "ctrl+x",
+  });
+  const tui = createTuiHarness({ keybindings: bindings, width: 160 });
+  current.ctx.ui.custom = tui.custom;
+  const rawId = "job_\u001b[31mone\u001b[0m";
+  let jobs: ActiveJobDisplay[] = [
+    {
+      jobId: rawId,
+      task: "First task",
+      state: "running",
+      thinkingLevel: "high",
+      defaultThinkingLevel: "medium",
+      elapsedMs: 0,
+      tools: ["read"],
+    },
+    {
+      jobId: "job_one",
+      task: "Second task",
+      state: "queued",
+      thinkingLevel: "off",
+      defaultThinkingLevel: "medium",
+      elapsedMs: 0,
+      tools: [],
+    },
+  ];
+  current.state.jobs = jobs.map(({ jobId, state }) => ({ jobId, state, createdAt: 0 }));
+  let change!: () => void;
+  const runtime = {
+    activeJobsForDisplay: () => jobs,
+    subscribeJobs: (callback: () => void) => {
+      change = callback;
+      return () => {};
+    },
+  } as unknown as SubagentRuntime;
+  const controller = createSubagentWidgetController(runtime);
+  let component: Component | undefined;
+  const theme = { fg: (_role: string, value: string) => value } as Theme;
+  Object.assign(current.ctx.ui, {
+    theme,
+    setWidget: (key: string, value: ((tui: TUI, theme: Theme) => Component) | undefined) => {
+      assert.equal(key, SUBAGENT_WIDGET_KEY);
+      component = value?.({ terminal: { rows: 36 }, requestRender() {} } as TUI, theme);
+    },
+  });
+  Object.assign(current.ctx, { isIdle: () => true, sessionManager: {} });
+  controller.start(current.ctx);
+  widgetCleanups.push(() => controller.shutdown(current.ctx));
+  const controls = controller.controls(current.ctx);
+  assert.ok(controls);
+  return {
+    ...current,
+    tui,
+    controller,
+    controls,
+    rawId,
+    options: { ...current.options, widget: controls },
+    render: () => text(component?.render(200) ?? []),
+    changeTask() {
+      jobs = jobs.map((job) => ({ ...job, task: "New assignment" }));
+      change();
+    },
+  };
+}
+
+async function choosePresentation(tui: ReturnType<typeof createTuiHarness>, label: string) {
+  for (let index = 0; index < 20; index++) {
+    if (tui.render().some((line) => stripVTControlCharacters(line).includes(`→ ${label}`))) {
+      tui.send("\u0019"); // Remapped confirm, not the default Enter.
+      await tui.waitForOpen();
+      return;
+    }
+    tui.send("\u000e");
+  }
+  throw new Error(`Menu item not found: ${label}`);
+}
+
+test("remapped widget menu controls actual presentation and disabled settings beat pin", async () => {
+  const f = presentationFixture();
+  const command = showSubagentsMenu(f.ctx, f.options);
+  await f.tui.waitForOpen();
+  await choosePresentation(f.tui, "Widget view");
+  await choosePresentation(f.tui, "Show summary");
+  const compact = f.render();
+  await choosePresentation(f.tui, "Pin view");
+  const pinned = text(f.tui.render());
+  await choosePresentation(f.tui, "Hide widget");
+  const hidden = f.render();
+  await choosePresentation(f.tui, "Show widget");
+  const shown = f.render();
+  f.state.settings.showWidget = false;
+  f.controller.update(f.ctx, f.state.settings);
+  await choosePresentation(f.tui, "Show details");
+  const disabled = f.render();
+  const disabledMenu = text(f.tui.render());
+  f.tui.send("\u0018"); // Remapped back returns to the root.
+  await f.tui.waitForOpen();
+  const root = text(f.tui.render());
+  f.tui.press("ctrl+c");
+  await command;
+  assert.match(compact, /2 active · 1 running · 1 queued/u);
+  assert.doesNotMatch(compact, /thinking:/u);
+  assert.match(pinned, /pinned: true/u);
+  assert.match(pinned, /Unpin view/u);
+  assert.equal(hidden, "");
+  assert.match(shown, /thinking: high/u);
+  assert.equal(disabled, "");
+  assert.match(disabledMenu, /Disabled by Settings/u);
+  assert.match(root, /Widget view/u);
+  assert.equal(f.options.cancelJob.mock.calls.length, 0);
+  assert.deepEqual(f.notifications, []);
+});
+
+test("item menu uses raw IDs, rejects a stale selected revision, and resets removed presentation only", async () => {
+  const f = presentationFixture();
+  const command = showSubagentsMenu(f.ctx, f.options);
+  await f.tui.waitForOpen();
+  await choosePresentation(f.tui, "Jobs");
+  await choosePresentation(f.tui, "job_one"); // Same sanitized label; first item has the raw escaped ID.
+  const details = text(f.tui.render());
+  f.changeTask(); // The selected handle is now stale.
+  await choosePresentation(f.tui, "Widget: job summary");
+  const staleResult = f.render();
+  await choosePresentation(f.tui, "Widget: job summary");
+  const compact = f.render();
+  await choosePresentation(f.tui, "Remove from widget (keep job)");
+  const removed = f.render();
+  f.tui.send("\u0018");
+  await f.tui.waitForOpen();
+  f.tui.send("\u0018");
+  await f.tui.waitForOpen();
+  await choosePresentation(f.tui, "Widget view");
+  await choosePresentation(f.tui, "Reset item views");
+  const reset = f.render();
+  f.tui.press("ctrl+c");
+  await command;
+  assert.match(details, /Job ID: job_one/u);
+  assert.equal(details.includes("\u001b[31m"), false);
+  assert.equal((staleResult.match(/thinking:/gu) ?? []).length, 2);
+  assert.equal((compact.match(/thinking:/gu) ?? []).length, 1);
+  assert.match(compact, /▶ New assignment\n/u);
+  assert.match(removed, /1 not shown \(1 removed\)/u);
+  assert.doesNotMatch(removed, /thinking: high/u);
+  assert.match(reset, /thinking: high/u);
+  assert.match(reset, /thinking: off/u);
+  assert.equal(f.state.jobs[0]?.jobId, f.rawId);
+  assert.equal(f.state.jobs.length, 2);
+  assert.equal(f.options.cancelJob.mock.calls.length, 0);
+  assert.deepEqual(f.notifications, []);
 });
 
 test.each(["print", "json"] as const)("%s does not open TUI or mutate jobs", async (mode) => {

@@ -18,7 +18,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 
 export interface RestartRequest {
   operation: "seed" | "resume" | "inspect";
@@ -84,6 +84,9 @@ async function run(request: RestartRequest): Promise<RestartResult> {
   const widgets: Array<string[] | undefined> = [];
   const notifications: string[] = [];
   const baseUI = session.extensionRunner.getUIContext();
+  let mounted: (Component & { dispose?(): void }) | undefined;
+  const renderMounted = () => widgets.push(mounted?.render(80).map(stripVTControlCharacters));
+  const tui = { terminal: { rows: 36 }, requestRender: renderMounted } as unknown as TUI;
   const ui: ExtensionUIContext = {
     ...baseUI,
     setWidget(key, content) {
@@ -91,9 +94,14 @@ async function run(request: RestartRequest): Promise<RestartResult> {
       if (request.mode === "rpc" && typeof content === "function") {
         throw new Error("RPC must receive string lines, not component factories");
       }
-      const lines =
-        typeof content === "function" ? content({ terminal: { rows: 36 } } as TUI, baseUI.theme).render(80) : content;
-      widgets.push(lines?.map(stripVTControlCharacters));
+      mounted?.dispose?.();
+      mounted = undefined;
+      if (typeof content === "function") {
+        mounted = content(tui, ui.theme);
+        renderMounted();
+      } else {
+        widgets.push(content?.map(stripVTControlCharacters));
+      }
     },
     notify(message) {
       notifications.push(message);

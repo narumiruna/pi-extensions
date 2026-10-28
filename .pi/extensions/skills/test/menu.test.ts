@@ -76,6 +76,7 @@ function context(ui: object, mode: "tui" | "rpc") {
     hasUI: true,
     ui: { ...ui, notify: vi.fn() },
     sessionManager: {},
+    getSystemPromptOptions: () => ({ skills: [] }),
     isProjectTrusted: () => true,
   } as unknown as ExtensionCommandContext;
 }
@@ -221,11 +222,11 @@ describe("declarative skills workflow", () => {
 });
 
 describe("single-skill management actions", () => {
-  const label = `Alpha · Project (Pi) · ${local.path}`;
+  const label = `Alpha · Not loaded · Project (Pi) · ${local.path}/SKILL.md`;
   it("opens actions instead of a SKILL.md detail page and returns without mutation", async () => {
     const f = fixture();
     const rpc = createRpcHarness([
-      select("Manage installed skills"),
+      select("Manage skills"),
       select(label),
       select("Back"),
       select("Back"),
@@ -238,6 +239,7 @@ describe("single-skill management actions", () => {
       "Move…",
       "Remove…",
       "[-] Copy directory path (unavailable: Clipboard copy requires Pi TUI)",
+      "[-] Model invocation (unavailable: Model invocation settings require a currently loaded Pi skill)",
       "Back",
     ]);
     expect(actions?.title).toContain(local.path);
@@ -263,7 +265,7 @@ describe("single-skill management actions", () => {
     ]);
     await showSkillsMenu(context(rpc.ui, "rpc"), { kind: "main" }, env, f.guard, f.services);
     rpc.assertConsumed();
-    expect(rpc.dialogs.some((dialog) => dialog.title.startsWith("Manage installed skills"))).toBe(true);
+    expect(rpc.dialogs.some((dialog) => dialog.title.startsWith("Manage skills"))).toBe(true);
     expect(f.services.scanInventory).toHaveBeenCalledTimes(2);
     expect(f.services.prepareOperation).not.toHaveBeenCalled();
     expect(f.apply).not.toHaveBeenCalled();
@@ -278,8 +280,8 @@ describe("single-skill management actions", () => {
     };
     f.services.scanInventory.mockResolvedValue({ skills: [local, second], warnings: [] });
     const rpc = createRpcHarness([
-      select("Manage installed skills"),
-      select(`Alpha · Project (Pi) · ${second.path}`),
+      select("Manage skills"),
+      select(`Alpha · Not loaded · Project (Pi) · ${second.path}/SKILL.md`),
       select("Remove…"),
       select("Apply changes"),
       select("Close without reload"),
@@ -287,6 +289,10 @@ describe("single-skill management actions", () => {
     await showSkillsMenu(context(rpc.ui, "rpc"), { kind: "main" }, env, f.guard, f.services);
     rpc.assertConsumed();
     expect(f.services.prepareOperation).toHaveBeenCalledWith({ kind: "remove", skills: [second] }, expect.any(Object));
+    const request = f.services.prepareOperation.mock.calls[0][0];
+    if (request.kind !== "remove") throw new Error("Expected removal");
+    expect(request.skills[0]).toBe(second);
+    expect(request.skills[0].id).toBe(second.id);
     expect(f.apply).toHaveBeenCalledTimes(1);
   });
   it("moves one chosen skill without carrying a previous batch selection", async () => {
@@ -303,8 +309,8 @@ describe("single-skill management actions", () => {
       select("Remove skills"),
       select("[ ] Alpha · Project (Pi)"),
       select("Back"),
-      select("Manage installed skills"),
-      select(`Beta · Project (Pi) · ${second.path}`),
+      select("Manage skills"),
+      select(`Beta · Not loaded · Project (Pi) · ${second.path}/SKILL.md`),
       select("Move…"),
       select("User (Pi)"),
       select("Prepare review"),
@@ -317,12 +323,16 @@ describe("single-skill management actions", () => {
       { kind: "move", target: user, skills: [second] },
       expect.any(Object),
     );
+    const request = f.services.prepareOperation.mock.calls[0][0];
+    if (request.kind !== "move") throw new Error("Expected move");
+    expect(request.skills[0]).toBe(second);
+    expect(request.skills[0].id).toBe(second.id);
     expect(f.apply).toHaveBeenCalledTimes(1);
   });
   it("cancels single-skill removal at the review without applying it", async () => {
     const f = fixture();
     const rpc = createRpcHarness([
-      select("Manage installed skills"),
+      select("Manage skills"),
       select(label),
       select("Remove…"),
       select("Back"),
@@ -340,11 +350,12 @@ describe("single-skill management actions", () => {
     const readOnlyReason = "Linked skill is read-only";
     f.services.scanInventory.mockResolvedValue({ skills: [{ ...local, readOnlyReason }], warnings: [] });
     const rpc = createRpcHarness([
-      select("Manage installed skills"),
+      select("Manage skills"),
       select(label),
       select(`[-] Move… (unavailable: ${readOnlyReason})`),
       select(`[-] Remove… (unavailable: ${readOnlyReason})`),
       select("[-] Copy directory path (unavailable: Clipboard copy requires Pi TUI)"),
+      select("[-] Model invocation (unavailable: Model invocation settings require a currently loaded Pi skill)"),
       select("Back"),
       select("Back"),
       select("Close"),
@@ -358,7 +369,7 @@ describe("single-skill management actions", () => {
   async function openActions(tui: ReturnType<typeof createTuiHarness>) {
     await waitTitle(tui, "Skills");
     tui.press("tui.select.confirm");
-    await waitTitle(tui, "Manage installed skills");
+    await waitTitle(tui, "Manage skills");
     tui.press("tui.select.confirm");
     await waitTitle(tui, "Alpha · Project (Pi)");
   }
@@ -441,12 +452,12 @@ describe("single-skill management actions", () => {
     const work = showSkillsMenu(context({ custom: tui.custom }, "tui"), { kind: "main" }, env, f.guard, f.services);
     await waitTitle(tui, "Skills");
     tui.send("\x19");
-    await waitTitle(tui, "Manage installed skills");
+    await waitTitle(tui, "Manage skills");
     tui.send("\x0e");
     tui.send("\x19");
     await waitTitle(tui, "Beta · Project (Pi)");
     tui.send("\x07");
-    await waitTitle(tui, "Manage installed skills");
+    await waitTitle(tui, "Manage skills");
     const frame = tui.render().join("\n");
     expect(frame).toMatch(/→.*Beta/);
     tui.press("ctrl+c");

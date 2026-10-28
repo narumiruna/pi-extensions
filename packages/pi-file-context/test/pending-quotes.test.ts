@@ -6,6 +6,7 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerFileQuoteExtension } from "../src/file-context.js";
+import { createPendingWidget } from "./widget-support.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "pi-file-context-pending-test-"));
@@ -112,7 +113,7 @@ test("removes an exact duplicate-looking pending quote and refreshes the widget"
     tui.press("ctrl+c");
     await running;
 
-    assert.deepEqual(widgets.get("file-context"), [
+    assert.deepEqual(createPendingWidget(widgets.get("file-context")).render(100).slice(1), [
       "Next prompt context · 1 snippet · ~4 tokens · /file-context to review",
       "1. src/example.ts · lines 1-1 · ~4 tokens",
     ]);

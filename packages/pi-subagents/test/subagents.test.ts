@@ -16,7 +16,7 @@ import { MAX_MODEL_TEXT_BYTES, MAX_MODEL_TEXT_LINES } from "../src/model-output.
 import { MAX_SKILL_SCAN_DEPTH } from "../src/resource-attachments.js";
 import { SubagentSettingsStore } from "../src/settings.js";
 import subagents, { type SubagentsDependencies } from "../src/subagents.js";
-import type { ChildRequest, ChildResult } from "../src/types.js";
+import { type ChildRequest, type ChildResult, SUBAGENT_THINKING_LEVELS } from "../src/types.js";
 import { SUBAGENT_WIDGET_KEY } from "../src/widget.js";
 
 interface RegisteredTool {
@@ -355,7 +355,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
   );
 });
 
-test("shows spawn-time thinking, tasks, timing, timeout, and selected tools above the editor", async () => {
+test("shows task-first defaults and keeps spawn-time thinking comparisons stable", async () => {
   let refreshWidget: (() => void) | undefined;
   const fakeTimer = { unref() {} } as NodeJS.Timeout;
   vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay) => {
@@ -389,23 +389,15 @@ test("shows spawn-time thinking, tasks, timing, timeout, and selected tools abov
 
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.equal(typeof factory, "function");
-  const lines = factory?.({}, identityTheme()).render(120) ?? [];
+  const component = factory?.({ terminal: { rows: 36 }, requestRender() {} }, identityTheme());
+  const lines = component?.render(120) ?? [];
   assert.equal(lines[0], "─".repeat(120));
   assert.equal(lines[1], "Subagents · 2 active");
-  assert.match(
-    lines[2] ?? "",
-    new RegExp(
-      `^▶ ${String(first.details.jobId)} · First · running · thinking: off · 1m 5s / 2m · tools: read, edit, custom_review$`,
-      "u",
-    ),
-  );
-  assert.match(
-    lines[3] ?? "",
-    new RegExp(
-      `^▶ ${String(second.details.jobId)} · Second · running · thinking: high · 0s / no timeout · tools: read, grep, find, ls$`,
-      "u",
-    ),
-  );
+  assert.equal(first.details.state, "queued");
+  assert.equal(second.details.state, "queued");
+  assert.equal(lines[2], "▶ First · thinking: off · 1m 5s / 2m");
+  assert.equal(lines[3], "▶ Second · 0s");
+  assert.doesNotMatch(lines.join("\n"), /job_|tools:|running|no timeout/u);
   (context.ctx as ExtensionContext).thinkingLevel = "low";
   mock.rawPi.setThinkingLevel("max");
   now = 66_000;
@@ -414,11 +406,12 @@ test("shows spawn-time thinking, tasks, timing, timeout, and selected tools abov
   const refreshedFactory = context.widgets.get(SUBAGENT_WIDGET_KEY) as
     | ((_tui: unknown, theme: Theme) => Component)
     | undefined;
-  const refreshedLines = refreshedFactory?.({}, identityTheme()).render(120) ?? [];
-  assert.match(refreshedLines[2] ?? "", /running · thinking: off · 1m 6s \/ 2m/u);
-  assert.match(refreshedLines[3] ?? "", /running · thinking: high · 1s \/ no timeout/u);
+  assert.equal(refreshedFactory, factory, "elapsed updates retain the visible mount");
+  const refreshedLines = component?.render(120) ?? [];
+  assert.equal(refreshedLines[2], "▶ First · thinking: off · 1m 6s / 2m");
+  assert.equal(refreshedLines[3], "▶ Second · 1s");
   assert.doesNotMatch(refreshedLines.join("\n"), /thinking: low|thinking: max/u);
-  for (const line of refreshedFactory?.({}, identityTheme()).render(24) ?? []) {
+  for (const line of component?.render(24) ?? []) {
     assert.ok(visibleWidth(line) <= 24);
   }
 
@@ -436,7 +429,7 @@ test.each(["rpc", "json", "print"])("does not install the component widget in %s
   assert.equal(context.widgets.has(SUBAGENT_WIDGET_KEY), false);
 });
 
-test("displays the Pi fallback thinking level at spawn without tracking later parent changes", async () => {
+test("hides the inherited Pi fallback thinking level without tracking later parent changes", async () => {
   const requests: ChildRequest[] = [];
   const { mock, context } = await setup(
     {
@@ -459,9 +452,10 @@ test("displays the Pi fallback thinking level at spawn without tracking later pa
   const next = await spawnJob(mock, context, "New parent level");
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.ok(factory);
-  const lines = factory({}, identityTheme()).render(200);
-  assert.match(lines[2] ?? "", /Reason carefully · running · thinking: xhigh/u);
-  assert.match(lines[3] ?? "", /New parent level · running · thinking: max/u);
+  const lines = factory({ terminal: { rows: 36 }, requestRender() {} }, identityTheme()).render(200);
+  assert.match(lines[2] ?? "", /^▶ Reason carefully · \d+s$/u);
+  assert.match(lines[3] ?? "", /^▶ New parent level · \d+s$/u);
+  assert.doesNotMatch(lines.join("\n"), /thinking:/u);
   assert.deepEqual(
     requests.map(({ thinkingLevel }) => thinkingLevel),
     ["xhigh", "max"],
@@ -469,6 +463,57 @@ test("displays the Pi fallback thinking level at spawn without tracking later pa
   assert.deepEqual(requests[0]?.tools, []);
   await cancelJob(mock, context, String(spawned.details.jobId));
   await cancelJob(mock, context, String(next.details.jobId));
+});
+
+test.each(SUBAGENT_THINKING_LEVELS)("hides inherited and explicit default thinking %s only", async (level) => {
+  const requests: ChildRequest[] = [];
+  const { mock, context } = await setup(
+    {
+      now: () => 0,
+      runChild: (request) => {
+        requests.push(request);
+        return waitForCancellation(request);
+      },
+    },
+    { thinkingLevel: "medium" },
+    { mode: "tui", thinkingLevel: level },
+  );
+  const different = level === "off" ? "max" : "off";
+  const results = [];
+  for (const params of [
+    { task: "Inherited" },
+    { task: "Explicit default", thinkingLevel: level },
+    { task: "Different level", thinkingLevel: different },
+  ]) {
+    results.push(await tool(mock, "subagent_spawn").execute("spawn", params, undefined, undefined, context.ctx));
+  }
+  const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as (_tui: unknown, theme: Theme) => Component;
+  const component = factory({ terminal: { rows: 36 }, requestRender() {} }, identityTheme());
+  const before = component.render(200);
+  assert.deepEqual(before.slice(2), [
+    "▶ Inherited · 0s",
+    "▶ Explicit default · 0s",
+    `▶ Different level · thinking: ${different} · 0s`,
+  ]);
+
+  (context.ctx as ExtensionContext).thinkingLevel = different;
+  mock.rawPi.setThinkingLevel(different);
+  await spawnJob(mock, context, "New default");
+  const after = component.render(200);
+  assert.deepEqual(after.slice(2, 5), before.slice(2));
+  assert.equal(after[5], "▶ New default · 0s");
+  assert.deepEqual(
+    requests.map((request) => request.thinkingLevel),
+    [level, level, different, different],
+  );
+  for (const request of requests) assert.equal(Object.hasOwn(request, "defaultThinkingLevel"), false);
+  assert.doesNotMatch(
+    JSON.stringify([
+      results,
+      await tool(mock, "subagent_inspect").execute("inspect", {}, undefined, undefined, context.ctx),
+    ]),
+    /defaultThinkingLevel|thinkingLevel/u,
+  );
 });
 
 test("rejects invalid spawn arguments and nesting before child launch", async () => {

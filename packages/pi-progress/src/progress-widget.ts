@@ -4,7 +4,11 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { renderCompletionSummary, renderProgressWidget, sanitizeProgressText } from "./progress-renderer.js";
+import { createProgressPresentation, type ProgressPresentation, WIDGET_KEY } from "./progress-presentation.js";
+import { renderProgressWidget, sanitizeProgressText } from "./progress-renderer.js";
+
+export { COMPLETION_SUMMARY_MS, WIDGET_KEY } from "./progress-presentation.js";
+
 import { showProgressSettings } from "./progress-settings-ui.js";
 import {
   allProgressCompleted,
@@ -33,12 +37,6 @@ import {
   saveProgressSettings,
 } from "./settings.js";
 
-export const WIDGET_KEY = "progress";
-export const COMPLETION_SUMMARY_MS = 3_000;
-const WIDGET_OPTIONS = { placement: "aboveEditor" } as const;
-// RPC provides no terminal dimensions and ignores component factories.
-const RPC_WIDGET_WIDTH = 80;
-
 export interface ProgressWidgetDependencies {
   loadSettings?: typeof loadProgressSettings;
   saveSettings?: typeof saveProgressSettings;
@@ -46,106 +44,87 @@ export interface ProgressWidgetDependencies {
   clearTimeout?: typeof globalThis.clearTimeout;
 }
 
+type CyclePhase = "idle" | "maintenance" | "unconfirmed" | "auto-preparing" | "preparing" | "running";
+
 export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: ProgressWidgetDependencies = {}): void {
   const readSettings = dependencies.loadSettings ?? loadProgressSettings;
   const writeSettings = dependencies.saveSettings ?? saveProgressSettings;
   const scheduleTimeout = dependencies.setTimeout ?? globalThis.setTimeout;
   const cancelTimeout = dependencies.clearTimeout ?? globalThis.clearTimeout;
   let activeSession: ExtensionContext["sessionManager"] | undefined;
-  let activeWidgetOwner: { sessionManager: ExtensionContext["sessionManager"]; clear(): void } | undefined;
+  let presentation: ProgressPresentation | undefined;
   let steps: ProgressStep[] = [];
   let settings = cloneDefaultSettings();
   let restoredBoundary: { summaryEpoch: string; content: string } | undefined;
   let settingsController = new AbortController();
+  let controlsController = new AbortController();
+  let displayGeneration = 0;
+  let cyclePhase: CyclePhase = "idle";
+  let cycleFailed = false;
   let settingsReady = false;
   let settingsScreenOpen = false;
   const settingsTasks = new Set<Promise<void>>();
   let generation = 0;
-  let completionTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  let completionToken = 0;
-  let widgetHidden = false;
 
   const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
-  const clearActiveWidget = (): void => {
-    activeWidgetOwner?.clear();
-    activeWidgetOwner = undefined;
+  const disposePresentation = (): void => {
+    try {
+      // Clear the exact key before invalidating its owner, even when UI cleanup fails.
+      presentation?.dispose();
+    } finally {
+      presentation = undefined;
+      displayGeneration += 1;
+    }
   };
 
-  const cancelCompletionSummary = (): void => {
-    completionToken += 1;
-    if (completionTimer !== undefined) cancelTimeout(completionTimer);
-    completionTimer = undefined;
+  const releaseSession = (): void => {
+    try {
+      disposePresentation();
+    } finally {
+      settingsController.abort();
+      controlsController.abort();
+      settingsReady = false;
+      settingsScreenOpen = false;
+      generation += 1;
+      steps = [];
+      settings = cloneDefaultSettings();
+      restoredBoundary = undefined;
+      activeSession = undefined;
+      cyclePhase = "idle";
+      cycleFailed = false;
+    }
   };
 
   const publish = (ctx: ExtensionContext): void => {
-    if (!ownsSession(ctx) || !ctx.hasUI) return;
-    if (!settings.enabled || steps.length === 0 || widgetHidden) {
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-      return;
-    }
-
-    const snapshot = cloneProgressSteps(steps);
-    const widgetSettings = { ...settings };
-    if (ctx.mode === "rpc") {
-      ctx.ui.setWidget(
-        WIDGET_KEY,
-        renderProgressWidget(snapshot, ctx.ui.theme, RPC_WIDGET_WIDTH, { settings: widgetSettings }),
-        WIDGET_OPTIONS,
-      );
-      return;
-    }
-    ctx.ui.setWidget(
-      WIDGET_KEY,
-      (tui, theme) => ({
-        render: (width) =>
-          renderProgressWidget(snapshot, theme, width, {
-            settings: widgetSettings,
-            terminalRows: tui.terminal.rows,
-          }),
-        invalidate: () => {},
-      }),
-      WIDGET_OPTIONS,
-    );
+    if (ownsSession(ctx)) presentation?.update(steps, settings);
   };
 
-  const publishCompletionSummary = (ctx: ExtensionContext): void => {
-    cancelCompletionSummary();
-    widgetHidden = false;
-    if (!ownsSession(ctx) || !ctx.hasUI || !settings.enabled) {
-      publish(ctx);
-      return;
+  const finishCycle = (eligible: boolean): void => {
+    try {
+      presentation?.view.settled(eligible);
+    } finally {
+      cyclePhase = "idle";
+      cycleFailed = false;
     }
+  };
 
-    const total = steps.length;
-    if (ctx.mode === "rpc") {
-      ctx.ui.setWidget(WIDGET_KEY, renderCompletionSummary(total, ctx.ui.theme, RPC_WIDGET_WIDTH), WIDGET_OPTIONS);
-    } else {
-      ctx.ui.setWidget(
-        WIDGET_KEY,
-        (_tui, theme) => ({
-          render: (width) => renderCompletionSummary(total, theme, width),
-          invalidate: () => {},
-        }),
-        WIDGET_OPTIONS,
-      );
+  const startCycle = (phase: Exclude<CyclePhase, "idle" | "maintenance">): void => {
+    if (cyclePhase === "idle" || cyclePhase === "maintenance") cycleFailed = false;
+    cyclePhase = phase;
+    presentation?.view.agentStarted();
+  };
+
+  const syncActiveCycle = (ctx: ExtensionContext): void => {
+    if (!ownsSession(ctx)) return;
+    if (ctx.isIdle()) {
+      // Preparation and maintenance can end without agent_settled.
+      if (cyclePhase !== "idle" && cyclePhase !== "running") finishCycle(false);
+    } else if (cyclePhase === "idle" || cyclePhase === "maintenance") {
+      // An earlier extension can still hold before_agent_start. Keep this
+      // provisional exclusion until a public run or maintenance hook identifies it.
+      startCycle(ctx.signal === undefined ? "unconfirmed" : "running");
     }
-    const ownerSession = activeSession;
-    const token = completionToken;
-    completionTimer = scheduleTimeout(() => {
-      if (
-        completionToken !== token ||
-        activeSession !== ownerSession ||
-        ctx.sessionManager !== ownerSession ||
-        !settings.enabled ||
-        !allProgressCompleted(steps)
-      ) {
-        return;
-      }
-      completionTimer = undefined;
-      widgetHidden = true;
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-    }, COMPLETION_SUMMARY_MS);
   };
 
   pi.registerTool({
@@ -168,12 +147,10 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       }
       const nextSteps = validateProgressArguments(params).steps;
       const wasComplete = allProgressCompleted(steps);
-      cancelCompletionSummary();
-      widgetHidden = false;
+      presentation?.showOnUpdate();
       steps = cloneProgressSteps(nextSteps);
       const becameComplete = steps.length > 0 && allProgressCompleted(steps) && !wasComplete;
-      if (becameComplete) publishCompletionSummary(ctx);
-      else publish(ctx);
+      presentation?.update(steps, settings, becameComplete);
 
       const details: ProgressDetails = {
         version: PROGRESS_DETAILS_VERSION,
@@ -221,17 +198,14 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
         // A committed save still applies after the interaction closes, not after owner replacement.
         if (!isCurrent()) return;
         settings = cloneSettings(next);
-        if (!settings.enabled) cancelCompletionSummary();
-        if (completionTimer === undefined) publish(ctx);
+        publish(ctx);
       },
     });
   };
 
   const hideWidget = (ctx: ExtensionContext): void => {
     if (!ownsSession(ctx)) return;
-    cancelCompletionSummary();
-    widgetHidden = true;
-    publish(ctx);
+    presentation?.clear();
     ctx.ui.notify("Progress widget cleared. Saved progress is unchanged.", "info");
   };
 
@@ -265,8 +239,13 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       }
       settingsScreenOpen = true;
       const ownerGeneration = generation;
-      const ownerSignal = settingsController.signal;
-      const isCurrent = () => ownsSession(ctx) && generation === ownerGeneration && !ownerSignal.aborted;
+      const ownerDisplay = displayGeneration;
+      const ownerSignal = controlsController.signal;
+      const isCurrent = () =>
+        displayGeneration === ownerDisplay &&
+        generation === ownerGeneration &&
+        !ownerSignal.aborted &&
+        ownsSession(ctx);
       const task = (async () => {
         if (route === "settings") {
           await openSettings(ctx, ownerSignal, isCurrent);
@@ -280,7 +259,17 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
           getState: () => ({
             settings: cloneSettings(settings),
             settingsPath: progressSettingsPath(),
-            widget: !settings.enabled ? "disabled" : widgetHidden ? "hidden" : steps.length === 0 ? "empty" : "visible",
+            widget: !settings.enabled
+              ? "disabled"
+              : presentation?.hidden
+                ? "hidden"
+                : steps.length === 0
+                  ? "empty"
+                  : "visible",
+            view: presentation?.view.mode ?? "default",
+            pinned: presentation?.view.pinned ?? false,
+            trigger: presentation?.view.trigger ?? "manual",
+            items: presentation?.items() ?? [],
             total: steps.length,
             completed: steps.filter((step) => step.status === "completed").length,
             inProgress: steps.filter((step) => step.status === "in_progress").length,
@@ -290,6 +279,21 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
             if (isCurrent()) hideWidget(ctx);
           },
           showSettings: (signal) => openSettings(ctx, signal, isCurrent),
+          setView: (mode) => {
+            if (isCurrent()) presentation?.show(mode);
+          },
+          setPinned: (pinned) => {
+            if (isCurrent()) presentation?.view.setPinned(pinned);
+          },
+          setTrigger: (trigger) => {
+            if (!isCurrent()) return;
+            syncActiveCycle(ctx);
+            presentation?.view.setTrigger(trigger);
+          },
+          item: (id) => (isCurrent() ? presentation?.item(id) : undefined),
+          refresh: () => {
+            if (isCurrent()) presentation?.refresh();
+          },
         });
       })();
       settingsTasks.add(task);
@@ -309,30 +313,30 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    settingsController.abort();
-    cancelCompletionSummary();
-    clearActiveWidget();
-
-    settingsReady = false;
-    settingsScreenOpen = false;
+    // A failed old-owner clear invalidates pending reads but must not acquire new UI.
+    releaseSession();
+    controlsController = new AbortController();
     settingsController = new AbortController();
     const ownerController = settingsController;
-    generation += 1;
     const ownerGeneration = generation;
     activeSession = ctx.sessionManager;
-    if (ctx.hasUI) {
-      const ownerSession = ctx.sessionManager;
-      activeWidgetOwner = {
-        sessionManager: ownerSession,
-        clear: () => ctx.ui.setWidget(WIDGET_KEY, undefined),
-      };
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-    }
-    widgetHidden = false;
+    // Clear leftovers at owner acquisition, not on ordinary publications.
+    if (ctx.hasUI && (ctx.mode === "tui" || ctx.mode === "rpc")) ctx.ui.setWidget(WIDGET_KEY, undefined);
+    cyclePhase = ctx.signal === undefined ? "idle" : "running";
+    cycleFailed = false;
     settings = cloneDefaultSettings();
     restoreBranchState(ctx);
-    // The completion summary is a live transition. Do not reopen a finished snapshot.
-    if (allProgressCompleted(steps)) widgetHidden = true;
+    const ownerDisplay = displayGeneration;
+    presentation = createProgressPresentation({
+      context: ctx,
+      isCurrent: () => displayGeneration === ownerDisplay && ownsSession(ctx),
+      settings,
+      setTimeout: scheduleTimeout,
+      clearTimeout: cancelTimeout,
+    });
+    // Do not publish defaults before the settings read completes.
+    presentation.reset(steps, true, false);
+    if (cyclePhase !== "idle") presentation.view.agentStarted();
 
     let loaded: ProgressSettingsLoadResult;
     try {
@@ -347,6 +351,9 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       };
     }
     if (ownerController.signal.aborted || ownerGeneration !== generation || !ownsSession(ctx)) return;
+    // Startup can attach after agent_start, or a run can begin while settings
+    // load. Seed the current cycle before a user can arm a "future cycle" rule.
+    syncActiveCycle(ctx);
     settings = cloneSettings(loaded.settings);
     settingsReady = true;
     if (loaded.kind === "invalid" && ctx.hasUI) {
@@ -356,6 +363,50 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       );
     }
     publish(ctx);
+  });
+
+  // A cycle spans retries and queued continuations until agent_settled. Input
+  // submission is not consumption; custom messages are not user-role messages.
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    // This hook starts a new high-level run. Only its earlier automatic
+    // compaction belongs to the same preparation; an unfinished prior run does not.
+    if (cyclePhase !== "auto-preparing" && cyclePhase !== "unconfirmed") finishCycle(false);
+    startCycle("preparing");
+  });
+  pi.on("session_before_compact", (event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    if (event.reason === "manual") {
+      finishCycle(false);
+      cyclePhase = "maintenance";
+    } else {
+      if (cyclePhase === "preparing" || cyclePhase === "maintenance") finishCycle(false);
+      if (cyclePhase === "idle" || cyclePhase === "unconfirmed") startCycle("auto-preparing");
+    }
+  });
+  pi.on("session_before_tree", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    finishCycle(false);
+    cyclePhase = "maintenance";
+  });
+  pi.on("input", (_event, ctx) => {
+    // Observe idle recovery only. Input is not accepted-message evidence.
+    if (ownsSession(ctx) && ctx.isIdle()) finishCycle(false);
+  });
+  pi.on("agent_start", (_event, ctx) => {
+    if (ownsSession(ctx)) startCycle("running");
+  });
+  pi.on("message_start", (event, ctx) => {
+    if (ownsSession(ctx) && event.message.role === "user") presentation?.view.userMessage();
+  });
+  pi.on("message_end", (event, ctx) => {
+    if (ownsSession(ctx) && event.message.role === "assistant") {
+      cycleFailed = event.message.stopReason === "error" || event.message.stopReason === "aborted";
+    }
+  });
+  pi.on("agent_settled", (event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    finishCycle(!event.aborted && !cycleFailed);
   });
 
   pi.on("context", (event: ContextEvent, ctx) => {
@@ -378,26 +429,49 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
 
   pi.on("session_tree", (_event, ctx) => {
     if (!ownsSession(ctx)) return;
-    cancelCompletionSummary();
-    widgetHidden = false;
+    finishCycle(false);
+    cyclePhase = "maintenance";
+    // Abort menus before resetting handles and the branch presentation generation.
+    controlsController.abort();
+    try {
+      disposePresentation();
+    } catch (error) {
+      // Failed branch cleanup cannot retain a startup read tied to the old context.
+      settingsController.abort();
+      generation += 1;
+      throw error;
+    } finally {
+      settingsScreenOpen = false;
+    }
+    controlsController = new AbortController();
+    const ownerDisplay = displayGeneration;
     restoreBranchState(ctx);
-    publish(ctx);
+    presentation = createProgressPresentation({
+      context: ctx,
+      isCurrent: () => displayGeneration === ownerDisplay && ownsSession(ctx),
+      settings,
+      setTimeout: scheduleTimeout,
+      clearTimeout: cancelTimeout,
+    });
+    presentation.reset(steps, false, settingsReady);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     if (!ownsSession(ctx)) return;
-    settingsController.abort();
-    settingsReady = false;
-    settingsScreenOpen = false;
-    generation += 1;
-    cancelCompletionSummary();
-    if (activeWidgetOwner?.sessionManager === ctx.sessionManager) clearActiveWidget();
-    steps = [];
-    settings = cloneDefaultSettings();
-    restoredBoundary = undefined;
-    widgetHidden = false;
-    activeSession = undefined;
-    await Promise.allSettled([...settingsTasks]);
+    const failures: unknown[] = [];
+    try {
+      releaseSession();
+    } catch (error) {
+      failures.push(error);
+    }
+    // Ignored cancellation can leave persistence or a menu pending. Join it even
+    // after display cleanup fails, then report every failure to the lifecycle caller.
+    const results = await Promise.allSettled([...settingsTasks]);
+    for (const result of results) {
+      if (result.status === "rejected") failures.push(result.reason);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Progress shutdown failed");
   });
 }
 

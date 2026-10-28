@@ -130,6 +130,7 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Menus and standalone interactions](./docs/api.md#-complete-menu-example) — typed actions, document reviews, multi-selects, tasks, confirmations, live previews, masked secrets, questionnaires, and custom components.
 - [Default-aware selectors](./docs/api.md#searchable-default-aware-selectors) — searchable choices with current/default state and save-default shortcuts.
 - [Standard screens](./docs/api.md#-standard-screens) — actions, detail, browse, choice, settings, input, review, and multi-select.
+- [Responsive list presentation](./docs/responsive-lists-uiux.md) — UI/UX findings, Codex visual proposal, before/after frames, and verification.
 - [Full-source document copy](./docs/api.md#full-source-document-copy) — explicit owner callbacks, raw-source safety, key priority, draining, and TUI-only behavior.
 - [Runtime and modes](./docs/api.md#-runtime-and-mode-behavior) — TUI/RPC adaptation, result types, cancellation, and session ownership.
 - [Ownership boundary](./docs/api.md#-ownership-boundary) — what Kit owns and what each extension must keep local.
@@ -137,6 +138,8 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Mermaid Markdown transformers](./docs/api.md#mermaid-markdown-transformers) — lazy preparation, final-message transformation, fallback behavior, and lifecycle ownership.
 - [Public exports and compatibility history](./docs/api.md#-public-api) — helpers, types, focused subpaths, and API-version changes.
 - [Horizontal rules](./docs/api.md#-horizontal-rules) and [editor status widgets](./docs/api.md#-editor-status-widgets) — passive, width-safe presentation components.
+- [Editor status presentation](./docs/editor-status-presentation.md) — optional stable snapshot publication, explicit view controls, and bounded consumer-local items without taking over Pi's layout.
+- [Editor status presentation](./docs/editor-status-presentation.md) — stable snapshots, session-local view controls, and bounded item collections with consumer-owned policy.
 - [Bounded frames](./docs/api.md#bounded-frames) and [configured keys](./docs/api.md#configured-keys) — row mappings and key syntax helpers with caller-owned input policy.
 
 The consuming extension owns domain state, persistence, confirmations, and session signals.
@@ -158,6 +161,7 @@ Both commands build Kit before starting Pi with automatic extension and skill lo
 Pi must be available on `PATH`; the launcher loads only the trusted repository demo, which runs with Pi's permissions.
 
 In Pi TUI mode, run `/tui-kit-showcase` without arguments to preview action, detail, browse, choice, settings, input, review, and multi-select screens.
+Type in the main menu to filter demo names and descriptions; spaces are part of the query. Use the configured confirm key (Enter by default) to open a matching demo, or clear the search text to show all entries.
 The menu also includes masked synthetic input, editable prefill, model/thinking selectors, theme/style samples, bounded task success/failure/cancellation, native pointer/overlay routing, and in-memory copy capture. It reopens after each standalone interaction. Runtime information identifies the local built Kit version, API version, and sanitized resolved module origin.
 All demo state stays in memory and resets on each command or session replacement. Save-default selector intent changes only demo state; no Pi settings or real session model changes occur. Enter only synthetic values in secret examples.
 The copy demo deliberately fails its first attempt, then captures exact synthetic source in memory; it never writes the system clipboard. Native examples do not replace Pi's renderer or layout. See the [showcase verification and release handoff](./docs/showcase-verification.md) for evidence, physical terminal steps, and unverified paths.

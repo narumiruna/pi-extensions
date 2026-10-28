@@ -182,12 +182,28 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   async () => {
     const f = fixture();
     try {
+      const active = readFileSync(f.settingsPath);
+      const revision = f.draft.revision;
       chmodSync(f.draft.directory, 0o500);
-      assert.throws(() => f.draft.dispose(), /EACCES|EPERM/u);
+      // Recursive removal can report a child permission error or ENOTEMPTY on
+      // its parent. The contract is an observable failure, not a specific errno.
+      assert.throws(() => f.draft.dispose(), Error);
+      assert.equal(existsSync(f.draft.directory), true);
+      assert.equal(existsSync(f.draft.path), true);
+      await assert.rejects(f.read.execute("closed", { path: f.draft.path }), /owner/u);
       await assert.rejects(f.write.execute("closed", { path: f.draft.path, content: "bad" }), /owner/u);
+      await assert.rejects(
+        f.edit.execute("closed", { path: f.draft.path, edits: [{ oldText: "$model", newText: "$directory" }] }),
+        /owner/u,
+      );
+      assert.throws(() => f.draft.rawDocument, /owner/u);
+      assert.throws(() => f.draft.assertRevision(revision), /owner/u);
+      assert.deepEqual(readFileSync(f.settingsPath), active);
       chmodSync(f.draft.directory, 0o700);
       f.draft.dispose();
+      f.draft.dispose();
       assert.equal(existsSync(f.draft.directory), false);
+      await assert.rejects(f.read.execute("removed", { path: f.draft.path }), /owner/u);
     } finally {
       if (existsSync(f.draft.directory)) chmodSync(f.draft.directory, 0o700);
       f.dispose();

@@ -7,6 +7,7 @@ import { prepareOperation, scanInventory } from "./filesystem.ts";
 import { discoverRepository, downloadBundles, parseRepository } from "./github.ts";
 import { type InvocationSnapshot, readInvocation, updateInvocation } from "./invocation.ts";
 import { applyRegistration, customLocation, loadLocations, previewRegistration } from "./locations.ts";
+import { getManagedSkills, type ManagedSkill } from "./managed-skills.ts";
 import type {
   Environment,
   Guard,
@@ -27,8 +28,8 @@ export const HELP = [
   "Complete directories are copied. References outside each selected bundle are not copied or rewritten.",
   "Project means the current Pi working directory. Shared locations can also be read by compatible agents.",
   "Existing destinations are skipped; duplicate names can still conflict under Pi's native discovery rules.",
-  "Manage installed skills opens per-skill actions for scanned local locations, not every loaded Pi resource. Protected bundles cannot be moved or removed.",
-  "Configure model invocation lists native loaded skills, including manual-only skills and package sources. Select a skill to inspect its actual write target before changing its setting.",
+  "Manage skills combines detected bundles and native loaded skills. Select a skill for Model invocation, Move, Remove, or Copy directory path.",
+  "Only native loaded skills enable Model invocation; only scanned bundles can enable Move/Remove. Protected bundles remain protected. Invocation changes require a target review.",
   "Invocation settings save immediately to the source file, including linked targets. User/shared edits affect other projects; package updates can replace edits. Escape does not undo saves.",
   "Single-skill Move and Remove reuse batch confirmation. Copy directory path sends the exact raw path to the clipboard in TUI only.",
   "Custom paths can be registered in native project/user skills settings, or copied without registration.",
@@ -65,7 +66,6 @@ type Screen =
   | "review"
   | "manage"
   | "skill-actions"
-  | "invocation"
   | "invocation-review"
   | "invocation-setting"
   | "help"
@@ -84,12 +84,12 @@ type Action =
   | "confirm"
   | "inventory-path"
   | "scan"
+  | "manage"
   | "manage-skill"
   | "move-one"
   | "remove-one"
   | "copy-directory"
   | "manage-scan"
-  | "configure-invocation"
   | "select-invocation"
   | "review-invocation"
   | "save-invocation"
@@ -114,7 +114,6 @@ interface State {
   managedId?: string;
   copyMessage?: string;
   loadedSkills: Skill[];
-  invocationId?: string;
   invocation?: InvocationSnapshot;
   invocationChanged: boolean;
   invocationValues: Map<string, boolean>;
@@ -186,35 +185,58 @@ function invocationNeedsReload(state: State): boolean {
   );
 }
 
-function invocationItems(state: State, rpc: boolean) {
-  return state.loadedSkills.map((skill) => {
-    const active = !skill.disableModelInvocation;
-    const saved = state.invocationValues.get(skill.filePath);
-    const mode = invocationMode(saved ?? active);
+function managedSkills(state: State) {
+  return getManagedSkills(state.inventory.skills, state.loadedSkills).sort((left, right) =>
+    safe(left.name).localeCompare(safe(right.name)),
+  );
+}
+
+function managedScope(skill: ManagedSkill): string {
+  return safe(
+    skill.local?.location.label ??
+      (skill.loaded?.sourceInfo.scope === "user"
+        ? "User"
+        : skill.loaded?.sourceInfo.scope === "project"
+          ? "Project"
+          : "Unknown"),
+  );
+}
+
+function managedItems(state: State, rpc: boolean) {
+  return managedSkills(state).map((skill) => {
+    const loaded = skill.loaded;
+    const active = loaded ? !loaded.disableModelInvocation : undefined;
+    const saved = loaded ? state.invocationValues.get(loaded.filePath) : undefined;
+    const mode = active === undefined ? "Not loaded" : invocationMode(saved ?? active);
     // SelectList falls back to its raw value when the normalized label is empty.
     const name = safe(skill.name).trim() || "Unnamed skill";
     const pending = saved !== undefined && saved !== active;
-    const scope =
-      skill.sourceInfo.scope === "user" ? "User" : skill.sourceInfo.scope === "project" ? "Project" : "Unknown";
+    const scope = managedScope(skill);
     return {
-      id: skill.filePath,
-      label: rpc
-        ? `${name} · ${mode}${pending ? " (reload pending)" : ""} · ${safe(skill.sourceInfo.scope ?? "unknown scope")} · ${safe(skill.filePath)}`
-        : name,
+      id: skill.id,
+      label: rpc ? `${name} · ${mode}${pending ? " (reload pending)" : ""} · ${scope} · ${safe(skill.filePath)}` : name,
       description: `${mode} · ${scope}${pending ? " · Reload pending" : ""}`,
       details: [
         `Skill: ${name}`,
         `File: ${safe(skill.filePath)}`,
-        `Source: ${scope} · ${safe(skill.sourceInfo.source)}`,
-        `Active: ${invocationMode(active)}${saved !== undefined ? ` · Saved: ${mode}${pending ? " (reload pending)" : ""}` : ""}`,
+        `Source: ${scope}${loaded ? ` · ${safe(loaded.sourceInfo.source)}` : ""}`,
+        active === undefined
+          ? "Not currently loaded by Pi."
+          : `Active: ${invocationMode(active)}${saved !== undefined ? ` · Saved: ${mode}${pending ? " (reload pending)" : ""}` : ""}`,
+        ...(skill.local?.warnings.map(safe) ?? []),
+        ...(skill.local?.readOnlyReason ? [`Bundle actions: ${safe(skill.local.readOnlyReason)}`] : []),
       ],
-      searchText: `${safe(skill.name)} ${safe(skill.description)} ${safe(skill.filePath)} ${safe(skill.sourceInfo.source)}`,
+      searchText: `${safe(skill.name)} ${safe(skill.description)} ${safe(skill.filePath)} ${safe(loaded?.description ?? "")} ${safe(loaded?.sourceInfo.source ?? "")}`,
     };
   });
 }
 
+function inventorySkills(state: State) {
+  return getManagedSkills(state.inventory.skills, []).flatMap((skill) => (skill.local ? [skill.local] : []));
+}
+
 function selectedLocals(state: State) {
-  return state.inventory.skills.filter((skill) => state.selected.has(skill.id) && !skill.readOnlyReason);
+  return inventorySkills(state).filter((skill) => state.selected.has(skill.id) && !skill.readOnlyReason);
 }
 
 function selectionItems(state: State, rpc: boolean) {
@@ -229,7 +251,7 @@ function selectionItems(state: State, rpc: boolean) {
       disabledReason: skill.disabledReason,
     }));
   }
-  return state.inventory.skills.map((skill) => ({
+  return inventorySkills(state).map((skill) => ({
     id: skill.id,
     label: `${safe(skill.name)} · ${safe(skill.location.label)}${rpc ? ` · ${safe(skill.path)}` : ""}`,
     description: `${skill.path}${skill.warnings.length ? ` — ${skill.warnings.join("; ")}` : ""}`,
@@ -252,7 +274,7 @@ function previewItems(state: State, rpc: boolean) {
         detailDocument: { content: skill.content, format: { kind: "text" as const } },
       }));
   }
-  return state.inventory.skills
+  return inventorySkills(state)
     .filter((skill) => state.selected.has(skill.id))
     .map((skill) => ({
       id: skill.id,
@@ -275,10 +297,18 @@ export function createSkillsMenu(
   mode: ExtensionCommandContext["mode"] = "tui",
 ) {
   const rpc = mode === "rpc";
-  const managedSkill = () => state.inventory.skills.find((skill) => skill.id === state.managedId);
+  const managedSkill = () => managedSkills(state).find((skill) => skill.id === state.managedId);
+  const readLoaded = (ctx: ExtensionCommandContext) => {
+    state.loadedSkills = (ctx.getSystemPromptOptions().skills ?? []).map((skill) => ({
+      ...skill,
+      sourceInfo: { ...skill.sourceInfo },
+    }));
+    state.invocation = undefined;
+    state.invocationReviewed = false;
+  };
   const selectManaged = (operation: "remove" | "move") => {
     owner.check();
-    const skill = managedSkill();
+    const skill = managedSkill()?.local;
     if (!skill) throw new Error("Choose an installed skill");
     if (skill.readOnlyReason) throw new Error(skill.readOnlyReason);
     state.mode = operation;
@@ -309,8 +339,7 @@ export function createSkillsMenu(
         ],
         hint: "close",
         items: [
-          { id: "manage", label: "Manage installed skills", to: "manage" },
-          { id: "invocation", label: "Configure model invocation", action: "configure-invocation" },
+          { id: "manage", label: "Manage skills", action: "manage" },
           { id: "add", label: "Add from GitHub", action: "begin" },
           { id: "remove", label: "Remove skills", action: "begin" },
           { id: "move", label: "Move skills", action: "begin" },
@@ -451,14 +480,9 @@ export function createSkillsMenu(
       }),
       manage: () => ({
         kind: "choice",
-        title: "Manage installed skills",
-        lines: ["Detected on disk, not a complete list of active Pi resources.", ...state.inventory.warnings],
-        items: state.inventory.skills.map((skill) => ({
-          id: skill.id,
-          label: `${safe(skill.name)} · ${safe(skill.location.label)}${rpc ? ` · ${safe(skill.path)}` : ""}`,
-          description: [skill.path, skill.readOnlyReason, ...skill.warnings].filter(Boolean).join(" — "),
-          searchText: `${skill.path} ${skill.description}`,
-        })),
+        title: "Manage skills",
+        lines: ["Select a skill to manage it. Loaded and detected skills are listed.", ...state.inventory.warnings],
+        items: managedItems(state, rpc),
         action: "manage-skill",
         initialItemId: state.managedId,
         enableSearch: true,
@@ -466,17 +490,31 @@ export function createSkillsMenu(
       }),
       "skill-actions": () => {
         const skill = managedSkill();
-        const blocked = skill?.readOnlyReason ?? (!skill ? "Skill is no longer in the scanned inventory" : undefined);
+        const blocked =
+          skill?.local?.readOnlyReason ??
+          (!skill?.local ? "Bundle actions require a scanned inventory entry" : undefined);
+        const invocationBlocked = !skill?.loaded
+          ? "Model invocation settings require a currently loaded Pi skill"
+          : undefined;
+        const invocationAction = {
+          id: "model-invocation",
+          label: "Model invocation",
+          action: "select-invocation" as const,
+          busyLabel: "Inspecting invocation target…",
+          disabled: Boolean(invocationBlocked),
+          disabledReason: invocationBlocked,
+        };
         return {
           kind: "actions",
-          title: skill ? `${safe(skill.name)} · ${safe(skill.location.label)}` : "Skill unavailable",
+          title: skill ? `${safe(skill.name).trim() || "Unnamed skill"} · ${managedScope(skill)}` : "Skill unavailable",
           lines: [
-            safe(skill?.path ?? ""),
-            ...(skill?.warnings.map(safe) ?? []),
+            safe(skill?.filePath ?? ""),
+            ...(skill?.local?.warnings.map(safe) ?? []),
             ...(blocked ? [safe(blocked)] : []),
             ...(state.copyMessage ? [state.copyMessage] : []),
           ],
           items: [
+            ...(skill?.loaded ? [invocationAction] : []),
             { id: "move-one", label: "Move…", action: "move-one", disabled: Boolean(blocked), disabledReason: blocked },
             {
               id: "remove-one",
@@ -499,23 +537,12 @@ export function createSkillsMenu(
                   ? "Clipboard copy requires Pi TUI"
                   : undefined,
             },
+            ...(!skill?.loaded ? [invocationAction] : []),
             { id: "back", label: "Back", action: "back" },
           ],
         };
       },
-      invocation: () => ({
-        kind: "choice",
-        title: "Configure model invocation",
-        lines: [
-          "Loaded skills. Select one to change model invocation.",
-          ...(state.loadedSkills.length ? [] : ["No loaded skills were found."]),
-        ],
-        items: invocationItems(state, rpc),
-        action: "select-invocation",
-        initialItemId: state.invocationId,
-        enableSearch: true,
-        viewportSize: 10,
-      }),
+
       "invocation-review": () => ({
         kind: "review",
         title: "Review invocation target",
@@ -572,21 +599,20 @@ export function createSkillsMenu(
       }),
     },
     actions: {
-      "configure-invocation": ({ ctx }) => {
+      manage: ({ ctx }) => {
         owner.check();
-        state.loadedSkills = (ctx.getSystemPromptOptions().skills ?? [])
-          .map((skill) => ({ ...skill, sourceInfo: { ...skill.sourceInfo } }))
-          .sort((left, right) => safe(left.name).localeCompare(safe(right.name)));
-        return { kind: "to", screen: "invocation" };
+        readLoaded(ctx);
+        return { kind: "to", screen: "manage" };
       },
-      "select-invocation": async ({ itemId, signal }) => {
+      "select-invocation": async ({ signal }) => {
         const guard = actionGuard(owner, signal);
         guard.check();
-        const skill = state.loadedSkills.find((skill) => skill.filePath === itemId);
-        if (!skill) throw new Error("Choose a currently loaded skill");
+        const skill = managedSkill()?.loaded;
+        const selectedId = state.managedId;
+        if (!skill) throw new Error("Model invocation settings require a currently loaded Pi skill");
         const snapshot = await services.readInvocation(skill, guard);
         guard.check();
-        state.invocationId = itemId;
+        if (state.managedId !== selectedId || managedSkill()?.loaded !== skill) return { kind: "rejected" };
         state.invocation = snapshot;
         state.invocationValues.set(snapshot.filePath, snapshot.enabled);
         state.invocationReviewed = false;
@@ -594,7 +620,8 @@ export function createSkillsMenu(
       },
       "review-invocation": () => {
         owner.check();
-        if (!state.invocation) throw new Error("Choose a currently loaded skill");
+        if (!state.invocation || managedSkill()?.loaded?.filePath !== state.invocation.filePath)
+          throw new Error("Choose a currently loaded skill");
         state.invocationReviewed = true;
         return { kind: "to", screen: "invocation-setting" };
       },
@@ -604,11 +631,20 @@ export function createSkillsMenu(
         try {
           guard.check();
           if (value !== "automatic" && value !== "manual only") throw new Error("Unknown model invocation value");
-          if (!state.invocation || !state.invocationReviewed)
+          if (
+            !state.invocation ||
+            !state.invocationReviewed ||
+            managedSkill()?.loaded?.filePath !== state.invocation.filePath
+          )
             throw new Error("Review the invocation target before changing its setting");
-          const result = await services.updateInvocation(state.invocation, value === "automatic", guard);
+          const previous = state.invocation;
+          const selectedId = state.managedId;
+          const loaded = managedSkill()?.loaded;
+          const result = await services.updateInvocation(previous, value === "automatic", guard);
           // Keep plain commit accounting even when cancellation follows publication.
-          state.invocation = result.snapshot;
+          const current =
+            state.managedId === selectedId && state.invocation === previous && managedSkill()?.loaded === loaded;
+          if (current) state.invocation = result.snapshot;
           state.invocationValues.set(result.snapshot.filePath, result.snapshot.enabled);
           state.invocationChanged ||= result.changed;
           if (result.changed) {
@@ -621,6 +657,7 @@ export function createSkillsMenu(
             };
           }
           guard.check();
+          if (!current) return { kind: "rejected" };
           if (result.changed) {
             try {
               const inventory = await services.scanInventory(state.locations, guard);
@@ -645,16 +682,19 @@ export function createSkillsMenu(
         state.reload = true;
         return { kind: "close" };
       },
-      "manage-scan": () => {
+      "manage-scan": ({ ctx }) => {
         owner.check();
+        readLoaded(ctx);
         state.afterScan = "manage";
         return { kind: "to", screen: "inventory-path" };
       },
       "manage-skill": ({ itemId }) => {
         owner.check();
-        if (!state.inventory.skills.some((skill) => skill.id === itemId))
-          throw new Error("Skill is no longer in the scanned inventory");
+        if (!managedSkills(state).some((skill) => skill.id === itemId))
+          throw new Error("Skill is no longer in the managed catalog");
         state.managedId = itemId;
+        state.invocation = undefined;
+        state.invocationReviewed = false;
         state.copyMessage = undefined;
         return { kind: "to", screen: "skill-actions" };
       },
@@ -795,7 +835,7 @@ function duplicateWarnings(state: State) {
   if (state.mode !== "add") return [];
   const selected = state.repository?.skills.filter((skill) => state.selected.has(skill.id)) ?? [];
   return selected.flatMap((candidate) => {
-    const existing = state.inventory.skills.filter((skill) => skill.name === candidate.name);
+    const existing = inventorySkills(state).filter((skill) => skill.name === candidate.name);
     return existing.map(
       (skill) =>
         `Name conflict: ${safe(candidate.name)} also exists at ${safe(skill.path)}. Pi decides discovery precedence.`,
