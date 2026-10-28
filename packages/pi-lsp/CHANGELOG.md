@@ -1,5 +1,12 @@
 # @narumitw/pi-lsp
 
+## 0.49.11
+
+### Patch Changes
+
+- 246a2cb: Advertise literal code-action support so language servers can resolve deferred fixes.
+- c6ee85e: Fix language-server command resolution and batch-file launching on Windows.
+
 ## 0.49.10
 
 ### Patch Changes
