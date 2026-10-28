@@ -130,6 +130,7 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Menus and standalone interactions](./docs/api.md#-complete-menu-example) — typed actions, document reviews, multi-selects, tasks, confirmations, live previews, masked secrets, questionnaires, and custom components.
 - [Default-aware selectors](./docs/api.md#searchable-default-aware-selectors) — searchable choices with current/default state and save-default shortcuts.
 - [Standard screens](./docs/api.md#-standard-screens) — actions, detail, browse, choice, settings, input, review, and multi-select.
+- [Responsive list presentation](./docs/responsive-lists-uiux.md) — UI/UX findings, Codex visual proposal, before/after frames, and verification.
 - [Full-source document copy](./docs/api.md#full-source-document-copy) — explicit owner callbacks, raw-source safety, key priority, draining, and TUI-only behavior.
 - [Runtime and modes](./docs/api.md#-runtime-and-mode-behavior) — TUI/RPC adaptation, result types, cancellation, and session ownership.
 - [Ownership boundary](./docs/api.md#-ownership-boundary) — what Kit owns and what each extension must keep local.

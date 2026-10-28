@@ -371,7 +371,8 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
         setSelectedIndex(filteredItems.length - 1, false, true);
       } else if (options.keybindings.matches(data, "tui.select.confirm")) {
         openDetail();
-      } else if (searchInputVisible) {
+      } else {
+        // Compact layouts hide the field, not its native query editing behavior.
         handleSearchInput(searchInput, data);
         applyFilter();
       }
@@ -471,9 +472,14 @@ function listRows<ScreenId extends string, ActionId extends string>(
   return items.slice(viewportStart, viewportStart + viewportRows).map((candidate, offset) => {
     const index = viewportStart + offset;
     const prefix = index === selectedIndex ? "› " : "  ";
-    const suffix = candidate.statusText ? `  [${candidate.statusText}]` : "";
-    const labelWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(suffix));
-    const label = truncateToWidth(candidate.label, labelWidth, "");
+    const contentWidth = Math.max(0, width - visibleWidth(prefix));
+    // Reserve at least half the content cells for the label, unless it needs less.
+    const reservedLabelWidth = Math.min(visibleWidth(candidate.label), Math.ceil(contentWidth / 2));
+    const statusWidth = Math.max(0, contentWidth - reservedLabelWidth - 4);
+    const suffix =
+      candidate.statusText && statusWidth > 0 ? `  [${truncateToWidth(candidate.statusText, statusWidth, "…")}]` : "";
+    const labelWidth = Math.max(0, contentWidth - visibleWidth(suffix));
+    const label = truncateToWidth(candidate.label, labelWidth, "…");
     const line = truncateToWidth(`${prefix}${label}${suffix}`, width, "");
     return index === selectedIndex ? options.theme.fg("accent", line) : line;
   });
