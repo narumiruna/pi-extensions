@@ -56,7 +56,7 @@ These extensions are part of my daily Pi setup:
 | Package | Use it for | Install |
 | --- | --- | --- |
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Use OpenAI Codex Remote Compaction V2 to persist and replay bounded opaque checkpoints, with `/codex-compact` manual controls and safe Pi-native fallback. | `pi install npm:@narumitw/pi-codex-compact` |
-| [`pi-codex-imagegen`](./packages/pi-codex-imagegen) | Experiment with Codex image generation through `/codex-imagegen` and an opt-in tool, without starting a Codex agent. | [Install from source](./packages/pi-codex-imagegen#-install) |
+| [`pi-codex-imagegen`](./packages/pi-codex-imagegen) | Experiment with Codex image generation through `/codex-imagegen` and a default-enabled tool, without starting a Codex agent. | [Install from source](./packages/pi-codex-imagegen#-install) |
 | [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
 | [`pi-file-context`](./packages/pi-file-context) | Browse project files, preview text, select exact lines or Git diff hunks, and attach immutable snapshots with Git provenance to the next prompt. Open it with configurable `Ctrl+Shift+X` or `/file-context`. | `pi install npm:@narumitw/pi-file-context` |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |

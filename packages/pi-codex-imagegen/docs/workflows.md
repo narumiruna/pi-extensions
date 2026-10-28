@@ -4,7 +4,7 @@ The manual menu and the optional model tool use the same image generation pipeli
 
 ## Manual and model-driven generation
 
-Manual generation does not require tool enablement. Model-driven generation requires explicit opt-in through Settings. Both routes require a prompt and an exact destination path.
+Manual generation does not require tool enablement. Model-driven generation is enabled by default and can be disabled through Settings. Both routes require a prompt and an exact destination path.
 
 ```mermaid
 flowchart TD
@@ -13,8 +13,8 @@ flowchart TD
     Menu --> Action["Select Generate Image"]
     Action --> Input["Enter prompt and destination path"]
     Caller -->|Pi agent| Enabled{"Is toolEnabled true?"}
-    Enabled -->|No| Unavailable["Tool unavailable<br/>Default state"]
-    Enabled -->|Yes| Tool["Call codex_imagegen<br/>prompt, path, optional<br/>transparentBackground"]
+    Enabled -->|No| Unavailable["Tool unavailable"]
+    Enabled -->|Yes, default| Tool["Call codex_imagegen<br/>prompt, path, optional<br/>transparentBackground"]
     Input --> Pipeline["Shared generation pipeline"]
     Tool --> Pipeline
     Pipeline --> Saved["Save image"]

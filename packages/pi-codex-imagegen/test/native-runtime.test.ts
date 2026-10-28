@@ -151,8 +151,8 @@ async function fixture(
     packageEntry?: boolean;
   } = {},
 ) {
-  if (options.enabled)
-    await writeFile(join(directory, "pi-codex-imagegen.json"), JSON.stringify({ toolEnabled: true }));
+  if (options.enabled !== undefined)
+    await writeFile(join(directory, "pi-codex-imagegen.json"), JSON.stringify({ toolEnabled: options.enabled }));
   // The environment is set before evaluation, including modules with cached package paths.
   vi.resetModules();
   const { createImagegenExtension: create } = await import("../src/codex-imagegen.js");
@@ -283,12 +283,13 @@ function resultFor(session: AgentSession, name: string) {
   return result;
 }
 
-it("keeps the default hidden tool out of declarations, codemode, search, and real nested execution even after explicit activation", async () => {
+it("keeps the explicitly disabled tool out of declarations, codemode, search, and real nested execution even after activation", async () => {
   const request = vi.fn<NonNullable<Dependencies["request"]>>(async () => ({ base64: IMAGE }));
   let api!: ExtensionAPI;
   let callable: string[] = [];
   let nestedError = false;
   const f = await fixture({
+    enabled: false,
     discovery: true,
     dependencies: { request },
     observer(pi) {
@@ -339,12 +340,13 @@ it("keeps the default hidden tool out of declarations, codemode, search, and rea
   await expect(access(join(directory, "pi-codex-imagegen"))).rejects.toThrow();
 });
 
-it("executes the enabled tool headlessly with a non-Codex primary model and writes the required exact path", async () => {
+it("executes the default-enabled tool headlessly with a non-Codex primary model and writes the required exact path", async () => {
   const request = vi.fn<NonNullable<Dependencies["request"]>>(async () => ({
     base64: IMAGE,
     requestId: "synthetic-image-request",
   }));
-  const f = await fixture({ enabled: true, dependencies: { request } });
+  const f = await fixture({ dependencies: { request } });
+  await expect(access(join(directory, "pi-codex-imagegen.json"))).rejects.toThrow();
   expect(f.session.model?.provider).not.toBe("openai-codex");
   expect(await f.runtime.listCredentials()).toEqual([]);
   expect(f.session.getActiveToolNames()).toContain(TOOL);
@@ -378,9 +380,9 @@ it("rejects missing path in a real SDK tool call without generating an image", a
   expect(f.errors).toEqual([]);
 });
 
-it("supports exact paths and overwriting through enabled codemode", async () => {
+it("supports exact paths and overwriting through default-enabled codemode", async () => {
   const request = vi.fn<NonNullable<Dependencies["request"]>>(async () => ({ base64: IMAGE }));
-  const f = await fixture({ enabled: true, discovery: true, dependencies: { request } });
+  const f = await fixture({ discovery: true, dependencies: { request } });
   const path = join(directory, "codemode-image.png");
   await writeFile(path, "previous image");
   f.responses.push([
@@ -438,18 +440,19 @@ it("preserves normalized provider prefixes within each epoch and unrelated tool 
   });
   await f.session.prompt("/codex-imagegen");
   const metadata = JSON.parse(JSON.stringify(f.session.getAllTools().filter((tool) => tool.name !== TOOL)));
-  const unrelated = f.session.getActiveToolNames();
+  const unrelated = f.session.getActiveToolNames().filter((name) => name !== TOOL);
   expect(unrelated).toEqual(["fixture_zeta", "fixture_alpha"]);
-  await f.session.prompt("Ordinary disabled first");
-  await f.session.prompt("Ordinary disabled second");
+  expect(f.session.getActiveToolNames()).toEqual([...unrelated, TOOL]);
+  await f.session.prompt("Ordinary default-enabled first");
+  await f.session.prompt("Ordinary default-enabled second");
   const baseline = f.captured[0];
   const ordinary = f.captured[1];
   assert.ok(baseline && ordinary);
   sameEpoch(baseline, ordinary);
-  expect(baseline.tools.map((tool) => tool.name)).toEqual(unrelated);
+  expect(baseline.tools.map((tool) => tool.name)).toEqual([...unrelated, TOOL]);
   for (const [enabled, offset] of [
-    [true, 2],
-    [false, 4],
+    [false, 2],
+    [true, 4],
   ] as const) {
     await owner.saveSettings({ toolEnabled: enabled });
     expect(owner.getSettings().toolEnabled).toBe(enabled);
@@ -463,7 +466,9 @@ it("preserves normalized provider prefixes within each epoch and unrelated tool 
     const previous = f.captured[offset - 1];
     assert.ok(first && second && previous);
     sameEpoch(first, second);
-    expect(first.tools.filter((tool) => tool.name !== TOOL)).toEqual(baseline.tools);
+    expect(first.tools.filter((tool) => tool.name !== TOOL)).toEqual(
+      baseline.tools.filter((tool) => tool.name !== TOOL),
+    );
     expect(first.tools).not.toEqual(previous.tools);
     // An intentional loadout delta must not rewrite any preceding model-visible message.
     expect(first.messages.slice(0, previous.messages.length)).toEqual(previous.messages);
@@ -596,9 +601,9 @@ it("loads the declared source package through DefaultResourceLoader and runs reg
   ).toBe(true);
   const imageTool = f.session.getAllTools().find((tool) => tool.name === TOOL);
   assert.ok(imageTool);
-  expect(imageTool.exposure).toBe("hidden");
+  expect(imageTool.exposure).toBe("direct");
   expect(dirname(imageTool.sourceInfo.path)).toBe(resolve("packages/pi-codex-imagegen/src"));
-  expect(f.session.getActiveToolNames()).not.toContain(TOOL);
+  expect(f.session.getActiveToolNames()).toContain(TOOL);
   await f.session.prompt("/codex-imagegen");
   expect(f.errors).toHaveLength(1);
   expect(f.errors[0]?.error).toContain("requires TUI mode");

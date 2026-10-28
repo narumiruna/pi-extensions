@@ -91,21 +91,56 @@ async function setup(options: { document?: unknown; mode?: ExtensionContext["mod
   };
 }
 
-it("registers only /codex-imagegen and a hidden tool without resolving auth or creating files", async () => {
+it("keeps the factory tool hidden and enables it on session start without resolving auth or creating files", async () => {
   const h = await setup();
   expect([...h.commands.keys()]).toEqual(["codex-imagegen"]);
   expect(h.tool().exposure).toBe("hidden");
   expect(h.request).not.toHaveBeenCalled();
   await expect(fs.stat(h.agentDir)).rejects.toMatchObject({ code: "ENOENT" });
   await h.emit("session_start");
+  expect(h.tool().exposure).toBe("direct");
   await expect(fs.stat(h.agentDir)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(h.execute()).rejects.toThrow(/disabled/);
   expect(h.request).not.toHaveBeenCalled();
   await h.emit("session_shutdown");
 });
 
-it("writes original bytes to the exact session-relative path with structured tool details", async () => {
-  const h = await setup({ document: { toolEnabled: true } });
+it.each(["tui", "rpc", "print", "json"] as const)(
+  "keeps invalid settings disabled and reports the load failure in %s",
+  async (mode) => {
+    const document = { toolEnabled: "invalid" };
+    const h = await setup({ document, mode });
+    if (h.ctx.hasUI) {
+      await h.emit("session_start");
+      expect(h.notifications).toContainEqual({ message: expect.stringContaining("Repair"), level: "warning" });
+    } else await expect(h.emit("session_start")).rejects.toThrow(/remains disabled/);
+    expect(h.tool().exposure).toBe("hidden");
+    await expect(h.execute()).rejects.toThrow(/disabled/);
+    expect(h.request).not.toHaveBeenCalled();
+    expect(await fs.readFile(join(h.agentDir, "pi-codex-imagegen.json"), "utf8")).toBe(JSON.stringify(document));
+    await h.emit("session_shutdown");
+  },
+);
+
+it("reloads explicit tool access overrides without changing them", async () => {
+  const h = await setup();
+  await h.emit("session_start");
+  expect(h.tool().exposure).toBe("direct");
+  await fs.mkdir(h.agentDir);
+  const path = join(h.agentDir, "pi-codex-imagegen.json");
+  for (const enabled of [false, true]) {
+    const bytes = JSON.stringify({ toolEnabled: enabled, future: 42 });
+    await fs.writeFile(path, bytes);
+    await h.emit("session_start");
+    expect(h.tool().exposure).toBe(enabled ? "direct" : "hidden");
+    expect(await fs.readFile(path, "utf8")).toBe(bytes);
+    if (!enabled) await expect(h.execute()).rejects.toThrow(/disabled/);
+  }
+  expect(h.request).not.toHaveBeenCalled();
+  await h.emit("session_shutdown");
+});
+
+it("writes original bytes to the exact session-relative path with default-enabled tool access and structured details", async () => {
+  const h = await setup();
   await h.emit("session_start");
   expect(h.tool().exposure).toBe("direct");
   const result = await h.execute({ prompt: "  unmodified prompt  ", path: "assets/cube" });
@@ -123,7 +158,7 @@ it("writes original bytes to the exact session-relative path with structured too
 });
 
 it("manual generation remains available with the tool hidden and appends without a model turn", async () => {
-  const h = await setup();
+  const h = await setup({ document: { toolEnabled: false } });
   await h.emit("session_start");
   const owner = await h.getOwner();
   await owner.generate("A landscape", "images/manual", owner.signal);
@@ -255,7 +290,7 @@ it.each(["a".repeat(60_000), "\n".repeat(5000)])(
 );
 
 it("applies setting changes immediately, rejects busy changes, and guards captured tool implementations", async () => {
-  const h = await setup();
+  const h = await setup({ document: { toolEnabled: false } });
   await h.emit("session_start");
   const owner = await h.getOwner();
   await owner.saveSettings({ toolEnabled: true, transparentBackground: true });
@@ -282,17 +317,17 @@ it("rolls back partial tool-registration failure together with settings publicat
   let fail = true;
   h.rawPi.registerTool = (tool) => {
     register(tool);
-    if ((tool as ToolDefinition).exposure === "direct" && fail) {
+    if ((tool as ToolDefinition).exposure === "hidden" && fail) {
       fail = false;
       throw new Error("runtime failure");
     }
   };
-  await expect(owner.saveSettings({ toolEnabled: true })).rejects.toThrow();
-  expect(owner.getSettings().toolEnabled).toBe(false);
-  expect(h.tool().exposure).toBe("hidden");
-  await expect(fs.stat(join(h.agentDir, "pi-codex-imagegen.json"))).rejects.toMatchObject({ code: "ENOENT" });
-  await owner.saveSettings({ toolEnabled: true });
+  await expect(owner.saveSettings({ toolEnabled: false })).rejects.toThrow();
+  expect(owner.getSettings().toolEnabled).toBe(true);
   expect(h.tool().exposure).toBe("direct");
+  await expect(fs.stat(join(h.agentDir, "pi-codex-imagegen.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  await owner.saveSettings({ toolEnabled: false });
+  expect(h.tool().exposure).toBe("hidden");
   await h.emit("session_shutdown");
 });
 
