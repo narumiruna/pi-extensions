@@ -1,5 +1,18 @@
 # @narumitw/pi-tui-kit
 
+## 0.68.0
+
+### Minor Changes
+
+- a21d39b: Add opt-in editor status presentation helpers for stable snapshot publication, session-local view controls, and bounded whole-snapshot collections. Keep the existing EditorStatusWidget API unchanged.
+  
+  Retain visible Progress, Subagents, and Herdr widgets during updates. Add bounded summaries, manual view and item controls, and explicit one-shot compaction policies to Progress and Subagents without changing task state or persistent defaults. Preserve Progress completion retention and keep Herdr observation policies local. Keep tree navigation and manual context compaction separate from response-cycle tracking.
+
+### Patch Changes
+
+- f68aa54: Use Pi TUI's public terminal-sequence helper when checking selected-label visibility, including cursor markers. Remove the unused internal selection controller from the package output without changing public exports.
+- b062d21: Keep choice names, current markers, and settings values readable at narrow terminal widths with explicit truncation and full selected context. Add searchable-choice result counts, preserve browse names beside long status text, and allow compact browse search recovery without focusing a hidden input.
+
 ## 0.67.0
 
 ### Minor Changes
