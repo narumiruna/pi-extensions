@@ -278,7 +278,6 @@ The following packages remain available as source references but are excluded fr
 - `pi-webui` — deprecated without a replacement
 - `pi-auto-thinking`
 - `pi-sidebar`
-- `pi-telegram-bot`
 - `pi-telegraph`
 - `pi-wait-what`
 
