@@ -240,7 +240,7 @@ Queries for another provider or all providers never publish their results to the
 
 ## 🔄 Migrating from pi-codex-usage
 
-`pi-codex-usage` is deprecated and its source is archived under `deprecated/`.
+`pi-codex-usage` is deprecated and no longer included in this repository.
 To migrate one installation:
 
 ```bash
