@@ -6,7 +6,7 @@ Deterministic tests validate the TypeScript implementation, not the availability
 
 Package tests cover synthetic OAuth metadata/resolution, golden HTTP payloads, fixed destination and header filtering, redaction, redirects, quota/status errors, deadlines, bounded/chunked streams, socket cancellation, image validation, path preflight, native-style binary writes, settings transactions, UI, and lifecycle cleanup.
 
-Real Pi SDK fixtures exercise hidden-tool behavior through direct activation, codemode, tool search, and nested execution; enabled generation; normalized model-visible prefixes and toggle transitions; command modes; direct SDK disposal; and the package entrypoint through Pi's Jiti loader. All credentials, model streams, and image responses in those tests are synthetic.
+Real Pi SDK fixtures exercise explicitly disabled tool behavior through direct activation, codemode, tool search, and nested execution; default-enabled generation; normalized model-visible prefixes and toggle transitions; command modes; direct SDK disposal; and the package entrypoint through Pi's Jiti loader. All credentials, model streams, and image responses in those tests are synthetic.
 
 Regression coverage includes required exact paths, native `write` path equivalence, overwrites, symlink and permission branches, partial write behavior, destination input cancellation, release-then-click mouse dispatch without a render boundary, save failures after normal Settings closure, partial tool-application rollback, bounded filesystem error text, terminal-marker injection, and transport results returned after SDK invalidation.
 
@@ -38,7 +38,7 @@ Expected result: Pi owns credential storage and refresh. The extension creates n
 
 Responsible role: maintainer/account owner. Prerequisites: explicit permission to consume quota, compatible OAuth, network access, and completion of deterministic checks. This procedure is not authorization to spend quota.
 
-1. Load only this extension in a temporary or controlled Pi configuration. Keep `toolEnabled` false initially.
+1. Set `toolEnabled` to `false` in a temporary or controlled Pi configuration before loading only this extension; the tool is enabled by default.
 2. Open `/codex-imagegen` and inspect Status without causing auth refresh or an image request.
 3. Choose Generate Image, enter one simple prompt, then provide an explicit path in a disposable directory. Existing files and symlink targets can be overwritten. Submit once; do not retry automatically.
 4. Confirm that a supported image exists at that exact path, inspect its actual bytes/dimensions, and confirm that the reported absolute path is correct. An extension does not request format conversion.

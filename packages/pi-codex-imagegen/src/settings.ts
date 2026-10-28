@@ -10,7 +10,7 @@ export interface ImagegenSettings {
 
 export function defaultSettings(): ImagegenSettings {
   return {
-    toolEnabled: false,
+    toolEnabled: true,
     transparentBackground: false,
   };
 }
@@ -114,7 +114,8 @@ export class SettingsStore {
         this.current = this.effective(document);
         return { settings: this.settings };
       } catch {
-        this.current = { ...this.defaults };
+        // Invalid or unreadable settings must not grant model access.
+        this.current = { ...this.defaults, toolEnabled: false };
         return {
           settings: this.settings,
           warning: "Image generation settings could not be loaded. Repair the file before saving.",

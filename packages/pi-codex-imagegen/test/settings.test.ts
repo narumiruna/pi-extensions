@@ -40,7 +40,7 @@ afterEach(async () => {
 
 it("uses the supplied agent directory and loads missing defaults without filesystem changes", async () => {
   const expected = {
-    toolEnabled: false,
+    toolEnabled: true,
     transparentBackground: false,
   };
   expect(defaultSettings()).toEqual(expected);
@@ -50,26 +50,39 @@ it("uses the supplied agent directory and loads missing defaults without filesys
   expect(await store.load()).toEqual({ settings: expected });
   expect(await fs.readdir(directory)).toEqual([]);
   const copy = store.settings;
-  copy.toolEnabled = true;
-  expect(store.settings.toolEnabled).toBe(false);
+  copy.toolEnabled = false;
+  expect(store.settings.toolEnabled).toBe(true);
+});
+
+it.each([
+  { overrides: {}, enabled: true },
+  { overrides: { transparentBackground: true }, enabled: true },
+  { overrides: { toolEnabled: false }, enabled: false },
+  { overrides: { toolEnabled: true }, enabled: true },
+])("applies defaults only to omitted settings: $overrides", async ({ overrides, enabled }) => {
+  const bytes = JSON.stringify(overrides);
+  await seed(bytes);
+  expect((await store.load()).settings.toolEnabled).toBe(enabled);
+  expect(await fs.readFile(store.path, "utf8")).toBe(bytes);
 });
 
 it("creates private settings only on first save and stores only explicit overrides", async () => {
-  expect(await store.save({ toolEnabled: true })).toEqual({ ...defaultSettings(), toolEnabled: true });
-  expect(await document()).toEqual({ toolEnabled: true });
+  expect(await store.save({ toolEnabled: false })).toEqual({ ...defaultSettings(), toolEnabled: false });
+  expect(await document()).toEqual({ toolEnabled: false });
+  expect((await new SettingsStore(agentDir).load()).settings.toolEnabled).toBe(false);
   expect(await fs.readdir(agentDir)).toEqual(["pi-codex-imagegen.json"]);
   if (process.platform !== "win32") {
     expect((await fs.stat(store.path)).mode & 0o777).toBe(0o600);
     expect((await fs.stat(agentDir)).mode & 0o777).toBe(0o700);
   }
   await store.save({ transparentBackground: false });
-  expect(await document()).toEqual({ toolEnabled: true, transparentBackground: false });
+  expect(await document()).toEqual({ toolEnabled: false, transparentBackground: false });
 });
 
 it("reloads manual edits and preserves unknown fields including prototype-like names", async () => {
-  const bytes = '{"toolEnabled":true,"future":{"nested":[1,2]},"__proto__":{"keep":true}}';
+  const bytes = '{"toolEnabled":false,"future":{"nested":[1,2]},"__proto__":{"keep":true}}';
   await seed(bytes);
-  expect((await store.load()).settings.toolEnabled).toBe(true);
+  expect((await store.load()).settings.toolEnabled).toBe(false);
   await store.save({ transparentBackground: true });
   expect(await document()).toEqual({
     ...JSON.parse(bytes),
@@ -92,7 +105,7 @@ it.each([
 ])("warns on invalid loads and protects existing invalid bytes: %s", async (bytes) => {
   await seed(bytes);
   const loaded = await store.load();
-  expect(loaded.settings).toEqual(defaultSettings());
+  expect(loaded.settings).toEqual({ ...defaultSettings(), toolEnabled: false });
   expect(loaded.warning).toMatch(/Repair/);
   expect(loaded.warning).not.toContain("raw-secret");
   await expect(store.save({ toolEnabled: true })).rejects.toThrow("Repair");
@@ -150,7 +163,7 @@ it("holds dependent reloads until persistence and runtime application complete",
   });
   let applied = false;
   const write = store.save(
-    { toolEnabled: true },
+    { toolEnabled: false },
     {
       apply: () => {
         applied = true;
@@ -168,7 +181,7 @@ it("holds dependent reloads until persistence and runtime application complete",
   expect(reloaded).toBe(false);
   release.resolve();
   await Promise.all([write, flush]);
-  expect((await reload).settings.toolEnabled).toBe(true);
+  expect((await reload).settings.toolEnabled).toBe(false);
 });
 
 it("keeps the old runtime and bytes after rename failure and recovers the queue", async () => {
@@ -198,13 +211,13 @@ it.each([false, true])("rolls back partially applied runtime and exact prior fil
   let runtime = previous;
   const calls: boolean[] = [];
   const failed = store.save(
-    { toolEnabled: true },
+    { toolEnabled: false },
     {
       apply: (next, old) => {
         expect(store.settings).toEqual(previous);
         calls.push(next.toolEnabled);
         runtime = next;
-        if (next.toolEnabled) {
+        if (!next.toolEnabled) {
           expect(old).toEqual(previous);
           throw new Error("raw-secret");
         }
@@ -213,7 +226,7 @@ it.each([false, true])("rolls back partially applied runtime and exact prior fil
   );
   await expect(failed).rejects.toThrow("not saved");
   await expect(failed).rejects.not.toThrow("raw-secret");
-  expect(calls).toEqual([true, false]);
+  expect(calls).toEqual([false, true]);
   expect(runtime).toEqual(previous);
   expect(store.settings).toEqual(previous);
   if (exists) expect(await fs.readFile(store.path, "utf8")).toBe(bytes);
@@ -225,8 +238,8 @@ it.each([false, true])("rolls back partially applied runtime and exact prior fil
 
 it("rejects asynchronous apply callbacks and restores the previous file", async () => {
   const apply = vi.fn(async () => {});
-  await expect(store.save({ toolEnabled: true }, { apply })).rejects.toThrow(/synchronous|rollback/);
-  expect(store.settings.toolEnabled).toBe(false);
+  await expect(store.save({ toolEnabled: false }, { apply })).rejects.toThrow(/synchronous|rollback/);
+  expect(store.settings.toolEnabled).toBe(true);
   await expect(fs.stat(store.path)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
@@ -263,7 +276,7 @@ it.each([false, true])("undoes late cancellation immediately after rename (exist
     controller.abort();
   });
   const apply = vi.fn();
-  await expect(store.save({ toolEnabled: true }, { signal: controller.signal, apply })).rejects.toThrow("cancelled");
+  await expect(store.save({ toolEnabled: false }, { signal: controller.signal, apply })).rejects.toThrow("cancelled");
   expect(apply).not.toHaveBeenCalled();
   expect(store.settings).toEqual(defaultSettings());
   if (exists) expect(await fs.readFile(store.path, "utf8")).toBe(bytes);
@@ -273,10 +286,10 @@ it.each([false, true])("undoes late cancellation immediately after rename (exist
 
 it("checks ownership after synchronous runtime application and rolls back both states", async () => {
   let current = true;
-  let runtime = false;
+  let runtime = true;
   await expect(
     store.save(
-      { toolEnabled: true },
+      { toolEnabled: false },
       {
         isCurrent: () => current,
         apply: (next) => {
@@ -286,8 +299,8 @@ it("checks ownership after synchronous runtime application and rolls back both s
       },
     ),
   ).rejects.toThrow("cancelled");
-  expect(runtime).toBe(false);
-  expect(store.settings.toolEnabled).toBe(false);
+  expect(runtime).toBe(true);
+  expect(store.settings.toolEnabled).toBe(true);
   await expect(fs.stat(store.path)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
@@ -302,6 +315,7 @@ it("reloads invalid manual edits before saving instead of replacing them from ca
 it("returns read warnings and sanitized save errors, then recovers", async () => {
   vi.spyOn(fs, "readFile").mockRejectedValueOnce(new Error("raw-secret"));
   const loaded = await store.load();
+  expect(loaded.settings.toolEnabled).toBe(false);
   expect(loaded.warning).toMatch(/Repair/);
   expect(loaded.warning).not.toContain("raw-secret");
   vi.spyOn(fs, "readFile").mockRejectedValueOnce(new Error("raw-secret"));
@@ -341,10 +355,10 @@ it("closes and removes a staged file when cancellation happens during open", asy
     controller.abort();
     return handle;
   });
-  await expect(store.save({ toolEnabled: true }, { signal: controller.signal })).rejects.toThrow("cancelled");
+  await expect(store.save({ toolEnabled: false }, { signal: controller.signal })).rejects.toThrow("cancelled");
   expect(close).toHaveBeenCalledOnce();
   expect(await fs.readdir(agentDir)).toEqual([]);
-  expect(store.settings.toolEnabled).toBe(false);
+  expect(store.settings.toolEnabled).toBe(true);
 });
 
 it("publishes from the same directory with private permissions even when replacing a public file", async () => {
@@ -363,11 +377,11 @@ it("publishes from the same directory with private permissions even when replaci
 
 it("cleans owned staged files and recovers after staging failure", async () => {
   vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("raw-secret"));
-  const failure = store.save({ toolEnabled: true });
+  const failure = store.save({ toolEnabled: false });
   await expect(failure).rejects.toThrow("not saved");
   await expect(failure).rejects.not.toThrow("raw-secret");
-  expect(store.settings.toolEnabled).toBe(false);
+  expect(store.settings.toolEnabled).toBe(true);
   expect(await fs.readdir(agentDir)).toEqual([]);
-  await store.save({ toolEnabled: true });
-  expect(await document()).toEqual({ toolEnabled: true });
+  await store.save({ toolEnabled: false });
+  expect(await document()).toEqual({ toolEnabled: false });
 });

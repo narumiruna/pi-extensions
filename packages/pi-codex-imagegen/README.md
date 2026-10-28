@@ -10,7 +10,7 @@ Generate images from Pi through the Codex image endpoint, without starting Codex
 
 ## ✨ Features
 
-- Generate an image manually from a menu or through an opt-in model tool.
+- Generate an image manually from a menu or through a model tool.
 - Write original image bytes to an explicit destination with Pi-native file handling.
 - Cancel owned requests and prevent results from reaching a replaced session.
 - Keep authentication with Pi rather than create another credential store.
@@ -51,7 +51,7 @@ The prompt dialog preserves Pi's native multiline editing and paste behavior. Ex
 
 `codex_imagegen` requires `prompt` and `path`, with an optional `transparentBackground` override. It returns the absolute destination path, image content, and structured file details. Image content is handled by Pi's normal tool-result image policy.
 
-The tool is **disabled by default**, including codemode, tool search, and nested calls. Enable it explicitly in `/codex-imagegen` → Settings. The manual menu does not require tool enablement. The enabled tool also works in headless modes.
+The tool is **enabled by default**, including codemode and nested calls. Disable it in `/codex-imagegen` → Settings to hide it from the model, codemode, tool search, and nested calls. Existing `toolEnabled: false` settings remain disabled. The manual menu does not require tool enablement. The enabled tool also works in headless modes.
 
 `path` uses the same resolution as Pi's `write`: relative paths use the session working directory; absolute paths, `~/`, leading `@`, and file URLs are supported. Shell variables and wildcards are literal, not expanded. There is no default destination or generated filename. No extension is added or changed; the extension does not select or convert the returned image format.
 
@@ -62,7 +62,7 @@ The tool is **disabled by default**, including codemode, tool search, and nested
 }
 ```
 
-Missing parent directories are created. Existing files are overwritten and symlinks are followed. See [Security and privacy](#-security-and-privacy) before enabling model access.
+Missing parent directories are created. Existing files are overwritten and symlinks are followed. See [Security and privacy](#-security-and-privacy) before using model access.
 
 ## ⚙️ Settings
 
@@ -70,20 +70,20 @@ User settings live in `<getAgentDir()>/pi-codex-imagegen.json`, normally `~/.pi/
 
 | Setting | Default | Accepted value |
 | --- | --- | --- |
-| `toolEnabled` | `false` | Boolean; permits model access. |
+| `toolEnabled` | `true` | Boolean; permits model access. |
 | `transparentBackground` | `false` | Boolean; requests transparency by default, with a per-call override. Actual alpha support is provider-dependent. |
 
-For example, to enable the tool:
+For example, to disable the tool:
 
 ```json
 {
-  "toolEnabled": true
+  "toolEnabled": false
 }
 ```
 
 Defaults and Status do not create files or directories. Each generation requires an explicit path and can create its parent directories even if generation later fails.
 
-Missing settings mean defaults. Invalid files produce a warning or lifecycle error and block settings writes until repaired. Saves preserve unknown fields, use temporary-file-plus-rename publication, and keep the prior effective values after a failed save or application. Settings reads and writes are ordered within one Pi process, not locked across separate Pi processes.
+Missing settings mean defaults. Invalid or unreadable files disable the tool, produce a warning or lifecycle error, and block settings writes until repaired. Saves preserve unknown fields, use temporary-file-plus-rename publication, and keep the prior effective values after a failed save or application. Settings reads and writes are ordered within one Pi process, not locked across separate Pi processes.
 
 Changes require an idle session. Enabling or disabling the tool deliberately changes the model-visible tool set and can affect prompt caching. Ordinary turns do not change tools, prompts, or earlier messages. Manual results append at the conversation tail without starting a model turn.
 
