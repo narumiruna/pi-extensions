@@ -86,7 +86,7 @@ Contract fixtures derive from [Specode's pinned implementation](https://github.c
 
 The statusline selects a returned bucket that matches the current Codex model when one is available.
 The percentage preference affects only this compact status and defaults to remaining quota; it does not change the detailed report or returned usage data.
-Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
+`pi-usage` has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
 
 Reset redemption is available only when Codex is the current provider.
 Pi's freshly resolved access token must exactly match an OAuth credential from Pi's stored login or a compatible credential source.
