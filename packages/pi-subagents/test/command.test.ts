@@ -115,26 +115,31 @@ test("main-menu and direct settings routes share one screen and apply durable ch
   assert.deepEqual(tui.render(), directFrame);
   tui.press("tui.select.down");
   tui.press("tui.select.confirm");
-  await vi.waitFor(() => assert.equal(store.settings.showJobId, false));
+  await vi.waitFor(() => assert.equal(store.settings.showJobId, true));
   const changed = tui.render().join("\n");
-  assert.match(changed, /Show job ID\s+false/u);
+  assert.match(changed, /Show job ID\s+true/u);
   assert.equal(tui.openCount, 3, "saving must not reopen the settings screen");
   tui.press("ctrl+c");
   await main;
-  assert.equal(store.settings.showJobId, false);
-  assert.deepEqual(JSON.parse(await fs.readFile(store.userPath, "utf8")), { showJobId: false });
+  assert.equal(store.settings.showJobId, true);
+  assert.deepEqual(JSON.parse(await fs.readFile(store.userPath, "utf8")), { showJobId: true });
 });
 
 test("reloads manual user preferences and leaves model-visible tools unchanged", async () => {
   const { mock, context, store } = await setup({ mode: "tui" });
   const definitions = JSON.stringify(mock.tools);
   await spawnJob(mock, context);
-  assert.match(widgetText(context), /job_.*tools: read/u);
+  assert.match(widgetText(context), /Run test task/u);
+  assert.doesNotMatch(widgetText(context), /job_|tools:/u);
+  await fs.writeFile(store.userPath, JSON.stringify({ showJobId: true, showTools: true, showTiming: true }));
+  await emit(mock, "session_start", context.ctx);
+  await spawnJob(mock, context);
+  assert.match(widgetText(context), /job_.*Run test task.*tools: read/u);
   await fs.writeFile(store.userPath, JSON.stringify({ showJobId: false, showTools: false, showTiming: false }));
   await emit(mock, "session_start", context.ctx);
   await spawnJob(mock, context);
-  assert.match(widgetText(context), /▶|○/u);
-  assert.doesNotMatch(widgetText(context), /job_|tools:|no timeout/u);
+  assert.match(widgetText(context), /Run test task/u);
+  assert.doesNotMatch(widgetText(context), /job_|tools:| · \d+(?:\.\d+)?s/u);
   assert.equal(JSON.stringify(mock.tools), definitions);
   assert.equal(mock.sentUserMessages.length, 0);
 });
@@ -233,13 +238,13 @@ test("public hooks compact on consumed user messages, not input attempts or othe
   await emit(mock, "input", context.ctx, { text: "handled, rejected, or queued input" });
   await emit(mock, "agent_end", context.ctx);
   await emit(mock, "message_end", context.ctx, { message: { role: "assistant" } });
-  assert.match(widgetText(context), /thinking:/u);
+  assert.match(widgetText(context), /Run test task/u);
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, {
     message: { role: "user", content: "extension-generated or consumed queue" },
   });
   assert.match(widgetText(context), /1 active · 1 running · 0 queued/u);
-  assert.doesNotMatch(widgetText(context), /thinking:/u);
+  assert.doesNotMatch(widgetText(context), /Run test task/u);
   assert.equal(JSON.stringify(mock.tools), definitions);
   assert.deepEqual(mock.sentMessages, []);
   assert.deepEqual(mock.sentUserMessages, []);
@@ -254,12 +259,12 @@ test("public settled hooks group retries and queued continuations and require an
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.match(widgetText(context), /thinking:/u, "the arming cycle is excluded");
+  assert.match(widgetText(context), /Run test task/u, "the arming cycle is excluded");
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "toolResult", stopReason: "stop" } });
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.match(widgetText(context), /thinking:/u, "a non-assistant turn cannot establish eligibility");
+  assert.match(widgetText(context), /Run test task/u, "a non-assistant turn cannot establish eligibility");
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "error" } });
@@ -270,9 +275,9 @@ test("public settled hooks group retries and queued continuations and require an
   await emit(mock, "agent_start", context.ctx); // Queued follow-up / continuation.
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
-  assert.match(widgetText(context), /thinking:/u);
+  assert.match(widgetText(context), /Run test task/u);
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.doesNotMatch(widgetText(context), /thinking:/u);
+  assert.doesNotMatch(widgetText(context), /Run test task/u);
 });
 
 test("menu arming excludes run preparation before the public agent_start hook", async () => {
@@ -288,12 +293,12 @@ test("menu arming excludes run preparation before the public agent_start hook", 
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   idle = true;
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.match(widgetText(context), /thinking:/u);
+  assert.match(widgetText(context), /Run test task/u);
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.doesNotMatch(widgetText(context), /thinking:/u);
+  assert.doesNotMatch(widgetText(context), /Run test task/u);
 });
 
 test("async settings initialization excludes an already-busy cycle even when its start hook was missed", async () => {
@@ -319,13 +324,13 @@ test("async settings initialization excludes an already-busy cycle even when its
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.match(widgetText(context), /thinking:/u);
+  assert.match(widgetText(context), /Run test task/u);
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   idle = true;
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
-  assert.doesNotMatch(widgetText(context), /thinking:/u);
+  assert.doesNotMatch(widgetText(context), /Run test task/u);
 });
 
 test.each([false, true])(
@@ -347,7 +352,7 @@ test.each([false, true])(
     await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
     await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
     await emit(mock, "agent_settled", context.ctx, { aborted: false });
-    assert.doesNotMatch(widgetText(context), /thinking:/u);
+    assert.doesNotMatch(widgetText(context), /Run test task/u);
     assert.equal(children[0]?.signal.aborted, false);
   },
 );
@@ -369,7 +374,7 @@ for (const reason of ["threshold", "overflow"] as const) {
       await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
       idle = true;
       await emit(mock, "agent_settled", context.ctx, { aborted: false });
-      assert.match(widgetText(context), /thinking:/u);
+      assert.match(widgetText(context), /Run test task/u);
       idle = false;
       await emit(mock, "before_agent_start", context.ctx);
       await emit(mock, "agent_start", context.ctx);
@@ -377,7 +382,7 @@ for (const reason of ["threshold", "overflow"] as const) {
       await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
       idle = true;
       await emit(mock, "agent_settled", context.ctx, { aborted: false });
-      assert.doesNotMatch(widgetText(context), /thinking:/u);
+      assert.doesNotMatch(widgetText(context), /Run test task/u);
     });
   }
 }
@@ -402,7 +407,7 @@ for (const operation of ["session_before_tree", "session_before_compact"] as con
     await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
     idle = true;
     await emit(mock, "agent_settled", context.ctx, { aborted: false });
-    assert.doesNotMatch(widgetText(context), /thinking:/u);
+    assert.doesNotMatch(widgetText(context), /Run test task/u);
   });
 }
 
@@ -417,7 +422,7 @@ test("tree navigation closes the old menu and resets presentation without cancel
   await menu;
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   assert.equal(tui.isOpen, false);
-  assert.match(widgetText(context), /thinking:/u);
+  assert.match(widgetText(context), /Run test task/u);
   assert.equal(children[0]?.signal.aborted, false);
   assert.deepEqual(mock.sentMessages, []);
 });
@@ -446,12 +451,12 @@ async function choose(tui: ReturnType<typeof createTuiHarness>, label: string) {
 
 test("reports ignored invalid settings without replacing the file", async () => {
   const { mock, context, store } = await setup({ mode: "rpc" });
-  const bytes = '{"showWidget":"wrong","showTools":false,"future":123}';
+  const bytes = '{"showWidget":"wrong","showTools":true,"future":123}';
   await fs.writeFile(store.userPath, bytes);
   await emit(mock, "session_start", context.ctx);
   assert.match(context.notifications.at(-1)?.message ?? "", /Ignored invalid.*showWidget/u);
   assert.equal(store.settings.showWidget, true);
-  assert.equal(store.settings.showTools, false);
+  assert.equal(store.settings.showTools, true);
   assert.equal(await fs.readFile(store.userPath, "utf8"), bytes);
 });
 

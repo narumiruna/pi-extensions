@@ -131,8 +131,8 @@ test("RPC Status, Help, empty Jobs and Settings use one manager with observable 
   assert.match(status, /Active jobs: 0/u);
   assert.match(status, /Omitted jobs: 2/u);
   assert.match(status, /Show widget: true/u);
-  assert.match(status, /Show job ID: true/u);
-  assert.match(status, /Show tools: true/u);
+  assert.match(status, /Show job ID: false/u);
+  assert.match(status, /Show tools: false/u);
   assert.match(status, /Show timing: true/u);
   assert.match(status, /User settings: \/user\/pi-subagents.json/u);
   assert.doesNotMatch(status, /hidden|\p{Bidi_Control}/u);
@@ -302,8 +302,24 @@ function presentationFixture() {
   current.ctx.ui.custom = tui.custom;
   const rawId = "job_\u001b[31mone\u001b[0m";
   let jobs: ActiveJobDisplay[] = [
-    { jobId: rawId, task: "First task", state: "running", thinkingLevel: "high", elapsedMs: 0, tools: ["read"] },
-    { jobId: "job_one", task: "Second task", state: "queued", thinkingLevel: "off", elapsedMs: 0, tools: [] },
+    {
+      jobId: rawId,
+      task: "First task",
+      state: "running",
+      thinkingLevel: "high",
+      defaultThinkingLevel: "medium",
+      elapsedMs: 0,
+      tools: ["read"],
+    },
+    {
+      jobId: "job_one",
+      task: "Second task",
+      state: "queued",
+      thinkingLevel: "off",
+      defaultThinkingLevel: "medium",
+      elapsedMs: 0,
+      tools: [],
+    },
   ];
   current.state.jobs = jobs.map(({ jobId, state }) => ({ jobId, state, createdAt: 0 }));
   let change!: () => void;
@@ -419,7 +435,7 @@ test("item menu uses raw IDs, rejects a stale selected revision, and resets remo
   assert.equal(details.includes("\u001b[31m"), false);
   assert.equal((staleResult.match(/thinking:/gu) ?? []).length, 2);
   assert.equal((compact.match(/thinking:/gu) ?? []).length, 1);
-  assert.match(compact, /New assignment · running\n/u);
+  assert.match(compact, /▶ New assignment\n/u);
   assert.match(removed, /1 not shown \(1 removed\)/u);
   assert.doesNotMatch(removed, /thinking: high/u);
   assert.match(reset, /thinking: high/u);

@@ -30,6 +30,7 @@ interface InternalJob extends JobSummary {
   task?: Promise<void>;
   taskText: string;
   thinkingLevel: SubagentThinkingLevel;
+  defaultThinkingLevel: SubagentThinkingLevel;
   stopRequest?: StopRequest;
   control?: ChildControl;
   controlReady: Promise<ChildControl>;
@@ -53,6 +54,7 @@ export interface ActiveJobDisplay {
   task: string;
   state: Extract<SubagentJobState, "queued" | "running">;
   thinkingLevel: SubagentThinkingLevel;
+  defaultThinkingLevel: SubagentThinkingLevel;
   elapsedMs: number;
   timeout?: number;
   tools: string[];
@@ -66,6 +68,7 @@ export interface StartJobInput {
   toolSources: Record<string, string[]>;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
+  defaultThinkingLevel: SubagentThinkingLevel;
   cwd: string;
   timeout?: number;
   projectTrusted: boolean;
@@ -120,6 +123,7 @@ export class SubagentRuntime {
         task: job.taskText,
         state: job.state,
         thinkingLevel: job.thinkingLevel,
+        defaultThinkingLevel: job.defaultThinkingLevel,
         elapsedMs: Math.max(0, now - (job.startedAt ?? job.createdAt)),
         ...(job.timeout !== undefined ? { timeout: job.timeout } : {}),
         tools: [...job.tools],
@@ -163,6 +167,7 @@ export class SubagentRuntime {
       tools: effectiveTools,
       taskText: input.task,
       thinkingLevel: input.thinkingLevel,
+      defaultThinkingLevel: input.defaultThinkingLevel,
       terminal,
       resolveTerminal,
       controlReady,

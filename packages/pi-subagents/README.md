@@ -63,11 +63,7 @@ Call `subagent_spawn` with a self-contained task and only the work tools that ta
 The call returns a `jobId` immediately, and the job continues in the background.
 Continue useful main-agent work until the result is required or a completion arrives.
 
-In TUI mode, each active-job row shows a preview of its existing `task` after the job ID by default; no new parameter is required.
-The preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened.
-It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
-Task text is visible in this local widget, but `subagent_inspect` continues to omit it.
-Rows are clipped to the available terminal width, so trailing state, thinking level, timing, or tools can be hidden on narrow terminals.
+In TUI mode, the widget above the editor shows queued and running tasks; no new parameter is required.
 
 Use messaging only when needed:
 
@@ -78,11 +74,6 @@ Use messaging only when needed:
 Completion messages and child requests and responses follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
 Collapsed messages show a summary and the configured expansion key; expanded messages show the full content.
 This display state does not change the content sent to the model.
-
-In TUI mode, the above-editor widget shows each queued or running job's ID, state, thinking level, elapsed time, timeout, and selected core and extension tool names.
-The `thinking: <level>` field shows the resolved configuration passed at spawn, including `off`, even when IDs, timing, and tools are hidden.
-Later main-agent changes do not change this field; it does not track child-side normalization or later setting changes.
-It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.
 
 ## 💬 Commands
 
@@ -97,7 +88,23 @@ Jobs do not survive reload or session replacement.
 
 ## 🖥️ Widget presentation
 
-The widget is TUI-only and contains only queued or running jobs. Its default detail rows stay unchanged when space permits.
+The widget is TUI-only and contains only queued or running jobs. Each row starts with `▶` for running or `○` for queued, followed by a task preview. Job IDs and tool names are hidden by default.
+For example, with a main-agent thinking level of `high` at spawn:
+
+```text
+Subagents · 2 active
+▶ Review widget tests · 12s
+○ Audit settings · thinking: medium · queued
+```
+
+The `thinking: <level>` field appears only when the job's resolved thinking level differs from the main agent's effective level captured at spawn, including an `off` override. An explicit value equal to that default is also hidden.
+Later main-agent changes do not change this comparison. The field describes the configuration passed at spawn, not child-side normalization or later changes.
+Running rows show elapsed time and a timeout only when one is set. Queued rows show `queued` and a configured timeout, without elapsed time. **Show timing** controls both time fields.
+
+The task preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened. It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
+Task text is visible in this local widget, but `subagent_inspect` continues to omit it. Optional tool names include selected core and extension tools, not fixed communication tools.
+The widget omits attachment paths and resource totals, disappears when no jobs remain active, and clears when the session ends.
+
 Ordinary updates refresh the mounted widget without changing its position among other widgets. Hiding and showing it again can change that position.
 The widget uses at most ten rows, including one separator, and reserves eight terminal rows for the editor and footer. This is a local height limit, not a calculation of space left by other widgets.
 With fewer than two available rows it renders nothing. Short layouts use a summary with active, running, queued, and omitted-row counts. Narrow layouts clip each line to the terminal width.
@@ -164,14 +171,14 @@ See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/
 ## ⚙️ Settings
 
 Use `/subagents settings` or the manager's Settings action to edit user display preferences.
-All four fields accept JSON booleans and default to `true`:
+All four fields accept JSON booleans:
 
-| Field | Effect |
-| --- | --- |
-| `showWidget` | Show the above-editor widget. |
-| `showJobId` | Show job IDs in widget rows. |
-| `showTools` | Show selected tool names in widget rows. |
-| `showTiming` | Show elapsed time and timeout in widget rows. |
+| Field | Default | Effect |
+| --- | --- | --- |
+| `showWidget` | `true` | Show the above-editor widget. |
+| `showJobId` | `false` | Show job IDs in widget rows. |
+| `showTools` | `false` | Show selected tool names in widget rows. |
+| `showTiming` | `true` | Show running elapsed time and configured timeouts. |
 
 Successful UI saves apply immediately. Hiding the widget does not stop jobs, change model tools, or suppress completion messages.
 Showing it again displays currently active jobs with the other saved preferences. Job state and the task preview remain visible when the widget is enabled.
@@ -179,7 +186,7 @@ Escape returns or closes without undoing completed saves; Ctrl+C closes the enti
 Settings uses Pi's configured selection keys. Its footer shows only the hard-cancel key to avoid displaying fixed keys that do not match your bindings.
 
 Preferences are saved in `<getAgentDir()>/pi-subagents.json`, normally `~/.pi/agent/pi-subagents.json`.
-Only user settings are supported; project files and legacy settings are not read. User fields override code defaults.
+Only user settings are supported; project files and legacy settings are not read. User fields override code defaults, including saved values from before a default change.
 Manual file edits are re-read on `session_start`, including `/reload`, and before each UI save.
 Reading defaults creates no file. Invalid values produce diagnostics and use their defaults; malformed documents block saves until repaired.
 Saves preserve unknown fields, publish atomically, and keep reads and writes ordered within one Pi process. Separate Pi processes are not locked.

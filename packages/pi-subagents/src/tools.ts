@@ -213,7 +213,8 @@ export function registerSubagentTools(
         assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
       }
       const model = resolveChildModel(ctx, attachments.extensions.length > 0);
-      const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? ctx.thinkingLevel ?? pi.getThinkingLevel());
+      const defaultThinkingLevel = resolveThinkingLevel(ctx.thinkingLevel ?? pi.getThinkingLevel());
+      const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? defaultThinkingLevel);
       resolveTimeoutMs(params.timeout);
       assertChildCommandCapacity(
         {
@@ -236,6 +237,7 @@ export function registerSubagentTools(
           toolSources: attachments.toolSources,
           model,
           thinkingLevel,
+          defaultThinkingLevel,
           cwd,
           timeout: params.timeout,
           projectTrusted,

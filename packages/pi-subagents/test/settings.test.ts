@@ -56,8 +56,8 @@ test("settings path uses Pi's user agent directory", () => {
 test("defaults and missing loads do not create files or directories", async () => {
   assert.deepEqual(DEFAULT_SUBAGENT_SETTINGS, {
     showWidget: true,
-    showJobId: true,
-    showTools: true,
+    showJobId: false,
+    showTools: false,
     showTiming: true,
   });
   assert.deepEqual(store.settings, DEFAULT_SUBAGENT_SETTINGS);
@@ -100,13 +100,14 @@ test.each(keys)("loads and saves both boolean values for %s", async (key) => {
 
 test.each(keys)("ignores invalid %s values individually and reports diagnostics", async (key) => {
   const otherKey = key === "showTiming" ? "showTools" : "showTiming";
+  const otherValue = !DEFAULT_SUBAGENT_SETTINGS[otherKey];
   for (const value of [null, 0, 1, "true", "false", [], {}]) {
-    await writeDocument({ [key]: value, [otherKey]: false });
+    await writeDocument({ [key]: value, [otherKey]: otherValue });
     const loaded = await store.load();
-    assert.deepEqual(loaded.settings, { ...DEFAULT_SUBAGENT_SETTINGS, [otherKey]: false });
+    assert.deepEqual(loaded.settings, { ...DEFAULT_SUBAGENT_SETTINGS, [otherKey]: otherValue });
     assert.equal(loaded.diagnostics.length, 1);
     assert.match(loaded.diagnostics[0] ?? "", new RegExp(`${key}.*boolean`, "u"));
-    assert.deepEqual(await diskDocument(), { [key]: value, [otherKey]: false });
+    assert.deepEqual(await diskDocument(), { [key]: value, [otherKey]: otherValue });
   }
 });
 
@@ -124,7 +125,7 @@ test.each(["{bad", "[]", "null", '"text"', "42", "true", ""])(
     await store.save("showWidget", false, signal());
     const previous = store.settings;
     await fs.writeFile(path, text);
-    await assert.rejects(store.save("showTools", false, signal()), /Cannot save/u);
+    await assert.rejects(store.save("showTools", true, signal()), /Cannot save/u);
     assert.deepEqual(store.settings, previous);
     assert.equal(await fs.readFile(path, "utf8"), text);
     const loaded = await store.load();
@@ -136,7 +137,7 @@ test.each(["{bad", "[]", "null", '"text"', "42", "true", ""])(
 );
 
 test("read errors are returned as diagnostics and block writes without replacing runtime settings", async () => {
-  await store.save("showTools", false, signal());
+  await store.save("showTools", true, signal());
   const before = await fs.readFile(path, "utf8");
   const previous = store.settings;
   const error = Object.assign(new Error("read denied"), { code: "EACCES" });
@@ -149,7 +150,7 @@ test("read errors are returned as diagnostics and block writes without replacing
   reads.mockRestore();
   assert.equal(await fs.readFile(path, "utf8"), before);
   await store.save("showTiming", false, signal());
-  assert.deepEqual(await diskDocument(), { showTools: false, showTiming: false });
+  assert.deepEqual(await diskDocument(), { showTools: true, showTiming: false });
 });
 
 test("saves patch only one key in the latest document and preserve unknown and invalid fields", async () => {
@@ -159,30 +160,30 @@ test("saves patch only one key in the latest document and preserve unknown and i
     '{"showWidget":true,"showTools":"invalid","future":{"nested":[2,false]},"__proto__":{"keep":true}}',
   ) as Record<string, unknown>;
   await writeDocument(latest);
-  assert.deepEqual(await store.save("showJobId", false, signal()), {
+  assert.deepEqual(await store.save("showJobId", true, signal()), {
     ...DEFAULT_SUBAGENT_SETTINGS,
-    showJobId: false,
+    showJobId: true,
   });
-  assert.deepEqual(await diskDocument(), { ...latest, showJobId: false });
-  await store.save("showTools", false, signal());
-  assert.deepEqual(await diskDocument(), { ...latest, showJobId: false, showTools: false });
+  assert.deepEqual(await diskDocument(), { ...latest, showJobId: true });
+  await store.save("showTools", true, signal());
+  assert.deepEqual(await diskDocument(), { ...latest, showJobId: true, showTools: true });
 });
 
 test("serializes requested changes and reads in the same store", async () => {
   const first = store.save("showWidget", false, signal());
-  const second = store.save("showTools", false, signal());
+  const second = store.save("showTools", true, signal());
   const reading = store.load();
   const third = store.save("showWidget", true, signal());
   assert.equal((await first).showWidget, false);
-  assert.equal((await second).showTools, false);
+  assert.equal((await second).showTools, true);
   assert.deepEqual((await reading).settings, {
     ...DEFAULT_SUBAGENT_SETTINGS,
     showWidget: false,
-    showTools: false,
+    showTools: true,
   });
-  assert.deepEqual(await third, { ...DEFAULT_SUBAGENT_SETTINGS, showTools: false });
+  assert.deepEqual(await third, { ...DEFAULT_SUBAGENT_SETTINGS, showTools: true });
   await store.flush();
-  assert.deepEqual(await diskDocument(), { showWidget: true, showTools: false });
+  assert.deepEqual(await diskDocument(), { showWidget: true, showTools: true });
 });
 
 test("orders writes and reads across stores sharing a path", async () => {
@@ -208,16 +209,16 @@ test("coordinates loads and saves with Pi's public file mutation queue", async (
   const writer = withFileMutationQueue(path, async () => {
     entered.resolve();
     await release.promise;
-    await writeDocument({ showJobId: false, external: true });
+    await writeDocument({ showJobId: true, external: true });
   });
   await entered.promise;
   const reading = store.load();
   const saving = store.save("showTiming", false, signal());
   release.resolve();
   await writer;
-  assert.deepEqual((await reading).settings, { ...DEFAULT_SUBAGENT_SETTINGS, showJobId: false });
-  assert.deepEqual(await saving, { ...DEFAULT_SUBAGENT_SETTINGS, showJobId: false, showTiming: false });
-  assert.deepEqual(await diskDocument(), { showJobId: false, showTiming: false, external: true });
+  assert.deepEqual((await reading).settings, { ...DEFAULT_SUBAGENT_SETTINGS, showJobId: true });
+  assert.deepEqual(await saving, { ...DEFAULT_SUBAGENT_SETTINGS, showJobId: true, showTiming: false });
+  assert.deepEqual(await diskDocument(), { showJobId: true, showTiming: false, external: true });
 });
 
 test("pre-aborted saves leave missing parent directories absent", async () => {
@@ -226,8 +227,8 @@ test("pre-aborted saves leave missing parent directories absent", async () => {
   await assert.rejects(store.save("showWidget", false, controller.signal), /abort/iu);
   assert.deepEqual(store.settings, DEFAULT_SUBAGENT_SETTINGS);
   assert.deepEqual(await fs.readdir(directory), []);
-  await store.save("showJobId", false, signal());
-  assert.equal(store.settings.showJobId, false);
+  await store.save("showJobId", true, signal());
+  assert.equal(store.settings.showJobId, true);
 });
 
 test("checks cancellation after waiting for the path queue", async () => {
@@ -258,12 +259,12 @@ test("aborted staged writes do not publish and remove temporary files", async ()
     await writeFile(...args);
     controller.abort();
   });
-  await assert.rejects(store.save("showTools", false, controller.signal), /abort/iu);
+  await assert.rejects(store.save("showTools", true, controller.signal), /abort/iu);
   assert.deepEqual(store.settings, previous);
   assert.equal(await fs.readFile(path, "utf8"), before);
   assert.deepEqual(await fs.readdir(dirname(path)), ["pi-subagents.json"]);
-  await store.save("showTools", false, signal());
-  assert.equal(store.settings.showTools, false);
+  await store.save("showTools", true, signal());
+  assert.equal(store.settings.showTools, true);
 });
 
 test("rename failure preserves disk and runtime, cleans staging, and does not poison queued operations", async () => {
@@ -271,7 +272,7 @@ test("rename failure preserves disk and runtime, cleans staging, and does not po
   const previous = store.settings;
   const before = await fs.readFile(path, "utf8");
   vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("rename failed"));
-  const failed = assert.rejects(store.save("showTools", false, signal()), /rename failed/u);
+  const failed = assert.rejects(store.save("showTools", true, signal()), /rename failed/u);
   const reading = store.load();
   await failed;
   assert.deepEqual(store.settings, previous);
@@ -290,12 +291,12 @@ test("write failure cleans staging and permits the next queued save", async () =
   const before = await fs.readFile(path, "utf8");
   vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("write failed"));
   const failed = assert.rejects(store.save("showWidget", true, signal()), /write failed/u);
-  const next = store.save("showTools", false, signal());
+  const next = store.save("showTools", true, signal());
   await failed;
   await next;
-  assert.deepEqual(store.settings, { ...previous, showTools: false });
+  assert.deepEqual(store.settings, { ...previous, showTools: true });
   assert.notEqual(await fs.readFile(path, "utf8"), before);
-  assert.deepEqual(await diskDocument(), { showWidget: false, showTools: false });
+  assert.deepEqual(await diskDocument(), { showWidget: false, showTools: true });
   assert.deepEqual(await fs.readdir(dirname(path)), ["pi-subagents.json"]);
 });
 
