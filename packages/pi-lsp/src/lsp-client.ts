@@ -2,22 +2,11 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import crossSpawn from "cross-spawn";
 import { commandPathValue, mergeEnvironment, resolveCommandPath } from "./command.js";
 import { directoryUri } from "./files.js";
 import { positionAt } from "./text-edits.js";
 import type { CodeAction, JsonRpcMessage, LspDiagnostic, LspServerAdapter, ServerCommand } from "./types.js";
-
-export function resolveSpawnCommand(
-  command: ServerCommand,
-  platform: NodeJS.Platform = process.platform,
-  comSpec = process.env.ComSpec,
-): ServerCommand {
-  if (platform !== "win32" || !/\.(?:bat|cmd)$/i.test(command.command)) return command;
-  return {
-    command: comSpec?.trim() || "cmd.exe",
-    args: ["/d", "/s", "/c", command.command, ...command.args],
-  };
-}
 
 // Quiet period (ms) after each publish before treating push diagnostics as settled.
 const PUBLISHED_DIAGNOSTICS_SETTLE_MS = 800;
@@ -87,8 +76,10 @@ export class LspClient {
       );
     }
 
-    const spawnCommand = resolveSpawnCommand({ ...this.#command, command: commandPath });
-    const child = spawn(spawnCommand.command, spawnCommand.args, {
+    // Node cannot spawn batch files directly. cross-spawn invokes ComSpec and
+    // safely quotes the command and argv; native executables keep native spawn.
+    const spawnServer = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(commandPath) ? crossSpawn.spawn : spawn;
+    const child = spawnServer(commandPath, this.#command.args, {
       cwd: this.#cwd,
       env: mergeEnvironment(this.#adapter.env),
       stdio: "pipe",

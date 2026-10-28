@@ -20,7 +20,6 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { consumeLspConfigNotice, DEFAULT_SERVER_CONFIGS, loadConfig, loadRuntime } from "../src/adapters.js";
 import { commandExists, commandPathValue, mergeEnvironment, resolveCommandPath } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
-import { resolveSpawnCommand } from "../src/lsp-client.js";
 import lsp from "../src/pi-lsp.js";
 import { selectDiagnosticRoutes, selectFixRoute } from "../src/routes.js";
 import { runDiagnostics, runFix } from "../src/runner.js";
@@ -342,6 +341,33 @@ test("default catalog routes common languages and skips generated trees", () => 
   }
 });
 
+test("Windows command resolution prefers executable suffixes to extensionless shims", () => {
+  const bin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-resolve-"));
+  const plain = path.join(bin, "server");
+  const bat = `${plain}.bat`;
+  const cmd = `${plain}.cmd`;
+  const exe = `${plain}.exe`;
+  try {
+    writeFileSync(plain, "#!/bin/sh\nexit 1\n");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), plain);
+    writeFileSync(bat, "@echo off\r\n");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), bat);
+    writeFileSync(cmd, "@echo off\r\n");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), cmd);
+    assert.equal(resolveCommandPath(cmd, bin, "win32", bin), cmd);
+    writeFileSync(exe, "");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), exe);
+    assert.equal(resolveCommandPath(cmd, bin, "win32", bin), cmd);
+
+    const dotted = path.join(bin, "server.v1");
+    writeFileSync(dotted, "#!/bin/sh\nexit 1\n");
+    writeFileSync(`${dotted}.cmd`, "@echo off\r\n");
+    assert.equal(resolveCommandPath("server.v1", bin, "win32", bin), `${dotted}.cmd`);
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
 test("command helpers honor server environments and platform wrappers", () => {
   const windowsBin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-bin-"));
   const commandShim = path.join(windowsBin, "language-server.cmd");
@@ -354,17 +380,6 @@ test("command helpers honor server environments and platform wrappers", () => {
   const resolvedShim = resolveCommandPath("language-server", windowsBin, "win32", windowsBin);
   assert.ok(resolvedShim);
   assert.equal(resolvedShim, commandShim);
-  assert.deepEqual(
-    resolveSpawnCommand({ command: resolvedShim, args: ["--stdio"] }, "win32", "C:\\Windows\\System32\\cmd.exe"),
-    {
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", commandShim, "--stdio"],
-    },
-  );
-  assert.deepEqual(resolveSpawnCommand({ command: "language_server.sh", args: [] }, "linux"), {
-    command: "language_server.sh",
-    args: [],
-  });
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-command-"));
   const executable = path.join(root, "tool");
   writeFileSync(executable, "#!/bin/sh\nexit 0\n");

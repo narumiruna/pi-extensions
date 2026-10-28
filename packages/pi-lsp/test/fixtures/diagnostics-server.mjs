@@ -146,6 +146,17 @@ function handle(message) {
       });
       return;
     }
+    if (
+      scenario === "require-argv" &&
+      JSON.stringify(process.argv.slice(4)) !== process.env.PI_LSP_TEST_EXPECTED_ARGS
+    ) {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32002, message: "server arguments were not forwarded verbatim" },
+      });
+      return;
+    }
     send({
       jsonrpc: "2.0",
       id: message.id,
