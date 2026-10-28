@@ -35,12 +35,16 @@
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build"
   },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/cross-spawn": "6.0.6",
     "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "typebox": "1.4.3",

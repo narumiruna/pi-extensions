@@ -10,6 +10,43 @@ import type { LspServerAdapter } from "../src/types.js";
 
 const fixture = path.resolve("packages/pi-lsp/test/fixtures/diagnostics-server.mjs");
 
+for (const [extension, variant] of [
+  ["cmd", "extensionless"],
+  ["cmd", "explicit"],
+  ["bat", "extensionless"],
+  ["bat", "explicit"],
+  ["cmd", "node-modules"],
+] as const) {
+  test.skipIf(process.platform !== "win32")(
+    `Windows ${variant} .${extension} shims handle spaced paths and arguments`,
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-shim-"));
+      const parent = path.join(root, "bin (test) & spaces");
+      const bin = variant === "node-modules" ? path.join(parent, "node_modules", ".bin") : parent;
+      mkdirSync(bin, { recursive: true });
+      const shim = path.join(bin, `fixture-server.${extension}`);
+      writeFileSync(shim, `@echo off\r\n"${process.execPath}" "${fixture}" require-argv 0 %*\r\n`);
+      writeFileSync(path.join(bin, "fixture-server"), "#!/bin/sh\nexit 1\n");
+      const args = ["--stdio", "argument with spaces", "a&b", 'quote"inside', "percent%PATH%", "trailing\\"];
+      const adapter = fixtureAdapter("require-argv", 30);
+      adapter.defaultCommand = { command: variant === "explicit" ? shim : "fixture-server", args };
+      adapter.env = {
+        PATH: `${bin};${process.env.PATH ?? ""}`,
+        PI_LSP_TEST_EXPECTED_ARGS: JSON.stringify(args),
+      };
+      const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+
+      try {
+        await client.start();
+        await client.initialize(root);
+      } finally {
+        await client.shutdown();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
+
 test("server environment overrides are forwarded to the LSP process", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-server-environment-"));
   const adapter = fixtureAdapter("require-environment", 30);
