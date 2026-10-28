@@ -213,9 +213,12 @@ Automatic compaction is off by default and is session-local. Select one single-u
 
 A settled cycle is eligible only when it was not aborted and its final assistant outcome is not an error or abort. A successful retry can make that cycle eligible.
 A cycle without later consumed user activity does not consume the rule. Custom and tool-result messages are not user messages.
+Tree navigation and manual context compaction are not response cycles. Automatic context compaction remains part of its agent cycle.
 Blocked work, pins, and disabled display prevent compaction and leave the rule armed for a later eligible boundary.
 A meaningful progress replacement rearms against the new content and current event position; identical updates and cosmetic refreshes do not.
 A manual view choice cancels the rule. Compaction changes presentation only: it never clears steps, changes tools or model instructions, or rewrites conversation history.
+
+If maintenance ends and an extension starts a custom run without an observed idle gap, the rule can wait one extra cycle. Pi exposes no exact run-activity query to extensions.
 
 ## ⚙️ Settings
 

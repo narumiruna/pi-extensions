@@ -44,6 +44,8 @@ export interface ProgressWidgetDependencies {
   clearTimeout?: typeof globalThis.clearTimeout;
 }
 
+type CyclePhase = "idle" | "maintenance" | "unconfirmed" | "auto-preparing" | "preparing" | "running";
+
 export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: ProgressWidgetDependencies = {}): void {
   const readSettings = dependencies.loadSettings ?? loadProgressSettings;
   const writeSettings = dependencies.saveSettings ?? saveProgressSettings;
@@ -57,7 +59,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   let settingsController = new AbortController();
   let controlsController = new AbortController();
   let displayGeneration = 0;
-  let cycleActive = false;
+  let cyclePhase: CyclePhase = "idle";
   let cycleFailed = false;
   let settingsReady = false;
   let settingsScreenOpen = false;
@@ -89,7 +91,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       settings = cloneDefaultSettings();
       restoredBoundary = undefined;
       activeSession = undefined;
-      cycleActive = false;
+      cyclePhase = "idle";
       cycleFailed = false;
     }
   };
@@ -98,12 +100,31 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     if (ownsSession(ctx)) presentation?.update(steps, settings);
   };
 
-  const syncActiveCycle = (ctx: ExtensionContext): void => {
-    // Pi becomes busy during run preparation, before agent_start is emitted.
-    if (!ownsSession(ctx) || cycleActive || ctx.isIdle()) return;
-    cycleActive = true;
-    cycleFailed = false;
+  const finishCycle = (eligible: boolean): void => {
+    try {
+      presentation?.view.settled(eligible);
+    } finally {
+      cyclePhase = "idle";
+      cycleFailed = false;
+    }
+  };
+
+  const startCycle = (phase: Exclude<CyclePhase, "idle" | "maintenance">): void => {
+    if (cyclePhase === "idle" || cyclePhase === "maintenance") cycleFailed = false;
+    cyclePhase = phase;
     presentation?.view.agentStarted();
+  };
+
+  const syncActiveCycle = (ctx: ExtensionContext): void => {
+    if (!ownsSession(ctx)) return;
+    if (ctx.isIdle()) {
+      // Preparation and maintenance can end without agent_settled.
+      if (cyclePhase !== "idle" && cyclePhase !== "running") finishCycle(false);
+    } else if (cyclePhase === "idle" || cyclePhase === "maintenance") {
+      // An earlier extension can still hold before_agent_start. Keep this
+      // provisional exclusion until a public run or maintenance hook identifies it.
+      startCycle(ctx.signal === undefined ? "unconfirmed" : "running");
+    }
   };
 
   pi.registerTool({
@@ -301,7 +322,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     activeSession = ctx.sessionManager;
     // Clear leftovers at owner acquisition, not on ordinary publications.
     if (ctx.hasUI && (ctx.mode === "tui" || ctx.mode === "rpc")) ctx.ui.setWidget(WIDGET_KEY, undefined);
-    cycleActive = !ctx.isIdle();
+    cyclePhase = ctx.signal === undefined ? "idle" : "running";
     cycleFailed = false;
     settings = cloneDefaultSettings();
     restoreBranchState(ctx);
@@ -315,7 +336,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     });
     // Do not publish defaults before the settings read completes.
     presentation.reset(steps, true, false);
-    if (cycleActive) presentation.view.agentStarted();
+    if (cyclePhase !== "idle") presentation.view.agentStarted();
 
     let loaded: ProgressSettingsLoadResult;
     try {
@@ -346,11 +367,34 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
 
   // A cycle spans retries and queued continuations until agent_settled. Input
   // submission is not consumption; custom messages are not user-role messages.
-  pi.on("agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (_event, ctx) => {
     if (!ownsSession(ctx)) return;
-    if (!cycleActive) cycleFailed = false;
-    cycleActive = true;
-    presentation?.view.agentStarted();
+    // This hook starts a new high-level run. Only its earlier automatic
+    // compaction belongs to the same preparation; an unfinished prior run does not.
+    if (cyclePhase !== "auto-preparing" && cyclePhase !== "unconfirmed") finishCycle(false);
+    startCycle("preparing");
+  });
+  pi.on("session_before_compact", (event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    if (event.reason === "manual") {
+      finishCycle(false);
+      cyclePhase = "maintenance";
+    } else {
+      if (cyclePhase === "preparing" || cyclePhase === "maintenance") finishCycle(false);
+      if (cyclePhase === "idle" || cyclePhase === "unconfirmed") startCycle("auto-preparing");
+    }
+  });
+  pi.on("session_before_tree", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    finishCycle(false);
+    cyclePhase = "maintenance";
+  });
+  pi.on("input", (_event, ctx) => {
+    // Observe idle recovery only. Input is not accepted-message evidence.
+    if (ownsSession(ctx) && ctx.isIdle()) finishCycle(false);
+  });
+  pi.on("agent_start", (_event, ctx) => {
+    if (ownsSession(ctx)) startCycle("running");
   });
   pi.on("message_start", (event, ctx) => {
     if (ownsSession(ctx) && event.message.role === "user") presentation?.view.userMessage();
@@ -362,9 +406,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   });
   pi.on("agent_settled", (event, ctx) => {
     if (!ownsSession(ctx)) return;
-    presentation?.view.settled(!event.aborted && !cycleFailed);
-    cycleActive = false;
-    cycleFailed = false;
+    finishCycle(!event.aborted && !cycleFailed);
   });
 
   pi.on("context", (event: ContextEvent, ctx) => {
@@ -387,6 +429,8 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
 
   pi.on("session_tree", (_event, ctx) => {
     if (!ownsSession(ctx)) return;
+    finishCycle(false);
+    cyclePhase = "maintenance";
     // Abort menus before resetting handles and the branch presentation generation.
     controlsController.abort();
     try {
@@ -410,7 +454,6 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       clearTimeout: cancelTimeout,
     });
     presentation.reset(steps, false, settingsReady);
-    if (cycleActive) presentation.view.agentStarted();
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

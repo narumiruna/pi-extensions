@@ -134,10 +134,13 @@ for (const busyAt of ["entry", "after-settings-await"] as const) {
         }),
     });
     const current = createContext({ mode: "rpc", isIdle: () => idle });
+    let runSignal = busyAt === "entry" ? new AbortController().signal : undefined;
+    Object.defineProperty(current.ctx, "signal", { get: () => runSignal });
     const starting = harness.emit("session_start", current.ctx);
-    // The public busy state can predate this extension's agent_start listener.
-    // Also cover a run beginning during the asynchronous settings read.
+    // A late attachment has a live run signal. A run that starts while settings
+    // load is observed through its public preparation hook, before agent_start.
     idle = false;
+    if (busyAt === "after-settings-await") await harness.emit("before_agent_start", current.ctx);
     resolve(defaultSettingsResult());
     await starting;
     await setProgress(harness, current.ctx, pending);
@@ -146,10 +149,60 @@ for (const busyAt of ["entry", "after-settings-await"] as const) {
     idle = true;
     await settle(harness, current.ctx);
     assert.equal(compact(current), false, "the startup cycle must be excluded");
+    runSignal = undefined;
     idle = false;
     await harness.emit("agent_start", current.ctx);
     await user(harness, current.ctx);
     idle = true;
+    await settle(harness, current.ctx);
+    assert.equal(compact(current), true);
+    await harness.emit("session_shutdown", current.ctx);
+  });
+}
+
+test.each(["entry", "after-settings-await"] as const)(
+  "maintenance-only startup at %s does not exclude the first future user cycle",
+  async (busyAt) => {
+    let resolve!: (result: ProgressSettingsLoadResult) => void;
+    let idle = busyAt !== "entry";
+    const harness = createHarness({
+      loadSettings: () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    });
+    const current = createContext({ mode: "rpc", isIdle: () => idle });
+    const starting = harness.emit("session_start", current.ctx);
+    idle = false;
+    resolve(defaultSettingsResult());
+    await starting;
+    await setProgress(harness, current.ctx, pending);
+    idle = true; // No agent run or agent_settled occurred during maintenance.
+    await arm(harness, current.ctx, "settled-cycle");
+    await harness.emit("agent_start", current.ctx);
+    await user(harness, current.ctx);
+    await settle(harness, current.ctx);
+    assert.equal(compact(current), true);
+    await harness.emit("session_shutdown", current.ctx);
+  },
+);
+
+for (const operation of ["session_before_tree", "session_before_compact"] as const) {
+  test(`arming during ${operation} permits the next idle user prompt`, async () => {
+    let idle = true;
+    const harness = createHarness();
+    const current = createContext({ mode: "rpc", isIdle: () => idle });
+    await harness.emit("session_start", current.ctx);
+    await setProgress(harness, current.ctx, pending);
+    idle = false;
+    await harness.emit(operation, current.ctx, { reason: "manual", signal: new AbortController().signal });
+    await arm(harness, current.ctx, "settled-cycle");
+    idle = true; // Canceled or failed maintenance need not emit session_tree.
+    await harness.emit("input", current.ctx, { source: "interactive", text: "Next user prompt" });
+    idle = false;
+    await harness.emit("before_agent_start", current.ctx);
+    await harness.emit("agent_start", current.ctx);
+    await user(harness, current.ctx);
     await settle(harness, current.ctx);
     assert.equal(compact(current), true);
     await harness.emit("session_shutdown", current.ctx);
@@ -162,8 +215,9 @@ test("arming during run preparation excludes that busy cycle before agent_start"
   const current = createContext({ mode: "rpc", isIdle: () => idle });
   await harness.emit("session_start", current.ctx);
   await setProgress(harness, current.ctx, pending);
-  // Pi has entered _prepareRun but has not emitted agent_start yet.
+  // A later before_agent_start handler can still hold preparation before agent_start.
   idle = false;
+  await harness.emit("before_agent_start", current.ctx);
   await arm(harness, current.ctx, "settled-cycle");
   await harness.emit("agent_start", current.ctx);
   await user(harness, current.ctx);
@@ -178,6 +232,72 @@ test("arming during run preparation excludes that busy cycle before agent_start"
   assert.equal(compact(current), true);
   await harness.emit("session_shutdown", current.ctx);
 });
+
+for (const reason of ["threshold", "overflow"] as const) {
+  for (const willRetry of [false, true]) {
+    for (const stage of ["preparation", "post-run"] as const) {
+      test(`${reason} compaction retry=${willRetry} at ${stage} remains in the real current cycle`, async () => {
+        let idle = true;
+        const harness = createHarness();
+        const current = createContext({ mode: "rpc", isIdle: () => idle });
+        await harness.emit("session_start", current.ctx);
+        await setProgress(harness, current.ctx, pending);
+        idle = false;
+        if (stage === "post-run") {
+          await harness.emit("before_agent_start", current.ctx);
+          await harness.emit("agent_start", current.ctx);
+          await harness.emit("agent_end", current.ctx);
+        }
+        // Automatic compaction is run evidence even before before_agent_start,
+        // with no low-level signal, and even when it will not retry a response.
+        await harness.emit("session_before_compact", current.ctx, { reason, willRetry });
+        await arm(harness, current.ctx, "settled-cycle");
+        await harness.emit("session_compact", current.ctx, { reason, willRetry });
+        if (stage === "preparation") await harness.emit("before_agent_start", current.ctx);
+        await harness.emit("agent_start", current.ctx);
+        await user(harness, current.ctx);
+        idle = true;
+        await settle(harness, current.ctx);
+        assert.equal(compact(current), false);
+        idle = false;
+        await harness.emit("before_agent_start", current.ctx);
+        await harness.emit("agent_start", current.ctx);
+        await user(harness, current.ctx);
+        idle = true;
+        await settle(harness, current.ctx);
+        assert.equal(compact(current), true);
+        await harness.emit("session_shutdown", current.ctx);
+      });
+    }
+  }
+}
+
+for (const recovery of ["idle-arm", "next-preparation", "next-automatic-compaction"] as const) {
+  test(`failed preparation without settlement recovers at ${recovery}`, async () => {
+    let idle = true;
+    const harness = createHarness();
+    const current = createContext({ mode: "rpc", isIdle: () => idle });
+    await harness.emit("session_start", current.ctx);
+    await setProgress(harness, current.ctx, pending);
+    idle = false;
+    await harness.emit("before_agent_start", current.ctx);
+    await arm(harness, current.ctx, "settled-cycle");
+    // _prepareRun rejects after its hook. No agent_start or agent_settled follows.
+    idle = true;
+    if (recovery === "idle-arm") await arm(harness, current.ctx, "settled-cycle");
+    idle = false;
+    if (recovery === "next-automatic-compaction") {
+      await harness.emit("session_before_compact", current.ctx, { reason: "threshold", willRetry: false });
+    }
+    await harness.emit("before_agent_start", current.ctx);
+    await harness.emit("agent_start", current.ctx);
+    await user(harness, current.ctx);
+    idle = true;
+    await settle(harness, current.ctx);
+    assert.equal(compact(current), true, "the abandoned preparation cannot exclude this future cycle");
+    await harness.emit("session_shutdown", current.ctx);
+  });
+}
 
 for (const outcome of ["error", "aborted", "retry-success"] as const) {
   test(`future-cycle eligibility handles ${outcome} without treating settled as success`, async () => {

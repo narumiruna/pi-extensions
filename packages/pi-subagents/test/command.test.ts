@@ -280,7 +280,8 @@ test("menu arming excludes run preparation before the public agent_start hook", 
   let idle = true;
   const { mock, context } = await setup({ mode: "tui", custom: tui.custom, isIdle: () => idle });
   await spawnJob(mock, context);
-  idle = false; // Pi's _prepareRun is busy, but no agent_start has been emitted.
+  idle = false; // A later preparation handler is still waiting; no agent_start exists yet.
+  await emit(mock, "before_agent_start", context.ctx);
   await armTrigger(mock, context, tui, "Next eligible settled cycle");
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
@@ -326,6 +327,84 @@ test("async settings initialization excludes an already-busy cycle even when its
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
   assert.doesNotMatch(widgetText(context), /thinking:/u);
 });
+
+test.each([false, true])(
+  "tree navigation with summary=%s does not exclude the first future cycle",
+  async (summarize) => {
+    const tui = createTuiHarness();
+    let idle = true;
+    const { mock, context, children } = await setup({ mode: "tui", custom: tui.custom, isIdle: () => idle });
+    await spawnJob(mock, context);
+    idle = false;
+    await emit(mock, "session_before_tree", context.ctx, {
+      preparation: { userWantsSummary: summarize },
+      signal: new AbortController().signal,
+    });
+    await emit(mock, "session_tree", context.ctx);
+    idle = true; // Navigation clears its controller without agent_settled.
+    await armTrigger(mock, context, tui, "Next eligible settled cycle");
+    await emit(mock, "agent_start", context.ctx);
+    await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+    await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+    await emit(mock, "agent_settled", context.ctx, { aborted: false });
+    assert.doesNotMatch(widgetText(context), /thinking:/u);
+    assert.equal(children[0]?.signal.aborted, false);
+  },
+);
+
+for (const reason of ["threshold", "overflow"] as const) {
+  for (const willRetry of [false, true]) {
+    test(`${reason} retry=${willRetry} is real preparation before agent_start`, async () => {
+      const tui = createTuiHarness();
+      let idle = true;
+      const { mock, context } = await setup({ mode: "tui", custom: tui.custom, isIdle: () => idle });
+      await spawnJob(mock, context);
+      idle = false;
+      await emit(mock, "session_before_compact", context.ctx, { reason, willRetry });
+      await armTrigger(mock, context, tui, "Next eligible settled cycle");
+      await emit(mock, "session_compact", context.ctx, { reason, willRetry });
+      await emit(mock, "before_agent_start", context.ctx);
+      await emit(mock, "agent_start", context.ctx);
+      await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+      await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+      idle = true;
+      await emit(mock, "agent_settled", context.ctx, { aborted: false });
+      assert.match(widgetText(context), /thinking:/u);
+      idle = false;
+      await emit(mock, "before_agent_start", context.ctx);
+      await emit(mock, "agent_start", context.ctx);
+      await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+      await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+      idle = true;
+      await emit(mock, "agent_settled", context.ctx, { aborted: false });
+      assert.doesNotMatch(widgetText(context), /thinking:/u);
+    });
+  }
+}
+
+for (const operation of ["session_before_tree", "session_before_compact"] as const) {
+  test(`arming during canceled ${operation} permits the next idle user prompt`, async () => {
+    const tui = createTuiHarness();
+    let idle = true;
+    const { mock, context } = await setup({ mode: "tui", custom: tui.custom, isIdle: () => idle });
+    await spawnJob(mock, context);
+    idle = false;
+    await emit(mock, operation, context.ctx, { reason: "manual", signal: new AbortController().signal });
+    await armTrigger(mock, context, tui, "Next eligible settled cycle");
+    // Native user prompts expose idle through input before starting a run.
+    // This resets tracking without counting the input as accepted user activity.
+    idle = true;
+    await emit(mock, "input", context.ctx, { source: "interactive", text: "Next user prompt" });
+    idle = false;
+    await emit(mock, "before_agent_start", context.ctx);
+    await emit(mock, "agent_start", context.ctx);
+    await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
+    await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
+    idle = true;
+    await emit(mock, "agent_settled", context.ctx, { aborted: false });
+    assert.doesNotMatch(widgetText(context), /thinking:/u);
+  });
+}
 
 test("tree navigation closes the old menu and resets presentation without cancelling jobs", async () => {
   const tui = createTuiHarness();

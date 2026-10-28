@@ -68,11 +68,19 @@ Owners connect only the relevant public hooks:
 
 | Owner call | Pi event | Meaning |
 | --- | --- | --- |
-| `agentStarted()` | `agent_start` | Begin a processing cycle if one is not already active; retry starts remain in the same cycle until settlement. |
+| `agentStarted()` | `before_agent_start`, automatic `session_before_compact`, or `agent_start` | Begin a processing cycle if one is not already active; preparation and retry starts remain in the same cycle until settlement. |
 | `userMessage()` | `message_start` filtered to role `user` | A user-role message has joined processing, including consumed queued or extension-generated messages. |
 | `settled(eligible)` | `agent_settled` | Finish the cycle after automatic continuation stops; eligibility is owner policy. |
 
 A settled-cycle rule excludes a cycle already active when it was armed.
+Do not equate `!ctx.isIdle()` with an agent cycle: manual context compaction and tree navigation also make Pi busy, without a matching `agent_settled`.
+Owners use public preparation/run hooks and automatic compaction reasons (`threshold` or `overflow`) as run evidence; a live `ctx.signal` can identify late attachment to a low-level run.
+An earlier extension can hold preparation before an owner's hook runs, so a provisional busy exclusion must be cleared on positive idle or a manual-compaction/navigation hook.
+Observe an idle `input` only to clear abandoned tracking, not to count accepted input.
+An unfinished preparation closes as ineligible before the next preparation; its earlier automatic compaction remains in the same cycle.
+Pi exposes no exact session-run query to extensions, so owners must not infer completion from a missing signal or a maintenance-success hook.
+One limit remains: maintenance can end and a custom-triggered run can start without an idle observation reaching the owner. Its public state can match a run that was already preparing when the rule was armed.
+The conservative busy exclusion preserves the current run, but can delay that future custom-triggered cycle by one settlement. A live high-level run query or an ordered cycle-identity API from Pi is needed to distinguish those cases without changing busy-time arming behavior.
 An eligible future cycle must itself consume a user message after arming; user activity in an earlier excluded or failed cycle cannot expire the rule during a later autonomous cycle.
 Queued inputs can share one cycle.
 `agent_settled.aborted === false` is not evidence of success; inspect relevant owner outcomes if success is required.
@@ -121,7 +129,8 @@ Consumer tests cover existing menus, settings, authoritative state, completion r
 Strict external-consumer and eager-graph tests keep the original widget entry unchanged and each optional helper dependency-free at runtime.
 Changesets fixtures verify that the Kit minor release raises each adopting consumer's generated dependency floor; exact-artifact publication guards remain required.
 
-The implementation verification passed both repository gates: `npm run check` and separate `npm test` (796 files, 15,330 tests; the existing one-file/two-test skips remain).
+The implementation verification passed both repository gates: `npm run check` and separate `npm test` (797 files, 15,384 tests; the existing one-file/two-test skips remain).
+These passing gates do not establish exact tracking across an unobserved maintenance/custom-run boundary; a separate native diagnostic reproduces the one-extra-cycle limit above.
 The complete intended diff was reviewed for correctness, security, lifecycle safety, compatibility, regressions, and scope against the extension, settings, README, Kit admission, and coordinated-release guides.
 Failure-injection tests cover cleanup exceptions across all three consumers, joining source/menu/settings/runtime work, stale context getters, retrying failed publication cleanup, reentrant policy/measurement callbacks, and capacity bypass attempts.
 

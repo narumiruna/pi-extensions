@@ -32,11 +32,17 @@ export interface SubagentWidgetControls {
   item(jobId: string): EditorStatusItemHandle | undefined;
 }
 
+export type SubagentCyclePhase = "idle" | "maintenance" | "unconfirmed" | "auto-preparing" | "preparing" | "running";
+
 export interface SubagentWidgetController {
-  start(ctx: ExtensionContext, settings?: SubagentSettings): void;
+  start(ctx: ExtensionContext, settings?: SubagentSettings, phase?: SubagentCyclePhase): void;
   update(ctx: ExtensionContext, settings: SubagentSettings): void;
   shutdown(ctx: ExtensionContext): void;
   controls(ctx: ExtensionContext): SubagentWidgetControls | undefined;
+  preparing(ctx: ExtensionContext): void;
+  automaticCompaction(ctx: ExtensionContext): void;
+  clearCycle(ctx: ExtensionContext): void;
+  maintenance(ctx: ExtensionContext): void;
   agentStarted(ctx: ExtensionContext): void;
   userMessage(ctx: ExtensionContext): void;
   turnEnded(ctx: ExtensionContext, stopReason: string): void;
@@ -64,7 +70,7 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
   let controls: SubagentWidgetControls | undefined;
   let jobs: readonly ActiveJobDisplay[] = [];
   let publishedValue: string | undefined;
-  let cycleActive = false;
+  let cyclePhase: SubagentCyclePhase = "idle";
   let lastOutcome: string | undefined;
   let settings = { ...DEFAULT_SUBAGENT_SETTINGS };
 
@@ -99,7 +105,7 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
       controls = undefined;
       jobs = [];
       publishedValue = undefined;
-      cycleActive = false;
+      cyclePhase = "idle";
       lastOutcome = undefined;
     }
     if (errors.length === 1) throw errors[0];
@@ -129,8 +135,31 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
     publish();
   };
 
+  const finishCycle = (eligible: boolean): void => {
+    try {
+      view?.settled(eligible);
+    } finally {
+      cyclePhase = "idle";
+      lastOutcome = undefined;
+    }
+  };
+  const startCycle = (phase: Exclude<SubagentCyclePhase, "idle" | "maintenance">): void => {
+    if (cyclePhase === "idle" || cyclePhase === "maintenance") lastOutcome = undefined;
+    cyclePhase = phase;
+    view?.agentStarted();
+  };
+  const syncActiveCycle = (ctx: ExtensionContext): void => {
+    if (ctx.isIdle()) {
+      if (cyclePhase !== "idle" && cyclePhase !== "running") finishCycle(false);
+    } else if (cyclePhase === "idle" || cyclePhase === "maintenance") {
+      // Earlier extension handlers can hold preparation before this owner sees
+      // it. Public maintenance hooks or positive idle discard this provisional cycle.
+      startCycle(ctx.signal === undefined ? "unconfirmed" : "running");
+    }
+  };
+
   return {
-    start(ctx, preferences = DEFAULT_SUBAGENT_SETTINGS) {
+    start(ctx, preferences = DEFAULT_SUBAGENT_SETTINGS, phase = "idle") {
       // Dispose while the old publisher still owns its key, then transfer ownership.
       stop();
       const token = generation;
@@ -148,12 +177,11 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
           render: (snapshot, theme, width, rows) =>
             renderSubagentWidgetSnapshot(snapshot, theme, width, subagentWidgetRowBudget(rows)),
         });
-        // Settings load can finish after agent_start. Exclude that already-busy
-        // cycle from any rule armed through the newly available menu.
-        if (!ctx.isIdle()) {
-          cycleActive = true;
-          view.agentStarted();
-        }
+        // The owner records public preparation/run hooks while settings load.
+        // General busy state also includes navigation and manual compaction.
+        if (phase === "maintenance") cyclePhase = phase;
+        else if (phase !== "idle") startCycle(phase);
+        syncActiveCycle(ctx);
         const ownedView = view;
         controls = {
           state: () => ({ mode: ownedView.mode, pinned: ownedView.pinned, trigger: ownedView.trigger }),
@@ -165,13 +193,7 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
           },
           setTrigger: (trigger) => {
             if (!isCurrent()) return;
-            // Pi is busy during run preparation, before agent_start is emitted.
-            // Arming in that gap must exclude the run that is already starting.
-            if (!cycleActive && !ctx.isIdle()) {
-              cycleActive = true;
-              lastOutcome = undefined;
-              ownedView.agentStarted();
-            }
+            syncActiveCycle(ctx);
             ownedView.setTrigger(trigger);
           },
           resetItems() {
@@ -216,25 +238,40 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
     controls(ctx) {
       return ownsSession(ctx) && ctx.mode === "tui" ? controls : undefined;
     },
-    agentStarted(ctx) {
+    preparing(ctx) {
       if (!ownsSession(ctx) || !view) return;
-      if (!cycleActive) lastOutcome = undefined;
-      cycleActive = true;
-      view.agentStarted();
+      // A new preparation closes a failed prior preparation without consuming
+      // the rule. Earlier automatic compaction is part of this same run.
+      if (cyclePhase !== "auto-preparing" && cyclePhase !== "unconfirmed") finishCycle(false);
+      startCycle("preparing");
+    },
+    automaticCompaction(ctx) {
+      if (!ownsSession(ctx) || !view) return;
+      if (cyclePhase === "preparing" || cyclePhase === "maintenance") finishCycle(false);
+      if (cyclePhase === "idle" || cyclePhase === "unconfirmed") startCycle("auto-preparing");
+    },
+    clearCycle(ctx) {
+      if (ownsSession(ctx)) finishCycle(false);
+    },
+    maintenance(ctx) {
+      if (!ownsSession(ctx)) return;
+      finishCycle(false);
+      cyclePhase = "maintenance";
+    },
+    agentStarted(ctx) {
+      if (ownsSession(ctx) && view) startCycle("running");
     },
     userMessage(ctx) {
       if (ownsSession(ctx)) view?.userMessage();
     },
     turnEnded(ctx, stopReason) {
-      if (ownsSession(ctx) && cycleActive) lastOutcome = stopReason;
+      if (ownsSession(ctx) && cyclePhase !== "idle" && cyclePhase !== "maintenance") lastOutcome = stopReason;
     },
     settled(ctx, aborted) {
       if (!ownsSession(ctx) || !view) return;
       // A non-aborted idle boundary alone does not establish a successful response.
       const eligible = !aborted && lastOutcome !== undefined && lastOutcome !== "error" && lastOutcome !== "aborted";
-      cycleActive = false;
-      lastOutcome = undefined;
-      view.settled(eligible);
+      finishCycle(eligible);
     },
   };
 }

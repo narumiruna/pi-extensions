@@ -8,7 +8,7 @@ import { afterEach, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { ActiveJobDisplay, SubagentRuntime } from "../src/runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../src/settings.js";
-import { createSubagentWidgetController, renderSubagentWidget } from "../src/widget.js";
+import { createSubagentWidgetController, renderSubagentWidget, type SubagentCyclePhase } from "../src/widget.js";
 import { subagentWidgetRowBudget } from "../src/widget-renderer.js";
 
 const theme = { fg: (_role: string, value: string) => value } as Theme;
@@ -26,7 +26,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fixture(initial: ActiveJobDisplay[] = [job], idle = true) {
+function fixture(initial: ActiveJobDisplay[] = [job], idle = true, phase: SubagentCyclePhase = "idle") {
   let jobs = initial;
   let tick!: () => void;
   const callbacks: (() => void)[] = [];
@@ -55,7 +55,7 @@ function fixture(initial: ActiveJobDisplay[] = [job], idle = true) {
     context.widgets.set(key, value);
     if (typeof value === "function") component = value({ terminal, requestRender: requests } as unknown as TUI, theme);
   });
-  controller.start(context.ctx);
+  controller.start(context.ctx, undefined, phase);
   cleanup.push(() => controller.shutdown(context.ctx));
   const controls = controller.controls(context.ctx);
   assert.ok(controls);
@@ -189,6 +189,7 @@ test.each(["stop", "length", "toolUse"])("future settled cycle compacts once aft
 test("arming while Pi is preparing a run excludes it before agent_start is emitted", () => {
   const f = fixture();
   f.setIdle(false);
+  f.controller.preparing(f.context.ctx);
   f.controls.setTrigger("settled-cycle");
   f.controller.agentStarted(f.context.ctx);
   f.controller.userMessage(f.context.ctx);
@@ -202,7 +203,7 @@ test("arming while Pi is preparing a run excludes it before agent_start is emitt
 });
 
 test("busy start excludes the pre-existing cycle even when agent_start was missed during settings load", () => {
-  const f = fixture([job], false);
+  const f = fixture([job], false, "running");
   f.controls.setTrigger("settled-cycle");
   f.controller.userMessage(f.context.ctx);
   f.controller.turnEnded(f.context.ctx, "stop");
@@ -211,6 +212,63 @@ test("busy start excludes the pre-existing cycle even when agent_start was misse
   f.cycle();
   assert.equal(f.render().length, 2);
 });
+
+test("positive idle discards provisional maintenance tracking without consuming the rule", () => {
+  const f = fixture([job], false);
+  f.controller.maintenance(f.ctx);
+  f.controls.setTrigger("settled-cycle");
+  f.setIdle(true);
+  f.controls.setTrigger("settled-cycle");
+  f.cycle();
+  assert.equal(f.render().length, 2);
+  assert.equal(f.controls.state().trigger, "manual");
+});
+
+test("a live run signal seeds late attachment without treating other busy work as a run", () => {
+  const f = fixture();
+  Object.defineProperty(f.ctx, "signal", { value: new AbortController().signal });
+  f.setIdle(false);
+  f.controls.setTrigger("settled-cycle");
+  f.cycle();
+  assert.equal(f.render().length, 3);
+  f.setIdle(true);
+  f.cycle();
+  assert.equal(f.render().length, 2);
+});
+
+for (const reason of ["threshold", "overflow"] as const) {
+  for (const willRetry of [false, true]) {
+    test(`${reason} compaction retry=${willRetry} excludes its current preparation before agent_start`, () => {
+      const f = fixture();
+      f.setIdle(false);
+      f.controller.automaticCompaction(f.ctx);
+      f.controls.setTrigger("settled-cycle");
+      f.controller.preparing(f.ctx);
+      f.cycle();
+      assert.equal(f.render().length, 3);
+      f.setIdle(true);
+      f.cycle();
+      assert.equal(f.render().length, 2);
+    });
+  }
+}
+
+for (const recovery of ["idle-arm", "next-preparation", "next-automatic-compaction"] as const) {
+  test(`failed preparation without settlement recovers at ${recovery}`, () => {
+    const f = fixture();
+    f.setIdle(false);
+    f.controller.preparing(f.ctx);
+    f.controls.setTrigger("settled-cycle");
+    f.setIdle(true);
+    if (recovery === "idle-arm") f.controls.setTrigger("settled-cycle");
+    f.setIdle(false);
+    if (recovery === "next-automatic-compaction") f.controller.automaticCompaction(f.ctx);
+    f.controller.preparing(f.ctx);
+    f.cycle();
+    assert.equal(f.render().length, 2);
+    assert.equal(f.controls.state().trigger, "manual");
+  });
+}
 
 test.each([
   { outcome: "error", aborted: false },

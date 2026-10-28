@@ -109,8 +109,11 @@ An explicit details, summary, or hide/show choice cancels the pending automatic 
 
 Automatic compaction is off by default. Choose **Next consumed user message** to compact when Pi emits `message_start` for a user message, including extension-generated user messages and queued messages when consumed. Input submission, rejected input, and unconsumed queues do not count.
 Choose **Next eligible settled cycle** to wait for `agent_settled` after later consumed user activity in that same cycle. The cycle already active when the rule is armed is excluded, including run preparation before `agent_start` and a cycle that started during settings loading.
-Retries, tool turns, continuations, and batched queued messages can share one cycle. Eligibility requires a non-aborted settlement and a latest observed turn outcome other than error or abort; a non-aborted settlement alone is insufficient.
+Retries, tool turns, continuations, automatic context compaction, and batched queued messages can share one cycle. Tree navigation and manual context compaction are not response cycles.
+Eligibility requires a non-aborted settlement and a latest observed turn outcome other than error or abort; a non-aborted settlement alone is insufficient.
 A pending rule rearms on meaningful active-job changes, but not elapsed-time refreshes, repaint, or resize. A rule that compacts is consumed once; otherwise it stays pending. Pins, disabled settings, and manual hide prevent automatic compaction.
+
+If maintenance ends and an extension starts a custom run without an observed idle gap, the rule can wait one extra cycle. Pi exposes no exact run-activity query to extensions.
 
 An active job's manager detail screen can compact or remove only that job's widget row. Removal does not cancel the job or suppress completion messages.
 Removal remains in effect across active-job snapshots until **Reset item views**, or until the job ID leaves the active snapshot. Reset restores the current active rows and their item details, not the overall view, pin, or trigger.

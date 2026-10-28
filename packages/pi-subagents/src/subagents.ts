@@ -8,7 +8,7 @@ import {
   subagentSettingsPath,
 } from "./settings.js";
 import { registerSubagentTools, type SubagentToolsDependencies } from "./tools.js";
-import { createSubagentWidgetController } from "./widget.js";
+import { createSubagentWidgetController, type SubagentCyclePhase } from "./widget.js";
 
 export interface SubagentsDependencies extends SubagentToolsDependencies {
   settingsStore?: Pick<SubagentSettingsStore, "userPath" | "load" | "save" | "flush">;
@@ -24,6 +24,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
   let owner = new AbortController();
   let ready = false;
   let menuOpen = false;
+  let cyclePhase: SubagentCyclePhase = "idle";
   let settings: SubagentSettings = { ...DEFAULT_SUBAGENT_SETTINGS };
   const menuTasks = new Set<Promise<void>>();
   const ownsSession = (ctx: ExtensionContext) =>
@@ -137,6 +138,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
     owner = new AbortController();
     const signal = owner.signal;
     activeContext = ctx;
+    cyclePhase = ctx.signal === undefined ? "idle" : "running";
     const isCurrent = () => generation === sessionGeneration && !signal.aborted && ownsSession(ctx);
     const errors: unknown[] = [];
     try {
@@ -159,7 +161,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
     const loaded = await store.load();
     if (!isCurrent()) return;
     settings = { ...loaded.settings };
-    widget.start(ctx, settings);
+    widget.start(ctx, settings, cyclePhase);
     ready = true;
     if (loaded.diagnostics.length > 0) {
       const message = sanitizeSubagentDisplayText(`Subagent settings: ${loaded.diagnostics.join(" ")}`);
@@ -168,8 +170,37 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
     }
   });
 
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "preparing";
+    if (ready) widget.preparing(ctx);
+  });
+  pi.on("session_before_compact", (event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    if (event.reason === "manual") {
+      cyclePhase = "maintenance";
+      if (ready) widget.maintenance(ctx);
+    } else {
+      if (cyclePhase !== "running") cyclePhase = "auto-preparing";
+      if (ready) widget.automaticCompaction(ctx);
+    }
+  });
+  pi.on("session_before_tree", (_event, ctx) => {
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "maintenance";
+    if (ready) widget.maintenance(ctx);
+  });
+  pi.on("input", (_event, ctx) => {
+    // Discard a canceled maintenance/preparation guard before a new idle prompt.
+    // Do not count input as a consumed user message.
+    if (!ownsSession(ctx) || !ctx.isIdle()) return;
+    cyclePhase = "idle";
+    if (ready) widget.clearCycle(ctx);
+  });
   pi.on("agent_start", (_event, ctx) => {
-    if (ready && ownsSession(ctx)) widget.agentStarted(ctx);
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "running";
+    if (ready) widget.agentStarted(ctx);
   });
   pi.on("message_start", (event, ctx) => {
     // Input submission is not consumption. Extension-generated user messages count too.
@@ -180,16 +211,20 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
       widget.turnEnded(ctx, event.message.stopReason);
   });
   pi.on("agent_settled", (event, ctx) => {
-    if (ready && ownsSession(ctx)) widget.settled(ctx, event.aborted);
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "idle";
+    if (ready) widget.settled(ctx, event.aborted);
   });
   pi.on("session_tree", (_event, ctx) => {
-    if (!ready || !ownsSession(ctx)) return;
+    if (!ownsSession(ctx)) return;
+    cyclePhase = "maintenance";
+    if (!ready) return;
     sessionGeneration++;
     ready = false;
     menuOpen = false;
     owner.abort();
     owner = new AbortController();
-    widget.start(ctx, settings);
+    widget.start(ctx, settings, cyclePhase);
     ready = true;
   });
 
@@ -199,6 +234,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
     ready = false;
     menuOpen = false;
     activeContext = undefined;
+    cyclePhase = "idle";
     owner.abort();
     const errors: unknown[] = [];
     try {
