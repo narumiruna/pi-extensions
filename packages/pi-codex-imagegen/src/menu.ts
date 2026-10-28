@@ -31,7 +31,7 @@ export async function showImagegenMenu(ctx: ExtensionCommandContext, owner: Imag
         main: () => ({
           kind: "actions",
           title: "Codex Image Generation",
-          lines: ["Experimental internal endpoint", `Activity: ${owner.isBusy() ? "Generating" : "Idle"}`],
+          lines: ["Codex internal image endpoint", `Activity: ${owner.isBusy() ? "Generating" : "Idle"}`],
           items: [
             {
               id: "generate",
@@ -52,7 +52,7 @@ export async function showImagegenMenu(ctx: ExtensionCommandContext, owner: Imag
           title: "Image Generation Status",
           lines: [
             `Authentication: ${sanitizeTerminalText(owner.getAuthStatus())}`,
-            "Endpoint: experimental ChatGPT/Codex internal image API",
+            "Endpoint: ChatGPT/Codex internal image API",
             "Local metadata does not verify account entitlement or live readiness.",
             `Tool access: ${owner.getSettings().toolEnabled ? "enabled" : "disabled"}`,
             "Each generation requires an output path.",

@@ -1,6 +1,6 @@
 # Codex image protocol contract
 
-This is an independent TypeScript implementation of the generation HTTP operation described by OpenAI Codex source. No Codex executable, library, agent, or plugin is bundled or started. The protocol is internal and experimental; offline tests do not establish real account access.
+This is an independent TypeScript implementation of the generation HTTP operation confirmed against the OpenAI Codex source mapped below. No Codex executable, library, agent, or plugin is bundled or started. The endpoint is internal; source review and offline tests do not establish real account access.
 
 ## Source mapping
 
