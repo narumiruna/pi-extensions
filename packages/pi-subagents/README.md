@@ -97,8 +97,8 @@ Subagents · 2 active
 ○ Audit settings · thinking: medium · queued
 ```
 
-The `thinking: <level>` field appears only when the job's resolved thinking level differs from the main agent's effective level captured at spawn, including an `off` override. An explicit value equal to that default is also hidden.
-Later main-agent changes do not change this comparison. The field describes the configuration passed at spawn, not child-side normalization or later changes.
+The `provider: <id>`, `model: <id>`, and `thinking: <level>` fields each appear only when the resolved value differs from the main agent's effective value captured at spawn, including an `off` thinking override. Inherited values and explicit values equal to those defaults are hidden. An explicit provider/model pair without a selected main-agent model shows both IDs.
+Later main-agent changes do not change these comparisons. The fields describe the configuration passed at spawn, not child-side normalization or later changes.
 Running rows show elapsed time and a timeout only when one is set. Queued rows show `queued` and a configured timeout, without elapsed time. **Show timing** controls both time fields.
 
 The task preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened. It describes the assigned task, not live child activity; the full task sent to the child is unchanged.

@@ -116,6 +116,24 @@ test("retains one mount for visible changes, invalidates renders, and clears onl
   assert.match(f.render().join("\n"), /Latest hidden task/u);
 });
 
+test.each(["provider", "model"] as const)("refreshes a changed %s override without remounting", (field) => {
+  const f = fixture([{ ...job, [field]: "first-id" }]);
+  const component = f.component();
+  const handle = f.controls.item(job.jobId);
+  assert.match(f.render()[2] ?? "", new RegExp(`${field}: first-id`, "u"));
+  f.replace([{ ...job, [field]: "second-id" }]);
+  assert.equal(f.component(), component);
+  assert.equal(f.mounts.mock.calls.length, 1);
+  assert.match(f.render()[2] ?? "", new RegExp(`${field}: second-id`, "u"));
+  assert.equal(handle?.compact(), false, "a semantic model change invalidates the old handle");
+  assert.equal(f.controls.item(job.jobId)?.compact(), true);
+  assert.doesNotMatch(f.render()[2] ?? "", /provider:|model:/u);
+  assert.equal(f.controls.item(job.jobId)?.expand(), true);
+  f.replace([job]);
+  assert.equal(f.component(), component);
+  assert.doesNotMatch(f.render()[2] ?? "", /provider:|model:/u);
+});
+
 test.each([0, 1, 2, 3, 4, 10])("renderer accounts for the separator in a %s-row budget", (budget) => {
   const jobs = Array.from({ length: 8 }, (_, index) => ({
     ...job,
@@ -352,13 +370,23 @@ test("raw IDs isolate item views, preserve removal across snapshots, and invalid
 test("accepts eight maximum-size UTF-8 runtime jobs and rejects invalid snapshots atomically", () => {
   const task = "界".repeat(Math.floor((50 * 1024) / 3));
   const tools = Array.from({ length: 64 }, (_, index) => `${index}${"界".repeat(126)}`);
-  const jobs = Array.from({ length: 8 }, (_, index) => ({ ...job, jobId: `job_${index}`, task, tools }));
+  const model = "界".repeat(Math.floor((16 * 1024 - 1024) / 3));
+  const jobs = Array.from({ length: 8 }, (_, index) => ({
+    ...job,
+    jobId: `job_${index}`,
+    task,
+    tools,
+    provider: "fixture-provider",
+    model,
+  }));
   const f = fixture(jobs);
   assert.equal(f.render().length, 10);
   const original = f.render();
   for (const invalid of [
     [...jobs, { ...job, jobId: "overflow" }],
     [{ ...job, task: "界".repeat(128 * 1024) }],
+    [{ ...job, provider: "界".repeat(128 * 1024) }],
+    [{ ...job, model: "界".repeat(128 * 1024) }],
     [job, job],
   ]) {
     assert.throws(() => f.replace(invalid), RangeError);

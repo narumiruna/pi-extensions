@@ -94,6 +94,8 @@ function renderJob(job: ActiveJobDisplay, theme: Theme, settings: SubagentSettin
       ? undefined
       : `timeout: ${timeout}`;
   const details = [
+    ...(job.provider !== undefined ? [`provider: ${sanitizeLabel(job.provider)}`] : []),
+    ...(job.model !== undefined ? [`model: ${sanitizeLabel(job.model)}`] : []),
     ...(job.thinkingLevel !== job.defaultThinkingLevel ? [`thinking: ${sanitizeLabel(job.thinkingLevel)}`] : []),
     ...(!running && hasLabel ? ["queued"] : []),
     ...(settings.showTiming && timing !== undefined ? [timing] : []),

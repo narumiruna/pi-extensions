@@ -29,6 +29,7 @@ interface InternalJob extends JobSummary {
   resolveTerminal: () => void;
   task?: Promise<void>;
   taskText: string;
+  modelOverrides: SubagentModelOverrides;
   thinkingLevel: SubagentThinkingLevel;
   defaultThinkingLevel: SubagentThinkingLevel;
   stopRequest?: StopRequest;
@@ -49,7 +50,13 @@ export interface RuntimeDependencies {
   now?: () => number;
 }
 
-export interface ActiveJobDisplay {
+/** Resolved IDs that differ from the effective parent pair captured at spawn. */
+export interface SubagentModelOverrides {
+  provider?: string;
+  model?: string;
+}
+
+export interface ActiveJobDisplay extends SubagentModelOverrides {
   jobId: string;
   task: string;
   state: Extract<SubagentJobState, "queued" | "running">;
@@ -68,6 +75,7 @@ export interface StartJobInput {
   toolSources: Record<string, string[]>;
   provider: string;
   model: string;
+  modelOverrides?: SubagentModelOverrides;
   thinkingLevel: SubagentThinkingLevel;
   defaultThinkingLevel: SubagentThinkingLevel;
   cwd: string;
@@ -123,6 +131,7 @@ export class SubagentRuntime {
         jobId: job.jobId,
         task: job.taskText,
         state: job.state,
+        ...job.modelOverrides,
         thinkingLevel: job.thinkingLevel,
         defaultThinkingLevel: job.defaultThinkingLevel,
         elapsedMs: Math.max(0, now - (job.startedAt ?? job.createdAt)),
@@ -168,6 +177,7 @@ export class SubagentRuntime {
       controller,
       tools: effectiveTools,
       taskText: input.task,
+      modelOverrides: { ...input.modelOverrides },
       thinkingLevel: input.thinkingLevel,
       defaultThinkingLevel: input.defaultThinkingLevel,
       terminal,

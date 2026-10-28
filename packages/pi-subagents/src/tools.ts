@@ -21,7 +21,7 @@ import {
   MAX_SELECTED_TOOLS,
   resolveResourceAttachments,
 } from "./resource-attachments.js";
-import { type RuntimeDependencies, SubagentRuntime } from "./runtime.js";
+import { type RuntimeDependencies, type SubagentModelOverrides, SubagentRuntime } from "./runtime.js";
 import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
 import {
   CHILD_CORE_TOOL_NAMES,
@@ -223,7 +223,7 @@ export function registerSubagentTools(
       if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
         throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
       }
-      const { provider, model } = resolveChildModel(ctx, params, attachments.extensions.length > 0);
+      const { provider, model, modelOverrides } = resolveChildModel(ctx, params, attachments.extensions.length > 0);
       const defaultThinkingLevel = resolveThinkingLevel(ctx.thinkingLevel ?? pi.getThinkingLevel());
       const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? defaultThinkingLevel);
       resolveTimeoutMs(params.timeout);
@@ -252,6 +252,7 @@ export function registerSubagentTools(
           toolSources: attachments.toolSources,
           provider,
           model,
+          modelOverrides,
           thinkingLevel,
           defaultThinkingLevel,
           cwd,
@@ -410,7 +411,7 @@ function resolveChildModel(
   ctx: ExtensionContext,
   overrides: Pick<SpawnArguments, "provider" | "model">,
   hasAttachedExtensions: boolean,
-): { provider: string; model: string } {
+): { provider: string; model: string; modelOverrides: SubagentModelOverrides } {
   // Read the effective parent pair once, after asynchronous attachment preflight.
   const parent = ctx.model;
   if (!parent && (overrides.provider === undefined || overrides.model === undefined)) {
@@ -432,7 +433,14 @@ function resolveChildModel(
       `Subagent model provider ${displayProvider} uses a process-local runtime API key. Configure stored or environment credentials that child processes can read.`,
     );
   }
-  return { provider, model };
+  return {
+    provider,
+    model,
+    modelOverrides: {
+      ...(provider !== parent?.provider ? { provider } : {}),
+      ...(model !== parent?.id ? { model } : {}),
+    },
+  };
 }
 
 function validateModelIdentifier(value: unknown, field: "provider" | "model"): string {
