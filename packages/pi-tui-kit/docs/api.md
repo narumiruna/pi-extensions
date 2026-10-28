@@ -734,7 +734,9 @@ They remain separate so a custom or legacy current value can focus a safe fallba
 A confirmed row invokes the screen action with its raw `itemId`; moving the cursor only changes selected details.
 Rejected or thrown actions retain the selection.
 Disabled rows stay focusable for their explanation but never invoke the action.
-Action and choice screens wrap the selected description below the list when it does not fit inline.
+Action and choice screens mark clipped names with an ellipsis and wrap the complete selected label below the list when it does not fit inline.
+Choices use adaptive primary columns and preserve the textual current marker when enough cells remain for both it and a label fragment.
+The selected description also wraps below the list when it does not fit inline.
 At constrained heights, the selected row takes priority; a filtered empty state keeps its recovery guidance ahead of the search field.
 RPC flattens choice rows to unique dialog labels while preserving raw identity.
 
@@ -767,6 +769,7 @@ const profileScreen = {
 Set `enableSearch: true` when a choice list needs local filtering, and provide optional `searchText` for safe aliases or metadata that should not be rendered.
 TUI fuzzy-searches sanitized labels, descriptions, and explicit search text.
 It preserves raw stable IDs, query and selection after a rejected action, disabled explanations, and IME focus.
+A muted count below the query shows the catalog total or filtered results, separately from cursor position.
 Details and raw IDs are not searched implicitly.
 RPC deliberately keeps one deterministic unfiltered selector and ignores interactive search metadata.
 
@@ -776,6 +779,8 @@ Use standalone `runLiveChoice()` when its list-and-shortcut contract fits; keep 
 Browse rows only reveal information and never invoke domain actions. An exact detail document can opt into the separate [full-source copy callback](#full-source-document-copy).
 TUI fuzzy-searches each sanitized label, textual `statusText`, description, and optional non-rendered `searchText`.
 Enter opens an adaptive scrolling detail view; Escape returns to the list without losing the query or selected raw id, then returns to the parent, while Ctrl+C closes the menu.
+List rows reserve name cells before bounding status text, and mark clipped names or status with an ellipsis.
+Query editing remains available when a constrained height hides the search field, but the hidden field has no cursor or focus.
 Omitted or `"adaptive"` viewport size uses the live terminal row budget; a positive number caps item rows without disabling terminal bounds.
 RPC intentionally keeps one deterministic unfiltered list, then presents bounded detail pages; `searchText` is never rendered.
 Set `enableDetailSearch: true` to add literal, case-insensitive search over the displayed legacy or exact detail text in TUI mode.
@@ -838,7 +843,9 @@ Use `choice` when confirmation invokes a domain action; use `browse` when select
 Domain status meaning, catalog construction, and data freshness remain consumer-owned.
 
 TUI settings screens retain the extension title and supporting context above Pi's familiar search field.
-They use aligned label and value columns, a ten-row viewport, a position indicator, a selected-row description, and a keyboard hint.
+They use width-bounded aligned label and value columns, a ten-row viewport, a position indicator, selected-row context, and a keyboard hint.
+Values retain space at narrow widths; clipped selected labels or values appear in full below the list when height permits, followed by the description.
+Rows below six columns prioritize the cursor and label rather than attempting two columns.
 Typing fuzzy-filters labels, arrows navigate, and Enter or Space changes the selected value.
 Changes save immediately, so Back or Close never implies rollback.
 The embedded search input forwards focus for IME positioning.
