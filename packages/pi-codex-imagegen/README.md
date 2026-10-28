@@ -6,7 +6,7 @@
 
 Generate images from Pi through the Codex image endpoint, without starting Codex CLI, an agent, or its plugins.
 
-> **Experimental:** This uses an internal ChatGPT endpoint, not the public OpenAI Images API. Real account access and transparent output have not been verified. The endpoint can change or reject third-party clients. Do not publish the initial package until the [live checks](./docs/verification.md) pass and publication is explicitly approved.
+> **Endpoint:** The request contract is confirmed against [OpenAI Codex source](./docs/protocol.md#source-mapping). This uses an internal ChatGPT endpoint, not the public OpenAI Images API. Real account access and transparent output have not been verified. The endpoint can change or reject third-party clients. Do not publish the initial package until the [live checks](./docs/verification.md) pass and publication is explicitly approved.
 
 ## ✨ Features
 

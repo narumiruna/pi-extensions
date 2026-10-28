@@ -1,6 +1,6 @@
 # Workflows
 
-The manual menu and the optional model tool use the same image generation pipeline. These diagrams describe the current implementation. See [Architecture](./architecture.md) for component and data boundaries, including the experimental endpoint warning.
+The manual menu and the optional model tool use the same image generation pipeline. These diagrams describe the current implementation. See [Architecture](./architecture.md) for component and data boundaries, including the internal endpoint limits.
 
 ## Manual and model-driven generation
 

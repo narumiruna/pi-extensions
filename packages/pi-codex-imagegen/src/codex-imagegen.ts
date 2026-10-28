@@ -201,7 +201,7 @@ export function createImagegenExtension(overrides: Partial<Dependencies> = {}) {
       name: TOOL_NAME,
       label: "Codex Image Generation",
       description:
-        "Generate one image through the experimental Codex image endpoint using Pi's OpenAI Codex OAuth login. Writes to the required exact path, overwrites existing files, and follows symlinks like write. Consumes account quota. No automatic retries. Image editing is unsupported.",
+        "Generate one image through the Codex image endpoint using Pi's OpenAI Codex OAuth login. Writes to the required exact path, overwrites existing files, and follows symlinks like write. Consumes account quota. No automatic retries. Image editing is unsupported.",
       parameters: PARAMETERS,
       outputSchema: OUTPUT_SCHEMA,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -324,7 +324,7 @@ export function createImagegenExtension(overrides: Partial<Dependencies> = {}) {
     });
 
     pi.registerCommand("codex-imagegen", {
-      description: "Generate images and manage experimental Codex image settings",
+      description: "Generate images and manage Codex image settings",
       handler: async (args, ctx) => {
         if (args.trim()) throw new Error("/codex-imagegen accepts no arguments. Open its menu without arguments.");
         if (ctx.mode !== "tui") {

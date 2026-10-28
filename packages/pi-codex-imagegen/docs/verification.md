@@ -1,6 +1,6 @@
 # Verification and release handoff
 
-Deterministic tests validate the TypeScript implementation, not the availability of the internal Codex endpoint for a real account. No live image request is part of the default tests, build, package load, or Status action.
+The request contract is confirmed against [OpenAI Codex source](./protocol.md#source-mapping). Deterministic tests validate the TypeScript implementation, not the availability of the internal Codex endpoint for a real account. No live image request is part of the default tests, build, package load, or Status action.
 
 ## Deterministic coverage
 
@@ -62,4 +62,4 @@ Expected result: Pi-native input behavior and bounded screens. Mocked frames do 
 
 Live account/endpoint compatibility, actual generated image bytes, transparent alpha, live tool use, physical terminal/IME behavior, and runtime-specific proxy setups remain unverified. The tests must not be described as proving those paths.
 
-Keep the feature experimental. Do not publish the initial package until the supported live generation path is verified and publication is explicitly approved. Do not create version tags, change npm visibility, or dispatch release workflows as part of implementation verification.
+Do not publish the initial package until the supported live generation path is verified and publication is explicitly approved. Do not create version tags, change npm visibility, or dispatch release workflows as part of implementation verification.

@@ -94,6 +94,10 @@ async function setup(options: { document?: unknown; mode?: ExtensionContext["mod
 it("keeps the factory tool hidden and enables it on session start without resolving auth or creating files", async () => {
   const h = await setup();
   expect([...h.commands.keys()]).toEqual(["codex-imagegen"]);
+  expect(h.commands.get("codex-imagegen")?.description).toBe("Generate images and manage Codex image settings");
+  expect(h.tool().description).toContain("through the Codex image endpoint");
+  expect(h.tool().description).not.toMatch(/experimental/i);
+  expect(h.tool().description).toContain("Consumes account quota. No automatic retries. Image editing is unsupported.");
   expect(h.tool().exposure).toBe("hidden");
   expect(h.request).not.toHaveBeenCalled();
   await expect(fs.stat(h.agentDir)).rejects.toMatchObject({ code: "ENOENT" });

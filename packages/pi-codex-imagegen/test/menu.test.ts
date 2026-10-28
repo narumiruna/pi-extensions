@@ -73,7 +73,10 @@ it("uses one Kit navigator for actions, status and help without resolving authen
   const { owner } = fixture();
   const running = showImagegenMenu(ctx, owner);
   await tui.waitForOpen();
-  expect(plain(tui.render())).toMatch(/Generate Image[\s\S]*Settings[\s\S]*Status[\s\S]*Help/);
+  const main = plain(tui.render());
+  expect(main).toMatch(/Generate Image[\s\S]*Settings[\s\S]*Status[\s\S]*Help/);
+  expect(main).toContain("Codex internal image endpoint");
+  expect(main).not.toMatch(/experimental/i);
   expect(owner.getAuthStatus).not.toHaveBeenCalled();
   tui.press("tui.select.down");
   tui.press("tui.select.down");
@@ -81,6 +84,8 @@ it("uses one Kit navigator for actions, status and help without resolving authen
   await opened(tui, 2);
   const status = plain(tui.render());
   expect(status).toMatch(/metadata present/);
+  expect(status).toContain("Endpoint: ChatGPT/Codex internal image API");
+  expect(status).not.toMatch(/experimental/i);
   expect(status).toMatch(/not verify account entitlement/);
   expect(status).toMatch(/Tool access: disabled/);
   expect(status).toContain("Each generation requires an output path.");

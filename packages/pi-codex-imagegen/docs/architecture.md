@@ -2,7 +2,7 @@
 
 `pi-codex-imagegen` generates images directly from Pi without starting Codex CLI, another agent, or Codex plugins. These diagrams describe the current implementation.
 
-> **Experimental:** The extension uses an internal ChatGPT endpoint, not the public OpenAI Images API. Real account access and transparent output have not been verified. See the [verification guide](./verification.md) for the remaining live checks and publication restrictions.
+> **Endpoint:** The request contract is confirmed against [OpenAI Codex source](./protocol.md#source-mapping). The extension uses an internal ChatGPT endpoint, not the public OpenAI Images API. Real account access and transparent output have not been verified. See the [verification guide](./verification.md) for the remaining live checks and publication restrictions.
 
 ## Component boundaries
 

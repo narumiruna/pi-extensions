@@ -1,7 +1,7 @@
 {
   "name": "@narumitw/pi-codex-imagegen",
   "version": "0.1.1",
-  "description": "Experimental Pi image generation through the Codex image endpoint, without a Codex agent.",
+  "description": "Pi image generation through the Codex image endpoint, without a Codex agent.",
   "type": "module",
   "license": "MIT",
   "private": false,
