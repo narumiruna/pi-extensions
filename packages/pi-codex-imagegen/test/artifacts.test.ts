@@ -444,7 +444,6 @@ describe("native binary publication", () => {
   it.each([
     "directory target",
     "missing symlink parent",
-    "missing symlink directory",
     "directory symlink loop",
     "final symlink loop",
     "non-directory ancestor",
@@ -455,8 +454,6 @@ describe("native binary publication", () => {
       await fs.symlink("target", join(directory, "link"));
     } else if (kind === "missing symlink parent") {
       await fs.symlink("missing/target", join(directory, "link"));
-    } else if (kind === "missing symlink directory") {
-      await fs.symlink("missing/", join(directory, "link"));
     } else if (kind === "non-directory ancestor") {
       await realFs.writeFile(join(directory, "link"), "original");
       path = "link/image";
@@ -470,6 +467,35 @@ describe("native binary publication", () => {
     await expect(preflightOutput(options(path))).rejects.toMatchObject({ code });
     await expect(publishImage(decode(PNG), options(path))).rejects.toMatchObject({ code });
   });
+
+  it.each([false, true].flatMap((chained) => (["relative", "absolute"] as const).map((kind) => ({ kind, chained }))))(
+    "rejects missing directory symlinks: $kind, chained=$chained",
+    async ({ kind, chained }) => {
+      const target = kind === "absolute" ? `${join(directory, "missing")}/` : "missing/";
+      const leaf = chained ? "next" : "link";
+      await fs.symlink(target, join(directory, leaf));
+      if (chained) await fs.symlink("next", join(directory, "link"));
+      const failure = await nativeWrite("link").catch((error: NodeJS.ErrnoException) => error);
+      expect(failure).toBeInstanceOf(Error);
+      const code = (failure as NodeJS.ErrnoException).code;
+      expect(code).toBeDefined();
+
+      const writes = vi.mocked(fs.writeFile).mock.calls.length;
+      const open = vi.spyOn(fs, "open");
+      // Non-writing preflight classifies this target as directory-shaped. Native
+      // write errors can differ by platform, so compare only publication with WRITE.
+      await expect(preflightOutput(options("link"))).rejects.toMatchObject({ code: "EISDIR" });
+      expect(fs.writeFile).toHaveBeenCalledTimes(writes);
+      expect(open).not.toHaveBeenCalled();
+      expect(await fs.readlink(join(directory, leaf))).toBe(target);
+      await expect(fs.stat(join(directory, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      await expect(publishImage(decode(PNG), options("link"))).rejects.toMatchObject({ code });
+      expect(await fs.readlink(join(directory, leaf))).toBe(target);
+      if (chained) expect(await fs.readlink(join(directory, "link"))).toBe("next");
+      await expect(fs.stat(join(directory, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it.each(["bad dimensions", "bad size", "bad metadata", "bad bytes"])(
     "validates %s before any destination I/O",
