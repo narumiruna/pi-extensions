@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -830,6 +830,61 @@ test("allows explicit external resources but rejects every loaded project path w
         { cwd: project, projectTrusted: false, coreTools: [] },
       ),
     /project.*not trusted/i,
+  );
+});
+
+test.each(
+  (["skill", "extension"] as const).flatMap((kind) =>
+    (["project", "external", "project-alias", "external-alias"] as const).flatMap((placement) =>
+      [false, true].map((symlinkedCwd) => ({ kind, placement, symlinkedCwd })),
+    ),
+  ),
+)("preserves $kind trust at $placement with symlinked cwd=$symlinkedCwd", async ({ kind, placement, symlinkedCwd }) => {
+  let cwd = project;
+  if (symlinkedCwd) {
+    cwd = path.join(root, "project-cwd");
+    symlinkSync(project, cwd, "dir");
+  }
+  const filename = kind === "skill" ? "resource.md" : "resource.ts";
+  const content =
+    kind === "skill" ? "---\nname: trusted-resource\ndescription: Test.\n---\n" : "export default () => {};\n";
+  const projectFile = path.join(cwd, filename);
+  const externalFile = path.join(external, filename);
+  writeFileSync(projectFile, content);
+  writeFileSync(externalFile, content);
+  const projectAlias = path.join(cwd, `external-${filename}`);
+  const externalAlias = path.join(external, `project-${filename}`);
+  symlinkSync(externalFile, projectAlias);
+  symlinkSync(projectFile, externalAlias);
+  const resource = {
+    project: projectFile,
+    external: externalFile,
+    "project-alias": projectAlias,
+    "external-alias": externalAlias,
+  }[placement];
+  const input = kind === "skill" ? { skills: [resource] } : { extensions: [{ path: resource, tools: [] }] };
+  const resolving = resolveResourceAttachments(input, { cwd, projectTrusted: false, coreTools: [] });
+  if (placement === "external") {
+    const resolved = await resolving;
+    if (kind === "skill") assert.deepEqual(resolved.skills, [realpathSync(externalFile)]);
+    else assert.deepEqual(resolved.extensions, [{ path: realpathSync(externalFile), tools: [] }]);
+  } else {
+    await assert.rejects(resolving, {
+      name: "Error",
+      message: `Subagent ${kind} cannot load a project path because the project is not trusted.`,
+    });
+  }
+});
+
+test.each(["skill", "extension"] as const)("%s path existence errors precede trust errors", async (kind) => {
+  const missing = path.join(project, "missing");
+  const input = kind === "skill" ? { skills: [missing] } : { extensions: [{ path: missing, tools: [] }] };
+  await assert.rejects(
+    () => resolveResourceAttachments(input, { cwd: project, projectTrusted: false, coreTools: [] }),
+    {
+      name: "Error",
+      message: `Subagent ${kind} path does not exist: ${missing}`,
+    },
   );
 });
 

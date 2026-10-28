@@ -9,6 +9,7 @@ import {
   BROKER_CREDENTIAL_FD_ENV,
   CHILD_READINESS_FD,
   CHILD_READINESS_FD_ENV,
+  type ChildSelection,
   captureChildBootstrap,
   takeCapturedReadiness,
 } from "../src/broker-credentials.js";
@@ -16,6 +17,8 @@ import { type ChildCommunicationClient, createChildCommunicationExtension } from
 import { createChildReadinessProbe } from "../src/child-readiness-probe.js";
 import { MAX_MESSAGE_BYTES } from "../src/message-broker.js";
 import type { BrokerCredentials } from "../src/types.js";
+
+const selection: ChildSelection = { provider: "test", model: "model", thinkingLevel: "high" };
 
 interface RegisteredTool {
   name: string;
@@ -179,9 +182,13 @@ test("child tool failures throw and preserve AbortError", async () => {
 test("bounds the child bootstrap by serialized UTF-8 bytes", () => {
   const toolNames = (character: string) =>
     Array.from({ length: 66 }, (_, index) => `${String(index).padStart(2, "0")}${character.repeat(126)}`);
-  assert.doesNotThrow(() => assertChildBootstrapCapacity(toolNames("a")));
-  assert.throws(() => assertChildBootstrapCapacity(toolNames("界")), /child bootstrap size limit/i);
-  assert.throws(() => assertChildBootstrapCapacity(toolNames('"')), /child bootstrap size limit/i);
+  assert.doesNotThrow(() => assertChildBootstrapCapacity(toolNames("a"), selection));
+  assert.throws(() => assertChildBootstrapCapacity(toolNames("界"), selection), /child bootstrap size limit/i);
+  assert.throws(() => assertChildBootstrapCapacity(toolNames('"'), selection), /child bootstrap size limit/i);
+  assert.throws(
+    () => assertChildBootstrapCapacity([], { ...selection, model: "界".repeat(6000) }),
+    /child bootstrap size limit/i,
+  );
 });
 
 test("captures child bootstrap state from private descriptors", () => {
@@ -193,16 +200,18 @@ test("captures child bootstrap state from private descriptors", () => {
   process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
   process.env[CHILD_READINESS_FD_ENV] = String(CHILD_READINESS_FD);
   assert.deepEqual(
-    captureChildBootstrap(() => JSON.stringify({ communication, expectedTools: ["read", "custom_search"] })),
+    captureChildBootstrap(() => JSON.stringify({ communication, expectedTools: ["read", "custom_search"], selection })),
     {
       communication,
       expectedTools: ["read", "custom_search"],
+      selection,
       readinessFd: CHILD_READINESS_FD,
     },
   );
   assert.deepEqual(takeCapturedReadiness(), {
     fd: CHILD_READINESS_FD,
     expectedTools: ["read", "custom_search"],
+    selection,
   });
   assert.equal(process.env[BROKER_CREDENTIAL_FD_ENV], undefined);
   assert.equal(process.env[CHILD_READINESS_FD_ENV], undefined);
@@ -228,6 +237,7 @@ test("rejects invalid bootstrap descriptors and payloads after deleting markers"
         JSON.stringify({
           communication: { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) },
           expectedTools: ["custom_search"],
+          selection,
         }),
       ),
     /readiness descriptor/i,
@@ -246,12 +256,65 @@ test("rejects invalid bootstrap descriptors and payloads after deleting markers"
           JSON.stringify({
             communication: { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) },
             expectedTools,
+            selection,
           }),
         ),
       /invalid.*bootstrap/i,
     );
   }
 });
+
+test("bootstrap requires exact validated selection and preserves copied literal IDs", () => {
+  const communication = { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) };
+  for (const invalid of [
+    undefined,
+    null,
+    {},
+    { ...selection, extra: true },
+    ...["provider", "model"].flatMap((key) =>
+      ["", " ", null, 1, "bad\u0000id", "bad\u001bid", "bad\u0085id"].map((id) => ({ ...selection, [key]: id })),
+    ),
+    ...["HIGH", " high", "unknown", null].map((thinkingLevel) => ({ ...selection, thinkingLevel })),
+  ]) {
+    process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
+    process.env[CHILD_READINESS_FD_ENV] = String(CHILD_READINESS_FD);
+    assert.throws(
+      () => captureChildBootstrap(() => JSON.stringify({ communication, expectedTools: ["read"], selection: invalid })),
+      /invalid.*bootstrap/i,
+    );
+    assert.equal(takeCapturedReadiness(), undefined);
+    assert.equal(process.env[BROKER_CREDENTIAL_FD_ENV], undefined);
+    assert.equal(process.env[CHILD_READINESS_FD_ENV], undefined);
+  }
+  const exact: ChildSelection = { provider: " Provider ", model: " Fixture/BASE:high ", thinkingLevel: "max" };
+  process.env[BROKER_CREDENTIAL_FD_ENV] = String(BROKER_CREDENTIAL_FD);
+  process.env[CHILD_READINESS_FD_ENV] = String(CHILD_READINESS_FD);
+  const captured = captureChildBootstrap(() =>
+    JSON.stringify({ communication, expectedTools: ["read"], selection: exact }),
+  );
+  assert.deepEqual(captured?.selection, exact);
+  if (captured) captured.selection.model = "mutated";
+  assert.deepEqual(takeCapturedReadiness()?.selection, exact);
+  assert.equal(takeCapturedReadiness(), undefined);
+});
+
+function readinessContext() {
+  const model = { provider: "test", id: "model" };
+  const provider = {};
+  return {
+    model,
+    modelRegistry: {
+      find: () => model,
+      getRegisteredNativeProvider: () => provider,
+      getRegisteredProviderConfig: () => undefined,
+      getAvailableOfType: async () => [model],
+      refresh: async () => undefined,
+    },
+    sessionManager: { getSessionId: () => "test-session" },
+    cwd: process.cwd(),
+    isProjectTrusted: () => false,
+  };
+}
 
 test("readiness probe runs after earlier resource hooks", async () => {
   const frames: string[] = [];
@@ -267,16 +330,23 @@ test("readiness probe runs after earlier resource hooks", async () => {
     {
       fd: CHILD_READINESS_FD,
       expectedTools: ["read", "factory_tool", "session_tool", "resource_tool"],
+      selection,
     },
     (_fd, frame) => frames.push(frame),
     () => undefined,
   )(mock.pi);
   for (const handler of mock.events.get("resources_discover") ?? []) {
-    await handler({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, {});
+    await handler({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, readinessContext());
   }
   assert.deepEqual(
     frames.map((frame) => JSON.parse(frame)),
-    [{ ok: true, sources: allTools.map((tool) => toolSourceId(tool.sourceInfo.path)) }],
+    [
+      {
+        ok: true,
+        sources: allTools.map((tool) => toolSourceId(tool.sourceInfo.path)),
+        model: { provider: "test", id: "model" },
+      },
+    ],
   );
 });
 
@@ -290,12 +360,12 @@ test("readiness probe reports success or missing requested tools once", async ()
     const allTools = activeTools.map((name) => ({ name, sourceInfo: { path: `/tmp/${name}.ts` } }));
     const mock = createMockPi({ activeTools: [...activeTools], allTools });
     createChildReadinessProbe(
-      { fd: CHILD_READINESS_FD, expectedTools: [...expectedTools] },
+      { fd: CHILD_READINESS_FD, expectedTools: [...expectedTools], selection },
       (_fd, frame) => frames.push(frame),
       (fd) => closed.push(fd),
     )(mock.pi);
     for (const handler of mock.events.get("resources_discover") ?? []) {
-      await handler({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, {});
+      await handler({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }, readinessContext());
     }
     for (const handler of mock.events.get("session_shutdown") ?? []) {
       await handler({ type: "session_shutdown", reason: "quit" }, {});
@@ -304,7 +374,11 @@ test("readiness probe reports success or missing requested tools once", async ()
       frames.map((frame) => JSON.parse(frame)),
       [
         expectedFrame.ok
-          ? { ok: true, sources: expectedTools.map((tool) => toolSourceId(`/tmp/${tool}.ts`)) }
+          ? {
+              ok: true,
+              sources: expectedTools.map((tool) => toolSourceId(`/tmp/${tool}.ts`)),
+              model: { provider: "test", id: "model" },
+            }
           : expectedFrame,
       ],
     );

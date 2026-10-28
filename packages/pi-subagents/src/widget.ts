@@ -52,10 +52,13 @@ export interface SubagentWidgetController {
 function createCollection(): EditorStatusCollection<ActiveJobDisplay> {
   return createEditorStatusCollection({
     maxItems: 8, // Runtime accepts at most eight active jobs.
-    // 50 KiB task + 64 tool names (128 UTF-16 units each), plus metadata.
+    // 50 KiB task + 64 tool names (128 UTF-16 units each) + 16 KiB model selection, plus metadata.
     maxContentSize: 128 * 1024,
     measure: (job) =>
-      Buffer.byteLength([job.jobId, job.task, job.thinkingLevel, ...job.tools].join("\0"), "utf8") + 128,
+      Buffer.byteLength(
+        [job.jobId, job.task, job.provider ?? "", job.model ?? "", job.thinkingLevel, ...job.tools].join("\0"),
+        "utf8",
+      ) + 128,
   });
 }
 

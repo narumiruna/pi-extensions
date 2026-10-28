@@ -5,6 +5,7 @@ import { afterEach, test } from "vitest";
 import { createBrokerClient } from "../src/child-communication-bridge.js";
 import {
   type BrokerInboundMessage,
+  type BrokerRequestOrigin,
   MAX_FRAME_BYTES,
   MAX_MESSAGE_BYTES,
   MAX_MESSAGE_LINES,
@@ -69,6 +70,47 @@ test("accepts one child response to a main request and delivers it asynchronousl
     duplicate: true,
   });
   await assert.rejects(() => client.wait(requested.requestId, 1, undefined), /unknown or expired/i);
+});
+
+test.each(
+  (["main", "child"] as const).flatMap((origin) =>
+    (["main", "child"] as const).map((responder) => ({ origin, responder })),
+  ),
+)("authorizes responder $responder for a request from $origin", async ({ origin, responder }) => {
+  const messages: BrokerInboundMessage[] = [];
+  const { broker, credentials } = await setup((message) => messages.push(message));
+  const client = createBrokerClient(credentials);
+  const request =
+    origin === "main"
+      ? broker.createMainRequest("job_1", "Question")
+      : await client.send({ recipient: "main", message: "Question" }, undefined);
+  const respond = async (sender: BrokerRequestOrigin, message: string) =>
+    sender === "main"
+      ? broker.replyFromMain(request.requestId, message)
+      : client.send({ requestId: request.requestId, message }, undefined);
+  const authorized = origin === "main" ? "child" : "main";
+  if (origin === responder) {
+    await assert.rejects(() => respond(responder, "Unauthorized"), {
+      name: "Error",
+      message: "Unknown, expired, or unauthorized subagent request.",
+    });
+    assert.equal(
+      messages.some(({ message }) => message === "Unauthorized"),
+      false,
+    );
+  }
+  assert.deepEqual(await respond(authorized, "Accepted"), {
+    requestId: request.requestId,
+    accepted: true,
+    duplicate: false,
+  });
+  if (origin === "child") {
+    assert.equal(await client.wait(request.requestId, undefined, undefined), "Accepted");
+  } else {
+    assert.deepEqual(messages, [
+      { kind: "response", requestId: request.requestId, jobId: "job_1", message: "Accepted" },
+    ]);
+  }
 });
 
 test("wait timeout and cancellation stop only the child long poll", async () => {

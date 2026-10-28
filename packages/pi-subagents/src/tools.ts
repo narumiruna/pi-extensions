@@ -1,19 +1,20 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { assertChildBootstrapCapacity } from "./broker-credentials.js";
-import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
+import { assertChildBootstrapCapacity, MAX_BOOTSTRAP_BYTES } from "./broker-credentials.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
   MAX_MESSAGE_BYTES,
   MessageBroker,
+  optionalIdentifier,
+  requiredIdentifier,
   sanitizeTerminalText,
   validateMessage,
 } from "./message-broker.js";
 import { BROKER_MESSAGE_TYPE } from "./message-renderers.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
-import { assertChildCommandCapacity } from "./process.js";
+import { assertChildCommandCapacity, selectedChildTools } from "./process.js";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
@@ -22,7 +23,7 @@ import {
   MAX_SELECTED_TOOLS,
   resolveResourceAttachments,
 } from "./resource-attachments.js";
-import { type RuntimeDependencies, SubagentRuntime } from "./runtime.js";
+import { type RuntimeDependencies, type SubagentModelOverrides, SubagentRuntime } from "./runtime.js";
 import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
 import {
   CHILD_CORE_TOOL_NAMES,
@@ -42,6 +43,21 @@ const SpawnParameters = Type.Object(
       description: "Self-contained task, constraints, and expected result. Maximum 50 KiB.",
       maxLength: MAX_TASK_BYTES,
     }),
+    provider: Type.Optional(
+      Type.String({
+        description: "Exact child provider ID. Defaults to the main agent's effective provider at spawn time.",
+        minLength: 1,
+        maxLength: MAX_BOOTSTRAP_BYTES,
+      }),
+    ),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Exact model ID within the selected provider. Defaults independently to the main agent's effective model ID at spawn time. Unlisted models fail without fallback.",
+        minLength: 1,
+        maxLength: MAX_BOOTSTRAP_BYTES,
+      }),
+    ),
     tools: Type.Optional(
       Type.Array(
         StringEnum(CHILD_CORE_TOOL_NAMES, {
@@ -209,10 +225,7 @@ export function registerSubagentTools(
       if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
         throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
       }
-      if (tools.includes("codemode") || attachments.extensions.length > 0) {
-        assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
-      }
-      const model = resolveChildModel(ctx, attachments.extensions.length > 0);
+      const { provider, model, modelOverrides } = resolveChildModel(ctx, params, attachments.extensions.length > 0);
       const defaultThinkingLevel = resolveThinkingLevel(ctx.thinkingLevel ?? pi.getThinkingLevel());
       const thinkingLevel = resolveThinkingLevel(params.thinkingLevel ?? defaultThinkingLevel);
       resolveTimeoutMs(params.timeout);
@@ -221,12 +234,16 @@ export function registerSubagentTools(
           tools,
           skills: attachments.skills,
           extensions: attachments.extensions,
-          model,
           thinkingLevel,
           projectTrusted,
         },
         dependencies.platform,
       );
+      assertChildBootstrapCapacity(selectedChildTools({ tools, extensions: attachments.extensions }), {
+        provider,
+        model,
+        thinkingLevel,
+      });
       throwIfAborted(signal, "Subagent spawn was cancelled");
       return toolResult(
         runtime.start({
@@ -235,7 +252,9 @@ export function registerSubagentTools(
           skills: attachments.skills,
           extensions: attachments.extensions,
           toolSources: attachments.toolSources,
+          provider,
           model,
+          modelOverrides,
           thinkingLevel,
           defaultThinkingLevel,
           cwd,
@@ -390,19 +409,62 @@ function resolveTools(value: unknown): string[] {
   return tools;
 }
 
-function resolveChildModel(ctx: ExtensionContext, hasAttachedExtensions: boolean): string {
-  const model = ctx.model;
-  if (!model) throw new Error("Subagent model is unavailable because no main-agent model is selected.");
-  const provider = sanitizeTerminalText(model.provider).slice(0, 128);
-  if (!hasAttachedExtensions && ctx.modelRegistry.getRegisteredProviderIds().includes(model.provider)) {
-    throw new Error(`Subagent model provider ${provider} is unavailable because children disable parent extensions.`);
+function resolveChildModel(
+  ctx: ExtensionContext,
+  overrides: Pick<SpawnArguments, "provider" | "model">,
+  hasAttachedExtensions: boolean,
+): { provider: string; model: string; modelOverrides: SubagentModelOverrides } {
+  // Read the effective parent pair once, after asynchronous attachment preflight.
+  const parent = ctx.model;
+  if (!parent && (overrides.provider === undefined || overrides.model === undefined)) {
+    throw new Error("Subagent model is unavailable because no main-agent model is selected.");
   }
-  if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source === "runtime") {
+  const provider = validateModelIdentifier(
+    overrides.provider === undefined ? parent?.provider : overrides.provider,
+    "provider",
+  );
+  const model = validateModelIdentifier(overrides.model === undefined ? parent?.id : overrides.model, "model");
+  const displayProvider = sanitizeTerminalText(provider).slice(0, 128);
+  if (!hasAttachedExtensions && ctx.modelRegistry.getRegisteredProviderIds().includes(provider)) {
     throw new Error(
-      `Subagent model provider ${provider} uses a process-local runtime API key. Configure stored or environment credentials that child processes can read.`,
+      `Subagent model provider ${displayProvider} is unavailable because children disable parent extensions.`,
     );
   }
-  return `${model.provider}/${model.id}`;
+  if (ctx.modelRegistry.getProviderAuthStatus(provider).source === "runtime") {
+    throw new Error(
+      `Subagent model provider ${displayProvider} uses a process-local runtime API key. Configure stored or environment credentials that child processes can read.`,
+    );
+  }
+  return {
+    provider,
+    model,
+    modelOverrides: {
+      ...(provider !== parent?.provider ? { provider } : {}),
+      ...(model !== parent?.id ? { model } : {}),
+    },
+  };
+}
+
+function validateModelIdentifier(value: unknown, field: "provider" | "model"): string {
+  // Each ID must fit the shared bootstrap before character scans or sanitization.
+  if (
+    typeof value === "string" &&
+    (value.length > MAX_BOOTSTRAP_BYTES || Buffer.byteLength(value, "utf8") > MAX_BOOTSTRAP_BYTES)
+  ) {
+    throw new Error(`Subagent ${field} exceeds the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit.`);
+  }
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    }) ||
+    sanitizeTerminalText(value) !== value
+  ) {
+    throw new Error(`Subagent ${field} must be a non-empty exact ID without control characters.`);
+  }
+  return value;
 }
 
 function resolveThinkingLevel(value: unknown): SubagentThinkingLevel {
@@ -432,27 +494,9 @@ function resolveMainSendArguments(params: SendArguments): MainSendSelection {
     : { kind: "response", requestId: requestId ?? "", message: params.message };
 }
 
-function optionalIdentifier(value: unknown, field: string): string | undefined {
-  return value === undefined ? undefined : requiredIdentifier(value, field);
-}
-
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Subagent ${field} is required.`);
   return value.trim();
-}
-
-function requiredIdentifier(value: unknown, field: string): string {
-  const identifier = requiredString(value, field);
-  if (
-    identifier.length > MAX_IDENTIFIER_LENGTH ||
-    [...identifier].some((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
-    })
-  ) {
-    throw new Error(`Subagent ${field} is invalid.`);
-  }
-  return identifier;
 }
 
 function assertNotNested(): void {

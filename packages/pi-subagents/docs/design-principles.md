@@ -12,7 +12,9 @@ That isolation is not a limitation—it is the point.
 
 Fresh does not mean empty.
 
-The subagent still receives Pi's standard system prompt, the main agent's effective model, applicable project context, its selected tools, explicit per-job attachments, and one task.
+The subagent still receives Pi's standard system prompt, applicable project context, its selected tools, explicit per-job attachments, and one task.
+
+Each omitted `provider` or `model` inherits independently from the main agent at spawn time. Explicit values select another exact pair. Only the child checks that the requested pair is registered and available before it receives the task.
 
 The task defines the child's specialization, while selected tools and trusted attachments define its authority.
 

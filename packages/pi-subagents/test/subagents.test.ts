@@ -78,6 +78,8 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   );
   assert.deepEqual(Object.keys(tools[0]?.parameters.properties ?? {}), [
     "task",
+    "provider",
+    "model",
     "tools",
     "skills",
     "extensions",
@@ -287,10 +289,11 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
   assert.equal(explicit.details.state, "queued");
   await Promise.resolve();
   assert.deepEqual(
-    requests.map(({ tools, skills, extensions, model, thinkingLevel }) => ({
+    requests.map(({ tools, skills, extensions, provider, model, thinkingLevel }) => ({
       tools,
       skills,
       extensions,
+      provider,
       model,
       thinkingLevel,
     })),
@@ -299,7 +302,8 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
         tools: ["read", "grep", "find", "ls"],
         skills: [],
         extensions: [],
-        model: "test-provider/test-model",
+        provider: "test-provider",
+        model: "test-model",
         thinkingLevel: "high",
       },
       {
@@ -311,7 +315,8 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
             tools: ["custom_review"],
           },
         ],
-        model: "test-provider/test-model",
+        provider: "test-provider",
+        model: "test-model",
         thinkingLevel: "low",
       },
     ],
@@ -911,7 +916,7 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
   assert.equal(launches, 0);
 });
 
-test("rejects an oversized Windows child command line before queueing", async () => {
+test("bounds the private model selection before queueing on Windows", async () => {
   let launches = 0;
   const { mock, context } = await setup(
     {
@@ -926,8 +931,8 @@ test("rejects an oversized Windows child command line before queueing", async ()
   );
 
   await assert.rejects(
-    () => spawnJob(mock, context, "oversized Windows child command"),
-    /command line exceeds the Windows process limit/i,
+    () => spawnJob(mock, context, "oversized private model selection"),
+    /child bootstrap size limit/i,
   );
   assert.equal(launches, 0);
 });
@@ -961,7 +966,8 @@ test("allows an attached extension to recreate a parent-registered provider", as
     context.ctx,
   );
   await waitFor(mock, context, String(spawned.details.jobId));
-  assert.equal(request.model, "test-provider/test-model");
+  assert.equal(request.provider, "test-provider");
+  assert.equal(request.model, "test-model");
   assert.equal(request.extensions.length, 1);
 });
 
@@ -1717,9 +1723,15 @@ async function setup(
   contextOverrides: Record<string, unknown> = {},
 ) {
   const mock = createMockPi(mockOptions);
+  const registeredModel = (contextOverrides.model ?? { provider: "test-provider", id: "test-model" }) as {
+    provider: string;
+    id: string;
+  };
   const context = createMockContext({
-    model: { provider: "test-provider", id: "test-model" },
+    model: registeredModel,
     modelRegistry: {
+      find: (provider: string, id: string) =>
+        provider === registeredModel.provider && id === registeredModel.id ? registeredModel : undefined,
       getProviderAuthStatus: () => ({ configured: true, source: "environment" as const }),
       getRegisteredProviderIds: () => [],
     },

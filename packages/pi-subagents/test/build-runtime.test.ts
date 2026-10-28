@@ -360,6 +360,7 @@ fs.closeSync(4);
       JSON.stringify({
         communication: { host: "127.0.0.1", port: 31_337, token: "a".repeat(64) },
         expectedTools: ["subagent_send", "subagent_wait"],
+        selection: { provider: "test", model: "model", thinkingLevel: "off" },
       }),
     );
     const code = await closed;

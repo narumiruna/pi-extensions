@@ -500,6 +500,8 @@ async function spawnJob(mock: Mock, context: Context) {
   const ctx = context.ctx as unknown as ExtensionContext;
   ctx.modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "environment" });
   ctx.modelRegistry.getRegisteredProviderIds = () => [];
+  ctx.modelRegistry.find = (provider, id) =>
+    ctx.model?.provider === provider && ctx.model.id === id ? ctx.model : undefined;
   await tool.execute("spawn", { task: "Run test task", tools: ["read"] }, undefined, undefined, ctx);
 }
 

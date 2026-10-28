@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ import {
   terminateWindowsProcessTree,
 } from "../src/process.js";
 import type { ChildControl, ChildRequest } from "../src/types.js";
+import { type FakePiOptions, installFakePi as installFixture } from "./child-process-fixture.js";
 
 let directory: string;
 let previousPackageDirectory: string | undefined;
@@ -57,7 +58,10 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
     "-e",
   ]);
   assert.equal(args[7], childCommunicationBridgePath());
-  assert.equal(args[args.indexOf("--model") + 1], "test-provider/test-model");
+  assert.equal(args.includes("--provider"), false);
+  assert.equal(args.includes("--model"), false);
+  assert.equal(args.includes("test-provider"), false);
+  assert.equal(args.includes("test-model"), false);
   assert.equal(args[args.indexOf("--thinking") + 1], "medium");
   assert.ok(args.includes("--no-approve"));
   assert.equal(args[args.indexOf("--tools") + 1], "read,grep,find,ls,subagent_send,subagent_wait");
@@ -108,8 +112,8 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
   assert.equal(attached[attached.indexOf("--tools") + 1], "read,subagent_send,subagent_wait,search_code");
 
   const skillOnly = buildPiArgs(childRequest({ skills: ["/tmp/review-skill"] }));
-  assert.equal(skillOnly.filter((argument) => argument === "-e").length, 1);
-  assert.equal(skillOnly.includes(childReadinessProbePath()), false);
+  assert.equal(skillOnly.filter((argument) => argument === "-e").length, 2);
+  assert.equal(skillOnly.includes(childReadinessProbePath()), true);
 
   const lifecycleOnly = buildPiArgs(childRequest({ extensions: [{ path: "/tmp/provider-extension.ts", tools: [] }] }));
   assert.deepEqual(
@@ -392,7 +396,7 @@ async function handle(command) {
     credentialsReceived: true,
     initialEnvironmentContainsToken: false,
     descriptorMarker: "3",
-    readinessMarker: null,
+    readinessMarker: "4",
   });
   delete process.env.PI_SUBAGENT_READINESS_FD;
 });
@@ -459,7 +463,7 @@ test("runChild sends an attached task only after readiness and starts its deadli
 let readinessSent = false;
 setTimeout(() => {
   readinessSent = true;
-  signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId("/tmp/search-extension.ts")) }) + "\\n");
+  signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId("/tmp/search-extension.ts")), model: selectedModel }) + "\\n");
 }, 50);
 async function handle(command) {
   if (command.type !== "prompt") return;
@@ -898,7 +902,8 @@ function childRequest(overrides: Partial<ChildRequest> = {}): ChildRequest {
     toolSources: Object.fromEntries(
       extensions.flatMap((extension) => extension.tools.map((tool) => [tool, [toolSourceId(extension.path)]])),
     ),
-    model: "test-provider/test-model",
+    provider: "test-provider",
+    model: "test-model",
     thinkingLevel: "medium",
     cwd: directory,
     projectTrusted: false,
@@ -912,111 +917,6 @@ function childRequest(overrides: Partial<ChildRequest> = {}): ChildRequest {
   };
 }
 
-function installFakePi(
-  source: string,
-  options: {
-    bundled?: boolean;
-    readiness?:
-      | "success"
-      | "manual"
-      | "failure"
-      | "malformed"
-      | "missingSources"
-      | "wrongCount"
-      | "invalidFingerprint"
-      | "oversized"
-      | "close";
-  } = {},
-): void {
-  const packageDirectory = path.join(directory, "pi-core");
-  const executableName = options.bundled ? "pi" : "fake-pi.mjs";
-  const executablePath = path.join(packageDirectory, executableName);
-  const readinessSetup = {
-    success:
-      'signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId(firstExtension)) }) + "\\n");',
-    manual: "",
-    failure:
-      'signalReadiness(JSON.stringify({ ok: false, error: "Requested extension tool is unavailable." }) + "\\n");',
-    malformed: 'signalReadiness("not-json\\n");',
-    missingSources: 'signalReadiness(JSON.stringify({ ok: true }) + "\\n");',
-    wrongCount: 'signalReadiness(JSON.stringify({ ok: true, sources: [] }) + "\\n");',
-    invalidFingerprint:
-      'signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => "wrong") }) + "\\n");',
-    oversized: 'signalReadiness("x".repeat(16 * 1024 + 1));',
-    close: "closeReadiness();",
-  }[options.readiness ?? "success"];
-  mkdirSync(packageDirectory, { recursive: true });
-  writeFileSync(
-    executablePath,
-    `${options.bundled ? "#!/usr/bin/env node\n" : ""}import fs from "node:fs";
-import { createHash } from "node:crypto";
-const childBootstrap = JSON.parse(fs.readFileSync(3, "utf8"));
-const brokerCredentials = childBootstrap.communication;
-const expectedTools = childBootstrap.expectedTools;
-const sourceId = (value) => createHash("sha256").update(value).digest("hex");
-const firstExtensionFlag = process.argv.indexOf("-e", process.argv.indexOf("-e") + 1);
-const firstExtension = firstExtensionFlag < 0 ? "" : process.argv[firstExtensionFlag + 1];
-const closeReadiness = () => {
-  if (expectedTools.length > 0) fs.closeSync(4);
-};
-const signalReadiness = (frame) => {
-  if (expectedTools.length === 0) return;
-  try {
-    fs.writeFileSync(4, frame, "utf8");
-  } finally {
-    fs.closeSync(4);
-  }
-};
-${readinessSetup}
-const event = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-const respond = (command, success = true, error) => event({
-  id: command.id,
-  type: "response",
-  command: command.type,
-  success,
-  ...(error ? { error } : {}),
-});
-const message = (text, stopReason = "stop") => ({
-  type: "message_end",
-  message: { role: "assistant", content: [{ type: "text", text }], stopReason },
-});
-${source}
-const dispatch = async (command) => {
-  if (command.type === "get_state") {
-    respond(command);
-    return;
-  }
-  if (command.type === "get_commands") {
-    event({ id: command.id, type: "response", command: command.type, success: true, data: { commands: globalThis.fakeCommands ?? [] } });
-    return;
-  }
-  await handle(command);
-};
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  input += chunk;
-  while (true) {
-    const newline = input.indexOf("\\n");
-    if (newline < 0) break;
-    const line = input.slice(0, newline);
-    input = input.slice(newline + 1);
-    if (line.trim()) void dispatch(JSON.parse(line));
-  }
-});
-`,
-  );
-  if (options.bundled) chmodSync(executablePath, 0o755);
-  writeFileSync(
-    path.join(packageDirectory, "package.json"),
-    JSON.stringify({
-      name: "@earendil-works/pi-coding-agent",
-      bin: { pi: options.bundled ? "./dist/bundle/cli.js" : "./fake-pi.mjs" },
-    }),
-  );
-  process.env.PI_PACKAGE_DIR = packageDirectory;
-  if (options.bundled) {
-    process.execPath = executablePath;
-    process.versions.bun = "1.3.0";
-  }
+function installFakePi(source: string, options: FakePiOptions = {}): void {
+  installFixture(directory, source, options);
 }

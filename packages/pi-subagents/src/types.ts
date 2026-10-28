@@ -60,6 +60,7 @@ export interface ChildRequest {
   skills: string[];
   extensions: ExtensionAttachment[];
   toolSources: Record<string, string[]>;
+  provider: string;
   model: string;
   thinkingLevel: SubagentThinkingLevel;
   cwd: string;

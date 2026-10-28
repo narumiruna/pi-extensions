@@ -29,6 +29,7 @@ interface InternalJob extends JobSummary {
   resolveTerminal: () => void;
   task?: Promise<void>;
   taskText: string;
+  modelOverrides: SubagentModelOverrides;
   thinkingLevel: SubagentThinkingLevel;
   defaultThinkingLevel: SubagentThinkingLevel;
   stopRequest?: StopRequest;
@@ -40,7 +41,6 @@ interface InternalJob extends JobSummary {
   result?: string;
   error?: string;
   limitations: string[];
-  deliverySent: boolean;
   generation: number;
 }
 
@@ -49,7 +49,13 @@ export interface RuntimeDependencies {
   now?: () => number;
 }
 
-export interface ActiveJobDisplay {
+/** Resolved IDs that differ from the effective parent pair captured at spawn. */
+export interface SubagentModelOverrides {
+  provider?: string;
+  model?: string;
+}
+
+export interface ActiveJobDisplay extends SubagentModelOverrides {
   jobId: string;
   task: string;
   state: Extract<SubagentJobState, "queued" | "running">;
@@ -66,7 +72,9 @@ export interface StartJobInput {
   skills: string[];
   extensions: ExtensionAttachment[];
   toolSources: Record<string, string[]>;
+  provider: string;
   model: string;
+  modelOverrides?: SubagentModelOverrides;
   thinkingLevel: SubagentThinkingLevel;
   defaultThinkingLevel: SubagentThinkingLevel;
   cwd: string;
@@ -80,7 +88,6 @@ export class SubagentRuntime {
   private readonly now: () => number;
   private counter = 0;
   private generation = 0;
-  private deliveryEnabled = false;
   private sessionActive = false;
   private omittedJobs = 0;
   private readonly jobListeners = new Set<() => void>();
@@ -99,7 +106,6 @@ export class SubagentRuntime {
     this.generation++;
     this.jobs.clear();
     this.omittedJobs = 0;
-    this.deliveryEnabled = true;
     this.sessionActive = true;
     this.notifyJobsChanged();
   }
@@ -122,6 +128,7 @@ export class SubagentRuntime {
         jobId: job.jobId,
         task: job.taskText,
         state: job.state,
+        ...job.modelOverrides,
         thinkingLevel: job.thinkingLevel,
         defaultThinkingLevel: job.defaultThinkingLevel,
         elapsedMs: Math.max(0, now - (job.startedAt ?? job.createdAt)),
@@ -140,6 +147,7 @@ export class SubagentRuntime {
     if (active >= MAX_ACTIVE_JOBS) {
       throw new Error(`Active subagent job limit reached (${MAX_ACTIVE_JOBS}).`);
     }
+    const { provider, model } = input;
     const jobId = `job_${this.now().toString(36)}_${(++this.counter).toString(36)}`;
     const communication = this.broker.issueCredentials({
       jobId,
@@ -166,6 +174,7 @@ export class SubagentRuntime {
       controller,
       tools: effectiveTools,
       taskText: input.task,
+      modelOverrides: { ...input.modelOverrides },
       thinkingLevel: input.thinkingLevel,
       defaultThinkingLevel: input.defaultThinkingLevel,
       terminal,
@@ -175,7 +184,6 @@ export class SubagentRuntime {
       rejectControl,
       sendQueue: Promise.resolve(),
       limitations: [],
-      deliverySent: false,
       generation: this.generation,
     };
     this.jobs.set(jobId, job);
@@ -202,7 +210,8 @@ export class SubagentRuntime {
           toolSources: Object.fromEntries(
             Object.entries(input.toolSources).map(([tool, sources]) => [tool, [...sources]]),
           ),
-          model: input.model,
+          provider,
+          model,
           thinkingLevel: input.thinkingLevel,
           cwd: input.cwd,
           timeout: input.timeout,
@@ -360,7 +369,6 @@ export class SubagentRuntime {
 
   async shutdown(): Promise<void> {
     if (!this.sessionActive) return;
-    this.deliveryEnabled = false;
     this.sessionActive = false;
     const active = [...this.jobs.values()].filter((job) => !isTerminal(job.state));
     await Promise.allSettled(
@@ -419,8 +427,7 @@ export class SubagentRuntime {
   }
 
   private deliver(job: InternalJob): void {
-    if (!this.deliveryEnabled || job.deliverySent || job.generation !== this.generation) return;
-    job.deliverySent = true;
+    if (!this.sessionActive || job.generation !== this.generation) return;
     const payload = this.waitResult(job, false);
     try {
       this.pi.sendMessage(

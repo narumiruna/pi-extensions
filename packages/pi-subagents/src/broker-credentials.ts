@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import type { BrokerCredentials } from "./types.js";
+import { type BrokerCredentials, SUBAGENT_THINKING_LEVELS, type SubagentThinkingLevel } from "./types.js";
 
 export const BROKER_CREDENTIAL_FD = 3;
 export const BROKER_CREDENTIAL_FD_ENV = "PI_SUBAGENT_BROKER_FD";
@@ -7,14 +7,27 @@ export const CHILD_READINESS_FD = 4;
 export const CHILD_READINESS_FD_ENV = "PI_SUBAGENT_READINESS_FD";
 export const MAX_READINESS_FRAME_BYTES = 16 * 1024;
 
-const MAX_BOOTSTRAP_BYTES = 16 * 1024;
+export const MAX_BOOTSTRAP_BYTES = 16 * 1024;
 const MAX_EXPECTED_TOOLS = 66;
 const MAX_TOOL_NAME_LENGTH = 128;
 const READINESS_STATE_KEY = Symbol.for("@narumitw/pi-subagents/child-readiness");
 
+export interface ChildSelection {
+  provider: string;
+  model: string;
+  thinkingLevel: SubagentThinkingLevel;
+}
+
 export interface ChildBootstrap {
   communication: BrokerCredentials;
   expectedTools: string[];
+  selection: ChildSelection;
+}
+
+interface CapturedReadiness {
+  fd: number;
+  expectedTools: string[];
+  selection: ChildSelection;
 }
 
 export interface CapturedChildBootstrap extends ChildBootstrap {
@@ -32,13 +45,16 @@ export function serializeChildBootstrap(bootstrap: ChildBootstrap): string {
   return JSON.stringify(bootstrap);
 }
 
-export function assertChildBootstrapCapacity(expectedTools: string[]): void {
+export function assertChildBootstrapCapacity(expectedTools: string[], selection: ChildSelection): void {
   const serialized = serializeChildBootstrap({
     communication: { host: "127.0.0.1", port: 65_535, token: "f".repeat(64) },
     expectedTools,
+    selection,
   });
   if (Buffer.byteLength(serialized, "utf8") > MAX_BOOTSTRAP_BYTES) {
-    throw new Error(`Subagent selected tool names exceed the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit.`);
+    throw new Error(
+      `Subagent tools and model selection exceed the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit.`,
+    );
   }
 }
 
@@ -78,23 +94,29 @@ export function captureChildBootstrap(
     if (readinessDescriptor !== String(CHILD_READINESS_FD)) {
       throw new Error("Invalid pi-subagents readiness descriptor.");
     }
-    setCapturedReadiness({ fd: CHILD_READINESS_FD, expectedTools: [...value.expectedTools] });
-    return { ...value, readinessFd: CHILD_READINESS_FD };
+    setCapturedReadiness({
+      fd: CHILD_READINESS_FD,
+      expectedTools: [...value.expectedTools],
+      selection: { ...value.selection },
+    });
+    return { ...value, selection: { ...value.selection }, readinessFd: CHILD_READINESS_FD };
   }
   if (readinessDescriptor !== undefined) throw new Error("Unexpected pi-subagents readiness descriptor.");
   setCapturedReadiness(undefined);
   return value;
 }
 
-export function takeCapturedReadiness(): { fd: number; expectedTools: string[] } | undefined {
-  const store = globalThis as unknown as Record<symbol, { fd: number; expectedTools: string[] } | undefined>;
+export function takeCapturedReadiness(): CapturedReadiness | undefined {
+  const store = globalThis as unknown as Record<symbol, CapturedReadiness | undefined>;
   const readiness = store[READINESS_STATE_KEY];
   delete store[READINESS_STATE_KEY];
-  return readiness ? { fd: readiness.fd, expectedTools: [...readiness.expectedTools] } : undefined;
+  return readiness
+    ? { fd: readiness.fd, expectedTools: [...readiness.expectedTools], selection: { ...readiness.selection } }
+    : undefined;
 }
 
-function setCapturedReadiness(readiness: { fd: number; expectedTools: string[] } | undefined): void {
-  const store = globalThis as unknown as Record<symbol, { fd: number; expectedTools: string[] } | undefined>;
+function setCapturedReadiness(readiness: CapturedReadiness | undefined): void {
+  const store = globalThis as unknown as Record<symbol, CapturedReadiness | undefined>;
   if (readiness) store[READINESS_STATE_KEY] = readiness;
   else delete store[READINESS_STATE_KEY];
 }
@@ -112,8 +134,8 @@ function readBootstrapPipe(): string {
 }
 
 function isChildBootstrap(value: unknown): value is ChildBootstrap {
-  if (!isRecord(value) || Object.keys(value).length !== 2) return false;
-  if (!isBrokerCredentials(value.communication)) return false;
+  if (!isRecord(value) || Object.keys(value).length !== 3) return false;
+  if (!isBrokerCredentials(value.communication) || !isChildSelection(value.selection)) return false;
   if (!Array.isArray(value.expectedTools) || value.expectedTools.length > MAX_EXPECTED_TOOLS) return false;
   return value.expectedTools.every(
     (tool) =>
@@ -122,6 +144,15 @@ function isChildBootstrap(value: unknown): value is ChildBootstrap {
       tool.length <= MAX_TOOL_NAME_LENGTH &&
       !tool.includes(",") &&
       !hasControlCharacter(tool),
+  );
+}
+
+function isChildSelection(value: unknown): value is ChildSelection {
+  if (!isRecord(value) || Object.keys(value).length !== 3) return false;
+  return (
+    [value.provider, value.model].every(
+      (id) => typeof id === "string" && id.trim().length > 0 && !hasControlCharacter(id),
+    ) && SUBAGENT_THINKING_LEVELS.includes(value.thinkingLevel as SubagentThinkingLevel)
   );
 }
 
