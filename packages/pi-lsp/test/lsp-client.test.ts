@@ -367,11 +367,9 @@ test.each([false, true])("literal code-action support enables deferred fixes (wr
       .codeAction;
     assert.equal(codeAction.dynamicRegistration, false);
     assert.deepEqual(codeAction.resolveSupport, { properties: ["edit"] });
-    assert.deepEqual(codeAction.codeActionLiteralSupport.codeActionKind.valueSet, [
-      "source",
-      "source.fixAll",
-      "source.organizeImports",
-    ]);
+    for (const kind of ["source", "source.fixAll", "source.organizeImports"]) {
+      assert.ok(codeAction.codeActionLiteralSupport.codeActionKind.valueSet.includes(kind));
+    }
     const requested = events.find((event) => event.method === "textDocument/codeAction");
     assert.deepEqual(requested.params.context.only, ["source.fixAll"]);
     const resolved = events.find((event) => event.method === "codeAction/resolve");
@@ -383,6 +381,30 @@ test.each([false, true])("literal code-action support enables deferred fixes (wr
     assert.ok(events.some((event) => event.method === "textDocument/didClose"));
     assert.ok(events.some((event) => event.method === "shutdown"));
     assert.ok(events.some((event) => event.method === "exited"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("literal code-action support allows deferred fixes to be resolved", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-literal-actions-"));
+  const file = path.join(root, "main.go");
+  const original = "package main\n";
+  writeFileSync(file, original);
+  const adapter = fixtureAdapter("resolve-literal", 30);
+  const ctx = { cwd: root, ui: { setStatus() {} } };
+
+  try {
+    const preview = await runFix(adapter, { root, path: file, write: false }, 1_000, undefined, ctx, "test");
+    const previewDetails = preview.details as { changed: boolean; text: string };
+    assert.equal(previewDetails.changed, true);
+    assert.equal(previewDetails.text, `// fixed\n${original}`);
+    assert.equal(readFileSync(file, "utf8"), original);
+
+    const written = await runFix(adapter, { root, path: file, write: true }, 1_000, undefined, ctx, "test");
+    const writtenDetails = written.details as { changed: boolean };
+    assert.equal(writtenDetails.changed, true);
+    assert.equal(readFileSync(file, "utf8"), `// fixed\n${original}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

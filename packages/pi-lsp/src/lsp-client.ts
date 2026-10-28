@@ -154,9 +154,22 @@ export class LspClient {
           // capabilities must be advertised statically.
           codeAction: {
             dynamicRegistration: false,
-            // Servers such as Biome expose resolveProvider only to literal-capable clients.
+            // Some servers only advertise resolveProvider when the client
+            // supports literal CodeAction objects as well as resolve.
             codeActionLiteralSupport: {
-              codeActionKind: { valueSet: ["source", "source.fixAll", "source.organizeImports"] },
+              codeActionKind: {
+                valueSet: [
+                  "",
+                  "quickfix",
+                  "refactor",
+                  "refactor.extract",
+                  "refactor.inline",
+                  "refactor.rewrite",
+                  "source",
+                  "source.organizeImports",
+                  "source.fixAll",
+                ],
+              },
             },
             resolveSupport: { properties: ["edit"] },
           },
