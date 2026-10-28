@@ -105,6 +105,7 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
         navigator.selectionFor(screenId, selectableItemIds(screen)),
         searchQueries.get(screenId),
         menuSignal,
+        () => isMenuCurrent(options),
         {
           onSelectionChange: (itemId) => navigator.rememberSelection(screenId, itemId),
           onSearchQueryChange: (query) => searchQueries.set(screenId, query),
@@ -177,6 +178,7 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string, C
   selectedItemId: string | undefined,
   searchQuery: string | undefined,
   menuSignal: AbortSignal,
+  isCurrent: () => boolean,
   callbacks: {
     onSelectionChange(itemId: string): void;
     onSearchQueryChange(query: string): void;
@@ -194,6 +196,7 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string, C
       const finish = (event: InternalScreenEvent<ScreenId>) => {
         if (finished) return;
         finished = true;
+        screenController.abort(new DOMException("Menu screen completed", "AbortError"));
         done(event);
       };
       const abortScreen = () => {
@@ -210,6 +213,8 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string, C
         tui,
         theme,
         keybindings,
+        signal: screenController.signal,
+        isCurrent,
         onEvent: finish,
         onSelectionChange: callbacks.onSelectionChange,
         onSearchQueryChange: callbacks.onSearchQueryChange,
@@ -226,7 +231,11 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string, C
     });
   } finally {
     removeAbortListener();
-    await component?.waitForPending();
+    try {
+      component?.dispose?.();
+    } finally {
+      await component?.waitForPending();
+    }
   }
 }
 

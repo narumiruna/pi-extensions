@@ -1,5 +1,5 @@
 import type { MarkdownTransformer, Theme } from "@earendil-works/pi-coding-agent";
-import type { SideThreadTurn } from "./side-thread.js";
+import type { SideTranscriptItem } from "./side-thread.js";
 
 export type BtwMarkdownTransformers = (theme: Theme) => readonly MarkdownTransformer[];
 
@@ -9,21 +9,21 @@ const MERMAID_MARKDOWN_MODULE = "@narumitw/pi-tui-kit/markdown";
 const noMarkdownTransformers: BtwMarkdownTransformers = () => [];
 
 export function prepareBtwTranscriptMarkdown(
-  turns: readonly SideThreadTurn[],
+  turns: readonly SideTranscriptItem[],
   pendingQuestion?: string,
 ): Promise<BtwMarkdownTransformers>;
 export function prepareBtwTranscriptMarkdown(
-  turns: readonly SideThreadTurn[],
+  turns: readonly SideTranscriptItem[],
   pendingQuestion: string | undefined,
   signal: AbortSignal,
 ): Promise<BtwMarkdownTransformers | undefined>;
 export async function prepareBtwTranscriptMarkdown(
-  turns: readonly SideThreadTurn[],
+  turns: readonly SideTranscriptItem[],
   pendingQuestion?: string,
   signal?: AbortSignal,
 ): Promise<BtwMarkdownTransformers | undefined> {
   const documents = turns.flatMap((turn) =>
-    turn.kind === "answered" ? [turn.question, turn.answer] : [turn.question],
+    turn.kind === "mainContext" ? [] : turn.kind === "answered" ? [turn.question, turn.answer] : [turn.question],
   );
   if (pendingQuestion) documents.push(pendingQuestion);
   if (!documents.some((document) => /mermaid/iu.test(document))) return noMarkdownTransformers;

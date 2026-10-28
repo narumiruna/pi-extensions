@@ -60,6 +60,85 @@
 .session-filters {
   padding: 8px;
   overflow: auto;
+  flex-shrink: 0;
+  max-height: 30dvh;
+  margin-bottom: 6px;
+}
+.common-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.common-filters .rt-TextFieldRoot {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.common-filters .filter-pills {
+  margin: 0;
+  flex: 0 1 240px;
+}
+.session-filters .filter-panel {
+  padding: 6px 0 0;
+}
+.advanced-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0 20px;
+}
+.navigation-tabs {
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.navigation-tabs button {
+  flex-shrink: 0;
+}
+.navigation-tabs button[aria-selected="true"] {
+  background: var(--selected-bg);
+  color: var(--blue-11);
+}
+.inspector-app > .navigation-tabs {
+  padding: 8px 28px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.environment-surface {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.environment-heading {
+  flex-shrink: 0;
+}
+.environment-heading p {
+  margin: 5px 0;
+}
+.resource-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+.environment-surface[hidden],
+.resource-panel[hidden] {
+  display: none;
+}
+.resource-panel .inventory-card {
+  margin: 10px 0;
+}
+.resource-panel .rt-Badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.session-toolbar > .navigation-tabs {
+  flex-wrap: wrap;
+}
+.session-toolbar > span {
+  overflow-wrap: anywhere;
 }
 .trace-history .trace-item {
   border-left: 0;

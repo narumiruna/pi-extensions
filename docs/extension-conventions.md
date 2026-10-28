@@ -213,9 +213,12 @@ Use the same frame for direct command routes and their main-menu actions.
   documentation, tests, tooling, and path migrations may omit a changeset. Keep Changesets `fixed`
   and `linked` groups empty. **Verification:** `Review` of release intent and the Changesets status,
   version PR, or package-specific release as applicable.
-- **MUST:** Publish a new `pi-tui-kit` API before an extension raises its compatibility floor to use
-  that API; do not release an unpublished Kit API and its first consumer together.
-  **Verification:** `Review` of npm availability and the consumer dependency floor.
+- **MUST:** Set each consumer's dependency floor to include every Kit API it uses. A new Kit API
+  and its consumers may share one Version PR and release batch only when Kit publishes first and its
+  exact registry tarball is available before dependent publication. Block dependent publication when
+  Kit publication, artifact verification, or availability checks fail.
+  **Verification:** `Test` of version propagation, publish ordering, failure, and retry fixtures;
+  `Review` of the release plan and consumer dependency floors.
 - **MUST:** Keep package contents aligned with the manifest's `files` list and include required
   notices and licenses. **Verification:** `Smoke` with `npm pack --workspace <name> --dry-run --json`
   for package or publishing changes.
@@ -381,6 +384,28 @@ linked package-owned guidance when users need them to use the extension safely.
 Do not create a validator merely because a convention is written down. Add one when a new or touched
 area has a stable, low-false-positive rule that can be checked without encoding product semantics in
 fragile regular expressions. Until then, label the real verification method honestly.
+
+#### Package architecture and workflow diagrams
+
+Each package MAY keep topic-focused architecture and workflow documentation under
+`packages/<package>/docs/`; no fixed filename or mandatory architecture document is required.
+
+- **MUST:** Use descriptive lowercase kebab-case filenames that identify the topic rather than a PR
+  number or temporary bug. **Verification:** `Review` of document names and scope.
+- **SHOULD:** Use Mermaid architecture diagrams to explain component boundaries and data flow, and
+  sequence diagrams to explain ordering, asynchronous work, and lifecycle interactions.
+- **SHOULD:** Explain the main idea in plain language before each diagram, keep each diagram focused
+  on one question, and connect simplified labels to actual component or API names.
+- **MUST:** Keep diagrams consistent with the current implementation and distinguish implemented
+  behavior from proposals.
+  Include failure, cancellation, or recovery paths when they are necessary to understand the
+  documented behavior. **Verification:** `Review` against the relevant code paths and tests.
+- **MUST:** Keep package documentation discoverable through the package README or a linked
+  documentation index, and update affected diagrams when the documented behavior changes.
+  **Verification:** `Review` of links, changed behavior, and diagram consistency.
+
+Keep short explanations in the README when they fit naturally; move detailed explanations and
+larger diagrams into package-owned documentation rather than duplicating them.
 
 ## New extension checklist
 

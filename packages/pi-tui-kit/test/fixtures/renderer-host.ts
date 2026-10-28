@@ -63,6 +63,7 @@ export function createRendererHost(
   const keys = new KeybindingsManager(
     {
       ...TUI_KEYBINDINGS,
+      "app.message.copy": { defaultKeys: "ctrl+x", description: "Copy document" },
       "app.models.save": { defaultKeys: "ctrl+s", description: "Save default model" },
       "app.thinking.save": { defaultKeys: "ctrl+s", description: "Save default thinking" },
       "app.thinking.cycle": { defaultKeys: "shift+tab", description: "Cycle thinking" },
@@ -131,7 +132,9 @@ export function createRendererHost(
   let stopped = false;
   const custom = (async (factory, customOptions) => {
     if (customOptions !== undefined) throw new Error("Renderer fixture supports replacement dialogs only");
-    opened = deferred<void>();
+    // Keep the initial readiness promise for factories reached after a lazy import.
+    // Replacing it before the first mount strands a caller already waiting for open.
+    if (component) opened = deferred<void>();
     component = undefined;
     const result = deferred<unknown>();
     let closed = false;

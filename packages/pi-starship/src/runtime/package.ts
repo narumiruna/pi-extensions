@@ -4,6 +4,7 @@ import {
   formatVersion,
   isRecord,
   MAX_METADATA_FILE_BYTES,
+  optionBoolean,
   optionString,
   parentDirectories,
   safeMetadata,
@@ -34,6 +35,8 @@ async function readPackageJson(context: CollectorContext): Promise<PackageVersio
   if (!source) return undefined;
   try {
     const document = JSON.parse(source) as unknown;
+    if (isRecord(document) && document.private === true && !optionBoolean(context, "package", "display_private"))
+      return undefined;
     const version = isRecord(document) ? safeVersion(document.version) : undefined;
     return version ? { version, source: "package.json" } : undefined;
   } catch {

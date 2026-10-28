@@ -890,6 +890,11 @@ test("mid-run compaction keeps the restored contract position after deferred per
     { role: "compactionSummary", content: "Compacted work", timestamp: 1_000 },
     timedAssistantMessage("Retained assistant tail", 1_100, 400),
   ];
+  // Startup publication was saved before compaction removed it from model context.
+  const startupContract = restoredGoalContract(restored.mock);
+  const sessionManager = (restored.ctx as { sessionManager: { getBranch: () => unknown[] } }).sessionManager;
+  sessionManager.getBranch().push({ type: "custom_message", ...startupContract });
+  Object.assign(sessionManager, { buildSessionContext: () => ({ messages: retained }) });
   const clock = vi.spyOn(Date, "now").mockReturnValue(2_000);
   try {
     await restored.mock.events.get("session_compact")?.[0]?.({ reason: "overflow", willRetry: true }, restored.ctx);
@@ -918,4 +923,56 @@ test("mid-run compaction keeps the restored contract position after deferred per
   );
   const nextInput = (await serializeProviderRequest(next)).input as unknown[];
   assert.deepEqual(nextInput.slice(0, deliveredInput.length), deliveredInput);
+});
+
+test("a Goal started mid-run publishes its contract once and keeps the request prefix", async () => {
+  const branch: Record<string, unknown>[] = [];
+  const allTools = [builtinTool("read"), builtinTool("bash")];
+  const mock = createMockPi({ activeTools: ["read", "bash"], allTools });
+  registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
+  const context = createMockContext({
+    isIdle: () => false,
+    sessionManager: { getBranch: () => branch, getEntries: () => branch },
+  });
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const running = [
+    userMessage("Long task already running"),
+    timedAssistantMessage("Tool turn in progress", 1_100, 400),
+  ];
+  const clock = vi.spyOn(Date, "now").mockReturnValue(2_000);
+  try {
+    await mock.commands.get("goal")?.handler("objective set while the agent is busy", context.ctx);
+  } finally {
+    clock.mockRestore();
+  }
+  // The kickoff is a followUp, so no before_agent_start runs until the current run ends:
+  // the contract has to be published now, and Pi persists it when the turn ends.
+  const published = mock.sentMessages.filter(
+    (sent) => (sent.message as { customType?: string }).customType === "goal-contract",
+  );
+  assert.equal(published.length, 1);
+  const [publication] = published;
+  assert.ok(publication);
+  assert.deepEqual(publication.options, { triggerTurn: false });
+  assert.equal((publication.message as { details?: { sentAt?: number } }).details?.sentAt, 2_000);
+
+  const beforeDelivery = await captureRequest(mock, context.ctx, "Next tool turn", running, false);
+  const contract = { role: "custom", ...restoredGoalContract(mock), timestamp: 2_300 };
+  branch.push({ type: "custom_message", customType: contract.customType, content: contract.content });
+  const delivered = [...running, timedAssistantMessage("Tool turn after the goal was set", 2_100, 500), contract];
+  const afterDelivery = await captureRequest(mock, context.ctx, "Following tool turn", delivered, false);
+  const later = await captureRequest(
+    mock,
+    context.ctx,
+    "Later tool turn",
+    [...delivered, timedAssistantMessage("Another tool turn", 2_400, 600)],
+    false,
+  );
+
+  const beforeInput = (await serializeProviderRequest(beforeDelivery)).input as unknown[];
+  const deliveredInput = (await serializeProviderRequest(afterDelivery)).input as unknown[];
+  const laterInput = (await serializeProviderRequest(later)).input as unknown[];
+  assert.deepEqual(deliveredInput.slice(0, beforeInput.length), beforeInput);
+  assert.deepEqual(laterInput.slice(0, deliveredInput.length), deliveredInput);
+  assert.equal(mock.sentMessages.length, published.length);
 });

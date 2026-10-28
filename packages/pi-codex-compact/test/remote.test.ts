@@ -94,15 +94,16 @@ function fakeProvider(
 }
 
 function responseSse(content = "opaque") {
-  const item = { type: "compaction", encrypted_content: content };
+  const item = { id: "cmp_test", type: "compaction", encrypted_content: content };
+  const completedItem = { encrypted_content: content, id: "cmp_test", type: "compaction" };
   const body = [
     `data: ${JSON.stringify({ type: "response.output_item.done", item })}\n\n`,
-    `data: ${JSON.stringify({ type: "response.completed", response: { output: [item] } })}\n\n`,
+    `data: ${JSON.stringify({ type: "response.completed", response: { output: [completedItem] } })}\n\n`,
   ].join("");
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-test("uses the public provider stream with SSE, bounded retry options, and a final trigger", async () => {
+test("uses the public provider stream with reordered SSE items, bounded retry options, and a final trigger", async () => {
   let sent: unknown;
   const provider = fakeProvider((payload, options) => {
     sent = payload;
@@ -122,7 +123,7 @@ test("uses the public provider stream with SSE, bounded retry options, and a fin
     fetch: async () => responseSse(),
   });
   assert.deepEqual((sent as { input: unknown[] }).input.at(-1), { type: "compaction_trigger" });
-  assert.equal(result.item.encrypted_content, "opaque");
+  assert.deepEqual(result.item, { encrypted_content: "opaque", id: "cmp_test", type: "compaction" });
   assert.deepEqual(result.usage, usage);
   assert.equal(result.promptInput.length, 1);
 });

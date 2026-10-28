@@ -9,7 +9,7 @@ const expectedConfig = {
   "min-release-age": "3",
   "ignore-scripts": "false",
   "dangerously-allow-all-scripts": "false",
-  "min-release-age-exclude": "",
+  "min-release-age-exclude": "@narumitw/pi-tui-kit",
   before: "null",
 };
 

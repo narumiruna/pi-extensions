@@ -45,9 +45,13 @@ const RESERVED_INPUT_BINDINGS = [
 // This specialized TUI keeps the same search, toggle, action, binding, and cancellation behavior
 // while RPC mode continues to use the Kit's declarative adapter in menu.ts.
 export async function showTickerTuiMenu(ctx: ExtensionCommandContext, options: TickerMenuOptions): Promise<void> {
-  const { formatInteractionHints, HorizontalRule, runCustomInteraction, sanitizeTerminalText } = await import(
-    "@narumitw/pi-tui-kit"
-  );
+  const {
+    canonicalizeConfiguredKey,
+    formatInteractionHints,
+    HorizontalRule,
+    runCustomInteraction,
+    sanitizeTerminalText,
+  } = await import("@narumitw/pi-tui-kit");
 
   while (!options.signal.aborted && options.isCurrent()) {
     const result = await runCustomInteraction<TuiMenuResult>(ctx, {
@@ -70,8 +74,8 @@ export async function showTickerTuiMenu(ctx: ExtensionCommandContext, options: T
         let pasteActive = false;
         let errorMessage: string | undefined;
         let pending = Promise.resolve();
-        const shortcutUp = shortcutAvailable(keybindings, "shift+up");
-        const shortcutDown = shortcutAvailable(keybindings, "shift+down");
+        const shortcutUp = shortcutAvailable(keybindings, "shift+up", canonicalizeConfiguredKey);
+        const shortcutDown = shortcutAvailable(keybindings, "shift+down", canonicalizeConfiguredKey);
         const activationHint = (label: string) =>
           formatInteractionHints(keybindings, [{ bindings: ["tui.select.confirm"], keys: ["space"], label }]);
         const reorderKeys = [shortcutUp, shortcutDown].filter(
@@ -436,6 +440,7 @@ function shortcutAvailable(
     getKeys(binding: string): readonly string[];
   },
   shortcut: "shift+up" | "shift+down",
+  canonicalKey: (value: unknown) => string | undefined,
 ): typeof shortcut | undefined {
   const unavailable = new Set(
     [
@@ -447,12 +452,4 @@ function shortcutAvailable(
     ].map(canonicalKey),
   );
   return unavailable.has(canonicalKey(shortcut)) ? undefined : shortcut;
-}
-
-function canonicalKey(value: string): string {
-  const parts = value.toLowerCase().split("+");
-  const base = parts.at(-1) ?? "";
-  const canonicalBase = base === "escape" ? "esc" : base === "return" ? "enter" : base;
-  const modifiers = ["ctrl", "shift", "alt", "super"].filter((modifier) => parts.includes(modifier));
-  return [...modifiers, canonicalBase].join("+");
 }

@@ -95,7 +95,7 @@ console.log("packed durable consumer passed");
     join(directory, "tsconfig.json"),
     JSON.stringify({
       compilerOptions: {
-        target: "ES2022",
+        target: "ES2024",
         module: "NodeNext",
         moduleResolution: "NodeNext",
         strict: true,

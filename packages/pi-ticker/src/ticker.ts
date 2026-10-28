@@ -4,18 +4,12 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
   getAgentDir,
-  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { fetchQuotes, QuoteRequestTimeoutError } from "./quotes.js";
-import {
-  formatTickerPlain,
-  mergeQuoteResults,
-  renderTickerWidget,
-  type TickerItem,
-  type TickerView,
-} from "./render.js";
+import { formatTickerPlain, mergeQuoteResults, renderTickerBody, type TickerItem, type TickerView } from "./render.js";
 import { createSettingsWriter, loadSettings, normalizeSymbols, parseSymbols } from "./settings.js";
 
 export interface StockTickerDependencies {
@@ -62,10 +56,11 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
     if (ctx.mode === "tui") {
       ctx.ui.setWidget(
         WIDGET_KEY,
-        (_tui: unknown, theme: Theme) => ({
-          render: (width: number) => renderTickerWidget(snapshot, theme, width),
-          invalidate: () => {},
-        }),
+        (_tui, theme) =>
+          new EditorStatusWidget({
+            theme,
+            renderBody: (width) => renderTickerBody(snapshot, theme, width),
+          }),
         { placement: "aboveEditor" },
       );
       return;

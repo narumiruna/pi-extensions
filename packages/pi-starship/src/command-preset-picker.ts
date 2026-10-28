@@ -5,6 +5,7 @@ import type { StarshipPreset } from "./presets/catalog.js";
 export type PresetPickerResult =
   | { kind: "apply"; presetId: StarshipPreset["id"] }
   | { kind: "customize"; presetId: StarshipPreset["id"] }
+  | { kind: "save-profile"; presetId: StarshipPreset["id"] }
   | { kind: "back" }
   | { kind: "close" };
 
@@ -40,7 +41,10 @@ export async function showPresetPicker(
     hint: "back",
     navigationLabel: "live preview",
     confirmLabel: "apply",
-    shortcuts: [{ id: "customize", keys: ["e", "shift+e"], label: "customize" }],
+    shortcuts: [
+      { id: "customize", keys: ["e", "shift+e"], label: "customize" },
+      { id: "save-profile", keys: ["s", "shift+s"], label: "save as profile" },
+    ],
     onSelectionChange: ({ item }) => {
       const preset = options.presets.find((candidate) => candidate.id === item.id);
       if (preset) options.preview(preset);
@@ -50,7 +54,7 @@ export async function showPresetPicker(
   });
   if (result.kind === "selected") return { kind: "apply", presetId: result.itemId };
   if (result.kind === "shortcut") {
-    return { kind: "customize", presetId: result.itemId };
+    return { kind: result.shortcutId === "save-profile" ? "save-profile" : "customize", presetId: result.itemId };
   }
   if (result.kind === "closed" && result.reason === "back") return { kind: "back" };
   return { kind: "close" };

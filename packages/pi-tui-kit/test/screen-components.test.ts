@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
@@ -10,6 +9,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { stripTuiCursorMarkers, plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { createMenuScreenComponent, type MenuScreenComponent, type MenuScreenEvent } from "../src/components/index.js";
 import type { MenuScreen, MenuTransition } from "../src/types.js";
 
@@ -153,6 +153,26 @@ test("standard screens remain bounded and sanitize terminal controls", () => {
       );
       assert.equal(lines.join("\n").includes("\u001b]8;;title"), false);
       harness.component.dispose?.();
+    }
+  }
+});
+
+test("standard screens render no content at zero or invalid widths and recover after resize", () => {
+  for (const screen of [actionScreen, detailScreen, choiceScreen, settingsScreen, multiSelectScreen]) {
+    const { component } = componentHarness(screen);
+    try {
+      for (const width of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        assert.deepEqual(component.render(width), [], `${screen.kind} at ${width}`);
+      }
+      component.invalidate();
+      const lines = component.render(80);
+      assert.ok(lines.length > 0, screen.kind);
+      assert.ok(
+        lines.every((line) => visibleWidth(line) <= 80),
+        screen.kind,
+      );
+    } finally {
+      component.dispose?.();
     }
   }
 });
@@ -689,7 +709,7 @@ test("settings sanitize terminal controls from bracketed search paste", () => {
   const harness = componentHarness(settingsScreen, { plainTheme: true });
   const pasted = "\u001b[200~man\u001b]8;;https://unsafe.example\u0007ual\u009dtitle\u009c\u001b[201~";
   harness.component.handleInput(pasted);
-  const rendered = harness.component.render(80).join("\n");
+  const rendered = stripTuiCursorMarkers(harness.component.render(80).join("\n"));
   assert.equal(rendered.includes("\u001b]8;;https://unsafe.example"), false);
   assert.equal(rendered.includes("\u0007"), false);
   assert.equal(rendered.includes("\u009d"), false);
@@ -1239,7 +1259,7 @@ test("searchable multi-select forwards focus and sanitizes bracketed paste", () 
   focusable.focused = false;
 
   harness.component.handleInput("\u001b[200~📖\u0007\u009d\u009c\u001b[201~");
-  const rendered = harness.component.render(80).join("\n");
+  const rendered = stripTuiCursorMarkers(harness.component.render(80).join("\n"));
   assert.match(stripVTControlCharacters(rendered), /讀取 📖/);
   assert.doesNotMatch(stripVTControlCharacters(rendered), /Write/);
   assert.equal(rendered.includes("\u001b[200~"), false);

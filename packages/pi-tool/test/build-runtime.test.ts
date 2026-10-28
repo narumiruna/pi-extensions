@@ -7,6 +7,7 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-tool",
   forbiddenEagerInputs: ["src/tool-catalog.ts"],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+  allowedEagerExternals: ["@narumitw/pi-tui-kit/editor-status-widget"],
 });
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {

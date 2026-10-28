@@ -1,0 +1,394 @@
+{
+  "caseId": "frontier-cutlass-host-context-2026-10-18",
+  "evidenceType": "retrospective single-case comparison with anonymized observed answers",
+  "environment": {
+    "date": "2026-10-18",
+    "platform": "Linux",
+    "node": "24.21.0",
+    "pi": "1.3.0",
+    "plugin": "0.56.1",
+    "python": "3.10.6",
+    "torch": "2.1.0+cu121",
+    "model": "gpt-6.1-sol",
+    "piThinkingLevel": "xhigh",
+    "modelNaming": "Normalized report label; provider revision and deployment identifiers are not independently verified or published.",
+    "api": "openai-responses",
+    "sameModelAndBackend": true
+  },
+  "design": {
+    "cases": 1,
+    "compactionArtifactsPerMethod": 1,
+    "recallResponsesPerArtifact": 1,
+    "questionsPerRecall": 12,
+    "allQuestionsAskedInOneResponse": true,
+    "fullContextControl": false,
+    "grading": "Retrospective, non-blinded manual component review; no model judge and no statistical inference.",
+    "inputMessages": 38,
+    "messagesToSummarize": 36,
+    "estimatedInputTokens": 33815,
+    "keepRecentTokens": 2048,
+    "reserveTokens": 100000,
+    "automaticCompaction": false,
+    "toolsDuringRecall": [],
+    "order": "sequential, fixed order; not counterbalanced",
+    "sameInputAndPreparation": true,
+    "salientFactsOutsideRecentTail": true,
+    "sameNetworkTransport": "Pi session/provider serialization with a shared HTTP transport for the paired comparison",
+    "piRetries": {
+      "enabled": true,
+      "maxRetries": 3,
+      "baseDelayMs": 8000,
+      "maxAgentDelayMs": 60000
+    },
+    "cacheStateControlled": false,
+    "equalInformationCapacity": false,
+    "pluginProtocol": "remote-v2",
+    "pluginReplacementUserTextBudget": 64000,
+    "reasoning": {
+      "nativeCompaction": "xhigh sent in reasoning.effort",
+      "pluginCompaction": "no reasoning field in maintenance payload",
+      "recall": "same selected xhigh level"
+    },
+    "reproductionLimit": "The private full conversation, backend and opaque bytes are not published. This packet supports review of the reported experiment, not an exact public live rerun.",
+    "recallInstruction": "Answer only a JSON object with keys q1 through q12. Use only retained conversation; say unknown when evidence is absent. Each value should be a concise string. Do not read files or execute anything.",
+    "questionWording": "Questions retain the observed prompt wording with project-specific target labels replaced.",
+    "pluginScoreScope": "Replacement history as a whole: retained user text and an opaque checkpoint, not the opaque item alone."
+  },
+  "metrics": {
+    "native": {
+      "compactionSeconds": 36.747,
+      "recallSecondsIncludingRetries": 60.026,
+      "visibleSummaryChars": 8349,
+      "piEstimatedTokensAfter": 4770,
+      "serviceCompactionInputTokens": 7855,
+      "serviceCompactionOutputTokens": 2845,
+      "serviceRecallInputTokens": 4288,
+      "firstRequestInputItems": 2,
+      "replayInputItems": 5,
+      "opaqueCheckpointChars": 0,
+      "fromHook": false,
+      "nativeSummaryRequests": 1,
+      "firstRequestJsonBytes": 32760
+    },
+    "plugin": {
+      "compactionSeconds": 42.486,
+      "recallSecondsIncludingRetries": 35.762,
+      "visibleSummaryChars": 278,
+      "piEstimatedTokensAfter": 2752,
+      "serviceCompactionInputTokens": 32008,
+      "serviceCompactionOutputTokens": 3267,
+      "serviceRecallInputTokens": 5779,
+      "firstRequestInputItems": 53,
+      "replayInputItems": 11,
+      "opaqueCheckpointChars": 20388,
+      "fromHook": true,
+      "nativeSummaryRequests": 0,
+      "firstRequestJsonBytes": 143645
+    }
+  },
+  "counts": {
+    "native": {
+      "PASS": 6,
+      "PARTIAL": 5,
+      "MISSING": 1
+    },
+    "plugin": {
+      "PASS": 8,
+      "PARTIAL": 3,
+      "MISSING": 1
+    }
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "title": "Ownership and forbidden reads",
+      "question": "What exact mapping establishes ownership of the attention metadata for the CUTLASS layer, and what reads are forbidden?",
+      "expectedComponents": [
+        "Both quant-scale objects must match by identity.",
+        "The specific test uses attention_layers={'layer.3':'owned'} and an exact dict lookup.",
+        "Read only the already loaded forward-context module; do not invoke native context methods or read Tensor contents."
+      ],
+      "native": {
+        "grade": "PARTIAL",
+        "answer": "Ownership requires identity matches for both quant-scale arrays and exact attention-dict selection (`type(raw) is dict`). The specific layer-to-attention key mapping is unknown from retained evidence. Context access uses `sys.modules.get('vllm.forward_context')` and `vars(module).get('_forward_context')`; invoking native context methods or reading Tensor contents is forbidden."
+      },
+      "plugin": {
+        "grade": "PARTIAL",
+        "answer": "Ownership follows the actual routed-expert module identity to DeepseekV2DecoderLayer.self_attn.mla_attn.mla_attn.layer_name; CUTLASS selection requires identity of both quant-scale objects. Only existing sys.modules.get('vllm.forward_context')._forward_context is inspected through vars. Native context getters/methods, Tensor-content reads, synchronization, new observation channels and searches through unrelated metadata are forbidden."
+      },
+      "judgment": "Both answers omit the exact layer.3 -> owned mapping. The plugin also retains the concrete owner path."
+    },
+    {
+      "id": "q2",
+      "title": "Observer failure versus native behavior",
+      "question": "What happens when attention metadata is missing, a scalar is a Tensor, or owned context cannot be serialized/read? Does original native invocation/result/exception change?",
+      "expectedComponents": [
+        "Missing context/owned attention is unavailable; a Tensor-valued scalar is unsupported.",
+        "Context-read failure records observer error; serialization failure may omit an observation row.",
+        "Original native arguments, return-object identity and exception identity remain unchanged."
+      ],
+      "native": {
+        "grade": "PARTIAL",
+        "answer": "Missing context yields {'status': 'unavailable'}. Missing attention, Tensor-valued scalars, or unreadable/unserializable owned metadata indicate unsupported or incomplete observer evidence, not native failure; exact per-field markers are unknown. The original native invocation, result and exception remain unchanged."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "Missing context yields status='unavailable'; missing owned attention yields attention_status='unavailable'. A Tensor-valued scalar is 'unsupported', not a native failure. Context-read faults increment recorder errors and yield status='error'; serialization faults may omit a row. Original invocation arguments, return-object identity and native-exception identity remain unchanged."
+      },
+      "judgment": "Native merges distinct metadata states and cannot name their exact markers. The plugin retains unavailable/unsupported/error distinctions and both identity guarantees."
+    },
+    {
+      "id": "q3",
+      "title": "Exact host values",
+      "question": "Give the owned-attention num_actual_tokens, prefill_max_seq_len, DP local_sizes, batch_descriptor.num_tokens and graph_mode values from the specific test.",
+      "expectedComponents": [
+        "num_actual_tokens=11",
+        "prefill_max_seq_len=384",
+        "DP local_sizes=[5,6]",
+        "batch_descriptor.num_tokens=16",
+        "graph_mode=PIECEWISE"
+      ],
+      "native": {
+        "grade": "MISSING",
+        "answer": "Unknown: the specific test's num_actual_tokens, prefill_max_seq_len, DP local_sizes, batch_descriptor.num_tokens and graph_mode values were not retained."
+      },
+      "plugin": {
+        "grade": "MISSING",
+        "answer": "Unknown: the retained evidence does not preserve the specific test's num_actual_tokens, prefill_max_seq_len, DP local_sizes, batch_descriptor.num_tokens or graph_mode values. The earlier observation run graph NONE does not establish that test's value."
+      },
+      "judgment": "Both answer unknown for all five fields, even though the plugin compaction request includes them."
+    },
+    {
+      "id": "q4",
+      "title": "Fresh test result and environment correction",
+      "question": "What was the first fresh local pytest failure, how was it corrected without installing dependencies, and what exact fresh result/time followed?",
+      "expectedComponents": [
+        "Collection failed with ModuleNotFoundError: No module named 'torch'.",
+        "Reuse the existing Torch installation through PYTHONPATH; do not install dependencies.",
+        "Fresh CPU result: 6 passed in 1.54s."
+      ],
+      "native": {
+        "grade": "PASS",
+        "answer": "The first fresh local attempt failed during collection with `ModuleNotFoundError: No module named 'torch'`, testing no observer behavior. Existing Torch was reused through `PYTHONPATH=$PWD:EXISTING_TORCH_PATH`, without installation. The subsequent fresh result was `6 passed in 1.54s`."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "The earlier fresh local attempt failed collection with ModuleNotFoundError: No module named 'torch': 1 error in 0.20s. Reusing the existing EXISTING_TORCH_PATH through PYTHONPATH, without installation, produced 6 passed in 1.54s for tests/unit/test_native_full_structure.py. Nothing was rerun now."
+      },
+      "judgment": "Both distinguish an import-path collection failure from a tested behavior failure and retain the fresh result."
+    },
+    {
+      "id": "q5",
+      "title": "Corrected terminal state",
+      "question": "Is the controlled fixture currently pending or completed? Give its exact historical job ID and terminal status, explaining which earlier state was superseded.",
+      "expectedComponents": [
+        "The historical fixture job identifier matches the source (published as FIXTURE_JOB).",
+        "Terminal status is Succeeded.",
+        "Terminal success supersedes the earlier report-creation snapshot saying GPU pending."
+      ],
+      "native": {
+        "grade": "PASS",
+        "answer": "Completed historically: job `FIXTURE_JOB` succeeded at `TERMINAL_TIMESTAMP`, exit 0/restart 0, with all eight numeric/control results passing. Its terminal success supersedes the earlier creation-time 'GPU pending' statement. This reconstruction performed no GPU execution."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "Completed, not pending. Historical job FIXTURE_JOB reached Succeeded at TERMINAL_TIMESTAMP, with container exit0/restart0 and natural launcher exit. This terminal evidence supersedes the earlier report-creation snapshot that described the GPU fixture as pending."
+      },
+      "judgment": "Both retain the correct terminal state and exact original identifier. Identifier equality was checked locally before redaction."
+    },
+    {
+      "id": "q6",
+      "title": "Shapes and numeric references",
+      "question": "Give the two controlled shapes and exact independent BF16 reference rows for top-k 1 and 2.",
+      "expectedComponents": [
+        "top-k1 shape=[2,128,128,2,1], reference=[2.921875,-1.90625]",
+        "top-k2 shape=[2,128,128,2,2], reference=[-0.69921875,0.5078125]"
+      ],
+      "native": {
+        "grade": "PASS",
+        "answer": "Top-k 1: shape `[2,128,128,2,1]`, independent BF16 reference row `[2.921875,-1.90625]`. Top-k 2: shape `[2,128,128,2,2]`, reference row `[-0.69921875,0.5078125]`."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "Controlled shapes: [2,128,128,2,1] and [2,128,128,2,2]. BF16 reference values: top-k 1 [2.921875,-1.90625]; top-k 2 [-0.69921875,0.5078125]. Outputs have shape [2,128]; the artifact retains first-column values and full-comparison reductions, not a standalone full raw-output Tensor archive."
+      },
+      "judgment": "Both retain both shapes and both complete reference rows."
+    },
+    {
+      "id": "q7",
+      "title": "Negative controls",
+      "question": "Which three negative controls must be rejected, and what is zero-output relative-L2? What error does a correct prepared output have?",
+      "expectedComponents": [
+        "Reject wrong-W31, wrong-scale-half and zero outputs.",
+        "Zero-output relative-L2=1.",
+        "Correct prepared output has max absolute error=0 and relative-L2=0."
+      ],
+      "native": {
+        "grade": "PASS",
+        "answer": "Reject wrong-W31, wrong-scale-half and zero controls. Zero-output relative-L2 is 1. Correct prepared outputs match the references exactly, giving error 0."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "The wrong-W31, wrong-scale-half and zero-output controls must reject the correct reference. Zero-output relative-L2 is 1 for both cases. Correct prepared outputs have maximum absolute error 0 and relative-L2 0. Deliberate negative-control mismatches are expected, not native defects or grounds to relax tolerances."
+      },
+      "judgment": "Both retain the required controls and errors."
+    },
+    {
+      "id": "q8",
+      "title": "Historical validation versus fresh work",
+      "question": "What were the historical recorder-test count, gate count/time and 77-case comparison result? Were these re-executed by this case?",
+      "expectedComponents": [
+        "Historical narration calls 25 tests recorder tests; the report identifies 25 affected tests without an independent recorder-only count.",
+        "26 gate tests in 1.04s.",
+        "77/77 comparison artifacts identical; these historical checks were not rerun for this case."
+      ],
+      "native": {
+        "grade": "PARTIAL",
+        "answer": "Historically, 25 recorder tests and 26 gates passed; gate elapsed time is unknown from retained evidence. The comparison found 77/77 artifacts identical. These historical suites and comparison were not re-executed by this reconstruction."
+      },
+      "plugin": {
+        "grade": "PARTIAL",
+        "answer": "Historical reports retain 17 combined native tests PASS in 1.88s, 25 affected engine-update tests passing, and 26 gate tests. A separately identified recorder-only count and gate elapsed time are unknown. Frontier comparison: 77/77 artifacts identical, zero mismatches. These historical checks were not re-executed by this reconstruction."
+      },
+      "judgment": "Both omit 1.04s. The plugin reports 25 affected tests but leaves a separately identified recorder-only count unknown. The source label ambiguity is retained rather than graded as a plugin hallucination."
+    },
+    {
+      "id": "q9",
+      "title": "Limits of a passing result",
+      "question": "Explain why fixture PASS, host_return, and 77/77 identical Frontier artifacts do not establish complete original-model GPU or full native-engine qualification.",
+      "expectedComponents": [
+        "Controlled fixture numerics do not cover original weights/model lifecycle/routing/startup.",
+        "host_return does not prove device completion or request-visible readiness.",
+        "Artifact equality does not prove patched native execution; sliced tests with stubs do not exercise the full engine."
+      ],
+      "native": {
+        "grade": "PASS",
+        "answer": "Fixture PASS covers controlled primitives with test-owned inputs, not the original model or full runtime. `host_return` establishes only a host boundary, not completed device execution or request readiness. Identical artifacts establish artifact equality, not worker inclusion or complete native-engine qualification; engine tests used sliced native bodies with external stubs."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "Fixture PASS covers controlled primitive numerics, not the original model's weights, lifecycle, routing or startup. host_return means only Python returned: device_completion='unobserved', run_verified=false, and prior capture/replay remain unobserved. The 77/77 comparison establishes Frontier artifact preservation, not patched-native execution. Sliced host tests use external stubs and do not exercise the full engine, RPC, CUDA or worker threads."
+      },
+      "judgment": "Both preserve all three evidence boundaries."
+    },
+    {
+      "id": "q10",
+      "title": "Open work and CPU-overhead evidence",
+      "question": "What are current full-model qualification, SECONDARY_TARGET and FROZEN_TARGET statuses? What schema/adapters/readiness/device/CPU-overhead evidence remains open?",
+      "expectedComponents": [
+        "Full-model qualification remains open/unqualified; SECONDARY_TARGET is blocked-on-runtime; FROZEN_TARGET remains frozen.",
+        "Schema/adapters, native inclusion/RPC, clean/light perturbation, request-visible readiness and device completion remain unqualified.",
+        "No accepted CPU-overhead table exists; local begin/end clock durations do not provide it."
+      ],
+      "native": {
+        "grade": "PARTIAL",
+        "answer": "Full-model qualification remains unqualified; SECONDARY_TARGET is `blocked-on-runtime`; FROZEN_TARGET remains frozen. Worker inclusion, full-model/runtime and execution-shape coverage, schema/adapters, device completion, request-visible readiness, clean/light perturbation and subsequent qualification phase remain unresolved. Specific CPU-overhead measurements are unknown from retained evidence."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "Full-model qualification remains open/unqualified; SECONDARY_TARGET is blocked-on-runtime; FROZEN_TARGET is frozen. Missing evidence includes startup-memory stage peaks and native routing phase/shape/rank/bytes/padding samples, complete schema/adapters, native-image inclusion and RPC serialization, clean/light perturbation, request-visible readiness and device completion. No accepted CPU-overhead table exists; local clock durations are insufficient."
+      },
+      "judgment": "Native leaves CPU-overhead measurements unknown. The plugin explicitly preserves why local clock durations cannot satisfy that requirement."
+    },
+    {
+      "id": "q11",
+      "title": "Plan continuation and authorization",
+      "question": "What plan steps are completed and what is the next justified action? May the agent repeat GPU fixture allocation, repair routing/backend, relax tolerance or close full qualification now?",
+      "expectedComponents": [
+        "Steps 1-5 completed; the next step is reconcile missing evidence and prepare a separately scoped proposal.",
+        "No new GPU allocation, backend repair, relaxed tolerance or full-qualification closure is authorized by quoted history."
+      ],
+      "native": {
+        "grade": "PARTIAL",
+        "answer": "Completed: source/HEAD/report inspection, fresh six-test CPU verification, historical fixture-status correction, engine-update/artifact reconciliation and four read-only archive batches. Next: map missing claims to retained evidence and required proof, then draft a separately scoped smallest-evidence proposal. No permission exists to repeat GPU allocation, repair routing/backend, relax tolerances or close full qualification."
+      },
+      "plugin": {
+        "grade": "PARTIAL",
+        "answer": "Completed work includes retained CUTLASS host-context observation, the earlier observation run, the completed controlled fixture, the bounded local engine-update slice, and report-only preparations. Next: reconcile qualification records and review existing source-only startup-memory/routing proposals against the precise missing evidence and approval questions. No repeat GPU allocation, routing/backend repair, tolerance relaxation or full-qualification closure is authorized."
+      },
+      "judgment": "Both preserve constrained next actions but omit the original completed step numbers."
+    },
+    {
+      "id": "q12",
+      "title": "Revision and changed files",
+      "question": "What is the exact inspected Frontier HEAD and which source files were changed in its latest commit? Did this reconstruction edit them?",
+      "expectedComponents": [
+        "Original revision matches the source (published as SOURCE_REVISION).",
+        "tests/comparison/calibration/native_full_structure.py and tests/unit/test_native_full_structure.py changed.",
+        "This reconstruction inspected these sources without editing them."
+      ],
+      "native": {
+        "grade": "PASS",
+        "answer": "Inspected HEAD: `SOURCE_REVISION`, 'Retain owned existing host context in selected CUTLASS calls'. Its latest commit changed `tests/comparison/calibration/native_full_structure.py` and `tests/unit/test_native_full_structure.py` (156 insertions, 3 deletions). This reconstruction inspected but did not edit them."
+      },
+      "plugin": {
+        "grade": "PASS",
+        "answer": "Retained inspected Frontier HEAD: SOURCE_REVISION. Its latest commit changed tests/comparison/calibration/native_full_structure.py and tests/unit/test_native_full_structure.py. Reconstruction reported no edits to those sources; this response read no files, executed nothing and made no changes."
+      },
+      "judgment": "Both retain the original revision and both files. Revision equality was checked locally before redaction."
+    }
+  ],
+  "lifecycle": {
+    "frontierResumeReload": {
+      "secondCompactionSeconds": 31.983,
+      "recallSeconds": 4.242,
+      "fromHook": true,
+      "retained": "earlier fixture identifier plus new continuity marker"
+    },
+    "synthetic": {
+      "firstCompactionSeconds": 5.148,
+      "firstRecallSeconds": 4.347,
+      "secondCompactionSeconds": 6.244,
+      "recallAfterReloadSeconds": 27.675,
+      "bothFromHook": true
+    },
+    "limit": "Operational replay/continuation checks, not additional independent quality samples."
+  },
+  "redactions": "Host/user paths, deployment identifiers, exact private revision/job identifiers and project-specific target labels are replaced or omitted. Scores and quantitative measurements are unchanged. Answers below are redacted text from observed responses, not newly generated responses.",
+  "inputCoverage": {
+    "scope": "Literal presence in the saved first compaction request input; not a separate model experiment or proof of checkpoint retention.",
+    "question": "q3",
+    "fields": [
+      {
+        "field": "num_actual_tokens",
+        "sourceLiteral": "num_actual_tokens=11",
+        "nativeCompactionInput": false,
+        "nativeRecall": "unknown",
+        "pluginCompactionInput": true,
+        "pluginRecall": "unknown"
+      },
+      {
+        "field": "prefill_max_seq_len",
+        "sourceLiteral": "prefill_max_seq_len=384",
+        "nativeCompactionInput": false,
+        "nativeRecall": "unknown",
+        "pluginCompactionInput": true,
+        "pluginRecall": "unknown"
+      },
+      {
+        "field": "DP local_sizes",
+        "sourceLiteral": "local_sizes=[5, 6]",
+        "nativeCompactionInput": false,
+        "nativeRecall": "unknown",
+        "pluginCompactionInput": true,
+        "pluginRecall": "unknown"
+      },
+      {
+        "field": "batch_descriptor.num_tokens",
+        "sourceLiteral": "num_tokens=16",
+        "nativeCompactionInput": false,
+        "nativeRecall": "unknown",
+        "pluginCompactionInput": true,
+        "pluginRecall": "unknown"
+      },
+      {
+        "field": "graph_mode",
+        "sourceLiteral": "name='PIECEWISE'",
+        "nativeCompactionInput": false,
+        "nativeRecall": "unknown",
+        "pluginCompactionInput": true,
+        "pluginRecall": "unknown"
+      }
+    ]
+  }
+}

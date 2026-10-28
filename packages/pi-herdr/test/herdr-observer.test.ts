@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { createMockContext } from "../../../test/support.js";
+import { createMockContext as createBaseContext } from "../../../test/support.js";
 import type { HerdrSubscription } from "../src/herdr-client.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
 import { HERDR_WIDGET_KEY } from "../src/herdr-widget.js";
+
+function createMockContext(overrides: Parameters<typeof createBaseContext>[0]) {
+  return createBaseContext({
+    theme: { bold: (text: string) => text, fg: (_role: string, text: string) => text },
+    ...overrides,
+  });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -54,10 +61,13 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 
 function renderWidget(value: unknown): string {
   assert.equal(typeof value, "function");
-  const component = (value as (tui: unknown, theme: Theme) => { render(width: number): string[] })({}, {
-    bold: (text: string) => text,
-    fg: (_role: string, text: string) => text,
-  } as Theme);
+  const component = (value as (tui: unknown, theme: Theme) => { render(width: number): string[] })(
+    { terminal: { rows: 36 }, requestRender() {} },
+    {
+      bold: (text: string) => text,
+      fg: (_role: string, text: string) => text,
+    } as Theme,
+  );
   return component.render(80).join("\n");
 }
 
@@ -92,8 +102,11 @@ function subscriptionHarness(signal: AbortSignal): SubscriptionHarness {
   };
 }
 
-test("publishes initial siblings and applies live status and exit events", async () => {
+test("publishes initial siblings and refreshes live status and exit invalidations", async () => {
   const { ctx, widgets } = createMockContext({ hasUI: true, mode: "tui" });
+  let sibling = wirePane("w1:p2");
+  let exited = false;
+  const statusSubscriptions: unknown[] = [];
   let onEvent: ((frame: unknown) => void) | undefined;
   let harness: SubscriptionHarness | undefined;
   const observer = createHerdrWidgetObserver({
@@ -103,14 +116,10 @@ test("publishes initial siblings and applies live status and exit events", async
     retryDelayMs: 0,
     async subscribe(_endpoint, request, signal, nextEvent) {
       assert.equal(request.method, "events.subscribe");
-      assert.deepEqual(
+      statusSubscriptions.push(
         (request.params.subscriptions as Record<string, unknown>[]).filter(
           (entry) => entry.type === "pane.agent_status_changed",
         ),
-        [
-          { type: "pane.agent_status_changed", pane_id: "w1:p1" },
-          { type: "pane.agent_status_changed", pane_id: "w1:p2" },
-        ],
       );
       onEvent = nextEvent;
       harness = subscriptionHarness(signal);
@@ -121,12 +130,9 @@ test("publishes initial siblings and applies live status and exit events", async
         assert.deepEqual(request.params, { caller_pane_id: "w1:p1" });
         return { type: "pane_current", pane: wirePane("w1:p1", "working") };
       }
-      const panes = [wirePane("w1:p1", "working"), wirePane("w1:p2", "idle")];
+      const panes = [wirePane("w1:p1", "working"), ...(exited ? [] : [sibling])];
       if (request.method === "agent.list") {
-        return agentList([
-          wirePane("w1:p1", "working", "pi", { name: "current" }),
-          wirePane("w1:p2", "idle", "pi", { name: "reviewer" }),
-        ]);
+        return agentList(panes.map((pane) => ({ ...pane, name: pane.pane_id === "w1:p1" ? "current" : "reviewer" })));
       }
       if (request.method === "workspace.get") return workspaceInfo();
       return { type: "pane_list", panes };
@@ -135,6 +141,10 @@ test("publishes initial siblings and applies live status and exit events", async
   observer.start(ctx);
   await waitUntil(() => typeof widgets.get(HERDR_WIDGET_KEY) === "function");
   assert.match(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /idle.*reviewer.*worker\/p2.*space\/w1/u);
+  assert.deepEqual(statusSubscriptions[0], [
+    { type: "pane.agent_status_changed", pane_id: "w1:p1" },
+    { type: "pane.agent_status_changed", pane_id: "w1:p2" },
+  ]);
   const initialWidget = widgets.get(HERDR_WIDGET_KEY);
   onEvent?.({
     event: "pane.agent_status_changed",
@@ -147,26 +157,25 @@ test("publishes initial siblings and applies live status and exit events", async
   });
   assert.equal(widgets.get(HERDR_WIDGET_KEY), initialWidget);
 
+  sibling = wirePane("w1:p2", "blocked", "pi", { state_labels: { blocked: "waiting" } });
   onEvent?.({
     event: "pane.agent_status_changed",
-    data: {
-      pane_id: "w1:p2",
-      workspace_id: "w1",
-      agent: "pi",
-      agent_status: "blocked",
-      state_labels: { blocked: "waiting" },
-    },
+    data: sibling,
   });
+  await waitUntil(() => renderWidget(widgets.get(HERDR_WIDGET_KEY)).includes("waiting"));
+  assert.equal(widgets.get(HERDR_WIDGET_KEY), initialWidget);
   assert.match(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /waiting/u);
+  exited = true;
   onEvent?.({ event: "pane_exited", data: { pane_id: "w1:p2", workspace_id: "w1" } });
-  assert.equal(widgets.get(HERDR_WIDGET_KEY), undefined);
+  await waitUntil(() => statusSubscriptions.length === 2 && widgets.get(HERDR_WIDGET_KEY) === undefined);
+  assert.deepEqual(statusSubscriptions[1], [{ type: "pane.agent_status_changed", pane_id: "w1:p1" }]);
 
   await observer.shutdown(ctx);
   assert.ok(harness);
   assert.equal(widgets.get(HERDR_WIDGET_KEY), undefined);
 });
 
-test("reconciles replayed topology without entering a resubscribe loop", async () => {
+test("reconciles topology invalidations without replay or a resubscribe loop", async () => {
   const { ctx, widgets } = createMockContext({ hasUI: true, mode: "tui" });
   let requests = 0;
   let subscriptions = 0;
@@ -193,14 +202,14 @@ test("reconciles replayed topology without entering a resubscribe loop", async (
     },
   });
   observer.start(ctx);
-  await waitUntil(() => typeof widgets.get(HERDR_WIDGET_KEY) === "function" && requests >= 12);
+  await waitUntil(() => typeof widgets.get(HERDR_WIDGET_KEY) === "function" && requests >= 8);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(subscriptions, 1);
   assert.match(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /worker\/p2.*space\/w1/u);
   await observer.shutdown(ctx);
 });
 
-test("queues events during initialization and rejects stale delayed publication", async () => {
+test("re-reads initialization invalidations and rejects stale delayed publication", async () => {
   const current = deferred<unknown>();
   const { ctx, widgets } = createMockContext({ hasUI: true, mode: "tui" });
   let currentRequests = 0;
@@ -236,7 +245,8 @@ test("queues events during initialization and rejects stale delayed publication"
   });
   current.resolve({ type: "pane_current", pane: wirePane("w1:p1", "working") });
   await waitUntil(() => typeof widgets.get(HERDR_WIDGET_KEY) === "function");
-  assert.match(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /blocked/u);
+  assert.match(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /idle/u);
+  assert.doesNotMatch(renderWidget(widgets.get(HERDR_WIDGET_KEY)), /blocked/u);
 
   const staleCurrent = deferred<unknown>();
   let requestCount = 0;
@@ -251,6 +261,7 @@ test("queues events during initialization and rejects stale delayed publication"
       return staleCurrent.promise;
     },
   });
+  await observer.shutdown(ctx);
   replacement.start(ctx);
   await waitUntil(() => requestCount === 1);
   const shuttingDown = replacement.shutdown(ctx);

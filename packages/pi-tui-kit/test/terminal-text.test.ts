@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { sanitizeTerminalText } from "../src/index.js";
+import { sanitizeTerminalText } from "../src/terminal-text.js";
 
 test("sanitizes untrusted terminal display text without changing printable identity", () => {
   assert.equal(sanitizeTerminalText("model/😀/e\u0301"), "model/😀/e\u0301");

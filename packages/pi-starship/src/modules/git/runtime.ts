@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { execWorkspaceCommand } from "../../runtime/command.js";
+import { MAX_COMMAND_OUTPUT_BYTES } from "../../runtime/helpers.js";
+import type { WorkspaceExec } from "../../runtime/types.js";
 import type {
   GitBranchSnapshot,
   GitCommitSnapshot,
@@ -16,6 +19,11 @@ const GIT_TIMEOUT_MS = 3_000;
 export interface ReadGitSnapshotOptions {
   includeMetrics: boolean;
   includeTag: boolean;
+  statusIgnoreSubmodules?: boolean;
+  metricsIgnoreSubmodules?: boolean;
+  tagMaxCandidates?: number;
+  inspectBare?: boolean;
+  exec?: WorkspaceExec;
   signal?: AbortSignal;
 }
 
@@ -24,30 +32,36 @@ export async function readGitSnapshot(
   cwd: string,
   options: ReadGitSnapshotOptions,
 ): Promise<GitSnapshot | undefined> {
-  const statusPromise = pi.exec(
-    "git",
-    ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--show-stash", "--untracked-files=normal"],
-    { cwd, signal: options.signal, timeout: GIT_TIMEOUT_MS },
-  );
-  const metadataPromise = pi.exec(
-    "git",
-    ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--git-dir"],
-    { cwd, signal: options.signal, timeout: GIT_TIMEOUT_MS },
-  );
-  const metricsPromise = options.includeMetrics
-    ? pi.exec("git", ["--no-optional-locks", "diff", "--shortstat", "HEAD", "--"], {
-        cwd,
-        signal: options.signal,
-        timeout: GIT_TIMEOUT_MS,
-      })
-    : Promise.resolve(undefined);
-  const tagPromise = options.includeTag
-    ? pi.exec("git", ["describe", "--tags", "--exact-match", "HEAD"], {
-        cwd,
-        signal: options.signal,
-        timeout: GIT_TIMEOUT_MS,
-      })
-    : Promise.resolve(undefined);
+  if (options.signal?.aborted) return undefined;
+  const run = (args: string[]) => runGit(pi, cwd, args, options);
+  const statusArgs = [
+    "--no-optional-locks",
+    "status",
+    "--porcelain=v2",
+    "--branch",
+    "--show-stash",
+    "--untracked-files=normal",
+  ];
+  // Upstream's status control ignores dirt inside submodules, not changed gitlinks.
+  if (options.statusIgnoreSubmodules) statusArgs.push("--ignore-submodules=dirty");
+  const statusPromise = run(statusArgs);
+  const metadataPromise = run([
+    "rev-parse",
+    "--path-format=absolute",
+    "--show-toplevel",
+    "--git-common-dir",
+    "--git-dir",
+  ]);
+  const metricsArgs = ["--no-optional-locks", "diff", "--shortstat"];
+  if (options.metricsIgnoreSubmodules) metricsArgs.push("--ignore-submodules=all", "--no-ext-diff", "--no-textconv");
+  metricsArgs.push("HEAD", "--");
+  const metricsPromise = options.includeMetrics ? run(metricsArgs) : Promise.resolve(undefined);
+  const candidates = options.tagMaxCandidates;
+  const tagArgs =
+    Number.isSafeInteger(candidates) && (candidates ?? 0) > 0 && (candidates ?? 0) <= 100
+      ? ["describe", "--tags", "--first-parent", "--abbrev=0", `--candidates=${candidates}`, "HEAD"]
+      : ["describe", "--tags", "--exact-match", "HEAD"];
+  const tagPromise = options.includeTag ? run(tagArgs) : Promise.resolve(undefined);
 
   const [statusResult, metadataResult, metricsResult, tagResult] = await Promise.all([
     statusPromise,
@@ -55,7 +69,10 @@ export async function readGitSnapshot(
     metricsPromise,
     tagPromise,
   ]);
-  if (statusResult.code !== 0 || statusResult.killed) return undefined;
+  if (options.signal?.aborted || statusResult.killed) return undefined;
+  if (statusResult.code !== 0) {
+    return options.inspectBare ? readBareSnapshot(pi, cwd, options, tagResult) : undefined;
+  }
 
   const parsed = parseGitStatusPorcelainV2(statusResult.stdout);
   const metadata =
@@ -76,21 +93,88 @@ export async function readGitSnapshot(
   };
 }
 
+type GitCommandResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
+
+async function runGit(
+  pi: ExtensionAPI,
+  cwd: string,
+  args: string[],
+  options: Pick<ReadGitSnapshotOptions, "signal" | "exec">,
+): Promise<GitCommandResult> {
+  const failed = { stdout: "", stderr: "", code: 1, killed: options.signal?.aborted ?? false };
+  if (options.signal?.aborted) return failed;
+  try {
+    const result = options.exec
+      ? await options.exec("git", args, {
+          cwd,
+          timeout: GIT_TIMEOUT_MS,
+          maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+          signal: options.signal,
+          environment: process.env,
+        })
+      : await pi.exec("git", args, { cwd, signal: options.signal, timeout: GIT_TIMEOUT_MS });
+    if (options.signal?.aborted) return { ...failed, killed: true };
+    if (Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > MAX_COMMAND_OUTPUT_BYTES) {
+      return { ...failed, killed: true };
+    }
+    return result;
+  } catch {
+    return failed;
+  }
+}
+
+async function readBareSnapshot(
+  pi: ExtensionAPI,
+  cwd: string,
+  options: ReadGitSnapshotOptions,
+  tagResult: GitCommandResult | undefined,
+): Promise<GitSnapshot | undefined> {
+  const boundedOptions = { ...options, exec: options.exec ?? execWorkspaceCommand };
+  const run = (args: string[]) => runGit(pi, cwd, args, boundedOptions);
+  const bare = await run(["rev-parse", "--is-bare-repository"]);
+  if (options.signal?.aborted || bare.killed || bare.code !== 0 || bare.stdout.trim() !== "true") return undefined;
+  const [head, hash] = await Promise.all([
+    run(["symbolic-ref", "--short", "HEAD"]),
+    run(["rev-parse", "--verify", "HEAD"]),
+  ]);
+  if (options.signal?.aborted || head.killed || hash.killed) return undefined;
+  const name = head.code === 0 ? head.stdout.trim() : "";
+  const commitHash = hash.code === 0 ? hash.stdout.trim() : "";
+  const validHash = /^[a-fA-F0-9]{4,64}$/u.test(commitHash);
+  if (!name && !validHash) return undefined;
+  const detached = name === "";
+  const reference = `refs/heads/${name}`;
+  const upstreamResult = name
+    ? await run(["for-each-ref", "--count=1", "--format=%(refname)%00%(upstream:short)", reference])
+    : undefined;
+  if (options.signal?.aborted) return undefined;
+  const upstreamFields =
+    upstreamResult?.code === 0 && !upstreamResult.killed ? upstreamResult.stdout.trimEnd().split("\0") : [];
+  const remote = upstreamFields[0] === reference ? splitUpstream(upstreamFields[1]) : {};
+  return {
+    branch: { name: name || "HEAD", detached, bare: true, ...remote },
+    commit: validHash ? withTag({ hash: commitHash, detached }, tagResult) : undefined,
+    status: emptyGitStatus(),
+  };
+}
+
 export async function readGitStatus(pi: ExtensionAPI, cwd: string): Promise<GitStatusSnapshot | undefined> {
-  const result = await pi.exec(
-    "git",
+  const result = await runGit(
+    pi,
+    cwd,
     ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--show-stash", "--untracked-files=normal"],
-    { cwd, timeout: GIT_TIMEOUT_MS },
+    {},
   );
   if (result.code !== 0 || result.killed) return undefined;
   return parseGitStatusPorcelainV2(result.stdout).status;
 }
 
 export async function readGitWorktree(pi: ExtensionAPI, cwd: string): Promise<GitWorktreeSnapshot | undefined> {
-  const result = await pi.exec(
-    "git",
+  const result = await runGit(
+    pi,
+    cwd,
     ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--git-dir"],
-    { cwd, timeout: GIT_TIMEOUT_MS },
+    {},
   );
   if (result.code !== 0 || result.killed) return undefined;
   return parseGitRepositoryMetadata(result.stdout)?.worktree;
@@ -125,8 +209,13 @@ export function parseGitStatusPorcelainV2(output: string): ParsedGitStatus {
     }
     if (line.startsWith("# branch.ab ")) {
       const match = /^# branch\.ab \+(\d+) -(\d+)$/u.exec(line);
-      status.ahead = match?.[1] ? Number(match[1]) : 0;
-      status.behind = match?.[2] ? Number(match[2]) : 0;
+      const ahead = Number(match?.[1]);
+      const behind = Number(match?.[2]);
+      const valid = Number.isSafeInteger(ahead) && Number.isSafeInteger(behind);
+      status.ahead = valid ? ahead : 0;
+      status.behind = valid ? behind : 0;
+      if (valid && ahead === 0 && behind === 0) status.upToDate = true;
+      else delete status.upToDate;
       continue;
     }
     if (line.startsWith("# stash ")) {

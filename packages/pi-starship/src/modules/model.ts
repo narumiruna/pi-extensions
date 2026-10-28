@@ -73,7 +73,7 @@ function isTruncationDirection(value: unknown): value is TruncationDirection {
 }
 
 export function shortenModel(model: string): string {
-  return model
+  return sanitizeTerminalText(model)
     .replace(/^claude-/u, "")
     .replace(/-20\d{6}$/u, "")
     .replace(/-latest$/u, "");

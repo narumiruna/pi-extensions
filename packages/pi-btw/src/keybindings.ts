@@ -9,7 +9,13 @@ import {
 } from "@earendil-works/pi-tui";
 import { formatKeyLabel } from "./text.js";
 
-export const BTW_SHORTCUT_ACTIONS = ["exit", "cycleThinkingLevel", "bringToMain"] as const;
+export const BTW_SHORTCUT_ACTIONS = [
+  "exit",
+  "cycleThinkingLevel",
+  "bringToMain",
+  "switchPane",
+  "importMainUpdates",
+] as const;
 export type BtwShortcutAction = (typeof BTW_SHORTCUT_ACTIONS)[number];
 export type BtwKeybindingOverrides = Partial<Record<BtwShortcutAction, string>>;
 
@@ -35,8 +41,8 @@ const SPECIAL: Record<string, number> = {
 const FUNCTION_INPUTS = ["OP", "OQ", "OR", "OS", "[15~", "[17~", "[18~", "[19~", "[20~", "[21~", "[23~", "[24~"];
 // All cross-identity legacy collisions in Pi's matchesKey(): raw Ctrl bytes,
 // ESC-prefixed bytes (including Alt+arrows), BS/DEL, Enter and Shift+Tab.
-// CSI-u, keypad, lock bits, shifted letters and modifyOtherKeys normalize to
-// the same key+modifiers; probe that identity instead of duplicating the parser.
+// Keypad, lock bits and shifted letters preserve identities; enhanced
+// physical/logical symbols and printable layout alternatives are probed below.
 const LEGACY_INPUTS = [
   ...Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)),
   ...Array.from({ length: 128 }, (_, code) => `\u001b${String.fromCharCode(code)}`),
@@ -48,7 +54,7 @@ const LEGACY_INPUTS = [
   ...FUNCTION_INPUTS.map((suffix) => `\u001b${suffix}`),
 ];
 
-/** Strict settings syntax; Pi itself ignores unknown/duplicate modifier tokens. */
+/** Strict settings syntax; reject unknown and duplicate modifier tokens. */
 export function normalizeBtwKey(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 80 || /[\s\p{Cc}]/u.test(value)) return undefined;
   const parts = value.toLowerCase().split("+");
@@ -81,9 +87,55 @@ function inputsFor(key: string): string[] {
   return inputs.filter((input) => matchesKey(input, key as KeyId));
 }
 
+export function btwKeyHasReachableInput(candidate: string, blockers: readonly string[]): boolean {
+  const key = normalizeBtwKey(candidate);
+  return (
+    key !== undefined &&
+    inputsFor(key).some(
+      (input) => !blockers.some((other) => typeof other === "string" && matchesKey(input, other as KeyId)),
+    )
+  );
+}
+
+function protocolIdentity(value: string): { codepoint: number; modifier: number } | undefined {
+  let base = value.toLowerCase();
+  const seen = new Set<string>();
+  for (;;) {
+    const part = MODIFIERS.find((modifier) => base.startsWith(`${modifier}+`));
+    if (!part) break;
+    if (seen.has(part)) return undefined;
+    seen.add(part);
+    base = base.slice(part.length + 1);
+  }
+  if (!base || (base.includes("+") && base !== "+")) return undefined;
+  if (base === "esc") base = "escape";
+  if (base === "return") base = "enter";
+  const codepoint = SPECIAL[base] ?? (base.length === 1 ? base.charCodeAt(0) : undefined);
+  if (codepoint === undefined) return undefined;
+  return { codepoint, modifier: MODIFIERS.reduce((mask, part, bit) => mask | (seen.has(part) ? 1 << bit : 0), 0) };
+}
+
+function protocolInputs(first: string, second: string): string[] {
+  const identity = protocolIdentity(first);
+  const alternate = protocolIdentity(second)?.codepoint;
+  if (!identity || alternate === undefined) return [];
+  const { codepoint, modifier } = identity;
+  return [
+    // Alternate layout fields describe printable keys, not invented functional
+    // key mappings such as Ctrl+Up with a Latin base-layout key.
+    ...(codepoint >= 33 && codepoint <= 126 && alternate >= 33 && alternate <= 126
+      ? [`\u001b[${codepoint}:${alternate};${modifier + 1}u`, `\u001b[${codepoint}::${alternate};${modifier + 1}u`]
+      : []),
+    `\u001b[27;${modifier + 1};${codepoint}~`,
+  ];
+}
+
 export function btwKeysOverlap(first: string, second: string): boolean {
   const normalized = normalizeBtwKey(first);
-  return normalized !== undefined && inputsFor(normalized).some((input) => matchesKey(input, second as KeyId));
+  if (normalized === undefined) return false;
+  return [...inputsFor(normalized), ...protocolInputs(normalized, second), ...protocolInputs(second, normalized)].some(
+    (input) => matchesKey(input, normalized as KeyId) && matchesKey(input, second as KeyId),
+  );
 }
 
 export interface BtwShortcuts {
@@ -158,12 +210,20 @@ function resolveShortcutSnapshot(
   copyOnSelect = true,
 ): BtwShortcuts {
   const reserved = reservedKeys(keybindings, copyOnSelect);
-  const keys: BtwShortcuts["keys"] = { exit: ["ctrl+c"], cycleThinkingLevel: [], bringToMain: [] };
+  const keys: BtwShortcuts["keys"] = {
+    exit: ["ctrl+c"],
+    cycleThinkingLevel: [],
+    bringToMain: [],
+    switchPane: [],
+    importMainUpdates: [],
+  };
   const warnings: string[] = [];
   const defaults: Record<BtwShortcutAction, readonly string[]> = {
     exit: ["ctrl+c"],
     cycleThinkingLevel: keybindings.getKeys("app.thinking.cycle"),
     bringToMain: ["ctrl+r"],
+    switchPane: ["f6", "f7", "f8"],
+    importMainUpdates: ["f9", "f10", "f11"],
   };
   const usable = (action: BtwShortcutAction, candidate: string, inherited = false): string | undefined => {
     const key = normalizeBtwKey(candidate);
@@ -171,10 +231,7 @@ function resolveShortcutSnapshot(
     const inputs = inputsFor(key);
     if (!inputs.length) return undefined;
     if (action === "exit" && key === "ctrl+c") return key;
-    if (
-      reserved.some((other) => typeof other === "string" && inputs.some((input) => matchesKey(input, other as KeyId)))
-    )
-      return undefined;
+    if (reserved.some((other) => typeof other === "string" && btwKeysOverlap(key, other))) return undefined;
     return key;
   };
   const candidates: BtwKeybindingOverrides = {};
@@ -186,6 +243,32 @@ function resolveShortcutSnapshot(
     const override = overrides[action];
     if (override !== undefined) candidates[action] = usable(action, override);
   }
+  // Pane transfer is additive: never displace an existing override or inherited
+  // thinking action merely because it uses one of the pane action's fallbacks.
+  availableDefaults.switchPane = availableDefaults.switchPane
+    .filter(
+      (key) =>
+        BTW_SHORTCUT_ACTIONS.some(
+          (action) =>
+            action !== "switchPane" &&
+            (candidates[action] ? [candidates[action]] : availableDefaults[action]).some((other) =>
+              btwKeysOverlap(key, other),
+            ),
+        ) === false,
+    )
+    .slice(0, 1);
+  availableDefaults.importMainUpdates = availableDefaults.importMainUpdates
+    .filter(
+      (key) =>
+        !BTW_SHORTCUT_ACTIONS.some(
+          (action) =>
+            action !== "importMainUpdates" &&
+            (candidates[action] ? [candidates[action]] : availableDefaults[action]).some((other) =>
+              btwKeysOverlap(key, other),
+            ),
+        ),
+    )
+    .slice(0, 1);
   // Compare the complete proposal, not only actions visited earlier. Reject conflicts
   // together, then repeat because a rejected override restores its default bindings.
   for (;;) {
@@ -220,7 +303,12 @@ function resolveShortcutSnapshot(
               (other) => other !== action && keys[other].some((used) => btwKeysOverlap(key, used)),
             ),
         );
-    keys[action] = action === "exit" ? [...new Set([...effective, "ctrl+c"])] : effective;
+    keys[action] =
+      action === "exit"
+        ? [...new Set([...effective, "ctrl+c"])]
+        : action === "switchPane" || action === "importMainUpdates"
+          ? effective.slice(0, 1)
+          : effective;
     if (!keys[action].length && (override !== undefined || defaults[action].length > 0))
       warnings.push(`${action}: no usable shortcut; change Pi BTW Settings or Pi keybindings.`);
   }
@@ -249,7 +337,9 @@ export function validateBtwShortcutEdit(
   for (const item of BTW_SHORTCUT_ACTIONS) {
     if (
       (item === action && !resolved.keys[item].includes(normalizeBtwKey(value) ?? "")) ||
-      (item !== action && previous.keys[item].some((key) => !resolved.keys[item].includes(key)))
+      (item !== action &&
+        !((item === "switchPane" || item === "importMainUpdates") && overrides[item] === undefined) &&
+        previous.keys[item].some((key) => !resolved.keys[item].includes(key)))
     ) {
       return `${item} conflicts with another BTW shortcut, editing, selection, search, scrolling, or copying. Choose a different key.`;
     }
@@ -257,22 +347,35 @@ export function validateBtwShortcutEdit(
   return undefined;
 }
 
+const hostInputBlockersByTui = new WeakMap<TUI, readonly string[]>();
+export function setBtwHostInputBlockers(tui: TUI, keys: readonly string[]): void {
+  hostInputBlockersByTui.set(tui, keys);
+}
+export function getBtwHostInputBlockers(tui: TUI): readonly string[] {
+  return hostInputBlockersByTui.get(tui) ?? [];
+}
+
+const keybindingsByTui = new WeakMap<TUI, KeybindingsManager>();
+export function setBtwKeybindings(tui: TUI, keybindings: KeybindingsManager): void {
+  keybindingsByTui.set(tui, keybindings);
+}
+export function getBtwKeybindings(tui: TUI, keybindings?: KeybindingsManager): KeybindingsManager {
+  return (
+    keybindingsByTui.get(tui) ??
+    keybindings ??
+    new KeybindingsManager({
+      ...TUI_KEYBINDINGS,
+      "app.thinking.cycle": { defaultKeys: "shift+tab" },
+    })
+  );
+}
+
 const bindingsByTui = new WeakMap<TUI, BtwShortcuts>();
 export function setBtwShortcuts(tui: TUI, shortcuts: BtwShortcuts): void {
   bindingsByTui.set(tui, shortcuts);
 }
 export function getBtwShortcuts(tui: TUI, keybindings?: KeybindingsManager): BtwShortcuts {
-  return (
-    bindingsByTui.get(tui) ??
-    resolveBtwShortcuts(
-      {},
-      keybindings ??
-        new KeybindingsManager({
-          ...TUI_KEYBINDINGS,
-          "app.thinking.cycle": { defaultKeys: "shift+tab" },
-        }),
-    )
-  );
+  return bindingsByTui.get(tui) ?? resolveBtwShortcuts({}, getBtwKeybindings(tui, keybindings));
 }
 
 /** Keep split bracketed-paste payloads away from screen-level shortcuts. */

@@ -2,6 +2,52 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.7.0
+
+### Minor Changes
+
+- a21d39b: Add opt-in editor status presentation helpers for stable snapshot publication, session-local view controls, and bounded whole-snapshot collections. Keep the existing EditorStatusWidget API unchanged.
+  
+  Retain visible Progress, Subagents, and Herdr widgets during updates. Add bounded summaries, manual view and item controls, and explicit one-shot compaction policies to Progress and Subagents without changing task state or persistent defaults. Preserve Progress completion retention and keep Herdr observation policies local. Keep tree navigation and manual context compaction separate from response-cycle tracking.
+
+### Patch Changes
+
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 0.6.4
+
+### Patch Changes
+
+- Updated dependencies [57eeae7]
+  - @narumitw/pi-tui-kit@0.67.0
+
+## 0.6.3
+
+### Patch Changes
+
+- 168248c: Reuse published TUI Kit frame metadata, masked input, configured-key syntax, and interaction ownership while retaining extension-owned settings and cancellation policy. Keep malformed Ticker key strings from suppressing valid reorder shortcuts, and drain Usage settings saves after cancellation.
+
+## 0.6.2
+
+### Patch Changes
+
+- 9f80b89: Reuse published Kit interaction ownership for native Progress and Subagents settings while preserving ordered saves, rollback, and durable-save recovery after the screen closes.
+  
+  Share passive widget framing in Subagents, Tool, Plan Mode, and Cache Hit Monitor. Keep domain rendering and lifecycle ownership local, bound narrow and invalid widths, and retain lazy loading of Kit menus and other interactive APIs.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.6.1
+
+### Patch Changes
+
+- e39afe6: Keep a fully completed progress widget hidden when a session starts again. Startup, resume, fork, and reload no longer replay the completion summary or reopen that snapshot; saved progress, tree navigation, and later incomplete updates are unchanged.
+
 ## 0.6.0
 
 ### Minor Changes

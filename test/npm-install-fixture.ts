@@ -74,14 +74,14 @@ export async function createNpmRegistry() {
   function addPackage(name: string, extra: Manifest = {}) {
     const versions: Record<string, Manifest> = {};
     for (const version of ["1.0.0", "1.0.1"]) {
-      const source = path.join(root, `${name}-${version}`);
+      const source = path.join(root, `${name.replace("/", "-")}-${version}`);
       mkdirSync(path.join(source, "package"), { recursive: true });
       const manifest = { name, version, ...extra };
       writeFileSync(path.join(source, "package/package.json"), JSON.stringify(manifest));
-      const archive = path.join(root, `${name}-${version}.tgz`);
+      const archive = `${source}.tgz`;
       execFileSync("tar", ["-czf", archive, "-C", source, "package"]);
       const data = readFileSync(archive);
-      const url = `/${name}/-/${name}-${version}.tgz`;
+      const url = `/${name}/-/${path.posix.basename(name)}-${version}.tgz`;
       tarballs.set(url, data);
       versions[version] = {
         ...manifest,
@@ -93,6 +93,10 @@ export async function createNpmRegistry() {
   try {
     addPackage("policy-script", { scripts: { postinstall: markerScript } });
     addPackage("policy-plain");
+    addPackage("@narumitw/policy-plain");
+    addPackage("@narumitw/pi-tui-kit", {
+      dependencies: { "policy-plain": "^1.0.0", "policy-script": "^1.0.0" },
+    });
     addPackage("policy-incompatible", {
       os: [process.platform === "darwin" ? "linux" : "darwin"],
       scripts: { install: markerScript },

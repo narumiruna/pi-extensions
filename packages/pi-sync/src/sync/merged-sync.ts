@@ -48,6 +48,7 @@ import {
 import { type ConflictResolution, resolveReviewedGroup } from "./conflict-resolution.js";
 import { pruneCompletedConflicts } from "./conflict-retention.js";
 import { resolveContentConflicts } from "./content-conflicts.js";
+import { ContinuousError } from "./continuous-errors.js";
 import { planFileMerge } from "./file-merge-planner.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields } from "./local-fields.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "./merge-apply.js";
@@ -96,8 +97,16 @@ export async function mergeSync(
       return false;
     }
   };
+  const validateRetryAuthorization = (config: AnySyncConfig) => {
+    if (
+      options.agentRetryRefusal &&
+      (!config.agentMode || options.auto || options.background || !ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))
+    )
+      throw new Error("Refused-candidate retry requires foreground Agent mode in TUI or RPC.");
+  };
   const config = await loadConfig(options.setup);
   validateOwner(config);
+  validateRetryAuthorization(config);
   const configToken = syncCheckConfigFingerprint(config);
   const modelToken = JSON.stringify(ctx.model);
   const sessionRoot = config.include.includes("sessions") ? await effectiveSessionRoot(ctx) : undefined;
@@ -112,6 +121,7 @@ export async function mergeSync(
       validateOwner();
       const latest = await loadConfig(options.setup);
       validateOwner(latest);
+      validateRetryAuthorization(latest);
       if (configToken !== syncCheckConfigFingerprint(latest))
         throw new Error("Sync setup or settings changed during transfer; reopen sync.");
       if (sessionRoot !== undefined) {
@@ -130,6 +140,8 @@ export async function mergeSync(
   await validate();
   const pending = await timings.measure("transfer journal read", () => readMergeJournal(config));
   await validate();
+  if (pending && options.agentRetryRefusal)
+    throw new Error("A pending merge journal requires ordinary Sync now before retrying a refused candidate.");
   if (pending) {
     const recovered = await timings.measure("transfer journal recovery", () =>
       completeJournal(
@@ -289,7 +301,7 @@ export async function mergeSync(
       );
       await validate();
       let resolved = { plan, fields: [] as string[] };
-      if (config.mergeSettings) {
+      if (config.mergeSettings || config.agentMode) {
         try {
           resolved = await timings.measure("transfer settings merge", () =>
             resolveSettingsConflicts(config, state, local, remote, plan),
@@ -339,7 +351,8 @@ export async function mergeSync(
         );
         await validate();
         if (plan.kind !== "planned" || (plan.conflicts.length && !config.partialSync))
-          throw new Error(
+          throw new ContinuousError(
+            "unsafe",
             "Agent mode paused: unsupported or refused conflict groups remain; no transfer was performed.",
           );
       }
@@ -456,7 +469,10 @@ export async function mergeSync(
         const beforeEvidence = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
         await validate();
         if (!beforeEvidence || !backend.sameRevision(beforeEvidence.revision, head.revision))
-          throw new Error("Remote changed before baseline acceptance; retry from a fresh observation.");
+          throw new ContinuousError(
+            "stale",
+            "Remote changed before baseline acceptance; retry from a fresh observation.",
+          );
         progress = await persistProgress();
         await validate();
         const currentLocal = await timings.measure("transfer local snapshot", () =>
@@ -468,14 +484,20 @@ export async function mergeSync(
           syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
             syncStateFingerprint(state)
         )
-          throw new Error(
+          throw new ContinuousError(
+            "stale",
             "Local content or baseline changed before baseline acceptance; retry from a fresh observation.",
           );
         await validate();
         const currentHead = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
         await validate();
         if (!currentHead || !backend.sameRevision(currentHead.revision, head.revision))
-          throw new Error("Remote changed before baseline acceptance; retry from a fresh observation.");
+          throw new ContinuousError(
+            "stale",
+            "Remote changed before baseline acceptance; retry from a fresh observation.",
+          );
+        await options.agentAcceptance?.commitCandidate?.();
+        await validate();
         await timings.measure("transfer baseline write", () =>
           writeAcceptedState(config, head, accepted, validate, progress),
         );
@@ -512,7 +534,10 @@ export async function mergeSync(
       );
       await validate();
       if (!config.skipSecretScan && scanSnapshot(upload).length)
-        throw new Error("Refusing to merge possible secrets. Review managed content before syncing.");
+        throw new ContinuousError(
+          "unsafe",
+          "Refusing to merge possible secrets. Review managed content before syncing.",
+        );
       if (!options.yes && !config.agentMode) {
         const summary = mergedSyncSummary({
           setupName: config.setupName,
@@ -545,17 +570,19 @@ export async function mergeSync(
         createSnapshot(config.snapshotIdentity, snapshotOptions),
       );
       if (!sameHashes(fileHashMap(refreshed), fileHashMap(localRaw)))
-        throw new Error("Local content changed during review; no merged transfer was performed.");
+        throw new ContinuousError("stale", "Local content changed during review; no merged transfer was performed.");
       if (
         syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
         syncStateFingerprint(state)
       )
-        throw new Error("Sync baseline changed during review; retry from a fresh observation.");
+        throw new ContinuousError("stale", "Sync baseline changed during review; retry from a fresh observation.");
       await validate();
       const refreshedHead = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
       await validate();
       if (!refreshedHead || !backend.sameRevision(refreshedHead.revision, head.revision))
-        throw new Error("Remote changed during review; no merged transfer was performed.");
+        throw new ContinuousError("stale", "Remote changed during review; no merged transfer was performed.");
+      await options.agentAcceptance?.commitCandidate?.();
+      await validate();
       progress = await persistProgress();
       await validate();
       const backup = await timings.measure("transfer backup", () =>
@@ -589,7 +616,8 @@ export async function mergeSync(
       if (!sameHashes(fileHashMap(atCommit), fileHashMap(localRaw)) || atCommitState !== journal.stateIdentity) {
         await validate();
         await clearMergeJournal(config);
-        throw new Error(
+        throw new ContinuousError(
+          "stale",
           "Local content or baseline changed before publication; candidate retired without transfer. Review a fresh sync.",
         );
       }

@@ -25,35 +25,24 @@ export interface HerdrWorkspace {
 }
 
 export type HerdrPaneEvent =
-  | { type: "created"; pane: HerdrPane }
-  | { type: "closed" | "exited"; paneId: string; workspaceId: string }
+  | { type: "created" | "updated"; pane: HerdrPane }
+  | {
+      type: "closed" | "exited" | "agent_detected" | "agent_status_changed";
+      paneId: string;
+      workspaceId: string;
+    }
+  | { type: "workspace_renamed"; workspaceId: string }
   | {
       type: "moved";
       pane: HerdrPane;
       previousPaneId: string;
       previousWorkspaceId: string;
-    }
-  | {
-      type: "agent_detected";
-      paneId: string;
-      workspaceId: string;
-      agent?: string;
-      finalStatus?: HerdrAgentStatus;
-      released: boolean;
-    }
-  | {
-      type: "agent_status_changed";
-      paneId: string;
-      workspaceId: string;
-      agent?: string;
-      agentStatus: HerdrAgentStatus;
-      displayAgent?: string;
-      stateLabels?: Record<string, string>;
-      title?: string;
     };
 
 const HERDR_WIDGET_TOPOLOGY_SUBSCRIPTIONS = [
   { type: "pane.created" },
+  { type: "pane.updated" },
+  { type: "workspace.renamed" },
   { type: "pane.closed" },
   { type: "pane.moved" },
   { type: "pane.exited" },
@@ -178,7 +167,13 @@ export function parseHerdrPaneEvent(value: unknown): HerdrPaneEvent | undefined 
   }
   const data = value.data;
 
-  if (value.event === "pane.agent_status_changed") {
+  if (value.event === "workspace_renamed") {
+    const workspaceId = requiredString(data.workspace_id);
+    if (!workspaceId || typeof data.label !== "string") return undefined;
+    return { type: "workspace_renamed", workspaceId };
+  }
+
+  if (value.event === "pane.agent_status_changed" || value.event === "pane_agent_status_changed") {
     const paneId = requiredString(data.pane_id);
     const workspaceId = requiredString(data.workspace_id);
     const status = agentStatus(data.agent_status);
@@ -187,17 +182,12 @@ export function parseHerdrPaneEvent(value: unknown): HerdrPaneEvent | undefined 
       type: "agent_status_changed",
       paneId,
       workspaceId,
-      agent: optionalString(data.agent),
-      agentStatus: status,
-      displayAgent: optionalString(data.display_agent),
-      stateLabels: stringRecord(data.state_labels),
-      title: optionalString(data.title),
     };
   }
 
-  if (value.event === "pane_created") {
+  if (value.event === "pane_created" || value.event === "pane_updated") {
     const pane = parseHerdrPane(data.pane);
-    return pane ? { type: "created", pane } : undefined;
+    return pane ? { type: value.event === "pane_created" ? "created" : "updated", pane } : undefined;
   }
   if (value.event === "pane_closed" || value.event === "pane_exited") {
     const paneId = requiredString(data.pane_id);
@@ -219,16 +209,15 @@ export function parseHerdrPaneEvent(value: unknown): HerdrPaneEvent | undefined 
   if (value.event === "pane_agent_detected") {
     const paneId = requiredString(data.pane_id);
     const workspaceId = requiredString(data.workspace_id);
-    if (!paneId || !workspaceId || typeof data.released !== "boolean") return undefined;
+    if (!paneId || !workspaceId || (data.released !== undefined && typeof data.released !== "boolean")) {
+      return undefined;
+    }
     const finalStatus = data.final_status === null ? undefined : agentStatus(data.final_status);
     if (data.final_status !== undefined && data.final_status !== null && !finalStatus) return undefined;
     return {
       type: "agent_detected",
       paneId,
       workspaceId,
-      agent: optionalString(data.agent),
-      finalStatus,
-      released: data.released,
     };
   }
   return undefined;

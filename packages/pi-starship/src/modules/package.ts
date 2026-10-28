@@ -12,6 +12,7 @@ export const packageModule = defineModule({
   },
   options: {
     version_format: { kind: "string", default: "v$raw" },
+    display_private: { kind: "boolean", default: true },
   },
   values: (context) => workspaceModuleValues("package", context),
 });

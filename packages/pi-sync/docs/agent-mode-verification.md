@@ -2,6 +2,8 @@
 
 This record describes the experimental implementation and its verification scope. The [settings reference](settings.md#experimental-agent-mode) is authoritative for user behavior, limits, privacy, and recovery.
 
+Later recovery, cancellation, confirmed-refusal retry, and diagnostics changes are documented in [Agent and Continuous sync recovery boundaries](agent-continuous-hardening.md). The [synthetic quality corpus](agent-quality-verification.md) adds structural tests without claiming measured model accuracy. Historical verification below describes the original implementation.
+
 ## Boundaries and semantic review
 
 - The implementation changes pi-sync only, plus its Changeset and matching bundled-Pi peer declarations in the manifest/lockfile. It does not modify Pi core or depend on another extension.

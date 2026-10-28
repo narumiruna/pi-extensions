@@ -27,7 +27,7 @@ try {
     await mkdir(dirname(join(directory, path)), { recursive: true });
     await cp(join(root, path), join(directory, path));
   }
-  const assets = join(directory, "packages/pi-inspect/dist");
+  const assets = join(directory, "packages/pi-inspect/browser-dist");
   await assert.rejects(stat(assets), { code: "ENOENT" });
   const npm = process.env.npm_execpath;
   assert(npm, "Run this smoke through the workspace npm script.");
@@ -35,6 +35,7 @@ try {
   run(process.execPath, [npm, "install", "--omit=dev", "--legacy-peer-deps"], directory);
   for (const file of ["index.html", "app.js", "app.css"]) assert((await stat(join(assets, file))).size > 0);
   await assert.rejects(stat(join(directory, "node_modules/typescript")), { code: "ENOENT" });
+  await assert.rejects(stat(join(directory, "packages/pi-inspect/dist")), { code: "ENOENT" });
 
   const { startServer } = await import(pathToFileURL(join(directory, "packages/pi-inspect/src/server.ts")).href);
   const server = await startServer({
@@ -80,7 +81,8 @@ try {
       "-e",
       helper,
       "-e",
-      join(directory, "packages/pi-inspect"),
+      // Git installation retains source entries; prepare builds browser assets only.
+      join(directory, "packages/pi-inspect/src/index.ts"),
       "/inspect",
     ],
     { cwd: directory, env: { ...process.env, PI_CODING_AGENT_DIR: join(directory, "agent") }, encoding: "utf8" },

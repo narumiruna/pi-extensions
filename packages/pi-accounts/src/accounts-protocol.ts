@@ -2,6 +2,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const ACCOUNTS_TOPOLOGY_CHANNEL = "accounts:topology:v1";
 export const ACCOUNTS_ACTIVATION_CHANNEL = "accounts:activation:v1";
+export const ACCOUNTS_SELECTION_COMMITTED_CHANNEL = "accounts:selection-committed:v1";
+
+export type AccountsSelectionCommittedEvent = {
+  session: object;
+  sessionId: string;
+  providerId: string;
+};
 
 export type AccountTopologyEntry = { name: string; kind: "oauth" | "api-key" };
 export type ProviderAccountTopology = {

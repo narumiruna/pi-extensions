@@ -37,6 +37,8 @@ import type {
   UsageDisplayState,
   UsageProviderAdapter,
 } from "./types.js";
+import { copyUsageReportForApi, registerUsageApi } from "./usage-api.js";
+import type { UsageQueryResultV1 } from "./usage-api-types.js";
 import {
   configuredAdapters,
   isAbortError,
@@ -56,6 +58,7 @@ const ALL_PROVIDER_CONCURRENCY = 2;
 const FAILURE_BACKOFF_MS = 30_000;
 const MAX_ACCOUNT_STATES = 32;
 const STATUS_KEY = "usage";
+const ACCOUNTS_SELECTION_COMMITTED_CHANNEL = "accounts:selection-committed:v1";
 
 const REFRESH_CURRENT = "Refresh current usage";
 const VIEW_ANOTHER = "View another configured provider…";
@@ -70,11 +73,20 @@ type UsageExtensionDependencies = {
   settingsRuntime?: UsageSettingsRuntime;
 };
 
+type ApiQueryRequest = { checkCurrent: () => void };
+
+function staleUsageQuery(): Error {
+  return Object.assign(new Error("Usage query ownership changed."), { name: "UsageStaleContextError" });
+}
+
 type QueryOutcome = {
   state: ProviderUsageState;
+  cacheFingerprint?: string;
+  queryId?: number;
   fingerprint?: string;
   authState?: "unavailable" | "unsupported" | "failed";
   rememberedTargetId?: string;
+  openaiPolicy?: { generation: number; enabled: boolean };
 };
 
 class UsageTargetSelectionChangedError extends Error {
@@ -91,14 +103,75 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const credentialCandidates = createOAuthCredentialCandidateReader(pi, credentialReader);
   const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
   const settingsRuntime = dependencies.settingsRuntime ?? createUsageSettingsRuntime();
-  const resolveUsageAuth = resolveRuntimeUsageAuth;
-  const cache = new UsageCache(CACHE_TTL_MS);
+  let openaiUsageGeneration = 0;
+  const openaiPolicy = () => ({
+    generation: openaiUsageGeneration,
+    enabled: settingsRuntime.get().settings.openaiUseCodexUsage,
+  });
+  const openaiPolicyIsCurrent = (policy: QueryOutcome["openaiPolicy"]) =>
+    !policy ||
+    (policy.generation === openaiUsageGeneration &&
+      policy.enabled === settingsRuntime.get().settings.openaiUseCodexUsage);
+  const resolveUsageAuth: typeof resolveRuntimeUsageAuth = async (
+    ctx,
+    adapter,
+    salt,
+    reader,
+    candidates,
+    _obsolete,
+    options,
+  ) => {
+    const policy = adapter.id === "openai" ? openaiPolicy() : undefined;
+    const ownerSession = sessionGeneration;
+    const ownerModel = modelIdentity(ctx.model);
+    const ownerSessionId = ctx.sessionManager.getSessionId();
+    const controller = policy ? new AbortController() : undefined;
+    if (controller) nativeQueryControllers.add(controller);
+    const signal = controller
+      ? options?.signal
+        ? AbortSignal.any([options.signal, controller.signal])
+        : controller.signal
+      : options?.signal;
+    const checkCurrent = () => {
+      options?.checkCurrent?.();
+      if (
+        policy &&
+        (!openaiPolicyIsCurrent(policy) ||
+          ownerSession !== sessionGeneration ||
+          modelIdentity(ctx.model) !== ownerModel ||
+          ctx.sessionManager.getSessionId() !== ownerSessionId)
+      )
+        throw abortError();
+    };
+    try {
+      const auth = await resolveRuntimeUsageAuth(ctx, adapter, salt, reader, candidates, undefined, {
+        openaiUseCodexUsage: policy?.enabled,
+        signal,
+        ...(policy || options?.checkCurrent ? { checkCurrent } : {}),
+      });
+      if (policy || options?.checkCurrent) checkCurrent();
+      return auth;
+    } catch (error) {
+      if (policy || options?.checkCurrent) checkCurrent();
+      throw error;
+    } finally {
+      if (controller) nativeQueryControllers.delete(controller);
+    }
+  };
+  let usageApi: ReturnType<typeof registerUsageApi> | undefined;
+  const cache = new UsageCache(CACHE_TTL_MS, MAX_ACCOUNT_STATES, (providerId, reason) =>
+    usageApi?.changed(providerId, reason),
+  );
   const failureBackoff = new Map<string, { until: number; message: string }>();
   const latestQueries = new Map<string, number>();
+  const providerQueries = new Map<string, number>();
+  const presentationQueries = new Map<string, Set<Promise<QueryOutcome>>>();
+  const providerIdentities = new Map<string, string>();
   const activeControllers = new Set<AbortController>();
   const nativeQueryControllers = new Set<AbortController>();
   let querySequence = 0;
   let activeCurrentIdentity: string | undefined;
+  let activeContext: ExtensionContext | undefined;
   let sessionActive = false;
   let statusGeneration = 0;
   let sessionGeneration = 0;
@@ -152,6 +225,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   };
 
   const publishStatus = (ctx: ExtensionContext, outcome: QueryOutcome, model: PiModel, shouldSchedule: boolean) => {
+    if (!openaiPolicyIsCurrent(outcome.openaiPolicy)) return;
     clearStatusCountdownTimer();
     if (adapterForProvider(model.provider)?.publishesStatusline === false) {
       clearStatusRefreshTimer();
@@ -218,13 +292,19 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   };
 
   const invalidateProviderState = (providerId: string) => {
-    cache.clearProvider(providerId);
     for (const key of failureBackoff.keys()) {
       if (key.startsWith(`${providerId}:`)) failureBackoff.delete(key);
     }
     for (const key of latestQueries.keys()) {
       if (key.startsWith(`${providerId}:`)) latestQueries.delete(key);
     }
+    cache.clearProvider(providerId);
+  };
+
+  const observeProviderIdentity = (providerId: string, identity: string) => {
+    const previous = providerIdentities.get(providerId);
+    providerIdentities.set(providerId, identity);
+    if (previous !== undefined && previous !== identity) invalidateProviderState(providerId);
   };
 
   const transitionCurrentIdentity = (nextIdentity: string, providerId: string) => {
@@ -247,22 +327,51 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     signal: AbortSignal,
     authRetry = 0,
     deadlineAt = Date.now() + DEFAULT_TIMEOUT_MS,
+    apiRequest?: ApiQueryRequest,
   ): Promise<QueryOutcome> => {
+    const expectedPolicy = adapter.id === "openai" ? openaiPolicy() : undefined;
     const expectedSessionGeneration = sessionGeneration;
     const expectedSessionId = ctx.sessionManager.getSessionId();
     const expectedModelIdentity = modelIdentity(ctx.model);
+    const expectedModel = JSON.stringify(ctx.model);
     const expectedTargetId = adapter.targets ? settingsRuntime.get().settings.selectedTargets[adapter.id] : undefined;
     const providerName = providerDisplayName(ctx, adapter.id);
+    const queryId = ++querySequence;
+    providerQueries.set(adapter.id, queryId);
+    // Ownership starts before auth or discovery, not when transport finally starts. An old
+    // preflight must never clear a successor's identity, report, or failure backoff.
+    const checkOwnership = () => {
+      apiRequest?.checkCurrent();
+      if (signal.aborted) throw abortError();
+      if (
+        providerQueries.get(adapter.id) !== queryId ||
+        expectedSessionGeneration !== sessionGeneration ||
+        ctx.sessionManager.getSessionId() !== expectedSessionId ||
+        !openaiPolicyIsCurrent(expectedPolicy) ||
+        (displayState === "current" && JSON.stringify(ctx.model) !== expectedModel) ||
+        (adapter.targets !== undefined &&
+          settingsRuntime.get().settings.selectedTargets[adapter.id] !== expectedTargetId)
+      ) {
+        if (apiRequest) throw staleUsageQuery();
+        throw abortError();
+      }
+    };
     let auth: ResolvedUsageAuth | undefined;
     try {
       auth = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, {
+          signal,
+          checkCurrent: checkOwnership,
+        }),
         signal,
         Math.max(1, deadlineAt - Date.now()),
         `resolving ${adapter.displayName} runtime auth`,
       );
     } catch (error) {
+      checkOwnership();
+      if (signal.aborted || !openaiPolicyIsCurrent(expectedPolicy)) throw abortError();
       if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
+      observeProviderIdentity(adapter.id, "auth-error");
       if (adapter.id === "openai") invalidateProviderState(adapter.id);
       const authState =
         error instanceof UnsupportedOpenAIUsageAuthError
@@ -273,6 +382,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (displayState === "current") {
         transitionCurrentIdentity(`${adapter.id}:auth-error`, adapter.id);
       }
+      checkOwnership();
       return {
         state: {
           providerId: adapter.id,
@@ -286,6 +396,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       };
     }
     const requiresRequestBoundaryGuard =
+      apiRequest !== undefined ||
       adapter.targets !== undefined ||
       [
         "baseten",
@@ -302,17 +413,24 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         "zai-coding-cn",
       ].includes(adapter.id);
     const requestContextChanged = () =>
+      !openaiPolicyIsCurrent(expectedPolicy) ||
       expectedSessionGeneration !== sessionGeneration ||
       ctx.sessionManager.getSessionId() !== expectedSessionId ||
       modelIdentity(ctx.model) !== expectedModelIdentity ||
       (adapter.targets !== undefined &&
         settingsRuntime.get().settings.selectedTargets[adapter.id] !== expectedTargetId);
-    if (requiresRequestBoundaryGuard && requestContextChanged()) throw abortError();
+    checkOwnership();
+    if (requiresRequestBoundaryGuard && requestContextChanged()) {
+      if (apiRequest) throw staleUsageQuery();
+      throw abortError();
+    }
     if (!auth) {
+      observeProviderIdentity(adapter.id, "auth-unavailable");
       if (adapter.id === "openai") invalidateProviderState(adapter.id);
       if (displayState === "current") {
         transitionCurrentIdentity(`${adapter.id}:unavailable`, adapter.id);
       }
+      checkOwnership();
       return {
         state: {
           providerId: adapter.id,
@@ -324,19 +442,38 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         authState: "unavailable",
       };
     }
+    observeProviderIdentity(
+      adapter.id,
+      JSON.stringify({ auth: auth.fingerprint, target: expectedTargetId, policy: expectedPolicy }),
+    );
     if (adapter.id === "openai" && !auth.openaiCompanion) invalidateProviderState(adapter.id);
     let retryableAuthChanged = false;
     const guard = async () => {
-      if (signal.aborted || requestContextChanged()) throw abortError();
+      checkOwnership();
+      if (signal.aborted || requestContextChanged()) {
+        if (apiRequest && !signal.aborted) throw staleUsageQuery();
+        throw abortError();
+      }
       if (!requiresRequestBoundaryGuard) return;
       const revalidated = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, {
+          signal,
+          checkCurrent: checkOwnership,
+        }),
         signal,
         Math.max(1, deadlineAt - Date.now()),
         `revalidating ${providerName} runtime auth`,
       );
-      if (signal.aborted || requestContextChanged()) throw abortError();
+      checkOwnership();
+      if (signal.aborted || requestContextChanged()) {
+        if (apiRequest && !signal.aborted) throw staleUsageQuery();
+        throw abortError();
+      }
       if (revalidated?.fingerprint !== auth.fingerprint) {
+        if (apiRequest) {
+          invalidateProviderState(adapter.id);
+          throw staleUsageQuery();
+        }
         if (["deepseek", "minimax", "minimax-cn"].includes(adapter.id)) {
           retryableAuthChanged = true;
           throw new Error(`${providerName} runtime credential changed during the usage query.`);
@@ -348,10 +485,10 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       ? `${auth.fingerprint}:target:${expectedTargetId ?? "unresolved"}`
       : auth.fingerprint;
     let failureKey = `${adapter.id}:${queryFingerprint}`;
-    let queryId: number | undefined;
+    setBoundedMap(latestQueries, failureKey, queryId, MAX_ACCOUNT_STATES);
     try {
       const previousDiscoveryFailure = failureBackoff.get(failureKey);
-      if (!force && previousDiscoveryFailure && previousDiscoveryFailure.until > Date.now()) {
+      if ((!force || apiRequest) && previousDiscoveryFailure && previousDiscoveryFailure.until > Date.now()) {
         return {
           state: {
             providerId: adapter.id,
@@ -372,10 +509,16 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         Math.max(1, deadlineAt - Date.now()),
         guard,
       );
+      checkOwnership();
+      if (requiresRequestBoundaryGuard && (signal.aborted || requestContextChanged())) {
+        if (apiRequest && !signal.aborted) throw staleUsageQuery();
+        throw abortError();
+      }
       if (target.kind === "selection-required") {
         if (displayState === "current") {
           transitionCurrentIdentity(`${adapter.id}:${queryFingerprint}`, adapter.id);
         }
+        checkOwnership();
         return {
           state: {
             providerId: adapter.id,
@@ -395,7 +538,10 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (displayState === "current") {
         transitionCurrentIdentity(`${adapter.id}:${queryFingerprint}`, adapter.id);
       }
+      checkOwnership();
+      setBoundedMap(latestQueries, failureKey, queryId, MAX_ACCOUNT_STATES);
       const cached = !force ? cache.get(adapter.id, queryFingerprint) : undefined;
+      checkOwnership();
       if (cached) {
         return {
           state: {
@@ -410,7 +556,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         };
       }
       const previousFailure = failureBackoff.get(failureKey);
-      if (!force && previousFailure && previousFailure.until > Date.now()) {
+      if ((!force || apiRequest) && previousFailure && previousFailure.until > Date.now()) {
         return {
           state: {
             providerId: adapter.id,
@@ -423,10 +569,9 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
           rememberedTargetId: expectedTargetId,
         };
       }
+      if (apiRequest) await guard();
+      checkOwnership();
       failureBackoff.delete(failureKey);
-      querySequence += 1;
-      queryId = querySequence;
-      setBoundedMap(latestQueries, failureKey, queryId, MAX_ACCOUNT_STATES);
       // Command Code can retain partial data after an optional transport timeout. Keep time
       // inside the overall deadline for its remaining auth guards and publication guard.
       const queryTimeoutMs = Math.max(
@@ -442,11 +587,21 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         target.targetId,
       );
       if (requiresRequestBoundaryGuard) await guard();
+      checkOwnership();
+      if (
+        signal.aborted ||
+        expectedSessionGeneration !== sessionGeneration ||
+        ctx.sessionManager.getSessionId() !== expectedSessionId
+      )
+        throw abortError();
+      const publicationIsCurrent = !requestContextChanged();
       const effectiveReport = { ...report, providerName };
-      if (latestQueries.get(failureKey) === queryId) {
-        cache.set(adapter.id, queryFingerprint, effectiveReport);
+      if (apiRequest && latestQueries.get(failureKey) !== queryId) throw staleUsageQuery();
+      if (publicationIsCurrent && latestQueries.get(failureKey) === queryId) {
         failureBackoff.delete(failureKey);
+        cache.set(adapter.id, queryFingerprint, effectiveReport);
       }
+      checkOwnership();
       return {
         state: {
           providerId: adapter.id,
@@ -455,19 +610,36 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
           status: "ready",
           report: effectiveReport,
         },
+        cacheFingerprint: queryFingerprint,
+        queryId,
         fingerprint: auth.fingerprint,
         rememberedTargetId: expectedTargetId,
       };
     } catch (error) {
+      checkOwnership();
+      if (
+        apiRequest &&
+        (requestContextChanged() || (error instanceof Error && error.name === "UsageStaleContextError"))
+      ) {
+        throw staleUsageQuery();
+      }
+      if (
+        signal.aborted ||
+        expectedSessionGeneration !== sessionGeneration ||
+        ctx.sessionManager.getSessionId() !== expectedSessionId ||
+        (requiresRequestBoundaryGuard && requestContextChanged())
+      )
+        throw abortError();
       if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
       if (
+        !apiRequest &&
         retryableAuthChanged &&
         authRetry === 0 &&
         !signal.aborted &&
         !requestContextChanged() &&
         Date.now() < deadlineAt
       ) {
-        if (queryId !== undefined && latestQueries.get(failureKey) === queryId) {
+        if (latestQueries.get(failureKey) === queryId) {
           latestQueries.delete(failureKey);
         }
         return queryAdapterState(ctx, adapter, displayState, true, signal, authRetry + 1, deadlineAt);
@@ -477,10 +649,12 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       for (const [key, failure] of failureBackoff) {
         if (failure.until <= now) failureBackoff.delete(key);
       }
-      if (queryId === undefined || latestQueries.get(failureKey) === queryId) {
+      if (!requestContextChanged() && latestQueries.get(failureKey) === queryId) {
         if (adapter.invalidateCacheOnFailure) cache.delete(adapter.id, queryFingerprint);
         setBoundedMap(failureBackoff, failureKey, { until: now + FAILURE_BACKOFF_MS, message }, MAX_ACCOUNT_STATES);
+        usageApi?.changed(adapter.id, "query-failed");
       }
+      checkOwnership();
       return {
         state: {
           providerId: adapter.id,
@@ -495,13 +669,14 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     }
   };
 
-  const queryAdapterState = async (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
+  const executeAdapterState = async (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
     const [ctx, adapter, displayState, force, signal, ...rest] = args;
     if (adapter.id !== "openai") return queryAdapterStateInternal(...args);
+    const policy = openaiPolicy();
     const controller = new AbortController();
     nativeQueryControllers.add(controller);
     try {
-      return await queryAdapterStateInternal(
+      const outcome = await queryAdapterStateInternal(
         ctx,
         adapter,
         displayState,
@@ -509,10 +684,82 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         AbortSignal.any([signal, controller.signal]),
         ...rest,
       );
+      if (signal.aborted || controller.signal.aborted || !openaiPolicyIsCurrent(policy)) throw abortError();
+      return { ...outcome, openaiPolicy: policy };
     } finally {
+      controller.abort();
       nativeQueryControllers.delete(controller);
     }
   };
+
+  const queryAdapterState = (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
+    const providerId = args[1].id;
+    const apiRequest = args[7];
+    if (apiRequest) return executeAdapterState(...args);
+    const queries = presentationQueries.get(providerId) ?? new Set<Promise<QueryOutcome>>();
+    const pending = executeAdapterState(...args);
+    queries.add(pending);
+    presentationQueries.set(providerId, queries);
+    return pending.finally(() => {
+      queries.delete(pending);
+      if (queries.size === 0 && presentationQueries.get(providerId) === queries) presentationQueries.delete(providerId);
+    });
+  };
+
+  usageApi = registerUsageApi(pi, {
+    policyIdentity: () =>
+      JSON.stringify({ openai: openaiPolicy(), targets: settingsRuntime.get().settings.selectedTargets }),
+    refresh: async (ctx, providerId, signal, deadlineAt, checkCurrent): Promise<UsageQueryResultV1> => {
+      // A read must not race a queued user settings publication. Cancelling this waiter must
+      // not cancel the settings transaction owned by the menu.
+      await awaitWithDeadline(
+        settingsRuntime.flush(),
+        signal,
+        Math.max(1, deadlineAt - Date.now()),
+        "waiting for usage settings publication",
+      );
+      checkCurrent();
+      const adapter = adapterForProvider(providerId);
+      if (!adapter) return { status: "unavailable", providerId, reason: "unsupported" };
+      // API work must not take ownership from a status or menu read. Waiting observes its
+      // completion, not its result, and cancellation belongs only to this API waiter.
+      while (true) {
+        const presentations = presentationQueries.get(providerId);
+        if (!presentations?.size) break;
+        await awaitWithDeadline(
+          Promise.allSettled([...presentations]),
+          signal,
+          Math.max(1, deadlineAt - Date.now()),
+          "waiting for usage presentation queries",
+        );
+        checkCurrent();
+      }
+      const outcome = await queryAdapterState(ctx, adapter, "configured", true, signal, 0, deadlineAt, {
+        checkCurrent,
+      });
+      checkCurrent();
+      const state = outcome.state;
+      if (state.status !== "ready") {
+        return { status: "unavailable", providerId, reason: state.status };
+      }
+      const entry = outcome.cacheFingerprint ? cache.getEntry(providerId, outcome.cacheFingerprint) : undefined;
+      if (
+        !entry ||
+        entry.report !== state.report ||
+        latestQueries.get(`${providerId}:${outcome.cacheFingerprint}`) !== outcome.queryId
+      ) {
+        throw staleUsageQuery();
+      }
+      checkCurrent();
+      return {
+        status: "ready",
+        providerId,
+        source: "refresh",
+        expiresAt: entry.expiresAt,
+        report: copyUsageReportForApi(state.report),
+      };
+    },
+  });
 
   const loadTargetChoices = async (ctx: ExtensionContext, adapter: UsageProviderAdapter, signal: AbortSignal) => {
     if (!adapter.targets) throw new Error("Provider does not support usage targets.");
@@ -527,7 +774,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       modelIdentity(ctx.model) !== expectedModel ||
       settingsRuntime.get().settings.selectedTargets[adapter.id] !== expectedTargetId;
     const auth = await awaitWithDeadline(
-      resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+      resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
       signal,
       Math.max(1, deadlineAt - Date.now()),
       `resolving ${providerDisplayName(ctx, adapter.id)} runtime auth`,
@@ -536,7 +783,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     const guard = async () => {
       if (signal.aborted || changed()) throw abortError();
       const revalidated = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
         signal,
         Math.max(1, deadlineAt - Date.now()),
         `revalidating ${providerDisplayName(ctx, adapter.id)} runtime auth`,
@@ -605,6 +852,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       }
       publishStatus(ctx, outcome, model, true);
     } finally {
+      controller.abort();
       activeControllers.delete(controller);
       if (statusController === controller) statusController = undefined;
     }
@@ -618,6 +866,52 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       safeSetStatus(ctx, `usage err: ${message.slice(0, 50)}`);
     });
   };
+
+  pi.events.on(ACCOUNTS_SELECTION_COMMITTED_CHANNEL, (value) => {
+    try {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const event = value as Record<string, unknown>;
+      const session = event.session;
+      const sessionId = event.sessionId;
+      const providerId = event.providerId;
+      const ctx = activeContext;
+      if (
+        !session ||
+        typeof session !== "object" ||
+        Array.isArray(session) ||
+        typeof sessionId !== "string" ||
+        typeof providerId !== "string" ||
+        !ctx ||
+        !sessionActive ||
+        session !== ctx.sessionManager ||
+        sessionId !== ctx.sessionManager.getSessionId() ||
+        providerId !== ctx.model?.provider
+      )
+        return;
+
+      clearStatus(ctx);
+      const generation = sessionGeneration;
+      queueMicrotask(() => {
+        const current = activeContext;
+        try {
+          if (
+            !sessionActive ||
+            generation !== sessionGeneration ||
+            !current ||
+            current.sessionManager !== session ||
+            current.sessionManager.getSessionId() !== sessionId ||
+            current.model?.provider !== providerId
+          )
+            return;
+        } catch {
+          return;
+        }
+        startStatusRefresh(current, current.model, true);
+      });
+    } catch {
+      // Ignore malformed notifications from the shared extension event bus.
+    }
+  });
 
   const runMenuOperation = async <T>(
     ctx: ExtensionCommandContext,
@@ -653,7 +947,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     outcome: QueryOutcome,
     signal: AbortSignal,
   ): Promise<boolean> => {
-    if (generation !== statusGeneration || modelIdentity(ctx.model) !== modelIdentity(model)) {
+    if (
+      !openaiPolicyIsCurrent(outcome.openaiPolicy) ||
+      generation !== statusGeneration ||
+      modelIdentity(ctx.model) !== modelIdentity(model)
+    ) {
       return false;
     }
     const adapter = adapterForProvider(outcome.state.providerId);
@@ -664,12 +962,13 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (!adapter) return false;
       try {
         const auth = await awaitWithDeadline(
-          resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+          resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
           signal,
           DEFAULT_TIMEOUT_MS,
           `revalidating ${adapter.displayName} runtime auth`,
         );
         return (
+          openaiPolicyIsCurrent(outcome.openaiPolicy) &&
           generation === statusGeneration &&
           modelIdentity(ctx.model) === modelIdentity(model) &&
           (!adapter.targets ||
@@ -690,6 +989,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
             errorMessage(error) === outcome.state.message);
         return (
           unchangedFailure &&
+          openaiPolicyIsCurrent(outcome.openaiPolicy) &&
           generation === statusGeneration &&
           modelIdentity(ctx.model) === modelIdentity(model) &&
           (!adapter.targets ||
@@ -701,12 +1001,13 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     if (!adapter) return false;
     try {
       const auth = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
         signal,
         DEFAULT_TIMEOUT_MS,
         `revalidating ${adapter.displayName} runtime auth`,
       );
       return (
+        openaiPolicyIsCurrent(outcome.openaiPolicy) &&
         generation === statusGeneration &&
         modelIdentity(ctx.model) === modelIdentity(model) &&
         (!adapter.targets ||
@@ -772,6 +1073,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const showMenu = async (ctx: ExtensionCommandContext): Promise<void> => {
     if (!ctx.hasUI) throw new Error("/usage requires TUI or RPC mode.");
     const controller = new AbortController();
+    const menuSessionGeneration = sessionGeneration;
     activeControllers.add(controller);
     try {
       if (isOfficialCodexModel(ctx.model)) {
@@ -907,6 +1209,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
           return false;
         }
         invalidateProviderState(adapter.id);
+        usageApi?.observe(ctx);
         return true;
       };
       const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
@@ -1114,7 +1417,29 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
               settingsRuntime,
               controller.signal,
               () => statusGeneration === menuGeneration && !controller.signal.aborted,
-              (id) => {
+              (id, uiClosed) => {
+                if (id === "openaiUseCodexUsage") {
+                  // A completed rename can outlive UI cancellation. Invalidate owned work
+                  // after durable publication, but never touch a replacement session's UI.
+                  if (menuSessionGeneration !== sessionGeneration) return;
+                  openaiUsageGeneration += 1;
+                  for (const query of nativeQueryControllers) query.abort();
+                  invalidateProviderState("openai");
+                  usageApi?.observe(ctx);
+                  if (ctx.model?.provider === "openai") {
+                    statusController?.abort();
+                    clearStatusTimers();
+                    safeSetStatus(ctx, undefined);
+                    // A stale or closed menu cannot restore the session refresh loop.
+                    if (
+                      sessionActive &&
+                      (uiClosed || statusGeneration !== menuGeneration || controller.signal.aborted)
+                    ) {
+                      startStatusRefresh(ctx, ctx.model, false);
+                    }
+                  }
+                  return;
+                }
                 if (
                   (id === "codexStatusResetCountdown" || id === "codexStatusPercentage") &&
                   stableCurrent &&
@@ -1125,6 +1450,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
                 }
               },
             );
+            if (controller.signal.aborted || statusGeneration !== menuGeneration) return { kind: "close" };
             fastState = settingsRuntime.get();
             const revalidated = await queryStableCurrent(ctx, false, controller, "Applying usage settings…");
             if (!revalidated) return { kind: "stay" };
@@ -1416,6 +1742,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   pi.registerCommand("usage", {
     description: "Show usage for the current runtime account",
     handler: async (args, ctx) => {
+      usageApi?.observe(ctx);
       if (args.trim()) {
         ctx.ui.notify("/usage does not accept arguments; choose an action from its menu.", "warning");
         return;
@@ -1429,44 +1756,69 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     },
   });
   pi.on("session_start", async (_event, ctx) => {
+    activeContext = ctx;
+    // Clear old cache state before the API invalidates the old session scope.
+    failureBackoff.clear();
+    latestQueries.clear();
+    providerQueries.clear();
+    presentationQueries.clear();
+    providerIdentities.clear();
+    activeCurrentIdentity = undefined;
+    cache.clear();
+    usageApi?.start(ctx);
     sessionGeneration += 1;
     statusGeneration += 1;
     clearStatusTimers();
     for (const controller of activeControllers) controller.abort();
     activeControllers.clear();
     statusController = undefined;
+    for (const controller of nativeQueryControllers) controller.abort();
     sessionActive = true;
     const ownerGeneration = sessionGeneration;
     try {
       await fastRuntime.prepareSession(ctx);
+      if (ownerGeneration !== sessionGeneration) return;
+      usageApi?.ready(ctx);
     } catch (error) {
       if (isStaleExtensionContextError(error) || ownerGeneration !== sessionGeneration) return;
       throw error;
     }
   });
   pi.on("session_tree", (_event, ctx) => {
+    activeContext = ctx;
+    usageApi?.observe(ctx);
     startStatusRefresh(ctx, ctx.model, false);
   });
   pi.on("model_select", (event, ctx) => {
+    activeContext = ctx;
+    usageApi?.observe(ctx);
     // Cancel read-only native queries, not confirmed legacy reset mutations.
     for (const controller of nativeQueryControllers) controller.abort();
     startStatusRefresh(ctx, event.model, false);
   });
   pi.on("turn_start", (_event, ctx) => {
+    activeContext = ctx;
+    usageApi?.observe(ctx);
     startStatusRefresh(ctx, ctx.model, false);
   });
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
+    activeContext = undefined;
     sessionGeneration += 1;
     statusGeneration += 1;
     clearStatusTimers();
     for (const controller of activeControllers) controller.abort();
     activeControllers.clear();
     statusController = undefined;
-    cache.clear();
+    for (const controller of nativeQueryControllers) controller.abort();
     failureBackoff.clear();
     latestQueries.clear();
+    providerQueries.clear();
+    presentationQueries.clear();
+    providerIdentities.clear();
     activeCurrentIdentity = undefined;
+    cache.clear();
+    usageApi?.stop(ctx);
     safeSetStatus(ctx, undefined);
   });
 

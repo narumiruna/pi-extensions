@@ -1,5 +1,26 @@
 # @narumitw/pi-tool
 
+## 0.4.0
+
+### Minor Changes
+
+- 808606a: Group the tool widget by Built-in, MCP, and Extension, and include script-callable tools, including MCP tools configured for codemode. Summarize MCP tools by namespace and Extension tools by source entrypoint to keep large catalogs compact, with tool counts and aggregate Extension exposure markers.
+
+## 0.3.3
+
+### Patch Changes
+
+- 9f80b89: Reuse published Kit interaction ownership for native Progress and Subagents settings while preserving ordered saves, rollback, and durable-save recovery after the screen closes.
+  
+  Share passive widget framing in Subagents, Tool, Plan Mode, and Cache Hit Monitor. Keep domain rendering and lifecycle ownership local, bound narrow and invalid widths, and retain lazy loading of Kit menus and other interactive APIs.
+- 79aca63: Enable existing TUI document search in Starship effective/raw TOML reviews, Recall non-destructive message previews, and Tool exact detail documents.
+  
+  Use a verified published Kit search release without changing raw content, persistence, confirmation, navigation, or RPC pagination. New Kit copy APIs remain outside these consumer changes.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
 ## 0.3.2
 
 ### Patch Changes

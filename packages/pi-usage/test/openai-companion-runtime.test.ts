@@ -3,7 +3,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
-import { type ExtensionCommandContext, initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  initTheme,
+  ModelRegistry,
+  ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test, vi } from "vitest";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "../../../test/support.js";
 import { createUsageSettingsRuntime } from "../src/settings.js";
@@ -48,14 +56,19 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function setup(mode: "tui" | "rpc" = "rpc", selected = nativeModel, obsolete?: unknown) {
+async function setup(mode: "tui" | "rpc" = "rpc", selected = nativeModel, obsolete?: unknown, enabled = true) {
   const root = await mkdtemp(join(tmpdir(), "pi-openai-companion-"));
   roots.push(root);
   vi.stubEnv("PI_CODING_AGENT_DIR", root);
   const { default: extension } = await import("../src/usage.js");
   const runtime = createUsageSettingsRuntime(join(root, "pi-usage.json"));
-  if (obsolete !== undefined)
-    await writeFile(join(root, "pi-usage.json"), JSON.stringify({ openaiCompanionUsage: obsolete }));
+  await writeFile(
+    join(root, "pi-usage.json"),
+    JSON.stringify({
+      openaiUseCodexUsage: enabled,
+      ...(obsolete === undefined ? {} : { openaiCompanionUsage: obsolete }),
+    }),
+  );
   await runtime.reload();
   const mock = createMockPi();
   let companion: typeof codex | undefined = codex;
@@ -136,7 +149,7 @@ async function setup(mode: "tui" | "rpc" = "rpc", selected = nativeModel, obsole
   };
 }
 for (const obsolete of [undefined, true, false, "obsolete"] as const) {
-  test(`native usage automatically queries companion with obsolete preference ${obsolete}`, async () => {
+  test(`native opt-in queries companion independently of obsolete preference ${obsolete}`, async () => {
     const state = await setup("rpc", nativeModel, obsolete);
     const calls = mockFetch();
     try {
@@ -161,7 +174,7 @@ function mockFetch() {
 }
 
 for (const mode of ["tui", "rpc"] as const) {
-  test(`automatic companion report is visible in ${mode} and never offers native mutations`, async () => {
+  test(`opt-in companion report is visible in ${mode} and never offers native mutations`, async () => {
     const state = await setup(mode);
     const calls = mockFetch();
     try {
@@ -501,3 +514,324 @@ test("real Pi resolves companion OAuth but never reuses it after a runtime API-k
     await state.emit("session_shutdown");
   }
 });
+
+type SettingsHarness = {
+  handleInput(data: string): unknown;
+  render(): readonly string[];
+  dispose(): void;
+};
+
+async function settingsCommand(
+  state: Awaited<ReturnType<typeof setup>>,
+  change: (harness: SettingsHarness) => Promise<void>,
+) {
+  let opened = false;
+  Object.assign(state.context.ctx.ui, {
+    custom: async (factory: unknown) => {
+      const tui = createTuiHarness({ width: 120, rows: 35, keybindings: getKeybindings() });
+      let kitScreen = false;
+      const running = tui.custom(async (...args) => {
+        const component = await (factory as Parameters<typeof tui.custom>[0])(...args);
+        kitScreen = "__piTuiKitScreen" in component && component.__piTuiKitScreen === true;
+        return component;
+      });
+      const harness: SettingsHarness = { handleInput: tui.send, render: tui.render, dispose: tui.dispose };
+      try {
+        await tui.waitForOpen();
+        const text = harness.render().join("\n");
+        if (kitScreen) {
+          state.titles.push(text);
+          if (!opened) {
+            opened = true;
+            harness.handleInput("\u001b[B");
+            harness.handleInput("\r");
+          } else harness.handleInput("\u0003");
+        } else if (text.includes("pi-usage Settings")) {
+          for (let row = 0; row < 3; row++) harness.handleInput("\u001b[B");
+          await change(harness);
+          harness.handleInput("\u0003");
+        }
+        return await running;
+      } finally {
+        harness.dispose();
+      }
+    },
+  });
+  await state.run();
+}
+
+for (const action of ["current", "another", "all"] as const) {
+  test(`default Off isolates native queries in the ${action} view with an existing Codex login`, async () => {
+    const state = await setup(
+      "rpc",
+      action === "current" ? nativeModel : { ...nativeModel, provider: "unsupported" },
+      true,
+      false,
+    );
+    const requests = mockFetch();
+    if (action !== "current")
+      state.queue(
+        action === "another"
+          ? ["View another configured provider…", "OpenAI", "Close"]
+          : ["View all configured providers…", "Close"],
+      );
+    try {
+      await state.run();
+      assert.match(state.titles.join("\n"), /Codex companion usage is disabled/);
+      assert.ok(!requests.some((url) => url.endsWith("/apps")));
+      if (action !== "all") assert.deepEqual(requests, []);
+      else assert.ok(requests.length > 0);
+    } finally {
+      await state.emit("session_shutdown");
+    }
+  });
+}
+
+test("Off remains isolated on session, turn, tree, and scheduled refreshes", async () => {
+  const state = await setup("rpc", nativeModel, true, false);
+  const requests = mockFetch();
+  const auth = vi.spyOn(state.registry, "getProviderAuth");
+  try {
+    await state.emit("session_start");
+    await state.run();
+    await state.emit("turn_start");
+    await state.run();
+    await state.emit("session_tree");
+    await state.run();
+    vi.useFakeTimers();
+    await state.run();
+    await vi.advanceTimersByTimeAsync(300_000);
+    assert.equal(state.context.statuses.get("usage"), "chatgpt usage: web only");
+    assert.ok(auth.mock.calls.every(([provider]) => provider === "openai"));
+    assert.deepEqual(requests, []);
+    await state.emit("session_shutdown");
+    assert.equal(vi.getTimerCount(), 0);
+  } finally {
+    await state.emit("session_shutdown");
+  }
+});
+
+test("Settings Off → On → Off applies without reload and clears companion quota", async () => {
+  const state = await setup("tui", nativeModel, true, false);
+  const requests = mockFetch();
+  const status = vi.spyOn(state.context.ctx.ui, "setStatus");
+  let clearedDuringSave = false;
+  try {
+    await settingsCommand(state, async (harness) => {
+      harness.handleInput("\r");
+      await vi.waitFor(() => assert.equal(state.runtime.get().settings.openaiUseCodexUsage, true));
+    });
+    assert.match(state.context.statuses.get("usage") ?? "", /chatgpt plan 80%/);
+    const firstRequests = requests.length;
+    let publications = 0;
+    await settingsCommand(state, async (harness) => {
+      publications = status.mock.calls.length;
+      harness.handleInput("\r");
+      await vi.waitFor(() => assert.equal(state.runtime.get().settings.openaiUseCodexUsage, false));
+      clearedDuringSave = state.context.statuses.get("usage") === undefined;
+    });
+    assert.equal(clearedDuringSave, true);
+    assert.equal(state.context.statuses.get("usage"), "chatgpt usage: web only");
+    assert.equal(requests.length, firstRequests);
+    assert.ok(!status.mock.calls.slice(publications).some(([, text]) => text?.includes("80%")));
+    assert.match(state.titles.at(-1) ?? "", /Codex companion usage is disabled/);
+  } finally {
+    await state.emit("session_shutdown");
+  }
+});
+
+for (const boundary of ["normal", "cancel-after-publication", "dispose-after-publication", "off-on-cycle"] as const) {
+  test(`durable disable cancels pending companion HTTP with ${boundary} and rejects a late response`, async () => {
+    const state = await setup("tui");
+    mockFetch();
+    let release!: () => void;
+    const response = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let ready!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    const originalUpdate = state.runtime.update;
+    let activeHarness: SettingsHarness | undefined;
+    let delayed = false;
+    let disabled = false;
+    let cleared = false;
+    const publications = vi.spyOn(state.context.ctx.ui, "setStatus");
+    const lateFetch = vi.fn(async (_url: string, init: RequestInit) => {
+      observedSignal = init.signal ?? undefined;
+      ready();
+      await response;
+      return new Response(JSON.stringify(apps));
+    });
+    vi.spyOn(state.runtime, "update").mockImplementation(async (patch, signal) => {
+      if (patch.openaiUseCodexUsage === false && !delayed) {
+        delayed = true;
+        state.companion({ ...codex, access: access("rotated"), accountId: "rotated" });
+        vi.stubGlobal("fetch", lateFetch);
+        await state.emit("turn_start");
+        await entered;
+      }
+      const saved = await originalUpdate(patch, signal);
+      if (patch.openaiUseCodexUsage === false) {
+        disabled = true;
+        if (boundary === "cancel-after-publication") activeHarness?.handleInput("\u0003");
+        if (boundary === "dispose-after-publication") activeHarness?.dispose();
+      }
+      return saved;
+    });
+    try {
+      await settingsCommand(state, async (harness) => {
+        activeHarness = harness;
+        harness.handleInput("\r");
+        await vi.waitFor(() => assert.equal(observedSignal?.aborted, true));
+        cleared = state.context.statuses.get("usage") === undefined;
+        if (boundary === "off-on-cycle") {
+          await originalUpdate({ openaiUseCodexUsage: true });
+        }
+        release();
+      });
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(disabled, true);
+      assert.equal(cleared, true);
+      assert.equal(observedSignal?.aborted, true);
+      assert.equal(lateFetch.mock.calls.length, 1);
+      assert.doesNotMatch(state.context.statuses.get("usage") ?? "", /80%|90%/);
+      const clearedAt = publications.mock.calls.map(([, text]) => text === undefined).lastIndexOf(true);
+      assert.ok(!publications.mock.calls.slice(clearedAt + 1).some(([, text]) => /80%|90%/.test(text ?? "")));
+    } finally {
+      release?.();
+      await state.emit("session_shutdown");
+    }
+  });
+}
+
+test("failed companion disable keeps its previous setting, report, and displayed value", async () => {
+  const state = await setup("tui");
+  const requests = mockFetch();
+  vi.spyOn(state.runtime, "update").mockRejectedValue(new Error("save rejected"));
+  let screen = "";
+  try {
+    await settingsCommand(state, async (harness) => {
+      harness.handleInput("\r");
+      await vi.waitFor(() =>
+        assert.ok(state.context.notifications.some((note) => note.message.includes("save rejected"))),
+      );
+      screen = harness.render().join("\n");
+    });
+    assert.equal(state.runtime.get().settings.openaiUseCodexUsage, true);
+    assert.match(screen, /Use Codex login for OpenAI usage[^\n]*On/);
+    assert.match(state.context.statuses.get("usage") ?? "", /chatgpt plan 80%/);
+    assert.equal(requests.length, 2);
+  } finally {
+    await state.emit("session_shutdown");
+  }
+});
+
+test("disable while companion readiness is pending stops late Codex credential reads", async () => {
+  const state = await setup("tui");
+  mockFetch();
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let ready!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const originalUpdate = state.runtime.update;
+  const auth = vi.spyOn(state.registry, "getProviderAuth");
+  let readsBeforeDisable = 0;
+  let readsAfterDisable = 0;
+  // Install the wait only for the background query that races the save.
+  let waiting = false;
+  const eventBus = (state.mock.pi as ExtensionAPI).events;
+  eventBus.on("oauth:credential-readiness:v1", (value) => {
+    const request = value as { provider: string; waitUntil(value: Promise<void>): void };
+    if (waiting && request.provider === "openai-codex") {
+      request.waitUntil(wait);
+      ready();
+    }
+  });
+  vi.spyOn(state.runtime, "update").mockImplementation(async (patch, signal) => {
+    if (patch.openaiUseCodexUsage === false) {
+      waiting = true;
+      await state.emit("turn_start");
+      await entered;
+      readsBeforeDisable = auth.mock.calls.filter(([provider]) => provider === "openai-codex").length;
+    }
+    return originalUpdate(patch, signal);
+  });
+  try {
+    await settingsCommand(state, async (harness) => {
+      harness.handleInput("\r");
+      await vi.waitFor(() => assert.equal(state.runtime.get().settings.openaiUseCodexUsage, false));
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      readsAfterDisable = auth.mock.calls.filter(([provider]) => provider === "openai-codex").length;
+    });
+    assert.ok(readsBeforeDisable > 0);
+    assert.equal(readsAfterDisable, readsBeforeDisable);
+  } finally {
+    release();
+    await state.emit("session_shutdown");
+  }
+});
+
+for (const handoff of ["event", "cancel-after-publication", "dispose-after-publication"] as const) {
+  test(`Settings ${handoff} handoff restores native status and its scheduled refresh`, async () => {
+    const state = await setup("tui");
+    const requests = mockFetch();
+    let release!: () => void;
+    const response = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let ready!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const originalUpdate = state.runtime.update;
+    const lateFetch = vi.fn(async () => {
+      ready();
+      await response;
+      return new Response(JSON.stringify(apps));
+    });
+    let activeHarness: SettingsHarness | undefined;
+    vi.spyOn(state.runtime, "update").mockImplementation(async (patch, signal) => {
+      if (patch.openaiUseCodexUsage === false && handoff === "event") {
+        state.companion({ ...codex, access: access("rotated"), accountId: "rotated" });
+        vi.stubGlobal("fetch", lateFetch);
+        await state.emit("turn_start");
+        await entered;
+      }
+      const saved = await originalUpdate(patch, signal);
+      if (handoff === "cancel-after-publication") activeHarness?.handleInput("\u0003");
+      if (handoff === "dispose-after-publication") activeHarness?.dispose();
+      return saved;
+    });
+    try {
+      vi.useFakeTimers();
+      await state.emit("session_start");
+      await settingsCommand(state, async (harness) => {
+        activeHarness = harness;
+        harness.handleInput("\r");
+        await vi.waitFor(() => assert.equal(state.runtime.get().settings.openaiUseCodexUsage, false));
+        release();
+      });
+      await vi.waitFor(() => assert.equal(state.context.statuses.get("usage"), "chatgpt usage: web only"));
+      assert.equal(vi.getTimerCount(), 1);
+      const auth = vi.spyOn(state.registry, "getProviderAuth");
+      await vi.advanceTimersByTimeAsync(300_000);
+      assert.equal(state.context.statuses.get("usage"), "chatgpt usage: web only");
+      assert.ok(auth.mock.calls.length > 0);
+      assert.ok(auth.mock.calls.every(([provider]) => provider === "openai"));
+      assert.equal(lateFetch.mock.calls.length, handoff === "event" ? 1 : 0);
+      assert.ok(requests.length > 0);
+    } finally {
+      release();
+      await state.emit("session_shutdown");
+    }
+  });
+}

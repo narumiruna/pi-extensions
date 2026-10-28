@@ -69,7 +69,7 @@ function provider(id: AccountProviderAdapter["id"]): AccountProviderAdapter {
   };
 }
 
-function runtimeRegistry(mock: ReturnType<typeof createMockPi>) {
+function runtimeRegistry(mock: ReturnType<typeof createMockPi>, model = copilotModel) {
   const keys = new Map<string, string>();
   const runtime = {
     async setRuntimeApiKey(providerId: string, apiKey: string) {
@@ -84,30 +84,35 @@ function runtimeRegistry(mock: ReturnType<typeof createMockPi>) {
     registry: {
       runtime,
       getRegisteredProviderConfig: (providerId: string) => mock.providers.get(providerId),
+      registerProvider: mock.rawPi.registerProvider,
+      unregisterProvider: mock.rawPi.unregisterProvider,
       getApiKeyForProvider: async (providerId: string) => keys.get(providerId),
-      getApiKeyAndHeaders: async (model: { provider: string }) => ({
+      getApiKeyAndHeaders: async (selected: { provider: string }) => ({
         ok: true as const,
-        apiKey: keys.get(model.provider),
+        apiKey: keys.get(selected.provider),
+        headers: (mock.providers.get(selected.provider) as { headers?: Record<string, string> } | undefined)?.headers,
       }),
       getProviderAuth: async (providerId: string) => {
         const apiKey = keys.get(providerId);
+        const config = mock.providers.get(providerId) as { headers?: Record<string, string> } | undefined;
         return apiKey
           ? {
               auth: {
                 apiKey,
+                headers: config?.headers,
                 ...(providerId === "github-copilot" ? { baseUrl: copilotModel.baseUrl } : {}),
               },
             }
           : undefined;
       },
-      getAvailable: () => [copilotModel],
-      getAll: () => [copilotModel],
+      getAvailable: () => [model],
+      getAll: () => [model],
       getProviderAuthStatus: (providerId: string) => ({
         configured: keys.has(providerId),
       }),
       getProviderDisplayName: (providerId: string) => providerId,
       find: (providerId: string, modelId: string) =>
-        providerId === copilotModel.provider && modelId === copilotModel.id ? copilotModel : undefined,
+        providerId === model.provider && modelId === model.id ? model : undefined,
     },
   };
 }
@@ -341,6 +346,139 @@ test("built generated entries complete a representative named-account usage boun
     rmSync(root, { force: true, recursive: true });
   }
 });
+
+const pendingUsageProviders = [
+  {
+    id: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    usageUrl: "https://openrouter.ai/api/v1/key",
+    before: "openrouter $75.00 left",
+    after: "openrouter $40.00 left",
+  },
+  {
+    id: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    usageUrl: "https://chatgpt.com/backend-api/wham/usage",
+    before: "codex 5h:75%",
+    after: "codex 5h:40%",
+  },
+  {
+    id: "kimi-coding",
+    baseUrl: "https://api.kimi.com/coding",
+    usageUrl: "https://api.kimi.com/coding/v1/usages",
+    before: "kimi wk:75%",
+    after: "kimi wk:40%",
+  },
+] as const;
+
+for (const configuration of pendingUsageProviders) {
+  test.each(["accounts-first", "usage-first"] as const)(
+    `${configuration.id} selection waits for activation before querying usage in %s order`,
+    async (order) => {
+      const mock = createMockPi();
+      const adapter = provider(configuration.id);
+      const model = { ...copilotModel, provider: configuration.id, baseUrl: configuration.baseUrl };
+      const store = new AccountStore(new InMemoryAccountStorageBackend());
+      await store.write({
+        version: 1,
+        providers: {
+          [configuration.id]: {
+            active: "first",
+            accounts: { first: credential("first"), second: credential("second") },
+          },
+        },
+      });
+      let conversionStarted!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        conversionStarted = resolve;
+      });
+      let releaseConversion!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        releaseConversion = resolve;
+      });
+      const toAuth = adapter.oauth.toAuth;
+      adapter.oauth.toAuth = async (current) => {
+        if (current.access === "runtime-second") {
+          conversionStarted();
+          await blocked;
+        }
+        return toAuth(current);
+      };
+      if (order === "accounts-first") {
+        registerAccounts(mock, store, [adapter]);
+        registerUsage(mock);
+      } else {
+        registerUsage(mock);
+        registerAccounts(mock, store, [adapter]);
+      }
+      const { registry } = runtimeRegistry(mock, model);
+      const choices = [`Switch ${adapter.displayName} account`, "second"];
+      const sessionManager = SessionManager.inMemory();
+      const { ctx, statuses } = createMockContext({
+        hasUI: true,
+        mode: "rpc",
+        model,
+        modelRegistry: registry,
+        sessionManager,
+        select: async (_title: string, options: string[]) => {
+          const next = choices[0];
+          if (next && options.includes(next)) return choices.shift();
+          return "Close";
+        },
+      });
+      const requests: Array<{ url: string; authorization: string | null }> = [];
+      globalThis.fetch = async (input, init) => {
+        const authorization = new Headers(init?.headers).get("authorization");
+        requests.push({ url: String(input), authorization });
+        const remaining = authorization === "Bearer runtime-first" ? 75 : 40;
+        return Response.json(
+          configuration.id === "openrouter"
+            ? { data: { limit: 100, limit_remaining: remaining, usage: 100 - remaining } }
+            : configuration.id === "openai-codex"
+              ? { rate_limit: { primary_window: { used_percent: 100 - remaining, limit_window_seconds: 18_000 } } }
+              : { usage: { name: "Weekly limit", used: 100 - remaining, limit: 100 } },
+        );
+      };
+      let selection: Promise<unknown> | undefined;
+      try {
+        for (const handler of mock.events.get("session_start") ?? []) await handler({}, ctx);
+        await settle();
+        assert.equal(statuses.get("usage"), configuration.before);
+        assert.deepEqual(requests, [{ url: configuration.usageUrl, authorization: "Bearer runtime-first" }]);
+
+        const command = mock.commands.get("accounts");
+        assert.ok(command);
+        selection = Promise.resolve(command.handler("", ctx));
+        await entered;
+        await settle();
+        assert.equal(statuses.get("usage"), "checking");
+        assert.equal(requests.length, 1, "pending activation must not query the previous account");
+
+        releaseConversion();
+        await selection;
+        await settle();
+        assert.deepEqual(choices, []);
+        assert.equal(statuses.get("usage"), configuration.after);
+        assert.deepEqual(requests, [
+          { url: configuration.usageUrl, authorization: "Bearer runtime-first" },
+          { url: configuration.usageUrl, authorization: "Bearer runtime-second" },
+        ]);
+        assert.equal(store.read().providers[configuration.id]?.active, "first");
+        const snapshot = sessionManager
+          .getEntries()
+          .filter((entry) => entry.type === "custom")
+          .at(-1);
+        assert.ok(snapshot);
+        assert.equal((snapshot.data as { providers: Record<string, string> }).providers[configuration.id], "second");
+        assert.deepEqual(mock.sentMessages, []);
+      } finally {
+        releaseConversion();
+        await selection;
+        for (const handler of mock.events.get("session_shutdown") ?? []) await handler({}, ctx);
+      }
+    },
+  );
+}
 
 test.each(["conflict-first", "conflict-last"] as const)(
   "conflicting matching credential fails closed with %s listener order",

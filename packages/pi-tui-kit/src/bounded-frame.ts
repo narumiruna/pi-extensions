@@ -19,6 +19,18 @@ export interface BoundedFrameOptions {
   focusedRow?: number;
 }
 
+/** Original content row retained at a zero-based rendered frame row. */
+export interface BoundedFrameContentRow {
+  contentIndex: number;
+  frameIndex: number;
+}
+
+export interface BoundedFrameLayout {
+  lines: string[];
+  /** Only content rows are mapped; title, context, hints, and rules are excluded. */
+  contentRows: BoundedFrameContentRow[];
+}
+
 interface FrameRow {
   line: string;
   contentIndex?: number;
@@ -29,8 +41,8 @@ export function renderBoundedFrame(options: BoundedFrameOptions): string[] {
   return renderBoundedFrameLayout(options).lines;
 }
 
-/** Internal layout metadata for components that route normalized pointer coordinates. */
-export function renderBoundedFrameLayout(options: BoundedFrameOptions) {
+/** Frame rows and retain their original content indexes for caller-owned pointer routing. */
+export function renderBoundedFrameLayout(options: BoundedFrameOptions): BoundedFrameLayout {
   const width = dimension(options.width);
   const maxRows = dimension(options.maxRows);
   if (maxRows === 0) return { lines: [], contentRows: [] };
@@ -60,7 +72,7 @@ export function renderBoundedFrameLayout(options: BoundedFrameOptions) {
   return finalizeLayout(framed ? [{ line: rule }, ...body, { line: rule }] : body, width);
 }
 
-function finalizeLayout(rows: readonly FrameRow[], width: number) {
+function finalizeLayout(rows: readonly FrameRow[], width: number): BoundedFrameLayout {
   return {
     lines: rows.map(({ line }) => truncateToWidth(line, width, "")),
     contentRows: rows.flatMap(({ contentIndex }, frameIndex) =>

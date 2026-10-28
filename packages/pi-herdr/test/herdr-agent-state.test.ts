@@ -148,7 +148,7 @@ test("blocked events override working state until every blocker clears", async (
   assert.equal(stateRequests(requests).at(-1)?.params.state, "working");
 });
 
-test("non-TUI sessions never report state", async () => {
+test.each(["rpc", "json", "print"])("%s sessions never report or mutate native ownership", async (mode) => {
   const requests: HerdrRequest[] = [];
   const observerStarts: string[] = [];
   const observerShutdowns: string[] = [];
@@ -164,7 +164,7 @@ test("non-TUI sessions never report state", async () => {
       },
     },
   })(mock.pi);
-  const started = createMockContext({ mode: "rpc", hasUI: true });
+  const started = createMockContext({ mode, hasUI: mode === "rpc" });
   await emit(mock, "session_start", { reason: "startup" }, started.ctx);
   await emit(mock, "agent_start", {}, started.ctx);
   await emit(mock, "agent_settled", {}, started.ctx);
@@ -173,8 +173,43 @@ test("non-TUI sessions never report state", async () => {
   await flushReporting();
   assert.deepEqual(requests, []);
   assert.deepEqual(observerStarts, []);
-  assert.deepEqual(observerShutdowns, ["rpc"]);
+  assert.deepEqual(observerShutdowns, [mode]);
+  assert.deepEqual(started.notifications, []);
 });
+
+test.each(["quit", "reload", "new", "resume", "fork"])(
+  "%s shutdown clears only metadata and leaves native lifecycle untouched",
+  async (reason) => {
+    const requests: HerdrRequest[] = [];
+    const mock = createMockPi();
+    herdrModule.createHerdrAgentStateExtension(enabledOptions(requests))(mock.pi);
+    const started = tuiContext();
+    await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+    await flushReporting();
+    const beforeShutdown = requests.length;
+    await emit(mock, "session_shutdown", { reason }, started.ctx);
+    const cleanup = requests.slice(beforeShutdown);
+    assert.deepEqual(
+      cleanup.map(({ method }) => method),
+      ["pane.report_metadata"],
+    );
+    assert.equal(
+      requests.some(({ method }) => method === "pane.release_agent" || method === "pane.clear_agent_authority"),
+      false,
+    );
+    assert.deepEqual(
+      cleanup[0]?.params.tokens,
+      Object.fromEntries(HERDR_METADATA_TOKEN_KEYS.map((key) => [key, null])),
+    );
+    assert.equal(cleanup[0]?.params.source, "herdr:pi");
+    assert.equal("agent_session_id" in (cleanup[0]?.params ?? {}), false);
+    assert.equal("agent_session_path" in (cleanup[0]?.params ?? {}), false);
+    for (let index = 1; index < requests.length; index++) {
+      assert.ok(Number(requests[index]?.params.seq) > Number(requests[index - 1]?.params.seq));
+    }
+    assert.deepEqual(started.notifications, []);
+  },
+);
 
 test("TUI sessions start and shut down the widget observer", async () => {
   const requests: HerdrRequest[] = [];
@@ -357,7 +392,7 @@ test("replacement aborts stale metadata and prevents an older shutdown clear", a
 
   await emit(mock, "session_start", { reason: "startup" }, oldSession.ctx);
   await flushReporting();
-  const stoppingOld = emit(mock, "session_shutdown", { reason: "reload" }, oldSession.ctx);
+  const stoppingOld = emit(mock, "session_shutdown", { reason: "quit" }, oldSession.ctx);
   const oldMetadata = requests.find(({ request }) => request.method === "pane.report_metadata");
   assert.equal(oldMetadata?.signal.aborted, true);
   await emit(mock, "session_start", { reason: "reload" }, replacement.ctx);
@@ -379,6 +414,10 @@ test("replacement aborts stale metadata and prevents an older shutdown clear", a
   assert.ok(latestMetadata);
   assert.equal((latestMetadata.params.tokens as Record<string, unknown>).model, "replacement");
   assert.ok(Number(firstMetadata.params.seq) < Number(latestMetadata.params.seq));
+  assert.equal(
+    requests.some(({ request }) => request.method === "pane.release_agent"),
+    false,
+  );
   const beforeStaleEvents = metadataBeforeFinalShutdown.length;
   await emit(mock, "agent_settled", {}, replacement.ctx);
   await emit(mock, "model_select", {}, oldSession.ctx);
@@ -413,6 +452,11 @@ test("repeated shutdown shares cleanup and sends exactly one clear patch", async
   const repeatedShutdown = emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
   release();
   await Promise.all([firstShutdown, repeatedShutdown]);
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  assert.equal(
+    requests.some(({ method }) => method === "pane.release_agent" || method === "pane.clear_agent_authority"),
+    false,
+  );
   const metadataAfterShutdown = requests.filter(({ method }) => method === "pane.report_metadata");
   assert.equal(metadataAfterShutdown.length, metadataBeforeShutdown + 1);
   const clearPatch = metadataAfterShutdown.at(-1);
@@ -421,6 +465,198 @@ test("repeated shutdown shares cleanup and sends exactly one clear patch", async
     Object.values(clearPatch.params.tokens as Record<string, unknown>).every((value) => value === null),
     true,
   );
+});
+
+test("replacement aborts pending metadata cleanup without changing native ownership", async () => {
+  const requests: HerdrRequest[] = [];
+  let finishCleanup!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    finishCleanup = resolve;
+  });
+  let cleanupStarted!: () => void;
+  const startedCleanup = new Promise<void>((resolve) => {
+    cleanupStarted = resolve;
+  });
+  let cleanupSignal: AbortSignal | undefined;
+  let shuttingDown = false;
+  const mock = createMockPi();
+  herdrModule.createHerdrAgentStateExtension({
+    ...enabledOptions(requests),
+    async sendRequest(request, signal) {
+      requests.push(request);
+      if (shuttingDown && request.method === "pane.report_metadata" && !cleanupSignal) {
+        cleanupSignal = signal;
+        cleanupStarted();
+        await delayed;
+      }
+    },
+  })(mock.pi);
+  const oldSession = tuiContext();
+  const replacement = tuiContext();
+  await emit(mock, "session_start", { reason: "startup" }, oldSession.ctx);
+  await flushReporting();
+  shuttingDown = true;
+  const stopping = emit(mock, "session_shutdown", { reason: "quit" }, oldSession.ctx);
+  await startedCleanup;
+  assert.equal(cleanupSignal?.aborted, false);
+  const cleanupCount = requests.length;
+  await emit(mock, "session_start", { reason: "new" }, replacement.ctx);
+  assert.equal(cleanupSignal?.aborted, true);
+  finishCleanup();
+  await stopping;
+  await flushReporting();
+  assert.equal(
+    requests.slice(cleanupCount).some(({ method }) => method === "pane.release_agent"),
+    false,
+  );
+  const beforeStaleShutdown = requests.length;
+  await emit(mock, "session_shutdown", { reason: "quit" }, oldSession.ctx);
+  assert.equal(requests.length, beforeStaleShutdown);
+  await emit(mock, "agent_start", {}, replacement.ctx);
+  await flushReporting();
+  assert.equal(stateRequests(requests).at(-1)?.params.state, "working");
+  await emit(mock, "session_shutdown", { reason: "quit" }, replacement.ctx);
+  assert.equal(requests.at(-1)?.method, "pane.report_metadata");
+  assert.equal(
+    requests.some(({ method }) => method === "pane.release_agent" || method === "pane.clear_agent_authority"),
+    false,
+  );
+});
+
+test("failed metadata cleanup remains silent and does not mutate native ownership", async () => {
+  const requests: HerdrRequest[] = [];
+  let shuttingDown = false;
+  const mock = createMockPi();
+  herdrModule.createHerdrAgentStateExtension({
+    ...enabledOptions(requests),
+    async sendRequest(request) {
+      requests.push(request);
+      if (shuttingDown && request.method === "pane.report_metadata") {
+        throw new Error("cleanup rejected");
+      }
+    },
+  })(mock.pi);
+  const started = tuiContext();
+  await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+  await flushReporting();
+  shuttingDown = true;
+  const beforeShutdown = requests.length;
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  assert.deepEqual(
+    requests.slice(beforeShutdown).map(({ method }) => method),
+    ["pane.report_metadata"],
+  );
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  assert.equal(
+    requests.some(({ method }) => method === "pane.release_agent" || method === "pane.clear_agent_authority"),
+    false,
+  );
+  assert.deepEqual(started.notifications, []);
+});
+
+test("quit drains every normal report and widget shutdown before cleanup", async () => {
+  const requests: HerdrRequest[] = [];
+  const pending: Array<{ signal: AbortSignal; finish(): void }> = [];
+  let delayReports = false;
+  let widgetStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => {
+    widgetStopped = resolve;
+  });
+  const mock = createMockPi();
+  herdrModule.createHerdrAgentStateExtension({
+    ...enabledOptions(requests),
+    async sendRequest(request, signal) {
+      requests.push(request);
+      if (delayReports) {
+        await new Promise<void>((finish) => pending.push({ signal, finish }));
+      }
+    },
+    widgetObserver: { start() {}, shutdown: () => stopped },
+  })(mock.pi);
+  const started = tuiContext();
+  await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+  await flushReporting();
+  delayReports = true;
+  await emit(mock, "agent_start", {}, started.ctx);
+  mock.rawPi.setSessionName("Changed");
+  await emit(mock, "session_info_changed", {}, started.ctx);
+  assert.equal(pending.length, 3);
+  const beforeShutdown = requests.length;
+  const stopping = emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  assert.equal(
+    pending.every(({ signal }) => signal.aborted),
+    true,
+  );
+  delayReports = false;
+  // Leave the fire-and-forget session report pending after both queue drains finish.
+  pending[1]?.finish();
+  pending[2]?.finish();
+  widgetStopped();
+  await flushReporting();
+  assert.equal(requests.length, beforeShutdown);
+  pending[0]?.finish();
+  await stopping;
+  assert.deepEqual(
+    requests.slice(beforeShutdown).map(({ method }) => method),
+    ["pane.report_metadata"],
+  );
+});
+
+test("quit during partial startup drains the session report and still clears metadata", async () => {
+  const requests: HerdrRequest[] = [];
+  let sessionReportStarted!: () => void;
+  const reportStarted = new Promise<void>((resolve) => {
+    sessionReportStarted = resolve;
+  });
+  let reportSignal: AbortSignal | undefined;
+  const mock = createMockPi();
+  herdrModule.createHerdrAgentStateExtension({
+    ...enabledOptions(requests),
+    async sendRequest(request, signal) {
+      requests.push(request);
+      if (request.method === "pane.report_agent_session") {
+        reportSignal = signal;
+        sessionReportStarted();
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      }
+    },
+  })(mock.pi);
+  const started = tuiContext();
+  const starting = emit(mock, "session_start", { reason: "startup" }, started.ctx);
+  await reportStarted;
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  await starting;
+  assert.equal(reportSignal?.aborted, true);
+  assert.equal(stateRequests(requests).length, 0);
+  assert.equal(requests.at(-1)?.method, "pane.report_metadata");
+  assert.equal(
+    requests.some(({ method }) => method === "pane.release_agent" || method === "pane.clear_agent_authority"),
+    false,
+  );
+  assert.deepEqual(started.notifications, []);
+});
+
+test("quit without session initialization does not send cleanup", async () => {
+  const requests: HerdrRequest[] = [];
+  const mock = createMockPi();
+  herdrModule.createHerdrAgentStateExtension(enabledOptions(requests))(mock.pi);
+  const started = tuiContext();
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  assert.deepEqual(requests, []);
+});
+
+test("unavailable socket does not interrupt quit or repeated shutdown", async () => {
+  const mock = createMockPi();
+  herdrModule.createHerdrAgentStateExtension({
+    environment: { enabled: true, paneId: "w1:p2", socketEndpoint: join(agentDir, "missing.sock") },
+    widgetObserver: { start() {}, async shutdown() {} },
+  })(mock.pi);
+  const started = tuiContext();
+  await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+  assert.deepEqual(started.notifications, []);
 });
 
 test("metadata failures never interrupt lifecycle or orderly shutdown", async () => {
@@ -459,7 +695,7 @@ test("socket transport retries one failed delivery and preserves the request", a
       const attempts = (attemptsById.get(request.id) ?? 0) + 1;
       attemptsById.set(request.id, attempts);
       if (request.method === "pane.report_agent_session" && attempts === 1) socket.end();
-      else socket.write("{}\n");
+      else socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);
       if (request.method === "pane.report_agent") reportState();
     });
   });

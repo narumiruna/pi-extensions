@@ -1,0 +1,154 @@
+/* Keep resource presentation local; other surfaces retain the original inspector styles. */
+.environment-surface {
+  --focus-ring: #2563ad;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+  margin-inline: auto;
+}
+.inspector-app.dark .environment-surface {
+  --focus-ring: #8bb9ff;
+}
+.environment-surface :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.environment-surface .environment-heading {
+  flex-shrink: 0;
+  padding: 0 4px 12px;
+}
+.environment-surface .environment-heading .rt-Heading {
+  font-size: 18px;
+  line-height: 24px;
+  letter-spacing: -0.3px;
+}
+.environment-surface .environment-heading p {
+  margin: 4px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.environment-surface .resource-panel {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 4px 8px;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--panel-border) transparent;
+}
+.environment-surface[hidden],
+.environment-surface .resource-panel[hidden] {
+  display: none;
+}
+.environment-surface .resource-panel > .rt-Heading {
+  font-size: 14px;
+  line-height: 20px;
+  margin: 0 0 4px;
+}
+.environment-surface .resource-panel p {
+  margin: 6px 0;
+  line-height: 1.6;
+  max-width: 88ch;
+}
+.environment-surface .resource-panel > p {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.environment-surface .inventory-card {
+  margin: 12px 0 0;
+  padding: 14px 16px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  box-shadow: none;
+}
+.environment-surface .inventory-card > .rt-Heading,
+.environment-surface .inventory-card-heading .rt-Heading {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.environment-surface .inventory-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 6px;
+}
+.environment-surface .inventory-card-heading .rt-Heading {
+  flex: 1 1 220px;
+}
+.environment-surface .inventory-status {
+  flex-shrink: 0;
+  margin: 0;
+}
+.environment-surface .inventory-metadata {
+  margin: 0 0 8px;
+}
+.environment-surface .rt-Badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.environment-surface .inventory-card .inventory-description {
+  margin: 8px 0 12px;
+  white-space: pre-wrap;
+}
+.environment-surface .inventory-card .data {
+  margin-top: 0;
+}
+.environment-surface .data-toolbar,
+.tool-detail-content .data-toolbar {
+  min-height: 36px;
+  padding: 3px 0;
+}
+.environment-surface .data-toolbar > .rt-Flex,
+.tool-detail-content .data-toolbar > .rt-Flex {
+  margin: 0;
+}
+.environment-surface .section-toggle,
+.tool-detail-content .section-toggle {
+  padding: 5px 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+.environment-surface .copy-button,
+.tool-detail-content .copy-button {
+  margin: 0;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--secondary);
+  font-size: 11px;
+}
+.environment-surface .section-toggle:hover,
+.environment-surface .copy-button:hover,
+.tool-detail-content .section-toggle:hover,
+.tool-detail-content .copy-button:hover {
+  color: var(--gray-12);
+  background: var(--surface-hover);
+}
+@media (max-width: 680px) {
+  .environment-surface .environment-heading {
+    padding-bottom: 8px;
+  }
+  .environment-surface .environment-heading .rt-Heading {
+    font-size: 16px;
+  }
+  .environment-surface .inventory-card {
+    padding: 12px 12px 6px;
+  }
+}

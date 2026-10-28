@@ -34,18 +34,17 @@ test.afterEach(async () => server.close());
 test("R33: opening widened panes cannot switch to closed drawers; desktop can collapse again", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(server.url);
-  await page.getByRole("button", { name: "Session", exact: true }).click();
-  await page.getByRole("button", { name: "Toggle filters", exact: true }).click();
-  const handle = page.getByRole("separator", { name: "Resize filters" });
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
+  await page.getByRole("button", { name: "Toggle event details", exact: true }).click();
+  const handle = page.getByRole("separator", { name: "Resize event details" });
   await handle.focus();
-  for (let i = 0; i < 25; i++) await page.keyboard.press("ArrowRight");
-  await page.getByRole("button", { name: "Toggle details", exact: true }).click();
-  await expect(page.locator(".sidebar")).toBeVisible();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("textbox", { name: "Search session" })).toBeVisible();
   await expect(page.locator(".inspector-panel")).toBeVisible();
   await expect(page.locator(".app-grid")).not.toHaveClass(/narrow-layout/);
-  await page.getByRole("button", { name: "Toggle filters", exact: true }).click();
-  await expect(page.locator(".sidebar")).not.toBeVisible();
-  await expect(page.locator(".inspector-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Close event details", exact: true }).click();
+  await expect(page.locator(".inspector-panel")).not.toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Search session" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 test("R28/R34: clearing distant search and categories resets source top; long paste is bounded before filtering", async ({
@@ -76,8 +75,7 @@ test("R28/R34: clearing distant search and categories resets source top; long pa
   await search.fill("A".repeat(100000));
   await expect(search).toHaveValue("A".repeat(512));
   await search.fill("");
-  await page.getByRole("button", { name: "Session", exact: true }).click();
-  await page.getByRole("button", { name: "Toggle filters", exact: true }).click();
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
   const sessionSearch = page.getByRole("textbox", { name: "Search session" });
   await sessionSearch.fill("B".repeat(100000));
   await expect(sessionSearch).toHaveValue("B".repeat(512));
@@ -90,8 +88,8 @@ test("R27: a leaf beyond the snapshot cutoff is revealable and remains read-only
   f.manager.branch(f.user);
   const leaf = f.manager.appendCustomEntry("late-active-leaf", {});
   await page.goto(server.url);
-  await page.getByRole("button", { name: "Session", exact: true }).click();
-  await page.getByRole("button", { name: "Branch view", exact: true }).click();
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
+  await page.getByRole("tab", { name: "Branch view", exact: true }).click();
   await expect(page.locator(`.session-primary:not([hidden]) [data-trace-id="${leaf}"]`)).toBeVisible();
   expect(f.manager.getLeafId()).toBe(leaf);
 });

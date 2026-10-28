@@ -3,8 +3,21 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } fro
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { test } from "vitest";
+import { type BuildOptions, build } from "esbuild";
+import { test, vi } from "vitest";
 import { type BuildMetadata, listFiles, type RuntimeBuilder } from "./runtime-builder-contract.js";
+
+// These fixtures inventory require() calls; they do not execute converted ESM.
+vi.mock("esbuild", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("esbuild")>();
+  return {
+    ...actual,
+    build: vi.fn((options: BuildOptions) =>
+      actual.build({ ...options, logOverride: { "unsupported-require-call": "silent" } }),
+    ),
+  };
+});
+const { build: realBuild } = await vi.importActual<typeof import("esbuild")>("esbuild");
 
 const banner = "// @generated runtime fixture";
 interface Configuration {
@@ -161,7 +174,11 @@ for (const scenario of ["build", "graph", "files", "validation", "publication"] 
       const fail = () => {
         throw new Error("injected failure");
       };
-      if (scenario === "build") await writeFile(join(root, "src/index.ts"), "export {");
+      if (scenario === "build") {
+        await writeFile(join(root, "src/index.ts"), "export {");
+        // Check the expected syntax error through the rejection, not inherited stderr.
+        vi.mocked(build).mockImplementationOnce((options) => realBuild({ ...options, logLevel: "silent" }));
+      }
       if (scenario === "graph") builder = createRuntimeBuilder({ ...config, validateGraph: fail });
       if (scenario === "files") builder = createRuntimeBuilder({ ...config, validateFiles: async () => fail() });
       await assert.rejects(
@@ -175,6 +192,11 @@ for (const scenario of ["build", "graph", "files", "validation", "publication"] 
                   }
                 : undefined,
         }),
+        scenario === "build"
+          ? /Expected identifier but found end of file/u
+          : scenario === "publication"
+            ? /ENOENT/u
+            : /injected failure/u,
       );
       await assertPrevious(root);
     });

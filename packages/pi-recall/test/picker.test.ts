@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { CURSOR_MARKER, type Focusable, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { stripTuiCursorMarkers, plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import type { RecallMessageRecord } from "../src/messages.js";
 import { ScopedRecallPicker } from "../src/picker.js";
 
@@ -341,7 +341,7 @@ test("preserves query spaces, removes pasted controls, bounds queries, and forwa
   assert.equal(picker.render(80).join("\n").includes(CURSOR_MARKER), true);
   focusable.focused = false;
   picker.handleInput("\u001b[200~foo \u0007\u009dbar\u009c\u202e\u2066\u2028\u2029\u001b[201~");
-  const rendered = picker.render(80).join("\n");
+  const rendered = stripTuiCursorMarkers(picker.render(80).join("\n"));
   assert.match(rendered, /bar foo/);
   assert.equal(rendered.includes("\u0007"), false);
   assert.equal(rendered.includes("\u009d"), false);

@@ -33,7 +33,7 @@ export function projectEffectiveConfig(config: StarshipConfig): TomlTable {
     }
     table.disabled = module.disabled;
     for (const key of Object.keys(definition.options ?? {})) {
-      table[key] = cloneOptionValue(module.options[key]);
+      table[key] = cloneOptionValue(module.options[key], definition.name === "directory" && key === "substitutions");
     }
     if (definition.name === "extension_status") {
       table.separator = config.extensionStatus.separator;
@@ -50,11 +50,12 @@ export function serializeEffectiveConfig(config: StarshipConfig): string {
   return stringify(projectEffectiveConfig(config));
 }
 
-function cloneOptionValue(value: ModuleOptionValue | undefined): TomlValue {
+function cloneOptionValue(value: ModuleOptionValue | undefined, preserveOrder = false): TomlValue {
   if (value === undefined) throw new Error("Missing normalized module option");
-  if (Array.isArray(value)) return [...(value as readonly string[])];
+  if (Array.isArray(value)) return structuredClone(value) as TomlValue;
   if (typeof value === "object") {
-    return sortedRecord(value as Readonly<Record<string, string>>);
+    const record = value as Readonly<Record<string, string>>;
+    return preserveOrder ? { ...record } : sortedRecord(record);
   }
   return value;
 }

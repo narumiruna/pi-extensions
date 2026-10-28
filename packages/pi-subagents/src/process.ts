@@ -4,18 +4,24 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
-import { isWithin } from "./attachment-utils.js";
 import {
   assertChildBootstrapCapacity,
   BROKER_CREDENTIAL_FD,
   CHILD_READINESS_FD,
-  CHILD_READINESS_FD_ENV,
   childBootstrapEnvironment,
   MAX_READINESS_FRAME_BYTES,
   serializeChildBootstrap,
 } from "./broker-credentials.js";
 import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
+import {
+  assertChildModelPair,
+  assertChildModelState,
+  assertTrustedChildResources,
+  type ChildReadinessFrame,
+  parseReadinessFrame,
+} from "./child-readiness.js";
 import { sanitizeTerminalText } from "./message-broker.js";
+import { JsonLineDecoder } from "./rpc-line-decoder.js";
 import { resolveTimeoutMs } from "./timeout.js";
 import type { ChildControl, ChildRequest, ChildResult } from "./types.js";
 
@@ -24,7 +30,6 @@ export { resolveTimeoutMs };
 const CORE_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const MAX_OUTPUT_BYTES = 32 * 1024;
 const MAX_ERROR_BYTES = 8 * 1024;
-const MAX_EVENT_LINE_BYTES = 256 * 1024;
 const RPC_RESPONSE_TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 1_000;
 const MAX_WINDOWS_COMMAND_LINE_CODE_UNITS = 32_767;
@@ -39,6 +44,7 @@ interface ProcessSettlement {
 
 interface AssistantEvent {
   type?: string;
+  command?: string;
   id?: string;
   success?: boolean;
   error?: string;
@@ -84,10 +90,7 @@ export async function runChild(request: ChildRequest): Promise<ChildResult> {
   }
 }
 
-type ChildCommandRequest = Pick<
-  ChildRequest,
-  "tools" | "skills" | "extensions" | "model" | "thinkingLevel" | "projectTrusted"
->;
+type ChildCommandRequest = Pick<ChildRequest, "tools" | "skills" | "extensions" | "thinkingLevel" | "projectTrusted">;
 
 export function buildPiArgs(request: ChildCommandRequest): string[] {
   const args = [
@@ -102,15 +105,10 @@ export function buildPiArgs(request: ChildCommandRequest): string[] {
   ];
   if (request.tools.includes("codemode")) args.push("-e", "builtin:codemode");
   for (const extension of request.extensions) args.push("-e", extension.path);
-  if (requiresReadinessAttestation(request)) args.push("-e", childReadinessProbePath());
+  args.push("-e", childReadinessProbePath());
   for (const skill of request.skills) args.push("--skill", skill);
-  args.push(
-    "--model",
-    request.model,
-    "--thinking",
-    request.thinkingLevel,
-    request.projectTrusted ? "--approve" : "--no-approve",
-  );
+  // CLI model flags use pattern matching. The readiness probe binds the private exact selection.
+  args.push("--thinking", request.thinkingLevel, request.projectTrusted ? "--approve" : "--no-approve");
   args.push("--tools", selectedChildTools(request).join(","));
   return args;
 }
@@ -154,11 +152,7 @@ export function childReadinessProbePath(): string {
   return fileURLToPath(new URL("./child-readiness-probe.ts", import.meta.url));
 }
 
-function requiresReadinessAttestation(request: Pick<ChildRequest, "tools" | "extensions">): boolean {
-  return request.tools.includes("codemode") || request.extensions.length > 0;
-}
-
-function selectedChildTools(request: Pick<ChildRequest, "tools" | "extensions">): string[] {
+export function selectedChildTools(request: Pick<ChildRequest, "tools" | "extensions">): string[] {
   return [
     ...new Set([
       ...request.tools,
@@ -174,8 +168,8 @@ async function executeProcess(
 ): Promise<ChildResult> {
   const timeoutMs = resolveTimeoutMs(request.timeout);
   const expectedTools = selectedChildTools(request);
-  const expectReadiness = requiresReadinessAttestation(request);
-  if (expectReadiness) assertChildBootstrapCapacity(expectedTools);
+  const selection = { provider: request.provider, model: request.model, thinkingLevel: request.thinkingLevel };
+  assertChildBootstrapCapacity(expectedTools, selection);
   let latestOutput = "";
   let terminalOutput: string | undefined;
   let terminalStopReason: "stop" | "length" | undefined;
@@ -212,7 +206,7 @@ async function executeProcess(
   };
   let malformedEvents = 0;
   let rpcCounter = 0;
-  let attachmentStartupPending = expectReadiness;
+  let attachmentReady = false;
   let attachmentStartupError: string | undefined;
   const pendingCommands = new Map<string, PendingRpcCommand>();
   let rpcInputError: Error | undefined;
@@ -258,9 +252,10 @@ async function executeProcess(
     (value) => {
       const event = value as AssistantEvent;
       if (
-        expectReadiness &&
         event.type === "extension_error" &&
-        (event.event === "session_start" || event.event === "resources_discover") &&
+        ["session_start", "resources_discover", "model_select", "thinking_level_select"].includes(
+          String(event.event),
+        ) &&
         !attachmentStartupError
       ) {
         const detail =
@@ -273,7 +268,9 @@ async function executeProcess(
       if (event.type === "response" && typeof event.id === "string") {
         const pending = pendingCommands.get(event.id);
         if (!pending) return;
-        if (event.success === true) {
+        if (event.command !== pending.command) {
+          rejectPendingCommand(event.id, new Error("Subagent RPC response returned an invalid command."));
+        } else if (event.success === true) {
           resolvePendingCommand(event.id, event);
         } else {
           rejectPendingCommand(
@@ -320,8 +317,9 @@ async function executeProcess(
     },
     () => {
       malformedEvents++;
-      if (attachmentStartupPending && !attachmentStartupError) {
+      if (!attachmentReady && !attachmentStartupError) {
         attachmentStartupError = "Subagent attachment startup emitted malformed or oversized RPC output.";
+        failRpcInput(new Error(attachmentStartupError));
       }
     },
   );
@@ -336,10 +334,10 @@ async function executeProcess(
     let timedOut = false;
     let completed = false;
     let ready = false;
-    let attachmentReady = !expectReadiness;
     let promptStarted = false;
     let readinessPipe: import("node:stream").Readable | undefined;
     let deadline: NodeJS.Timeout | undefined;
+    let startupDeadline: NodeJS.Timeout | undefined;
     let forceClose: NodeJS.Timeout | undefined;
     let escalation: NodeJS.Timeout | undefined;
     let termination: Promise<void> | undefined;
@@ -351,6 +349,7 @@ async function executeProcess(
         if (settled) return;
         settled = true;
         if (deadline) clearTimeout(deadline);
+        if (startupDeadline) clearTimeout(startupDeadline);
         if (forceClose) clearTimeout(forceClose);
         if (escalation) clearTimeout(escalation);
         request.signal.removeEventListener("abort", onAbort);
@@ -365,6 +364,8 @@ async function executeProcess(
     const terminate = (code: number) => {
       if (settled || terminating) return;
       terminating = true;
+      rejectPendingCommands(new Error("Subagent RPC process is terminating."));
+      if (startupDeadline) clearTimeout(startupDeadline);
       if (deadline) {
         clearTimeout(deadline);
         deadline = undefined;
@@ -401,15 +402,14 @@ async function executeProcess(
     try {
       const environment: NodeJS.ProcessEnv = {
         ...globalThis.process.env,
-        ...childBootstrapEnvironment(expectReadiness),
+        ...childBootstrapEnvironment(true),
         PI_SUBAGENT_DEPTH: String((Number.parseInt(globalThis.process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) + 1),
       };
-      if (!expectReadiness) delete environment[CHILD_READINESS_FD_ENV];
       process = spawn(invocation.command, invocation.args, {
         cwd: request.cwd,
         detached: globalThis.process.platform !== "win32",
         shell: false,
-        stdio: expectReadiness ? ["pipe", "pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
         env: environment,
       });
     } catch (error) {
@@ -467,8 +467,18 @@ async function executeProcess(
     };
 
     const startPrompt = () => {
-      if (!spawned || !attachmentReady || promptStarted || settled || cancelled || terminating) return;
+      if (
+        !spawned ||
+        !attachmentReady ||
+        promptStarted ||
+        settled ||
+        cancelled ||
+        terminating ||
+        request.signal.aborted
+      )
+        return;
       promptStarted = true;
+      if (startupDeadline) clearTimeout(startupDeadline);
       void sendCommand(
         { type: "prompt", message: `Task: ${request.task}` },
         () => {
@@ -505,12 +515,19 @@ async function executeProcess(
     };
     const failReadiness = (message: string) => {
       if (settled || terminating || attachmentReady) return;
-      errorMessage = truncateText(redactAttachmentPaths(message, request), MAX_ERROR_BYTES).text;
+      const limited = truncateText(redactAttachmentPaths(sanitizeTerminalText(message), request), MAX_ERROR_BYTES);
+      errorMessage = limited.text;
+      truncated ||= limited.truncated;
       terminate(1);
     };
     const confirmAttachmentStartup = () => {
-      void sendCommand({ type: "get_state" }, undefined, request.signal)
+      void sendCommand(
+        { type: "get_state" },
+        (response) => assertChildModelState(response.data, request),
+        request.signal,
+      )
         .then(async () => {
+          if (settled || terminating || request.signal.aborted) return;
           if (attachmentStartupError) throw new Error(attachmentStartupError);
           if (!request.projectTrusted) {
             // Pi's RPC get_commands includes effective skills and prompts after resources_discover.
@@ -521,8 +538,8 @@ async function executeProcess(
               request.signal,
             );
           }
+          if (settled || terminating || request.signal.aborted) return;
           if (attachmentStartupError) throw new Error(attachmentStartupError);
-          attachmentStartupPending = false;
           attachmentReady = true;
           startPrompt();
         })
@@ -537,7 +554,9 @@ async function executeProcess(
       spawned = true;
       startPrompt();
     });
-    if (expectReadiness) {
+    {
+      startupDeadline = setTimeout(() => failReadiness("Subagent child readiness timed out."), RPC_RESPONSE_TIMEOUT_MS);
+      startupDeadline.unref();
       const candidate = process.stdio[CHILD_READINESS_FD];
       if (!candidate || !("on" in candidate)) {
         errorMessage = "Subagent readiness pipe is unavailable.";
@@ -557,9 +576,10 @@ async function executeProcess(
         readinessPipe.once("end", () => {
           if (readinessSettled || terminating) return;
           readinessSettled = true;
-          let frame: { ok: true; sources: string[] } | { ok: false; error: string };
+          let frame: ChildReadinessFrame;
           try {
             frame = parseReadinessFrame(buffer, expectedTools.length);
+            if (frame.ok) assertChildModelPair(frame.model, request);
           } catch (error) {
             failReadiness(error instanceof Error ? error.message : String(error));
             return;
@@ -629,7 +649,8 @@ async function executeProcess(
         credentialPipe.end(
           serializeChildBootstrap({
             communication: request.communication,
-            expectedTools: expectReadiness ? expectedTools : [],
+            expectedTools,
+            selection,
           }),
         );
       } catch {
@@ -802,79 +823,6 @@ function killImmediateChild(process: ChildProcess): void {
   }
 }
 
-function assertTrustedChildResources(value: unknown, cwd: string): void {
-  const invalid = () => new Error("Subagent child resource attestation returned invalid commands.");
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
-  const commands = (value as { commands?: unknown }).commands;
-  if (!Array.isArray(commands)) throw invalid();
-  let canonicalCwd: string;
-  try {
-    canonicalCwd = fs.realpathSync(cwd);
-  } catch {
-    throw invalid();
-  }
-  for (const command of commands) {
-    if (!command || typeof command !== "object" || Array.isArray(command)) throw invalid();
-    const entry = command as { source?: unknown; sourceInfo?: { path?: unknown } };
-    if (entry.source !== "skill" && entry.source !== "prompt") continue;
-    const resourcePath = entry.sourceInfo?.path;
-    if (typeof resourcePath !== "string" || !resourcePath) throw invalid();
-    const lexicalPath = path.resolve(cwd, resourcePath);
-    let canonicalPath: string;
-    try {
-      canonicalPath = fs.realpathSync(lexicalPath);
-    } catch {
-      throw invalid();
-    }
-    if (isWithin(cwd, lexicalPath) || isWithin(canonicalCwd, canonicalPath)) {
-      throw new Error("Subagent child cannot load project resources because the project is not trusted.");
-    }
-  }
-}
-
-function parseReadinessFrame(
-  buffer: Buffer,
-  expectedToolCount: number,
-): { ok: true; sources: string[] } | { ok: false; error: string } {
-  if (buffer.byteLength === 0) {
-    throw new Error("Subagent readiness pipe closed without a result.");
-  }
-  const text = buffer.toString("utf8");
-  const newline = text.indexOf("\n");
-  if (newline < 0 || newline !== text.length - 1) {
-    throw new Error("Subagent readiness pipe returned an invalid frame.");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text.slice(0, newline));
-  } catch {
-    throw new Error("Subagent readiness pipe returned malformed JSON.");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Subagent readiness pipe returned an invalid result.");
-  }
-  const record = value as Record<string, unknown>;
-  if (
-    record.ok === true &&
-    Object.keys(record).length === 2 &&
-    Array.isArray(record.sources) &&
-    record.sources.length === expectedToolCount &&
-    record.sources.every((source) => typeof source === "string" && /^[a-f0-9]{64}$/u.test(source))
-  ) {
-    return { ok: true, sources: record.sources };
-  }
-  if (
-    record.ok === false &&
-    Object.keys(record).length === 2 &&
-    typeof record.error === "string" &&
-    record.error.length > 0 &&
-    Buffer.byteLength(record.error, "utf8") <= MAX_ERROR_BYTES
-  ) {
-    return { ok: false, error: sanitizeTerminalText(record.error) };
-  }
-  throw new Error("Subagent readiness pipe returned an invalid result.");
-}
-
 function redactAttachmentPaths(value: string, request: Pick<ChildRequest, "skills" | "extensions">): string {
   return redactAttachmentPathVariants(value, attachmentPathVariants(request));
 }
@@ -953,60 +901,4 @@ function truncateTail(text: string, maxBytes: number): { text: string; truncated
       .replace(/^�+/gu, "")}`,
     truncated: true,
   };
-}
-
-class JsonLineDecoder {
-  private buffer = "";
-  private dropping = false;
-  private readonly decoder = new StringDecoder("utf8");
-
-  constructor(
-    private readonly onValue: (value: unknown) => void,
-    private readonly onMalformed: () => void,
-  ) {}
-
-  push(chunk: Buffer | string): void {
-    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
-    this.drain(false);
-  }
-
-  finish(): void {
-    this.buffer += this.decoder.end();
-    this.drain(true);
-    this.buffer = "";
-    this.dropping = false;
-  }
-
-  private drain(flush: boolean): void {
-    while (true) {
-      const newline = this.buffer.indexOf("\n");
-      if (newline < 0) break;
-      const line = this.buffer.slice(0, newline).replace(/\r$/u, "");
-      this.buffer = this.buffer.slice(newline + 1);
-      if (this.dropping) {
-        this.dropping = false;
-        continue;
-      }
-      this.parse(line);
-    }
-    if (!flush && Buffer.byteLength(this.buffer, "utf8") > MAX_EVENT_LINE_BYTES) {
-      this.onMalformed();
-      this.buffer = "";
-      this.dropping = true;
-    }
-    if (flush && this.buffer && !this.dropping) this.parse(this.buffer.replace(/\r$/u, ""));
-  }
-
-  private parse(line: string): void {
-    if (!line.trim()) return;
-    if (Buffer.byteLength(line, "utf8") > MAX_EVENT_LINE_BYTES) {
-      this.onMalformed();
-      return;
-    }
-    try {
-      this.onValue(JSON.parse(line));
-    } catch {
-      this.onMalformed();
-    }
-  }
 }

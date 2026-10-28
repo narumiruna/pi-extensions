@@ -3,7 +3,13 @@ import { withLock } from "../state/lock.js";
 import { withStateDirectoryAccess } from "../state/state-directory.js";
 import { ContinuousError, type ContinuousErrorKind } from "./continuous-errors.js";
 import { type ContinuousLease, continuousLeaseOwner } from "./continuous-lease.js";
-import { continuousBinding, readContinuousPrivate, writeContinuousPrivate } from "./continuous-storage.js";
+import {
+  CONTINUOUS_RECORD_MAX_BYTES,
+  continuousBinding,
+  readContinuousPrivate,
+  readContinuousPrivateDocument,
+  writeContinuousPrivate,
+} from "./continuous-storage.js";
 
 export const REQUEST_WINDOW_MS = 15 * 60_000;
 export interface ContinuousRecord {
@@ -93,10 +99,12 @@ export function validateContinuousRecord(value: unknown, binding: string): asser
   )
     throw new Error("Invalid continuous sync state; evidence retained.");
 }
+function emptyContinuousRecord(binding: string): ContinuousRecord {
+  return { version: 1, binding, pending: true, phase: "waiting", next: 0, failures: 0, calls: [], attempts: {} };
+}
 export async function readContinuousRecord(binding: string): Promise<ContinuousRecord> {
   const value = await readContinuousPrivate(`${binding}.json`);
-  if (value === undefined)
-    return { version: 1, binding, pending: true, phase: "waiting", next: 0, failures: 0, calls: [], attempts: {} };
+  if (value === undefined) return emptyContinuousRecord(binding);
   validateContinuousRecord(value, binding);
   return value;
 }
@@ -131,16 +139,20 @@ export async function reserveContinuousRequest(
   lease: ContinuousLease,
   key: string,
   clock: () => number = Date.now,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   if (!digest(key)) throw new Error("Invalid continuous candidate key.");
   let failure: ContinuousError | undefined;
   await updateContinuousRecord(binding, lease, (record) => {
+    signal?.throwIfAborted();
     const now = clock();
+    signal?.throwIfAborted();
     normalizeContinuousClock(record, now);
     if ((record.attempts[key] ?? 0) >= 2)
       failure = new ContinuousError(
         "model",
-        "Automatic request limit reached for this evidence. Use Sync now for an explicit retry.",
+        "Automatic request limit reached for this evidence. Change the evidence or review /sync; Sync now does not reset this limit.",
       );
     else if (record.calls.length >= 2)
       failure = new ContinuousError(
@@ -153,27 +165,97 @@ export async function reserveContinuousRequest(
       record.calls.push({ key, at: now });
     }
   });
+  // Atomic publication is not interruptible. A reservation written before cancellation stays spent.
+  signal?.throwIfAborted();
   if (failure) throw failure;
 }
 
+const recoveryActions: Record<ContinuousErrorKind, string> = {
+  transient: "Wait for the scheduled retry. Check network and service availability if failures continue.",
+  contention: "Wait for the active sync operation to finish. Do not remove a live lock.",
+  stale: "Wait for a fresh inspection after the retry delay. Local or remote evidence changed.",
+  authentication: "Repair storage or Pi model authentication, then reopen /sync. Do not share credentials.",
+  storage: "Repair private-state permissions, free space or storage access. Retain accounting and recovery evidence.",
+  unsafe:
+    "Remove secrets or repair unsupported conflicts. Changed evidence is inspected again; review /sync if needed.",
+  model:
+    "Review conflict evidence and Pi model access. Sync now reuses cached refusals; a refusal needs changed evidence or a separately confirmed retry.",
+  budget:
+    "Wait for the window allowance shown above. Waiting does not restore exhausted candidates or accounting capacity.",
+  unknown:
+    "Review /sync diagnostics and reconcile pending recovery before retrying. Do not delete private evidence or blindly republish.",
+};
+
+function serializedBytes(record: ContinuousRecord): number {
+  // Keep this aligned with writeJson's private-document encoding.
+  return Buffer.byteLength(`${JSON.stringify(record, null, "\t")}\n`);
+}
+
+/** Check space for one reservation without retaining or publishing the synthetic candidate. */
+function hasReservationCapacity(record: ContinuousRecord, now: number): boolean {
+  const existing = Object.keys(record.attempts).find((key) => record.attempts[key] === 1);
+  let key = existing ?? "0".repeat(64);
+  if (!existing) {
+    for (let index = 1; record.attempts[key] !== undefined; index++) key = index.toString(16).padStart(64, "0");
+  }
+  return (
+    serializedBytes({
+      ...record,
+      calls: [...record.calls, { key, at: now }],
+      attempts: { ...record.attempts, [key]: (record.attempts[key] ?? 0) + 1 },
+    }) <= CONTINUOUS_RECORD_MAX_BYTES
+  );
+}
+
 /** Read-only status: no directory creation, lease, mutation, request reservation or provider call. */
-export async function continuousStatusLines(config: AnySyncConfig): Promise<string[]> {
+export async function continuousStatusLines(config: AnySyncConfig, clock: () => number = Date.now): Promise<string[]> {
   if (!config.continuous) return ["Continuous sync: Off"];
   if (!config.agentMode) return ["Continuous sync: paused; enable Agent mode first"];
   try {
-    const record = await readContinuousRecord(await continuousBinding(config));
+    const binding = await continuousBinding(config);
+    const document = await readContinuousPrivateDocument(`${binding}.json`);
+    const record = document === undefined ? emptyContinuousRecord(binding) : document.value;
+    validateContinuousRecord(record, binding);
+    const bytes = serializedBytes(record);
+    // Only this detached read is normalized. A Status read never publishes clock repairs or expires durable calls.
+    const now = clock();
+    normalizeContinuousClock(record, now);
+    const spent = Object.values(record.attempts).filter((count) => count === 2).length;
+    const eligible =
+      record.calls.length < 2 ? now : Math.min(...record.calls.map((call) => call.at)) + REQUEST_WINDOW_MS;
+    const capacityRecord = { ...record, calls: [...record.calls] };
+    normalizeContinuousClock(capacityRecord, eligible);
+    const available = hasReservationCapacity(capacityRecord, eligible);
+    const owner = await continuousLeaseOwner(binding).catch(
+      () => "Local scheduler lease: private owner metadata unavailable; retain evidence and repair access",
+    );
     return [
-      `Continuous sync: ${record.phase}${record.error ? ` (${record.error})` : ""}`,
-      await continuousLeaseOwner(record.binding),
-      `Last successful background check: ${record.checked ? new Date(record.checked).toISOString() : "not yet checked"}`,
-      `Last successful background transfer: ${record.transferred ? new Date(record.transferred).toISOString() : "none"}`,
+      `Continuous sync: ${record.phase}${record.error ? ` (${record.error})` : ""}${document === undefined ? "; no accounting record yet" : ""}`,
+      owner,
+      "Scheduler owner model: unavailable; the observing session's selected model is not proof of the owner's model.",
+      `Automatic requests (rolling 15 minutes, window only): ${record.calls.length}/2 used; ${2 - record.calls.length} remaining.`,
+      `Next request eligibility: ${available ? (eligible === now ? "now (window allowance)" : `${new Date(eligible).toISOString()} (window allowance)`) : "unavailable (accounting full)"}. Candidate, capacity, ownership and safety checks still apply.`,
+      `Spent candidates: ${spent} exhausted / ${Object.keys(record.attempts).length} tracked; 2 automatic requests per candidate. Expired windows do not clear this limit.`,
+      `Accounting: ${bytes}/${CONTINUOUS_RECORD_MAX_BYTES} serialized bytes; ${Math.max(0, CONTINUOUS_RECORD_MAX_BYTES - bytes)} bytes free; ${document?.bytes ?? 0} bytes on disk${available ? "." : "; full for another reservation."}`,
+      ...(!available
+        ? [
+            "Accounting recovery: pause Continuous sync and seek reviewed recovery. Do not delete accounting, prune candidates or reset limits to regain requests.",
+          ]
+        : []),
+      `Last successful background check: ${record.checked !== undefined ? new Date(record.checked).toISOString() : "not yet checked"}`,
+      `Last successful background transfer: ${record.transferred !== undefined ? new Date(record.transferred).toISOString() : "none"}`,
       ...(record.phase === "retry" ? [`Next background attempt: ${new Date(record.next).toISOString()}`] : []),
-      ...(record.phase === "blocked"
-        ? ["Background sync needs changed evidence or repair. Review /sync, or use Sync now for an explicit retry."]
+      ...(record.error ? [`Recovery (${record.error}): ${recoveryActions[record.error]}`] : []),
+      ...(record.phase === "blocked" && !record.error
+        ? ["Review /sync diagnostics and repair changed evidence. Retain private recovery state."]
         : []),
       "Monitoring requires an eligible open Pi session. Status does not spend model requests or clear retry limits.",
     ];
   } catch {
-    return ["Continuous sync: private state unavailable; retain evidence and repair access before retrying."];
+    return [
+      "Continuous sync: private state unavailable; usage, eligibility and accounting bytes cannot be verified.",
+      `Accounting capacity: ${CONTINUOUS_RECORD_MAX_BYTES} bytes; do not treat unavailable accounting as unused allowance.`,
+      "Recovery: pause Continuous sync, retain malformed, unknown or unsafe evidence, and repair private-state access. Do not delete accounting or reset limits.",
+    ];
   }
 }

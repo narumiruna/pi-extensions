@@ -215,6 +215,35 @@ test("masked input does not advertise a binding reconstructed from control chara
   assert.match(frame, /ctrl\+c cancel/u);
 });
 
+test("optional masked secret submits an empty value", async () => {
+  const tui = createTuiHarness();
+  const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+  const pending = promptSecret(ctx, "Optional credential", { required: false });
+  await tui.waitForOpen();
+  tui.press("tui.input.submit");
+  assert.equal(await pending, "");
+});
+
+test("non-TUI secret prompts never open a custom or plaintext dialog", async () => {
+  for (const mode of ["rpc", "print", "json"] as const) {
+    const calls: string[] = [];
+    const { ctx } = createMockContext({
+      mode,
+      hasUI: mode === "rpc",
+      custom: async () => {
+        calls.push("custom");
+        return undefined;
+      },
+      input: async () => {
+        calls.push("input");
+        return "plaintext";
+      },
+    });
+    assert.equal(await promptSecret(ctx, "Credential"), undefined);
+    assert.deepEqual(calls, []);
+  }
+});
+
 async function flushAsync() {
   await Promise.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));

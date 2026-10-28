@@ -12,8 +12,10 @@ A read-only browser view of the current Pi session, with consent-gated live cont
 
 - Explore ordered context messages and blocks with search, filters, a minimap and expandable details.
 - Read branch-scoped Session history with conversation groups, direct search matches, and an explicit internal-events view.
-- Inspect actual branches, historical prompts, tools, skills and codemode evidence through content-first Details without changing Pi's active leaf.
+- Inspect actual branches, historical prompts, tools, skills and codemode evidence through content-first Event details without changing Pi's active leaf.
 - Follow bounded live tool calls, including observed nested calls, with explicit provenance and unavailable-data labels.
+- Browse current tools in a source explorer with selectable table columns and a detail panel; inspect MCP registrations and the startup skill catalog separately.
+- Review recorded branch cache usage, hit-rate trends, request comparisons and estimated costs without another extension.
 - Use light/dark and responsive browser layouts with keyboard navigation.
 
 ## 📦 Install
@@ -32,7 +34,9 @@ For one invocation without saving an installation:
 pi -e ./packages/pi-inspect
 ```
 
-Extensions run with Pi's permissions; review the source before installing. Root `npm install` builds browser assets during prepare, including Pi's production-only Git installation path. Rebuild after frontend changes. Packaged browser assets require no development server; frontend/build dependencies remain production dependencies so asset-free Git checkouts can build with dev dependencies omitted. Factory loading does not start the server or read those assets.
+Extensions run with Pi's permissions; review the source before installing. An unbuilt local checkout must run the package build before loading the package directory. Published packages include a prebuilt TypeScript runtime for Pi's Jiti loader and browser assets; they need no development server. Factory loading does not start the server or read those assets.
+
+Root `npm install` builds only browser assets during prepare, including Pi's production-only Git installation path, which retains source entrypoints. Frontend/build dependencies remain production dependencies so asset-free Git checkouts can build with dev dependencies omitted. Rebuild the package after source changes. Runtime and browser output have separate directories; a failed build/prepack stops packaging, but publication of the two directories is not one transaction.
 
 The old project-local extension is removed. Replace explicit `.pi/extensions/inspect/index.ts` references with `packages/pi-inspect/src/index.ts`, or load the package directory. Reload an existing session after updating its installation.
 
@@ -40,7 +44,11 @@ The old project-local extension is removed. Replace explicit `.pi/extensions/ins
 
 In Pi's interactive TUI, run `/inspect` and accept the sensitive-data warning. The command opens your default browser; if opening fails, Pi shows a private URL instead.
 
-Context shows the last observed model input, or an explicitly labeled session-derived fallback. Switch to Session for History, Branch view, or Captured executions; selecting a record opens Details. **View branch context** opens an explicit historical projection, not a captured request. Current runtime inventories and independent provider observations remain separate from historical evidence.
+Use the Context, Session, Cache, Tools, MCP Servers and Skills tabs below the header. Context shows the last observed model input, or an explicitly labeled session-derived fallback. Session contains History, Branch view and Captured executions, with inline filters; selecting a record opens Event details beside the list, or in a drawer on narrow screens. **View branch context** opens an explicit historical projection, not a captured request.
+
+Tools provides source navigation, a searchable table, exposure filters and selectable columns. Select a tool to open its description, parameters, source and schema on the right. Group by Namespace, Source or Exposure. Namespace uses the declared tool namespace and falls back to Source when absent. Source separates Built-in, Extensions, Packages and Unknown. On narrow screens, Sources and Tool details open as drawers. Column and group choices stay in memory; they do not change Pi settings or tool activation. MCP Servers shows extension registrations; Skills shows the catalog captured at inspector startup. These views are not historical request evidence. Independent provider observations remain in Context.
+
+Cache follows Pi's active branch, with weighted usage totals, the latest 200 records and up to 32 conversational trend points in a fixed 0–100% vertical bar chart. Text labels distinguish Low, Moderate, High and unavailable values; unknown is not 0%. Select a point with the keyboard or pointer to open Event details. Summary and warming usage contribute to totals but not conversational comparisons. Costs and re-billed tokens are estimates, not billing or proof of prefix reuse. See the [cache history contract](./docs/cache-history.md) for display states, fixed visual targets, epoch boundaries, formulas and bounds. Streaming and historical-branch cache previews are not included.
 
 Use `/inspect stop` when finished. Closing the browser tab alone does not stop the server or collection.
 
@@ -70,6 +78,8 @@ See the bundled [viewer reference](./docs/viewer.md) for detailed bounds, connec
 
 The observed Pi-stage context and provider-payload copies are not guaranteed final transport inputs. Historical projections follow native Pi semantics; missing checkpoints, uncaptured results, segment token sizes and unavailable timings are labeled rather than inferred. Session ancestry and live execution parentage remain separate.
 
+MCP Servers cannot report the complete configured server catalog, connection/authentication health or authoritative server-to-tool ownership. A registration or namespace is not proof of a connection. Skill file content and current file availability are unavailable; the inspector does not read skill files. The startup skill catalog is not continuously refreshed.
+
 The [viewer reference](./docs/viewer.md) documents every view, supported interaction, provenance distinction and capture limit.
 
 ## Development verification
@@ -98,8 +108,10 @@ Root checks build and typecheck this workspace; root tests include its determini
 - `src/index.ts`: thin Pi entrypoint forwarding to `src/extension.ts`.
 - `src/`: session ownership, bounded collection, projection, privacy and loopback server.
 - `src/web/`: React/Radix browser viewer and styles.
-- `dist/`: generated browser assets, built before packing and included in the package.
+- `dist/`: generated Jiti entrypoint and source map.
+- `browser-dist/`: generated browser HTML, JavaScript and CSS, built before packing.
 - `docs/`: bundled viewer reference and historical review/verification evidence.
+- [benchmarks/](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-inspect/benchmarks): repository-only startup measurements and reproduction commands; not published.
 - `scripts/`, `test/`: repository build/smoke helpers and deterministic/browser tests; not published.
 
 ## 🔎 Keywords

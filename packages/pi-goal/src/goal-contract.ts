@@ -14,7 +14,7 @@ interface ContractMessage {
   role?: string;
   customType?: string;
   content?: unknown;
-  details?: { sentAt?: unknown };
+  details?: { sentAt?: unknown; publicationId?: unknown };
   timestamp?: unknown;
 }
 
@@ -67,6 +67,12 @@ export function hasInactiveGoalContextContract(entries: unknown[]) {
 
 export function hasGoalContextContractHistory(entries: unknown[]) {
   return entries.some(isGoalContextContract);
+}
+
+export function hasGoalContractPublication(entries: unknown[], publicationId: string) {
+  return entries.some(
+    (entry) => isGoalContextContract(entry) && unwrapMessage(entry).details?.publicationId === publicationId,
+  );
 }
 
 export function isGoalContextContract(message: unknown) {

@@ -10,7 +10,7 @@ import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { pull, push, rollback } from "../src/sync/sync-mutations.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
-import { mergeOptions as options } from "./merged-sync-fixture.js";
+import { mergeOptions as options } from "./merge-options.js";
 
 for (const route of ["pull", "rollback"] as const)
   for (const change of ["unchanged", "edit", "delete"] as const)

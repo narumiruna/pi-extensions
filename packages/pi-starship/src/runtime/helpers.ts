@@ -1,6 +1,9 @@
-import { type FileHandle, open, opendir, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, type FileHandle, open, opendir, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import type { CollectorContext, WorkspaceEntry, WorkspaceFileSystem, WorkspaceRefreshInput } from "./types.js";
+
+export { formatVersion } from "../format/version.js";
 
 export const MAX_METADATA_FILE_BYTES = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 2_000;
@@ -11,15 +14,24 @@ const MAX_LABEL_LENGTH = 160;
 export function createFileSystem(input: WorkspaceRefreshInput): WorkspaceFileSystem {
   const defaults: WorkspaceFileSystem = {
     async readFile(path, maxBytes) {
+      if (input.signal?.aborted) return undefined;
       let handle: FileHandle | undefined;
       try {
         handle = await open(path, "r");
         const info = await handle.stat();
         if (!info.isFile() || info.size > maxBytes) return undefined;
-        const buffer = Buffer.alloc(Math.min(maxBytes + 1, Number(info.size) + 1));
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        if (bytesRead > maxBytes) return undefined;
-        return buffer.subarray(0, bytesRead).toString("utf8");
+        // procfs can report zero bytes and sysfs can report a nominal page size.
+        // Read through EOF, not stat.size, while keeping one overflow byte.
+        const buffer = Buffer.alloc(maxBytes + 1);
+        let offset = 0;
+        while (offset < buffer.length) {
+          if (input.signal?.aborted) return undefined;
+          const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, null);
+          if (bytesRead === 0) break;
+          offset += bytesRead;
+        }
+        if (input.signal?.aborted || offset > maxBytes) return undefined;
+        return buffer.subarray(0, offset).toString("utf8");
       } catch {
         return undefined;
       } finally {
@@ -27,10 +39,12 @@ export function createFileSystem(input: WorkspaceRefreshInput): WorkspaceFileSys
       }
     },
     async readDirectory(path) {
+      if (input.signal?.aborted) return [];
       const entries: WorkspaceEntry[] = [];
       try {
         const directory = await opendir(path);
         for await (const entry of directory) {
+          if (input.signal?.aborted) break;
           entries.push({
             name: entry.name,
             isFile: entry.isFile(),
@@ -49,6 +63,22 @@ export function createFileSystem(input: WorkspaceRefreshInput): WorkspaceFileSys
         return true;
       } catch {
         return false;
+      }
+    },
+    async realPath(path) {
+      try {
+        return await realpath(path);
+      } catch {
+        return undefined;
+      }
+    },
+    async isWritable(path) {
+      try {
+        await access(path, constants.W_OK);
+        return true;
+      } catch (error) {
+        const code = isRecord(error) ? error.code : undefined;
+        return code === "EACCES" || code === "EPERM" || code === "EROFS" ? false : undefined;
       }
     },
   };
@@ -140,8 +170,26 @@ export function exactAlias(value: string | undefined, aliases: Readonly<Record<s
   return Object.hasOwn(aliases, value) ? safeMetadata(aliases[value]) : value;
 }
 
-export function formatVersion(raw: string, format: string | undefined): string {
-  return (format ?? "v$raw").replaceAll("$raw", raw.replace(/^v/u, ""));
+/** Empty values count as present, as in Starship's Context::detect_env_vars. */
+export function detectEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+  names: readonly string[],
+): boolean {
+  if (names.length === 0) return true;
+  let hasPositive = false;
+  let positiveMatch = false;
+  for (const name of names) {
+    const negative = name.startsWith("!");
+    const key = negative ? name.slice(1) : name;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) return false;
+    const present = Object.hasOwn(environment, key) && typeof environment[key] === "string";
+    if (negative && present) return false;
+    if (!negative) {
+      hasPositive = true;
+      positiveMatch ||= present;
+    }
+  }
+  return !hasPositive || positiveMatch;
 }
 
 export async function runBounded(
@@ -149,6 +197,7 @@ export async function runBounded(
   command: string,
   args: string[],
 ): Promise<string | undefined> {
+  if (context.input.signal?.aborted) return undefined;
   try {
     const result = await context.input.exec(command, args, {
       cwd: context.input.cwd,
@@ -157,7 +206,7 @@ export async function runBounded(
       signal: context.input.signal,
       environment: context.input.environment,
     });
-    if (result.code !== 0 || result.killed) return undefined;
+    if (context.input.signal?.aborted || result.code !== 0 || result.killed) return undefined;
     const selectedOutput = result.stdout || result.stderr;
     const output = Buffer.from(selectedOutput).subarray(0, MAX_COMMAND_OUTPUT_BYTES + 1);
     if (output.byteLength > MAX_COMMAND_OUTPUT_BYTES) return undefined;

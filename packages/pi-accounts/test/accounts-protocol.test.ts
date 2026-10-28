@@ -7,6 +7,7 @@ import { initTheme, ModelRegistry, ModelRuntime, SessionManager } from "@earendi
 import { beforeAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import accountsExtension, { AccountStore } from "../src/accounts.js";
+import { ACCOUNTS_SELECTION_COMMITTED_CHANNEL } from "../src/accounts-protocol.js";
 import type { AccountProviderAdapter } from "../src/oauth.js";
 import { RUNTIME_FAIL_CLOSED_API_KEY } from "../src/runtime-auth.js";
 import {
@@ -125,6 +126,26 @@ for (const account of ["alpha", "beta"] as const) {
     assert.notEqual(await current.registry.getApiKeyForProvider("openai"), account === "alpha" ? access : key);
   });
 }
+test("explicit selection emits a credential-free session notification", async () => {
+  const { mock, session } = await fixture();
+  const current = await session();
+  const notifications: unknown[] = [];
+  mock.rawPi.events.on(ACCOUNTS_SELECTION_COMMITTED_CHANNEL, (value) => notifications.push(value));
+
+  const result = await activate(mock, current.manager, "alpha");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(result, { status: "active", providerId: "openai", accountName: "alpha" });
+  assert.deepEqual(notifications, [
+    {
+      session: current.manager,
+      sessionId: current.manager.getSessionId(),
+      providerId: "openai",
+    },
+  ]);
+  safe(notifications);
+});
+
 test("PI_ACCOUNT rejects protocol activation and default restoration without changing session selection", async () => {
   process.env.PI_ACCOUNT = "alpha";
   const { mock, session } = await fixture();

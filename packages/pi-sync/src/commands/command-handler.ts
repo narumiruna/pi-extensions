@@ -32,9 +32,10 @@ export async function handleCommand(
     onCommit?: () => void,
     target?: string,
     onDialog?: (active: boolean) => void,
+    retryRefusal = false,
   ) => {
     const [command, ...args] = splitArgs(route);
-    if (command === "sync") {
+    if (command === "sync" && !retryRefusal) {
       try {
         const options = parseOptions(args);
         validateCommandOptions("sync", options);
@@ -51,6 +52,7 @@ export async function handleCommand(
       observationCommitCallback(attention, sessionSignal, onCommit),
       target,
       onDialog,
+      retryRefusal,
     );
   };
   if (!rawArgs.trim()) {

@@ -48,7 +48,7 @@ The package declares `dist/index.ts`, so an unbuilt local checkout must run the 
 Run `/usage` in TUI or RPC mode to inspect the active provider, refresh its usage, or choose another configured provider.
 When a provider exposes several billing targets, `/usage` asks for one target before querying usage.
 Run `/fast` to toggle Fast mode for a supported active Codex model.
-For native `/login openai`, select an `openai` model and run `/usage`. A same-account/workspace `/login openai-codex` supplies [companion usage](#chatgpt-companion-usage) automatically without changing native inference.
+For native `/login openai`, select an `openai` model and run `/usage` for authentication status and the ChatGPT usage-settings link. Optional [companion usage](#chatgpt-companion-usage) is Off by default.
 Native OpenAI Fast mode and earned reset redemption are not implemented; those actions remain specific to legacy `openai-codex`.
 
 ## 💬 Commands
@@ -68,7 +68,7 @@ Read the [query and reset guide](./docs/operations.md) for target selection, can
 
 ## ⚙️ Settings
 
-Choose **Settings** in `/usage` to edit Codex Fast mode, percentage display, and reset countdown through Pi's settings-list interaction in TUI mode.
+Choose **Settings** in `/usage` to edit Codex Fast mode, percentage display, reset countdown, and optional [OpenAI companion usage](#chatgpt-companion-usage) through Pi's settings-list interaction in TUI mode.
 RPC mode reports the active manual settings path instead of opening terminal UI.
 
 These preferences live in `pi-usage.json` under Pi's user agent directory, normally `~/.pi/agent/pi-usage.json`.
@@ -133,11 +133,20 @@ Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `fal
 **Experimental source:** this read-only feature uses undocumented ChatGPT backend endpoints that may change without notice.
 A user observed the plan weekly remaining percentage and reset time matching the ChatGPT overview; app percentages and broader account/window agreement remain unverified.
 
-Keep `/login openai` for native inference, then run `/login openai-codex` with the **same ChatGPT account and workspace**.
-After native OAuth validation, companion usage is automatic on queries and scheduled refreshes; there is no enablement setting or confirmation.
-This intentionally replaces the former default-off experimental opt-in.
-Existing `openaiCompanionUsage` values, including `false`, are ignored and preserved as unrelated JSON during other settings saves; reads do not rewrite the file.
-Remove the companion login if you do not want this automatic companion query path.
+**Off by default:** native `openai` queries do not resolve Codex credentials or make companion requests. They show native authentication status and the ChatGPT usage-settings link.
+Keep this setting Off if the two provider logins use different accounts or workspaces. Independent `openai-codex` usage, Fast mode, and reset redemption are unchanged.
+
+To opt in, keep `/login openai` for native inference, run `/login openai-codex` with the **same ChatGPT account and workspace**, then turn **Use Codex login for OpenAI usage** On in `/usage` → **Settings**.
+The extension cannot verify that the two logins identify the same account or workspace.
+In RPC mode, edit the user settings file manually, set `"openaiUseCodexUsage": true`, and run `/reload`; the field accepts only a boolean and defaults to `false` when absent.
+When enabled, native queries and scheduled refreshes use the validated Codex companion login; there is no reverse fallback to native OpenAI credentials.
+
+Settings-screen changes apply without `/reload`. Disabling cancels pending companion requests and clears old native quota reports and status immediately after a successful save; late responses cannot restore them.
+A request already sent to ChatGPT cannot be recalled. Manual file edits apply at the next session start or `/reload`.
+
+**Upgrade:** automatic companion queries are now disabled unless the new `openaiUseCodexUsage` preference is explicitly `true`.
+Historical `openaiCompanionUsage` values, including `true`, do not enable the feature and remain preserved during other settings saves; reads do not rewrite the file.
+Users who want to retain numerical native reporting must opt in again.
 
 The extension sends only the independently validated companion bearer and account ID to ChatGPT, never the native token.
 It requires exactly one app registration matching the native grant's client ID, but that match is **not independent proof of shared identity**.
@@ -169,7 +178,7 @@ Currencies and billing targets remain separate.
 
 | Provider | Reported data |
 | --- | --- |
-| OpenAI (native ChatGPT OAuth) | Automatic companion-sourced plan percentages and plan/app resets; authentication status when companion login is absent |
+| OpenAI (native ChatGPT OAuth) | Authentication status by default; optional companion-sourced plan percentages and plan/app resets |
 | OpenAI Codex (legacy) | Subscription windows, credits, resets, and model buckets |
 | Kimi For Coding | Plan request windows and a separate booster wallet |
 | Moonshot AI Global/China | Current API balance in USD/CNY |
@@ -222,31 +231,12 @@ MiniMax publishes Token Plan window percentages or the regional pay-as-you-go av
 Baseten publishes the exact trailing 30-day Model APIs net subtotal after credits.
 xAI is always menu-only and never starts a scheduled status refresh.
 Z.AI statusline usage refreshes every five minutes while the selected model remains on Z.AI.
-Verified native OpenAI OAuth with valid companion auth refreshes both read-only endpoints automatically. The statusline shows only plan limits, for example `chatgpt plan 70% ↻ 2h30m`; app reset details remain available in `/usage`.
-Without companion auth it publishes `chatgpt usage: web only`; refreshes revalidate auth without calling a usage endpoint.
+Verified native OpenAI OAuth with companion usage enabled and valid companion auth refreshes both read-only endpoints automatically. The statusline shows only plan limits, for example `chatgpt plan 70% ↻ 2h30m`; app reset details remain available in `/usage`.
+With companion usage disabled or its login absent, it publishes `chatgpt usage: web only`; refreshes revalidate native auth without calling a usage endpoint.
 OpenAI API-key auth clears this status.
 
 Queries for another provider or all providers never publish their results to the statusline.
 `@narumitw/pi-statusline` supplies the default `📊` icon; `pi-usage` publishes text-only values.
-
-## 🔄 Migrating from pi-codex-usage
-
-`pi-codex-usage` is deprecated and its source is archived under `deprecated/`.
-To migrate one installation:
-
-```bash
-pi remove npm:@narumitw/pi-codex-usage
-pi install npm:@narumitw/pi-usage
-```
-
-Remove the deprecated package rather than loading both usage extensions together.
-
-Behavior changes:
-
-- Use `/usage` for usage management; `/codex-status` is no longer registered.
-- Refresh and cross-provider operations are menu actions rather than flags.
-- Codex CLI fallback is removed to preserve active-runtime-account correctness.
-- The status key changes from `codex-usage` to `usage`.
 
 ## 🔒 Security and privacy
 
@@ -256,7 +246,7 @@ Only the selected provider's exact runtime match is used, and secrets are sent o
 Native OpenAI status requires fresh Pi OAuth resolution and a matching complete ChatGPT grant, including the direct-token scope and client ID.
 Model-level Authorization overrides cannot inherit subscription status from a stored login.
 Native tokens are never forwarded to ChatGPT backend endpoints.
-The automatic companion path sends only its validated Codex bearer and matching account ID to fixed `GET /backend-api/wham/usage/chatpass/apps` and `GET /backend-api/wham/usage` routes on `https://chatgpt.com`, rejects redirects, and bounds response sizes and request time.
+The opt-in companion path sends only its validated Codex bearer and matching account ID to fixed `GET /backend-api/wham/usage/chatpass/apps` and `GET /backend-api/wham/usage` routes on `https://chatgpt.com`, rejects redirects, and bounds response sizes and request time.
 Both credential identities and native registration metadata bind cache identity and request-boundary revalidation.
 Provider-specific endpoints and credential requirements are documented in the [provider reference](./docs/providers.md).
 Pi extensions run with the user's process privileges, so the shared event bus is not a security boundary between installed extensions.
@@ -286,6 +276,11 @@ An absent or incompatible peer preserves standalone fallback and fail-closed mis
 - Immediate account-change events are not available from Pi; auth is re-resolved before commands, turns, and scheduled refreshes.
 - Fast model support is intentionally conservative and may require an extension update when Codex adds or removes service tiers.
 - Another later-loaded extension can replace the final provider payload, so arbitrary third-party payload-rewrite conflicts cannot be prevented.
+
+## Read-only extension API
+
+Other extensions can use the [read-only usage API v1](./docs/api/usage-v1.md) through `pi.events` to query reports and capabilities or receive invalidation notifications, without importing this extension.
+Use `refresh: true` to obtain a report: cache-only queries currently return `cache-miss` because Pi cannot prove effective runtime auth identity without potentially doing network work. No client helper is exported.
 
 ## 🗂️ Package layout
 

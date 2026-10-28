@@ -1,3 +1,4 @@
+export { createFullscreenHarness, FullscreenTerminal, fullscreenMounted } from "./fullscreen-harness.js";
 export { createRpcHarness } from "./rpc-harness.js";
 export { createTuiHarness } from "./tui-harness.js";
 export type {

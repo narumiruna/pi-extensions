@@ -93,11 +93,6 @@ test("validates current panes, pane lists, and supported subscription events", (
       type: "agent_status_changed",
       paneId: "w1:p2",
       workspaceId: "w1",
-      agent: "pi",
-      agentStatus: "blocked",
-      displayAgent: undefined,
-      stateLabels: { blocked: "waiting" },
-      title: undefined,
     },
   );
   assert.deepEqual(
@@ -115,10 +110,21 @@ test("validates current panes, pane lists, and supported subscription events", (
       type: "agent_detected",
       paneId: "w1:p2",
       workspaceId: "w1",
-      agent: "codex",
-      finalStatus: "done",
-      released: false,
     },
+  );
+  assert.deepEqual(
+    parseHerdrPaneEvent({
+      event: "pane_agent_detected",
+      data: { pane_id: "w1:p2", workspace_id: "w1", agent: "codex" },
+    }),
+    { type: "agent_detected", paneId: "w1:p2", workspaceId: "w1" },
+  );
+  assert.equal(
+    parseHerdrPaneEvent({
+      event: "pane_agent_detected",
+      data: { pane_id: "w1:p2", workspace_id: "w1", released: null },
+    }),
+    undefined,
   );
   assert.equal(
     parseHerdrPaneEvent({
@@ -164,41 +170,88 @@ test("filters siblings, orders every state, distinguishes panes, and caps rows",
   assert.equal(Object.isFrozen(snapshot.rows), true);
 });
 
-test("tracks moved current panes plus agent detection, release, and exit", () => {
+test("replaces state for moved panes, agent detection, release, and exit", () => {
   const model = new HerdrWidgetModel();
   model.reset(pane("w1:p1"), [pane("w1:p1"), pane("w1:p2", "working", { label: "worker" })]);
-  model.apply({
-    type: "moved",
-    previousPaneId: "w1:p1",
-    previousWorkspaceId: "w1",
-    pane: pane("w2:p9", "working", { workspaceId: "w2" }),
-  });
-  model.apply({
-    type: "agent_detected",
-    paneId: "w2:p2",
-    workspaceId: "w2",
-    agent: "codex",
-    finalStatus: "done",
-    released: false,
-  });
+  const current = pane("w2:p9", "working", { workspaceId: "w2" });
+  model.reset(current, [current, pane("w2:p2", "done", { workspaceId: "w2", agent: "codex" })]);
   assert.equal(model.snapshot()?.rows[0]?.paneId, "w2:p2");
-  model.apply({
-    type: "agent_detected",
-    paneId: "w2:p2",
-    workspaceId: "w2",
-    released: true,
-  });
+  model.reset(current, [current, pane("w2:p2", "unknown", { workspaceId: "w2", agent: undefined })]);
   assert.equal(model.snapshot(), undefined);
-  model.apply({
-    type: "agent_status_changed",
-    paneId: "w2:p3",
-    workspaceId: "w2",
-    agent: "pi",
-    agentStatus: "blocked",
-  });
+  model.reset(current, [current, pane("w2:p3", "blocked", { workspaceId: "w2" })]);
   assert.equal(model.snapshot()?.rows[0]?.paneId, "w2:p3");
-  model.apply({ type: "exited", paneId: "w2:p3", workspaceId: "w2" });
+  model.reset(current, [current]);
   assert.equal(model.snapshot(), undefined);
+  model.clear();
+  assert.equal(model.snapshot(), undefined);
+});
+
+for (const cleared of [null, undefined]) {
+  test(`authoritative ${String(cleared)} presentation values clear old state`, () => {
+    const model = new HerdrWidgetModel();
+    const current = pane("w1:p1");
+    model.reset(
+      current,
+      [
+        current,
+        pane("w1:p2", "blocked", {
+          agentName: "old-name",
+          displayAgent: "old-display",
+          label: "old-label",
+          title: "old-title",
+          stateLabels: { blocked: "old-state" },
+        }),
+      ],
+      { workspaceId: "w1", label: "old-space" },
+    );
+    const replacement = parsePaneCurrentResult({
+      type: "pane_current",
+      pane: wirePane({
+        pane_id: "w1:p2",
+        agent_status: "blocked",
+        name: cleared,
+        display_agent: cleared,
+        label: cleared,
+        title: cleared,
+        state_labels: cleared,
+      }),
+    });
+    model.reset(current, [current, replacement], { workspaceId: "w1" });
+    assert.deepEqual(model.snapshot()?.rows[0], {
+      agent: "pi",
+      pane: "p2",
+      paneId: "w1:p2",
+      space: "w1",
+      state: "blocked",
+      stateLabel: "blocked",
+    });
+    model.reset(current, [
+      current,
+      { ...replacement, displayAgent: "new-display", title: "new-title", stateLabels: { blocked: "new-state" } },
+    ]);
+    assert.equal(model.snapshot()?.rows[0]?.agent, "new-display");
+    assert.equal(model.snapshot()?.rows[0]?.pane, "new-title/p2");
+    assert.equal(model.snapshot()?.rows[0]?.stateLabel, "new-state");
+  });
+}
+
+test("parses pane and workspace update invalidations without retaining presentation payloads", () => {
+  const updated = parseHerdrPaneEvent({ event: "pane_updated", data: { pane: wirePane() } });
+  assert.equal(updated?.type, "updated");
+  assert.deepEqual(parseHerdrPaneEvent({ event: "workspace_renamed", data: { workspace_id: "w1", label: "new" } }), {
+    type: "workspace_renamed",
+    workspaceId: "w1",
+  });
+  assert.deepEqual(parseHerdrPaneEvent({ event: "pane_agent_status_changed", data: wirePane() }), {
+    type: "agent_status_changed",
+    paneId: "w1:p1",
+    workspaceId: "w1",
+  });
+  assert.equal(parseHerdrPaneEvent({ event: "workspace_renamed", data: { workspace_id: "w1" } }), undefined);
+  assert.equal(parseHerdrPaneEvent({ event: "pane_updated", data: { pane: {} } }), undefined);
+  const types = herdrWidgetSubscriptions([]).map((entry) => entry.type);
+  assert.ok(types.includes("pane.updated"));
+  assert.ok(types.includes("workspace.renamed"));
 });
 
 test("renders Herdr's distinct static symbol and semantic theme role for every agent state", () => {

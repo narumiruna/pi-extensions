@@ -44,5 +44,6 @@ jobs:
 
       - name: Run affected tests
         env:
+          PI_EXTENSIONS_BUILD_READY: "1"
           PI_EXTENSIONS_TEST_BASE: ${{ inputs.test-base || github.event.pull_request.base.sha || github.event.before }}
         run: npm test

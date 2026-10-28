@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import {
   type CacheMonitorView,
   type CacheSample,
@@ -70,14 +71,9 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
     const signature = JSON.stringify(lines);
     if (signature === publishedSignature) return;
     if (ctx.mode === "tui") {
-      ctx.ui.setWidget(
-        WIDGET_KEY,
-        (_tui, theme) => ({
-          render: (width: number) => renderCacheMonitor(view, theme, width),
-          invalidate: () => {},
-        }),
-        { placement: "aboveEditor" },
-      );
+      ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => createCacheMonitorWidget(view, theme), {
+        placement: "aboveEditor",
+      });
     } else {
       ctx.ui.setWidget(
         WIDGET_KEY,
@@ -189,16 +185,18 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
 }
 
 export function renderCacheMonitor(view: CacheMonitorView, theme: Theme, width: number): string[] {
-  const renderWidth = Math.max(0, width);
-  if (renderWidth === 0) return ["", ...formatMonitorLines(view).map(() => "")];
-  const divider = theme.fg("borderMuted", "─".repeat(renderWidth));
-  const rendered = formatMonitorLines(view).flatMap((line) => {
-    const styled = styleLine(line, theme);
-    return wrapTextWithAnsi(styled, renderWidth);
+  return createCacheMonitorWidget(view, theme).render(width);
+}
+
+function createCacheMonitorWidget(view: CacheMonitorView, theme: Theme): EditorStatusWidget {
+  // Kit normalizes fractional and invalid widths before body wrapping.
+  return new EditorStatusWidget({
+    theme,
+    renderBody: (width) =>
+      width === 0
+        ? formatMonitorLines(view).map(() => "")
+        : formatMonitorLines(view).flatMap((line) => wrapTextWithAnsi(styleLine(line, theme), width)),
   });
-  return [divider, ...rendered].map((line) =>
-    visibleWidth(line) <= renderWidth ? line : truncateToWidth(line, renderWidth, ""),
-  );
 }
 
 function styleLine(line: MonitorLine, theme: Theme): string {

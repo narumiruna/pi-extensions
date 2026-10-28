@@ -10,7 +10,7 @@ export function createLoaderQueue() {
     run<Loader extends ReloadableLoader>(
       create: () => Loader,
       signal: AbortSignal,
-      inspect: (loader: Loader) => void,
+      inspect: (loader: Loader) => unknown,
     ): Promise<void> {
       const work = pending.then(async () => {
         signal.throwIfAborted();
@@ -19,7 +19,7 @@ export function createLoaderQueue() {
         try {
           await loader.reload();
           signal.throwIfAborted();
-          inspect(loader);
+          await inspect(loader);
         } finally {
           originalRuntime.invalidate("generated Jiti smoke complete");
           const currentRuntime = loader.getExtensions().runtime;

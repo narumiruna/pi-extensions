@@ -9,9 +9,9 @@ import {
   initTheme,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
-import { createCustomSelectorHarness } from "../../../test/support.js";
 
 initTheme("dark");
 
@@ -56,6 +56,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       mode: "tui",
       hasUI: true,
       sessionManager,
+      isIdle: () => true,
       ui: {
         setWidget(key: string, content: unknown) {
           widgets.push({ key, content });
@@ -116,25 +117,18 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.equal(dialogs.length, 4);
     assert.match(dialogs[1]?.title ?? "", /Progress Status/u);
     assert.ok(notifications.some(({ message }) => /Edit settings manually:/u.test(message)));
-    let settingsFrame: string[] = [];
-    let itemLimitFrame: string[] = [];
-    Object.assign(ctx.ui, {
-      custom: async (factory: unknown) => {
-        const screen = createCustomSelectorHarness(factory, 80);
-        try {
-          settingsFrame = screen.render(80);
-          for (let index = 0; index < 3; index++) screen.handleInput("\u001b[B");
-          screen.handleInput("\r");
-          screen.handleInput("25");
-          itemLimitFrame = screen.render(80);
-          screen.handleInput("\u0003");
-          return await screen.resultPromise;
-        } finally {
-          screen.dispose();
-        }
-      },
-    });
-    await command.handler("settings", ctx as ExtensionCommandContext);
+    const screen = createTuiHarness({ width: 80 });
+    Object.assign(ctx.ui, { custom: screen.custom });
+    const settingsCommand = command.handler("settings", ctx as ExtensionCommandContext);
+    await screen.waitForOpen();
+    const settingsFrame = screen.render();
+    for (let index = 0; index < 3; index++) screen.press("tui.select.down");
+    screen.press("tui.select.confirm");
+    screen.type("25");
+    const itemLimitFrame = screen.render();
+    screen.press("ctrl+c");
+    await settingsCommand;
+    screen.dispose();
     assert.equal(settingsFrame[0], "─".repeat(80));
     assert.equal(settingsFrame.at(-1), "─".repeat(80));
     assert.match(itemLimitFrame.join("\n"), /Visible item limit/u);

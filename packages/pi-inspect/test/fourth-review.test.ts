@@ -109,7 +109,7 @@ it("matches full native projection for each valid forked, edited and compacted f
 
 describe("R22: emitted legal notices", () => {
   it("keeps the emitted React/license notices in the served JavaScript rather than linking unavailable assets", () => {
-    const bundle = readFileSync(new URL("../dist/app.js", import.meta.url), "utf8");
+    const bundle = readFileSync(new URL("../browser-dist/app.js", import.meta.url), "utf8");
     expect(bundle).toContain("@license React");
     expect(bundle).toContain("MIT license");
     expect(bundle).not.toContain("app.js.LEGAL.txt");

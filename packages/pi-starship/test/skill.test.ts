@@ -6,8 +6,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { open } from "node:fs/promises";
@@ -21,7 +24,7 @@ import { MODULE_DEFINITIONS, MODULE_NAMES } from "../src/modules/catalog.js";
 
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsDirectory = path.join(packageDirectory, "skills");
-const skillDirectory = path.join(skillsDirectory, "configuring-pi-starship");
+const skillDirectory = path.join(skillsDirectory, "configure-pi-starship");
 const referencesDirectory = path.join(skillDirectory, "references");
 const scriptsDirectory = path.join(skillDirectory, "scripts");
 const applyPath = path.join(scriptsDirectory, "apply.mjs");
@@ -42,7 +45,7 @@ test("package bundles one focused pi-starship configuration skill", async () => 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.skills.length, 1);
   const skill = result.skills[0];
-  assert.equal(skill?.name, "configuring-pi-starship");
+  assert.equal(skill?.name, "configure-pi-starship");
   assert.equal(skill?.disableModelInvocation, true);
   assert.match(skill?.description ?? "", /Configure .* answer questions .*pi-starship\.toml/u);
   for (const excludedTask of [
@@ -66,10 +69,29 @@ test("package bundles one focused pi-starship configuration skill", async () => 
     await loader.reload();
     const loaded = loader.getSkills();
     assert.deepEqual(loaded.diagnostics, []);
-    assert.ok(loaded.skills.some(({ name }) => name === "configuring-pi-starship"));
+    assert.ok(loaded.skills.some(({ name }) => name === "configure-pi-starship"));
   } finally {
     rmSync(agentDir, { force: true, recursive: true });
   }
+});
+
+test("hosted skill workflow uses draft tools without changing the standalone publication contract", () => {
+  const skill = readFileSync(path.join(skillDirectory, "SKILL.md"), "utf8");
+  const hosted = skill.split("## Hosted preview-only chat\n")[1]?.split("## Choose the task path")[0] ?? "";
+  for (const rule of [
+    "never write or edit the active settings file",
+    "`read`, `write`, and `edit`",
+    "without `/reload`",
+    "Do not run or request the resolver",
+    "Only the user can choose",
+    "Save draft as profile action and enter its name",
+    "asks separately whether to apply the saved profile",
+    "declining keeps the profile without changing active settings",
+    "Closing or discarding before that user save does not save the preview",
+  ])
+    assert.ok(hosted.includes(rule));
+  assert.ok(skill.includes('node "$skill_dir/scripts/apply.mjs"'));
+  assert.ok(skill.includes('node "$skill_dir/scripts/validate.mjs"'));
 });
 
 test("skill answers from references or source and edits configuration safely", () => {
@@ -85,6 +107,11 @@ test("skill answers from references or source and edits configuration safely", (
     "[module behavior](references/modules.md)",
     "[runtime and security](references/runtime-and-security.md)",
     "resolve the active path through Pi's `getAgentDir()` API",
+    "Keep the current working directory unchanged",
+    "first `pi` executable on `PATH`, following symbolic links",
+    "separate npm or Bun global Pi installations",
+    "stop before reading or writing a guessed settings path",
+    "Do not install another Pi copy, modify `node_modules`",
     "Read the existing document before editing it.",
     "Preserve comments, ordering, unknown fields, and unrelated custom settings",
     "make it reachable from the root `format` or `$all`",
@@ -157,9 +184,9 @@ test("skill references own the detailed public configuration guidance", () => {
 
   const readme = readFileSync(path.join(packageDirectory, "README.md"), "utf8");
   assert.match(readme, /configuration skill is manual-only/u);
-  assert.match(readme, /Run `\/skill:configuring-pi-starship` before asking Pi/u);
+  assert.match(readme, /Run `\/skill:configure-pi-starship` before asking Pi/u);
   for (const file of Object.keys(expectedCoverage)) {
-    assert.ok(readme.includes(`./skills/configuring-pi-starship/references/${file}`));
+    assert.ok(readme.includes(`./skills/configure-pi-starship/references/${file}`));
   }
   const configuration = readFileSync(path.join(referencesDirectory, "configuration.md"), "utf8");
   assert.match(configuration, /format = "\$provider\$model\$thinking"/u);
@@ -271,7 +298,7 @@ test("config path resolver returns Pi's tilde-aware absolute agent path", () => 
         `~/pi-starship-skill-${process.pid}`,
         path.join(homedir(), `pi-starship-skill-${process.pid}`, "pi-starship.toml"),
       ],
-      [".pi/agent", path.join(directory, ".pi", "agent", "pi-starship.toml")],
+      [".pi/agent", path.join(realpathSync(directory), ".pi", "agent", "pi-starship.toml")],
     ] as const) {
       const result = spawnSync(process.execPath, [configPathResolver], {
         cwd: directory,
@@ -577,6 +604,185 @@ test("atomic apply preserves the active document when its durable backup cannot 
   }
 });
 
+test("skill rechecks external edits after durable backup awaits and retains recovery", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-backup-race-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  const original = "# exact baseline\r\nformat = 'old'\r\n";
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    const { backupExpectedDocument } = await import(backupScriptUrl);
+    for (const replacement of ["different", "same-bytes-new-inode"]) {
+      writeFileSync(destination, original);
+      writeFileSync(baseline, original);
+      writeFileSync(draft, "format = 'draft'\n");
+      let retained = "";
+      await assert.rejects(
+        applyGuardedDocument(draft, destination, baseline, {
+          backup: async (active: string, bytes: Buffer) => {
+            retained = await backupExpectedDocument(active, bytes);
+            if (replacement === "different") writeFileSync(destination, "format = 'external'\n");
+            else {
+              writeFileSync(`${destination}.new`, original);
+              renameSync(`${destination}.new`, destination);
+            }
+            return retained;
+          },
+        }),
+        /changed after inspection.*[\s\S]*Retained backup:/u,
+      );
+      assert.equal(readFileSync(destination, "utf8"), replacement === "different" ? "format = 'external'\n" : original);
+      assert.equal(readFileSync(retained, "utf8"), original);
+      rmSync(retained);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill retains its recovery copy after active publication failure", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-publish-failure-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'draft'\n");
+    await assert.rejects(
+      applyGuardedDocument(draft, destination, baseline, {
+        rename() {
+          throw new Error("active rename failed");
+        },
+      }),
+      /not applied.*active rename failed[\s\S]*Retained backup:/u,
+    );
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+    const backups = readdirSync(path.join(directory, "pi-starship"));
+    assert.equal(backups.length, 1);
+    assert.equal(readFileSync(path.join(directory, "pi-starship", backups[0] ?? ""), "utf8"), "format = 'old'\n");
+    assert.equal(
+      readdirSync(directory).some((file) => file.endsWith(".tmp")),
+      false,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill reports publication honestly when the active directory flush fails", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-active-flush-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'draft'\n");
+    await assert.rejects(
+      applyGuardedDocument(draft, destination, baseline, {
+        syncDirectory() {
+          throw new Error("active directory flush failed");
+        },
+      }),
+      /was published.*durability.*active directory flush failed[\s\S]*Retained backup:/u,
+    );
+    assert.equal(readFileSync(destination, "utf8"), "format = 'draft'\n");
+    if (process.platform !== "win32") assert.equal(statSync(destination).mode & 0o777, 0o600);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill byte-identical no-op does not create a legacy backup", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-noop-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    for (const file of [destination, draft, baseline]) writeFileSync(file, "format = 'same'\n");
+    const result = await applyGuardedDocument(draft, destination, baseline);
+    assert.equal(result.unchanged, true);
+    assert.equal(existsSync(path.join(directory, "pi-starship")), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill rejects a changed draft after backup and reports staged-file cleanup failure", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-draft-conflict-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    const { backupExpectedDocument } = await import(backupScriptUrl);
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'reviewed'\n");
+    await assert.rejects(
+      applyGuardedDocument(draft, destination, baseline, {
+        backup: async (active: string, bytes: Buffer) => {
+          const archived = await backupExpectedDocument(active, bytes);
+          writeFileSync(draft, "format = 'unreviewed'\n");
+          return archived;
+        },
+        remove() {
+          throw new Error("staged cleanup failed");
+        },
+      }),
+      /draft changed[\s\S]*Retained backup:[\s\S]*staged cleanup failed.*Temporary path:/u,
+    );
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+    assert.equal(readdirSync(path.join(directory, "pi-starship")).length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill refuses a symlinked backup directory without changing active or outside files", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-backup-symlink-"));
+  const outside = path.join(directory, "outside");
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "sentinel"), "untouched");
+    symlinkSync(outside, path.join(directory, "pi-starship"), process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'draft'\n");
+    const result = spawnSync(process.execPath, [applyPath, draft, destination, baseline], { encoding: "utf8" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Backup directory.*not a symbolic link/u);
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+    assert.deepEqual(readdirSync(outside), ["sentinel"]);
+    assert.equal(readFileSync(path.join(outside, "sentinel"), "utf8"), "untouched");
+    assert.equal(
+      readdirSync(directory).some((file) => file.endsWith(".tmp")),
+      false,
+    );
+    rmSync(path.join(directory, "pi-starship"));
+    const { backupExpectedDocument } = await import(backupScriptUrl);
+    await assert.rejects(
+      backupExpectedDocument(destination, Buffer.from("format = 'old'\n"), {
+        makeDirectory: async () =>
+          symlinkSync(outside, path.join(directory, "pi-starship"), process.platform === "win32" ? "junction" : "dir"),
+      }),
+      /Backup directory.*not a symbolic link/u,
+    );
+    assert.deepEqual(readdirSync(outside), ["sentinel"]);
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function hasUnsafeTerminalControl(value: string): boolean {
   return [...value].some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
@@ -599,6 +805,10 @@ function optionType(kind: string): string {
   return {
     boolean: "boolean",
     integer: "integer",
+    number: "number",
+    "command-alternatives": "command alternatives",
+    "context-rules": "context-rule array",
+    substitutions: "substitution table or array",
     string: "string",
     "string-array": "string array",
     "string-enum": "string enum",

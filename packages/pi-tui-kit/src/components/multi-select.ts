@@ -99,7 +99,7 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
     const previousIndex = rows.findIndex((row) => row.item.id === previouslySelectedId);
     if (previousIndex < 0 && previouslySelectedId) restoreItemId ??= previouslySelectedId;
     const restoreIndex = rows.findIndex((row) => row.item.id === restoreItemId);
-    const nextIndex = restoreIndex >= 0 ? restoreIndex : previousIndex >= 0 ? previousIndex : 0;
+    const nextIndex = restoreIndex >= 0 ? restoreIndex : Math.max(previousIndex, 0);
     if (restoreIndex >= 0) restoreItemId = undefined;
     setSelectedIndex(nextIndex, false);
   };

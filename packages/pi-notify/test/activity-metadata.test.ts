@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { isUserActivity } from "../src/activity.js";
 import { displayPath, notificationMetadata, safeText } from "../src/metadata.js";
+import type { Notification } from "../src/provider.js";
+
+function emphasis(notification: Notification) {
+  return notification.bodyEmphasis?.map(({ style, offset, length }) => ({
+    style,
+    text: notification.body.slice(offset, offset + length),
+  }));
+}
 
 it.each([
   ["", false],
@@ -65,7 +73,25 @@ it("omits unavailable Git and strips terminal controls, bidi, and mentions", asy
   expect(notification.body).not.toMatch(/Repository:|\x1b|\u202e|@person|secret/);
   expect(displayPath(join(homedir(), "src", "app"))).toBe("~/src/app");
   expect(safeText("\x1b[31mname")).toBe("name");
+  expect(emphasis(notification)).toEqual([
+    { style: "monospace", text: "session" },
+    { style: "monospace", text: data.cwd },
+  ]);
 });
+it.each([undefined, "", "😀中文e\u0301\x1b[31m@person"])(
+  "formats only the sanitized ID in a session named %j",
+  async (sessionName) => {
+    const notification = await notificationMetadata(
+      { ...data, sessionName, sessionId: "😀id\x1b[31m@session" },
+      new AbortController().signal,
+    );
+    expect(notification.body).toContain(`Session: ${sessionName ? "😀中文e\u0301＠person " : ""}(😀id＠session)`);
+    expect(emphasis(notification)).toEqual([
+      { style: "monospace", text: "😀id＠session" },
+      { style: "monospace", text: data.cwd },
+    ]);
+  },
+);
 it("identifies ordinary and linked Git worktrees and detached HEAD", async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), "pi-notify-git-"));
   directories.push(directory);
@@ -91,13 +117,32 @@ it("identifies ordinary and linked Git worktrees and detached HEAD", async () =>
     { stdio: "ignore" },
   );
   execFileSync("git", ["-C", repo, "worktree", "add", "-b", "feature", linked], { stdio: "ignore" });
+  const ordinary = await notificationMetadata({ ...data, cwd: repo }, new AbortController().signal);
+  expect(emphasis(ordinary)).toEqual([
+    { style: "monospace", text: "session" },
+    { style: "monospace", text: repo },
+    { style: "bold", text: "app" },
+    { style: "monospace", text: repo },
+    { style: "monospace", text: "main" },
+  ]);
   const notification = await notificationMetadata({ ...data, cwd: linked }, new AbortController().signal);
+  expect(emphasis(notification)).toEqual([
+    { style: "monospace", text: "session" },
+    { style: "monospace", text: linked },
+    { style: "bold", text: "app" },
+    { style: "monospace", text: linked },
+    { style: "monospace", text: "feature" },
+  ]);
   expect(notification.body).toContain("Repository: app");
   expect(notification.body).toContain("Branch: feature");
   execFileSync("git", ["-C", linked, "checkout", "--detach"], { stdio: "ignore" });
   const detached = await notificationMetadata({ ...data, cwd: linked, error: true }, new AbortController().signal);
   expect(detached.body).toMatch(/Branch: detached [a-f0-9]+/);
   expect(detached.title).toBe("Pi stopped with an error");
+  expect(emphasis(detached)?.at(-1)).toEqual({
+    style: "monospace",
+    text: expect.stringMatching(/^detached [a-f0-9]+$/),
+  });
 });
 it("aborts metadata without leaking subprocess errors", async () => {
   const controller = new AbortController();

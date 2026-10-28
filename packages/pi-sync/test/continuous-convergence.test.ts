@@ -10,7 +10,7 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import { pull, push } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { v3WebDavSettings } from "./helpers.js";
-import { mergeOptions } from "./merged-sync-fixture.js";
+import { mergeOptions } from "./merge-options.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
 type State = { status?: string; checks: number; requests: number };

@@ -1207,6 +1207,47 @@ test("stale settled legacy presentation is ignored without losing ready state", 
   assert.equal(context.statuses.get("plan-mode"), "plan ready");
 });
 
+test("custom starts preserve a ready plan and its settled presentation", async () => {
+  let selectCalls = 0;
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi);
+  const context = createMockContext({
+    hasUI: true,
+    select: async () => {
+      selectCalls += 1;
+      return "Stay in Plan mode";
+    },
+  });
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const execute = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
+    | ((...args: unknown[]) => Promise<unknown>)
+    | undefined;
+  assert.ok(execute);
+  await execute("complete", { plan: "# Keep ready" }, undefined, undefined, context.ctx);
+  const readyEntry = mock.entries.at(-1);
+  for (const content of ["background notification", [{ type: "text", text: "background notification" }]]) {
+    await mock.events.get("before_agent_start")?.[0]?.(
+      {
+        messageType: "custom",
+        message: { role: "custom", customType: "notification", content, display: false, timestamp: 1 },
+        systemPrompt: "base",
+      },
+      context.ctx,
+    );
+    assert.equal(mock.entries.at(-1), readyEntry);
+    assert.equal(context.statuses.get("plan-mode"), "plan ready");
+  }
+  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  assert.equal(selectCalls, 1);
+  assert.equal((mock.entries.at(-1)?.data as { latestPlan?: string })?.latestPlan, "# Keep ready");
+  await mock.events.get("before_agent_start")?.[0]?.(
+    { messageType: "user", prompt: "Revise the plan", systemPrompt: "base" },
+    context.ctx,
+  );
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+  assert.equal((mock.entries.at(-1)?.data as { latestPlan?: string })?.latestPlan, undefined);
+});
+
 test("a newer Plan turn cancels stale ready presentation", async () => {
   let selectCalls = 0;
   const mock = createMockPi({ activeTools: ["read"] });

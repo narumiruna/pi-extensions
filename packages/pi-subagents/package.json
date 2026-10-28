@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-subagents",
-  "version": "3.2.0",
+  "version": "3.4.0",
   "description": "Subagent jobs with asynchronous main-agent messaging for Pi.",
   "type": "module",
   "license": "MIT",
@@ -39,12 +39,12 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
-    "@types/node": "26.6.4",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@types/node": "26.6.5",
     "esbuild": "0.28.2",
-    "typebox": "1.3.36",
+    "typebox": "1.4.3",
     "typescript": "7.0.2"
   },
   "repository": {
@@ -53,6 +53,7 @@
     "directory": "packages/pi-subagents"
   },
   "dependencies": {
-    "ignore": "^7.0.12"
+    "@narumitw/pi-tui-kit": "^0.68.0",
+    "ignore": "^7.0.13"
   }
 }

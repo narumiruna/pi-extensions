@@ -32,7 +32,7 @@ test("built Markdown entrypoint resolves its runtime and type exports", async (t
     path.join(fixture, "tsconfig.json"),
     JSON.stringify({
       compilerOptions: {
-        target: "ES2022",
+        target: "ES2024",
         module: "NodeNext",
         moduleResolution: "NodeNext",
         strict: true,

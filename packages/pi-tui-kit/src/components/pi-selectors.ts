@@ -2,9 +2,7 @@ import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent"
 import {
   fuzzyFilter,
   Input,
-  isKittyProtocolActive,
   Key,
-  type KeyId,
   matchesKey,
   parseKey,
   type TUI,
@@ -12,12 +10,15 @@ import {
   type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderBoundedFrameLayout } from "../bounded-frame.js";
 import { HorizontalRule } from "../horizontal-rule.js";
 import { formatInteractionHints } from "../interaction-hints.js";
 import { sanitizeTerminalText } from "../terminal-text.js";
 import type { MenuCloseReason } from "../types.js";
+import { componentKeybindings } from "./host-input.js";
+import { canonicalKeyId, keysOverlap, usesDisambiguatedKeyProtocol } from "./key-matching.js";
 import { componentRows } from "./rendering.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
@@ -62,6 +63,7 @@ export interface PiSelectorOptions<Value> {
 
 /** Shared public-primitive implementation for searchable default-aware selectors. */
 export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
   const input = new Input();
   if (options.initialSearchInput) input.setValue(safe(options.initialSearchInput));
   let filtered = filterRows(options.rows, input.getValue(), options.prioritizeDefaultPrefix ?? false);
@@ -268,10 +270,15 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
       if (start > 0 || start + visible.length < filtered.length) {
         content.push(options.theme.fg("muted", `  (${selectedIndex + 1}/${filtered.length})`));
       }
+      const detailStart = content.length;
       if (filtered.length === 0) {
-        content.push(options.theme.fg("muted", "  No matching options"));
+        content.push(options.theme.fg("muted", "  No matching options; edit search"));
       } else if (descriptionColumnWidth === undefined && selected?.description) {
-        content.push("", options.theme.fg("muted", `  ${safe(selected.description)}`));
+        content.push(
+          ...wrapTextWithAnsi(safe(selected.description), Math.max(1, safeWidth - 2)).map((line) =>
+            options.theme.fg("muted", `  ${line}`),
+          ),
+        );
       }
 
       const keyPlan = selectorKeyPlan(
@@ -283,10 +290,10 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
       const hint = selectorHint(keyPlan);
       const cycleHint = selectorCycleHint(keyPlan);
       const listSelectedIndex = selectedIndex - start;
-      const selectedContentIndex = searchRows.length + 1 + listSelectedIndex;
+      const selectedContentIndex = filtered.length === 0 ? detailStart : searchRows.length + 1 + listSelectedIndex;
       const rule =
         new HorizontalRule({
-          ruleStyle: (text) => options.theme.fg("borderMuted", text),
+          ruleStyle: (text) => options.theme.fg("border", text),
         }).render(safeWidth)[0] ?? "";
       const layout = renderBoundedFrameLayout({
         width: safeWidth,
@@ -297,7 +304,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
         content,
         hints: hint ? [options.theme.fg("dim", `  ${hint}`)] : [],
         compactHint: hint ? options.theme.fg("dim", hint) : "",
-        priorityRows: [0, selectedContentIndex],
+        priorityRows: [selectedContentIndex, 0, ...content.slice(detailStart).map((_, index) => detailStart + index)],
         focusedRow: selectedContentIndex,
       });
       const frameRowByContent = new Map(
@@ -464,28 +471,6 @@ function selectorCycleHint(plan: SelectorKeyPlan) {
   return formatInteractionHints({ getKeys: () => [] }, [{ keys: plan.cycle, label: "cycle choice" }]);
 }
 
-function canonicalKeyId(value: string): string | undefined {
-  const parts = safe(value).toLowerCase().split("+");
-  const rawBase = parts.at(-1);
-  if (!rawBase) return undefined;
-  const base = rawBase === "esc" ? "escape" : rawBase === "return" ? "enter" : rawBase;
-  const modifiers = ["shift", "ctrl", "alt", "super"].filter((modifier) => parts.includes(modifier));
-  if (!isExecutableKey(base, modifiers)) return undefined;
-  return [...modifiers, base].join("+");
-}
-
-function usesDisambiguatedKeyProtocol(tui: TUI) {
-  const terminal = tui.terminal as typeof tui.terminal & {
-    readonly modifyOtherKeysActive?: boolean;
-  };
-  return isKittyProtocolActive() || terminal.kittyProtocolActive || terminal.modifyOtherKeysActive === true;
-}
-
-function keysOverlap(first: string, second: string, disambiguatedKeyProtocol: boolean) {
-  if (disambiguatedKeyProtocol) return first === second;
-  return inputsForKey(first).some((input) => matchesKey(input, second as KeyId));
-}
-
 function matchesSelectorBinding(
   keybindings: KeybindingsManager,
   data: string,
@@ -496,106 +481,6 @@ function matchesSelectorBinding(
   const inputKey = canonicalKeyId(parseKey(data) ?? "");
   return inputKey !== undefined && getBindingKeys(keybindings, binding).some((key) => canonicalKeyId(key) === inputKey);
 }
-
-function inputsForKey(key: string) {
-  const cacheKey = `${isLocalWindowsTerminalSession() ? "windows" : "other"}:${key}`;
-  const cached = LEGACY_KEY_INPUT_CACHE.get(cacheKey);
-  if (cached) return cached;
-  const parts = key.split("+");
-  const base = parts.pop() ?? "";
-  const modifier = parts.reduce(
-    (mask, part) => mask | (KEY_MODIFIER_MASKS[part as keyof typeof KEY_MODIFIER_MASKS] ?? 0),
-    0,
-  );
-  const codepoint = KEY_CODEPOINTS[base] ?? (base.length === 1 ? base.charCodeAt(0) : undefined);
-  const candidates =
-    codepoint === undefined ? LEGACY_KEY_INPUTS : [...LEGACY_KEY_INPUTS, `\u001b[${codepoint};${modifier + 1}u`];
-  const inputs = candidates.filter((input) => matchesKey(input, key as KeyId));
-  LEGACY_KEY_INPUT_CACHE.set(cacheKey, inputs);
-  return inputs;
-}
-
-function isLocalWindowsTerminalSession() {
-  return (
-    Boolean(process.env.WT_SESSION) && !process.env.SSH_CONNECTION && !process.env.SSH_CLIENT && !process.env.SSH_TTY
-  );
-}
-
-function isExecutableKey(base: string, modifiers: readonly string[]) {
-  if (!KEY_BASES.has(base)) return false;
-  if (base === "escape" || /^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
-  if (base === "clear") {
-    return modifiers.length === 0 || (modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"));
-  }
-  return true;
-}
-
-const KEY_MODIFIER_MASKS = { shift: 1, alt: 2, ctrl: 4, super: 8 } as const;
-const KEY_CODEPOINTS: Record<string, number> = {
-  escape: 27,
-  tab: 9,
-  enter: 13,
-  space: 32,
-  backspace: 127,
-  insert: 57425,
-  delete: 57426,
-  home: 57423,
-  end: 57424,
-  pageup: 57421,
-  pagedown: 57422,
-  left: 57417,
-  right: 57418,
-  up: 57419,
-  down: 57420,
-};
-const LEGACY_FUNCTION_INPUT_SUFFIXES = [
-  "OP",
-  "OQ",
-  "OR",
-  "OS",
-  "[15~",
-  "[17~",
-  "[18~",
-  "[19~",
-  "[20~",
-  "[21~",
-  "[23~",
-  "[24~",
-];
-// Probe every cross-identity legacy collision through Pi's live matcher. CSI-u,
-// keypad, lock-bit, shifted-letter, and modifyOtherKeys forms normalize to the
-// same key and modifiers, so one generated CSI-u identity covers those branches.
-const LEGACY_KEY_INPUT_CACHE = new Map<string, readonly string[]>();
-const LEGACY_KEY_INPUTS = [
-  ...Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)),
-  ...Array.from({ length: 128 }, (_, code) => `\u001b${String.fromCharCode(code)}`),
-  "\u001b[Z",
-  "\u001bOM",
-  "\u001b[E",
-  "\u001b[e",
-  "\u001bOe",
-  ...LEGACY_FUNCTION_INPUT_SUFFIXES.map((suffix) => `\u001b${suffix}`),
-];
-const KEY_BASES = new Set([
-  ..."abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./!@#$%^&*()_|~{}:<>?",
-  "escape",
-  "enter",
-  "tab",
-  "space",
-  "backspace",
-  "delete",
-  "insert",
-  "clear",
-  "home",
-  "end",
-  "pageup",
-  "pagedown",
-  "up",
-  "down",
-  "left",
-  "right",
-  ...Array.from({ length: 12 }, (_, index) => `f${index + 1}`),
-]);
 
 function resolveSelectorBinding(
   keybindings: KeybindingsManager,

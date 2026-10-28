@@ -1,3 +1,4 @@
+import { formatClockTime } from "./time-format.js";
 import { defineModule } from "./types.js";
 
 export const timeModule = defineModule({
@@ -9,9 +10,14 @@ export const timeModule = defineModule({
     style: "bold yellow",
     disabled: false,
   },
-  values: ({ runtime }) => ({ time: formatTime(runtime.now) }),
+  options: {
+    use_12hr: { kind: "boolean", default: false },
+    time_format: { kind: "string", default: "", allowEmpty: true },
+    utc_time_offset: { kind: "string", default: "local" },
+    time_range: { kind: "string", default: "-", allowEmpty: true },
+  },
+  values: ({ runtime, options }) => {
+    const time = formatClockTime(runtime.now, options);
+    return time === undefined ? undefined : { time };
+  },
 });
-
-function formatTime(now: Date): string {
-  return `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
-}

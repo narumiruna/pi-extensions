@@ -2,7 +2,6 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
   getMarkdownTheme,
-  type KeybindingsManager,
   type MarkdownTransformer,
   type Theme,
   UserMessageComponent,
@@ -13,26 +12,197 @@ import {
   Editor,
   type EditorTheme,
   type Focusable,
-  Key,
-  Loader,
-  Markdown,
-  matchesKey,
+  isKeyRelease,
+  type Keybindings,
+  type KeybindingsManager,
+  renderFakeCursor,
   ScrollView,
+  Spacer,
+  Text,
   type TUI,
   truncateToWidth,
   VStack,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { BtwPasteGuard, type BtwShortcuts, getBtwShortcuts } from "./keybindings.js";
-import type { BtwThinkingLevel, SideThreadTurn } from "./side-thread.js";
-import { sanitizeSingleLine } from "./text.js";
+import {
+  type BtwDisplayModel,
+  BtwWorkingIndicator,
+  type BtwWorkspaceFocus,
+  renderConversationFooter,
+  renderWorkingBorder,
+} from "./conversation-chrome.js";
+import {
+  BtwPasteGuard,
+  type BtwShortcuts,
+  btwKeyHasReachableInput,
+  getBtwHostInputBlockers,
+  getBtwKeybindings,
+  getBtwShortcuts,
+  normalizeBtwKey,
+} from "./keybindings.js";
+import type { BtwThinkingLevel, SideTranscriptItem } from "./side-thread.js";
+import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
 import type { BtwFullscreenLayoutComponent } from "./workspace-layout.js";
 
-const TRANSCRIPT_CHROME_LINES = 2;
 const MAX_STEERING_DISPLAY_LINES = 3;
 const OSC133_MARKERS = ["\u001b]133;A\u0007", "\u001b]133;B\u0007", "\u001b]133;C\u0007"];
 // Pi renders a spacer above the custom component and a two-line built-in footer below it.
 const RESERVED_APP_LINES = 3;
+
+// Native mouse focus can land directly on this Editor. Route keyboard input
+// through its logical BTW owner without replacing native mouse/cursor handling.
+class BtwComposer extends Editor {
+  constructor(
+    tui: TUI,
+    theme: EditorTheme,
+    private readonly dispatch: (data: string) => void,
+    private readonly loader?: BtwWorkingIndicator,
+  ) {
+    super(tui, theme);
+  }
+  override handleInput(data: string): void {
+    this.dispatch(data);
+  }
+  handleEditorInput(data: string): void {
+    super.handleInput(data);
+  }
+  override render(width: number): string[] {
+    if (width <= 0) return [];
+    // Core word wrapping cannot fit a two-cell grapheme into layoutWidth=1.
+    // Measure at least two text cells, then clip only the display boundary.
+    return super.render(Math.max(3, width)).map((line) => {
+      // A wide grapheme cannot fit a one-cell dock. Keep its cursor cell usable.
+      if (width <= 2 && line.includes(CURSOR_MARKER))
+        return CURSOR_MARKER + renderFakeCursor(" ") + " ".repeat(width - 1);
+      return truncateToWidth(line, width, "");
+    });
+  }
+  protected override renderTopBorder(width: number, hiddenLineCount: number): string {
+    if (!this.loader) return super.renderTopBorder(width, hiddenLineCount);
+    return (
+      renderWorkingBorder(width, hiddenLineCount, this.borderColor, this.loader) ??
+      super.renderTopBorder(width, hiddenLineCount)
+    );
+  }
+}
+
+const VIEWPORT_ACTIONS = [
+  "tui.altScreen.search",
+  "tui.altScreen.pageUp",
+  "tui.altScreen.pageDown",
+  "tui.altScreen.halfPageUp",
+  "tui.altScreen.halfPageDown",
+  "tui.altScreen.lineUp",
+  "tui.altScreen.lineDown",
+  "tui.altScreen.previousPrompt",
+  "tui.altScreen.nextPrompt",
+  "tui.altScreen.top",
+  "tui.altScreen.bottom",
+] as const;
+// Editor's actual order before submit, with no autocomplete provider installed.
+const BEFORE_SUBMIT = [
+  "tui.input.copy",
+  "tui.editor.undo",
+  "tui.input.tab",
+  "tui.editor.deleteToLineEnd",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.yank",
+  "tui.editor.yankPop",
+  "tui.editor.historyPrevious",
+  "tui.editor.historyNext",
+  "tui.editor.cursorLineStart",
+  "tui.editor.cursorLineEnd",
+  "tui.editor.cursorWordLeft",
+  "tui.editor.cursorWordRight",
+  "tui.input.newLine",
+] as const;
+
+function usableKeys(keybindings: KeybindingsManager, action: keyof Keybindings, blockers: readonly string[]): string[] {
+  return keybindings.getKeys(action).flatMap((candidate) => {
+    const key = normalizeBtwKey(candidate);
+    return key && btwKeyHasReachableInput(key, blockers) ? [key] : [];
+  });
+}
+
+function submitHint(tui: TUI, keybindings: KeybindingsManager, verb: string): string {
+  const earlier =
+    tui.mode === "fullscreen" ? VIEWPORT_ACTIONS : (["tui.altScreen.pageUp", "tui.altScreen.pageDown"] as const);
+  const blockers = [
+    ...getBtwHostInputBlockers(tui),
+    "ctrl+c",
+    "shift+backspace",
+    "shift+delete",
+    ...[...earlier, ...BEFORE_SUBMIT].flatMap((id) => keybindings.getKeys(id)),
+  ];
+  const key = usableKeys(keybindings, "tui.input.submit", blockers)[0];
+  return key ? `${formatKeyLabel(key)} ${verb}` : "";
+}
+
+function pagingHint(tui: TUI, keybindings: KeybindingsManager): string {
+  const actions = ["tui.altScreen.pageUp", "tui.altScreen.pageDown"] as const;
+  const labels = actions.flatMap((action) => {
+    const earlier =
+      tui.mode === "fullscreen"
+        ? VIEWPORT_ACTIONS.slice(0, VIEWPORT_ACTIONS.indexOf(action))
+        : action === "tui.altScreen.pageDown"
+          ? (["tui.altScreen.pageUp"] as const)
+          : [];
+    const blockers = [...getBtwHostInputBlockers(tui), "ctrl+c", ...earlier.flatMap((id) => keybindings.getKeys(id))];
+    const key = usableKeys(keybindings, action, blockers)[0];
+    return key
+      ? [
+          formatKeyLabel(key)
+            .replace(/Pageup$/u, "PgUp")
+            .replace(/Pagedown$/u, "PgDn"),
+        ]
+      : [];
+  });
+  return labels.length ? `${labels.join("/")} history` : "";
+}
+
+function handleFallbackPaging(
+  data: string,
+  tui: TUI,
+  keybindings: KeybindingsManager,
+  scrollView: ScrollView,
+): boolean {
+  // The native renderer already dispatched these before the focused component.
+  if (tui.mode === "fullscreen" || isKeyRelease(data)) return false;
+  for (const [action, direction] of [
+    ["tui.altScreen.pageUp", -1],
+    ["tui.altScreen.pageDown", 1],
+  ] as const) {
+    if (keybindings.matches(data, action)) {
+      scrollView.scrollBy(direction * Math.max(1, scrollView.viewportHeight - 4));
+      return true;
+    }
+  }
+  return false;
+}
+
+function fittingHint(width: number, variants: readonly string[]): string {
+  return variants.find((hint) => visibleWidth(hint) <= Math.max(0, width)) ?? "";
+}
+
+function compactHints(parts: readonly string[]): string {
+  return parts.filter(Boolean).join(" • ");
+}
+
+function releaseScrollbar(scrollView: ScrollView): void {
+  scrollView.setScrollbarActive(false);
+  // setScrollbar owns cancellation of its private native hide timer.
+  scrollView.setScrollbar("hidden");
+}
+
+function thinkingBorder(theme: Theme, level: BtwThinkingLevel | undefined, text: string): string {
+  return level && theme.getThinkingBorderColor
+    ? theme.getThinkingBorderColor(level)(text)
+    : theme.fg("borderMuted", text);
+}
 
 // A temporary fit after manual scrolling must not silently resume following new output.
 class PreservingScrollView extends ScrollView {
@@ -48,6 +218,7 @@ class PreservingScrollView extends ScrollView {
 export type TranscriptPagerAction =
   | { kind: "submit"; question: string }
   | { kind: "bringToMain"; questionDraft: string }
+  | { kind: "importMainUpdates"; questionDraft: string }
   | { kind: "close" };
 
 export interface BtwThinkingControl {
@@ -58,6 +229,8 @@ export interface BtwThinkingControl {
 }
 
 export interface BtwAnsweringViewOptions {
+  model?: BtwDisplayModel;
+  keybindings?: KeybindingsManager;
   markdownTransformers?: readonly MarkdownTransformer[];
   steering?: {
     questions: readonly string[];
@@ -67,10 +240,18 @@ export interface BtwAnsweringViewOptions {
 }
 
 export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusable {
+  private workspaceFocus: BtwWorkspaceFocus | undefined;
+  private get keybindings(): KeybindingsManager {
+    return getBtwKeybindings(this.tui, this.options.keybindings ?? this.options.thinking?.keybindings);
+  }
+  setWorkspaceFocus(pane: "side" | "main", shortcutLabel: string | undefined): void {
+    this.workspaceFocus = { pane, shortcutLabel: shortcutLabel ? sanitizeSingleLine(shortcutLabel) : undefined };
+    this.tui.requestRender();
+  }
   private readonly shortcuts: BtwShortcuts;
   private readonly pasteGuard = new BtwPasteGuard();
   private readonly transcriptComponents: Component[];
-  private readonly editor: Editor;
+  private readonly editor: BtwComposer;
   private readonly canBringToMain: boolean;
   private readonly scrollView: ScrollView;
   private readonly layoutRoot: VStack;
@@ -83,21 +264,24 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
   constructor(
     private readonly tui: TUI,
     private readonly theme: Theme,
-    turns: readonly SideThreadTurn[],
+    turns: readonly SideTranscriptItem[],
     private readonly onAction: (action: TranscriptPagerAction) => void,
     private readonly options: {
+      model?: BtwDisplayModel;
+      keybindings?: KeybindingsManager;
+      mainUpdates?: () => boolean;
       startAtBottom?: boolean;
       initialQuestion?: string;
       markdownTransformers?: readonly MarkdownTransformer[];
       thinking?: BtwThinkingControl;
     } = {},
   ) {
-    this.shortcuts = getBtwShortcuts(tui, options.thinking?.keybindings);
+    this.shortcuts = getBtwShortcuts(tui, this.keybindings);
     this.transcriptComponents = buildTranscriptComponents(turns, this.theme, undefined, options.markdownTransformers);
     this.canBringToMain = turns.some((turn) => turn.kind === "answered");
     this.thinkingLevel = options.thinking?.level;
     const editorTheme: EditorTheme = {
-      borderColor: (text) => this.theme.fg("accent", text),
+      borderColor: (text) => thinkingBorder(this.theme, this.thinkingLevel, text),
       selectList: {
         selectedPrefix: (text) => this.theme.fg("accent", text),
         selectedText: (text) => this.theme.fg("accent", text),
@@ -106,7 +290,7 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
         noMatch: (text) => this.theme.fg("warning", text),
       },
     };
-    this.editor = new Editor(this.tui, editorTheme);
+    this.editor = new BtwComposer(this.tui, editorTheme, (data) => this.handleInput(data));
     if (options.initialQuestion) this.editor.setText(options.initialQuestion);
     this.editor.onChange = () => {
       this.warning = undefined;
@@ -122,14 +306,20 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
     };
     const transcript = this.createTranscriptComponent();
     this.scrollView = new PreservingScrollView(transcript, {
-      follow: options.startAtBottom ? "end" : "none",
+      follow: "end",
       primary: true,
+      scrollbar: "auto",
+      scrollbarTrackStyle: (text) => this.theme.fg("scrollbarTrack", text),
+      scrollbarThumbStyle: (text) => this.theme.fg("scrollbarThumb", text),
     });
+    if (!options.startAtBottom) this.scrollView.scrollTo(0, { disableFollow: true });
+    const dock = new VStack([
+      { component: this.editor, basis: "auto", shrink: 1, minSize: 1 },
+      { component: this.createFooterComponent(), basis: "auto", shrink: 1, minSize: 0 },
+    ]);
     this.layoutRoot = new VStack([
-      { component: this.createHeaderComponent(), basis: 1, shrink: 0, minSize: 1 },
       { component: this.scrollView, basis: 0, grow: 1, minSize: 0 },
-      { component: this.createFooterComponent(), basis: 1, shrink: 0, minSize: 1 },
-      { component: this.editor, basis: "auto", shrink: 1, minSize: 0 },
+      { component: dock, basis: "auto", shrink: 1, minSize: 1 },
     ]);
   }
 
@@ -151,17 +341,16 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
   }
 
   render(width: number): string[] {
-    if (width <= 0) return [];
+    if (width <= 0 || this.tui.terminal.rows <= 0) return [];
     const safeWidth = Math.max(1, width);
     const editorLines = this.editor.render(safeWidth);
     const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
-    const viewportHeight = Math.max(0, availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES);
     const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
     this.lastContentLineCount = contentLines.length;
+    const viewportHeight = Math.max(0, availableRows - editorLines.length - this.renderFooter(safeWidth).length);
     this.scrollView.updateLayout(contentLines.length, viewportHeight, () => this.tui.requestRender());
 
     return fitComposerLayout(
-      renderSideThreadHeader(safeWidth, this.theme, this.thinkingLevel),
       contentLines.slice(this.scrollView.scrollTop, this.scrollView.scrollTop + viewportHeight),
       this.renderFooter(safeWidth),
       editorLines,
@@ -172,13 +361,18 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
   handleInput(data: string): void {
     if (this.finished) return;
     if (this.pasteGuard.consume(data)) {
-      this.editor.handleInput(data);
+      this.editor.handleEditorInput(data);
       this.tui.requestRender();
       return;
     }
     if (this.shortcuts.matches(data, "exit")) {
       this.finished = true;
       this.onAction({ kind: "close" });
+      return;
+    }
+    if (this.options.mainUpdates && this.shortcuts.matches(data, "importMainUpdates")) {
+      this.finished = true;
+      this.onAction({ kind: "importMainUpdates", questionDraft: this.editor.getExpandedText() });
       return;
     }
     if (this.canBringToMain && this.shortcuts.matches(data, "bringToMain")) {
@@ -198,17 +392,9 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
       }
       return;
     }
-    if (matchesKey(data, Key.pageUp)) {
-      this.scrollView.scrollBy(-Math.max(1, this.scrollView.viewportHeight));
-      this.tui.requestRender();
-      return;
+    if (!handleFallbackPaging(data, this.tui, this.keybindings, this.scrollView)) {
+      this.editor.handleEditorInput(data);
     }
-    if (matchesKey(data, Key.pageDown)) {
-      this.scrollView.scrollBy(Math.max(1, this.scrollView.viewportHeight));
-      this.tui.requestRender();
-      return;
-    }
-    this.editor.handleInput(data);
     if (!this.finished) this.tui.requestRender();
   }
 
@@ -217,72 +403,72 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
   }
 
   dispose(): void {
+    releaseScrollbar(this.scrollView);
     if (this.finished) return;
     this.finished = true;
     this.onAction({ kind: "close" });
   }
 
-  private renderFooter(width: number): string {
+  private renderFooter(width: number): string[] {
+    return renderConversationFooter(width, this.theme, {
+      model: this.options.model,
+      thinkingLevel: this.thinkingLevel,
+      focus: this.workspaceFocus,
+      hint: this.renderHints(width),
+      warning: this.warning !== undefined,
+    });
+  }
+
+  private renderHints(width: number): string {
     const exit = this.shortcuts.label("exit");
     const bring = this.canBringToMain && this.shortcuts.keys.bringToMain.length > 0;
     const bringKey = this.shortcuts.label("bringToMain");
-    if (this.warning) {
-      const warning = width < 32 ? `Empty • ${exit}` : `${this.warning} • ${exit} exit`;
-      return truncateToWidth(this.theme.fg("warning", warning), width);
-    }
-    const scrollable = this.getMaxScrollOffset() > 0;
+    if (this.warning) return fittingHint(width, [`${this.warning} • ${exit} exit`, `Empty • ${exit}`, exit]);
     const thinking = this.options.thinking;
-    const cycleHint =
-      thinking && thinking.levels.length > 1 && this.thinkingLevel && this.shortcuts.keys.cycleThinkingLevel.length
-        ? ` • thinking ${this.thinkingLevel} • ${this.shortcuts.label("cycleThinkingLevel")} cycle`
+    const cycle =
+      thinking && thinking.levels.length > 1 && this.shortcuts.keys.cycleThinkingLevel.length
+        ? `${this.shortcuts.label("cycleThinkingLevel")} thinking`
         : "";
-    const base = bring
-      ? `btw • Enter send • ${bringKey} bring to main • ${exit} exit`
-      : `btw • Enter send • ${exit} exit`;
-    const fullBase = `${base}${cycleHint}`;
-    const fallbackBase = `btw • Enter • ${exit}`;
-    const compactBase = bring ? `btw • Enter • ${bringKey} • ${exit}` : fallbackBase;
-    const compactWithThinking = `${compactBase}${cycleHint}`;
-    let hints =
-      visibleWidth(fullBase) <= width
-        ? fullBase
-        : visibleWidth(compactWithThinking) <= width
-          ? compactWithThinking
-          : visibleWidth(compactBase) <= width
-            ? compactBase
-            : fallbackBase;
-    if (scrollable) {
-      const history = ` • ${this.scrollView.scrollTop > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history`;
-      const compactHistory = " • PgUp/PgDn";
-      const compactScrollable = bring
-        ? `Enter • ${bringKey} • ${exit} • PgUp/PgDn`
-        : `${fallbackBase}${compactHistory}`;
-      if (visibleWidth(`${hints}${history}`) <= width) {
-        hints += history;
-      } else if (visibleWidth(`${compactBase}${history}`) <= width) {
-        hints = `${compactBase}${history}`;
-      } else if (visibleWidth(`${hints}${compactHistory}`) <= width) {
-        hints += compactHistory;
-      } else if (visibleWidth(`${compactBase}${compactHistory}`) <= width) {
-        hints = `${compactBase}${compactHistory}`;
-      } else if (visibleWidth(compactScrollable) <= width) {
-        hints = compactScrollable;
-      }
-    }
-    return truncateToWidth(this.theme.fg("muted", hints), width);
-  }
-
-  private createHeaderComponent(): Component {
-    return {
-      render: (width) => [renderSideThreadHeader(width, this.theme, this.thinkingLevel)],
-      invalidate() {},
-    };
+    const importKey =
+      this.options.mainUpdates && this.shortcuts.keys.importMainUpdates.length
+        ? this.shortcuts.label("importMainUpdates")
+        : "";
+    const newMainUpdates = importKey ? this.options.mainUpdates?.() : false;
+    const importHint = importKey ? `${importKey} import main${newMainUpdates ? " (new)" : ""}` : "";
+    const compactImportHint = importKey ? `${importKey} import${newMainUpdates ? " (new)" : ""}` : "";
+    const submit = submitHint(this.tui, this.keybindings, "send");
+    const history = this.getMaxScrollOffset() > 0 ? pagingHint(this.tui, this.keybindings) : "";
+    const switchPane = this.workspaceFocus?.shortcutLabel ? `${this.workspaceFocus.shortcutLabel} switch` : "";
+    const submitKey = submit.split(" ")[0] ?? "";
+    return fittingHint(width, [
+      compactHints([
+        submit,
+        bring ? `${bringKey} bring to main` : "",
+        `${exit} exit`,
+        cycle,
+        history,
+        switchPane,
+        importHint,
+      ]),
+      ...(compactImportHint
+        ? [
+            compactHints([submit, bring ? bringKey : "", exit, cycle, history, switchPane, compactImportHint]),
+            compactHints([submitKey, exit, compactImportHint]),
+          ]
+        : []),
+      compactHints([submit, bring ? bringKey : "", exit, cycle, history, switchPane]),
+      compactHints([submitKey, bring ? bringKey : "", exit, cycle, history.replace(/ history$/u, ""), switchPane]),
+      compactHints([submitKey, bring ? bringKey : "", exit, history.replace(/ history$/u, "")]),
+      compactHints([submitKey, bring ? bringKey : "", exit]),
+      compactHints([submitKey, exit]),
+      exit,
+    ]);
   }
 
   private createTranscriptComponent(): Component {
     return {
       render: (width) => {
-        const lines = renderTranscriptLines(this.transcriptComponents, width);
+        const lines = renderTranscriptLines(this.transcriptComponents, width, true);
         this.lastContentLineCount = lines.length;
         return lines;
       },
@@ -294,7 +480,7 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 
   private createFooterComponent(): Component {
     return {
-      render: (width) => [this.renderFooter(width)],
+      render: (width) => this.renderFooter(width),
       invalidate() {},
     };
   }
@@ -305,11 +491,19 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
 }
 
 export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable {
+  private workspaceFocus: BtwWorkspaceFocus | undefined;
+  private get keybindings(): KeybindingsManager {
+    return getBtwKeybindings(this.tui, this.options.keybindings ?? this.options.steering?.thinking?.keybindings);
+  }
+  setWorkspaceFocus(pane: "side" | "main", shortcutLabel: string | undefined): void {
+    this.workspaceFocus = { pane, shortcutLabel: shortcutLabel ? sanitizeSingleLine(shortcutLabel) : undefined };
+    this.tui.requestRender();
+  }
   private readonly shortcuts: BtwShortcuts;
   private readonly pasteGuard = new BtwPasteGuard();
   private readonly transcriptComponents: Component[];
-  private readonly loader: Loader;
-  private readonly editor: Editor | undefined;
+  private readonly loader: BtwWorkingIndicator;
+  private readonly editor: BtwComposer | undefined;
   private readonly controller = new AbortController();
   private readonly scrollView: ScrollView;
   private readonly layoutRoot: VStack;
@@ -322,13 +516,13 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
   constructor(
     private readonly tui: TUI,
     private readonly theme: Theme,
-    turns: readonly SideThreadTurn[],
+    turns: readonly SideTranscriptItem[],
     pendingQuestion: string,
     private readonly onCancel: () => void,
     thinkingLevel?: BtwThinkingLevel,
     private readonly options: BtwAnsweringViewOptions = {},
   ) {
-    this.shortcuts = getBtwShortcuts(tui, options.steering?.thinking?.keybindings);
+    this.shortcuts = getBtwShortcuts(tui, this.keybindings);
     this.transcriptComponents = buildTranscriptComponents(
       turns,
       this.theme,
@@ -336,7 +530,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
       options.markdownTransformers,
     );
     this.thinkingLevel = options.steering?.thinking?.level ?? thinkingLevel;
-    this.loader = new Loader(
+    this.loader = new BtwWorkingIndicator(
       this.tui,
       (text) => this.theme.fg("accent", text),
       (text) => this.theme.fg("muted", text),
@@ -344,7 +538,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
     );
     if (options.steering) {
       const editorTheme: EditorTheme = {
-        borderColor: (text) => this.theme.fg("accent", text),
+        borderColor: (text) => thinkingBorder(this.theme, this.thinkingLevel, text),
         selectList: {
           selectedPrefix: (text) => this.theme.fg("accent", text),
           selectedText: (text) => this.theme.fg("accent", text),
@@ -353,7 +547,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
           noMatch: (text) => this.theme.fg("warning", text),
         },
       };
-      this.editor = new Editor(this.tui, editorTheme);
+      this.editor = new BtwComposer(this.tui, editorTheme, (data) => this.handleInput(data), this.loader);
       this.editor.onChange = () => {
         this.warning = undefined;
       };
@@ -368,10 +562,14 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
       };
     }
     const transcript = this.createTranscriptComponent();
-    this.scrollView = new PreservingScrollView(transcript, { follow: "end", primary: true });
-    this.layoutRoot = new VStack([
-      { component: this.createHeaderComponent(), basis: 1, shrink: 0, minSize: 1 },
-      { component: this.scrollView, basis: 0, grow: 1, minSize: 0 },
+    this.scrollView = new PreservingScrollView(transcript, {
+      follow: "end",
+      primary: true,
+      scrollbar: "auto",
+      scrollbarTrackStyle: (text) => this.theme.fg("scrollbarTrack", text),
+      scrollbarThumbStyle: (text) => this.theme.fg("scrollbarThumb", text),
+    });
+    const dock = new VStack([
       {
         component: this.createSteeringComponent(),
         basis: "auto",
@@ -379,8 +577,12 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
         minSize: 0,
         maxSize: MAX_STEERING_DISPLAY_LINES,
       },
-      { component: this.createFooterComponent(), basis: 1, shrink: 0, minSize: 1 },
-      ...(this.editor ? [{ component: this.editor, basis: "auto" as const, shrink: 1, minSize: 0 }] : []),
+      { component: this.editor ?? this.createWorkingComponent(), basis: "auto", shrink: 1, minSize: 1 },
+      { component: this.createFooterComponent(), basis: "auto", shrink: 1, minSize: 0 },
+    ]);
+    this.layoutRoot = new VStack([
+      { component: this.scrollView, basis: 0, grow: 1, minSize: 0 },
+      { component: dock, basis: "auto", shrink: 1, minSize: 1 },
     ]);
   }
 
@@ -406,27 +608,24 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
   }
 
   render(width: number): string[] {
-    if (width <= 0) return [];
+    if (width <= 0 || this.tui.terminal.rows <= 0) return [];
     const safeWidth = Math.max(1, width);
     const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_LINES);
-    const editorLines = this.editor?.render(safeWidth) ?? [];
-    const steeringCapacity = Math.max(0, availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES);
+    const editorLines = this.editor?.render(safeWidth) ?? this.renderWorking(safeWidth);
+    const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
+    this.lastContentLineCount = contentLines.length;
+    const footerLines = this.renderFooter(safeWidth);
+    const steeringCapacity = Math.max(0, availableRows - editorLines.length - footerLines.length);
     const steeringLines = renderSteeringLines(
       this.options.steering?.questions ?? [],
       safeWidth,
       this.theme,
       Math.min(MAX_STEERING_DISPLAY_LINES, steeringCapacity),
     );
-    const viewportHeight = Math.max(
-      0,
-      availableRows - editorLines.length - TRANSCRIPT_CHROME_LINES - steeringLines.length,
-    );
-    const contentLines = renderTranscriptLines(this.transcriptComponents, safeWidth);
-    this.lastContentLineCount = contentLines.length;
+    const viewportHeight = Math.max(0, availableRows - editorLines.length - footerLines.length - steeringLines.length);
     this.scrollView.updateLayout(contentLines.length, viewportHeight, () => this.tui.requestRender());
 
     return fitComposerLayout(
-      renderSideThreadHeader(safeWidth, this.theme, this.thinkingLevel),
       contentLines.slice(this.scrollView.scrollTop, this.scrollView.scrollTop + viewportHeight),
       this.renderFooter(safeWidth),
       editorLines,
@@ -438,7 +637,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
   handleInput(data: string): void {
     if (this.finished) return;
     if (this.pasteGuard.consume(data)) {
-      this.editor?.handleInput(data);
+      this.editor?.handleEditorInput(data);
       this.tui.requestRender();
       return;
     }
@@ -461,17 +660,9 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
       }
       return;
     }
-    if (matchesKey(data, Key.pageUp)) {
-      this.scrollView.scrollBy(-Math.max(1, this.scrollView.viewportHeight));
-      this.tui.requestRender();
-      return;
+    if (!handleFallbackPaging(data, this.tui, this.keybindings, this.scrollView)) {
+      this.editor?.handleEditorInput(data);
     }
-    if (matchesKey(data, Key.pageDown)) {
-      this.scrollView.scrollBy(Math.max(1, this.scrollView.viewportHeight));
-      this.tui.requestRender();
-      return;
-    }
-    this.editor?.handleInput(data);
     this.tui.requestRender();
   }
 
@@ -481,10 +672,12 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 
   finish(): void {
     this.finished = true;
+    releaseScrollbar(this.scrollView);
     this.loader.stop();
   }
 
   dispose(): void {
+    releaseScrollbar(this.scrollView);
     if (this.finished) {
       this.loader.stop();
       this.controller.abort();
@@ -496,38 +689,50 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
     this.onCancel();
   }
 
-  private renderFooter(width: number): string {
-    const exit = this.shortcuts.label("exit");
-    if (this.warning) {
-      const warning = width < 32 ? `Empty • ${exit}` : `${this.warning} • ${exit} cancel`;
-      return truncateToWidth(this.theme.fg("warning", warning), width);
-    }
-    const baseHint = this.editor ? `Enter steer • ${exit} cancel` : `${exit} cancel`;
-    const thinking = this.options.steering?.thinking;
-    const cycleHint =
-      thinking && thinking.levels.length > 1 && this.thinkingLevel && this.shortcuts.keys.cycleThinkingLevel.length
-        ? ` • thinking ${this.thinkingLevel} • ${this.shortcuts.label("cycleThinkingLevel")} cycle`
-        : "";
-    const scrollHint = this.getMaxScrollOffset() > 0 ? " • PgUp/PgDn history" : "";
-    const hints = `${baseHint}${cycleHint}${scrollHint}`;
-    const compactHints = this.editor ? `Enter • ${exit}` : exit;
-    const selectedHints = visibleWidth(hints) <= width ? hints : compactHints;
-    const loaderWidth = Math.max(1, width - visibleWidth(selectedHints) - 3);
-    const loaderLine = this.loader.render(loaderWidth).at(-1) ?? "Answering…";
-    return truncateToWidth(`${loaderLine} • ${this.theme.fg("muted", selectedHints)}`, width);
+  private renderFooter(width: number): string[] {
+    return renderConversationFooter(width, this.theme, {
+      model: this.options.model,
+      thinkingLevel: this.thinkingLevel,
+      focus: this.workspaceFocus,
+      hint: this.renderHints(width),
+      warning: this.warning !== undefined,
+    });
   }
 
-  private createHeaderComponent(): Component {
-    return {
-      render: (width) => [renderSideThreadHeader(width, this.theme, this.thinkingLevel)],
-      invalidate() {},
-    };
+  private renderHints(width: number): string {
+    const exit = this.shortcuts.label("exit");
+    if (this.warning) return fittingHint(width, [`${this.warning} • ${exit} cancel`, `Empty • ${exit}`, exit]);
+    const submit = this.editor ? submitHint(this.tui, this.keybindings, "queue next") : "";
+    const thinking = this.options.steering?.thinking;
+    const cycle =
+      thinking && thinking.levels.length > 1 && this.shortcuts.keys.cycleThinkingLevel.length
+        ? `${this.shortcuts.label("cycleThinkingLevel")} thinking`
+        : "";
+    const history = this.getMaxScrollOffset() > 0 ? pagingHint(this.tui, this.keybindings) : "";
+    const switchPane = this.workspaceFocus?.shortcutLabel ? `${this.workspaceFocus.shortcutLabel} switch` : "";
+    const submitKey = submit.split(" ")[0] ?? "";
+    return fittingHint(width, [
+      compactHints([submit, `${exit} cancel`, cycle, history, switchPane]),
+      compactHints([submit, exit, cycle, history, switchPane]),
+      compactHints([submitKey, exit, cycle, history.replace(/ history$/u, ""), switchPane]),
+      compactHints([submitKey, exit, history.replace(/ history$/u, "")]),
+      compactHints([submitKey, exit]),
+      exit,
+    ]);
+  }
+
+  private renderWorking(width: number): string[] {
+    return [this.loader.renderInBorder(Math.max(0, width))];
+  }
+
+  private createWorkingComponent(): Component {
+    return { render: (width) => this.renderWorking(width), invalidate: () => this.loader.invalidate() };
   }
 
   private createTranscriptComponent(): Component {
     return {
       render: (width) => {
-        const lines = renderTranscriptLines(this.transcriptComponents, width);
+        const lines = renderTranscriptLines(this.transcriptComponents, width, true);
         this.lastContentLineCount = lines.length;
         return lines;
       },
@@ -547,7 +752,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
 
   private createFooterComponent(): Component {
     return {
-      render: (width) => [this.renderFooter(width)],
+      render: (width) => this.renderFooter(width),
       invalidate: () => this.loader.invalidate(),
     };
   }
@@ -557,9 +762,10 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
   }
 }
 
-export function formatSideTranscript(turns: readonly SideThreadTurn[]): string {
+export function formatSideTranscript(turns: readonly SideTranscriptItem[]): string {
   return turns
     .map((turn) => {
+      if (turn.kind === "mainContext") return `Main context update\n\n${escapeTerminalControls(turn.snapshot.text)}`;
       const question = escapeTerminalControls(turn.question);
       const rawAnswer = escapeTerminalControls(turn.answer);
       const answer = turn.kind === "error" ? `Error: ${rawAnswer}` : rawAnswer;
@@ -569,12 +775,27 @@ export function formatSideTranscript(turns: readonly SideThreadTurn[]): string {
 }
 
 function buildTranscriptComponents(
-  turns: readonly SideThreadTurn[],
+  turns: readonly SideTranscriptItem[],
   theme: Theme,
   pendingQuestion?: string,
   markdownTransformers: readonly MarkdownTransformer[] = [],
 ): Component[] {
-  const components = turns.flatMap((turn): Component[] => {
+  const components = turns.flatMap((turn, index): Component[] => {
+    // Pi inserts a spacer before a later user message, outside that message's
+    // own Markdown padding. Keep the same separation between side exchanges.
+    const preceding = index > 0 ? [new Spacer(1)] : [];
+    if (turn.kind === "mainContext") {
+      const update: Component = {
+        render: (width) =>
+          new Text(
+            theme.fg("muted", `Main context update\n\n${escapeTerminalControls(turn.snapshot.text)}`),
+            1,
+            0,
+          ).render(width),
+        invalidate() {},
+      };
+      return [...preceding, update];
+    }
     const question = new UserMessageComponent(
       escapeTerminalControls(turn.question),
       getMarkdownTheme(),
@@ -582,10 +803,12 @@ function buildTranscriptComponents(
       markdownTransformers,
     );
     if (turn.kind === "error") {
-      const error = new Markdown(`Error: ${escapeTerminalControls(turn.answer)}`, 1, 1, getMarkdownTheme(), {
-        color: (text) => theme.fg("error", text),
-      });
-      return [question, error];
+      const error: Component = {
+        render: (width) =>
+          new Text(theme.fg("error", `Error: ${escapeTerminalControls(turn.answer)}`), 1, 0).render(width),
+        invalidate() {},
+      };
+      return [...preceding, question, new Spacer(1), error];
     }
     const response: AssistantMessage = {
       ...turn.response,
@@ -593,9 +816,14 @@ function buildTranscriptComponents(
       stopReason: "stop",
       errorMessage: undefined,
     };
-    return [question, new AssistantMessageComponent(response, true, getMarkdownTheme(), "", 1, markdownTransformers)];
+    return [
+      ...preceding,
+      question,
+      new AssistantMessageComponent(response, true, getMarkdownTheme(), "", 1, markdownTransformers),
+    ];
   });
   if (pendingQuestion) {
+    if (components.length > 0) components.push(new Spacer(1));
     components.push(
       new UserMessageComponent(escapeTerminalControls(pendingQuestion), getMarkdownTheme(), 1, markdownTransformers),
     );
@@ -603,30 +831,44 @@ function buildTranscriptComponents(
   return components;
 }
 
-function renderTranscriptLines(components: readonly Component[], width: number): string[] {
-  return components.flatMap((component) => component.render(width)).map(stripShellIntegrationMarkers);
-}
-
-function renderSideThreadHeader(width: number, theme: Theme, thinkingLevel?: BtwThinkingLevel): string {
-  const thinking = thinkingLevel ? ` · thinking ${thinkingLevel}` : "";
-  const title = truncateToWidth(`─ btw · side thread${thinking} `, width);
-  const ruleWidth = Math.max(0, width - visibleWidth(title));
-  return theme.fg("muted", `${title}${"─".repeat(ruleWidth)}`);
+function renderTranscriptLines(components: readonly Component[], width: number, native = false): string[] {
+  return components.flatMap((component) => {
+    const lines = component.render(width);
+    // Pi adds these exact prefixes outside Markdown. Never trust payload/transformer
+    // markers, even when they happen to use the same OSC number.
+    const trusted = component instanceof UserMessageComponent || component instanceof AssistantMessageComponent;
+    return lines.map((line, index) => {
+      let prefix = "";
+      if (native && trusted) {
+        if (index === 0 && line.startsWith(OSC133_MARKERS[0] ?? "")) prefix += OSC133_MARKERS[0];
+        const end = `${OSC133_MARKERS[1]}${OSC133_MARKERS[2]}`;
+        if (index === lines.length - 1 && line.slice(prefix.length).startsWith(end)) prefix += end;
+      }
+      return prefix + truncateToWidth(stripShellIntegrationMarkers(line), Math.max(0, width), "");
+    });
+  });
 }
 
 function fitComposerLayout(
-  header: string,
   contentLines: string[],
-  footer: string,
+  footerLines: string[],
   editorLines: string[],
   availableRows: number,
   statusLines: string[] = [],
 ): string[] {
-  const lines = [header, ...contentLines, ...statusLines, footer, ...editorLines];
-  if (lines.length <= availableRows) return lines;
-  if (availableRows <= 1) return [header];
-  const editorBudget = Math.max(0, availableRows - 2);
-  return [header, footer, ...fitEditorLines(editorLines, editorBudget)];
+  if (availableRows <= 0) return [];
+  // Keep the active input first in the row budget, while retaining native
+  // conversation order: transcript, pending questions, editor, then footer.
+  const editorBudget = Math.min(editorLines.length, availableRows);
+  const footerBudget = Math.min(footerLines.length, availableRows - editorBudget);
+  const statusBudget = Math.min(statusLines.length, availableRows - editorBudget - footerBudget);
+  const transcriptBudget = availableRows - editorBudget - footerBudget - statusBudget;
+  return [
+    ...contentLines.slice(0, transcriptBudget),
+    ...statusLines.slice(0, statusBudget),
+    ...fitEditorLines(editorLines, editorBudget),
+    ...footerLines.slice(0, footerBudget),
+  ];
 }
 
 function fitEditorLines(editorLines: string[], budget: number): string[] {
@@ -644,7 +886,7 @@ function renderSteeringLines(questions: readonly string[], width: number, theme:
   if (maxLines === 1 && questions.length > 1) {
     return [
       truncateToWidth(
-        theme.fg("dim", `Steering (+${questions.length - 1} more): ${formatQuestion(questions[0] ?? "")}`),
+        theme.fg("dim", ` Steering next (+${questions.length - 1} more): ${formatQuestion(questions[0] ?? "")}`),
         width,
       ),
     ];
@@ -653,15 +895,16 @@ function renderSteeringLines(questions: readonly string[], width: number, theme:
   const questionLimit = hasOverflow ? Math.max(1, maxLines - 1) : maxLines;
   const lines = questions
     .slice(0, questionLimit)
-    .map((question) => truncateToWidth(theme.fg("dim", `Steering: ${formatQuestion(question)}`), width));
+    .map((question) => truncateToWidth(theme.fg("dim", ` Steering next: ${formatQuestion(question)}`), width));
   if (hasOverflow) {
-    lines.push(truncateToWidth(theme.fg("dim", `Steering: … +${questions.length - questionLimit} more`), width));
+    lines.push(truncateToWidth(theme.fg("dim", ` Steering next: … +${questions.length - questionLimit} more`), width));
   }
   return lines;
 }
 
 function stripShellIntegrationMarkers(line: string): string {
-  return OSC133_MARKERS.reduce((result, marker) => result.replaceAll(marker, ""), line);
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: remove the exact OSC terminal protocol, not printable text.
+  return line.replace(/\u001b\]133;[^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, "");
 }
 
 function escapeTerminalControls(text: string): string {

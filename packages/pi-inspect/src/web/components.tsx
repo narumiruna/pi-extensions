@@ -148,19 +148,28 @@ function colored(line: string, budget: { remaining: number }) {
   fragments.push(line.slice(cursor));
   return fragments;
 }
+export interface DataState {
+  open: boolean;
+  format: "tree" | "text";
+}
 export function Data({
   data,
   label,
   defaultOpen = true,
   scope = label,
+  state,
+  changeState,
 }: {
   data?: Capture;
   label: string;
   defaultOpen?: boolean;
   scope?: string;
+  state?: DataState;
+  changeState?(state: DataState): void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const [format, setFormat] = useState("tree");
+  const [localState, setLocalState] = useState<DataState>({ open: defaultOpen, format: "tree" });
+  const { open, format } = state ?? localState;
+  const change = changeState ?? setLocalState;
   const value = data ? output(data.value) : "unavailable";
   const lines = value.split("\n");
   const budget = { remaining: 512 };
@@ -169,7 +178,12 @@ export function Data({
   return (
     <section className="data">
       <div className="data-toolbar">
-        <button type="button" className="section-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button
+          type="button"
+          className="section-toggle"
+          aria-expanded={open}
+          onClick={() => change({ open: !open, format })}
+        >
           <ChevronRightIcon className={open ? "chevron-open" : ""} />
           <span>{label}</span>
         </button>
@@ -182,8 +196,13 @@ export function Data({
         <div>
           {structured && (
             <div className="data-mode">
-              {["tree", "text"].map((mode) => (
-                <button type="button" key={mode} aria-pressed={format === mode} onClick={() => setFormat(mode)}>
+              {(["tree", "text"] as const).map((mode) => (
+                <button
+                  type="button"
+                  key={mode}
+                  aria-pressed={format === mode}
+                  onClick={() => change({ open, format: mode })}
+                >
                   {mode === "tree" ? "Objects" : "JSON text"}
                 </button>
               ))}

@@ -5,12 +5,15 @@ import { createReviewComponent, reviewDialogPages } from "./components/review.js
 import { runCustomInteraction } from "./custom-interaction.js";
 import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import {
+  type DocumentCopyAction,
   MAX_REVIEW_VIEWPORT_SIZE,
   type MenuCloseReason,
   type MenuContext,
   type ReviewFormat,
   type ReviewScreen,
 } from "./types.js";
+
+export type { DocumentCopyAction, DocumentCopyContext } from "./types.js";
 
 type ExtensionMode = MenuContext["mode"];
 type DocumentReviewValue = { kind: "confirmed" } | { kind: "cancelled"; reason: MenuCloseReason };
@@ -27,6 +30,8 @@ export interface RunDocumentReviewOptions<Context extends MenuContext = Extensio
   viewportSize?: number | "adaptive";
   /** Enable literal search over displayed document text in TUI mode. */
   enableSearch?: boolean;
+  /** Copy the original content in place in TUI mode only. */
+  copy?: DocumentCopyAction;
   confirmation?: DocumentReviewConfirmation;
   hint?: MenuCloseReason;
   signal?: AbortSignal;
@@ -80,12 +85,14 @@ async function runTuiDocumentReview<Context extends MenuContext>(
     signal: options.signal,
     isCurrent: options.isCurrent,
     onError: (currentCtx, error) => reportDocumentReviewError(currentCtx, options, error),
-    create: ({ tui, theme, keybindings, complete }) =>
+    create: ({ tui, theme, keybindings, complete, signal }) =>
       createReviewComponent<"review", "confirm">({
         screen,
         tui,
         theme,
         keybindings,
+        signal,
+        isCurrent: options.isCurrent,
         onEvent: (event) => {
           if (event.kind === "activate") complete({ kind: "confirmed" });
           else complete({ kind: "cancelled", reason: event.kind });
@@ -155,6 +162,7 @@ function reviewScreen<Context extends MenuContext>(
     format: options.format,
     viewportSize: options.viewportSize,
     enableSearch: options.enableSearch,
+    copy: options.copy,
     hint: options.hint,
     ...(options.confirmation
       ? { confirm: { id: "confirm", label: options.confirmation.label, action: "confirm" as const } }

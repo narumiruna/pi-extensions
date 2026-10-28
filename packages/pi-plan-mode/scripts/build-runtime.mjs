@@ -21,6 +21,8 @@ export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publish
     "src/settings-menu.ts",
   ],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+  // Passive framing imports only Pi TUI primitives; menus and other Kit APIs stay lazy.
+  allowedEagerExternals: ["@narumitw/pi-tui-kit/editor-status-widget"],
 });
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;

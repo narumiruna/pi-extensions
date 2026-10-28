@@ -15,12 +15,17 @@ export const gitMetricsModule = defineModule({
   },
   styleVariables: ["added_style", "deleted_style"],
   resolveStyleVariables: ({ styles }) => styles,
-  values: ({ runtime }) => {
+  options: {
+    only_nonzero_diffs: { kind: "boolean", default: true },
+    ignore_submodules: { kind: "boolean", default: false },
+  },
+  values: ({ runtime, options }) => {
     const metrics = runtime.gitMetrics;
-    if (!metrics || (metrics.added === 0 && metrics.deleted === 0)) return undefined;
+    const onlyNonzero = options.only_nonzero_diffs !== false;
+    if (!metrics || (onlyNonzero && metrics.added === 0 && metrics.deleted === 0)) return undefined;
     return {
-      added: metrics.added > 0 ? metrics.added.toString() : "",
-      deleted: metrics.deleted > 0 ? metrics.deleted.toString() : "",
+      added: !onlyNonzero || metrics.added > 0 ? metrics.added.toString() : "",
+      deleted: !onlyNonzero || metrics.deleted > 0 ? metrics.deleted.toString() : "",
     };
   },
 });

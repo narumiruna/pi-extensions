@@ -20,7 +20,7 @@ import { diff } from "../src/sync/sync-queries.js";
 import { fileHashMap, hasLocalChanges, hasRemoteChanges } from "../src/sync/sync-state.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
-import { mergeOptions as options } from "./merged-sync-fixture.js";
+import { mergeOptions as options } from "./merge-options.js";
 
 async function fixture(root: string) {
   await fs.mkdir(root, { recursive: true });

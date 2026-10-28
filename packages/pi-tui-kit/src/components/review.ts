@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { MenuScreen, ReviewScreen } from "../types.js";
 import type { MenuKeybindings, MenuScreenComponent, MenuScreenComponentOptions } from "./contracts.js";
+import { createDocumentCopy } from "./document-copy.js";
 import {
   createDocumentLineCache,
   type DocumentPresentation,
@@ -23,6 +24,7 @@ import {
   documentSearchActionMatches,
   documentSearchActivationAvailable,
 } from "./document-search.js";
+import { componentKeyAvailable, componentKeybindings } from "./host-input.js";
 import { componentRows, fitCompactHintSegments, menuHint, renderHorizontalRule, safeMenuText } from "./rendering.js";
 
 const DEFAULT_REVIEW_VIEWPORT_SIZE = 14;
@@ -38,6 +40,7 @@ export type ReviewOptions<ScreenId extends string, ActionId extends string> = Me
 export function createReviewComponent<ScreenId extends string, ActionId extends string>(
   options: ReviewOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
   let scrollOffset = 0;
   let lastMaximumScroll = 0;
   let lastViewportSize = reviewViewportSize(options.screen);
@@ -60,9 +63,24 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
   const documentLineCache = createDocumentLineCache(options.theme, Boolean(options.screen.enableSearch));
   const search = options.screen.enableSearch ? new DocumentSearchController() : undefined;
   const searchActivationAvailable = Boolean(
-    search && documentSearchActivationAvailable(options.keybindings, Boolean(options.screen.confirm)),
+    search &&
+      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY) &&
+      documentSearchActivationAvailable(options.keybindings, Boolean(options.screen.confirm)),
   );
 
+  const copy = createDocumentCopy({
+    ...options,
+    includeConfirm: Boolean(options.screen.confirm),
+    searchEnabled: searchActivationAvailable,
+    document: () =>
+      options.screen.copy
+        ? { owner: options.screen, action: options.screen.copy, content: options.screen.content }
+        : undefined,
+  });
+  const finish: typeof options.onEvent = (event) => {
+    copy.cancel();
+    options.onEvent(event);
+  };
   const moveTo = (offset: number) => {
     scrollOffset = Math.max(0, Math.min(offset, lastMaximumScroll));
     options.tui.requestRender();
@@ -104,6 +122,7 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
         searchLine: searchActive ? search?.render(safeWidth) : undefined,
         searchEnabled: searchActivationAvailable,
         searchActive,
+        copyHint: copy.hint(searchActive),
         width: safeWidth,
         terminalRows,
         maximumViewportSize:
@@ -150,7 +169,7 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
           data,
           (outsidePaste) => {
             if (matchesKey(outsidePaste, Key.ctrl("c"))) {
-              options.onEvent({ kind: "close" });
+              finish({ kind: "close" });
               return false;
             }
             if (options.keybindings.matches(outsidePaste, "tui.altScreen.searchClose")) {
@@ -187,9 +206,9 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
         }
         return;
       }
-      if (matchesKey(data, Key.ctrl("c"))) options.onEvent({ kind: "close" });
+      if (matchesKey(data, Key.ctrl("c"))) finish({ kind: "close" });
       else if (options.keybindings.matches(data, "tui.select.cancel")) {
-        options.onEvent({ kind: options.screen.hint ?? "back" });
+        finish({ kind: options.screen.hint ?? "back" });
       } else if (options.keybindings.matches(data, "tui.select.up")) {
         moveTo(scrollOffset - 1);
       } else if (options.keybindings.matches(data, "tui.select.down")) {
@@ -201,11 +220,11 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
       } else if (matchesKey(data, Key.home)) moveTo(0);
       else if (matchesKey(data, Key.end)) moveTo(lastMaximumScroll);
       else if (options.screen.confirm && options.keybindings.matches(data, "tui.select.confirm")) {
-        options.onEvent({ kind: "activate", itemId: options.screen.confirm.id });
+        finish({ kind: "activate", itemId: options.screen.confirm.id });
       } else if (search && searchActivationAvailable && matchesKey(data, DOCUMENT_SEARCH_ACTIVATE_KEY)) {
         search.activate(lastLines, lastSoftWrapAfter, lastIgnoreLeadingWhitespace, lastSearchSources, scrollOffset);
         options.tui.requestRender();
-      }
+      } else copy.handleInput(data);
     },
     handleMouse(event) {
       if (disposed || !mouseLayout || event.width !== mouseLayout.width) return undefined;
@@ -216,10 +235,11 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
       }
       return routeDocumentWheel(event);
     },
-    async waitForPending() {},
+    waitForPending: () => copy.waitForPending(),
     dispose() {
       if (disposed) return;
       disposed = true;
+      copy.dispose();
       mouseLayout = undefined;
       search?.dispose();
       options.onDispose?.();
@@ -259,6 +279,7 @@ interface AdaptiveReviewFrameOptions<ActionId extends string> {
   searchLine?: string;
   searchEnabled: boolean;
   searchActive: boolean;
+  copyHint: string;
   width: number;
   terminalRows: number;
   maximumViewportSize?: number;
@@ -310,6 +331,7 @@ function renderAdaptiveReviewFrame<ActionId extends string>(
     confirmAction,
     options.searchEnabled,
     options.searchActive,
+    options.copyHint,
   );
   const fullHint = wrapTextWithAnsi(options.theme.fg("dim", hintText), options.width).map((line) =>
     truncateToWidth(line, options.width, ""),
@@ -323,6 +345,7 @@ function renderAdaptiveReviewFrame<ActionId extends string>(
       options.width,
       options.searchEnabled,
       options.searchActive,
+      options.copyHint,
     ),
   );
 
@@ -466,6 +489,7 @@ function reviewHint(
   confirmAction: string,
   searchEnabled: boolean,
   searchActive: boolean,
+  copyHint: string,
 ) {
   if (searchActive) {
     const next = reviewBindingText(keybindings, "tui.altScreen.searchNext");
@@ -480,7 +504,7 @@ function reviewHint(
   }
   const base = menuHint(keybindings, destination, confirmAction);
   const search = searchEnabled ? DOCUMENT_SEARCH_ACTIVATE_KEY : "";
-  return [base, ...(search ? [`${search} search`] : [])].filter(Boolean).join(" · ");
+  return [base, ...(search ? [`${search} search`] : []), copyHint].filter(Boolean).join(" · ");
 }
 
 function compactReviewHint(
@@ -490,6 +514,7 @@ function compactReviewHint(
   width: number,
   searchEnabled: boolean,
   searchActive: boolean,
+  copyHint: string,
 ) {
   if (searchActive) {
     const close = reviewBindingText(keybindings, "tui.altScreen.searchClose");
@@ -511,6 +536,7 @@ function compactReviewHint(
       ...(confirm && confirmAction ? [`${confirm} ${confirmAction}`] : []),
       ...(up || down ? [`${[up, down].filter(Boolean).join("/")} navigate`] : []),
       ...(search ? [`${search} search`] : []),
+      ...(copyHint ? [copyHint] : []),
     ],
     width,
   );

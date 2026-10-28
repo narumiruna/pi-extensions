@@ -1,0 +1,416 @@
+/* Tool inventory owns its scroll panes; drawers use the same bounded content styles. */
+.environment-surface #resource-panel-tools {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.environment-surface #resource-panel-tools[hidden] {
+  display: none;
+}
+.tool-explorer {
+  --default-font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --heading-font-family: var(--default-font-family);
+  font-family: var(--default-font-family);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  font-size: 12px;
+}
+.tool-explorer :is(button, input, select, summary):focus-visible {
+  outline: 2px solid var(--blue-9);
+  outline-offset: -2px;
+}
+.tool-explorer :is(button, input, select) {
+  font: inherit;
+  color: inherit;
+}
+.tool-explorer .tool-inventory-note {
+  color: var(--secondary);
+  margin: 6px 4px 12px;
+  font-size: 11px;
+}
+.tool-explorer-layout {
+  display: grid;
+  grid-template-columns: minmax(160px, 19%) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  border-top: 1px solid var(--panel-border);
+}
+.tool-explorer.with-details .tool-explorer-layout {
+  grid-template-columns: minmax(160px, 17%) minmax(0, 1fr) minmax(300px, 32%);
+}
+.tool-source-pane,
+.tool-detail-pane {
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  background: var(--panel-bg);
+  scrollbar-width: thin;
+}
+.tool-source-pane {
+  border-right: 1px solid var(--panel-border);
+}
+.tool-sources {
+  padding: 14px 8px;
+}
+.tool-sources .rt-Heading {
+  font-size: 13px;
+  margin: 0 8px 12px;
+}
+.tool-source {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+}
+.tool-source > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tool-count {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel-raised);
+  color: var(--secondary);
+  font-size: 11px;
+}
+.tool-source:hover,
+.tool-inventory-table button:hover {
+  background: var(--surface-hover);
+}
+.tool-source[aria-pressed="true"],
+.tool-inventory-table tr[data-selected="true"] {
+  background: var(--selected-bg);
+}
+.tool-source[aria-pressed="true"] {
+  color: var(--blue-12);
+}
+.tool-source-category {
+  margin-top: 8px;
+}
+.tool-source-category > summary {
+  padding: 6px 4px;
+  cursor: pointer;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+.tool-source-category > summary .tool-count {
+  margin-left: 5px;
+}
+.tool-source-category > .tool-source {
+  padding-left: 20px;
+}
+.tool-table-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.tool-toolbar {
+  padding: 12px;
+  flex-shrink: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.tool-breadcrumb {
+  display: flex;
+  gap: 8px 14px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.tool-breadcrumb strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tool-breadcrumb > span {
+  color: var(--secondary);
+  font-size: 11px;
+}
+.tool-toolbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.tool-toolbar-controls > input {
+  flex: 1 1 160px;
+  min-width: 0;
+  width: 120px;
+}
+.tool-toolbar-controls > label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--secondary);
+  max-width: 100%;
+}
+.tool-toolbar-controls :is(input[type="search"], select, button),
+.tool-columns-trigger {
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  background: var(--panel-bg);
+  padding: 7px 9px;
+  min-height: 32px;
+  font-size: 11px;
+}
+.tool-toolbar-controls select {
+  max-width: 100%;
+}
+.tool-columns-menu.rt-PopoverContent {
+  width: 210px;
+  max-width: calc(100vw - 16px);
+  max-height: var(--radix-popover-content-available-height);
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  color: var(--gray-12);
+  font-size: 12px;
+}
+.tool-columns-menu fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.tool-columns-menu input:focus-visible {
+  outline: 2px solid var(--blue-9);
+  outline-offset: 2px;
+}
+.tool-columns-menu legend {
+  padding: 2px 4px;
+  background: var(--panel-bg);
+  font-size: 11px;
+}
+.tool-columns-menu label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 3px;
+}
+.tool-table-scroll {
+  min-height: min(110px, 25dvh);
+  flex: 1;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.tool-inventory-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+.tool-inventory-table :is(th, td) {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--panel-border);
+  font-weight: normal;
+  vertical-align: top;
+}
+.tool-inventory-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-raised);
+  color: var(--secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.tool-inventory-table th[scope="row"] {
+  min-width: 160px;
+  max-width: 300px;
+  padding: 0;
+}
+.tool-inventory-table button {
+  display: block;
+  min-height: 36px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 500;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.tool-inventory-table td > span {
+  display: block;
+  max-width: 280px;
+  overflow-wrap: anywhere;
+}
+.tool-inventory-table .tool-cell-description {
+  width: 240px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.tool-inventory-table .tool-cell-exposure {
+  color: var(--blue-12);
+}
+.tool-empty {
+  padding: 16px;
+}
+.tool-detail-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--panel-border);
+}
+.tool-panel-heading {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 0;
+}
+.tool-panel-heading .rt-Heading {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.tool-detail-content {
+  padding: 14px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  overflow-wrap: anywhere;
+}
+.tool-detail-content > .rt-Heading {
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+.tool-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 8px 0 16px;
+}
+.tool-explorer .tool-badges .rt-Badge {
+  white-space: normal;
+}
+.tool-detail-content .navigation-tabs {
+  margin: 12px 0;
+}
+.tool-detail-content .navigation-tabs button {
+  font-size: 11px;
+  padding: 6px 8px;
+}
+.tool-detail-content .navigation-tabs button[aria-selected="true"] {
+  color: var(--blue-12);
+}
+.tool-detail-content .inventory-description {
+  white-space: pre-wrap;
+  margin: 12px 0;
+}
+.tool-detail-content .metadata {
+  display: block;
+  font-size: 11px;
+}
+.tool-detail-content .metadata > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+.tool-detail-content .metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.tool-explorer .tool-note {
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 14px 8px;
+}
+.tool-explorer .tool-table-note {
+  flex-shrink: 0;
+  margin: 8px 12px;
+}
+.tool-detail-content .data {
+  margin: 12px 0;
+}
+.tool-detail-content .section-toggle {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tool-detail-content .data-toolbar {
+  flex-wrap: wrap;
+}
+/* Portals sit outside .inspector-app; keep owned overlays in the same palette. */
+.tool-resource-drawer,
+.tool-resource-popover.radix-themes.rt-PopoverContent {
+  --panel-bg: #faf8f3;
+  --panel-raised: #eeebe4;
+  --surface-hover: #e9e6de;
+  --panel-border: #dedbd4;
+  --secondary: #63676e;
+  --code-bg: #eeebe4;
+  --selected-bg: #638dd119;
+  --default-font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --heading-font-family: var(--default-font-family);
+  font-family: var(--default-font-family);
+}
+.radix-themes.dark .tool-resource-drawer,
+.tool-resource-popover.radix-themes.dark {
+  --panel-bg: #26292e;
+  --panel-raised: #30343a;
+  --surface-hover: #353a41;
+  --panel-border: #41454d;
+  --secondary: #c0c3ca;
+  --code-bg: #2e3237;
+  --selected-bg: #638dd124;
+}
+.tool-resource-drawer.rt-DialogContent {
+  background: var(--panel-bg);
+}
+.tool-drawer-body {
+  overflow: hidden;
+}
+.tool-drawer-body > .tool-sources {
+  overflow: auto;
+}
+@media (max-width: 1100px) {
+  .tool-explorer-layout {
+    display: flex;
+  }
+  .tool-table-pane {
+    width: 100%;
+  }
+}
+@media (max-width: 680px) {
+  .tool-toolbar {
+    padding: 8px 4px;
+  }
+  .tool-toolbar-controls > input {
+    flex-basis: 160px;
+  }
+  .tool-detail-content {
+    padding: 8px 4px;
+  }
+  .tool-explorer .tool-table-note {
+    font-size: 10px;
+    margin: 6px 4px;
+  }
+}

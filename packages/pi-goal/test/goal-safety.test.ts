@@ -717,6 +717,34 @@ test("provider retry does not consume a pending transformed follow-up", async ()
   assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
 });
 
+test("custom starts keep non-goal ownership at the message boundary", async () => {
+  const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+  const message = {
+    role: "custom",
+    customType: "notification",
+    content: "unrelated background update",
+    display: false,
+    timestamp: 1,
+  };
+  const entriesBefore = active.mock.entries.length;
+  assert.equal(
+    active.mock.events.get("before_agent_start")?.[0]?.(
+      { messageType: "custom", message, systemPrompt: "base" },
+      active.ctx,
+    ),
+    undefined,
+  );
+  assert.equal(active.mock.entries.length, entriesBefore);
+  active.mock.events.get("agent_start")?.[0]?.({}, active.ctx);
+  active.mock.events.get("message_start")?.[0]?.({ message }, active.ctx);
+  active.mock.events.get("turn_end")?.[0]?.(
+    { message: { role: "assistant", stopReason: "stop", content: [] }, toolResults: [] },
+    active.ctx,
+  );
+  assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
+  assert.equal(lastGoalStatus(active.mock), "active");
+});
+
 test("queued non-goal follow-up does not inherit automatic recovery ownership", async () => {
   const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
   await active.mock.events.get("agent_end")?.[0]?.(

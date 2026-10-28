@@ -120,7 +120,7 @@ test.beforeEach(async () => {
 test.afterEach(async () => server.close());
 async function open(page: import("@playwright/test").Page, selected = f.assistant) {
   await page.goto(server.url);
-  await page.getByRole("button", { name: "Session", exact: true }).click();
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
   await page.locator(`.session-primary:not([hidden]) [data-trace-id="${selected}"]`).click();
   await page.getByRole("tab", { name: "tools", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "Declared tools" })).toBeVisible();
@@ -255,7 +255,7 @@ test("historical replay documents Pi-generated returns and composed/typeless par
 test("wide Details keeps tool navigation beside documentation in both appearances", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await open(page);
-  await page.getByRole("separator", { name: "Resize details" }).focus();
+  await page.getByRole("separator", { name: "Resize event details" }).focus();
   await page.keyboard.press("End");
   const bounds = await page.locator(".tool-browser").evaluate((element) => {
     const navigation = element.querySelector("nav")?.getBoundingClientRect();

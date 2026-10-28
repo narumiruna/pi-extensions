@@ -2,6 +2,7 @@
 // separating that security boundary would duplicate request and redaction policy across providers.
 import { randomBytes } from "node:crypto";
 import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { createUsageAuthGuard, type UsageAuthLifecycle } from "./auth-resolution-guard.js";
 import { abortError, errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
 import { fallbackOAuthCredentialCandidates, type OAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
@@ -408,9 +409,12 @@ export async function resolveUsageAuth(
   salt: Uint8Array = AUTH_FINGERPRINT_SALT,
   credentialReader: StoredCredentialReader = readStoredCredential,
   candidateReader?: OAuthCredentialCandidateReader,
-  /** @deprecated Companion resolution is automatic; this argument is ignored. */
+  /** @deprecated This historical companion argument is ignored; use options instead. */
   _openaiCompanionUsage?: boolean,
+  options: UsageAuthLifecycle & { openaiUseCodexUsage?: boolean } = {},
 ): Promise<ResolvedUsageAuth | undefined> {
+  const guard = createUsageAuthGuard(options);
+  guard.check();
   if (ctx.model?.provider === adapter.id && !hasOfficialOrigin(ctx.model, adapter.id)) {
     throw new Error(
       `${adapter.displayName} usage cannot send a custom provider base URL credential to the official usage endpoint.`,
@@ -419,11 +423,8 @@ export async function resolveUsageAuth(
 
   const model = candidateModels(ctx, adapter.id).find((candidate) => hasOfficialOrigin(candidate, adapter.id));
   if (!model) return undefined;
-  if (
-    ["github-copilot", "openai", "xai"].includes(adapter.id) &&
-    candidateReader?.waitUntilReady &&
-    !(await candidateReader.waitUntilReady(ctx, adapter.id))
-  ) {
+  // Pending activation can replace runtime keys or headers even without an OAuth credential offer.
+  if (candidateReader?.waitUntilReady && !(await guard.wait(() => candidateReader.waitUntilReady?.(ctx, adapter.id)))) {
     throw new Error(`${adapter.displayName} OAuth credential readiness failed closed.`);
   }
   // SAFETY: Pi exposes the required auth methods at runtime, and checks below narrow them before use.
@@ -438,19 +439,20 @@ export async function resolveUsageAuth(
   const currentModel = ctx.model?.provider === adapter.id ? ctx.model : undefined;
   const resolveCurrentModelAuth = async (): Promise<RequestAuth | undefined> => {
     if (!currentModel || typeof registry.getApiKeyAndHeaders !== "function") return undefined;
-    const result = await registry.getApiKeyAndHeaders(currentModel);
+    const result = await guard.wait(() => registry.getApiKeyAndHeaders?.(currentModel));
+    if (!result) return undefined;
     if (!result.ok) throw new Error(redactUsageError(result.error));
     // Native plan status must inspect explicit empty/null Authorization overrides, not fall
     // back to provider OAuth when the selected model removes or replaces its authorization.
     return adapter.id === "openai" || authorizationFrom(result) ? result : undefined;
   };
   const resolveSelectedAuthLast = ["deepseek", "minimax", "minimax-cn", "openai"].includes(adapter.id);
-  if (!resolveSelectedAuthLast) modelAuth = await resolveCurrentModelAuth();
+  if (!resolveSelectedAuthLast) modelAuth = await guard.wait(resolveCurrentModelAuth);
   if (typeof registry.getProviderAuth !== "function") {
     throw new Error("pi-usage requires Pi 0.81.0 or newer to validate resolved provider auth.");
   }
   if (!moonshotProviderAuthIsAllowed(ctx, adapter.id)) return undefined;
-  const providerResult = await registry.getProviderAuth(adapter.id);
+  const providerResult = await guard.wait(() => registry.getProviderAuth?.(adapter.id));
   if (!moonshotProviderAuthIsAllowed(ctx, adapter.id)) return undefined;
   if (providerResult?.auth.baseUrl && !hasOfficialUrlOrigin(providerResult.auth.baseUrl, adapter.id)) {
     throw new Error(
@@ -459,7 +461,7 @@ export async function resolveUsageAuth(
   }
   // Providers with credential-change retries read selected-model auth last so a rotation during
   // provider-origin validation cannot leave the earlier credential queued for the usage request.
-  if (resolveSelectedAuthLast) modelAuth = await resolveCurrentModelAuth();
+  if (resolveSelectedAuthLast) modelAuth = await guard.wait(resolveCurrentModelAuth);
   if (modelAuth?.baseUrl && !hasOfficialUrlOrigin(modelAuth.baseUrl, adapter.id)) {
     throw new Error(
       `${adapter.displayName} usage cannot send model-resolved proxy credentials to the official usage endpoint.`,
@@ -503,29 +505,37 @@ export async function resolveUsageAuth(
     // Pi can return empty compatibility model auth without any provider credential.
     if (!providerResult) return undefined;
     if (providerResult.source !== "OAuth") throw new UnsupportedOpenAIUsageAuthError();
-    const offered = candidateReader
-      ? await candidateReader(ctx, adapter.id)
-      : fallbackOAuthCredentialCandidates(adapter.id, credentialReader);
+    const offered = await guard.wait(() =>
+      candidateReader
+        ? candidateReader(ctx, adapter.id)
+        : fallbackOAuthCredentialCandidates(adapter.id, credentialReader),
+    );
     if (!offered.ok) throw new Error("OpenAI OAuth credential discovery failed closed.");
     const native = finalize(
       resolveOpenAIChatGPTAuth(auth, providerResult.auth, providerResult.source, model, offered.candidates),
     );
-    const { resolveOpenAICompanionAuth } = await import("./openai-companion-auth.js");
-    return resolveOpenAICompanionAuth(ctx, native, salt, credentialReader, candidateReader);
+    if (options.openaiUseCodexUsage !== true) return native;
+    native.openaiUseCodexUsage = true;
+    const { resolveOpenAICompanionAuth } = await guard.wait(() => import("./openai-companion-auth.js"));
+    return resolveOpenAICompanionAuth(ctx, native, salt, credentialReader, candidateReader, options);
   }
   if (adapter.id === "github-copilot") {
-    const offered = candidateReader
-      ? await candidateReader(ctx, adapter.id)
-      : fallbackOAuthCredentialCandidates(adapter.id, credentialReader);
+    const offered = await guard.wait(() =>
+      candidateReader
+        ? candidateReader(ctx, adapter.id)
+        : fallbackOAuthCredentialCandidates(adapter.id, credentialReader),
+    );
     if (!offered.ok) {
       throw new Error("GitHub Copilot OAuth credential discovery failed closed.");
     }
     return finalize(resolveGitHubCopilotUsageAuth(auth, model, salt, offered.candidates, offered.offeredCount === 0));
   }
   if (adapter.id === "xai") {
-    const offered = candidateReader
-      ? await candidateReader(ctx, adapter.id)
-      : fallbackOAuthCredentialCandidates(adapter.id, credentialReader);
+    const offered = await guard.wait(() =>
+      candidateReader
+        ? candidateReader(ctx, adapter.id)
+        : fallbackOAuthCredentialCandidates(adapter.id, credentialReader),
+    );
     if (!offered.ok) throw new Error("xAI OAuth credential discovery failed closed.");
     return finalize(resolveXaiUsageAuth(auth, model, salt, offered.candidates));
   }
@@ -606,7 +616,12 @@ export async function queryProviderUsage(
       targetId,
     );
   } catch (error) {
-    if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
+    if (
+      isStaleExtensionContextError(error) ||
+      isAbortError(error) ||
+      (error instanceof Error && error.name === "UsageStaleContextError")
+    )
+      throw error;
     throw new Error(redactUsageError(errorMessage(error), auth.secrets));
   }
 }

@@ -15,6 +15,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
 - Offers default-off experimental Agent mode for autonomous, validated text/settings conflict resolution, with a separate Continuous sync opt-in for monitoring and recovery.
 - Loads a generated split runtime with lazy UI and backend chunks.
+- Bundles a manual-only skill for configuration questions and safe setup guidance.
 
 ## 📦 Install
 
@@ -137,7 +138,7 @@ Choose **Review differences (recommended)** in an ordinary file-direction confli
 Then choose one reviewed direction:
 
 - **Keep local content and replace remote…** uses the existing forced-push path.
-  It applies the [secret-scan setting](./docs/settings.md#secret-scanning), shows the exact remote publication effect, re-reads a changed remote head, and asks again if the reviewed plan changed.
+  It applies the [secret-scan setting](./skills/configure-pi-sync/references/configuration.md#secret-scanning), shows the exact remote publication effect, re-reads a changed remote head, and asks again if the reviewed plan changed.
 - **Use remote content and replace local…** uses the existing forced-pull path.
   It shows exact local writes and deletions, protects the live session, and creates a local backup before applying.
 - First sync uses **Use local as initial source…** and **Use remote as initial source…** labels.
@@ -167,7 +168,7 @@ Missing settings stay unconfigured without creating files or locks.
 
 Set the top-level `"debug": true` in `pi-sync.json`, or enable **Settings → Advanced → Debug startup timings**, then restart Pi or use `/reload`.
 The default is `false`. Timing reports appear in TUI/RPC notifications, not the model context or a log file.
-See [Debug startup timings](./docs/settings.md#debug-startup-timings) for measured stages and limits.
+See [Debug startup timings](./skills/configure-pi-sync/references/configuration.md#debug-startup-timings) for measured stages and limits.
 
 ### Background startup checks
 
@@ -185,15 +186,19 @@ Shutdown behavior is unchanged: when **Automatic sync** is On and sessions are i
 
 **Warning:** eligible conflict text is sent to the selected Pi model and can incur costs. Accepted results can replace/delete selected local and remote content without another transfer prompt. The resolver has no tools or parent conversation, and validates candidate ownership and current versions before using the existing publication/backup/journal flow. Validation is not a guarantee of semantic correctness or lossless editing against other local processes.
 
-The first implementation resolves bounded overlapping `AGENTS.md` and prompt/skill Markdown/plain-text edits, and selects complete atomic global settings units. Verified ancestors are required. Code, session histories, deletion conflicts and path collisions are not model-resolved; unsupported/refused work pauses, unless existing partial-sync policy permits independent progress. No resources reload automatically. Disabling stops subsequent authorization, not completed writes or provider charges. Read [Agent mode settings, limits, privacy and recovery](./docs/settings.md#experimental-agent-mode) before enabling.
+The first implementation resolves bounded overlapping `AGENTS.md` and prompt/skill Markdown/plain-text edits, and selects complete atomic global settings units. For `settings.json` packages, it keeps the higher explicit npm SemVer version from local and remote without a registry lookup; incompatible filters and non-comparable sources retain existing conflict handling. Verified ancestors are required. Code, session histories, deletion conflicts and path collisions are not model-resolved; unsupported/refused work pauses, unless existing partial-sync policy permits independent progress. No resources reload automatically. Disabling stops subsequent authorization, not completed writes or provider charges. Read [Agent mode settings, limits, privacy and recovery](./skills/configure-pi-sync/references/configuration.md#experimental-agent-mode) before enabling.
+
+Ordinary **Sync now** reuses a cached refusal. Use **Retry refused model result…** in the manager to review and authorize one fresh request for the current refusal. This can incur another charge; it does not reset automatic request limits. Known unsupported conflicts stop before inference when partial sync is off. See [retry and cancellation boundaries](./docs/agent-continuous-hardening.md) and the [synthetic merge-quality corpus](./docs/agent-quality-verification.md).
 
 ### Experimental Continuous sync
 
 **Settings → Sync behavior → Continuous sync (experimental)** controls separate per-setup `sync.continuous`, default **Off**. Agent mode must also be enabled. A separate review authorizes recurring network access, model costs and automatic transfers while Pi is open. Upgrade all Pi processes sharing the agent directory before enabling it. Monitoring starts after the `/sync` command or manager closes, and replaces the duplicate one-shot startup transfer.
 
-Selected-file hints are coalesced after one quiet second. A 60–66 second remote/local check covers missed events. Temporary failures use bounded backoff. One local session owns monitoring for each shared agent directory; each computer remains a separate replica. Busy sessions and foreground commands release ownership after draining work. Nothing runs after Pi exits, and resources never reload automatically.
+Selected-file hints are coalesced after one quiet second. A 60–66 second remote/local check covers missed events. Temporary failures and proven pre-publication edit races use bounded backoff. Removing flagged secret content or repairing unsupported conflicts permits a fresh inspection; unchanged blocks do not repeatedly call the model. One local session owns monitoring for each shared agent directory; each computer remains a separate replica. Busy sessions and foreground commands release ownership after draining work. Nothing runs after Pi exits, and resources never reload automatically.
 
-**Warning:** local changes and retries can cause extra network requests between polls. Automatic model requests are limited to two per candidate and two per replica binding in a rolling 15-minute window, across restarts. These are request limits, not a currency cap. Safety blocks still require changed evidence or repair; uncertain provider/Git errors are not guessed to be retryable. See [Continuous sync consent, budgets and recovery](./docs/settings.md#experimental-continuous-sync).
+**Check remote status** shows rolling-window allowance, exhausted candidates, accounting capacity and safe recovery actions. These are read-only observations, not permission to dispatch. The observing session's model does not identify another scheduler owner's model. Retained private candidates and accounting are not automatically pruned.
+
+**Warning:** local changes and retries can cause extra network requests between polls. Automatic model requests are limited to two per candidate and two per replica binding in a rolling 15-minute window, across restarts. These are request limits, not a currency cap. Safety blocks still require changed evidence or repair; uncertain provider/Git errors are not guessed to be retryable. See [Continuous sync consent, budgets and recovery](./skills/configure-pi-sync/references/configuration.md#experimental-continuous-sync).
 
 ### Opt-in automatic transfer
 
@@ -201,13 +206,13 @@ Selected-file hints are coalesced after one quiet second. A 60–66 second remot
 
 A baseline and matching authoritative content list are required. First-source choice, changed selection, missing established remote, secrets, and real conflicts remain review barriers. Automatic transfer requires conditional or lease-protected publication: Git, verified WebDAV, and R2/S3 with verified conditional writes are supported. The existing **Automatic sync** setting and shutdown policy are unchanged when this new opt-in is absent.
 
-Unchanged automatic transfers use a read-only fast path after a fresh head read and verified baseline/cache checks, avoiding snapshot downloads and baseline rewrites. Recovery, partial-sync, legacy, and uncertain cases keep the full path. See [unchanged transfer conditions](./docs/settings.md#unchanged-transfer-fast-path).
+Unchanged automatic transfers use a read-only fast path after a fresh head read and verified baseline/cache checks, avoiding snapshot downloads and baseline rewrites. Recovery, partial-sync, legacy, and uncertain cases keep the full path. See [unchanged transfer conditions](./skills/configure-pi-sync/references/configuration.md#unchanged-transfer-fast-path).
 
 Successful transfers show one summary. They do not reload resources, activate extension code, or rewrite model context. After local resources change, reload or restart when ready; newly pulled conversations still require explicit resume. Headless print/JSON skip this new startup feature. Reviewed directional settings/session-root transitions record both roots and verified settings evidence so interrupted apply can recover before or after settings installation. Older pending journals without transition evidence retain their original root-ownership checks and may require reviewed recovery; preserve their backups rather than downgrading. See [merge safety and recovery](./docs/merge-implementation-audit.md) for journal boundaries, external-writer limits, and downgrade guidance.
 
 **Settings → Advanced → Merge settings fields** (experimental) controls per-setup `sync.mergeSettings`, default **Off**. It combines independent global `settings.json` fields, not arbitrary JSON or keybindings. Missing/corrupt ancestors, unsupported syntax, and incompatible fields retain whole-transfer review. Sensitive accepted content is cached privately under the denied state root; disabling does not delete evidence.
 
-**Settings → Sync content → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. Enabling rules opts into settings version 4 / snapshot version 2, which older clients must refuse. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./docs/settings.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
+**Settings → Sync content → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. Enabling rules opts into settings version 4 / snapshot version 2, which older clients must refuse. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./skills/configure-pi-sync/references/configuration.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
 
 **Settings → Advanced → Content merge / partial progress** (experimental) controls independent `sync.mergeContent` and `sync.partialSync` opt-ins, both default **Off**. Saving opts into settings version 5; partial publications use snapshot version 3, rejected by older readers. Supported Markdown/plain-text resources merge bounded independent line edits without Git or conflict markers. Diff grids and hunk comparisons share an eight-million-work-unit budget across the operation and its retries; exhausted paths remain conflicts for review. Same-session reconciliation only accepts validated complete byte-prefix extensions; divergent histories and the loaded session require review. A syntactically clean text merge is **not a semantic correctness guarantee**.
 
@@ -216,7 +221,7 @@ Partial sync keeps each side's unresolved versions, preserves their previous acc
 **Settings → Advanced → Show sync status** defaults to **On**. Turning it Off immediately clears and suppresses pi-sync status text for background checks, transfers, and review attention; widgets and notifications remain available.
 
 **Settings → Advanced → Skip secret scan** defaults to **Off**; enable it only after reviewing the destination and selected content because it disables push scanning for every setup.
-See [Secret scanning](./docs/settings.md#secret-scanning) for the setting and diagnostic behavior.
+See [Secret scanning](./skills/configure-pi-sync/references/configuration.md#secret-scanning) for the setting and diagnostic behavior.
 
 A minimal Git setup uses an existing private remote and keeps automatic sync off:
 
@@ -257,7 +262,15 @@ Version 1, version 2, and non-empty unversioned settings require manual recovery
 Adding `sessions` can upload prompts, tool output, paths, images, and secrets; interactive flows require a privacy acknowledgement.
 Startup checks report included-content differences without changing anything. Transfers retain their existing included-content policy checks instead of silently expanding local scope.
 
-Read the [settings reference](./docs/settings.md) for complete S3/R2, Git, and WebDAV examples, backend fields, included-content rules, legacy paths, and recovery steps.
+Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, included-content rules, legacy paths, and recovery steps.
+
+## 🧠 Skills
+
+Run `/skill:configure-pi-sync` before asking Pi about storage choices, included content, automatic controls, or settings recovery.
+The [configuration skill](./skills/configure-pi-sync/SKILL.md) is manual-only and provides guidance only: it does not inspect private settings, collect credentials, edit files, execute diagnostics, or sync content.
+Enter credentials in the existing masked TUI and perform settings changes and reviewed transfers through `/sync` yourself.
+The skill's instructions are not a permission sandbox for the agent's other tools.
+Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) directly when no agent assistance is needed.
 
 ## 💬 Commands
 
@@ -362,7 +375,8 @@ packages/pi-sync/
 │   └── ui/                            # Manager, settings, reviews, and setup flows
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
-├── docs/                              # Published reference documentation
+├── docs/                              # Operational audits and settings link compatibility
+├── skills/configure-pi-sync/           # Manual-only guidance and authoritative settings reference
 └── test/                              # Behavior and lifecycle coverage
 ```
 

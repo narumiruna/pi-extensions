@@ -21,6 +21,7 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "src/settings-menu.ts",
   ],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+  allowedEagerExternals: ["@narumitw/pi-tui-kit/editor-status-widget"],
 });
 
 test("generated interactive UI stays loadable with a lazy external questionnaire", async () => {

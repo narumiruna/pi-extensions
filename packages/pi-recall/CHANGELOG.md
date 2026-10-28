@@ -1,5 +1,17 @@
 # @narumitw/pi-recall
 
+## 0.50.9
+
+### Patch Changes
+
+- 79aca63: Enable existing TUI document search in Starship effective/raw TOML reviews, Recall non-destructive message previews, and Tool exact detail documents.
+  
+  Use a verified published Kit search release without changing raw content, persistence, confirmation, navigation, or RPC pagination. New Kit copy APIs remain outside these consumer changes.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
 ## 0.50.8
 
 ### Patch Changes

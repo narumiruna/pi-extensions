@@ -113,6 +113,89 @@ for (const spec of ["1.0.1", "^1.0.1"]) {
   });
 }
 
+for (const spec of ["1.0.1", "^1.0.0"]) {
+  test(`fresh registry Kit ${spec} installs while its third-party transitives remain age-filtered`, async () => {
+    const cwd = registry.fixture({
+      dependencies: { "@narumitw/pi-tui-kit": spec },
+      allowScripts: { "policy-script@1.0.0": true },
+    });
+    expectSuccess(await registry.npm(cwd, ["install"]));
+    assert.equal(registry.lockedVersion(cwd, "@narumitw/pi-tui-kit"), "1.0.1");
+    assert.equal(registry.lockedVersion(cwd, "policy-plain"), "1.0.0");
+    assert.equal(registry.lockedVersion(cwd, "policy-script"), "1.0.0");
+    assert.equal(registry.marker(cwd), true);
+    assert.ok(registry.requests.includes("/@narumitw/pi-tui-kit/-/pi-tui-kit-1.0.1.tgz"));
+    const installed = JSON.parse(
+      readFileSync(path.join(cwd, "node_modules/@narumitw/pi-tui-kit/package.json"), "utf8"),
+    );
+    assert.equal(installed.version, "1.0.1");
+  });
+}
+
+test("a recent non-Kit release artifact can be verified by URL without weakening age selection", async () => {
+  const cwd = registry.fixture();
+  const spec = "policy-plain@1.0.1";
+  const named = await registry.npm(cwd, ["pack", spec, "--ignore-scripts", "--json"]);
+  assert.notEqual(named.code, 0);
+  assert.match(named.stderr, /ETARGET/u);
+  const metadata = await registry.npm(cwd, ["view", spec, "dist.tarball", "--json"]);
+  expectSuccess(metadata);
+  const url = JSON.parse(metadata.stdout) as string;
+  assert.ok(url.startsWith(registry.registry));
+  const packed = await registry.npm(cwd, [
+    "pack",
+    url,
+    "--ignore-scripts",
+    "--json",
+    "--cache",
+    path.join(cwd, "fresh-cache"),
+    "--pack-destination",
+    cwd,
+  ]);
+  expectSuccess(packed);
+  const [artifact] = JSON.parse(packed.stdout) as { id: string; filename: string }[];
+  assert.ok(artifact);
+  assert.equal(artifact.id, spec);
+  assert.ok(existsSync(path.join(cwd, artifact.filename)));
+  writeFileSync(
+    path.join(cwd, "package.json"),
+    JSON.stringify({ name: "consumer", version: "1.0.0", dependencies: { "policy-plain": "1.0.1" } }),
+  );
+  const install = await registry.npm(cwd, ["install", "--package-lock-only", "--ignore-scripts"]);
+  assert.notEqual(install.code, 0);
+  assert.match(install.stderr, /ETARGET/u);
+});
+
+test("the Kit age exception does not approve unreviewed transitive scripts", async () => {
+  const cwd = registry.fixture({ dependencies: { "@narumitw/pi-tui-kit": "1.0.1" } });
+  await lock(cwd);
+  const result = await registry.npm(cwd, ["ci"]);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /ESTRICTALLOWSCRIPTS/u);
+  assert.equal(registry.lockedVersion(cwd, "@narumitw/pi-tui-kit"), "1.0.1");
+  assert.equal(registry.marker(cwd), false);
+});
+
+for (const [name, spec] of [
+  ["@narumitw/policy-plain", "1.0.1"],
+  ["@narumitw/pi-tui-kit", "npm:policy-plain@1.0.1"],
+]) {
+  test(`the Kit age exception does not exempt ${name}@${spec}`, async () => {
+    const cwd = registry.fixture({ dependencies: { [name]: spec } });
+    const result = await registry.npm(cwd, ["install", "--package-lock-only", "--ignore-scripts"]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /ETARGET/u);
+    assert.equal(existsSync(path.join(cwd, "package-lock.json")), false);
+  });
+}
+
+test("the Kit age exception follows the registry identity through an alias", async () => {
+  const cwd = registry.fixture({ dependencies: { "kit-alias": "npm:@narumitw/pi-tui-kit@1.0.1" } });
+  await lock(cwd);
+  assert.equal(registry.lockedVersion(cwd, "kit-alias"), "1.0.1");
+  assert.equal(registry.lockedVersion(cwd, "policy-plain"), "1.0.0");
+});
+
 test("age filtering does not audit a young existing lock during maintenance or ci", async () => {
   const cwd = registry.fixture({ dependencies: { "policy-plain": "1.0.1" } });
   await lock(cwd, ["--min-release-age=0"]);
@@ -153,6 +236,54 @@ for (const [key, value] of [
     const result = await registry.command(cwd, ["scripts/check-install-policy.mjs"], { [`npm_config_${key}`]: value });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /Unexpected npm|environment override/u);
+  });
+}
+
+for (const exclusion of [
+  "@narumitw/other",
+  "@narumitw/*",
+  "*",
+  "**",
+  "@narumitw/pi-tui-*",
+  "@narumitw/pi-tui-kit,policy-plain",
+]) {
+  test(`preflight rejects replacement age exclusion ${JSON.stringify(exclusion)}`, async () => {
+    const cwd = preflightFixture();
+    const result = await registry.command(cwd, ["scripts/check-install-policy.mjs"], {
+      npm_config_min_release_age_exclude: exclusion,
+    });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Unexpected npm min-release-age-exclude/u);
+  });
+}
+
+for (const [label, exclusion] of [
+  ["missing", ""],
+  ["additional", "min-release-age-exclude[]=policy-plain\n"],
+]) {
+  test(`preflight rejects ${label} project age exclusions`, async () => {
+    const cwd = preflightFixture();
+    const npmrc = path.join(cwd, ".npmrc");
+    const policy = readFileSync(npmrc, "utf8");
+    writeFileSync(
+      npmrc,
+      exclusion ? policy + exclusion : policy.replace("min-release-age-exclude[]=@narumitw/pi-tui-kit\n", ""),
+    );
+    const result = await registry.command(cwd, ["scripts/check-install-policy.mjs"]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Unexpected npm min-release-age-exclude/u);
+  });
+}
+
+for (const exclusion of ["", "@narumitw/pi-tui-kit"]) {
+  test(`preflight accepts unchanged effective age policy with env exclusion ${JSON.stringify(exclusion)}`, async () => {
+    const cwd = preflightFixture();
+    // npm ignores empty env values; an exact name leaves the effective policy unchanged.
+    expectSuccess(
+      await registry.command(cwd, ["scripts/check-install-policy.mjs"], {
+        npm_config_min_release_age_exclude: exclusion,
+      }),
+    );
   });
 }
 

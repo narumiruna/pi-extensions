@@ -130,6 +130,7 @@ export async function describeManagerState(
           : "Unavailable";
     const canSwitch = (await countValidSyncSetups(configuredTargets, signal)) > 1;
     const mainActions: string[] = [...MAIN_MENU_ACTIONS];
+    if (config.agentMode && !noSyncedContent) mainActions.splice(1, 0, "Retry refused model result…");
     if (canSwitch) mainActions.push("Switch sync setup");
     if (syncState?.unresolved?.length) mainActions.unshift("Review unresolved conflicts");
     const ordinaryTitle = [

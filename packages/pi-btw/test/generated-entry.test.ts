@@ -14,7 +14,7 @@ test("declared generated entry preserves registration and partial lifecycle clea
     const mock = createMockPi();
     await extension(mock.pi);
     assert.ok(mock.commands.has("btw"));
-    assert.equal(mock.events.has("session_shutdown"), false);
+    assert.equal(mock.events.has("session_shutdown"), true);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

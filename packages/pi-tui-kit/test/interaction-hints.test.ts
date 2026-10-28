@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { formatInteractionHints } from "../src/index.js";
+import { formatInteractionHints } from "../src/interaction-hints.js";
 
 const keybindings = {
   getKeys(binding: string): readonly string[] {

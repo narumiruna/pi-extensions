@@ -103,6 +103,26 @@ test.each([
   );
 });
 
+test.each([
+  [null, null, 0, 0],
+  [null, 3, 0, 3],
+  [7, null, 7, 0],
+  [0, 0, 0, 0],
+])("accepts unreported evaluator usage (%s, %s)", async (input, output, inputTokens, outputTokens) => {
+  const client: TypeSafeSystemOneClient = {
+    async systemOne() {
+      return {
+        model: JEV_EVALUATOR_MODEL,
+        answers: { decision_000: { type: "noul", noul: 1 } },
+        usage: { input_tokens: input, output_tokens: output },
+      } as never;
+    },
+  };
+  const result = await evaluateHistoryUnits(client, [unit(0)], new AbortController().signal);
+  assert.equal(result.decisions[0]?.summarize, true);
+  assert.deepEqual(result.usage, { inputTokens, outputTokens });
+});
+
 test("rejects invalid evaluator usage counts", async () => {
   const invalidUsage = {
     async systemOne() {

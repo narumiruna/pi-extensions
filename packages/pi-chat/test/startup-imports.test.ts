@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createPiChatExtension } from "../src/pi-chat.js";
+
+test("Chat keeps the shared widget import inside its lazy module", async () => {
+  const entry = await readFile(new URL("../src/pi-chat.ts", import.meta.url), "utf8");
+  const widget = await readFile(new URL("../src/widget.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(entry, /@narumitw\/pi-tui-kit/u);
+  assert.match(entry, /\(\) => import\("\.\/widget\.js"\)/u);
+  assert.match(widget, /import \{ EditorStatusWidget \} from "@narumitw\/pi-tui-kit\/editor-status-widget"/u);
+  assert.doesNotMatch(widget, /["']─["']\.repeat/u);
+});
 
 async function emit(mock: ReturnType<typeof createMockPi>, name: string, event: unknown, ctx: unknown): Promise<void> {
   for (const handler of mock.events.get(name) ?? []) await handler(event, ctx);

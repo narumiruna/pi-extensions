@@ -201,7 +201,10 @@ vite.config.ts.timestamp-*
 .vite/
 
 # Project
-packages/pi-inspect/dist-staging/
+packages/pi-inspect/browser-dist/
+packages/pi-inspect/.inspect-browser-staging-*/
+packages/pi-inspect/.inspect-browser-build-test-*/
+packages/pi-inspect/browser-dist.backup-*/
 packages/pi-inspect/test-results/
 packages/pi-inspect/playwright-report/
 .pi/agent/

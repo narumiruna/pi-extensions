@@ -1,5 +1,101 @@
 # @narumitw/pi-starship
 
+## 0.64.2
+
+### Patch Changes
+
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 0.64.1
+
+### Patch Changes
+
+- 57eeae7: Add the opt-in `createFullscreenHandoff()` resource and native test harness. Share terminal entry/exit drain, cancellation-safe restoration, keyboard-protocol recovery, owned overlay handling, and cleanup errors through public Pi TUI APIs. Keep ordinary Kit interactions unchanged.
+  
+  Use the resource in Starship's configuration chat and BTW's multi-screen workspace. Keep each extension's input policy, layouts, domain state, permissions, and persistence local. BTW now waits for native input drain before entry. Changesets raises both consumer floors to the Kit API release; dependent publication requires its exact registry artifact.
+- b46fd49: Put Apply first in profile actions, followed by Review TOML, Edit TOML, Duplicate, Rename, and Delete. Keep the apply confirmation and History action order unchanged.
+- Updated dependencies [57eeae7]
+  - @narumitw/pi-tui-kit@0.67.0
+
+## 0.64.0
+
+### Minor Changes
+
+- 31774d2: Move configuration chat to a Starship-owned `TuiAltScreen` with native `ScrollView` history and a fixed editor/preview dock. Suspend the parent TUI while the chat owns the shared terminal and restore ownership before review and save screens. Await native input drain before entering the chat and before returning to the parent. Recheck ownership after entry drain, join cancelled entry work, and restore keyboard protocols if entry is cancelled or fails.
+  
+  History paging now uses `tui.altScreen.pageUp` and `tui.altScreen.pageDown` instead of `tui.editor.pageUp` and `tui.editor.pageDown`; move custom history paging bindings to the viewport actions. Agent behavior, draft permissions, and settings/profile storage are unchanged.
+  
+  Align tool displays with Pi's built-in message/tool event lifecycle, including streamed arguments, partial results, native edit previews, final diffs, errors, and per-tool clicks. Seed expansion from the parent once and keep subsequent changes local across review. Restrict preview reads to the owned draft and prevent late native preview callbacks from redrawing disposed UI.
+  
+  Document the intentional deviation from Pi's single-renderer guidance and the required lifecycle and physical-terminal checks. This change does not establish a diagnosis or verified fix for the originally reported wheel/key failure.
+
+## 0.63.0
+
+### Minor Changes
+
+- 7e6690c: Restore Pi's native footer from Restore built-in… instead of saving the Starship example. Keep the previous settings bytes in History before removing the active file. Missing settings now leave the native footer active, and presets can still be applied without reloading. Native-mode previews use cached data and do not start collectors until custom settings are applied.
+
+### Patch Changes
+
+- 9af45da: Align configuration-chat hints with Pi core: use lowercase key names and “to” action descriptions, and replace the ambiguous cancellation label with “esc to interrupt” when Escape is available.
+- 584d57b: Keep the configuration chat open on idle Escape instead of opening a review menu. Escape still stops an active response, save shortcuts still open exact-draft review, and Ctrl+C still discards the chat.
+- 06c8567: Allow scrolling configuration chat history with the mouse wheel and configured Editor page-up/page-down keys. Keep the history position stable while new output arrives and resume following output at the bottom.
+- 71a7a29: Support collapsing and expanding configuration-chat tool output with Pi’s app.tools.expand action (Ctrl+O by default), without changing the main conversation. Preserve the local display state across new tool output and theme invalidation.
+
+## 0.62.0
+
+### Minor Changes
+
+- eb69a7c: Simplify the footer menu around agent-assisted configuration, presets, profiles, and recovery. Show configuration health and warnings inline, and give the configuration chat read-only opening snapshots of loaded settings and module state. Keep the existing settings editor command and all review, confirmation, Gist, and History safeguards.
+- 047c6b0: Add a separate fullscreen configuration chat with native Pi message rendering, the bundled skill, and draft-only read, write, and edit tools. Native steering, follow-up, and dequeue actions support messages submitted during a response, with undelivered input restored on cancellation or failure. A direct save shortcut opens reviewed profile creation and shows its active key on the editor border. Hard cancellation restores the active footer without redrawing a replaced session. Short gray editor-border labels show status and controls. Valid edits appear immediately without reload in a bottom-aligned footer preview; the user reviews and saves the draft as a named profile before a separate apply confirmation can change active settings, with History and conflict checks. Declining or failing application retains the saved profile.
+
+### Patch Changes
+
+- 55502a4: Remove the trailing ellipsis from Configure with agent to match other menu-opening labels. Keep the existing conversation, preview, and save behavior unchanged.
+
+## 0.61.0
+
+### Minor Changes
+
+- dee7381: Expand Git, directory, time, language, environment, and Kubernetes settings while preserving existing default footer output. Add bounded version and regex formatting, nested configuration round-tripping, and opt-in Jujutsu, system memory, and Linux battery modules. Keep collectors read-only, cancellable, and separate from rendering.
+  
+  Custom version formats now use formatter variable boundaries and escapes: use `${raw}_suffix` for appended identifier text and `\$` for a literal dollar sign. The existing `v$raw` default remains unchanged.
+
+## 0.60.1
+
+### Patch Changes
+
+- ee1b9ca: Fix the configuration skill path resolver for managed extension installs with a separate npm or Bun global Pi installation. Resolve the public Pi API beside the first Pi executable on PATH when the host peer is absent from the skill module tree, preserve the original working directory, and stop with actionable guidance instead of guessing a settings path.
+
+## 0.60.0
+
+### Minor Changes
+
+- 8e0942f: Add `pi:<role>` color references for exact public Pi theme roles in styles and palette values. Foreground and background colors follow Pi theme switches and hot reload without reloading TOML, while style modifiers, fixed colors, defaults, and palette-key precedence remain unchanged. Invalid Pi roles report settings diagnostics in either color position.
+- e7f5df0: Add named TOML profiles with live selection previews, editing, switching, renaming, duplication, and deletion. Preserve replaced settings in recovery history and expose existing skill backups without changing the active settings path or command routes.
+
+## 0.59.2
+
+### Patch Changes
+
+- 79aca63: Enable existing TUI document search in Starship effective/raw TOML reviews, Recall non-destructive message previews, and Tool exact detail documents.
+  
+  Use a verified published Kit search release without changing raw content, persistence, confirmation, navigation, or RPC pagination. New Kit copy APIs remain outside these consumer changes.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.59.1
+
+### Patch Changes
+
+- 2e333f1: Rename the bundled configuration skill to `configure-pi-starship`.
+  Use `/skill:configure-pi-starship` instead of `/skill:configuring-pi-starship`.
+
 ## 0.59.0
 
 ### Minor Changes

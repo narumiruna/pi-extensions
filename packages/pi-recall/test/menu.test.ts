@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
-import { Key, type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getKeybindings, Key, type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { createRecallMenu, type RecallMenuSource, showRecallMenu } from "../src/menu.js";
 import type { MessageCandidate, RecallMessageRecord } from "../src/messages.js";
 
@@ -509,10 +510,12 @@ test("preview is exact, quote appends to the draft without sending, and delete r
   assert.equal(preview.kind, "review");
   if (preview.kind !== "review") return;
   assert.equal(preview.content, "saved text saved-a");
+  assert.equal(preview.enableSearch, true);
   const deletion = resolveMenuScreen(controller.menu, "delete", current);
   assert.equal(deletion.kind, "review");
   if (deletion.kind !== "review") return;
   assert.equal(deletion.confirm?.label, "Delete saved message");
+  assert.equal(deletion.enableSearch, undefined);
   const quoteResult = await controller.menu.actions.quote({
     ctx: quoteCtx as never,
     state: current,
@@ -530,6 +533,101 @@ test("preview is exact, quote appends to the draft without sending, and delete r
     itemId: "delete-confirm",
   });
   assert.equal(data.records.length, 0);
+});
+
+test("preview search keeps exact content and source metadata and returns to the selected action without mutation", async (t) => {
+  const saved = record("raw-id\u001b[31m");
+  saved.text = "abcdefghijklmnopqrstuvWXYZ a.b\r\n\ttrailing  \r\n";
+  const data = source([saved]);
+  const before = structuredClone(data.records);
+  let mutations = 0;
+  data.save = async () => {
+    mutations += 1;
+    throw new Error("unexpected save");
+  };
+  data.delete = async () => {
+    mutations += 1;
+    return false;
+  };
+  const controller = createRecallMenu(data);
+  controller.selectRecordForTest(saved.id);
+  const current = await state(controller);
+  const preview = resolveMenuScreen(controller.menu, "preview", current);
+  assert.equal(preview.kind, "review");
+  if (preview.kind !== "review") return;
+  assert.equal(preview.enableSearch, true);
+  assert.equal(preview.content, saved.text);
+  assert.deepEqual(preview.lines, [
+    "Role: assistant",
+    `Message time: ${new Date(saved.source.messageTimestamp).toISOString()}`,
+    `Saved: ${saved.savedAt}`,
+    "Session: Current",
+    "Source cwd: /work/project",
+  ]);
+  const tui = createTuiHarness({ width: 24, rows: 18, keybindings: getKeybindings() as never });
+  t.onTestFinished(() => tui.dispose());
+  const base = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runMenu(base.ctx, { ...controller.menu, start: "selected" }, { getState: controller.getState });
+  await tui.waitForOpen();
+  tui.press("tui.select.confirm");
+  await tui.waitForOpen();
+  tui.render();
+  tui.send(" ");
+  tui.send("\u001b[200~vWXYZ\u001b[201~");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /1\/1/u);
+  tui.resize({ width: 17, rows: 14 });
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /1\/1/u);
+  tui.send("\u0015");
+  tui.type("a.bx");
+  tui.send("\u007f");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /1\/1/u);
+  tui.press("tui.select.cancel");
+  assert.equal(tui.isOpen, true);
+  tui.press("tui.select.cancel");
+  await tui.waitForOpen();
+  tui.resize({ width: 64, rows: 18 });
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ Preview/u);
+  tui.press("tui.select.confirm");
+  await tui.waitForOpen();
+  tui.render();
+  tui.send(" ");
+  tui.press("ctrl+c");
+  assert.deepEqual(await running, { kind: "closed", reason: "close" });
+  assert.equal(mutations, 0);
+  assert.deepEqual(data.records, before);
+});
+
+test("searchable preview preserves RPC pagination and never invokes custom TUI", async () => {
+  const saved = record();
+  saved.text = Array.from({ length: 18 }, (_, index) => `row ${index + 1}`).join("\n");
+  const controller = createRecallMenu(source([saved]));
+  controller.selectRecordForTest(saved.id);
+  const preview = resolveMenuScreen(controller.menu, "preview", await state(controller));
+  assert.equal(preview.kind, "review");
+  if (preview.kind !== "review") return;
+  const dialogs = [];
+  for (const enableSearch of [false, true]) {
+    const rpc = createRpcHarness([
+      { kind: "select", response: "Next" },
+      { kind: "select", response: "Next" },
+      { kind: "select", response: "Previous" },
+      { kind: "select", response: "Back" },
+    ]);
+    const base = createMockContext({ mode: "rpc", hasUI: true }).ctx as ExtensionCommandContext;
+    await runMenu(
+      { ...base, ui: { ...base.ui, ...rpc.ui } },
+      {
+        ...controller.menu,
+        start: "preview",
+        screens: { ...controller.menu.screens, preview: () => ({ ...preview, enableSearch }) },
+      },
+      { getState: controller.getState },
+    );
+    rpc.assertConsumed();
+    dialogs.push(rpc.dialogs);
+  }
+  assert.deepEqual(dialogs[1], dialogs[0]);
+  assert.match(dialogs[1]?.[2]?.title ?? "", /row 18/u);
 });
 
 test("invalid storage remains visible and disables mutation routes", async () => {

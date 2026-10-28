@@ -19,6 +19,16 @@ The default response is concise, while selected sections and sanitized bundles p
 ## Tool
 
 Call `runtime_diagnostics` with no arguments to receive a concise status summary.
+Direct calls return JSON text. Codemode calls return the same report as a structured object:
+
+```js
+const report = await tools.runtime_diagnostics({ sections: ["cache", "tools"] });
+text({ summary: report.summary, details: report.details, outputNote: report.outputNote });
+```
+
+Both forms use the same privacy filters and output limits.
+Large reports omit `details` first, then `findings` and `recommendations` if necessary.
+Check `outputNote` before using these optional fields.
 
 | Action | Behavior |
 | --- | --- |
@@ -89,7 +99,8 @@ A cache finding cannot prove provider cache support and should be interpreted wi
 - `snapshot.ts` owns runtime, cache, tool, extension, environment, and timeline snapshots.
 - `report.ts` owns findings, comparisons, privacy audits, presentation, and output bounds.
 - `text.ts` owns terminal-safe diagnostic string normalization.
-- `index.test.ts` covers capture, controls, privacy, commands, bundles, and output bounds.
+- `index.test.ts` covers capture, controls, privacy, commands, bundles, structured results, and output bounds.
+- `codemode.test.ts` exercises structured reports through Pi's native codemode runtime.
 - `tsconfig.json` and `vitest.config.ts` provide extension-local verification boundaries.
 
 ## Verification

@@ -443,6 +443,7 @@ packages/pi-goal/
 ```
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
+For internal continuation, retry, compaction, and ownership rules, see the [continuation lifecycle reference](./docs/continuation-lifecycle.md).
 
 ## 🔎 Keywords
 

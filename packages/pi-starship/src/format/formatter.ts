@@ -1,4 +1,5 @@
 import { type ColorPalette, isFillChunk, type LayoutChunk, parseStyle, type TextStyle } from "./style.js";
+import { sanitizeFormatText } from "./terminal-safety.js";
 
 export type FormatNode =
   | { type: "text"; value: string }
@@ -201,7 +202,7 @@ function renderNodes(
   for (const node of nodes) {
     switch (node.type) {
       case "text":
-        chunks.push({ text: node.value, style: inheritedStyle });
+        chunks.push({ text: sanitizeFormatText(node.value), style: inheritedStyle });
         break;
       case "variable":
         chunks.push(...chunksForValue(ownValue(options.variables, node.name), inheritedStyle));
@@ -232,17 +233,18 @@ function ownValue<T>(record: Readonly<Record<string, T>> | undefined, key: strin
 
 function chunksForValue(value: FormatValue, inheritedStyle: TextStyle | undefined): LayoutChunk[] {
   if (value === undefined) return [];
-  if (typeof value === "string") return [{ text: value, style: inheritedStyle }];
+  if (typeof value === "string") return [{ text: sanitizeFormatText(value), style: inheritedStyle }];
   return value.map((chunk) =>
     isFillChunk(chunk)
       ? {
           type: "fill" as const,
           pattern: chunk.pattern.map((part) => ({
             ...part,
+            text: sanitizeFormatText(part.text),
             style: part.style ?? inheritedStyle,
           })),
         }
-      : { ...chunk, style: chunk.style ?? inheritedStyle },
+      : { ...chunk, text: sanitizeFormatText(chunk.text), style: chunk.style ?? inheritedStyle },
   );
 }
 
@@ -250,7 +252,9 @@ function conditionalVisible(nodes: readonly FormatNode[], variables: Readonly<Re
   for (const variable of formatVariables(nodes)) {
     const value = ownValue(variables, variable);
     if (
-      typeof value === "string" ? value.length > 0 : value?.some((chunk) => isFillChunk(chunk) || chunk.text.length > 0)
+      typeof value === "string"
+        ? sanitizeFormatText(value).length > 0
+        : value?.some((chunk) => isFillChunk(chunk) || sanitizeFormatText(chunk.text).length > 0)
     ) {
       return true;
     }

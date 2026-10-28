@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
-import type { HerdrAgentStatus, HerdrPane, HerdrPaneEvent, HerdrWorkspace } from "./herdr-protocol.js";
+import type { HerdrAgentStatus, HerdrPane, HerdrWorkspace } from "./herdr-protocol.js";
 
 export const HERDR_WIDGET_KEY = "herdr:agents";
 export const MAX_HERDR_WIDGET_AGENTS = 5;
@@ -134,60 +134,6 @@ export class HerdrWidgetModel {
 
   isCurrentWorkspace(workspaceId: string): boolean {
     return this.currentWorkspaceId === workspaceId;
-  }
-
-  apply(event: HerdrPaneEvent): void {
-    if (event.type === "created") {
-      this.panes.set(event.pane.paneId, observedPane(event.pane));
-      return;
-    }
-    if (event.type === "closed" || event.type === "exited") {
-      this.panes.delete(event.paneId);
-      return;
-    }
-    if (event.type === "moved") {
-      this.panes.delete(event.previousPaneId);
-      this.panes.set(event.pane.paneId, observedPane(event.pane));
-      if (this.currentPaneId === event.previousPaneId) {
-        this.currentPaneId = event.pane.paneId;
-        this.currentWorkspaceId = event.pane.workspaceId;
-        this.workspace = { workspaceId: event.pane.workspaceId };
-      }
-      return;
-    }
-
-    const existing = this.panes.get(event.paneId);
-    if (event.type === "agent_detected") {
-      if (event.released || !event.agent) {
-        if (existing) this.panes.set(event.paneId, { ...existing, agent: undefined });
-        return;
-      }
-      this.panes.set(event.paneId, {
-        ...(existing ?? {
-          paneId: event.paneId,
-          workspaceId: event.workspaceId,
-          agentStatus: event.finalStatus ?? "unknown",
-          stateLabels: {},
-        }),
-        agent: event.agent,
-        agentStatus: event.finalStatus ?? existing?.agentStatus ?? "unknown",
-      });
-      return;
-    }
-    if (event.type !== "agent_status_changed") return;
-
-    this.panes.set(event.paneId, {
-      ...(existing ?? {
-        paneId: event.paneId,
-        workspaceId: event.workspaceId,
-        stateLabels: {},
-      }),
-      agent: event.agent ?? existing?.agent,
-      agentStatus: event.agentStatus,
-      displayAgent: event.displayAgent ?? existing?.displayAgent,
-      stateLabels: event.stateLabels ?? existing?.stateLabels ?? {},
-      title: event.title ?? existing?.title,
-    });
   }
 
   snapshot(): HerdrWidgetSnapshot | undefined {

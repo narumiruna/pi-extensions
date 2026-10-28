@@ -17,7 +17,9 @@ export interface CommandOptions {
   /** Internal validated resolver result; never parsed from command arguments. */
   agentAcceptance?: AgentAcceptance;
   /** Internal cycle authorization, ownership and durable request reservation; never command arguments. */
-  background?: { validate(config?: AnySyncConfig): void; reserve(key: string): Promise<void> };
+  background?: { validate(config?: AnySyncConfig): void; reserve(key: string, signal?: AbortSignal): Promise<void> };
+  /** Manager-only, separately confirmed retry; never parsed from command arguments. */
+  agentRetryRefusal?: boolean;
   args: string[];
 }
 

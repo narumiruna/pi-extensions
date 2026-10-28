@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-accounts",
-  "version": "0.53.2",
+  "version": "0.54.0",
   "description": "Pi extension for switching named provider-owned OAuth accounts.",
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,7 @@
   "files": [
     "src",
     "dist",
+    "docs",
     "README.md",
     "LICENSE"
   ],
@@ -48,8 +49,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@types/proper-lockfile": "^4.1.4",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"

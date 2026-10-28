@@ -109,9 +109,13 @@ export function buildAgentEvidence(
       let units: AgentUnit[];
       if (conflict.path === "settings.json") {
         const documents = versions.map((value) => parseSettingsDocument(Buffer.from(value)));
-        const merge = mergeSettingsJson(...(versions.map((value) => Buffer.from(value)) as [Buffer, Buffer, Buffer]));
-        if (merge.kind !== "review" || merge.reason !== "field-conflict") throw new Error("unsupported settings");
-        const fields = new Set(merge.fields);
+        const merge = mergeSettingsJson(
+          ...(versions.map((value) => Buffer.from(value)) as [Buffer, Buffer, Buffer]),
+          undefined,
+          true,
+        );
+        if (merge.kind === "review" && merge.reason !== "field-conflict") throw new Error("unsupported settings");
+        const fields = new Set(merge.kind === "review" ? merge.fields : []);
         const groups = COUPLED_FIELDS.map((group) => [...group] as string[]);
         const coupled = new Set(groups.flat());
         groups.push(...[...fields].filter((key) => !coupled.has(key)).map((key) => [key]));
@@ -229,6 +233,7 @@ export function applyAgentCandidate(
         Buffer.from(file.local),
         Buffer.from(file.remote),
         selections,
+        true,
       );
       if (merged.kind !== "merged") throw new Error("Agent settings units remain unresolved.");
       // The existing renderer/parser retains atomic values, unknown members and exact numeric policy.

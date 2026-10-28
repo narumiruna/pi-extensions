@@ -108,7 +108,8 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
     let metadataDrainTask: Promise<void> | undefined;
     let lastMetadataSnapshot: HerdrMetadataSnapshot | undefined;
     let metadataRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-    let shutdownClearController: AbortController | undefined;
+    const sessionReportTasks = new Set<Promise<void>>();
+    let shutdownController: AbortController | undefined;
     let shutdownSession: ExtensionContext["sessionManager"] | undefined;
     let shutdownTask: Promise<void> | undefined;
 
@@ -154,7 +155,7 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
     function reportSession(sessionStartSource?: string): Promise<void> {
       const sessionRef = currentSessionRef();
       if (!sessionRef) return Promise.resolve();
-      return safeSend(
+      const task = safeSend(
         {
           id: requestId("session"),
           method: "pane.report_agent_session",
@@ -169,6 +170,9 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
         },
         sessionController.signal,
       );
+      sessionReportTasks.add(task);
+      void task.finally(() => sessionReportTasks.delete(task));
+      return task;
     }
 
     function stateRequest(state: QueuedState): HerdrRequest {
@@ -331,8 +335,10 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
       const generation = ++sessionGeneration;
       const replaced = new DOMException("Herdr session replaced", "AbortError");
       sessionController.abort(replaced);
-      shutdownClearController?.abort(replaced);
-      shutdownClearController = undefined;
+      shutdownController?.abort(replaced);
+      shutdownController = undefined;
+      shutdownTask = undefined;
+      shutdownSession = undefined;
       if (metadataRefreshTimer) clearTimeout(metadataRefreshTimer);
       metadataRefreshTimer = undefined;
       queuedMetadata = undefined;
@@ -355,7 +361,12 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
       const sessionReport = reportSession(event.reason);
       publishMetadata(ctx);
       await Promise.all([sessionReport, widgetStart]);
-      if (generation !== sessionGeneration || sessionController.signal.aborted || !rootSession) {
+      if (
+        generation !== sessionGeneration ||
+        activeSession !== ctx.sessionManager ||
+        sessionController.signal.aborted ||
+        !rootSession
+      ) {
         return;
       }
       agentActive = !ctx.isIdle();
@@ -403,24 +414,30 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
         sessionController.abort(new DOMException("Herdr session shut down", "AbortError"));
         queuedState = undefined;
         queuedMetadata = undefined;
-        await Promise.allSettled([drainTask, metadataDrainTask, widget.shutdown(ctx)]);
-        const stillOwnsShutdown = shutdownGeneration === sessionGeneration && activeSession === session && !rootSession;
-        if (shouldClearMetadata && stillOwnsShutdown) {
+        await Promise.allSettled([...sessionReportTasks, drainTask, metadataDrainTask, widget.shutdown(ctx)]);
+        const stillOwnsShutdown = () =>
+          shutdownGeneration === sessionGeneration && activeSession === session && !rootSession;
+        if (shouldClearMetadata && stillOwnsShutdown()) {
           const controller = new AbortController();
-          shutdownClearController = controller;
-          await safeSend(
-            createHerdrMetadataRequest({
-              id: requestId(),
-              paneId: environment.paneId,
-              source: SOURCE,
-              seq: nextReportSeq(),
-              snapshot: createHerdrMetadataClearSnapshot(),
-            }),
-            controller.signal,
-          );
-          if (shutdownClearController === controller) shutdownClearController = undefined;
+          shutdownController = controller;
+          try {
+            await safeSend(
+              createHerdrMetadataRequest({
+                id: requestId(),
+                paneId: environment.paneId,
+                source: SOURCE,
+                seq: nextReportSeq(),
+                snapshot: createHerdrMetadataClearSnapshot(),
+              }),
+              controller.signal,
+            );
+            // Native identity and restore remain Herdr-owned. Official-source
+            // release is a no-op; clearing authority would delete restore data.
+          } finally {
+            if (shutdownController === controller) shutdownController = undefined;
+          }
         }
-        if (shutdownGeneration !== sessionGeneration || activeSession !== session || rootSession) {
+        if (!stillOwnsShutdown()) {
           return;
         }
         lastMetadataSnapshot = undefined;

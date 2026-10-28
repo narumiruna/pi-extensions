@@ -2,23 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createMockContext } from "../../../test/support.js";
-import type { CommandOptions } from "../src/commands/command-types.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { regenerateSnapshotIdentity } from "../src/snapshot/snapshot.js";
 import { push } from "../src/sync/sync-mutations.js";
 import { snapshot, v3S3Settings } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
+import { mergeOptions } from "./merge-options.js";
 
-export const mergeOptions: CommandOptions = {
-  args: [],
-  yes: true,
-  force: false,
-  stale: false,
-  silent: false,
-  reload: false,
-  auto: false,
-};
+export { mergeOptions };
 
 export async function createMergeFixture(agentDir: string, backend = new MemorySyncBackend(), sessions = false) {
   await fs.mkdir(agentDir, { recursive: true });

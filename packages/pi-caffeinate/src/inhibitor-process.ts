@@ -9,6 +9,7 @@ export function startInhibitorProcess(
 ): ChildProcess {
   const child = spawn(command.command, command.args, {
     detached: false,
+    windowsHide: true,
     stdio: [command.releaseOnStdinClose ? "pipe" : "ignore", "pipe", "pipe"],
   });
   child.once("error", onError);

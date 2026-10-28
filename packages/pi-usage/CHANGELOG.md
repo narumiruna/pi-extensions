@@ -1,5 +1,49 @@
 # @narumitw/pi-usage
 
+## 0.68.4
+
+### Patch Changes
+
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 0.68.3
+
+### Patch Changes
+
+- 5442c02: Notify current-session usage consumers when an account selection is committed so status lines can refresh without waiting for the next turn. Wait for each provider's pending account activation before resolving usage authentication, including OpenRouter, Kimi, and legacy Codex.
+
+## 0.68.2
+
+### Patch Changes
+
+- Updated dependencies [57eeae7]
+  - @narumitw/pi-tui-kit@0.67.0
+
+## 0.68.1
+
+### Patch Changes
+
+- 168248c: Reuse published TUI Kit frame metadata, masked input, configured-key syntax, and interaction ownership while retaining extension-owned settings and cancellation policy. Keep malformed Ticker key strings from suppressing valid reorder shortcuts, and drain Usage settings saves after cancellation.
+
+## 0.68.0
+
+### Minor Changes
+
+- 74cc35f: Add the read-only `usage:query:v1`, `usage:capabilities:v1`, and `usage:changed:v1` event protocols for other Pi extensions. Refresh requests preserve authentication policy, cancellation, failure backoff, and session ownership without changing UI or model context. API refreshes wait for active status and menu reads instead of interrupting those presentation flows. Cache-only reads conservatively return `cache-miss` because Pi cannot prove effective auth identity without potentially doing network work. Document protocol timestamps in milliseconds and include a bounded consumer example.
+
+## 0.67.0
+
+### Minor Changes
+
+- 1cd8b94: Make native OpenAI companion usage default to Off. Enable **Use Codex login for OpenAI usage** in `/usage` Settings only when both logins use the same ChatGPT account and workspace. The extension cannot verify that identity match.
+  
+  The new `openaiUseCodexUsage` boolean defaults to `false`, including after upgrade. Historical `openaiCompanionUsage` values do not opt in. Native OpenAI shows authentication status and a usage-settings link until explicitly enabled; independent Codex usage, Fast mode, and reset redemption are unchanged.
+  
+  Disabling cancels pending companion queries and auth waits, invalidates native quota caches, and prevents late results from restoring old reports or status. A successful save restores the active session status refresh even if the Settings screen closes or becomes stale during publication. This does not add reverse fallback or change Pi-owned OAuth renewal. Companion endpoints remain experimental and undocumented.
+
 ## 0.66.0
 
 ### Minor Changes

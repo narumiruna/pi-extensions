@@ -22,7 +22,10 @@ export function summaryPrefix(
 
 // This is an inference request, not another remote compaction protocol. The caller
 // owns the lossy native-fallback policy after this request releases its resources.
-export async function recoverCheckpoint(request: RemoteCompactionRequest, event: SessionBeforeCompactEvent) {
+export async function summarizeCheckpoint(
+  request: RemoteCompactionRequest,
+  options: { maxTokens: number; customInstructions?: string },
+) {
   if (!request.priorCheckpoint) throw new Error("Checkpoint recovery requires a compatible checkpoint");
   if (request.signal.aborted) throw abortError();
   const controller = new AbortController();
@@ -52,13 +55,7 @@ export async function recoverCheckpoint(request: RemoteCompactionRequest, event:
       signal,
       transport: "sse",
       cacheRetention: "none",
-      maxTokens: Math.max(
-        1,
-        Math.min(
-          Math.floor(event.preparation.settings.reserveTokens * 0.8),
-          request.model.maxTokens > 0 ? request.model.maxTokens : Number.POSITIVE_INFINITY,
-        ),
-      ),
+      maxTokens: options.maxTokens,
       maxRetries: request.maxRetries,
       timeoutMs: request.requestTimeoutMs,
       fetch: async (input, init) => {
@@ -106,7 +103,7 @@ export async function recoverCheckpoint(request: RemoteCompactionRequest, event:
                   type: "input_text",
                   text:
                     RECOVERY_INSTRUCTION +
-                    (event.customInstructions ? `\nAdditional focus: ${event.customInstructions}` : ""),
+                    (options.customInstructions ? `\nAdditional focus: ${options.customInstructions}` : ""),
                 },
               ],
             },
@@ -200,23 +197,7 @@ export async function recoverCheckpoint(request: RemoteCompactionRequest, event:
         throw new Error("Checkpoint recovery terminal text conflicts with provider completion");
       if (!summary.trim() || Buffer.byteLength(summary) > MAX_COMPACTION_ITEM_BYTES)
         throw new Error("Checkpoint recovery returned an empty or oversized summary");
-      const modifiedFiles = [
-        ...new Set([...event.preparation.fileOps.written, ...event.preparation.fileOps.edited]),
-      ].sort();
-      const readFiles = [...event.preparation.fileOps.read].filter((path) => !modifiedFiles.includes(path)).sort();
-      const finalSummary =
-        summary +
-        (readFiles.length ? `\n\n<read-files>\n${readFiles.join("\n")}\n</read-files>` : "") +
-        (modifiedFiles.length ? `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : "");
-      if (Buffer.byteLength(finalSummary) > MAX_COMPACTION_ITEM_BYTES)
-        throw new Error("Checkpoint recovery summary and file metadata exceeded the size limit");
-      return {
-        summary: finalSummary,
-        firstKeptEntryId: event.preparation.firstKeptEntryId,
-        tokensBefore: event.preparation.tokensBefore,
-        usage: completed.usage,
-        details: { readFiles, modifiedFiles },
-      };
+      return { summary, usage: completed.usage };
     };
     return await Promise.race([collect(), aborted]);
   } finally {
@@ -226,4 +207,34 @@ export async function recoverCheckpoint(request: RemoteCompactionRequest, event:
     // Unblock our consumer even if a custom provider ignores the abort signal.
     stream?.end();
   }
+}
+
+export async function recoverCheckpoint(request: RemoteCompactionRequest, event: SessionBeforeCompactEvent) {
+  const result = await summarizeCheckpoint(request, {
+    maxTokens: Math.max(
+      1,
+      Math.min(
+        Math.floor(event.preparation.settings.reserveTokens * 0.8),
+        request.model.maxTokens > 0 ? request.model.maxTokens : Number.POSITIVE_INFINITY,
+      ),
+    ),
+    customInstructions: event.customInstructions,
+  });
+  const modifiedFiles = [
+    ...new Set([...event.preparation.fileOps.written, ...event.preparation.fileOps.edited]),
+  ].sort();
+  const readFiles = [...event.preparation.fileOps.read].filter((path) => !modifiedFiles.includes(path)).sort();
+  const summary =
+    result.summary +
+    (readFiles.length ? `\n\n<read-files>\n${readFiles.join("\n")}\n</read-files>` : "") +
+    (modifiedFiles.length ? `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : "");
+  if (Buffer.byteLength(summary) > MAX_COMPACTION_ITEM_BYTES)
+    throw new Error("Checkpoint recovery summary and file metadata exceeded the size limit");
+  return {
+    summary,
+    firstKeptEntryId: event.preparation.firstKeptEntryId,
+    tokensBefore: event.preparation.tokensBefore,
+    usage: result.usage,
+    details: { readFiles, modifiedFiles },
+  };
 }

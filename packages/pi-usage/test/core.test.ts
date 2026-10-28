@@ -72,6 +72,285 @@ test("usage cache deletion preserves other credentials and providers", () => {
   assert.equal(cache.get("zai-coding-cn", "account-a", 1_001), report);
 });
 
+for (const method of ["get", "getEntry"] as const) {
+  test(`usage cache ${method} expires at the exact TTL boundary without extending reads`, () => {
+    const cache = new UsageCache(100);
+    cache.set("openrouter", "account-a", report, 1_000);
+
+    assert.deepEqual(cache.getEntry("openrouter", "account-a", 1_000), { report, expiresAt: 1_100 });
+    assert.equal(cache.get("openrouter", "account-a", 1_050), report);
+    assert.equal(cache.getEntry("openrouter", "account-a", 1_099)?.report, report);
+    assert.equal(cache.getEntry("openrouter", "account-a", 1_099)?.expiresAt, 1_100);
+    assert.equal(cache[method]("openrouter", "account-a", 1_100), undefined);
+    assert.equal(cache.size, 0);
+  });
+}
+
+test("usage cache metadata uses the default clock and does not expose mutable expiry state", () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const cache = new UsageCache(100);
+  cache.set("openrouter", "account-a", report);
+  clock.mockReturnValue(1_050);
+  const entry = cache.getEntry("openrouter", "account-a");
+  assert.ok(entry);
+  assert.equal(entry.report, report);
+  assert.equal(entry.expiresAt, 1_100);
+  entry.expiresAt = 5_000;
+  assert.equal(cache.getEntry("openrouter", "account-a")?.expiresAt, 1_100);
+  clock.mockReturnValue(1_100);
+  assert.equal(cache.getEntry("openrouter", "account-a"), undefined);
+});
+
+test("usage cache publishes initial and replacement state before update notifications", () => {
+  let now = 1_000;
+  const observed: unknown[] = [];
+  const cache: UsageCache = new UsageCache(100, 2, (providerId, reason) => {
+    observed.push({ providerId, reason, entry: cache.getEntry(providerId, "account-a", now), size: cache.size });
+  });
+  cache.set("openrouter", "account-a", report, now);
+  now = 1_050;
+  const replacement = { ...report, capturedAt: 2 };
+  cache.set("openrouter", "account-a", replacement, now);
+  assert.deepEqual(observed, [
+    { providerId: "openrouter", reason: "updated", entry: { report, expiresAt: 1_100 }, size: 1 },
+    { providerId: "openrouter", reason: "updated", entry: { report: replacement, expiresAt: 1_150 }, size: 1 },
+  ]);
+});
+
+for (const { name, remove, invalidated, remaining } of [
+  {
+    name: "delete",
+    remove: (cache: UsageCache) => cache.delete("zai", "account-a"),
+    invalidated: ["zai"],
+    remaining: [false, true, true, true],
+  },
+  {
+    name: "clearProvider",
+    remove: (cache: UsageCache) => cache.clearProvider("zai"),
+    invalidated: ["zai"],
+    remaining: [false, false, true, true],
+  },
+  {
+    name: "clear",
+    remove: (cache: UsageCache) => cache.clear(),
+    invalidated: ["zai", "zai-coding-cn", "zai:other"],
+    remaining: [false, false, false, false],
+  },
+]) {
+  test(`usage cache ${name} notifies affected providers only after all removals`, () => {
+    const identities = [
+      ["zai", "account-a"],
+      ["zai", "account-b"],
+      ["zai-coding-cn", "account-a"],
+      ["zai:other", "account-a"],
+    ] as const;
+    const observed: unknown[] = [];
+    const cache: UsageCache = new UsageCache(100, 4, (providerId, reason) => {
+      observed.push({
+        providerId,
+        reason,
+        remaining: identities.map(([provider, fingerprint]) => cache.get(provider, fingerprint, 1_000) !== undefined),
+      });
+    });
+    for (const [providerId, fingerprint] of identities) cache.set(providerId, fingerprint, report, 1_000);
+    observed.length = 0;
+
+    remove(cache);
+    assert.deepEqual(
+      observed,
+      invalidated.map((providerId) => ({ providerId, reason: "invalidated", remaining })),
+    );
+    observed.length = 0;
+    remove(cache);
+    cache.delete("missing", "account-a");
+    cache.clearProvider("missing");
+    assert.deepEqual(observed, []);
+  });
+}
+
+for (const method of ["get", "getEntry", "set"] as const) {
+  test(`usage cache ${method} sweeps expired providers once before notification`, () => {
+    const observed: unknown[] = [];
+    let now = 1_000;
+    const cache: UsageCache = new UsageCache(100, 4, (providerId, reason) => {
+      observed.push({ providerId, reason, size: cache.size, live: cache.get("live", "account-a", now) });
+    });
+    cache.set("expired", "account-a", report, now);
+    cache.set("expired", "account-b", report, now);
+    cache.set("other-expired", "account-a", report, now);
+    now = 1_050;
+    cache.set("live", "account-a", report, now);
+    observed.length = 0;
+    now = 1_100;
+
+    if (method === "set") cache.set("new", "account-a", report, now);
+    else assert.equal(cache[method]("missing", "account-a", now), undefined);
+    const size = method === "set" ? 2 : 1;
+    assert.deepEqual(observed, [
+      { providerId: "expired", reason: "invalidated", size, live: report },
+      { providerId: "other-expired", reason: "invalidated", size, live: report },
+      ...(method === "set" ? [{ providerId: "new", reason: "updated", size, live: report }] : []),
+    ]);
+    observed.length = 0;
+    cache.getEntry("expired", "account-a", now);
+    assert.deepEqual(observed, []);
+  });
+}
+
+test("usage cache capacity eviction publishes the successor before invalidation", () => {
+  const observed: unknown[] = [];
+  const cache: UsageCache = new UsageCache(100, 2, (providerId, reason) => {
+    observed.push({
+      providerId,
+      reason,
+      size: cache.size,
+      oldest: cache.get("oldest", "account-a", 1_000),
+      newest: cache.getEntry("newest", "account-a", 1_000),
+    });
+  });
+  cache.set("oldest", "account-a", report, 1_000);
+  cache.set("middle", "account-a", report, 1_000);
+  cache.get("oldest", "account-a", 1_000);
+  observed.length = 0;
+  cache.set("newest", "account-a", report, 1_000);
+  assert.deepEqual(observed, [
+    {
+      providerId: "oldest",
+      reason: "invalidated",
+      size: 2,
+      oldest: undefined,
+      newest: { report, expiresAt: 1_100 },
+    },
+    {
+      providerId: "newest",
+      reason: "updated",
+      size: 2,
+      oldest: undefined,
+      newest: { report, expiresAt: 1_100 },
+    },
+  ]);
+});
+
+test("usage cache replacement refreshes insertion order without capacity invalidation", () => {
+  const changes: unknown[] = [];
+  const cache = new UsageCache(100, 2, (providerId, reason) => changes.push([providerId, reason]));
+  cache.set("first", "account-a", report, 1_000);
+  cache.set("second", "account-a", report, 1_000);
+  changes.length = 0;
+  cache.set("first", "account-a", report, 1_050);
+  cache.set("third", "account-a", report, 1_050);
+  assert.deepEqual(changes, [
+    ["first", "updated"],
+    ["second", "invalidated"],
+    ["third", "updated"],
+  ]);
+  assert.equal(cache.getEntry("first", "account-a", 1_100)?.expiresAt, 1_150);
+  assert.equal(cache.size, 2);
+});
+
+test("usage cache reentrant expiry observers cannot sweep successor entries", () => {
+  const changes: unknown[] = [];
+  const reads: unknown[] = [];
+  let now = 1_000;
+  const successor = { ...report, capturedAt: 2 };
+  const cache: UsageCache = new UsageCache(100, 4, (providerId, reason) => {
+    changes.push([providerId, reason]);
+    if (reason !== "invalidated") return;
+    reads.push(cache.getEntry(providerId, "account-a", now));
+    cache.set(providerId, "account-a", successor, now);
+    reads.push(cache.getEntry(providerId, "account-a", now));
+  });
+  cache.set("first", "account-a", report, now);
+  cache.set("first", "account-b", report, now);
+  cache.set("second", "account-a", report, now);
+  changes.length = 0;
+  now = 1_100;
+
+  assert.deepEqual(cache.getEntry("first", "account-a", now), { report: successor, expiresAt: 1_200 });
+  assert.deepEqual(changes, [
+    ["first", "invalidated"],
+    ["second", "invalidated"],
+    ["first", "updated"],
+    ["second", "updated"],
+  ]);
+  assert.deepEqual(reads, [
+    undefined,
+    { report: successor, expiresAt: 1_200 },
+    undefined,
+    { report: successor, expiresAt: 1_200 },
+  ]);
+  assert.equal(cache.getEntry("second", "account-a", now)?.report, successor);
+  assert.equal(cache.size, 2);
+});
+
+test("usage cache reentrant eviction observers remain bounded and do not loop notifications", () => {
+  const changes: unknown[] = [];
+  const sizes: number[] = [];
+  const cache: UsageCache = new UsageCache(100, 1, (providerId, reason) => {
+    changes.push([providerId, reason]);
+    sizes.push(cache.size);
+    // The cap also keeps a broken implementation from hanging this regression test.
+    if (reason === "invalidated" && changes.length < 10) cache.set(providerId, "account-a", report, 1_000);
+  });
+  cache.set("first", "account-a", report, 1_000);
+  changes.length = 0;
+  sizes.length = 0;
+  cache.set("second", "account-a", report, 1_000);
+  assert.deepEqual(changes, [
+    ["first", "invalidated"],
+    ["second", "updated"],
+    ["second", "invalidated"],
+    ["first", "updated"],
+  ]);
+  assert.deepEqual(sizes, [1, 1, 1, 1]);
+  assert.equal(cache.get("second", "account-a", 1_000), report);
+  assert.equal(cache.get("first", "account-a", 1_000), undefined);
+});
+
+test("usage cache coalesces synchronous update feedback but not later operations", () => {
+  const changes: unknown[] = [];
+  let callbackNow = 1_050;
+  const cache: UsageCache = new UsageCache(100, 1, (providerId, reason) => {
+    changes.push([providerId, reason]);
+    if (reason === "updated" && changes.length < 10) cache.set(providerId, "account-a", report, callbackNow);
+  });
+  cache.set("openrouter", "account-a", report, 1_000);
+  callbackNow = 1_150;
+  cache.set("openrouter", "account-a", report, 1_100);
+  assert.deepEqual(changes, [
+    ["openrouter", "updated"],
+    ["openrouter", "updated"],
+  ]);
+  assert.equal(cache.getEntry("openrouter", "account-a", 1_150)?.expiresAt, 1_250);
+});
+
+test("usage cache isolates observer exceptions and continues later notifications", () => {
+  const changes: unknown[] = [];
+  const cache = new UsageCache(100, 2, (providerId, reason) => {
+    changes.push([providerId, reason]);
+    throw new Error("observer failed");
+  });
+  cache.set("first", "account-a", report, 1_000);
+  cache.set("second", "account-a", report, 1_000);
+  changes.length = 0;
+  cache.set("third", "account-a", report, 1_100);
+  assert.deepEqual(changes, [
+    ["first", "invalidated"],
+    ["second", "invalidated"],
+    ["third", "updated"],
+  ]);
+  assert.equal(cache.get("third", "account-a", 1_100), report);
+  cache.delete("third", "account-a");
+  cache.set("third", "account-a", report, 1_100);
+  cache.clearProvider("third");
+  cache.set("third", "account-a", report, 1_100);
+  cache.clear();
+  assert.equal(cache.size, 0);
+  cache.set("third", "account-a", report, 1_100);
+  assert.equal(cache.getEntry("third", "account-a", 1_200), undefined);
+  assert.equal(cache.size, 0);
+});
+
 test("bounded orchestration retains stable partial results and respects cancellation", async () => {
   let active = 0;
   let maximumActive = 0;

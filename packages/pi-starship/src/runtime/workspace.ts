@@ -69,6 +69,18 @@ const COLLECTOR_GROUPS: readonly {
   load(): Promise<WorkspaceCollector>;
 }[] = [
   {
+    modules: ["directory"],
+    load: async () => (await import("./directory.js")).collectDirectory,
+  },
+  {
+    modules: ["jj_bookmark", "jj_change", "jj_metrics", "jj_status"],
+    load: async () => (await import("./jujutsu.js")).collectJujutsu,
+  },
+  {
+    modules: ["memory_usage", "battery"],
+    load: async () => (await import("./system.js")).collectSystem,
+  },
+  {
     modules: ["nodejs", "python", "rust", "golang", "bun", "deno"],
     load: async () => (await import("./languages.js")).collectLanguages,
   },
@@ -95,7 +107,6 @@ const BUILT_IN_ONLY_MODULES = new Set<ModuleName>([
   "provider",
   "model",
   "thinking",
-  "directory",
   "git_worktree",
   "git_branch",
   "github_pr",

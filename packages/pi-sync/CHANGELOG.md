@@ -1,5 +1,58 @@
 # @narumitw/pi-sync
 
+## 0.57.6
+
+### Patch Changes
+
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 0.57.5
+
+### Patch Changes
+
+- Updated dependencies [57eeae7]
+  - @narumitw/pi-tui-kit@0.67.0
+
+## 0.57.4
+
+### Patch Changes
+
+- 168248c: Reuse published TUI Kit frame metadata, masked input, configured-key syntax, and interaction ownership while retaining extension-owned settings and cancellation policy. Keep malformed Ticker key strings from suppressing valid reorder shortcuts, and drain Usage settings saves after cancellation.
+
+## 0.57.3
+
+### Patch Changes
+
+- 11da747: Recover Continuous sync after proven pre-publication edit races and repaired content safety blocks. Avoid model requests when unsupported conflicts prevent an all-or-nothing transfer, and propagate resolver deadlines through validation and reservation work.
+  
+  Add a separately confirmed manager action to retry a current cached model refusal without resetting automatic accounting. Preserve ordinary Sync now cache behavior and retain the previous refusal privately. Show read-only request allowance, accounting capacity, and category-specific recovery guidance.
+
+## 0.57.2
+
+### Patch Changes
+
+- 9f80b89: Use native fake-cursor markers for masked credential input and normalize unusable render widths without changing secret editing, validation, cancellation, or storage policy.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.57.1
+
+### Patch Changes
+
+- a87a2ba: Keep the higher local or remote explicit npm package version when Agent mode merges settings, without a registry lookup. Preserve matching resource filters and one-sided package order or membership changes. Keep changed non-npm sources and conflicting package lists under atomic conflict handling. Preserve existing package-array bytes and use ancestor rules when SemVer precedence is equal. Keep accepted settings documents unchanged unless a package override is required.
+
+## 0.57.0
+
+### Minor Changes
+
+- fa985f7: Add the manual-only `configure-pi-sync` skill for configuration questions and safe setup guidance without private settings reads, edits, or sync execution.
+  Bundle the authoritative settings reference with the skill and preserve existing settings documentation anchors.
+
 ## 0.56.0
 
 ### Minor Changes

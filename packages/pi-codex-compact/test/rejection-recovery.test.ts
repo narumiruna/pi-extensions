@@ -645,10 +645,22 @@ test("rejection cache is bounded without evicting known routes or blocking unkno
   }
 });
 
-test("incompatible checkpoint cancels before any request", async () => {
+test("model switch preserves encrypted checkpoint recovery on the selected Responses model", async () => {
   const h = await harness({ checkpoint: true });
   const before = structuredClone(h.entries);
   h.setModel({ id: "other" });
+  const result = (await h.run()) as { compaction: { summary: string } };
+  assert.match(result.compaction.summary, /sapphire/);
+  assert.equal(h.payloads.length, 2);
+  assert.ok(h.payloads.every(({ payload }) => payload.model === "other"));
+  assert.ok(h.payloads.every(({ payload }) => JSON.stringify(payload).includes("opaque-assistant-only-fact")));
+  assert.deepEqual(h.entries, before);
+});
+
+test("incompatible checkpoint cancels before any request", async () => {
+  const h = await harness({ checkpoint: true });
+  const before = structuredClone(h.entries);
+  h.setModel({ api: "openai-codex-responses" });
   assert.deepEqual(await h.run(), { cancel: true });
   assert.equal(h.payloads.length, 0);
   assert.deepEqual(h.entries, before);

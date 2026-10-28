@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-starship",
-  "version": "0.59.0",
+  "version": "0.64.2",
   "description": "Native Starship-style TOML statusline and configuration skill for Pi.",
   "type": "module",
   "license": "MIT",
@@ -39,18 +39,22 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.59.0",
-    "smol-toml": "^1.9.0",
+    "@narumitw/pi-tui-kit": "^0.68.0",
+    "re2js": "^2.9.0",
+    "semver": "^7.8.5",
+    "smol-toml": "^1.9.1",
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
-    "@types/node": "26.6.4",
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },

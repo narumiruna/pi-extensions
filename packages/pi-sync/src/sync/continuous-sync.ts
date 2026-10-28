@@ -451,7 +451,8 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
             signal,
             background: {
               validate,
-              reserve: (key) => reserveContinuousRequest(binding, lease, key, () => clock.now()),
+              reserve: (key, requestSignal) =>
+                reserveContinuousRequest(binding, lease, key, () => clock.now(), requestSignal),
             },
           },
           (options) => operations.syncBoth(ctx, options),

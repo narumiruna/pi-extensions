@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
@@ -33,6 +34,7 @@ export async function showSyncManager(
   type Screen = "main";
   type Action =
     | "review-attention"
+    | "retry-refusal"
     | "sync"
     | "switch"
     | "settings"
@@ -127,6 +129,27 @@ export async function showSyncManager(
         });
         const disposition = await dispatchManagerResult(ctx, result, "sync", runRoute, sessionSignal);
         return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
+      },
+      "retry-refusal": async ({ signal: actionSignal }) => {
+        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, signal);
+        validate();
+        const retryRoute: RunRoute = (route, operationSignal, onCommit, target, onDialog) =>
+          runRoute(route, operationSignal, onCommit, target, onDialog, true);
+        const result = await runCancellableOperation(ctx, "Checking cached refusal…", "sync", retryRoute, {
+          commitAware: true,
+          cancelAcrossDialogs: true,
+          signal,
+          cancelledMessage: "Model retry cancelled. Submitted requests and committed writes cannot be undone.",
+        });
+        if (signal.aborted) return { kind: "close" };
+        validate();
+        if (result.kind === "decision-required" || result.kind === "remote-selection-required")
+          ctx.ui.notify(
+            "Model retry needs an established source and matching synced content. Use Sync now to review changed selection or recovery before retrying.",
+            "warning",
+          );
+        return { kind: result.kind === "closed" ? "close" : "stay" };
       },
       switch: async () => {
         const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
@@ -231,7 +254,25 @@ export async function showSyncManager(
       },
     },
   });
-  await runMenu(ctx, menu, {
+  const menuContext: ExtensionCommandContext = {
+    ...ctx,
+    ui: {
+      ...ctx.ui,
+      custom: (factory, customOptions) =>
+        ctx.ui.custom((...args) => {
+          const bound = (component: Component & { dispose?(): void }) => {
+            const render = component.render.bind(component);
+            // Kit menus use a one-cell layout floor; suppress it at a zero-column display boundary.
+            component.render = (width) => (width <= 0 ? [] : render(width));
+            return component;
+          };
+          const component = factory(...args);
+          // Keep synchronous factories synchronous, including adapters that inspect their returned component.
+          return component instanceof Promise ? component.then(bound) : bound(component);
+        }, customOptions),
+    },
+  };
+  await runMenu(menuContext, menu, {
     getState: async () => {
       const pendingAttention = options.getAttention?.();
       const observation = options.getObservation?.();
@@ -261,6 +302,7 @@ function syncMainMenuItem(
 ): ActionMenuItem<
   "main",
   | "sync"
+  | "retry-refusal"
   | "pull"
   | "push"
   | "diff"
@@ -279,6 +321,7 @@ function syncMainMenuItem(
 > {
   const actions = {
     "Sync now": "sync",
+    "Retry refused model result…": "retry-refusal",
     "Pull from remote…": "pull",
     "Push to remote…": "push",
     "View differences": "diff",
@@ -303,18 +346,20 @@ function syncMainMenuItem(
     label,
     action,
     description:
-      action === "doctor"
-        ? "Manage: review backend checks before running."
-        : action === "settings" || action === "history" || action === "switch"
-          ? "Manage"
-          : action === "sync"
-            ? "Transfer: choose a safe direction or review conflicts."
-            : action === "pull"
-              ? "Transfer: remote → local; review writes and removals."
-              : action === "push"
-                ? "Transfer: local → remote active snapshot; review publication."
-                : action === "status" || action === "diff"
-                  ? "Inspect: read current local and remote state without transferring files."
-                  : undefined,
+      action === "retry-refusal"
+        ? "Transfer: confirm one fresh model request for a current cached refusal; may incur costs."
+        : action === "doctor"
+          ? "Manage: review backend checks before running."
+          : action === "settings" || action === "history" || action === "switch"
+            ? "Manage"
+            : action === "sync"
+              ? "Transfer: choose a safe direction or review conflicts."
+              : action === "pull"
+                ? "Transfer: remote → local; review writes and removals."
+                : action === "push"
+                  ? "Transfer: local → remote active snapshot; review publication."
+                  : action === "status" || action === "diff"
+                    ? "Inspect: read current local and remote state without transferring files."
+                    : undefined,
   };
 }

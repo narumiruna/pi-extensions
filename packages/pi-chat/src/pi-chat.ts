@@ -44,7 +44,7 @@ export interface PiChatDirectoryOptions {
 type Awaitable<Value> = Value | Promise<Value>;
 type ChatMenuModule = Pick<typeof import("./menu.js"), "showChatMenu">;
 type ChatViewModule = Pick<typeof import("./chat-view.js"), "ChatView">;
-type ChatWidgetModule = Pick<typeof import("./widget.js"), "renderChatWidget">;
+type ChatWidgetModule = Pick<typeof import("./widget.js"), "createChatWidget">;
 
 export interface PiChatDependencies {
   settingsPath: string;
@@ -99,7 +99,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
     let restoringRoomId: string | undefined;
     let joinOwner: { sessionManager: unknown; generation: number; token: symbol } | undefined;
     const ownedTasks = new Set<Promise<unknown>>();
-    let renderChatWidget: ChatWidgetModule["renderChatWidget"] | undefined;
+    let createChatWidget: ChatWidgetModule["createChatWidget"] | undefined;
     let widgetRender: (() => void) | undefined;
     let widgetInstalled = false;
 
@@ -127,7 +127,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
         // Session replacement may invalidate an old UI immediately.
       }
       if (ctx.sessionManager !== activeSessionManager || generation !== ownerGeneration) return;
-      renderChatWidget = undefined;
+      createChatWidget = undefined;
       widgetRender = undefined;
       widgetInstalled = false;
     };
@@ -153,19 +153,28 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
           widgetRender = undefined;
           return;
         }
-        const renderWidget = renderChatWidget;
-        if (!renderWidget) return;
+        const createWidget = createChatWidget;
+        if (!createWidget) return;
         if (!widgetInstalled) {
+          const ownerGeneration = generation;
           ctx.ui.setWidget(CHAT_UI_KEY, (tui, theme) => {
-            const requestRender = () => tui.requestRender();
-            widgetRender = requestRender;
+            let disposed = false;
+            const ownsWidget = () => !disposed && isCurrent(ctx.sessionManager, ownerGeneration);
+            const widget = createWidget({
+              theme,
+              getSnapshot: () => (ownsWidget() ? latestSnapshot : undefined),
+              getMode: () => settings.widgetMode ?? "count",
+              getTerminalRows: () => tui.terminal.rows,
+            });
+            const requestRender = () => {
+              if (ownsWidget()) tui.requestRender();
+            };
+            if (ownsWidget()) widgetRender = requestRender;
             return {
-              render: (width: number) =>
-                latestSnapshot
-                  ? renderWidget(latestSnapshot, settings.widgetMode ?? "count", width, theme, tui.terminal.rows)
-                  : [],
-              invalidate() {},
+              render: (width: number) => widget.render(width),
+              invalidate: () => widget.invalidate(),
               dispose() {
+                disposed = true;
                 if (widgetRender === requestRender) widgetRender = undefined;
               },
             };
@@ -339,7 +348,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
         await transport.stop();
         return false;
       }
-      renderChatWidget = widgetModule.renderChatWidget;
+      createChatWidget = widgetModule.createChatWidget;
       const session = new ChatSession({
         room,
         identity,

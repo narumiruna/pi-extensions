@@ -1,5 +1,18 @@
 # @narumitw/pi-goal
 
+## 0.54.13
+
+### Patch Changes
+
+- 41a422d: Publish the Goal contract when a Goal is started, resumed, or edited while the agent is busy, so it is persisted once at the turn boundary instead of being appended at the tail of every request until the current run ends.
+- 5bc5d7f: Deduplicate Goal contracts that are queued during run startup or another busy publication. Preserve ordered active/inactive revisions and restore contracts after compaction without changing automatic continuation prompts or existing request prefixes.
+
+## 0.54.12
+
+### Patch Changes
+
+- fed7bfb: Handle Pi custom-message run starts without consuming queued file quotes, clearing ready plans, or applying user-prompt Goal ownership logic.
+
 ## 0.54.11
 
 ### Patch Changes

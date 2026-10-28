@@ -140,11 +140,8 @@ button:disabled {
   grid-row: 1;
   height: 100%;
 }
-.nav-slot {
-  grid-column: 1;
-}
 .inspector-slot {
-  grid-column: 5;
+  grid-column: 3;
 }
 .side-slot[hidden] {
   display: none;
@@ -159,18 +156,15 @@ button:disabled {
   touch-action: none;
   grid-row: 1;
 }
-.pane-resizer[aria-label="Resize filters"] {
+.pane-resizer[aria-label="Resize event details"] {
   grid-column: 2;
-}
-.pane-resizer[aria-label="Resize details"] {
-  grid-column: 4;
 }
 .pane-resizer:hover,
 .pane-resizer:focus-visible {
   background: var(--blue-8);
 }
 .center-column {
-  grid-column: 3;
+  grid-column: 1;
   grid-row: 1;
   display: flex;
   flex-direction: column;

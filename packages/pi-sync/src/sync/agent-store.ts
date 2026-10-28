@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -7,6 +7,7 @@ import { withLock } from "../state/lock.js";
 import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "../state/lock-policy.js";
 import { LOCKFILE_FS_ADAPTER } from "../state/lockfile-fs.js";
 import { stateDir } from "../state/state-directory.js";
+import type { AgentCandidate } from "./agent-candidate.js";
 import { AGENT_OUTPUT_BYTES } from "./agent-policy.js";
 import { ContinuousError } from "./continuous-errors.js";
 
@@ -147,5 +148,35 @@ export async function saveAgentCandidate(key: string, candidate: unknown) {
       throw new Error("Agent candidate changed before save; existing evidence retained.");
     return;
   }
+  await writeJson(target, candidate, { maxBytes: AGENT_OUTPUT_BYTES * 2 });
+}
+
+/** Caller holds the resolver claim and operation lock and has validated both candidates. */
+export async function replaceRefusedAgentCandidate(
+  key: string,
+  previous: AgentCandidate,
+  candidate: AgentCandidate,
+  validate: () => Promise<void>,
+) {
+  const original = JSON.stringify(previous);
+  if (!previous.results.some((row) => "refuse" in row) || candidate.results.some((row) => "refuse" in row))
+    throw new Error("Only a validated refusal can be replaced by a complete retry result.");
+  const target = candidatePath(key);
+  const assertPrevious = async () => {
+    if (JSON.stringify(await readPrivate(target)) !== original)
+      throw new Error("Cached refusal changed during review; previous evidence retained.");
+    await validate();
+  };
+  await assertPrevious();
+  const digest = createHash("sha256").update(original).digest("hex");
+  const archive = path.join(paths().root, `${key}.refusal-${digest}.json`);
+  const retained = await readPrivate(archive);
+  await validate();
+  if (retained !== undefined && JSON.stringify(retained) !== original)
+    throw new Error("Retained refusal changed; evidence retained.");
+  if (retained === undefined) await writeJson(archive, previous, { maxBytes: AGENT_OUTPUT_BYTES * 2 });
+  await assertPrevious();
+  // Archive first: even a durability error after replacement retains the original refusal.
+  // Once rename commits, later cancellation cannot undo the valid new candidate.
   await writeJson(target, candidate, { maxBytes: AGENT_OUTPUT_BYTES * 2 });
 }

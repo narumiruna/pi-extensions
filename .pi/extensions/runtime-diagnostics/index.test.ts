@@ -5,6 +5,8 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import { Check } from "typebox/value";
 import { test } from "vitest";
 import {
   CONTROL_ENTRY_TYPE,
@@ -21,19 +23,21 @@ import {
   createProviderResponseDiagnostic,
   extractProviderRequestDiagnostic,
 } from "./provider-request.js";
-import { DIAGNOSTIC_SECTIONS } from "./report.js";
+import { boundDiagnosticResponse, DIAGNOSTIC_ACTIONS, DIAGNOSTIC_SECTIONS } from "./report.js";
 import { RUNTIME_ENTRY_TYPE } from "./snapshot.js";
 import { sanitizeDiagnosticText } from "./text.js";
 
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   details: unknown;
+  structuredContent: unknown;
 }
 
 interface RegisteredTool {
   name: string;
   description: string;
   parameters: unknown;
+  outputSchema: TSchema;
   promptGuidelines?: string[];
   execute(
     toolCallId: string,
@@ -194,7 +198,10 @@ function createHarness(options: { extraToolCount?: number; modelApi?: string; pr
 }
 
 function parseToolResult(result: ToolResult) {
-  return JSON.parse(result.content[0].text) as Record<string, unknown>;
+  const report = JSON.parse(result.content[0].text) as Record<string, unknown>;
+  assert.deepEqual(result.structuredContent, report);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.details)), report);
+  return report;
 }
 
 test("captures only sanitized provider metadata, byte counts, status, and header latency", () => {
@@ -869,4 +876,46 @@ test("bounds a full diagnostic bundle below Pi tool output limits", async () => 
   assert.ok(Buffer.byteLength(text, "utf8") <= 50 * 1024);
   assert.ok(text.split("\n").length <= 2_000);
   assert.match(text, /Detailed sections were omitted/);
+  const report = parseToolResult(result);
+  assert.equal(report.details, undefined);
+  assert.ok(Check(harness.tool().outputSchema, result.structuredContent));
+});
+
+test("declares a structured output schema for every action and minimal reports", async () => {
+  const harness = createHarness();
+  await harness.emit("session_start", {});
+  for (const action of DIAGNOSTIC_ACTIONS) {
+    const result = await harness
+      .tool()
+      .execute(
+        `call-${action}`,
+        { action, ...(action === "configure" ? { maxRecords: 2 } : {}) },
+        new AbortController().signal,
+        undefined,
+        harness.context,
+      );
+    parseToolResult(result);
+    assert.ok(Check(harness.tool().outputSchema, result.structuredContent), action);
+  }
+  const result = await harness
+    .tool()
+    .execute("call-status", {}, new AbortController().signal, undefined, harness.context);
+  const report = parseToolResult(result);
+  const minimal = boundDiagnosticResponse({
+    ...report,
+    findings: [{ severity: "info", code: "large", message: "x".repeat(60_000) }],
+  } as Parameters<typeof boundDiagnosticResponse>[0]);
+  const structured = JSON.parse(minimal.text);
+  assert.equal(structured.findings, undefined);
+  assert.equal(structured.details, undefined);
+  assert.ok(Check(harness.tool().outputSchema, structured));
+
+  const controller = new AbortController();
+  controller.abort();
+  const entryCount = harness.entries.length;
+  await assert.rejects(
+    harness.tool().execute("cancelled", { action: "disable" }, controller.signal, undefined, harness.context),
+    { name: "AbortError" },
+  );
+  assert.equal(harness.entries.length, entryCount);
 });

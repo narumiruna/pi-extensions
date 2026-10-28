@@ -152,8 +152,9 @@ export class JevEvaluator {
       }
       return {
         scores,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        // The SDK uses null for unreported usage; totals include only reported tokens.
+        inputTokens: response.usage.input_tokens ?? 0,
+        outputTokens: response.usage.output_tokens ?? 0,
         model: response.model,
       };
     } catch (error: unknown) {

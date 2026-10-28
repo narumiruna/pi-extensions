@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { test, vi } from "vitest";
 import type { AnySyncConfig } from "../src/settings/settings-types.js";
-import { conflictGroups } from "../src/sync/conflict-artifacts.js";
+import { conflictGroups } from "../src/sync/conflict-groups.js";
 import { type FileMergePlan, mergePathIdentity } from "../src/sync/file-merge-planner.js";
 
 const config = (include: string[]) => ({ include }) as AnySyncConfig;

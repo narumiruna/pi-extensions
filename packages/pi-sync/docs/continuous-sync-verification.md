@@ -2,6 +2,8 @@
 
 This record describes implementation evidence and test scope. The [settings reference](settings.md#experimental-continuous-sync) owns user-facing behavior, limits and recovery.
 
+Later recovery classification, deadline propagation, confirmed-refusal retry, and read-only allowance/capacity diagnostics are documented in [Agent and Continuous sync recovery boundaries](agent-continuous-hardening.md). Historical verification below describes the original implementation.
+
 ## Boundaries and semantic audit
 
 The change is confined to Pi Sync and its Changeset. It adds no dependency, provider, public command, interval setting, environment variable, Pi core change or dependency on another extension. Continuous sync is a separate experimental opt-in; Agent mode alone retains its existing behavior.

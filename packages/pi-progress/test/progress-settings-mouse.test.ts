@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
+import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { showProgressSettings } from "../src/progress-settings-ui.js";
 import { DEFAULT_PROGRESS_SETTINGS } from "../src/settings.js";
 import { createContext } from "./progress-harness.js";
@@ -59,6 +59,21 @@ for (const width of [1, 2, 3]) {
     const screen = await openSettings(t, 4, width);
     screen.tui.press("tui.select.down");
     assert.equal(screen.frame().length, 1);
+    screen.tui.mouse({ type: "click", x: 0, y: 0 });
+    await vi.waitFor(() => assert.equal(screen.settings().displayMode, "expanded"));
+    assert.deepEqual(screen.save.mock.calls[0]?.[0], { displayMode: "expanded" });
+  });
+}
+
+for (const width of [1, 2, 3]) {
+  test(`row metadata at width ${width} survives height changes and invalidation`, async (t) => {
+    const screen = await openSettings(t, 4, width);
+    screen.tui.press("tui.select.down");
+    for (const rows of [24, 7, 4]) {
+      screen.tui.resize({ rows });
+      screen.tui.invalidate();
+      screen.frame();
+    }
     screen.tui.mouse({ type: "click", x: 0, y: 0 });
     await vi.waitFor(() => assert.equal(screen.settings().displayMode, "expanded"));
     assert.deepEqual(screen.save.mock.calls[0]?.[0], { displayMode: "expanded" });

@@ -61,6 +61,18 @@ function compactionItemsFromEvent(event: JsonObject): unknown[] {
   return items.filter((item) => isObject(item) && item.type === "compaction");
 }
 
+// Normalize only identity keys; keep received items and array order unchanged.
+function compactionItemKey(item: JsonObject): string {
+  return JSON.stringify(item, (_key, value: unknown) => {
+    if (!isObject(value)) return value;
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, value[key]]),
+    );
+  });
+}
+
 export async function collectCompactionSse(
   stream: ReadableStream<Uint8Array>,
   options: {
@@ -102,7 +114,7 @@ export async function collectCompactionSse(
     }
     for (const candidate of compactionItemsFromEvent(parsed)) {
       const item = validateCompactionItem(candidate, options.maxItemBytes);
-      items.set(JSON.stringify(item), item);
+      items.set(compactionItemKey(item), item);
     }
   };
   const processLine = (line: string) => {

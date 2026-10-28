@@ -1241,6 +1241,53 @@ test("removing a different account under PI_ACCOUNT leaves the override active",
   }
 });
 
+test("default account providers include only saved accounts, with or without a configured default", async () => {
+  const store = new AccountStore(new InMemoryAccountStorageBackend());
+  await store.write({
+    version: 1,
+    providers: {
+      anthropic: { accounts: { personal: credential("personal") } },
+      "openai-codex": { active: "work", accounts: { work: credential("work") } },
+      "github-copilot": { accounts: {} },
+    },
+  });
+  const mock = createMockPi();
+  accountsExtension(mock.pi, {
+    store,
+    providers: [
+      fakeProvider("xai"),
+      fakeProvider("openai-codex"),
+      fakeProvider("github-copilot"),
+      fakeProvider("anthropic"),
+    ],
+  });
+  const runtime = runtimeHarness(mock);
+  const { ctx, selectCalls } = createInteractiveAccountContext(
+    { modelRegistry: runtime.registry, model: { provider: "anthropic", id: "claude" } },
+    { selections: ["Set default account"] },
+  );
+  await startSessionAndWaitForCurrentProvider(mock, ctx);
+  const before = await store.readAsync();
+  await mock.commands.get("accounts")?.handler("", ctx);
+  assert.deepEqual(selectCalls[1]?.options, ["Anthropic", "OpenAI Codex"]);
+  assert.deepEqual(await store.readAsync(), before);
+  await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+});
+
+test("default account providers are empty when no accounts are saved", async () => {
+  const store = new AccountStore(new InMemoryAccountStorageBackend());
+  const mock = createMockPi();
+  accountsExtension(mock.pi, { store, providers: [fakeProvider("anthropic")] });
+  const runtime = runtimeHarness(mock);
+  const { ctx, selectCalls } = createInteractiveAccountContext(
+    { modelRegistry: runtime.registry },
+    { selections: ["Set default account"] },
+  );
+  await mock.commands.get("accounts")?.handler("", ctx);
+  assert.deepEqual(selectCalls[1]?.options, []);
+  await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+});
+
 test("clearing a startup default keeps the named account active only in the current session", async () => {
   const store = new AccountStore(new InMemoryAccountStorageBackend());
   await store.updateProvider("anthropic", () => ({

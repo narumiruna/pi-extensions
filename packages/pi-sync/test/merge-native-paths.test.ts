@@ -8,7 +8,7 @@ import { regenerateSnapshotIdentity } from "../src/snapshot/snapshot.js";
 import { push, syncBoth } from "../src/sync/sync-mutations.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
-import { mergeOptions } from "./merged-sync-fixture.js";
+import { mergeOptions } from "./merge-options.js";
 
 for (const filePath of [
   "notes:2026.md",

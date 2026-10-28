@@ -405,11 +405,18 @@ const deleteKeyCases: readonly {
     expected: "f7",
   },
   {
-    name: "skips invalid configured strings",
-    deleteKeys: ["meta+x", "ctrl+ctrl+x", "f8"],
+    name: "skips invalid configured strings and retains literal-plus rejection",
+    deleteKeys: ["meta+x", "ctrl+ctrl+x", "+", "ctrl++", "ctrl+", "\u0000f8", "f8"],
     reserved: {},
     search: false,
     expected: "f8",
+  },
+  {
+    name: "retains legacy modifier order for protocol lookups",
+    deleteKeys: ["CTRL+ALT+X"],
+    reserved: {},
+    search: false,
+    expected: "alt+ctrl+x",
   },
   {
     name: "skips printable search collisions",

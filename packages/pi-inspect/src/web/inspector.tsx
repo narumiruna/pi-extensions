@@ -1,6 +1,6 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
-import { ChevronRightIcon, CubeIcon } from "@radix-ui/react-icons";
-import { Button, Heading, Tabs, Text } from "@radix-ui/themes";
+import { ChevronRightIcon, Cross2Icon, CubeIcon } from "@radix-ui/react-icons";
+import { Button, Heading, IconButton, Tabs, Text } from "@radix-ui/themes";
 import { useEffect, useMemo, useState } from "react";
 import type { BranchView, Call, Capture, DetailView, EntrySummary, Json, Snapshot } from "../model.js";
 import { Copy, Data, Metadata, Status } from "./components.js";
@@ -10,6 +10,7 @@ import { RecordedContent } from "./recorded-content.js";
 import { ToolInspector } from "./tool-inspector.js";
 
 export function Inspector({
+  close,
   selected,
   node,
   detail,
@@ -26,6 +27,7 @@ export function Inspector({
   selectCall,
   preview,
 }: {
+  close(): void;
   selected: string;
   node?: EntrySummary;
   detail?: DetailView;
@@ -81,9 +83,12 @@ export function Inspector({
       <div className="panel-heading">
         <Heading size="3">
           <CubeIcon />
-          Details
+          Event details
         </Heading>
         {activeRaw && <Copy key={selected} value={output(activeRaw.value)} />}
+        <IconButton aria-label="Close event details" variant="ghost" size="1" onClick={close}>
+          <Cross2Icon />
+        </IconButton>
       </div>
       <div className="inspector-identity">
         {call?.branchAnchor && !snapshot?.nodes.some((entry) => entry.id === call.branchAnchor) && (

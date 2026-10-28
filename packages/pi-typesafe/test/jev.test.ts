@@ -441,6 +441,30 @@ test("rejects non-JSON and circular structured values", () => {
   );
 });
 
+test.each([
+  [null, null, 0, 0],
+  [null, 3, 0, 3],
+  [7, null, 7, 0],
+  [0, 0, 0, 0],
+])("normalizes unreported SDK usage (%s, %s)", (input, output, inputTokens, outputTokens) => {
+  const response = structuredClone(decisionResponse) as unknown as Record<string, unknown>;
+  response.usage = { input_tokens: input, output_tokens: output };
+  const normalized = normalizeJevResponse(response, decisionInput);
+  assert.deepEqual(normalized.usage, { input_tokens: inputTokens, output_tokens: outputTokens });
+  assert.equal(formatJevResult(normalized).usage?.totalTokens, (inputTokens ?? 0) + (outputTokens ?? 0));
+});
+
+test.each([
+  {},
+  { input_tokens: -1, output_tokens: 0 },
+  { input_tokens: Number.NaN, output_tokens: 0 },
+  { input_tokens: 0, output_tokens: 1.5 },
+])("rejects invalid usage counts %j", (usage) => {
+  const response = structuredClone(decisionResponse) as unknown as Record<string, unknown>;
+  response.usage = usage;
+  assert.throws(() => normalizeJevResponse(response, decisionInput), /non-negative input_tokens and output_tokens/);
+});
+
 test("normalizes OpenRouter token aliases and reports optional cost as Pi tool usage", () => {
   const response = structuredClone(decisionResponse) as unknown as Record<string, unknown>;
   response.usage = { prompt_tokens: 12, completion_tokens: 3, cost: 0.001 };

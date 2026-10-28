@@ -43,7 +43,7 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
       platform: "node",
       sourcemap: true,
       splitting: true,
-      target: "es2022",
+      target: "es2024",
       write: true,
     });
     validateEagerGraph(result.metafile);
@@ -61,7 +61,7 @@ export async function buildRuntime({ outputDirectory = distDirectory, validateOu
       platform: "node",
       sourcemap: true,
       splitting: true,
-      target: "es2022",
+      target: "es2024",
       write: true,
     });
     await generateDeclarations(stagingDirectory);

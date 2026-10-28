@@ -1,5 +1,43 @@
 # @narumitw/pi-tui-kit
 
+## 0.68.0
+
+### Minor Changes
+
+- a21d39b: Add opt-in editor status presentation helpers for stable snapshot publication, session-local view controls, and bounded whole-snapshot collections. Keep the existing EditorStatusWidget API unchanged.
+  
+  Retain visible Progress, Subagents, and Herdr widgets during updates. Add bounded summaries, manual view and item controls, and explicit one-shot compaction policies to Progress and Subagents without changing task state or persistent defaults. Preserve Progress completion retention and keep Herdr observation policies local. Keep tree navigation and manual context compaction separate from response-cycle tracking.
+
+### Patch Changes
+
+- f68aa54: Use Pi TUI's public terminal-sequence helper when checking selected-label visibility, including cursor markers. Remove the unused internal selection controller from the package output without changing public exports.
+- b062d21: Keep choice names, current markers, and settings values readable at narrow terminal widths with explicit truncation and full selected context. Add searchable-choice result counts, preserve browse names beside long status text, and allow compact browse search recovery without focusing a hidden input.
+
+## 0.67.0
+
+### Minor Changes
+
+- 57eeae7: Add the opt-in `createFullscreenHandoff()` resource and native test harness. Share terminal entry/exit drain, cancellation-safe restoration, keyboard-protocol recovery, owned overlay handling, and cleanup errors through public Pi TUI APIs. Keep ordinary Kit interactions unchanged.
+  
+  Use the resource in Starship's configuration chat and BTW's multi-screen workspace. Keep each extension's input policy, layouts, domain state, permissions, and persistence local. BTW now waits for native input drain before entry. Changesets raises both consumer floors to the Kit API release; dependent publication requires its exact registry artifact.
+
+## 0.66.0
+
+### Minor Changes
+
+- 077137a: Add optional in-place full-source Copy to review screens, standalone document reviews, and exact browse-detail documents through consumer-owned callbacks.
+  
+  Preserve existing completion and confirmation contracts. Filter effective copy hints, keep search and standard actions first, drain accepted work on exit, and report retryable failures without exposing source-bearing callback errors. RPC never exposes or invokes Copy; no clipboard transport is included.
+- 9f80b89: Expose typed bounded-frame row mappings and configured-key canonicalization while retaining existing frame output and native input ownership.
+  
+  Use native fake-cursor markers for masked input so hardware-cursor mode does not draw a second cursor, and keep secret rendering within zero or invalid width bounds.
+  
+  New frame and key APIs are prepared before consumer adoption; protocol-overlap, global availability, and a second paste parser remain deferred.
+
+### Patch Changes
+
+- efc474c: Keep selected rows, descriptions, and empty-search guidance usable in clipped selectors. Omit interaction hints for keys owned by Pi's native host while preserving document-local search, editing, cancellation, and asynchronous settlement.
+
 ## 0.65.6
 
 ### Patch Changes

@@ -31,6 +31,8 @@ async function emit(
 
 function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
   return piStarshipRuntime(pi, {
+    gitExec: (command, args, options) =>
+      pi.exec(command, args, { cwd: options.cwd, signal: options.signal, timeout: options.timeout }),
     githubPrExec: (command, args, options) =>
       pi.exec(command, args, {
         cwd: options.cwd,
@@ -778,7 +780,8 @@ test("TUI footer renders cached state and parallel tool activity without executi
   await emit(mock.events, "session_shutdown", {}, context.ctx);
 });
 
-test("stale Git results from a replaced session cannot overwrite the new footer", async () => {
+test("stale Git results from a replaced session cannot overwrite the new footer", async (t) => {
+  useLifecycleConfig(t, "format = '$git_status'\n");
   const mock = createMockPi();
   const first = deferred<ExecResult>();
   const second = deferred<ExecResult>();

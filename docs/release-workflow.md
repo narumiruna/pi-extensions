@@ -9,7 +9,9 @@ flowchart TD
     Select -->|version| Version[Create or update Version PR]
     Select -->|publish| Pack[Build and pack unpublished packages]
     Select -->|none| Skip[No release work]
-    Pack --> Publish[Publish packed artifact and create tags/releases]
+    Pack --> Guard[Validate packed plan and local integrity]
+    Guard --> Publish[Verify dependency artifacts and publish native chunks]
+    Publish --> Reports[Action pushes tags and creates releases from native reports]
 ```
 
 Changesets selects `version` when there are non-empty pending changesets. Merging the Version PR consumes these changesets and updates manifests, changelogs, and the lockfile. The next main push selects `publish` if unpublished package versions remain. Empty-only changesets or no unpublished versions select `none`. CI failure blocks all release jobs.
@@ -22,7 +24,7 @@ Keep npm trusted-publisher bindings pointed at this repository's `publish.yml`. 
 
 ## Failures and recovery
 
-The workflow uses the official Changesets publisher, not `publish-packages:sequential`. The official CLI publishes dependency-ordered batches, stops later batches after a batch failure, and reports an unsuccessful exit. The publish action still creates tags and GitHub releases for packages reported as successful and fails the job afterward. The Actions summary lists successful packages when the action supplies those outputs, including partial-success failures; inspect the action logs if release/tag creation itself fails.
+The workflow uses a packed-artifact guard around the official Changesets publisher, not the legacy sequential script. The guard validates local hashes and requires exact registry artifacts before dependent chunks. It stops after artifact-verification or native-publication failure. The official CLI still publishes each reached chunk and reports its result; the guard does not repack artifacts or replace native reporting. See [coordinated releases](coordinated-releases.md) for the dependency graph, integrity checks, retry behavior, and limits. The publish action still creates tags and GitHub releases for packages reported as successful and fails the job afterward. The Actions summary lists successful packages when the action supplies those outputs, including partial-success failures; inspect the action logs if release/tag creation itself fails.
 
 Before retrying, inspect npm versions and the run's tags/releases. A fresh run on main recomputes the plan for unpublished versions instead of replaying an old packed artifact. Do not expect it to repair missing tags/releases for versions that already reached npm; inspect and repair those separately with explicit approval. Do not dispatch a release run merely to validate workflow syntax: it can publish packages.
 

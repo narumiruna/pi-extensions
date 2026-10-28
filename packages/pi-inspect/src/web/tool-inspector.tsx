@@ -27,14 +27,30 @@ function DocumentationText({ value }: { value: string }) {
   );
 }
 
-function SchemaRows({ node, depth = 0 }: { node: SchemaNode; depth?: number }) {
-  const [open, setOpen] = useState(false);
+function SchemaRows({
+  node,
+  depth = 0,
+  expansion,
+}: {
+  node: SchemaNode;
+  depth?: number;
+  expansion?: Map<string, boolean>;
+}) {
+  const [open, setOpen] = useState(() => expansion?.get(node.id) ?? false);
   return (
     <Fragment>
       <tr>
         <th scope="row" style={{ paddingLeft: `${8 + Math.min(depth, 8) * 12}px` }}>
           {node.children.length ? (
-            <button type="button" className="schema-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+            <button
+              type="button"
+              className="schema-toggle"
+              aria-expanded={open}
+              onClick={() => {
+                expansion?.set(node.id, !open);
+                setOpen(!open);
+              }}
+            >
               <span aria-hidden="true">{open ? "▾" : "▸"}</span> {node.name}
             </button>
           ) : (
@@ -66,11 +82,14 @@ function SchemaRows({ node, depth = 0 }: { node: SchemaNode; depth?: number }) {
           )}
         </td>
       </tr>
-      {open && node.children.map((child) => <SchemaRows key={child.id} node={child} depth={depth + 1} />)}
+      {open &&
+        node.children.map((child) => (
+          <SchemaRows key={child.id} node={child} depth={depth + 1} expansion={expansion} />
+        ))}
     </Fragment>
   );
 }
-export function ParameterSchema({ value }: { value: Json }) {
+export function ParameterSchema({ value, expansion }: { value: Json; expansion?: Map<string, boolean> }) {
   const root = useMemo(() => parseSchema(value), [value]);
   return (
     <div className="schema-scroll">
@@ -85,9 +104,9 @@ export function ParameterSchema({ value }: { value: Json }) {
           </tr>
         </thead>
         <tbody>
-          <SchemaRows node={{ ...root, children: [] }} />
+          <SchemaRows node={{ ...root, children: [] }} expansion={expansion} />
           {root.children.map((node) => (
-            <SchemaRows key={node.id} node={node} />
+            <SchemaRows key={node.id} node={node} expansion={expansion} />
           ))}
         </tbody>
       </table>

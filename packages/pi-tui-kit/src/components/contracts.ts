@@ -10,6 +10,7 @@ const MENU_BINDINGS = [
   "tui.select.confirm",
   "tui.select.cancel",
   "tui.input.submit",
+  "app.message.copy",
   "tui.altScreen.search",
   "tui.altScreen.searchNext",
   "tui.altScreen.searchPrevious",
@@ -69,6 +70,9 @@ export interface MenuScreenComponentOptions<ScreenId extends string, ActionId ex
   onInputSubmit?(change: MenuInputSubmit): Promise<MenuChangeResponse<ScreenId>>;
   onTransition?(transition: MenuTransition<ScreenId>): void;
   onError?(error: unknown): void;
+  /** Internal async document-action ownership, supplied by the interaction runner. */
+  signal?: AbortSignal;
+  isCurrent?(): boolean;
   /** Internal standalone-interaction hint override. Declarative screens do not set this. */
   interactionHint?: string;
   /** Internal TUI-only query restoration for rejected searchable-choice actions. */

@@ -17,10 +17,12 @@ import { gitStateModule } from "./git/state.js";
 import { gitStatusModule } from "./git/status.js";
 import { gitWorktreeModule } from "./git/worktree.js";
 import { githubPrModule } from "./github-pr.js";
+import { jujutsuModules } from "./jujutsu.js";
 import { languageModules } from "./languages.js";
 import { modelModule } from "./model.js";
 import { packageModule } from "./package.js";
 import { providerModule } from "./provider.js";
+import { systemModules } from "./system.js";
 import { thinkingModule } from "./thinking.js";
 import { timeModule } from "./time.js";
 import { tokensModule } from "./tokens.js";
@@ -40,12 +42,14 @@ const MODULE_IMPLEMENTATIONS = [
   gitStateModule,
   gitMetricsModule,
   gitStatusModule,
+  ...jujutsuModules,
   packageModule,
   ...languageModules,
   ...developmentModules,
   ...deploymentModules,
   ...cloudModules,
   ...executionModules,
+  ...systemModules,
   activityModule,
   contextModule,
   tokensModule,
@@ -64,6 +68,7 @@ const MODULE_DESCRIPTIONS = {
   activity: "Current Pi activity, extension UI wait, or most recently completed tool.",
   aws: "Active AWS profile and region.",
   azure: "Active Azure subscription and optional username.",
+  battery: "Local battery charge and charging state on supported platforms.",
   brand: "pi-starship brand mark.",
   bun: "Bun version detected in the current workspace.",
   cache: "Prompt-cache usage and latest cache hit rate.",
@@ -88,7 +93,12 @@ const MODULE_DESCRIPTIONS = {
   golang: "Go version detected in the current workspace.",
   guix_shell: "Current Guix shell state.",
   hostname: "Current host name, normally shown for remote sessions.",
+  jj_bookmark: "Closest ancestor bookmark in the current Jujutsu repository.",
+  jj_change: "Current Jujutsu change and commit identity.",
+  jj_metrics: "Added and deleted lines in the current Jujutsu change.",
+  jj_status: "Current Jujutsu change status.",
   kubernetes: "Active Kubernetes context, namespace, cluster, and user.",
+  memory_usage: "Current system memory and available swap usage.",
   mise: "Current mise configuration health.",
   model: "Current Pi model.",
   nix_shell: "Current Nix shell state, name, and nesting level.",

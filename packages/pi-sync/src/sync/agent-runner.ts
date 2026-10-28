@@ -34,9 +34,9 @@ export function resolverResources(): ResourceLoader {
 export async function runAgentResolver(
   ctx: ExtensionContext,
   evidence: AgentEvidence,
-  validate: () => Promise<void>,
+  validate: (signal: AbortSignal) => Promise<void>,
   signal?: AbortSignal,
-  beforeRequest?: () => Promise<void>,
+  beforeRequest?: (signal: AbortSignal) => Promise<void>,
 ): Promise<string> {
   const model = ctx.model;
   if (!model) throw new ContinuousError("model", "Agent mode paused: select an available model first.");
@@ -105,12 +105,13 @@ export async function runAgentResolver(
     child.agent.streamFunction = async (_model, context, options) => {
       ownedSignal.throwIfAborted();
       if (++calls > 1) throw new Error("Agent mode paused: one provider request per candidate is permitted.");
-      await validate();
+      await validate(ownedSignal);
       ownedSignal.throwIfAborted();
       if (beforeRequest) {
         try {
-          await beforeRequest();
-          await validate();
+          await beforeRequest(ownedSignal);
+          ownedSignal.throwIfAborted();
+          await validate(ownedSignal);
           ownedSignal.throwIfAborted();
         } catch (error) {
           transportFailure = error;
@@ -137,7 +138,8 @@ export async function runAgentResolver(
       ownedSignal.throwIfAborted();
       await child.prompt(JSON.stringify({ units: evidence.units }));
       ownedSignal.throwIfAborted();
-      await validate();
+      await validate(ownedSignal);
+      ownedSignal.throwIfAborted();
       const last = child.messages.at(-1);
       if (
         last?.role !== "assistant" ||

@@ -129,16 +129,19 @@ export async function evaluateHistoryUnits(
     const request = evaluationRequest(batch);
     const result = await client.systemOne(request, { signal });
     signal.throwIfAborted();
+    // The SDK uses null for unreported usage; totals include only reported tokens.
+    const batchInputTokens = result.usage.input_tokens ?? 0;
+    const batchOutputTokens = result.usage.output_tokens ?? 0;
     if (
-      !Number.isSafeInteger(result.usage.input_tokens) ||
-      result.usage.input_tokens < 0 ||
-      !Number.isSafeInteger(result.usage.output_tokens) ||
-      result.usage.output_tokens < 0
+      !Number.isSafeInteger(batchInputTokens) ||
+      batchInputTokens < 0 ||
+      !Number.isSafeInteger(batchOutputTokens) ||
+      batchOutputTokens < 0
     ) {
       throw new Error("TypeSafe returned invalid usage counts");
     }
-    inputTokens += result.usage.input_tokens;
-    outputTokens += result.usage.output_tokens;
+    inputTokens += batchInputTokens;
+    outputTokens += batchOutputTokens;
     for (const [index, unit] of batch.entries()) {
       const name = `decision_${String(index).padStart(3, "0")}`;
       const answer = result.answers[name];

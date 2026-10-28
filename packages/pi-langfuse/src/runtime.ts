@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { LangfuseSpanProcessor } from "@langfuse/otel";
+import { isLangfuseSpan, LangfuseSpanProcessor } from "@langfuse/otel";
 import {
   type LangfuseObservation,
   type LangfuseObservationAttributes,
@@ -77,8 +77,13 @@ class ProductionObservation implements Observation {
       attributes,
       this.secrets,
     );
-    if (input !== undefined || output !== undefined) {
-      this.native.setTraceIO({ input, output });
+    // Preserve setTraceIO's trace-only scope; Langfuse 6's update() changes observation IO instead.
+    for (const [key, value] of [
+      [LangfuseOtelSpanAttributes.TRACE_INPUT, input],
+      [LangfuseOtelSpanAttributes.TRACE_OUTPUT, output],
+    ] as const) {
+      const serialized = serializeTraceIO(value);
+      if (serialized !== undefined) this.native.otelSpan.setAttribute(key, serialized);
     }
     if (name !== undefined) {
       this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_NAME, name);
@@ -224,7 +229,8 @@ const defaultFactories: RuntimeFactories = {
       flushInterval: 5,
       timeout: 5,
       mask: ({ data }) => maskSecrets(data, secrets),
-      shouldExportSpan: ({ otelSpan }) => typeof otelSpan.attributes["langfuse.observation.type"] === "string",
+      // Langfuse 6 also filters during onStart, before observation attributes exist.
+      shouldExportSpan: ({ otelSpan }) => isLangfuseSpan(otelSpan),
     });
   },
   createProvider: (processor) => new NodeTracerProvider({ spanProcessors: [processor] }),
@@ -292,8 +298,18 @@ function normalizeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+// Match Langfuse 5's createTraceAttributes serializer, including omitted and failed values.
+function serializeTraceIO(value: unknown): string | undefined {
+  try {
+    if (typeof value === "string") return value;
+    return value != null ? JSON.stringify(value) : undefined;
+  } catch {
+    return "<failed to serialize>";
+  }
+}
+
 function serializeMetadataValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  return JSON.stringify(value);
 }
 
 function maskObservationAttributes(

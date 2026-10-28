@@ -2,12 +2,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripVTControlCharacters } from "node:util";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { reloadConfiguration, settingsDocumentScreen } from "../src/command-configuration.js";
+import { configurationMenuScreen, reloadConfiguration } from "../src/command-configuration.js";
 import { registerStarshipCommand } from "../src/commands.js";
 import { type LoadedStarshipConfig, loadStarshipConfig } from "../src/config.js";
 
@@ -16,168 +14,38 @@ const currentOwner = {
   isCurrent: () => true,
 };
 
-test("Configuration exposes six focused actions under seven top-level goals", async () => {
+test("Configuration keeps exactly four operations and exposes state without read-only subpages", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-configuration-menu-"));
-  const path = join(root, "pi-starship.toml");
-  const raw = "# retained comment\nformat = '$model'\nfuture = true\n";
-  writeFileSync(path, raw);
+  const path = join(root, "missing", "pi-starship.toml");
+  const loaded = loadStarshipConfig(path);
+  const screen = configurationMenuScreen(loaded, path);
+  assert.deepEqual(
+    screen.items.map((item) => item.label),
+    ["Reload from disk…", "Share settings as Gist…", "Import settings from Gist…", "History"],
+  );
+  assert.match(screen.lines.join("\\n"), /State: Pi native footer.*Source: No settings file.*Health: Healthy/su);
+  assert.ok(screen.lines.includes(`Path: ${path}`));
+  assert.equal(existsSync(join(root, "missing")), false);
+  const mock = createMockPi();
+  registerStarshipCommand(mock.pi, { getLoaded: () => loaded, apply() {}, settingsPath: path });
+  const tui = createTuiHarness({ width: 110, rows: 28 });
   try {
-    const mock = createMockPi();
-    const loaded = loadStarshipConfig(path);
-    let inspectionCalls = 0;
-    registerStarshipCommand(mock.pi, {
-      getLoaded: () => loaded,
-      getInspection() {
-        inspectionCalls += 1;
-        return undefined;
-      },
-      apply() {},
-      settingsPath: path,
-    });
-    const tui = createTuiHarness({ width: 64, rows: 18 });
     const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
     const running = mock.commands.get("starship")?.handler("", context.ctx);
     await tui.waitForOpen();
-    const main = tui.render().join("\n");
-    assert.equal(
-      ["Customize footer", "Presets", "Explain footer", "Modules", "Configuration", "Help", "Restore built-in…"].filter(
-        (label) => main.includes(label),
-      ).length,
-      7,
-    );
-
     await openConfiguration(tui);
-    const configuration = tui.render().join("\n");
-    assert.match(configuration, /Overview/u);
-    assert.match(configuration, /Effective configuration/u);
-    assert.match(configuration, /Settings document/u);
-    assert.match(configuration, /Reload from disk…/u);
-    assert.match(configuration, /Share settings as Gist…/u);
-    assert.match(configuration, /Import settings from Gist…/u);
-
-    tui.press("tui.select.down");
-    tui.press("tui.select.confirm");
-    await tui.waitForOpen();
-    const effective = tui.render().join("\n");
-    assert.match(effective, /Normalized public TOML/u);
-    assert.match(effective, /\[brand\]/u);
-    assert.doesNotMatch(effective, /future|retained comment|formatAst/u);
+    const frame = tui.render().join("\\n");
+    assert.match(frame, /Source: No settings file/u);
+    assert.match(frame, /→ Reload from disk/u);
+    assert.doesNotMatch(frame, /Overview|Effective configuration|Settings document/u);
     tui.press("tui.select.cancel");
     await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /→ Effective configuration/u);
-
-    tui.press("tui.select.down");
-    tui.press("tui.select.confirm");
-    await tui.waitForOpen();
-    const document = tui.render().join("\n");
-    assert.match(document, /retained comment/u);
-    assert.match(document, /future = true/u);
-    assert.equal(readFileSync(path, "utf8"), raw);
-    assert.equal(inspectionCalls, 0);
+    assert.match(tui.render().join("\\n"), /→ Configuration/u);
     tui.press("ctrl+c");
     await running;
+    assert.equal(existsSync(join(root, "missing")), false);
   } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("Settings document preserves raw payload while its review renders safely and within width", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-starship-document-safe-"));
-  const path = join(root, "pi-starship.toml");
-  try {
-    const base = loadStarshipConfig(path);
-    const raw = `# before\u001b[31mred\u001b[0m\u202eevil\n# tab\tcolumn and 中文 ${"x".repeat(80)}\nformat = '$model'\n`;
-    const loaded: LoadedStarshipConfig = {
-      ...base,
-      source: "user",
-      rawDocument: raw,
-    };
-    const screen = settingsDocumentScreen(loaded, `${path}\u001b]8;;bad\u0007label`);
-    assert.equal(screen.kind, "review");
-    if (screen.kind === "review") assert.equal(screen.content, raw);
-
-    const mock = createMockPi();
-    registerStarshipCommand(mock.pi, {
-      getLoaded: () => loaded,
-      apply() {},
-      settingsPath: path,
-    });
-    const tui = createTuiHarness({ width: 24, rows: 12 });
-    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
-    const running = mock.commands.get("starship")?.handler("", context.ctx);
-    await tui.waitForOpen();
-    await openConfiguration(tui);
-    tui.press("tui.select.down");
-    tui.press("tui.select.down");
-    tui.press("tui.select.confirm");
-    await tui.waitForOpen();
-    for (const dimensions of [
-      { width: 24, rows: 12 },
-      { width: 18, rows: 9 },
-      { width: 40, rows: 16 },
-    ]) {
-      const frame = tui.resize(dimensions);
-      assert.ok(frame.every((line) => visibleWidth(line) <= dimensions.width));
-      const text = stripVTControlCharacters(frame.join("\n"));
-      assert.match(text, /beforeredevil/u);
-      assert.equal(text.includes("\u202e"), false);
-      assert.doesNotMatch(text, /\]8;;|\[31m/u);
-    }
-    assert.equal(loaded.rawDocument, raw);
-    assert.equal(existsSync(path), false);
-    tui.press("ctrl+c");
-    await running;
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("healthy missing Settings document creates no file or parent directory", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-starship-document-missing-"));
-  const parent = join(root, "missing");
-  const path = join(parent, "pi-starship.toml");
-  try {
-    const loaded = loadStarshipConfig(path);
-    const mock = createMockPi();
-    registerStarshipCommand(mock.pi, {
-      getLoaded: () => loaded,
-      apply() {},
-      settingsPath: path,
-    });
-    const tui = createTuiHarness({ width: 44, rows: 14 });
-    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
-    const running = mock.commands.get("starship")?.handler("", context.ctx);
-    await tui.waitForOpen();
-    await openConfiguration(tui);
-    tui.press("tui.select.down");
-    tui.press("tui.select.down");
-    tui.press("tui.select.confirm");
-    await tui.waitForOpen();
-    const frame = tui.render().join("\n");
-    assert.match(frame, /No settings document exists/u);
-    assert.match(frame, /Built-in defaults are active/u);
-    assert.equal(existsSync(parent), false);
-    let applied = 0;
-    const reloadContext = createMockContext({ mode: "tui", hasUI: true });
-    assert.equal(
-      await reloadConfiguration(
-        reloadContext.ctx,
-        {
-          getLoaded: () => loaded,
-          apply() {
-            applied += 1;
-          },
-          settingsPath: path,
-        },
-        currentOwner,
-      ),
-      "stay",
-    );
-    assert.equal(applied, 0);
-    assert.equal(existsSync(parent), false);
-    tui.press("ctrl+c");
-    await running;
-  } finally {
+    tui.dispose();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -208,7 +76,6 @@ test("Configuration reload action returns to the updated section and restores fo
     const running = mock.commands.get("starship")?.handler("", context.ctx);
     await tui.waitForOpen();
     await openConfiguration(tui);
-    for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     assert.match(tui.render().join("\n"), /Reload preview/u);
@@ -270,7 +137,7 @@ test("Reload applies a validated external edit without changing disk bytes", asy
   }
 });
 
-test("Reload previews file removal and applies built-in defaults without creating a file", async () => {
+test("Reload previews file removal and applies Pi native footer without creating a file", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-reload-missing-"));
   const path = join(root, "pi-starship.toml");
   writeFileSync(path, "format = '$provider'\n");
@@ -297,7 +164,7 @@ test("Reload previews file removal and applies built-in defaults without creatin
       currentOwner,
     );
     await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /Built-in defaults/u);
+    assert.match(tui.render().join("\n"), /Pi native footer/u);
     tui.press("tui.select.confirm");
     assert.equal(await running, "applied");
     assert.equal(loaded.source, "built-in");
@@ -336,9 +203,10 @@ test("Reload clears a recovered read-error fallback when the document is now mis
       currentOwner,
     );
     await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /Built-in defaults/u);
+    assert.match(tui.render().join("\n"), /Pi native footer/u);
     tui.press("tui.select.confirm");
     assert.equal(await running, "applied");
+    assert.equal(loaded.rawDocument, undefined);
     assert.deepEqual(loaded.diagnostics, []);
     assert.equal(existsSync(path), false);
   } finally {
@@ -484,7 +352,7 @@ test("Reload rejects disk and active-state changes after preview", async () => {
     tui.press("tui.select.confirm");
     assert.equal(await running, "stay");
     assert.equal(applied, 0);
-    assert.match(staleDisk.notifications.at(-1)?.message ?? "", /changed after preview/u);
+    assert.match(staleDisk.notifications.at(-1)?.message ?? "", /changed concurrently.*newer file was preserved/u);
 
     writeFileSync(path, "format = '$provider'\n");
     let revision = 1;
@@ -585,7 +453,7 @@ test("Reload restores runtime state after apply failure and reports rollback fai
 });
 
 async function openConfiguration(tui: ReturnType<typeof createTuiHarness>) {
-  for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
+  for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
   tui.press("tui.select.confirm");
   await tui.waitForOpen();
 }

@@ -77,7 +77,7 @@ async function recordedWork() {
           name: "review",
           description: "Review tool",
           parameters: Type.Object({}),
-          execute: async () => ({ content: [fauxText("tool result")] }),
+          execute: async () => ({ output: [fauxText("tool result")] }),
         }),
       ],
     }),
@@ -199,7 +199,7 @@ it("publishes same-run steered inputs from an authoritative public snapshot", as
           execute: async (_args, _api, ctx) => {
             toolEntered.resolve();
             await awaitWithContext(toolRelease.promise, ctx);
-            return { content: [fauxText("result")] };
+            return { output: [fauxText("result")] };
           },
         }),
       ],

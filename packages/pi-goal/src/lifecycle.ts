@@ -395,7 +395,8 @@ export function registerGoalLifecycle(
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (!sessionActive) return;
+    // Custom runs use message_start to establish non-goal ownership.
+    if (!sessionActive || event.messageType === "custom") return;
     runtime.clearAgentRun();
     // Pi-owned retries emit agent_start directly. Reaching a normal prompt
     // boundary means cleanup no longer owns the next run, so the hard-cap guard

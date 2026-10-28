@@ -50,6 +50,34 @@ test("aborted Jiti reload is drained before another loader or fixture cleanup", 
   assert.deepEqual(events, ["first", "invalidate", "second", "inspect second", "invalidate", "cleanup"]);
 });
 
+test("drains asynchronous lazy command inspection before invalidation and cleanup", async () => {
+  const queue = createLoaderQueue();
+  const inspecting = deferred();
+  const inspected = deferred();
+  const events: string[] = [];
+  const runtime = { invalidate: () => events.push("invalidate") };
+  const work = queue.run(
+    () => ({
+      reload: async () => {},
+      getExtensions: () => ({ runtime }),
+    }),
+    new AbortController().signal,
+    async () => {
+      events.push("inspect");
+      inspecting.resolve();
+      await inspected.promise;
+      events.push("inspected");
+    },
+  );
+  await inspecting.promise;
+  const draining = queue.drain().then(() => events.push("drained"));
+  await Promise.resolve();
+  assert.deepEqual(events, ["inspect"]);
+  inspected.resolve();
+  await Promise.all([work, draining]);
+  assert.deepEqual(events, ["inspect", "inspected", "invalidate", "drained"]);
+});
+
 test("failed partial Jiti reload invalidates both runtimes and releases the queue", async () => {
   const queue = createLoaderQueue();
   const events: string[] = [];

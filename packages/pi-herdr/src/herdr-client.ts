@@ -39,6 +39,9 @@ class NdjsonFrames {
         throw new Error("Herdr returned invalid JSON");
       }
     }
+    if (this.buffer.length > MAX_HERDR_FRAME_BYTES) {
+      throw new Error("Herdr response frame exceeded the size limit");
+    }
     return frames;
   }
 }
@@ -51,51 +54,33 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new DOMException("Herdr request aborted", "AbortError");
 }
 
-function responseError(frame: Record<string, unknown>): Error | undefined {
-  if (!isRecord(frame.error)) return undefined;
-  const message = typeof frame.error.message === "string" ? frame.error.message : "request failed";
-  return new Error(`Herdr ${message}`);
+class HerdrApiError extends Error {
+  readonly code: string | undefined;
+
+  constructor(error: Record<string, unknown>) {
+    super(`Herdr ${typeof error.message === "string" ? error.message : "request failed"}`);
+    this.code = typeof error.code === "string" ? error.code : undefined;
+  }
 }
 
-function sendRequestAttempt(
-  socketEndpoint: string,
-  request: HerdrRequest,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false);
-
-  return new Promise((resolve) => {
-    let finished = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const socket = net.createConnection(socketEndpoint);
-
-    const finish = (delivered: boolean) => {
-      if (finished) return;
-      finished = true;
-      if (timeout) clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
-      socket.destroy();
-      resolve(delivered);
-    };
-    const abort = () => finish(false);
-
-    signal.addEventListener("abort", abort, { once: true });
-    socket.on("error", () => finish(false));
-    socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-    socket.on("data", () => finish(true));
-    socket.on("end", () => finish(false));
-    socket.on("close", () => finish(false));
-    timeout = setTimeout(() => finish(false), timeoutMs);
-    timeout.unref?.();
-  });
+function responseError(frame: Record<string, unknown>): Error | undefined {
+  if (!("error" in frame)) return undefined;
+  if (!isRecord(frame.error)) return new Error("Herdr returned an invalid error response");
+  return new HerdrApiError(frame.error);
 }
 
 export function createBestEffortSender(socketEndpoint: string) {
   return async (request: HerdrRequest, signal: AbortSignal): Promise<void> => {
-    if (await sendRequestAttempt(socketEndpoint, request, 500, signal)) return;
-    if (signal.aborted) return;
-    await sendRequestAttempt(socketEndpoint, request, 1500, signal);
+    for (const timeoutMs of [500, 1500]) {
+      if (signal.aborted) return;
+      try {
+        const result = await requestHerdr(socketEndpoint, request, signal, timeoutMs);
+        if (isRecord(result) && result.type === "ok") return;
+      } catch (error) {
+        // API rejection is not a transport outage. Do not repeat a rejected report.
+        if (signal.aborted || error instanceof HerdrApiError) return;
+      }
+    }
   };
 }
 
@@ -108,6 +93,7 @@ export function requestHerdr(
   if (signal.aborted) return Promise.reject(abortReason(signal));
 
   return new Promise((resolve, reject) => {
+    const payload = `${JSON.stringify(request)}\n`;
     const socket = net.createConnection(socketEndpoint);
     const parser = new NdjsonFrames();
     let finished = false;
@@ -129,11 +115,14 @@ export function requestHerdr(
     const abort = () => finish(abortReason(signal));
 
     signal.addEventListener("abort", abort, { once: true });
-    socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+    socket.on("connect", () => {
+      if (!finished) socket.write(payload);
+    });
     socket.on("error", (error) => finish(error));
     socket.on("end", () => finish(new Error("Herdr closed the request before responding")));
     socket.on("close", () => finish(new Error("Herdr request socket closed")));
     socket.on("data", (chunk: Buffer) => {
+      if (finished) return;
       try {
         for (const value of parser.push(chunk)) {
           if (!isRecord(value)) continue;
@@ -171,6 +160,7 @@ export async function openHerdrSubscription(
 ): Promise<HerdrSubscription> {
   if (signal.aborted) throw abortReason(signal);
 
+  const payload = `${JSON.stringify(request)}\n`;
   const socket = net.createConnection(socketEndpoint);
   const parser = new NdjsonFrames();
   const pendingEvents: unknown[] = [];
@@ -212,6 +202,7 @@ export async function openHerdrSubscription(
     else resolveClosed();
   };
   const deliver = (frame: unknown) => {
+    if (finished) return;
     try {
       onEvent(frame);
     } catch (error) {
@@ -224,27 +215,27 @@ export async function openHerdrSubscription(
   };
 
   signal.addEventListener("abort", abort, { once: true });
-  socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+  socket.on("connect", () => {
+    if (!finished) socket.write(payload);
+  });
   socket.on("error", (error) => finish(error));
   socket.on("end", () => finish(new Error("Herdr subscription closed")));
   socket.on("close", () => finish(new Error("Herdr subscription socket closed")));
   socket.on("data", (chunk: Buffer) => {
+    if (finished) return;
     try {
       for (const value of parser.push(chunk)) {
-        if (!ready) {
-          if (isRecord(value)) {
-            const uncorrelatedError = responseError(value);
-            if (uncorrelatedError && (value.id === "" || value.id === undefined)) {
-              finish(uncorrelatedError);
-              return;
-            }
+        if (finished) return;
+        if (isRecord(value)) {
+          const error = responseError(value);
+          if (error && (value.id === request.id || value.id === "" || value.id === undefined)) {
+            finish(error);
+            return;
           }
+          if ("id" in value && value.id !== request.id) continue;
+        }
+        if (!ready) {
           if (isRecord(value) && value.id === request.id) {
-            const error = responseError(value);
-            if (error) {
-              finish(error);
-              return;
-            }
             if (!isRecord(value.result) || value.result.type !== "subscription_started") {
               finish(new Error("Herdr returned an invalid subscription acknowledgement"));
               return;

@@ -5,10 +5,47 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
 import { LspClient } from "../src/lsp-client.js";
-import { runDiagnostics } from "../src/runner.js";
+import { runDiagnostics, runFix } from "../src/runner.js";
 import type { LspServerAdapter } from "../src/types.js";
 
 const fixture = path.resolve("packages/pi-lsp/test/fixtures/diagnostics-server.mjs");
+
+for (const [extension, variant] of [
+  ["cmd", "extensionless"],
+  ["cmd", "explicit"],
+  ["bat", "extensionless"],
+  ["bat", "explicit"],
+  ["cmd", "node-modules"],
+] as const) {
+  test.skipIf(process.platform !== "win32")(
+    `Windows ${variant} .${extension} shims handle spaced paths and arguments`,
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-shim-"));
+      const parent = path.join(root, "bin (test) & spaces");
+      const bin = variant === "node-modules" ? path.join(parent, "node_modules", ".bin") : parent;
+      mkdirSync(bin, { recursive: true });
+      const shim = path.join(bin, `fixture-server.${extension}`);
+      writeFileSync(shim, `@echo off\r\n"${process.execPath}" "${fixture}" require-argv 0 %*\r\n`);
+      writeFileSync(path.join(bin, "fixture-server"), "#!/bin/sh\nexit 1\n");
+      const args = ["--stdio", "argument with spaces", "a&b", 'quote"inside', "percent%PATH%", "trailing\\"];
+      const adapter = fixtureAdapter("require-argv", 30);
+      adapter.defaultCommand = { command: variant === "explicit" ? shim : "fixture-server", args };
+      adapter.env = {
+        PATH: `${bin};${process.env.PATH ?? ""}`,
+        PI_LSP_TEST_EXPECTED_ARGS: JSON.stringify(args),
+      };
+      const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+
+      try {
+        await client.start();
+        await client.initialize(root);
+      } finally {
+        await client.shutdown();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 test("server environment overrides are forwarded to the LSP process", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-server-environment-"));
@@ -291,6 +328,30 @@ test("code-action resolution follows the advertised server capability", async ()
         await client.shutdown();
       }
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("literal code-action support allows deferred fixes to be resolved", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-literal-actions-"));
+  const file = path.join(root, "main.go");
+  const original = "package main\n";
+  writeFileSync(file, original);
+  const adapter = fixtureAdapter("resolve-literal", 30);
+  const ctx = { cwd: root, ui: { setStatus() {} } };
+
+  try {
+    const preview = await runFix(adapter, { root, path: file, write: false }, 1_000, undefined, ctx, "test");
+    const previewDetails = preview.details as { changed: boolean; text: string };
+    assert.equal(previewDetails.changed, true);
+    assert.equal(previewDetails.text, `// fixed\n${original}`);
+    assert.equal(readFileSync(file, "utf8"), original);
+
+    const written = await runFix(adapter, { root, path: file, write: true }, 1_000, undefined, ctx, "test");
+    const writtenDetails = written.details as { changed: boolean };
+    assert.equal(writtenDetails.changed, true);
+    assert.equal(readFileSync(file, "utf8"), `// fixed\n${original}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

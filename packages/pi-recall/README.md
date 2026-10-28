@@ -57,6 +57,8 @@ Use these controls as needed in the saved-message picker:
 | `Enter` | Open the selected message for preview or quoting. |
 | `Ctrl+D` | Review and confirm deletion. |
 
+The non-destructive full-message preview supports literal document search in TUI mode. Space opens search; the configured search-close binding closes search before Back returns to the picker. The picker query and selection remain intact. RPC retains paginated review without interactive search; deletion policy is unchanged.
+
 After quoting, add your instruction and submit the draft normally.
 
 A quoted draft uses this form:

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { COMPLETION_MESSAGE_TYPE } from "./completion-renderer.js";
 import { type BrokerSendAcknowledgement, type MessageBroker, sanitizeTerminalText } from "./message-broker.js";
+import { COMPLETION_MESSAGE_TYPE } from "./message-renderers.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
 import { runChild as defaultRunChild } from "./process.js";
 import type { ExtensionAttachment } from "./resource-attachments.js";
@@ -28,6 +28,10 @@ interface InternalJob extends JobSummary {
   terminal: Promise<void>;
   resolveTerminal: () => void;
   task?: Promise<void>;
+  taskText: string;
+  modelOverrides: SubagentModelOverrides;
+  thinkingLevel: SubagentThinkingLevel;
+  defaultThinkingLevel: SubagentThinkingLevel;
   stopRequest?: StopRequest;
   control?: ChildControl;
   controlReady: Promise<ChildControl>;
@@ -37,7 +41,6 @@ interface InternalJob extends JobSummary {
   result?: string;
   error?: string;
   limitations: string[];
-  deliverySent: boolean;
   generation: number;
 }
 
@@ -46,9 +49,18 @@ export interface RuntimeDependencies {
   now?: () => number;
 }
 
-export interface ActiveJobDisplay {
+/** Resolved IDs that differ from the effective parent pair captured at spawn. */
+export interface SubagentModelOverrides {
+  provider?: string;
+  model?: string;
+}
+
+export interface ActiveJobDisplay extends SubagentModelOverrides {
   jobId: string;
+  task: string;
   state: Extract<SubagentJobState, "queued" | "running">;
+  thinkingLevel: SubagentThinkingLevel;
+  defaultThinkingLevel: SubagentThinkingLevel;
   elapsedMs: number;
   timeout?: number;
   tools: string[];
@@ -60,8 +72,11 @@ export interface StartJobInput {
   skills: string[];
   extensions: ExtensionAttachment[];
   toolSources: Record<string, string[]>;
+  provider: string;
   model: string;
+  modelOverrides?: SubagentModelOverrides;
   thinkingLevel: SubagentThinkingLevel;
+  defaultThinkingLevel: SubagentThinkingLevel;
   cwd: string;
   timeout?: number;
   projectTrusted: boolean;
@@ -73,7 +88,6 @@ export class SubagentRuntime {
   private readonly now: () => number;
   private counter = 0;
   private generation = 0;
-  private deliveryEnabled = false;
   private sessionActive = false;
   private omittedJobs = 0;
   private readonly jobListeners = new Set<() => void>();
@@ -92,7 +106,6 @@ export class SubagentRuntime {
     this.generation++;
     this.jobs.clear();
     this.omittedJobs = 0;
-    this.deliveryEnabled = true;
     this.sessionActive = true;
     this.notifyJobsChanged();
   }
@@ -113,7 +126,11 @@ export class SubagentRuntime {
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((job) => ({
         jobId: job.jobId,
+        task: job.taskText,
         state: job.state,
+        ...job.modelOverrides,
+        thinkingLevel: job.thinkingLevel,
+        defaultThinkingLevel: job.defaultThinkingLevel,
         elapsedMs: Math.max(0, now - (job.startedAt ?? job.createdAt)),
         ...(job.timeout !== undefined ? { timeout: job.timeout } : {}),
         tools: [...job.tools],
@@ -130,6 +147,7 @@ export class SubagentRuntime {
     if (active >= MAX_ACTIVE_JOBS) {
       throw new Error(`Active subagent job limit reached (${MAX_ACTIVE_JOBS}).`);
     }
+    const { provider, model } = input;
     const jobId = `job_${this.now().toString(36)}_${(++this.counter).toString(36)}`;
     const communication = this.broker.issueCredentials({
       jobId,
@@ -155,6 +173,10 @@ export class SubagentRuntime {
       ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
       controller,
       tools: effectiveTools,
+      taskText: input.task,
+      modelOverrides: { ...input.modelOverrides },
+      thinkingLevel: input.thinkingLevel,
+      defaultThinkingLevel: input.defaultThinkingLevel,
       terminal,
       resolveTerminal,
       controlReady,
@@ -162,7 +184,6 @@ export class SubagentRuntime {
       rejectControl,
       sendQueue: Promise.resolve(),
       limitations: [],
-      deliverySent: false,
       generation: this.generation,
     };
     this.jobs.set(jobId, job);
@@ -189,7 +210,8 @@ export class SubagentRuntime {
           toolSources: Object.fromEntries(
             Object.entries(input.toolSources).map(([tool, sources]) => [tool, [...sources]]),
           ),
-          model: input.model,
+          provider,
+          model,
           thinkingLevel: input.thinkingLevel,
           cwd: input.cwd,
           timeout: input.timeout,
@@ -347,7 +369,6 @@ export class SubagentRuntime {
 
   async shutdown(): Promise<void> {
     if (!this.sessionActive) return;
-    this.deliveryEnabled = false;
     this.sessionActive = false;
     const active = [...this.jobs.values()].filter((job) => !isTerminal(job.state));
     await Promise.allSettled(
@@ -406,8 +427,7 @@ export class SubagentRuntime {
   }
 
   private deliver(job: InternalJob): void {
-    if (!this.deliveryEnabled || job.deliverySent || job.generation !== this.generation) return;
-    job.deliverySent = true;
+    if (!this.sessionActive || job.generation !== this.generation) return;
     const payload = this.waitResult(job, false);
     try {
       this.pi.sendMessage(

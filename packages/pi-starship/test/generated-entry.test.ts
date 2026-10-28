@@ -32,7 +32,7 @@ test("declared generated entry preserves registration and lifecycle behavior", a
     const context = createMockContext({ mode: "tui" });
     await emit(mock.events, "session_start", {}, context.ctx);
     assert.equal(existsSync(agentDir), false);
-    assert.equal(typeof context.footer, "function");
+    assert.equal(context.footer, undefined);
 
     await mock.commands.get("starship")?.handler("help", context.ctx);
     assert.match(context.notifications.at(-1)?.message ?? "", /\/starship settings/u);

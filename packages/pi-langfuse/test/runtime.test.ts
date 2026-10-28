@@ -284,14 +284,20 @@ test("isolated runtime preserves the global provider and exports native observat
     generation?.attributes["langfuse.observation.cost_details"],
     JSON.stringify({ input: 0.01, output: 0.02, total: 0.03 }),
   );
-  assert.equal(agent?.attributes["langfuse.observation.metadata.pi.cwd"], "/workspace");
-  assert.equal(agent?.attributes["langfuse.trace.metadata.pi.cwd"], "/workspace");
+  assert.equal(agent?.attributes["langfuse.observation.metadata.pi.cwd"], JSON.stringify("/workspace"));
+  assert.equal(agent?.attributes["langfuse.trace.metadata.pi.cwd"], JSON.stringify("/workspace"));
   assert.equal(agent?.attributes["langfuse.observation.metadata.nested"], JSON.stringify({ value: "preserved" }));
   assert.equal(agent?.attributes["langfuse.trace.metadata.nested"], JSON.stringify({ value: "preserved" }));
   assert.equal(agent?.attributes["langfuse.observation.metadata.items"], JSON.stringify(["a", "b"]));
   assert.equal(agent?.attributes["langfuse.trace.metadata.items"], JSON.stringify(["a", "b"]));
-  assert.equal(agent?.attributes["langfuse.observation.metadata.custom.[base64 data URI omitted]"], "redacted-key");
-  assert.equal(agent?.attributes["langfuse.trace.metadata.custom.[base64 data URI omitted]"], "redacted-key");
+  assert.equal(
+    agent?.attributes["langfuse.observation.metadata.custom.[base64 data URI omitted]"],
+    JSON.stringify("redacted-key"),
+  );
+  assert.equal(
+    agent?.attributes["langfuse.trace.metadata.custom.[base64 data URI omitted]"],
+    JSON.stringify("redacted-key"),
+  );
   assert.equal(
     agent?.attributes["langfuse.observation.metadata.credential.[LANGFUSE_KEY_REDACTED]"],
     JSON.stringify({ secret: "[LANGFUSE_KEY_REDACTED]" }),
@@ -306,13 +312,16 @@ test("isolated runtime preserves the global provider and exports native observat
       JSON.stringify(agent?.attributes ?? {}).includes(config.secretKey),
     false,
   );
-  assert.equal(agent?.attributes["langfuse.observation.metadata.pi.trace.outcome"], "success");
-  assert.equal(agent?.attributes["langfuse.trace.metadata.pi.trace.outcome"], "success");
-  assert.equal(attempt?.attributes["langfuse.observation.metadata.pi.attempt.reason"], "post_compaction");
-  assert.equal(attempt?.attributes["langfuse.observation.metadata.pi.attempt.outcome"], "success");
+  assert.equal(agent?.attributes["langfuse.observation.metadata.pi.trace.outcome"], JSON.stringify("success"));
+  assert.equal(agent?.attributes["langfuse.trace.metadata.pi.trace.outcome"], JSON.stringify("success"));
+  assert.equal(
+    attempt?.attributes["langfuse.observation.metadata.pi.attempt.reason"],
+    JSON.stringify("post_compaction"),
+  );
+  assert.equal(attempt?.attributes["langfuse.observation.metadata.pi.attempt.outcome"], JSON.stringify("success"));
   assert.equal(tool?.attributes["langfuse.observation.input"], JSON.stringify({ path: "executed-file" }));
-  assert.equal(tool?.attributes["langfuse.observation.metadata.pi.tool.call_id"], "call");
-  assert.equal(tool?.attributes["langfuse.observation.metadata.pi.tool.name"], "read");
+  assert.equal(tool?.attributes["langfuse.observation.metadata.pi.tool.call_id"], JSON.stringify("call"));
+  assert.equal(tool?.attributes["langfuse.observation.metadata.pi.tool.name"], JSON.stringify("read"));
   assert.equal(compaction?.attributes["langfuse.observation.metadata.pi.compaction.messages_to_summarize"], "2");
   assert.equal(compaction?.attributes["langfuse.observation.metadata.pi.compaction.from_extension"], "false");
 

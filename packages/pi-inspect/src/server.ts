@@ -17,12 +17,14 @@ export interface ServerOptions {
   branch(id: string, offset: number): unknown;
   detail(id: string, leaf: string): unknown;
   assets?: Map<string, { type: string; body: string | Buffer }>;
+  assetBase?: URL;
 }
 export function sendRevision(response: { write(frame: string): boolean; destroy(): void }, frame: string): void {
   // No extension-owned queue: close a backpressured client; reconnect fetches a fresh snapshot.
   if (!response.write(frame)) response.destroy();
 }
 export async function startServer(options: ServerOptions): Promise<ViewerServer> {
+  const assetBase = options.assetBase ?? new URL("../browser-dist/", import.meta.url);
   const assets =
     options.assets ??
     new Map([
@@ -30,21 +32,21 @@ export async function startServer(options: ServerOptions): Promise<ViewerServer>
         "/",
         {
           type: "text/html; charset=utf-8",
-          body: await readFile(new URL("../dist/index.html", import.meta.url), { signal: options.signal }),
+          body: await readFile(new URL("index.html", assetBase), { signal: options.signal }),
         },
       ],
       [
         "/app.js",
         {
           type: "text/javascript; charset=utf-8",
-          body: await readFile(new URL("../dist/app.js", import.meta.url), { signal: options.signal }),
+          body: await readFile(new URL("app.js", assetBase), { signal: options.signal }),
         },
       ],
       [
         "/app.css",
         {
           type: "text/css; charset=utf-8",
-          body: await readFile(new URL("../dist/app.css", import.meta.url), { signal: options.signal }),
+          body: await readFile(new URL("app.css", assetBase), { signal: options.signal }),
         },
       ],
     ]);

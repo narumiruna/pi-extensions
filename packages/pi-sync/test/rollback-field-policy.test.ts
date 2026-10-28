@@ -12,7 +12,7 @@ import { portableSnapshot } from "../src/sync/local-fields.js";
 import { push, rollback, syncBoth } from "../src/sync/sync-mutations.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
-import { mergeOptions as options } from "./merged-sync-fixture.js";
+import { mergeOptions as options } from "./merge-options.js";
 
 async function fixture(root: string, policy: string[] | undefined) {
   await fs.mkdir(root, { recursive: true });

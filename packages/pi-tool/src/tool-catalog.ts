@@ -113,6 +113,7 @@ export function createToolMenu(
       tools: () => ({
         kind: "browse",
         title: catalog.title,
+        enableDetailSearch: true,
         items: catalog.items.map((item) => ({
           id: item.id,
           label: item.label,

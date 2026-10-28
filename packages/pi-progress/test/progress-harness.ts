@@ -87,8 +87,8 @@ export function createHarness(options: ProgressWidgetDependencies = {}) {
       assert.ok(tool);
       return tool;
     },
-    async emit(event: string, ctx: ExtensionContext) {
-      for (const handler of handlers.get(event) ?? []) await handler({} as never, ctx);
+    async emit(event: string, ctx: ExtensionContext, payload: unknown = {}) {
+      for (const handler of handlers.get(event) ?? []) await handler(payload as never, ctx);
     },
     async context(messages: ContextEvent["messages"], ctx: ExtensionContext) {
       let current = messages;
@@ -104,7 +104,13 @@ export function createHarness(options: ProgressWidgetDependencies = {}) {
 }
 
 export function createContext(
-  options: { mode?: ExtensionContext["mode"]; hasUI?: boolean; branch?: SessionEntry[]; terminalRows?: number } = {},
+  options: {
+    mode?: ExtensionContext["mode"];
+    hasUI?: boolean;
+    branch?: SessionEntry[];
+    terminalRows?: number;
+    isIdle?: () => boolean;
+  } = {},
 ) {
   const widgets: Array<{
     key: string;
@@ -114,7 +120,16 @@ export function createContext(
   }> = [];
   const notifications: Array<{ message: string; type: string | undefined }> = [];
   const branch = options.branch ?? [];
-  const tui = { terminal: { rows: options.terminalRows ?? 36 } } as unknown as TUI;
+  let component: (Component & { dispose?(): void }) | undefined;
+  let renderRequests = 0;
+  const terminal = { rows: options.terminalRows ?? 36 };
+  let activeTheme = identityTheme().theme;
+  const tui = {
+    terminal,
+    requestRender: () => {
+      renderRequests++;
+    },
+  } as unknown as TUI;
   const sessionManager = {
     getBranch: () => branch,
   } as unknown as ExtensionContext["sessionManager"];
@@ -123,8 +138,11 @@ export function createContext(
     mode,
     hasUI: options.hasUI ?? (mode === "tui" || mode === "rpc"),
     sessionManager,
+    isIdle: options.isIdle ?? (() => true),
     ui: {
-      theme: identityTheme().theme,
+      get theme() {
+        return activeTheme;
+      },
       setWidget(
         key: string,
         content: WidgetFactory | string[] | undefined,
@@ -132,8 +150,16 @@ export function createContext(
       ) {
         // Match Pi RPC: clear and string-array calls are emitted; factories are ignored.
         if (mode === "rpc" && typeof content === "function") return;
+        component?.dispose?.();
+        component = undefined;
         if (Array.isArray(content)) {
           widgets.push({ key, content: undefined, lines: [...content], options: widgetOptions });
+        } else if (content) {
+          // Pi invokes a factory once at mount. Render that retained component,
+          // rather than calling the original factory again after every update.
+          const mounted = content(tui, ctx.ui.theme);
+          component = mounted;
+          widgets.push({ key, content: () => mounted, options: widgetOptions });
         } else {
           widgets.push({ key, content, options: widgetOptions });
         }
@@ -143,7 +169,26 @@ export function createContext(
       },
     },
   } as unknown as ExtensionContext;
-  return { branch, ctx, notifications, tui, widgets };
+  return {
+    branch,
+    ctx,
+    notifications,
+    tui,
+    widgets,
+    setRows(rows: number) {
+      terminal.rows = rows;
+    },
+    setTheme(theme: Theme) {
+      activeTheme = theme;
+    },
+    get component() {
+      return component;
+    },
+    get renderRequests() {
+      return renderRequests;
+    },
+    renderWidget: (width = 80) => component?.render(width) ?? widgets.at(-1)?.lines ?? [],
+  };
 }
 
 export function identityTheme() {

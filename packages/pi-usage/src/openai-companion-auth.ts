@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createUsageAuthGuard, type UsageAuthLifecycle } from "./auth-resolution-guard.js";
 import { fingerprintResolvedAuth } from "./core.js";
 import { fallbackOAuthCredentialCandidates, type OAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { openAIAuthAccessToken } from "./providers/openai-chatgpt.js";
@@ -13,7 +14,10 @@ export async function resolveOpenAICompanionAuth(
   salt: Uint8Array,
   credentialReader: (providerId: string) => unknown,
   candidateReader?: OAuthCredentialCandidateReader,
+  lifecycle: UsageAuthLifecycle = {},
 ): Promise<ResolvedUsageAuth> {
+  const guard = createUsageAuthGuard(lifecycle);
+  guard.check();
   const unavailable = () => ({
     ...native,
     fingerprint: fingerprintResolvedAuth(
@@ -21,12 +25,17 @@ export async function resolveOpenAICompanionAuth(
       salt,
     ),
   });
-  if (candidateReader?.waitUntilReady && !(await candidateReader.waitUntilReady(ctx, "openai-codex"))) {
+  if (
+    candidateReader?.waitUntilReady &&
+    !(await guard.wait(() => candidateReader.waitUntilReady?.(ctx, "openai-codex")))
+  ) {
     throw new Error("Companion Codex OAuth credential readiness failed closed.");
   }
   const adapter = adapterForProvider("openai-codex");
   if (!adapter) throw new Error("Companion Codex usage support is unavailable.");
-  const companion = await resolveUsageAuth(ctx, adapter, salt, credentialReader);
+  const companion = await guard.wait(() =>
+    resolveUsageAuth(ctx, adapter, salt, credentialReader, undefined, undefined, lifecycle),
+  );
   if (!companion) return unavailable();
   if (companion.source !== "OAuth")
     throw new Error("Companion usage requires /login openai-codex OAuth, not an API key.");
@@ -34,7 +43,8 @@ export async function resolveOpenAICompanionAuth(
   // against preserved fresh provider auth before using its normalized request headers.
   const access = openAIAuthAccessToken(companion.auth);
   if (ctx.model?.provider === "openai-codex") {
-    const selected = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+    const model = ctx.model;
+    const selected = await guard.wait(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
     if (
       !selected.ok ||
       (selected.baseUrl && new URL(selected.baseUrl).origin !== "https://chatgpt.com") ||
@@ -48,9 +58,11 @@ export async function resolveOpenAICompanionAuth(
   }
   const accountId = codexAccountId(access);
   if (!accountId) throw new Error("Companion Codex token did not contain a valid account ID.");
-  const offered = candidateReader
-    ? await candidateReader(ctx, "openai-codex")
-    : fallbackOAuthCredentialCandidates("openai-codex", credentialReader);
+  const offered = await guard.wait(() =>
+    candidateReader
+      ? candidateReader(ctx, "openai-codex")
+      : fallbackOAuthCredentialCandidates("openai-codex", credentialReader),
+  );
   if (!offered.ok) throw new Error("Companion Codex OAuth credential discovery failed closed.");
   const matches = new Set<string>();
   for (const candidate of offered.candidates) {

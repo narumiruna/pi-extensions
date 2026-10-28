@@ -16,6 +16,7 @@ import {
   registerFileQuoteExtension,
 } from "../src/file-context.js";
 import { FileQuoteExplorer } from "../src/file-context-explorer.js";
+import { createPendingWidget } from "./widget-support.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "pi-file-context-test-"));
@@ -871,7 +872,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
     secondTui.press("tui.select.confirm");
     await second;
 
-    assert.deepEqual(widgets.get("file-context"), [
+    assert.deepEqual(createPendingWidget(widgets.get("file-context")).render(100).slice(1), [
       "Next prompt context · 2 snippets · ~13 tokens · /file-context to review",
       "1. src/example.ts · lines 1-1 · ~6 tokens",
       "2. test/example.test.ts · lines 2-3 · ~8 tokens",

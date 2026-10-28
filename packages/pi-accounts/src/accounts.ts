@@ -11,7 +11,7 @@ import {
   parseAccountName,
   type StoredCredential,
 } from "./account-store.js";
-import { registerAccountsProtocol } from "./accounts-protocol.js";
+import { ACCOUNTS_SELECTION_COMMITTED_CHANNEL, registerAccountsProtocol } from "./accounts-protocol.js";
 import {
   type AccountProviderAdapter,
   type AccountProviderId,
@@ -255,6 +255,24 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     owner.selections = selections;
     owner.selectionRevisions.set(providerId, (owner.selectionRevisions.get(providerId) ?? 0) + 1);
     owner.error = undefined;
+    const revision = owner.selectionRevisions.get(providerId);
+    queueMicrotask(() => {
+      try {
+        if (
+          !isOwnerCurrent(owner) ||
+          owner.sessionManager.getSessionId() !== owner.sessionId ||
+          owner.selectionRevisions.get(providerId) !== revision
+        )
+          return;
+        pi.events.emit(ACCOUNTS_SELECTION_COMMITTED_CHANNEL, {
+          session: owner.sessionManager,
+          sessionId: owner.sessionId,
+          providerId,
+        });
+      } catch {
+        // A notification consumer must not interrupt the selected account's activation.
+      }
+    });
     return true;
   };
 

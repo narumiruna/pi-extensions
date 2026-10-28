@@ -89,7 +89,7 @@ for (const [id, api, header] of [
   ["openai", "openai-responses", "api-key"],
   ["openrouter", "openai-completions", "api-key"],
   ["anthropic", "anthropic-messages", "x-api-key"],
-  ["kimi-coding", "anthropic-messages", "x-api-key"],
+  ["kimi-coding", "openai-completions", "api-key"],
 ] as const) {
   test(`${id} detects a case-insensitive ${header} override`, async () => {
     const f = await fixture(id, api);

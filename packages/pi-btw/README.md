@@ -10,12 +10,14 @@ Only context you explicitly bring back is loaded into the main editor.
 - Starts a side thread immediately with `/btw <question>` or opens the manager with `/btw`.
 - Uses any persisted main-session branch as context without switching branches.
 - Supports scrollable answers, transcript search, a clickable jump-to-latest control, follow-up questions, queued steering, and in-memory resume.
-- Offers fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view, click-to-focus input, and a draggable remembered divider.
+- Uses Pi's message components, a native-style working editor border, and a compact footer below the editor.
+- Offers fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view, mouse or keyboard pane focus, and a draggable remembered divider.
 - Renders supported Mermaid fences as width-safe, themed Unicode diagrams without a browser or network request.
+- Manually previews and imports new main-thread context without stopping main work or rewriting earlier side exchanges.
 - Keeps side questions and answers out of the main conversation by default.
 - Brings back the latest answer, a question suffix, an exact range, or the complete thread only when requested.
 - Uses Pi's current model and thinking level or saved pi-btw choices.
-- Offers BTW-only exit, thinking-cycle, and bring-to-main keybindings.
+- Offers BTW-only exit, thinking-cycle, bring-to-main, and pane-switch keybindings.
 
 ## 📦 Install
 
@@ -55,7 +57,9 @@ Both routes require TUI mode and a model with usable credentials; see [Settings]
 Side questions and selected conversation context are sent to that model's provider.
 Bringing context back fills the main editor without submitting; replacing an existing draft requires confirmation.
 Ctrl+C cancels the response and discards the current draft and queued questions, but completed exchanges remain resumable in memory.
-Read the [workflow guide](./docs/workflows.md) for context selection, copying, search, steering, and draft recovery; `/new`, `/resume`, `/reload`, and restart discard retained threads.
+While composing, use **Import main updates** (`F9` by default) to preview and confirm new main context; no content is imported automatically.
+Imports can increase context size and provider cost; see [import scope and branch limits](./docs/workflows.md#import-main-updates).
+Read the [workflow guide](./docs/workflows.md) for context selection, importing, copying, search, steering, and draft recovery; `/new`, `/resume`, `/fork`, `/reload`, and restart discard retained threads.
 
 ## ⚙️ Settings
 
@@ -116,7 +120,9 @@ Pi-btw does not inherit Pi core's setting of the same name because Pi's public e
 `layout` controls the dedicated workspace and defaults to `fullscreen` when omitted.
 Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
-A single muted divider separates the panes; click either pane to move keyboard focus to it.
+A single muted divider separates the panes; click either pane or use the pane-switch shortcut to move keyboard focus.
+The footer below the editor shows **BTW focus** or **Main focus** and the available switch key.
+It also shows the selected side model and thinking level when space permits; narrow or short views omit optional fields and hints before the active input row.
 Drag the divider with the primary mouse button to resize both panes.
 The side-thread share is limited to 20–80% and saved as `sidePaneRatio` when the button is released, independent of whether the side thread is on the left or right.
 If the save fails, the workspace restores the last saved ratio and reports the error.
@@ -138,6 +144,8 @@ The literal `/btw settings` remains a side question, not a settings subcommand.
 | `exit` | `ctrl+c` | Cancel and leave the dedicated side-thread workspace, including its nested dialogs. |
 | `cycleThinkingLevel` | Inherit Pi's `app.thinking.cycle` | Cycle supported levels while composing or generating. |
 | `bringToMain` | `ctrl+r` | Open the bring-to-main chooser after a completed answer. |
+| `switchPane` | First available `f6`, `f7`, or `f8` | Switch keyboard focus between panes in a split workspace. |
+| `importMainUpdates` | First available `f9`, `f10`, or `f11` | Preview and confirm main updates while the side composer is idle. |
 
 For example, merge these overrides into `pi-btw.json`:
 
@@ -159,6 +167,8 @@ Actual availability depends on the terminal; `super` and some modified combinati
 New overrides cannot take ordinary typing keys or conflict with BTW actions, Pi editing, selection, search, scrolling, or enabled manual-copy bindings.
 Pi's explicitly configured printable thinking shortcuts remain inherited for compatibility.
 If a saved override becomes conflicting, BTW warns and uses an available default; if none is usable, that shortcut is unavailable and its activation hint is omitted.
+The pane-switch action uses only the first available fallback and does not displace an existing BTW override or inherited Pi thinking shortcut.
+It has no effect in fullscreen-only or collapsed layouts, and background pane switching is blocked while an overlay owns focus.
 An explicitly unbound Pi thinking action stays unbound. Remove an override field to restore its default; neither saving nor resetting modifies Pi's global keybindings.
 **Ctrl+C always remains available as hard cancel**, even after configuring another exit key. Shortcut handling does not interpret bracketed-paste payloads as commands.
 
@@ -176,10 +186,14 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 ## 🚧 Limitations
 
 - `/btw` supports TUI mode only.
-- Only the clicked pane receives keyboard input; hovering or scrolling over the other pane does not move focus.
+- The side model does not execute tools. Answers appear only after the response completes, not token by token.
+- Only the active pane receives keyboard input; hovering or scrolling over the other pane does not move focus.
 - Resume state is memory-only and lasts only for the current extension instance.
-- A side thread retains the latest 40,000 characters of main-conversation context and adds a truncation notice when earlier content is omitted.
+- Main-conversation context is a limited text snapshot, not the complete session; see [context scope](./docs/workflows.md#choose-context-and-resume-threads).
 - Clipboard access depends on Pi's host helper, the operating system, and the terminal.
+- The live workspace uses a separate TUI instance and BTW-owned private host-layout access because Pi has no public workspace-composition API; see the [core-alignment handoff](./docs/core-alignment.md) for tested safeguards, exact limits, and proposed APIs. This intentionally deviates from Pi's advice against a second terminal renderer: only one renderer owns the terminal at a time, without an official support guarantee. The [shared fullscreen handoff record](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-tui-kit/docs/fullscreen-handoff.md) records the Kit physical-lifecycle contract, two-consumer proof, release guards, and physical-terminal limits; layouts, input, and domain state stay in BTW.
+- Pi does not expose all effective renderer options or a public clipboard-read callback. BTW uses native automatic wheel behavior but does not inherit private host wheel overrides or right-click clipboard paste.
+- Conversation appearance follows native defaults, not custom host editor/footer extensions or private padding settings. BTW uses one-cell message padding and zero-cell editor padding; see the [appearance reference and before/after frames](./docs/native-appearance.md).
 - Malformed, unsupported, or oversized Mermaid diagrams remain readable as fenced source; partial parses also show a warning.
 - Pi versions before 0.85 omit the clickable jump-to-latest control.
 
@@ -191,7 +205,7 @@ packages/pi-btw/
 │   ├── index.ts                       # Thin Pi entrypoint
 │   └── btw.ts                         # Side-thread lifecycle and command
 ├── dist/                              # Generated Jiti runtime
-├── docs/                              # Side-thread workflows and controls
+├── docs/                              # Workflows, appearance evidence, and core-alignment handoff
 ├── scripts/build-runtime.mjs          # Runtime builder
 └── test/                              # Behavior and lifecycle coverage
 ```

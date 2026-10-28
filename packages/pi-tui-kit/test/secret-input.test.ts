@@ -228,27 +228,35 @@ test("secret input preserves remapped kill, yank, and yank-pop bindings", async 
 });
 
 test("secret input reports unsupported modes without opening a plaintext dialog", async () => {
-  let inputCalls = 0;
-  const unsupportedModes: unknown[] = [];
-  const context = createMockContext({
-    mode: "rpc",
-    hasUI: true,
-    input: async () => {
-      inputCalls += 1;
-      return "plaintext";
-    },
-  });
-  assert.deepEqual(
-    await runSecretInput(context.ctx, {
-      title: "Secret",
-      onUnsupportedMode: (_ctx, mode) => {
-        unsupportedModes.push(mode);
+  for (const mode of ["rpc", "print", "json"] as const) {
+    let inputCalls = 0;
+    let customCalls = 0;
+    const unsupportedModes: unknown[] = [];
+    const context = createMockContext({
+      mode,
+      hasUI: mode === "rpc",
+      input: async () => {
+        inputCalls += 1;
+        return "plaintext";
       },
-    }),
-    { kind: "unsupported", mode: "rpc" },
-  );
-  assert.deepEqual(unsupportedModes, ["rpc"]);
-  assert.equal(inputCalls, 0);
+      custom: async () => {
+        customCalls += 1;
+        return undefined;
+      },
+    });
+    assert.deepEqual(
+      await runSecretInput(context.ctx, {
+        title: "Secret",
+        onUnsupportedMode: (_ctx, unsupportedMode) => {
+          unsupportedModes.push(unsupportedMode);
+        },
+      }),
+      { kind: "unsupported", mode },
+    );
+    assert.deepEqual(unsupportedModes, [mode]);
+    assert.equal(inputCalls, 0);
+    assert.equal(customCalls, 0);
+  }
 });
 
 test("secret input revalidates isCurrent ownership before input and mouse dispatch", async () => {

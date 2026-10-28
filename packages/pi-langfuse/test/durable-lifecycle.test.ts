@@ -59,7 +59,7 @@ it("a host error callback can dispose during tool-span finalization without doub
           name: "tool",
           description: "Execute",
           parameters: Type.Object({}),
-          execute: async () => ({ content: [fauxText("executed fully")] }),
+          execute: async () => ({ output: [fauxText("executed fully")] }),
         }),
       ],
     }),

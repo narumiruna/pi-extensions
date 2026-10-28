@@ -1,5 +1,4 @@
 import { stripVTControlCharacters } from "node:util";
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Focusable,
   fuzzyFilter,
@@ -7,7 +6,7 @@ import {
   Key,
   matchesKey,
   type SelectItem,
-  SelectList,
+  type SelectList,
   type TuiMouseEvent,
   type TuiMouseEventResult,
   truncateToWidth,
@@ -24,18 +23,22 @@ import type {
   MenuScreenComponentOptions,
   MultiSelectOptions,
 } from "./contracts.js";
+import { componentKeyAvailable, componentKeybindings } from "./host-input.js";
 import { createInputComponent, type InputOptions } from "./input.js";
 import { createMultiSelectComponent } from "./multi-select.js";
 import {
   actionMenuItemPresentation,
   actionMenuUnavailableDescription,
+  createMenuSelectList,
   handleSearchInput,
   renderFrame,
   renderFrameLayout,
   restoreSearchInput,
   safeMenuText,
+  selectedLabelFallback,
 } from "./rendering.js";
 import { createReviewComponent, type ReviewOptions } from "./review.js";
+import { renderSettingsRows } from "./settings-rows.js";
 
 export { browseDialogLabel, browseDialogPages } from "./browse.js";
 export type {
@@ -56,6 +59,7 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
   let component: MenuScreenComponent;
   switch (options.screen.kind) {
     case "actions":
@@ -83,6 +87,8 @@ export function createMenuScreenComponent<ScreenId extends string, ActionId exte
       component = createMultiSelectComponent(options as MultiSelectOptions<ScreenId, ActionId>);
       break;
   }
+  const render = component.render.bind(component);
+  component.render = (width) => (Number.isFinite(width) && width > 0 ? render(Math.floor(width)) : []);
   Object.defineProperty(component, "__piTuiKitScreen", { value: true });
   return component;
 }
@@ -118,12 +124,7 @@ function createActionsComponent<ScreenId extends string, ActionId extends string
     value: item.id,
     ...actionMenuItemPresentation(item),
   }));
-  const widestPrimary = Math.max(1, ...items.map((item) => visibleWidth(item.label))) + 2;
-  const list = new SelectList(items, Math.min(items.length, 10), selectTheme(options.theme), {
-    minPrimaryColumnWidth: Math.min(32, widestPrimary),
-    maxPrimaryColumnWidth: widestPrimary,
-    truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth, maxWidth > 1 ? "…" : ""),
-  });
+  const list = createMenuSelectList(items, 10, options.theme);
   setInitialSelection(list, items, options.selectedItemId);
   return commonListComponent(
     options,
@@ -227,10 +228,11 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
   }
   function createList() {
     const items = filteredItems.map(({ selectItem }) => selectItem);
-    const next = new SelectList(
+    const next = createMenuSelectList(
       items,
-      Math.min(items.length, options.screen.viewportSize ?? 10),
-      selectTheme(options.theme),
+      options.screen.viewportSize ?? 10,
+      options.theme,
+      options.screen.currentItemId,
     );
     setInitialSelection(next, items, filteredItems[selectedIndex]?.item.id);
     return next;
@@ -264,7 +266,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     const previousIndex = filteredItems.findIndex(({ item }) => item.id === previouslySelectedId);
     if (previousIndex < 0 && previouslySelectedId) restoreItemId ??= previouslySelectedId;
     const restoreIndex = filteredItems.findIndex(({ item }) => item.id === restoreItemId);
-    selectedIndex = restoreIndex >= 0 ? restoreIndex : previousIndex >= 0 ? previousIndex : 0;
+    selectedIndex = restoreIndex >= 0 ? restoreIndex : Math.max(previousIndex, 0);
     if (restoreIndex >= 0) restoreItemId = undefined;
     list = createList();
     const item = selected();
@@ -346,8 +348,18 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     render(width) {
       const safeWidth = Math.max(1, width);
       const selectedItem = selected();
+      const listRows = list.render(safeWidth);
+      const description = selectedItem?.description ? safeMenuText(selectedItem.description) : "";
+      const selectedListRow =
+        listRows[selectedIndex - listWindowStart(selectedIndex, filteredItems.length, pageSize())];
       const details = [
-        ...(selectedItem?.disabledReason ? [`Unavailable: ${safeMenuText(selectedItem.disabledReason)}`] : []),
+        ...selectedLabelFallback(filteredItems[selectedIndex]?.selectItem.label, selectedListRow),
+        ...(selectedItem?.disabled && selectedItem.disabledReason
+          ? [`Unavailable: ${safeMenuText(selectedItem.disabledReason)}`]
+          : []),
+        ...(description && !listRows.some((line) => stripVTControlCharacters(line).includes(description))
+          ? [description]
+          : []),
         ...(selectedItem?.details ?? []).map(safeMenuText),
       ];
       const detailRows = details.flatMap((line) => wrapTextWithAnsi(options.theme.fg("muted", line), safeWidth));
@@ -355,15 +367,13 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
         allItems.length === 0
           ? [options.theme.fg("dim", "  No choices available")]
           : filteredItems.length === 0
-            ? [options.theme.fg("dim", "  No matching choices")]
-            : [...list.render(safeWidth), ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
+            ? [options.theme.fg("dim", "  No matching choices; edit search")]
+            : [...listRows, ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
+      const totalChoices = `${allItems.length} ${allItems.length === 1 ? "choice" : "choices"}`;
+      const resultCount =
+        filteredItems.length === allItems.length ? totalChoices : `${filteredItems.length} of ${totalChoices}`;
       const search = options.screen.enableSearch
-        ? [
-            ...renderChoiceSearchInput(searchInput, safeWidth),
-            "",
-            ...choices,
-            ...(filteredItems.length > 0 ? [options.theme.fg("dim", "Type to search")] : []),
-          ]
+        ? [...renderChoiceSearchInput(searchInput, safeWidth), options.theme.fg("dim", resultCount), ...choices]
         : choices;
       const frame = renderFrameLayout(
         options.screen.title,
@@ -377,7 +387,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
             filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
           confirmAction: "select",
           pinnedContentRows: options.screen.enableSearch ? 1 : 0,
-          priorityTailRows: detailRows.length + (options.screen.enableSearch ? 1 : 0),
+          priorityTailRows: filteredItems.length === 0 ? 1 : detailRows.length,
         },
       );
       const listContentStart = options.screen.enableSearch ? 2 : 0;
@@ -570,7 +580,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
           compactOverflowText:
             filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
           confirmAction: "change",
-          hint: settingsHint(options.keybindings),
+          hint: settingsHint(options.keybindings, componentKeyAvailable(options.tui, "space")),
           pinnedContentRows: 1,
           priorityTailRows: settingsRows.priorityTailRows,
         },
@@ -634,79 +644,11 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
   return component;
 }
 
-function renderSettingsRows<ScreenId extends string, ActionId extends string>(
-  filteredItems: readonly { item: MenuSettingItem<ActionId>; label: string }[],
-  allItems: readonly { item: MenuSettingItem<ActionId>; label: string }[],
-  selectedIndex: number,
-  displayed: ReadonlyMap<string, string>,
-  width: number,
-  options: SettingsOptions<ScreenId, ActionId>,
-): { lines: string[]; priorityTailRows: number; viewportStart: number; visibleCount: number } {
-  if (allItems.length === 0) {
-    return {
-      lines: [options.theme.fg("dim", "  No settings available")],
-      priorityTailRows: 1,
-      viewportStart: 0,
-      visibleCount: 0,
-    };
-  }
-  if (filteredItems.length === 0) {
-    return {
-      lines: [options.theme.fg("dim", "  No matching settings")],
-      priorityTailRows: 1,
-      viewportStart: 0,
-      visibleCount: 0,
-    };
-  }
-
-  const maxVisible = Math.min(filteredItems.length, 10);
-  const startIndex = Math.max(
-    0,
-    Math.min(selectedIndex - Math.floor(maxVisible / 2), filteredItems.length - maxVisible),
-  );
-  const endIndex = Math.min(startIndex + maxVisible, filteredItems.length);
-  const maxLabelWidth = Math.min(30, Math.max(...allItems.map((candidate) => visibleWidth(candidate.label))));
-  const lines: string[] = [];
-  for (let index = startIndex; index < endIndex; index += 1) {
-    const candidate = filteredItems[index];
-    if (!candidate) continue;
-    const { item, label } = candidate;
-    const selected = index === selectedIndex;
-    const prefix = selected ? options.theme.fg("accent", "→ ") : "  ";
-    const labelPadded = label + " ".repeat(Math.max(0, maxLabelWidth - visibleWidth(label)));
-    const currentValue = safeMenuText(displayed.get(item.id) ?? item.currentValue);
-    const value = item.disabled ? `(unavailable) ${currentValue}` : currentValue;
-    const valueWidth = Math.max(0, width - visibleWidth(prefix) - maxLabelWidth - 2);
-    let labelText = labelPadded;
-    let valueText = truncateToWidth(value, valueWidth, "");
-    if (selected) {
-      labelText = options.theme.fg("accent", labelText);
-      valueText = options.theme.fg("accent", valueText);
-    } else if (item.disabled) {
-      labelText = options.theme.fg("dim", labelText);
-      valueText = options.theme.fg("dim", valueText);
-    } else {
-      valueText = options.theme.fg("muted", valueText);
-    }
-    lines.push(truncateToWidth(`${prefix}${labelText}  ${valueText}`, width, ""));
-  }
-  if (startIndex > 0 || endIndex < filteredItems.length) {
-    lines.push(options.theme.fg("dim", `  (${selectedIndex + 1}/${filteredItems.length})`));
-  }
-  let priorityTailRows = 0;
-  const selected = filteredItems[selectedIndex]?.item;
-  if (selected?.description) {
-    lines.push("");
-    for (const line of wrapTextWithAnsi(safeMenuText(selected.description), Math.max(1, width - 4))) {
-      lines.push(options.theme.fg("dim", `  ${line}`));
-      priorityTailRows += 1;
-    }
-  }
-  return { lines, priorityTailRows, viewportStart: startIndex, visibleCount: endIndex - startIndex };
-}
-
-function settingsHint(keybindings: MenuKeybindings) {
-  const confirmKeys = uniqueHintKeys([...keybindings.getKeys("tui.select.confirm"), "space"]);
+function settingsHint(keybindings: MenuKeybindings, spaceAvailable: boolean) {
+  const confirmKeys = uniqueHintKeys([
+    ...keybindings.getKeys("tui.select.confirm"),
+    ...(spaceAvailable ? ["space"] : []),
+  ]);
   const cancelKeys = uniqueHintKeys(keybindings.getKeys("tui.select.cancel").filter((key) => key !== "ctrl+c"));
   return [
     "Type to search",
@@ -845,11 +787,22 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
     render(width) {
       const safeWidth = Math.max(1, width);
       const selectedId = items[selectedIndex]?.value;
-      const details = selectedId ? (selectedDetails?.(selectedId) ?? []) : [];
+      const listRows = list.render(safeWidth);
+      const selectedItem = items[selectedIndex];
+      const description = selectedItem?.description;
+      const selectedListRow =
+        listRows[selectedIndex - listWindowStart(selectedIndex, items.length, Math.min(items.length, 10))];
+      const details = [
+        ...selectedLabelFallback(selectedItem?.label, selectedListRow),
+        ...(selectedId ? (selectedDetails?.(selectedId) ?? []) : []),
+        ...(description && !listRows.some((line) => stripVTControlCharacters(line).includes(description))
+          ? [description]
+          : []),
+      ];
       const detailRows = details.flatMap((detail) =>
         wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(detail)), safeWidth),
       );
-      const content = [...list.render(safeWidth), ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
+      const content = [...listRows, ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
       const frame = renderFrameLayout(options.screen.title, lines, content, destination, width, options, {
         compactOverflowText: items.length > 1 ? `  (${selectedIndex + 1}/${items.length})` : undefined,
         priorityTailRows: detailRows.length,
@@ -920,16 +873,6 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
       mouseLayout = undefined;
       options.onDispose?.();
     },
-  };
-}
-
-function selectTheme(theme: Pick<Theme, "fg">) {
-  return {
-    selectedPrefix: (text: string) => theme.fg("accent", text),
-    selectedText: (text: string) => theme.fg("accent", text),
-    description: (text: string) => theme.fg("muted", text),
-    scrollInfo: (text: string) => theme.fg("dim", text),
-    noMatch: (text: string) => theme.fg("warning", text),
   };
 }
 

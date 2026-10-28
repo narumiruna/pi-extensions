@@ -13,10 +13,10 @@ import {
   setKittyProtocolActive,
   type TUI,
   TUI_KEYBINDINGS,
-  type TuiAltScreen,
+  TuiAltScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager } from "../src/transcript-pager.js";
 
@@ -118,8 +118,12 @@ function createFullscreenHarness(rows = 12, options: { columns?: number; keybind
   };
 }
 
-async function flushAsyncWork(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+async function flushAsyncWork(current: () => TUI | undefined): Promise<void> {
+  await vi.waitFor(() => {
+    const tui = current();
+    assert.ok(tui instanceof TuiAltScreen, "native side TUI must be created");
+    assert.ok(tui.getFocusedComponent(), "side component must be mounted");
+  });
 }
 
 const JUMP_TO_LATEST = "↓ Jump to latest message";
@@ -175,7 +179,7 @@ test("mouse wheel and history keys scroll the native side-thread viewport", asyn
       );
     }),
   );
-  await flushAsyncWork();
+  await flushAsyncWork(() => sideTui);
   assert.ok(sideTui);
 
   sideTui.renderNow(true);
@@ -188,9 +192,9 @@ test("mouse wheel and history keys scroll the native side-thread viewport", asyn
   harness.input("\u001b[<64;1;1M");
   sideTui.renderNow(true);
   const wheelOlderTop = viewport.viewportTop;
-  assert.ok(wheelOlderTop < initialTop, "wheel-up over the fixed header should reveal older history");
+  assert.ok(wheelOlderTop < initialTop, "wheel-up over the transcript should reveal older history");
   const wheelFrame = stripVTControlCharacters(harness.writes.join(""));
-  assert.match(wheelFrame, /btw · side thread/);
+  assert.match(stripVTControlCharacters(viewport.getScreenLines().at(-2) ?? ""), /^btw/u);
   assert.match(wheelFrame, /Ctrl\+C/);
   assert.match(wheelFrame, /PgUp\/PgDn/);
   assert.match(wheelFrame, /↓ Jump to latest message · Ctrl\+End/u);
@@ -247,7 +251,7 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
       );
     }),
   );
-  await flushAsyncWork();
+  await flushAsyncWork(() => sideTui);
   assert.ok(sideTui);
 
   sideTui.renderNow(true);
@@ -259,7 +263,7 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
   sideTui.renderNow(true);
   assert.ok(viewport.viewportTop < initialTop);
   const wheelFrame = stripVTControlCharacters(harness.writes.join(""));
-  assert.match(wheelFrame, /btw · side thread/);
+  assert.match(stripVTControlCharacters(viewport.getScreenLines().at(-2) ?? ""), /^btw/u);
   assert.match(wheelFrame, /Answering…/);
   assert.match(wheelFrame, /Ctrl\+C/);
   assert.match(wheelFrame, /↓ Jump to latest message · Ctrl\+End/u);
@@ -328,6 +332,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
       "alt+clear",
       "shift+f1",
       "bogus+ctrl+ctrl+x" as KeyId,
+      "ctrl+x",
       "x",
     ],
   });
@@ -358,7 +363,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
       }),
     { copyOnSelect: false },
   );
-  await flushAsyncWork();
+  await flushAsyncWork(() => sideTui);
   assert.ok(sideTui);
 
   sideTui.renderNow(true);
@@ -432,7 +437,7 @@ test("narrow indicator without a usable key stays bounded and defers to search",
       );
     }),
   );
-  await flushAsyncWork();
+  await flushAsyncWork(() => sideTui);
   assert.ok(sideTui);
 
   sideTui.renderNow(true);

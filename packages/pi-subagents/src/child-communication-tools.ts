@@ -4,6 +4,8 @@ import {
   type BrokerSendAcknowledgement,
   MAX_IDENTIFIER_LENGTH,
   MAX_MESSAGE_BYTES,
+  optionalIdentifier,
+  requiredIdentifier,
   sanitizeTerminalText,
   validateMessage,
 } from "./message-broker.js";
@@ -97,23 +99,4 @@ export function createChildCommunicationExtension(client: ChildCommunicationClie
 
 function prepareWaitArguments(args: unknown): WaitArguments {
   return prepareTimeoutArguments(args) as WaitArguments;
-}
-
-function optionalIdentifier(value: unknown, field: string): string | undefined {
-  return value === undefined ? undefined : requiredIdentifier(value, field);
-}
-
-function requiredIdentifier(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`Subagent ${field} is required.`);
-  const identifier = value.trim();
-  if (
-    identifier.length > MAX_IDENTIFIER_LENGTH ||
-    [...identifier].some((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
-    })
-  ) {
-    throw new Error(`Subagent ${field} is invalid.`);
-  }
-  return identifier;
 }

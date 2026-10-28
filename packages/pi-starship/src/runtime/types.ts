@@ -31,6 +31,8 @@ export interface WorkspaceFileSystem {
   readFile(path: string, maxBytes: number): Promise<string | undefined>;
   readDirectory(path: string): Promise<readonly WorkspaceEntry[]>;
   fileExists(path: string): Promise<boolean>;
+  realPath?(path: string): Promise<string | undefined>;
+  isWritable?(path: string): Promise<boolean | undefined>;
 }
 
 export interface WorkspaceRefreshInput {
@@ -46,6 +48,7 @@ export interface WorkspaceRefreshInput {
   fileExists?(path: string): Promise<boolean>;
   reason?: "initial" | "event" | "periodic";
   previous?: WorkspaceSnapshot;
+  systemMemory?: () => { total: number; free: number; swap?: { total: number; free: number } } | undefined;
   signal?: AbortSignal;
 }
 

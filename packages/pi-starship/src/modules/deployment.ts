@@ -32,7 +32,15 @@ export const kubernetesModule = defineModule({
     style: "cyan bold",
     disabled: false,
   },
+  resolveStyleVariables: ({ runtime, style }) => ({
+    style: runtime.workspace?.styleSelectors?.kubernetes ?? style,
+  }),
   options: {
+    detect_files: { kind: "string-array", default: [], allowNegative: true },
+    detect_extensions: { kind: "string-array", default: [], allowNegative: true },
+    detect_folders: { kind: "string-array", default: [], allowNegative: true },
+    detect_env_vars: { kind: "string-array", default: [], allowNegative: true },
+    contexts: { kind: "context-rules", default: [] },
     context_aliases: { kind: "string-map", default: {} },
     namespace_aliases: { kind: "string-map", default: {} },
     cluster_aliases: { kind: "string-map", default: {} },

@@ -41,7 +41,7 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
   });
 }
 
-test("package exposes API version 20 and Markdown document types", () => {
+test("package exposes API version 22 and Markdown document types", () => {
   const markdown: ReviewFormat = {
     kind: "markdown",
     renderLatex: false,
@@ -56,9 +56,9 @@ test("package exposes API version 20 and Markdown document types", () => {
     label: "Schema",
     detailDocument: document,
   };
-  const apiVersion: 20 = PI_EXTENSION_MENU_API_VERSION;
+  const apiVersion: 22 = PI_EXTENSION_MENU_API_VERSION;
   assert.equal(item.detailDocument, document);
-  assert.equal(apiVersion, 20);
+  assert.equal(apiVersion, 22);
   assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 

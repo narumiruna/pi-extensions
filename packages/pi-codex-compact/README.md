@@ -92,8 +92,8 @@ The provider adapter must honor Pi's public `onPayload` and injected `fetch` opt
 For a custom API, map its exact non-built-in label to `"codex-responses-v1"` in `apiProfiles`. This profile uses Remote V2 in `auto` mode and requires Codex-compatible request fields and replay; it declares compatibility rather than probing the backend. With unary compaction selected, it retains Codex-supported tools and reasoning.
 Built-in adapter tests cover request plumbing, not backend support or hosted entitlement. A custom provider or proxy remains responsible for its routing, authentication, and payload transforms. See the [implementation reference](./docs/implementation.md#protocol-and-replay) for the protocol contract.
 
-Changing providers can replay a checkpoint only when its API label, compatibility profile, and exact model ID still match. Custom checkpoints also require the matching `apiProfiles` entry.
-An incompatible route exposes the fallback marker and recent messages, not the checkpoint's older history. An ordinary request cannot transparently recover after an incompatible backend has already received the checkpoint.
+Opaque checkpoint replay requires its issuing provider and an authorized API/profile; the recorded model ID does not gate replay within that boundary. Custom checkpoints also require the matching `apiProfiles` entry.
+With summary recovery enabled, a compatible provider change can request a lossy plaintext transfer through the issuer instead of sending encrypted state to the target; see [Provider changes](./docs/implementation.md#provider-changes). An incompatible API/profile exposes the fallback marker and recent messages, not the checkpoint's older history.
 The extension does not make capability probes or automatically retry a failed billable request through another protocol.
 
 ### Experimental Context Management
@@ -182,7 +182,7 @@ Context Management does not retain the original plaintext alongside its checkpoi
 ## 🚧 Limitations
 
 - Backend compaction contracts and OAuth restrictions can change independently; keep backups of important sessions.
-- Older history requires this extension, a matching API/profile/model, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
+- Opaque checkpoint replay requires this extension, its issuing provider, an authorized API/profile, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
 - The package does not reproduce Codex core's context-window lineage, previous-model fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
 - Pi's public tool metadata omits `constrainedSampling`; Remote V2 preserves active tool order, names, descriptions, and schemas but cannot reproduce that optional field.
 - Successful recovery replaces active opaque history with a lossy summary; native fallback after recovery failure cannot read opaque-only history. Raw session entries remain available, but rolling back the extension does not restore the active context. Use `/tree` before the required checkpoint or restore a transcript backup.
@@ -210,7 +210,7 @@ npm test
 npm run package:pack -- codex-compact
 ```
 
-See the bundled [implementation reference](./docs/implementation.md) and repository [Codex mechanism notes](https://github.com/narumiruna/pi-extensions/blob/main/docs/implementation-notes/codex-compaction-mechanism.md).
+See the bundled [implementation reference](./docs/implementation.md) for current behavior and [Codex mechanism research](./docs/codex-compaction-mechanism.md) for pinned upstream history and design lessons.
 
 ## 🗂️ Package layout
 

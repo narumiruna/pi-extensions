@@ -1,4 +1,4 @@
-import { HamburgerMenuIcon, MoonIcon, ReaderIcon, SunIcon } from "@radix-ui/react-icons";
+import { MoonIcon, SunIcon } from "@radix-ui/react-icons";
 import { Badge, Callout, Heading, IconButton, Theme } from "@radix-ui/themes";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,19 +6,32 @@ import "@radix-ui/themes/styles.css";
 import "./style.css";
 import "./composition.css";
 import "./session.css";
+import "./environment.css";
 import type { BranchView, ContextComposition as Composition, Snapshot } from "../model.js";
 import { generation, headers, RequestFailure, request, useDetail } from "./api.js";
+import { Cache } from "./cache.js";
 import { CapturedExecutions } from "./captured-executions.js";
 import { ContextComposition } from "./context-composition.js";
 import { ContextInventory } from "./context-inventory.js";
+import { ResourcePanel, type ResourceTab, resources } from "./environment.js";
 import { type Filters, matches } from "./format.js";
 import { history, internalEntry } from "./history.js";
 import { Inspector } from "./inspector.js";
+import { NavigationTabs } from "./navigation-tabs.js";
 import { Overview } from "./overview.js";
 import { PaneDrawer, ResizeHandle, useNarrow } from "./panes.js";
 import { boundedSearch, searchNeedle } from "./search.js";
 import { SessionFilters } from "./session-filters.js";
 import { Trace } from "./trace.js";
+
+type Surface = "context" | "events" | "cache" | ResourceTab;
+type SessionView = "history" | "branches" | "executions";
+const surfaces = [
+  { value: "context", label: "Context" },
+  { value: "events", label: "Session" },
+  { value: "cache", label: "Cache" },
+  ...resources,
+] as const;
 
 type Selection = { kind: "entry" | "call"; id: string; serial: number; filterVersion?: number; anchor?: string | null };
 function App() {
@@ -31,8 +44,10 @@ function App() {
   const branchOwner = useRef<{ entryId: string; attempt: number } | undefined>(undefined);
   const [selection, setSelection] = useState<Selection>();
   const [view, setView] = useState("list");
-  const [surface, setSurface] = useState("context");
-  const [sessionView, setSessionView] = useState("history");
+  const [surface, setSurface] = useState<Surface>("context");
+  // Mount resource catalogs on first visit, then retain their independent reading state.
+  const [visitedResources, setVisitedResources] = useState<ReadonlySet<ResourceTab>>(() => new Set());
+  const [sessionView, setSessionView] = useState<SessionView>("history");
   const [historyLeaf, setHistoryLeaf] = useState<string | null>(null);
   const [showInternal, setShowInternal] = useState(false);
   const [preview, setPreview] = useState<Composition>();
@@ -53,18 +68,22 @@ function App() {
   const [connected, setConnected] = useState(false);
   const lifecycle = useRef<{ terminal: boolean; stream?: AbortController }>({ terminal: false });
   const [tab, setTab] = useState("content");
-  const navTrigger = useRef<HTMLButtonElement>(null);
   const inspectorTrigger = useRef<HTMLButtonElement>(null);
-  const [navOpen, setNavOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [navDrawer, setNavDrawer] = useState(false);
-  const [inspectorDrawer, setInspectorDrawer] = useState(false);
-  const [navWidth, setNavWidth] = useState(() => Math.max(200, Math.min(360, window.innerWidth * 0.185)));
   const [inspectorWidth, setInspectorWidth] = useState(() => Math.max(280, Math.min(520, window.innerWidth * 0.235)));
   const narrow = useNarrow();
-  const sideBudget = Math.max(0, window.innerWidth - 600);
-  const navSize = navOpen ? Math.min(navWidth, inspectorOpen ? sideBudget * 0.4 : sideBudget) : 0;
-  const inspectorSize = inspectorOpen ? Math.min(inspectorWidth, navOpen ? sideBudget * 0.6 : sideBudget) : 0;
+  const inspectorSize = inspectorOpen ? Math.min(inspectorWidth, Math.max(0, window.innerWidth - 600)) : 0;
+  function changeSurface(value: Surface) {
+    if (value === "tools" || value === "mcp" || value === "skills")
+      setVisitedResources((old) => (old.has(value) ? old : new Set([...old, value])));
+    if (value === "context") setPreview(undefined);
+    if (narrow) setInspectorOpen(false);
+    setSurface(value);
+  }
+  function closeInspector() {
+    setInspectorOpen(false);
+    inspectorTrigger.current?.focus({ preventScroll: true });
+  }
   const calls = snapshot?.calls ?? [];
   const entries = snapshot?.nodes ?? [];
   const selectedCall =
@@ -73,8 +92,7 @@ function App() {
   const callAnchorAvailable = Boolean(selectedCall?.branchAnchor && represented.has(selectedCall.branchAnchor));
   const entryId =
     selection?.kind === "entry" ? selection.id : callAnchorAvailable ? (selectedCall?.branchAnchor ?? "") : "";
-  const paneActive =
-    surface === "events" && revision >= 0 && (inspectorOpen || inspectorDrawer) && selection?.kind === "entry";
+  const paneActive = surface === "events" && revision >= 0 && inspectorOpen && selection?.kind === "entry";
   const { detail, error: detailError, retry: retryDetails } = useDetail(paneActive ? entryId : undefined);
   const previousSelection = useRef<Selection | undefined>(undefined);
   useEffect(() => {
@@ -91,13 +109,11 @@ function App() {
   function selectEntry(id: string) {
     setSurface("events");
     if (sessionView === "executions") setSessionView("branches");
-    if (narrow) setInspectorDrawer(true);
-    else setInspectorOpen(true);
+    setInspectorOpen(true);
     setSelection((old) => ({ kind: "entry", id, serial: (old?.serial ?? 0) + 1, filterVersion }));
   }
   function selectCall(id: string) {
-    if (narrow) setInspectorDrawer(true);
-    else setInspectorOpen(true);
+    setInspectorOpen(true);
     setSelection((old) => ({
       kind: "call",
       id,
@@ -265,10 +281,10 @@ function App() {
   const hiddenMatches = scoped.rows.filter(
     ({ node }) => internalEntry(node) && matching.has(node.id) && !visibleHistory.has(node.id),
   ).length;
-  const sidebar = <SessionFilters filters={filters} change={changeFilters} />;
   const selectedBranch = branch?.leafId === entryId ? branch : undefined;
   const inspector = (
     <Inspector
+      close={closeInspector}
       selected={selection?.id ?? ""}
       node={selectedNode}
       detail={detail}
@@ -287,8 +303,7 @@ function App() {
         if (selectedBranch?.context) {
           setPreview(selectedBranch.context);
           setSurface("context");
-          setInspectorDrawer(false);
-          setNavDrawer(false);
+          if (narrow) setInspectorOpen(false);
         }
       }}
     />
@@ -319,43 +334,6 @@ function App() {
           </span>
         </div>
         <div className="header-actions">
-          <fieldset className="surface-switch" aria-label="Inspection source">
-            <button
-              type="button"
-              aria-pressed={surface === "context"}
-              onClick={() => {
-                setPreview(undefined);
-                setSurface("context");
-                setInspectorDrawer(false);
-                setNavDrawer(false);
-              }}
-            >
-              Context
-            </button>
-            <button type="button" aria-pressed={surface === "events"} onClick={() => setSurface("events")}>
-              Session
-            </button>
-          </fieldset>
-          <IconButton
-            hidden={surface !== "events"}
-            ref={navTrigger}
-            aria-label="Toggle filters"
-            aria-expanded={narrow ? navDrawer : navOpen}
-            variant="ghost"
-            onClick={() => (narrow ? setNavDrawer(!navDrawer) : setNavOpen(!navOpen))}
-          >
-            <HamburgerMenuIcon />
-          </IconButton>
-          <IconButton
-            hidden={surface !== "events"}
-            ref={inspectorTrigger}
-            aria-label="Toggle details"
-            aria-expanded={narrow ? inspectorDrawer : inspectorOpen}
-            variant="ghost"
-            onClick={() => (narrow ? setInspectorDrawer(!inspectorDrawer) : setInspectorOpen(!inspectorOpen))}
-          >
-            <ReaderIcon />
-          </IconButton>
           <Badge color={connected ? "green" : "amber"}>{connected ? "Live" : "Disconnected"}</Badge>
           <Badge>Read-only</Badge>
           <IconButton
@@ -367,6 +345,7 @@ function App() {
           </IconButton>
         </div>
       </header>
+      <NavigationTabs id="surface" label="Inspection source" tabs={surfaces} value={surface} change={changeSurface} />
       {(error || snapshot?.incomplete) && (
         <div className="app-notices">
           {error && (
@@ -388,24 +367,20 @@ function App() {
             ? undefined
             : {
                 gridTemplateColumns:
-                  surface === "context"
-                    ? "0px 0px minmax(0, 1fr) 0px 0px"
-                    : `${navSize}px ${navOpen ? 6 : 0}px minmax(0, 1fr) ${inspectorOpen ? 6 : 0}px ${inspectorSize}px`,
+                  surface !== "events"
+                    ? "minmax(0, 1fr) 0px 0px"
+                    : `minmax(0, 1fr) ${inspectorOpen ? 6 : 0}px ${inspectorSize}px`,
               }
         }
       >
-        {!narrow && surface === "events" && (
-          <>
-            <div className="side-slot nav-slot" hidden={!navOpen}>
-              {sidebar}
-            </div>
-            {navOpen && (
-              <ResizeHandle name="Resize filters" value={navWidth} change={setNavWidth} min={180} max={420} />
-            )}
-          </>
-        )}
         <div className="center-column">
-          <div className="context-surface" hidden={surface !== "context"}>
+          <div
+            className="context-surface"
+            role="tabpanel"
+            id="surface-panel-context"
+            aria-labelledby="surface-tab-context"
+            hidden={surface !== "context"}
+          >
             <div className="observed-context" hidden={Boolean(preview)}>
               <ContextComposition context={snapshot?.context} payload={snapshot?.providerObservation} />
               <ContextInventory snapshot={snapshot} />
@@ -422,28 +397,61 @@ function App() {
               </div>
             )}
           </div>
-          <div className="events-surface" hidden={surface !== "events"}>
+          <div
+            className="cache-surface"
+            role="tabpanel"
+            id="surface-panel-cache"
+            aria-labelledby="surface-tab-cache"
+            hidden={surface !== "cache"}
+          >
+            <Cache report={snapshot?.cache} select={selectEntry} />
+          </div>
+          {resources.map((resource) => (
+            <div
+              key={resource.value}
+              className="environment-surface"
+              role="tabpanel"
+              id={`surface-panel-${resource.value}`}
+              aria-labelledby={`surface-tab-${resource.value}`}
+              hidden={surface !== resource.value}
+            >
+              {visitedResources.has(resource.value) && (
+                <ResourcePanel snapshot={snapshot} resource={resource} active={surface === resource.value} />
+              )}
+            </div>
+          ))}
+          <div
+            className="events-surface"
+            role="tabpanel"
+            id="surface-panel-events"
+            aria-labelledby="surface-tab-events"
+            hidden={surface !== "events"}
+          >
             <Overview snapshot={snapshot} />
             <div className="session-toolbar">
-              <fieldset className="view-switch" aria-label="Session navigation">
-                {[
-                  ["history", "History"],
-                  ["branches", "Branch view"],
-                  ["executions", "Captured executions"],
-                ].map(([value, label]) => (
-                  <button
-                    type="button"
-                    key={value}
-                    aria-pressed={sessionView === value}
-                    onClick={() => setSessionView(value ?? "history")}
-                  >
-                    {label}
-                    {value === "executions"
-                      ? ` · ${calls.filter((call) => call.status === "running").length} running · ${calls.filter((call) => call.status === "error").length} errors`
-                      : ""}
-                  </button>
-                ))}
-              </fieldset>
+              <NavigationTabs<SessionView>
+                id="session"
+                label="Session navigation"
+                tabs={[
+                  { value: "history", label: "History" },
+                  { value: "branches", label: "Branch view" },
+                  {
+                    value: "executions",
+                    label: `Captured executions · ${calls.filter((call) => call.status === "running").length} running · ${calls.filter((call) => call.status === "error").length} errors`,
+                  },
+                ]}
+                value={sessionView}
+                change={setSessionView}
+              />
+              <button
+                type="button"
+                ref={inspectorTrigger}
+                aria-label="Toggle event details"
+                aria-expanded={inspectorOpen}
+                onClick={() => setInspectorOpen(!inspectorOpen)}
+              >
+                Event details
+              </button>
               {sessionView === "history" && (
                 <>
                   <span>Branch leaf: {historyLeaf ?? snapshot?.leafId ?? "unavailable"}</span>
@@ -479,7 +487,14 @@ function App() {
                 </button>
               )}
             </div>
-            <div className="session-primary" hidden={sessionView !== "history"}>
+            <SessionFilters filters={filters} change={changeFilters} />
+            <div
+              className="session-primary"
+              role="tabpanel"
+              id="session-panel-history"
+              aria-labelledby="session-tab-history"
+              hidden={sessionView !== "history"}
+            >
               <Trace
                 entries={entries}
                 matches={matching}
@@ -494,7 +509,13 @@ function App() {
                 active={surface === "events" && sessionView === "history" && revision >= 0}
               />
             </div>
-            <div className="session-primary" hidden={sessionView !== "branches"}>
+            <div
+              className="session-primary"
+              role="tabpanel"
+              id="session-panel-branches"
+              aria-labelledby="session-tab-branches"
+              hidden={sessionView !== "branches"}
+            >
               <Trace
                 entries={entries}
                 matches={matching}
@@ -508,7 +529,13 @@ function App() {
                 active={surface === "events" && sessionView === "branches" && revision >= 0}
               />
             </div>
-            <div className="session-primary execution-primary" hidden={sessionView !== "executions"}>
+            <div
+              className="session-primary execution-primary"
+              role="tabpanel"
+              id="session-panel-executions"
+              aria-labelledby="session-tab-executions"
+              hidden={sessionView !== "executions"}
+            >
               <CapturedExecutions
                 entries={entries}
                 calls={calls}
@@ -529,7 +556,7 @@ function App() {
           <>
             {inspectorOpen ? (
               <ResizeHandle
-                name="Resize details"
+                name="Resize event details"
                 value={inspectorWidth}
                 change={setInspectorWidth}
                 min={260}
@@ -544,20 +571,15 @@ function App() {
         )}
       </main>
       {narrow && surface === "events" && (
-        <>
-          <PaneDrawer trigger={navTrigger} name="Session filters" side="left" open={navDrawer} change={setNavDrawer}>
-            {sidebar}
-          </PaneDrawer>
-          <PaneDrawer
-            trigger={inspectorTrigger}
-            name="Details"
-            side="right"
-            open={inspectorDrawer}
-            change={setInspectorDrawer}
-          >
-            {inspector}
-          </PaneDrawer>
-        </>
+        <PaneDrawer
+          trigger={inspectorTrigger}
+          name="Event details"
+          side="right"
+          open={inspectorOpen}
+          change={setInspectorOpen}
+        >
+          {inspector}
+        </PaneDrawer>
       )}
       <footer className="app-footer">
         <span>{connected ? "Connected · observing live events" : "Disconnected · reopen from Pi"}</span>

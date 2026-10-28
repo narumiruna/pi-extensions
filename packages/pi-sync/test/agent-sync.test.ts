@@ -59,6 +59,176 @@ for (const auto of [false, true])
       assert.equal((await fs.stat(path.join(claimDir, records[0] ?? ""))).mode & 0o077, 0);
     }));
 
+for (const [localVersion, remoteVersion] of [
+  ["2.0.0", "3.0.0"],
+  ["1.0.0", "2.0.0"],
+  ["2.0.0", "1.0.0"],
+] as const)
+  test(`agent sync keeps higher package version without inference: ${localVersion}/${remoteVersion}`, async () =>
+    withTempHome(async (agentDir) => {
+      const f = await createMergeFixture(agentDir);
+      const settingsPath = path.join(agentDir, "settings.json");
+      const content = (version: string) => JSON.stringify({ packages: [`npm:example@${version}`] });
+      await fs.writeFile(settingsPath, content("2.0.0"));
+      await push(f.ctx, mergeOptions, undefined, () => f.backend);
+      await enabled();
+      await fs.writeFile(settingsPath, content(localVersion));
+      await f.remoteEdit("settings.json", content(remoteVersion));
+      const mock = agentContext(() => {
+        throw new Error("no inference expected");
+      });
+      await withStateDirectoryAccess(() =>
+        withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+      );
+      assert.equal(mock.requests.length, 0);
+      const expected = content(remoteVersion === "3.0.0" ? "3.0.0" : "2.0.0");
+      assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, "utf8")), JSON.parse(expected));
+      const head = await f.backend.readHead();
+      assert.ok(head);
+      const published = await f.backend.readSnapshot(head.snapshotRef);
+      const file = published.files.find((file) => file.path === "settings.json");
+      assert.ok(file);
+      assert.deepEqual(JSON.parse(Buffer.from(file.contentBase64, "base64").toString()), JSON.parse(expected));
+    }));
+
+for (const [name, base, local, remote, expected, requests] of [
+  [
+    "remote-only reorder",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    0,
+  ],
+  [
+    "remote reorder with local upgrade",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:a@2.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+    0,
+  ],
+  ["remote-only build metadata", ["npm:x@1.0.0"], ["npm:x@1.0.0"], ["npm:x@1.0.0+remote"], ["npm:x@1.0.0+remote"], 0],
+  [
+    "conflicting build metadata",
+    ["npm:x@1.0.0"],
+    ["npm:x@1.0.0+local"],
+    ["npm:x@1.0.0+remote"],
+    ["npm:x@1.0.0+remote"],
+    1,
+  ],
+  [
+    "Git ref conflict",
+    ["git:github.com/example/repo@base"],
+    ["git:github.com/example/repo@local"],
+    ["https://github.com/example/repo.git@remote"],
+    ["https://github.com/example/repo.git@remote"],
+    1,
+  ],
+] satisfies [string, string[], string[], string[], string[], number][]) {
+  test(`agent publishes safe package selection: ${name}`, async () =>
+    withTempHome(async (agentDir) => {
+      const f = await createMergeFixture(agentDir);
+      const settingsPath = path.join(agentDir, "settings.json");
+      const content = (packages: string[]) => JSON.stringify({ packages });
+      await fs.writeFile(settingsPath, content(base));
+      await push(f.ctx, mergeOptions, undefined, () => f.backend);
+      await enabled();
+      await fs.writeFile(settingsPath, content(local));
+      await f.remoteEdit("settings.json", content(remote));
+      const mock = agentContext(selectRemote);
+      await withStateDirectoryAccess(() =>
+        withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+      );
+      assert.equal(mock.requests.length, requests);
+      assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, "utf8")), { packages: expected });
+      const head = await f.backend.readHead();
+      assert.ok(head);
+      const published = await f.backend.readSnapshot(head.snapshotRef);
+      const file = published.files.find((file) => file.path === "settings.json");
+      assert.ok(file);
+      assert.deepEqual(JSON.parse(Buffer.from(file.contentBase64, "base64").toString()), { packages: expected });
+    }));
+}
+
+for (const [name, base, changed, expected] of [
+  ["root order", '{"packages":["npm:x@2.0.0"],"number":1}', '{"number":1,"packages":["npm:x@2.0.0"]}', undefined],
+  [
+    "whitespace and line endings",
+    '{"packages":["npm:x@2.0.0"]}',
+    '{\r\n  "packages" : [ "npm:x@2.0.0" ]\r\n}\r\n',
+    undefined,
+  ],
+  ["numeric spelling without packages", '{"number":1}', '{"number":1.00e0}', undefined],
+  ["escaped key and source", '{"packages":["npm:x@2.0.0"]}', '{"\\u0070ackages":["\\u006epm:x@2.0.0"]}', undefined],
+  [
+    "non-exact package versions",
+    '{"packages":["npm:x@latest"],"number":1}',
+    '{"number":1.0,"packages" : [ "npm:x@latest" ]}',
+    undefined,
+  ],
+  [
+    "package upgrade with other spelling",
+    '{"packages":["npm:x@2.0.0"],"number":1}',
+    '{"number":1.00e0,"packages" : [ "npm:x@3.0.0" ]}',
+    undefined,
+  ],
+  [
+    "package downgrade with other spelling",
+    '{"packages":["npm:x@2.0.0"],"number":1}',
+    '{"number":1.00e0,"packages" : ["npm:x@1.0.0"]}',
+    '{"number":1.00e0,"packages" : ["npm:x@2.0.0"]}',
+  ],
+] as const) {
+  for (const side of ["local", "remote"] as const) {
+    test(`accepted ${side} settings keep document bytes: ${name}`, async () =>
+      withTempHome(async (agentDir) => {
+        const f = await createMergeFixture(agentDir);
+        const settingsPath = path.join(agentDir, "settings.json");
+        await fs.writeFile(settingsPath, base);
+        await push(f.ctx, mergeOptions, undefined, () => f.backend);
+        await enabled();
+        await fs.writeFile(settingsPath, side === "local" ? changed : base);
+        await f.remoteEdit("settings.json", side === "remote" ? changed : base);
+        const mock = agentContext(selectRemote);
+        await withStateDirectoryAccess(() =>
+          withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+        );
+        assert.equal(mock.requests.length, 0);
+        assert.equal(await fs.readFile(settingsPath, "utf8"), expected ?? changed);
+        const head = await f.backend.readHead();
+        assert.ok(head);
+        const published = await f.backend.readSnapshot(head.snapshotRef);
+        const file = published.files.find((file) => file.path === "settings.json");
+        assert.ok(file);
+        assert.equal(Buffer.from(file.contentBase64, "base64").toString(), expected ?? changed);
+      }));
+  }
+}
+
+test("unrelated sync preserves unchanged package bytes locally and remotely", async () =>
+  withTempHome(async (agentDir) => {
+    const f = await createMergeFixture(agentDir);
+    const settingsPath = path.join(agentDir, "settings.json");
+    const original = '{\n  "packages" : [\n    "npm:x@1.0.0"\n  ]\n}\n';
+    await fs.writeFile(settingsPath, original);
+    await push(f.ctx, mergeOptions, undefined, () => f.backend);
+    await enabled();
+    await f.remoteEdit("AGENTS.md", "remote instructions\n");
+    const mock = agentContext(selectRemote);
+    await withStateDirectoryAccess(() =>
+      withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+    );
+    assert.equal(mock.requests.length, 0);
+    assert.equal(await fs.readFile(settingsPath, "utf8"), original);
+    const head = await f.backend.readHead();
+    assert.ok(head);
+    const published = await f.backend.readSnapshot(head.snapshotRef);
+    const file = published.files.find((file) => file.path === "settings.json");
+    assert.ok(file);
+    assert.equal(Buffer.from(file.contentBase64, "base64").toString(), original);
+  }));
+
 for (const mutation of ["local", "remote", "settings", "model"] as const)
   test(`reject stale candidate after ${mutation} changes during inference`, async () =>
     withTempHome(async (agentDir) => {
@@ -122,7 +292,7 @@ for (const failure of ["refuse", "malformed", "secret", "unsupported", "delete"]
         ),
       );
       assert.deepEqual(await f.backend.readHead(), head);
-      assert.equal(mock.requests.length, failure === "secret" || failure === "delete" ? 0 : 1);
+      assert.equal(mock.requests.length, ["secret", "delete", "unsupported"].includes(failure) ? 0 : 1);
     }));
 
 test("off preserves reviewed behavior and does not call model", async () =>

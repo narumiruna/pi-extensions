@@ -4,8 +4,10 @@ import { captureContext } from "./context.js";
 import { EntryIndex } from "./entry-index.js";
 import { recordedLeaf } from "./identity.js";
 import type { ContextComposition, SkillView, Snapshot } from "./model.js";
-import { capture, displayText, readSessionName } from "./privacy.js";
+import { capture, readSessionName } from "./privacy.js";
 import { snapshot } from "./projection.js";
+import { mcpRegistrations } from "./resources.js";
+import { projectToolCatalog } from "./tool-catalog.js";
 
 export class SessionFeed {
   private dirty = true;
@@ -54,6 +56,7 @@ export class SessionFeed {
     const ctx = this.options.context();
     const manager = ctx.sessionManager;
     const tools = this.options.pi.getAllTools();
+    const active = this.options.pi.getActiveTools();
     // Public SDK method, omitted from the current ReadonlySessionManager type; readonly adapters may lack it.
     const counted = manager as typeof manager & { getEntryCount?: () => number };
     const count = typeof counted.getEntryCount === "function" ? counted.getEntryCount() : manager.getEntries().length;
@@ -61,15 +64,10 @@ export class SessionFeed {
       count,
       leaf: recordedLeaf(manager),
       name: readSessionName(manager),
-      active: this.options.pi.getActiveTools(),
+      mcp: mcpRegistrations(this.options.pi),
       toolCount: tools.length,
-      tools: tools.slice(0, 256).map((tool) => ({
-        name: tool.name,
-        exposure: tool.exposure,
-        namespace: tool.namespace?.name,
-        description: displayText(tool.description).slice(0, 512),
-        schema: capture(tool.parameters, 2048),
-      })),
+      // Opaque catalog/group IDs also detect raw identity changes beyond the display budget.
+      tools: projectToolCatalog(tools, active),
     });
   }
   start(): void {
@@ -116,6 +114,7 @@ export class SessionFeed {
         this.options.skills,
         this.index(),
         this.observed,
+        (provider, model) => ctx.modelRegistry?.find(provider, model),
       );
       this.cached.calls = []; // Do not retain evicted live results inside the static cache.
       this.dirty = false;
@@ -125,6 +124,7 @@ export class SessionFeed {
       revision: this.revision,
       context: this.observed ?? this.cached.context,
       providerObservation: this.providerObservation,
+      mcp: mcpRegistrations(this.options.pi),
       calls: this.options.collector.list(),
       droppedCalls: this.options.collector.dropped,
       invalidCallEvents: this.options.collector.invalidEvents,

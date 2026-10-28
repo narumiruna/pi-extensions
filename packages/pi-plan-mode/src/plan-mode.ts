@@ -510,7 +510,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     updateUi(ctx);
     // A new session receives its setup entries after session_start, so its input gate refreshes
     // them. Resumed and forked sessions already have the intent and must apply it here because
-    // extension-triggered custom-message turns bypass both input and before_agent_start.
+    // extension-triggered custom-message turns bypass the user-input gates.
     if (event.reason !== "new") await applyPendingImplementationRuntime(ctx);
   });
 
@@ -780,7 +780,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   });
 
-  pi.on("before_agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
+    if (event.messageType === "custom") return;
     refreshStateForFirstPrompt(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {

@@ -276,16 +276,31 @@ test("Starship-aligned module options normalize their public defaults", () => {
     truncation_symbol: "",
     home_symbol: "~",
     use_os_path_sep: true,
+    use_logical_path: true,
+    repo_root_format: "",
+    read_only: "🔒",
     substitutions: {},
   });
   assert.deepEqual(BUILT_IN_CONFIG.modules.git_branch.options, {
     truncation_length: 0,
     truncation_symbol: "…",
+    only_attached: false,
+    always_show_remote: true,
+    ignore_branches: [],
+    ignore_remotes: [],
+    ignore_bare_repo: true,
   });
-  assert.deepEqual(BUILT_IN_CONFIG.modules.git_commit.options, { commit_hash_length: 7 });
+  assert.deepEqual(BUILT_IN_CONFIG.modules.git_commit.options, {
+    commit_hash_length: 7,
+    only_detached: false,
+    tag_disabled: false,
+    tag_symbol: " 🏷 ",
+    tag_max_candidates: 0,
+  });
   assert.deepEqual(BUILT_IN_CONFIG.modules.conda.options, {
     ignore_base: true,
     truncation_length: 1,
+    detect_env_vars: [],
   });
 
   const valid = loadFromText(

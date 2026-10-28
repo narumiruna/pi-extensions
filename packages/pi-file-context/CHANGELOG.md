@@ -1,5 +1,17 @@
 # @narumitw/pi-file-context
 
+## 0.54.5
+
+### Patch Changes
+
+- 209ff7a: Use Pi TUI Kit's existing `EditorStatusWidget` for passive editor widgets. Share the muted separator and terminal-width bounds while retaining extension-owned content, refresh scheduling, cleanup, and RPC behavior. Sanitize untrusted display values before styling and wrapping without changing raw payloads.
+
+## 0.54.4
+
+### Patch Changes
+
+- fed7bfb: Handle Pi custom-message run starts without consuming queued file quotes, clearing ready plans, or applying user-prompt Goal ownership logic.
+
 ## 0.54.3
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-codex-compact",
-  "version": "0.56.1",
+  "version": "0.56.3",
   "description": "Responses compaction protocols for compatible Pi providers.",
   "type": "module",
   "license": "MIT",
@@ -41,10 +41,10 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "1.1.0",
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@types/node": "26.6.4",
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },

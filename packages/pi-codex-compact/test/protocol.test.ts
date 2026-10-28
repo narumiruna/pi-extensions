@@ -6,6 +6,7 @@ import {
   collectCompactionSse,
   collectCompactResponse,
   expandRemoteCompactionPayload,
+  type JsonObject,
   prepareRemoteCompactionPayload,
   rewriteCheckpointMarker,
   validateCompactedResponse,
@@ -25,11 +26,14 @@ function fragmentedStream(text: string, chunkSize = 1): ReadableStream<Uint8Arra
   });
 }
 
-function validSse(item = { type: "compaction", encrypted_content: "opaque" }): string {
+function validSse(
+  item: JsonObject = { type: "compaction", encrypted_content: "opaque" },
+  completedItem: JsonObject = item,
+): string {
   return [
     ": keepalive\r\n",
     `data: ${JSON.stringify({ type: "response.output_item.done", item })}\r\n\r\n`,
-    `data: ${JSON.stringify({ type: "response.completed", response: { output: [item] } })}\r\n\r\n`,
+    `data: ${JSON.stringify({ type: "response.completed", response: { output: [completedItem] } })}\r\n\r\n`,
   ].join("");
 }
 
@@ -37,6 +41,109 @@ test("collects one compaction from fragmented CRLF SSE and deduplicates complete
   const result = await collectCompactionSse(fragmentedStream(validSse()));
   assert.deepEqual(result.item, { type: "compaction", encrypted_content: "opaque" });
   assert.ok(result.completedResponse);
+});
+
+const reportedItem = { id: "cmp_test", type: "compaction", encrypted_content: "test" };
+const reorderedItem = { encrypted_content: "test", id: "cmp_test", type: "compaction" };
+
+test.each([
+  { name: "top-level keys", item: reportedItem, repeated: reorderedItem },
+  {
+    name: "items without IDs",
+    item: { type: "compaction", encrypted_content: "test" },
+    repeated: { encrypted_content: "test", type: "compaction" },
+  },
+  {
+    name: "nested object keys",
+    item: { ...reportedItem, metadata: { z: null, a: { number: 1, flag: true, text: "value" } } },
+    repeated: { ...reorderedItem, metadata: { a: { text: "value", flag: true, number: 1 }, z: null } },
+  },
+  {
+    name: "object keys inside arrays",
+    item: { ...reportedItem, metadata: [{ b: 2, a: 1 }, null, "text", false, 0] },
+    repeated: { ...reorderedItem, metadata: [{ a: 1, b: 2 }, null, "text", false, 0] },
+  },
+  {
+    name: "special property names",
+    item: {
+      ...reportedItem,
+      metadata: JSON.parse('{"__proto__":{"z":2,"a":1},"constructor":"data","toJSON":"data","10":true,"2":null}'),
+    },
+    repeated: {
+      ...reorderedItem,
+      metadata: JSON.parse('{"2":null,"10":true,"toJSON":"data","constructor":"data","__proto__":{"a":1,"z":2}}'),
+    },
+  },
+])("deduplicates reordered $name without changing returned JSON", async ({ item, repeated }) => {
+  assert.notEqual(JSON.stringify(item), JSON.stringify(repeated));
+  const result = await collectCompactionSse(fragmentedStream(validSse(item, repeated), 3));
+  assert.equal(JSON.stringify(result.item), JSON.stringify(repeated));
+  assert.equal(JSON.stringify(result.completedResponse), JSON.stringify({ output: [repeated] }));
+});
+
+test.each([
+  { name: "repeated item-done events", done: [reportedItem, reorderedItem], output: [] },
+  { name: "completed output only", done: [], output: [reportedItem, reorderedItem] },
+])("deduplicates reordered compaction items from $name", async ({ done, output }) => {
+  const events = [
+    ...done.map((item) => ({ type: "response.output_item.done", item })),
+    { type: "response.completed", response: { output } },
+  ];
+  const text = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  const result = await collectCompactionSse(fragmentedStream(text, 3));
+  assert.equal(JSON.stringify(result.item), JSON.stringify(reorderedItem));
+  assert.deepEqual(result.completedResponse, { output });
+});
+
+test.each([
+  {
+    name: "encrypted content with the same ID",
+    item: reportedItem,
+    repeated: { ...reorderedItem, encrypted_content: "different" },
+  },
+  { name: "ID with the same encrypted content", item: reportedItem, repeated: { ...reorderedItem, id: "cmp_other" } },
+  { name: "missing ID", item: reportedItem, repeated: { type: "compaction", encrypted_content: "test" } },
+  { name: "added field", item: reportedItem, repeated: { ...reorderedItem, metadata: null } },
+  {
+    name: "nested value",
+    item: { ...reportedItem, metadata: { a: 1, b: 2 } },
+    repeated: { ...reorderedItem, metadata: { b: 3, a: 1 } },
+  },
+  {
+    name: "nested key",
+    item: { ...reportedItem, metadata: { a: 1 } },
+    repeated: { ...reorderedItem, metadata: { b: 1 } },
+  },
+  {
+    name: "primitive type",
+    item: { ...reportedItem, metadata: 1 },
+    repeated: { ...reorderedItem, metadata: "1" },
+  },
+  {
+    name: "null versus absent field",
+    item: { ...reportedItem, metadata: { a: null } },
+    repeated: { ...reorderedItem, metadata: {} },
+  },
+  {
+    name: "array order",
+    item: { ...reportedItem, metadata: [1, 2] },
+    repeated: { ...reorderedItem, metadata: [2, 1] },
+  },
+  {
+    name: "array length",
+    item: { ...reportedItem, metadata: [1] },
+    repeated: { ...reorderedItem, metadata: [1, 1] },
+  },
+  {
+    name: "special property value",
+    item: { ...reportedItem, metadata: JSON.parse('{"__proto__":{"value":1}}') },
+    repeated: { ...reorderedItem, metadata: JSON.parse('{"__proto__":{"value":2}}') },
+  },
+])("rejects distinct compaction items: $name", async ({ item, repeated }) => {
+  await assert.rejects(collectCompactionSse(fragmentedStream(validSse(item, repeated), 3)), {
+    name: "CodexCompactionProtocolError",
+    message: "Remote compaction returned 2 distinct compaction items; expected exactly one",
+  });
 });
 
 test("joins multiline data fields and ignores unrelated output items", async () => {

@@ -8,6 +8,7 @@ import {
   BUILT_IN_EXAMPLE,
   type LoadedStarshipConfig,
   loadStarshipConfig,
+  readConfigDocumentSnapshot,
   validateConfigDocument,
 } from "./config.js";
 import { checkGistDocument, createSettingsGist, fetchSettingsGist, type GhApi, gistId } from "./gist.js";
@@ -91,8 +92,10 @@ export async function importSettingsGist(
   const previous = options.getLoaded();
   const revision = options.getLoadedRevision?.();
   const disk = diskSnapshot(options);
+  const initialDisk = readConfigDocumentSnapshot(options.settingsPath);
   const guardedOwner: WorkflowOwner = {
     signal: owner.signal,
+    isSessionCurrent: () => owner.isSessionCurrent?.() ?? owner.isCurrent(),
     isCurrent: () =>
       current(owner) &&
       options.getLoadedRevision?.() === revision &&
@@ -138,7 +141,7 @@ export async function importSettingsGist(
     [
       `Source: https://gist.github.com/${id}`,
       "Untrusted settings can enable local commands and network requests. Review the complete TOML before applying.",
-      "Import replaces the entire local document, including comments and unknown fields; no backup is kept after success.",
+      "Import replaces the entire local document, including comments and unknown fields; its previous bytes will be kept in History.",
     ],
     "Preview imported footer…",
   );
@@ -152,7 +155,7 @@ export async function importSettingsGist(
         if (!current(guardedOwner) || diskSnapshot(options) !== disk) {
           throw new Error("Settings changed during import. Start a new import to review the latest state.");
         }
-        return (options.save ?? atomicSaveConfigDocument)(path, raw);
+        return options.save ? options.save(path, raw) : atomicSaveConfigDocument(path, raw, {}, initialDisk);
       },
     },
     guardedOwner,
@@ -196,7 +199,12 @@ async function reviewDocument(
 
 function diskSnapshot(options: StarshipCommandOptions): string {
   const loaded = (options.read ?? loadStarshipConfig)(options.settingsPath);
-  return JSON.stringify([loaded.rawDocument, loaded.source, loaded.diagnostics]);
+  return JSON.stringify([
+    loaded.rawDocument,
+    loaded.source,
+    loaded.diagnostics,
+    readConfigDocumentSnapshot(options.settingsPath),
+  ]);
 }
 
 function current(owner: WorkflowOwner): boolean {

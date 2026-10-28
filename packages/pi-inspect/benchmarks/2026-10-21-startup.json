@@ -1,0 +1,336 @@
+{
+  "baselineCommit": "5fafd4f7f33ceb6e0fe816186d6d679dfe380c24",
+  "pi": "1.3.0",
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "arch": "arm64",
+    "node": "v26.10.0"
+  },
+  "cacheProtocol": "warm primes Jiti filesystem cache; cold disables it, not OS cache",
+  "runsExcludeWarmup": true,
+  "startup": [
+    {
+      "series": "after-package-inspect-cold",
+      "measuredAt": "2026-10-21T03:38:38.044Z",
+      "entries": ["packages/pi-inspect"],
+      "warmupMs": {
+        "importTotal": 136,
+        "firstResponse": 301.28
+      },
+      "summaryMs": {
+        "importMedian": 130,
+        "importMAD": 1,
+        "firstResponseMedian": 292.59,
+        "firstResponseMAD": 3.32,
+        "baselineResponseMedian": 160.39,
+        "baselineResponseMAD": 0.8
+      },
+      "samplesMs": {
+        "importTotal": [129, 130, 125, 135, 130, 131, 128],
+        "firstResponse": [297.42, 292.59, 285.03, 297.9, 292.41, 291.86, 295.91],
+        "byEntry": {
+          "packages/pi-inspect/dist/index.ts": [129, 130, 125, 135, 130, 131, 128]
+        },
+        "baselineResponse": [160.39, 159.59, 159.76, 160.72, 163.81, 162.01, 158.92]
+      }
+    },
+    {
+      "series": "after-package-inspect-warm",
+      "measuredAt": "2026-10-21T03:38:13.549Z",
+      "entries": ["packages/pi-inspect"],
+      "warmupMs": {
+        "importTotal": 149,
+        "firstResponse": 310.36
+      },
+      "summaryMs": {
+        "importMedian": 9,
+        "importMAD": 0,
+        "firstResponseMedian": 168.37,
+        "firstResponseMAD": 0.34,
+        "baselineResponseMedian": 160.73,
+        "baselineResponseMAD": 0.65
+      },
+      "samplesMs": {
+        "importTotal": [9, 9, 9, 9, 9, 9, 8],
+        "firstResponse": [170.4, 168.5, 168.03, 168.21, 168.37, 169.02, 167.32],
+        "byEntry": {
+          "packages/pi-inspect/dist/index.ts": [9, 9, 9, 9, 9, 9, 8]
+        },
+        "baselineResponse": [162.59, 160.98, 159.8, 159.31, 160.73, 160.08, 161]
+      }
+    },
+    {
+      "series": "after-source-inspect-cold",
+      "measuredAt": "2026-10-21T03:38:23.731Z",
+      "entries": ["packages/pi-inspect/src/index.ts"],
+      "warmupMs": {
+        "importTotal": 253,
+        "firstResponse": 414.4
+      },
+      "summaryMs": {
+        "importMedian": 233,
+        "importMAD": 3,
+        "firstResponseMedian": 394.65,
+        "firstResponseMAD": 2.83,
+        "baselineResponseMedian": 161.42,
+        "baselineResponseMAD": 1.04
+      },
+      "samplesMs": {
+        "importTotal": [238, 232, 244, 231, 233, 230, 243],
+        "firstResponse": [404.66, 393.29, 406.98, 391.82, 394.65, 391.95, 404.97],
+        "byEntry": {
+          "packages/pi-inspect/src/index.ts": [238, 232, 244, 231, 233, 230, 243]
+        },
+        "baselineResponse": [160.38, 161.76, 161.42, 164.58, 161.28, 159.09, 168.67]
+      }
+    },
+    {
+      "series": "after-source-inspect-warm",
+      "measuredAt": "2026-10-21T03:38:03.201Z",
+      "entries": ["packages/pi-inspect/src/index.ts"],
+      "warmupMs": {
+        "importTotal": 179,
+        "firstResponse": 360.65
+      },
+      "summaryMs": {
+        "importMedian": 74,
+        "importMAD": 3,
+        "firstResponseMedian": 237.56,
+        "firstResponseMAD": 3.05,
+        "baselineResponseMedian": 161.63,
+        "baselineResponseMAD": 0.89
+      },
+      "samplesMs": {
+        "importTotal": [74, 74, 70, 71, 73, 78, 77],
+        "firstResponse": [237.56, 237.58, 235.75, 233.61, 234.51, 244.77, 255.78],
+        "byEntry": {
+          "packages/pi-inspect/src/index.ts": [74, 74, 70, 71, 73, 78, 77]
+        },
+        "baselineResponse": [175.91, 178.66, 160.97, 161.14, 161.63, 160.45, 162.52]
+      }
+    },
+    {
+      "series": "before-package-inspect-cold",
+      "measuredAt": "2026-10-21T03:31:32.253Z",
+      "entries": ["packages/pi-inspect"],
+      "warmupMs": {
+        "importTotal": 237,
+        "firstResponse": 399.93
+      },
+      "summaryMs": {
+        "importMedian": 237,
+        "importMAD": 2,
+        "firstResponseMedian": 403.25,
+        "firstResponseMAD": 5.05,
+        "baselineResponseMedian": 162.9,
+        "baselineResponseMAD": 1.56
+      },
+      "samplesMs": {
+        "importTotal": [234, 237, 235, 239, 237, 232, 238],
+        "firstResponse": [404.98, 397.67, 398.2, 403.25, 409.41, 392.5, 405.24],
+        "byEntry": {
+          "packages/pi-inspect/src/index.ts": [234, 237, 235, 239, 237, 232, 238]
+        },
+        "baselineResponse": [181.93, 178.68, 162.94, 161.34, 161.21, 162.06, 162.9]
+      }
+    },
+    {
+      "series": "before-package-inspect-warm",
+      "measuredAt": "2026-10-21T03:31:05.036Z",
+      "entries": ["packages/pi-inspect"],
+      "warmupMs": {
+        "importTotal": 71,
+        "firstResponse": 230.33
+      },
+      "summaryMs": {
+        "importMedian": 70,
+        "importMAD": 0,
+        "firstResponseMedian": 229.26,
+        "firstResponseMAD": 0.65,
+        "baselineResponseMedian": 162.57,
+        "baselineResponseMAD": 3
+      },
+      "samplesMs": {
+        "importTotal": [70, 70, 70, 69, 70, 69, 70],
+        "firstResponse": [235.02, 229.26, 228.61, 228.26, 230.58, 229.3, 229.26],
+        "byEntry": {
+          "packages/pi-inspect/src/index.ts": [70, 70, 70, 69, 70, 69, 70]
+        },
+        "baselineResponse": [159.41, 162.03, 162.57, 163.84, 172.33, 159.57, 165.82]
+      }
+    },
+    {
+      "series": "before-source-inspect-cold",
+      "measuredAt": "2026-10-21T03:31:17.022Z",
+      "entries": ["packages/pi-inspect/src/index.ts"],
+      "warmupMs": {
+        "importTotal": 240,
+        "firstResponse": 401.7
+      },
+      "summaryMs": {
+        "importMedian": 237,
+        "importMAD": 8,
+        "firstResponseMedian": 404.64,
+        "firstResponseMAD": 12.07,
+        "baselineResponseMedian": 158.24,
+        "baselineResponseMAD": 0.28
+      },
+      "samplesMs": {
+        "importTotal": [237, 227, 258, 231, 244, 245, 229],
+        "firstResponse": [404.64, 388.42, 418.34, 397.18, 416.71, 405.82, 389.27],
+        "byEntry": {
+          "packages/pi-inspect/src/index.ts": [237, 227, 258, 231, 244, 245, 229]
+        },
+        "baselineResponse": [156.94, 158.24, 158.06, 158.43, 159.58, 157.96, 161.32]
+      }
+    },
+    {
+      "series": "before-source-inspect-warm",
+      "measuredAt": "2026-10-21T03:30:54.544Z",
+      "entries": ["packages/pi-inspect/src/index.ts"],
+      "warmupMs": {
+        "importTotal": 78,
+        "firstResponse": 285.05
+      },
+      "summaryMs": {
+        "importMedian": 71,
+        "importMAD": 2,
+        "firstResponseMedian": 233.29,
+        "firstResponseMAD": 1.82,
+        "baselineResponseMedian": 160.63,
+        "baselineResponseMAD": 0.63
+      },
+      "samplesMs": {
+        "importTotal": [73, 75, 71, 72, 70, 69, 68],
+        "firstResponse": [233.29, 235.11, 231.13, 233.68, 234.56, 227.87, 228.08],
+        "byEntry": {
+          "packages/pi-inspect/src/index.ts": [73, 75, 71, 72, 70, 69, 68]
+        },
+        "baselineResponse": [159.38, 161.26, 160.63, 160.24, 160.1, 199.62, 198.66]
+      }
+    }
+  ],
+  "firstUse": [
+    {
+      "series": "after-first-use-package-inspect-cold",
+      "warmupMs": 27.232792000000018,
+      "samplesMs": [
+        23.592124999999953, 23.707083999999952, 23.678999999999974, 23.986792000000037, 23.688582999999937,
+        20.14416700000004, 27.50079199999999
+      ],
+      "medianMs": 23.69,
+      "madMs": 0.1
+    },
+    {
+      "series": "after-first-use-package-inspect-warm",
+      "warmupMs": 20.44079099999999,
+      "samplesMs": [
+        21.600082999999984, 19.471374999999966, 20.120582999999954, 20.055249999999944, 19.426499999999976,
+        19.69145900000001, 18.96258400000005
+      ],
+      "medianMs": 19.69,
+      "madMs": 0.36
+    },
+    {
+      "series": "after-first-use-source-inspect-cold",
+      "warmupMs": 20.423999999999978,
+      "samplesMs": [
+        24.74087499999996, 23.48416599999996, 23.725166999999942, 24.89254200000005, 25.06000000000006,
+        27.64945799999998, 23.52637500000003
+      ],
+      "medianMs": 24.74,
+      "madMs": 1.02
+    },
+    {
+      "series": "after-first-use-source-inspect-warm",
+      "warmupMs": 27.76724999999999,
+      "samplesMs": [
+        23.847999999999956, 22.83941699999997, 23.47783400000003, 22.41508299999998, 23.36824999999999,
+        19.434667000000047, 24.339624999999955
+      ],
+      "medianMs": 23.37,
+      "madMs": 0.53
+    },
+    {
+      "series": "before-first-use-package-inspect-cold",
+      "warmupMs": 29.76974999999993,
+      "samplesMs": [
+        24.484958000000006, 24.065875000000005, 28.492875000000026, 23.468833000000018, 25.152750000000083,
+        28.43004099999996, 25.175541000000067
+      ],
+      "medianMs": 25.15,
+      "madMs": 1.09
+    },
+    {
+      "series": "before-first-use-package-inspect-warm",
+      "warmupMs": 19.44191699999999,
+      "samplesMs": [
+        22.615958000000035, 22.270290999999986, 19.100084000000038, 22.003917, 22.448208000000022, 22.308084000000008,
+        22.61033299999997
+      ],
+      "medianMs": 22.31,
+      "madMs": 0.3
+    },
+    {
+      "series": "before-first-use-source-inspect-cold",
+      "warmupMs": 24.04170799999997,
+      "samplesMs": [
+        25.194082999999978, 25.997375000000034, 24.433625000000006, 24.239834000000087, 24.225291000000084, 23.649,
+        19.673875000000066
+      ],
+      "medianMs": 24.24,
+      "madMs": 0.59
+    },
+    {
+      "series": "before-first-use-source-inspect-warm",
+      "warmupMs": 24.10233400000004,
+      "samplesMs": [
+        25.577875000000006, 22.314250000000015, 22.32541600000002, 22.99783400000001, 20.30016599999999,
+        22.862415999999996, 22.261582999999973
+      ],
+      "medianMs": 22.33,
+      "madMs": 0.54
+    },
+    {
+      "series": "before-installed-first-use-inspect-cold",
+      "warmupMs": 23.963750000000005,
+      "samplesMs": [
+        23.8717079999999, 28.239708000000064, 24.001833999999917, 24.81316700000002, 23.710542000000032,
+        23.43987500000003, 19.655166999999892
+      ],
+      "medianMs": 23.87,
+      "madMs": 0.43
+    },
+    {
+      "series": "before-installed-first-use-inspect-warm",
+      "warmupMs": 23.41429100000005,
+      "samplesMs": [
+        23.220084000000043, 22.042250000000024, 26.043999999999983, 22.439707999999996, 21.92874999999998,
+        22.06058300000001, 25.737707999999998
+      ],
+      "medianMs": 22.44,
+      "madMs": 0.51
+    },
+    {
+      "series": "installed-first-use-inspect-cold",
+      "warmupMs": 23.32016699999997,
+      "samplesMs": [
+        23.612541999999962, 23.36850000000004, 28.01091699999995, 25.021749999999997, 24.198667, 23.69883299999998,
+        23.743750000000034
+      ],
+      "medianMs": 23.74,
+      "madMs": 0.38
+    },
+    {
+      "series": "installed-first-use-inspect-warm",
+      "warmupMs": 20.374124999999992,
+      "samplesMs": [
+        19.210666000000003, 20.581208000000004, 19.281791, 19.108000000000004, 19.41020900000001, 19.23554200000001,
+        20.833082999999988
+      ],
+      "medianMs": 19.28,
+      "madMs": 0.13
+    }
+  ]
+}

@@ -103,6 +103,7 @@ export function createRecallMenu(source: RecallMenuSource, ownership: { isCurren
         title: "Saved message preview",
         lines: state.selected ? sourceLines(state.selected) : ["The saved message is no longer available."],
         content: state.selected?.text ?? "",
+        enableSearch: true,
         format: { kind: "text" },
         viewportSize: "adaptive",
         hint: "back",

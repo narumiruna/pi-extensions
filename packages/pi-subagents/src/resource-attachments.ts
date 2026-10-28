@@ -178,9 +178,7 @@ function resolveResourcePath(
   if (!stats.isFile() && !stats.isDirectory()) {
     throw new Error(`Subagent ${kind} path must reference a file or directory.`);
   }
-  if (!projectTrusted && (isWithin(cwd, lexicalPath) || isWithin(canonicalCwd, canonicalPath))) {
-    throw new Error(`Subagent ${kind} cannot load a project path because the project is not trusted.`);
-  }
+  assertProjectPathTrusted(lexicalPath, canonicalPath, kind, cwd, canonicalCwd, projectTrusted);
   return canonicalPath;
 }
 

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { resolveCommandPath } from "../src/command.js";
-import { resolveSpawnCommand } from "../src/lsp-client.js";
 
 for (const [files, expected] of [
   [["biome", "biome.cmd", "biome.bat", "biome.exe"], "biome.exe"],
@@ -24,6 +23,19 @@ for (const [files, expected] of [
     }
   });
 }
+
+test("Windows lookup resolves dotted basenames through PATH and explicit relative or absolute paths", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-dotted-command-"));
+  const shim = path.join(root, "server.v2.cmd");
+  try {
+    writeFileSync(shim, "@echo off\r\n");
+    for (const command of ["server.v2", "./server.v2", path.join(root, "server.v2")]) {
+      assert.equal(resolveCommandPath(command, root, "win32", root), shim);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("Windows lookup preserves explicit suffixes and does not substitute a suffixed sibling", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-explicit-command-"));
@@ -73,28 +85,3 @@ test.skipIf(process.platform === "win32")(
     }
   },
 );
-
-test("Windows batch wrapping uses one verbatim command line and the configured command processor", () => {
-  const command = { command: "C:\\tools with spaces\\server.CMD", args: ["--stdio"] };
-  const args = ["/d", "/s", "/c", '"C:\\tools^ with^ spaces\\server.CMD ^"--stdio^""'];
-  assert.deepEqual(resolveSpawnCommand(command, "win32", " C:\\Windows\\System32\\cmd.exe "), {
-    command: "C:\\Windows\\System32\\cmd.exe",
-    args,
-    windowsVerbatimArguments: true,
-  });
-  assert.deepEqual(resolveSpawnCommand(command, "win32", " "), {
-    command: "cmd.exe",
-    args,
-    windowsVerbatimArguments: true,
-  });
-});
-
-test("native executables and non-Windows commands do not use shell parsing", () => {
-  for (const [command, platform] of [
-    [{ command: "C:\\bin with spaces\\server.exe", args: ["a & b", ""] }, "win32"],
-    [{ command: "/bin/server.cmd", args: ["a & b", ""] }, "linux"],
-  ] as const) {
-    const input = { command: command.command, args: [...command.args] };
-    assert.equal(resolveSpawnCommand(input, platform), input);
-  }
-});

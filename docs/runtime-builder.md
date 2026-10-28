@@ -52,7 +52,7 @@ Parsed, non-bundling esbuild validation replaces import-like string matching in 
 
 ## Builder contract
 
-`createRuntimeBuilder` accepts only confirmed wrapper variations: package root, temporary prefix, banner, optional named entries, forbidden eager inputs/externals, exact allowed externals, external subpath/dynamic matching, and additive graph/file validators. It does not accept arbitrary esbuild options or build callbacks. The default build remains split ESM, ES2022, external packages, `.ts` JavaScript output and source maps.
+`createRuntimeBuilder` accepts only confirmed wrapper variations: package root, temporary prefix, banner, optional named entries, forbidden eager inputs/externals, exact allowed externals, external subpath/dynamic matching, and additive graph/file validators. It does not accept arbitrary esbuild options or build callbacks. The default build remains split ESM, ES2024, external packages, `.ts` JavaScript output and source maps.
 
 Package graph validators receive normalized input sets and the main eager graph. File validators receive the staged directory and runtime inventory after common validation. They cannot replace the common policy. The per-build `validateOutput` seam supports failure injection after normal validation.
 

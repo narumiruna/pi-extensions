@@ -341,6 +341,33 @@ test("default catalog routes common languages and skips generated trees", () => 
   }
 });
 
+test("Windows command resolution prefers executable suffixes to extensionless shims", () => {
+  const bin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-resolve-"));
+  const plain = path.join(bin, "server");
+  const bat = `${plain}.bat`;
+  const cmd = `${plain}.cmd`;
+  const exe = `${plain}.exe`;
+  try {
+    writeFileSync(plain, "#!/bin/sh\nexit 1\n");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), plain);
+    writeFileSync(bat, "@echo off\r\n");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), bat);
+    writeFileSync(cmd, "@echo off\r\n");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), cmd);
+    assert.equal(resolveCommandPath(cmd, bin, "win32", bin), cmd);
+    writeFileSync(exe, "");
+    assert.equal(resolveCommandPath("server", bin, "win32", bin), exe);
+    assert.equal(resolveCommandPath(cmd, bin, "win32", bin), cmd);
+
+    const dotted = path.join(bin, "server.v1");
+    writeFileSync(dotted, "#!/bin/sh\nexit 1\n");
+    writeFileSync(`${dotted}.cmd`, "@echo off\r\n");
+    assert.equal(resolveCommandPath("server.v1", bin, "win32", bin), `${dotted}.cmd`);
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
 test("command helpers honor server environments and platform wrappers", () => {
   const windowsBin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-bin-"));
   const commandShim = path.join(windowsBin, "language-server.cmd");

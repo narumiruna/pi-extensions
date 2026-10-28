@@ -1,4 +1,12 @@
-import { exactAlias, optionBoolean, optionMap, optionString, optionStrings, safeMetadata } from "./helpers.js";
+import {
+  detectEnvironment,
+  exactAlias,
+  optionBoolean,
+  optionMap,
+  optionString,
+  optionStrings,
+  safeMetadata,
+} from "./helpers.js";
 import { type CollectorContext, type MutableModuleSnapshot, PRIVATE_STYLE_SELECTOR } from "./types.js";
 
 export async function collectExecution(context: CollectorContext): Promise<MutableModuleSnapshot> {
@@ -82,6 +90,8 @@ async function containerValues(context: CollectorContext): Promise<Record<string
 function hostnameValues(context: CollectorContext): Record<string, string> | undefined {
   const ssh = isSsh(context);
   if (optionBoolean(context, "hostname", "ssh_only") && !ssh) return undefined;
+  if (!detectEnvironment(context.input.environment, optionStrings(context, "hostname", "detect_env_vars")))
+    return undefined;
   const raw = safeMetadata(context.input.hostname);
   if (!raw) return undefined;
   const aliases = optionMap(context, "hostname", "aliases");
@@ -89,7 +99,7 @@ function hostnameValues(context: CollectorContext): Record<string, string> | und
   const index = trimAt ? raw.indexOf(trimAt) : -1;
   const trimmed = index >= 0 ? raw.slice(0, index) : raw;
   const hostname = exactAlias(trimmed, aliases) ?? trimmed;
-  return { hostname, ssh_symbol: ssh ? "🌐 " : "" };
+  return { hostname, ssh_symbol: ssh ? (optionString(context, "hostname", "ssh_symbol") ?? "🌐 ") : "" };
 }
 
 function usernameValues(context: CollectorContext): Record<string, string> | undefined {

@@ -1,5 +1,17 @@
 # @narumitw/pi-codex-compact
 
+## 0.56.3
+
+### Patch Changes
+
+- 6b89b6a: Deduplicate Remote V2 compaction items independently of JSON object-key order while still rejecting differences in content or other fields.
+
+## 0.56.2
+
+### Patch Changes
+
+- 92f0fa5: Preserve opaque checkpoint replay, repeated compaction, and recovery after switching models within the same issuing provider and authorized Responses API/profile. Transfer checkpoints through their issuer as persistent plaintext summaries when switching providers, and stop safely if transfer cannot complete. Keep projection validation and in-flight ownership cancellation.
+
 ## 0.56.1
 
 ### Patch Changes

@@ -44,6 +44,7 @@ export const gcloudModule = cloudModule({
   options: {
     project_aliases: { kind: "string-map", default: {} },
     region_aliases: { kind: "string-map", default: {} },
+    detect_env_vars: { kind: "string-array", default: [], allowNegative: true },
   },
 });
 

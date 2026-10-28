@@ -27,18 +27,17 @@ test.afterEach(async () => {
 });
 async function explore(page: Page): Promise<void> {
   await page.goto(server.url);
-  await page.getByRole("button", { name: "Session", exact: true }).click();
-  await page.getByRole("button", { name: "Branch view", exact: true }).click();
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
+  await page.getByRole("tab", { name: "Branch view", exact: true }).click();
   if ((page.viewportSize()?.width ?? 0) >= 1200) {
-    await page.getByRole("button", { name: "Toggle filters", exact: true }).click();
-    await page.getByRole("button", { name: "Toggle details", exact: true }).click();
+    await page.getByRole("button", { name: "Toggle event details", exact: true }).click();
     await page.getByRole("tab", { name: "raw", exact: true }).click();
   }
 }
 const nav = (page: Page, id: string) => page.locator(`.session-primary:not([hidden]) [data-trace-id="${id}"]`);
 const row = nav;
 async function openLive(page: Page) {
-  await page.getByRole("button", { name: /^Captured executions ·/ }).click();
+  await page.getByRole("tab", { name: /^Captured executions ·/ }).click();
 }
 async function openObjects(page: Page, section: string) {
   const container = page
@@ -192,8 +191,8 @@ test("executions remain an explicit view during updates; hostile text/raster rem
     if (!request.url().startsWith(server.origin)) external.push(request.url());
   });
   await explore(page);
-  const drawer = page.getByRole("button", { name: /^Captured executions ·/ });
-  await expect(drawer).toHaveAttribute("aria-pressed", "false");
+  const drawer = page.getByRole("tab", { name: /^Captured executions ·/ });
+  await expect(drawer).toHaveAttribute("aria-selected", "false");
   await expect(page.locator(".live-drawer")).not.toBeVisible();
   collector.start(
     {
@@ -207,7 +206,7 @@ test("executions remain an explicit view during updates; hostile text/raster rem
   );
   server.invalidate(++revision);
   await expect(drawer).toContainText("1 running");
-  await expect(drawer).toHaveAttribute("aria-pressed", "false");
+  await expect(drawer).toHaveAttribute("aria-selected", "false");
   await openLive(page);
   await page.getByRole("button", { name: "mcp__docs__search · running", exact: true }).click();
   collector.end(
@@ -268,7 +267,7 @@ test("list is default; timeline uses a shared axis and log points, never duratio
   await openLive(page);
   await expect(page.locator('[data-raw-id="unknown-start"] .timeline-span')).toHaveCount(0);
   await expect(page.locator('[data-raw-id="unknown-start"] .timeline-point')).toBeVisible();
-  await page.getByRole("button", { name: "Branch view", exact: true }).click();
+  await page.getByRole("tab", { name: "Branch view", exact: true }).click();
   await nav(page, data.alternate).click();
   await expect(page.locator(".session-primary:not([hidden]) .trace-timeline")).toBeVisible();
 });
@@ -285,30 +284,31 @@ test("compact desktop layout, resizing/collapse, overview/JSON, copy and screens
   );
   await explore(page);
   await expect(page.getByRole("region", { name: "Session overview" })).toBeVisible();
-  const positions = await page.locator(".sidebar, .center-column, .inspector-panel").evaluateAll((elements) =>
+  const positions = await page.locator(".center-column, .inspector-panel").evaluateAll((elements) =>
     elements.map((element) => ({
       x: element.getBoundingClientRect().x,
       width: element.getBoundingClientRect().width,
     })),
   );
   expect(positions[0]?.x).toBeLessThan(positions[1]?.x ?? 0);
-  expect(positions[1]?.width).toBeGreaterThan(positions[2]?.width ?? 0);
-  const splitter = page.getByRole("separator", { name: "Resize filters" });
+  expect(positions[0]?.width).toBeGreaterThan(positions[1]?.width ?? 0);
+  const splitter = page.getByRole("separator", { name: "Resize event details" });
   const width = Number(await splitter.getAttribute("aria-valuenow"));
   await splitter.focus();
-  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
   await expect(splitter).toHaveAttribute("aria-valuenow", String(width + 10));
   const box = await splitter.boundingBox();
   if (!box) throw new Error("No splitter");
   await page.mouse.move(box.x + 2, box.y + 60);
   await page.mouse.down();
-  await page.mouse.move(box.x + 42, box.y + 60);
+  await page.mouse.move(box.x - 42, box.y + 60);
   await page.mouse.up();
   expect(Number(await splitter.getAttribute("aria-valuenow"))).toBeGreaterThan(width + 10);
-  await page.getByRole("button", { name: "Toggle filters" }).click();
-  await expect(page.locator(".sidebar")).not.toBeVisible();
-  await page.getByRole("button", { name: "Toggle filters" }).click();
-  await expect(page.locator(".sidebar")).toBeVisible();
+  await page.getByRole("button", { name: "Close event details", exact: true }).click();
+  await expect(page.locator(".inspector-panel")).not.toBeVisible();
+  await page.getByRole("button", { name: "Toggle event details" }).click();
+  await expect(page.locator(".inspector-panel")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Search session" })).toBeVisible();
   await page.getByRole("button", { name: "Raw JSON", exact: true }).click();
   await expect(page.locator(".inspector-metadata")).toHaveCount(0);
   await page.getByRole("button", { name: "Overview", exact: true }).click();
@@ -335,14 +335,11 @@ test("medium/narrow and effective 150% viewport use accessible drawers without p
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 900, height: 700 });
   await expect(page.locator(".app-grid")).toHaveClass(/narrow-layout/);
-  await page.getByRole("button", { name: "Toggle filters" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Search session" })).toBeVisible();
-  await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Toggle filters" })).toBeFocused();
+
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.getByRole("button", { name: "Toggle details" }).click();
+  await page.getByRole("button", { name: "Toggle event details" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.locator(".inspector-panel")).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("session-explorer-narrow.png"), animations: "disabled" });
@@ -443,7 +440,7 @@ test("long labels/tab overflow and resize cancellation preserve readable panes",
   expect(await title.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe("nowrap");
   const descriptions = await page.locator(".session-primary:not([hidden]) .row-title > span").allTextContents();
   expect(descriptions.every((description) => !description.trim().startsWith("{"))).toBe(true);
-  const separator = page.getByRole("separator", { name: "Resize details" });
+  const separator = page.getByRole("separator", { name: "Resize event details" });
   await separator.focus();
   await page.keyboard.press("Home");
   const list = page.locator(".inspector-tabs > [role=tablist]");
@@ -452,7 +449,7 @@ test("long labels/tab overflow and resize cancellation preserve readable panes",
     element.scrollLeft = element.scrollWidth;
   });
   await expect(page.getByRole("tab", { name: "codemode", exact: true })).toBeVisible();
-  const navSplitter = page.getByRole("separator", { name: "Resize filters" });
+  const navSplitter = page.getByRole("separator", { name: "Resize event details" });
   const box = await navSplitter.boundingBox();
   if (!box) throw new Error("Missing handle");
   await page.mouse.move(box.x + 2, box.y + 20);

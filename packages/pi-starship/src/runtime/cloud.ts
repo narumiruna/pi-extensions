@@ -1,12 +1,14 @@
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import {
+  detectEnvironment,
   exactAlias,
   isRecord,
   joinHome,
   MAX_METADATA_FILE_BYTES,
   optionBoolean,
   optionMap,
+  optionStrings,
   parseIni,
   safeMetadata,
 } from "./helpers.js";
@@ -55,6 +57,7 @@ async function collectAws(context: CollectorContext): Promise<Record<string, str
 
 async function collectGcloud(context: CollectorContext): Promise<Record<string, string> | undefined> {
   const env = context.input.environment;
+  if (!detectEnvironment(env, optionStrings(context, "gcloud", "detect_env_vars"))) return undefined;
   const directory = safeMetadata(env.CLOUDSDK_CONFIG, 1_024) ?? joinHome(context.input, ".config", "gcloud");
   const active =
     safeMetadata(env.CLOUDSDK_ACTIVE_CONFIG_NAME) ??

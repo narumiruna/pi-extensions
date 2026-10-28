@@ -58,7 +58,7 @@ test("session replacement disposes an open settings preview before returning", a
   }
 });
 
-test("session replacement disposes an open module browser before returning", async () => {
+test("session replacement disposes an open Configuration summary before returning", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-stale-modules-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = root;
@@ -99,7 +99,7 @@ test("session replacement disposes an open module browser before returning", asy
   }
 });
 
-test("session shutdown disposes an open module browser before returning", async () => {
+test("session shutdown disposes an open Configuration summary before returning", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-shutdown-modules-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = root;
@@ -178,6 +178,8 @@ test("session shutdown disposes an open settings preview before returning", asyn
 
 test("preset cursor preview swaps only the in-memory footer and Back restores it", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-live-preset-footer-"));
+  const activeDocument = "format = 'π active'\n";
+  writeFileSync(join(root, "pi-starship.toml"), activeDocument);
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = root;
   try {
@@ -204,7 +206,7 @@ test("preset cursor preview swaps only the in-memory footer and Back restores it
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     assert.doesNotMatch(footer.render(80).join("\n"), /π/u);
-    assert.equal(existsSync(join(root, "pi-starship.toml")), false);
+    assert.equal(readFileSync(join(root, "pi-starship.toml"), "utf8"), activeDocument);
 
     tui.press("tui.select.cancel");
     await tui.waitForOpen();
@@ -222,6 +224,8 @@ test("preset cursor preview swaps only the in-memory footer and Back restores it
 
 test("session replacement clears an open preset footer preview before returning", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-replace-preset-preview-"));
+  const activeDocument = "format = 'π active'\n";
+  writeFileSync(join(root, "pi-starship.toml"), activeDocument);
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = root;
   try {
@@ -251,7 +255,7 @@ test("session replacement clears an open preset footer preview before returning"
     await emit(mock.events, "session_start", {}, newContext.ctx);
     await command;
     assert.match(oldFooter.render(80).join("\n"), /π/u);
-    assert.equal(existsSync(join(root, "pi-starship.toml")), false);
+    assert.equal(readFileSync(join(root, "pi-starship.toml"), "utf8"), activeDocument);
     oldFooter.dispose();
     await emit(mock.events, "session_shutdown", {}, newContext.ctx);
   } finally {
@@ -316,10 +320,9 @@ test("session replacement disposes an open reload preview without applying stale
     writeFileSync(path, external);
     const command = Promise.resolve(mock.commands.get("starship")?.handler("", oldContext.ctx));
     await tui.waitForOpen();
-    for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
+    for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
-    for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     assert.match(tui.render().join("\n"), /Reload preview/u);
@@ -364,10 +367,9 @@ test("session shutdown rejects a reload confirmation that resolves after ownersh
     writeFileSync(path, external);
     const command = Promise.resolve(mock.commands.get("starship")?.handler("", context.ctx));
     await tui.waitForOpen();
-    for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
+    for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
-    for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     tui.press("tui.select.confirm");

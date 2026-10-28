@@ -49,6 +49,31 @@ test("Jev evaluator batches candidates, forwards cancellation, and aggregates ty
   assert.match(JSON.stringify(questions.candidate_0), /untrusted data/);
 });
 
+test.each([
+  [null, null, 0, 0],
+  [null, 3, 0, 3],
+  [7, null, 7, 0],
+  [0, 0, 0, 0],
+])("Jev evaluator accepts unreported usage (%s, %s)", async (input, output, inputTokens, outputTokens) => {
+  const client: SystemOneClient = {
+    async systemOne() {
+      return {
+        model: "jev-test",
+        answers: { candidate_0: { type: "noul", noul: 0.9 } },
+        usage: { input_tokens: input, output_tokens: output },
+      };
+    },
+  };
+  const result = await new JevEvaluator("secret-key", client).evaluate(
+    "query",
+    [{ id: "one", path: "one", text: "text" }],
+    "file",
+  );
+  assert.equal(result.scores.get("one"), 0.9);
+  assert.equal(result.inputTokens, inputTokens);
+  assert.equal(result.outputTokens, outputTokens);
+});
+
 test("Jev evaluator keeps escaped candidate state within the provider request budget", async () => {
   const client = new FakeClient();
   const evaluator = new JevEvaluator("secret-key", client);

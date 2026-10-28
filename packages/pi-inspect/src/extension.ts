@@ -146,7 +146,8 @@ export function registerInspector(pi: ExtensionAPI, deps: Dependencies = default
   });
   pi.on("agent_settled", (_event, ctx) => {
     owners.get(ctx.sessionManager)?.collector?.settle();
-    changed(ctx, false);
+    // Settled hooks can persist auxiliary usage without a message event.
+    changed(ctx);
   });
 
   async function open(owner: Owner, ctx: ExtensionCommandContext): Promise<void> {
@@ -175,6 +176,9 @@ export function registerInspector(pi: ExtensionAPI, deps: Dependencies = default
           },
         });
         const server = await deps.start({
+          // This eager entry module has the same package-root depth in src and dist.
+          // Pass the base explicitly so server chunks never resolve assets from their own directory.
+          assetBase: new URL("../browser-dist/", import.meta.url),
           generation: owner.generation,
           signal: owner.controller.signal,
           snapshot: () => owner.feed?.snapshot(),

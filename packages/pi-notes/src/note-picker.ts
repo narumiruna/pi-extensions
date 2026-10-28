@@ -16,7 +16,13 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { formatInteractionHints, HorizontalRule, renderBoundedFrame, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import {
+  canonicalizeConfiguredKey,
+  formatInteractionHints,
+  HorizontalRule,
+  renderBoundedFrame,
+  sanitizeTerminalText,
+} from "@narumitw/pi-tui-kit";
 import type { MarkdownEntry } from "./storage.js";
 
 const BRACKETED_PASTE_START = "\u001b[200~";
@@ -64,25 +70,6 @@ const SEARCH_INPUT_BINDINGS = [
 ] as const;
 
 const MODIFIERS = ["shift", "alt", "ctrl", "super"] as const;
-const SYMBOLS = "`-=[]\\;',./!@#$%^&*()_|~{}:<>?";
-const SPECIAL_KEYS = new Set([
-  "escape",
-  "enter",
-  "tab",
-  "space",
-  "backspace",
-  "insert",
-  "delete",
-  "clear",
-  "home",
-  "end",
-  "pageup",
-  "pagedown",
-  "left",
-  "right",
-  "up",
-  "down",
-]);
 const FUNCTION_INPUTS = ["OP", "OQ", "OR", "OS", "[15~", "[17~", "[18~", "[19~", "[20~", "[21~", "[23~", "[24~"];
 const LEGACY_INPUTS = [
   ...Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)),
@@ -670,23 +657,13 @@ export function resolveNoteDeleteKey(
 }
 
 function normalizeKey(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length > 80 || /[\s\p{Cc}]/u.test(value)) return undefined;
-  const parts = value.toLowerCase().split("+");
-  let base = parts.pop();
-  if (!base) return undefined;
-  if (base === "esc") base = "escape";
-  if (base === "return") base = "enter";
-  if (new Set(parts).size !== parts.length || parts.some((part) => !MODIFIERS.includes(part as never)))
-    return undefined;
-  if (
-    !SPECIAL_KEYS.has(base) &&
-    !/^f(?:[1-9]|1[0-2])$/u.test(base) &&
-    !(base.length === 1 && (/^[a-z0-9]$/u.test(base) || SYMBOLS.includes(base)))
-  )
-    return undefined;
-  if ((base === "escape" || /^f(?:[1-9]|1[0-2])$/u.test(base)) && parts.length > 0) return undefined;
-  if (base === "clear" && (parts.length > 1 || (parts.length === 1 && !["ctrl", "shift"].includes(parts[0] ?? ""))))
-    return undefined;
+  // Retain the picker's existing admission and protocol-lookup spelling. Kit
+  // also accepts literal '+', which this picker has never admitted.
+  if (typeof value !== "string" || value.length > 80 || value.endsWith("+")) return undefined;
+  const canonical = canonicalizeConfiguredKey(value);
+  if (!canonical) return undefined;
+  const parts = canonical.toLowerCase().split("+");
+  const base = parts.pop();
   return [...MODIFIERS.filter((modifier) => parts.includes(modifier)), base].join("+");
 }
 

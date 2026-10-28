@@ -1,4 +1,4 @@
-import { defineModule, type ModuleDefinition } from "./types.js";
+import { defineModule, type ModuleDefinition, type ModuleOptionSchema, type ModuleStyleContext } from "./types.js";
 import { workspaceModuleValues } from "./workspace-helpers.js";
 
 const detectionOptions = {
@@ -14,6 +14,8 @@ function languageModule<const Name extends string>(definition: {
   format: string;
   symbol: string;
   style: string;
+  options?: Readonly<Record<string, ModuleOptionSchema>>;
+  requirementStyle?: boolean;
 }): ModuleDefinition<Name> {
   return defineModule({
     name: definition.name,
@@ -24,7 +26,20 @@ function languageModule<const Name extends string>(definition: {
       style: definition.style,
       disabled: false,
     },
-    options: detectionOptions,
+    ...(definition.requirementStyle
+      ? {
+          // Opt in to requirement styling without changing existing output or symbol-only work.
+          styleDefaults: { not_capable_style: "none" },
+          fallbackStyle: true,
+          resolveStyleVariables: ({ runtime, style, styles }: ModuleStyleContext) => ({
+            style:
+              runtime.workspace?.styleSelectors?.[definition.name] === "not_capable"
+                ? (styles.not_capable_style ?? style)
+                : style,
+          }),
+        }
+      : {}),
+    options: { ...detectionOptions, ...definition.options },
     values: (context) => workspaceModuleValues(definition.name, context),
   });
 }
@@ -35,6 +50,7 @@ export const nodejsModule = languageModule({
   format: "via [$symbol($version )]($style)",
   symbol: " ",
   style: "bold green",
+  requirementStyle: true,
 });
 
 export const pythonModule = languageModule({
@@ -43,6 +59,13 @@ export const pythonModule = languageModule({
   format: "via [$symbol$pyenv_prefix($version )(\\($virtualenv\\) )]($style)",
   symbol: " ",
   style: "yellow bold",
+  options: {
+    pyenv_version_name: { kind: "boolean", default: false },
+    pyenv_prefix: { kind: "string", default: "pyenv " },
+    python_binary: { kind: "command-alternatives", default: [] },
+    detect_env_vars: { kind: "string-array", default: [], allowNegative: true },
+    generic_venv_names: { kind: "string-array", default: [] },
+  },
 });
 
 export const rustModule = languageModule({
@@ -59,6 +82,7 @@ export const golangModule = languageModule({
   format: "via [$symbol($version )]($style)",
   symbol: " ",
   style: "bold cyan",
+  requirementStyle: true,
 });
 
 export const bunModule = languageModule({

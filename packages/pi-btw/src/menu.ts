@@ -129,6 +129,8 @@ export async function showBtwCommandMenu(
     exit: "Exit shortcut",
     cycleThinkingLevel: "Cycle thinking level shortcut",
     bringToMain: "Bring to main shortcut",
+    switchPane: "Switch pane shortcut",
+    importMainUpdates: "Import main updates shortcut",
   };
   const shortcutValue = (settings: BtwSettings, action: BtwShortcutAction): string => {
     if (!keybindings) return "Default";
@@ -592,7 +594,7 @@ export async function showBtwCommandMenu(
 
   const result = await runBtwMenuPreservingEditor(
     ctx,
-    (menuContext) => runMenu(menuContext, menu, { getState: loadState }),
+    (menuContext) => runMenu(menuContext, menu, { getState: loadState, signal: ctx.signal }),
     (manager) => {
       keybindings = manager;
     },
@@ -607,27 +609,33 @@ export async function showBtwCustomPreservingEditor<T>(
   ctx: ExtensionCommandContext,
   factory: BtwCustomFactory<T>,
 ): Promise<T | undefined> {
+  const { runCustomInteraction } = await import("@narumitw/pi-tui-kit");
+  if (ctx.signal?.aborted) return undefined;
   let liveEditorText = ctx.ui.getEditorText();
   let completed = false;
-  const result = await ctx.ui.custom<T>((tui, theme, keybindings, done) =>
-    factory(tui, theme, keybindings, (value) => {
-      try {
-        liveEditorText = ctx.ui.getEditorText();
-      } catch {
-        // Keep completion finite if session replacement invalidates the editor context.
-      }
-      completed = true;
-      done(value);
-    }),
-  );
-  if (completed) {
+  const result = await runCustomInteraction<T>(ctx, {
+    signal: ctx.signal,
+    create: ({ tui, theme, keybindings, complete }) =>
+      factory(tui, theme, keybindings, (value) => {
+        if (ctx.signal?.aborted) return;
+        try {
+          liveEditorText = ctx.ui.getEditorText();
+        } catch {
+          // Keep completion finite if session replacement invalidates the editor context.
+        }
+        completed = true;
+        complete(value);
+      }),
+  });
+  if (result.kind === "error") throw result.error;
+  if (!ctx.signal?.aborted && completed) {
     try {
       if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
     } catch {
       // A replaced context owns a different editor and must not receive stale restoration.
     }
   }
-  return result;
+  return result.kind === "completed" ? result.value : undefined;
 }
 
 export async function runBtwMenuPreservingEditor(
@@ -635,31 +643,38 @@ export async function runBtwMenuPreservingEditor(
   run: (menuContext: MenuContext) => Promise<RunMenuResult>,
   onKeybindings?: (keybindings: KeybindingsManager) => void,
 ): Promise<RunMenuResult> {
+  if (ctx.signal?.aborted) return { kind: "stale" };
   let liveEditorText = ctx.ui.getEditorText();
   let completed = false;
   const ui = new Proxy(ctx.ui, {
     get(target, property) {
       if (property === "custom") {
         return <Value>(factory: BtwCustomFactory<Value>, customOptions?: BtwCustomOptions) =>
-          target.custom<Value>((tui, theme, keybindings, done) => {
-            onKeybindings?.(keybindings);
-            return factory(tui, theme, keybindings, (value) => {
-              try {
-                liveEditorText = target.getEditorText();
-              } catch {
-                // Keep completion finite if session replacement invalidates the editor context.
-              }
-              completed = true;
-              done(value);
-            });
-          }, customOptions);
+          ctx.signal?.aborted
+            ? Promise.resolve(undefined as Value)
+            : target.custom<Value>((tui, theme, keybindings, done) => {
+                onKeybindings?.(keybindings);
+                return factory(tui, theme, keybindings, (value) => {
+                  try {
+                    if (ctx.signal?.aborted) {
+                      done(value);
+                      return;
+                    }
+                    liveEditorText = target.getEditorText();
+                  } catch {
+                    // Keep completion finite if session replacement invalidates the editor context.
+                  }
+                  completed = true;
+                  done(value);
+                });
+              }, customOptions);
       }
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
   const result = await run({ mode: ctx.mode, hasUI: ctx.hasUI, ui });
-  if (result.kind !== "stale" && completed) {
+  if (!ctx.signal?.aborted && result.kind !== "stale" && completed) {
     try {
       if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
     } catch {
@@ -720,6 +735,7 @@ function notifySafely(
   message: string,
   level: Parameters<ExtensionCommandContext["ui"]["notify"]>[1],
 ): void {
+  if (ctx.signal?.aborted) return;
   try {
     ctx.ui.notify(sanitizeSingleLine(message), level);
   } catch {

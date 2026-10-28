@@ -1,6 +1,7 @@
 import { Container, Key, Loader, matchesKey, Spacer, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { HorizontalRule } from "../horizontal-rule.js";
 import type { MenuKeybindings } from "./contracts.js";
+import { componentKeybindings } from "./host-input.js";
 
 interface TaskLoaderTheme {
   fg(color: "accent" | "border" | "dim" | "muted", text: string): string;
@@ -22,7 +23,7 @@ export class TaskLoader extends Container {
   ) {
     super();
     this.cancellable = options.cancellable ?? true;
-    const cancelHint = this.cancellable ? cancelKeyText(keybindings) : undefined;
+    const cancelHint = this.cancellable ? cancelKeyText(componentKeybindings(tui, keybindings)) : undefined;
     const borderColor = (text: string) => theme.fg("border", text);
     this.addChild(new HorizontalRule({ ruleStyle: borderColor }));
     this.loader = new Loader(

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
+import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { stripTuiCursorMarkers, plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import toolExtension from "../src/index.js";
-import { createToolCatalog } from "../src/tool-catalog.js";
+import { createToolCatalog, createToolMenu } from "../src/tool-catalog.js";
 
 initTheme("dark", false);
 
@@ -152,6 +154,71 @@ test("exact detail documents do not become implicit browse search metadata", asy
   assert.match(stripVTControlCharacters(tui.render().join("\n")), /No matching items/u);
   tui.press("ctrl+c");
   await running;
+});
+
+test("exact detail search preserves raw catalog identity, metadata, list query, and selection on Back", async (t) => {
+  const catalog = createToolCatalog(configuredTools as never, ["read"], { read: "abcdefghijklmnopqrstuvWXYZ a.b" });
+  const before = structuredClone(catalog);
+  let writes = 0;
+  const menu = createToolMenu(catalog, {
+    settingsPath: "/test/pi-tool.json",
+    isActiveToolStatusEnabled: () => false,
+    toggleActiveToolStatus: async () => {
+      writes += 1;
+      return true;
+    },
+  });
+  const screen = resolveMenuScreen(menu, "tools", undefined);
+  assert.equal(screen.kind, "browse");
+  if (screen.kind !== "browse") return;
+  assert.equal(screen.enableDetailSearch, true);
+  assert.deepEqual(
+    screen.items.map(({ id, label }) => ({ id, label })),
+    [
+      { id: "deploy", label: "deploy" },
+      { id: "read", label: "read" },
+    ],
+  );
+  for (const [index, item] of screen.items.entries()) {
+    assert.equal(item.detailDocument?.content, catalog.items[index]?.detailContent);
+    assert.deepEqual(item.detailDocument?.format, { kind: "text" });
+    assert.equal(item.searchText, catalog.items[index]?.searchText);
+  }
+  const tui = createTuiHarness({ width: 24, rows: 18, keybindings: getKeybindings() as never });
+  t.onTestFinished(() => tui.dispose());
+  const base = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runMenu(base.ctx, { ...menu, start: "tools" }, { getState: () => undefined });
+  await tui.waitForOpen();
+  tui.type("builtin");
+  const list = stripVTControlCharacters(tui.render().join("\n"));
+  assert.match(list, /› read/u);
+  assert.doesNotMatch(list, /deploy/u);
+  tui.press("tui.select.confirm");
+  tui.render();
+  tui.send(" ");
+  tui.type("vWXYx");
+  tui.send("\u007f");
+  tui.type("Z");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /1\/1/u);
+  for (const width of [17, 31, 24]) {
+    tui.resize({ width });
+    assert.match(stripVTControlCharacters(tui.render().join("\n")), /1\/1/u);
+  }
+  tui.send("\u0015");
+  tui.send("\u001b[200~a.b\u001b[201~");
+  assert.match(stripVTControlCharacters(tui.render().join("\n")), /1\/1/u);
+  tui.press("tui.select.cancel");
+  assert.equal(tui.isOpen, true);
+  assert.doesNotMatch(stripVTControlCharacters(tui.render().join("\n")), /Find:/u);
+  tui.press("tui.select.cancel");
+  assert.equal(stripVTControlCharacters(tui.render().join("\n")), list);
+  tui.press("tui.select.confirm");
+  tui.render();
+  tui.send(" ");
+  tui.press("ctrl+c");
+  assert.deepEqual(await running, { kind: "closed", reason: "close" });
+  assert.deepEqual(catalog, before);
+  assert.equal(writes, 0);
 });
 
 test("/tool supports RPC list and detail navigation", async () => {
@@ -335,7 +402,7 @@ test("/tool toggles and persists the active-tool widget in RPC mode", async () =
   await command.handler("", { ...base, ui: { ...base.ui, ...rpc.ui } });
   rpc.assertConsumed();
   assert.deepEqual(saved, [true]);
-  assert.deepEqual(lifecycle.widgets.get("tool:active-tools"), ["Active tool (1)", "read"]);
+  assert.deepEqual(lifecycle.widgets.get("tool:active-tools"), ["Tools (1)", "Built-in (1): read"]);
   await mock.events.get("session_shutdown")?.[0]?.({}, lifecycle.ctx);
 });
 
@@ -457,13 +524,13 @@ test("terminal controls are stripped by the browse display boundary", async () =
   const running = command.handler("", { ...base, ui: { ...base.ui, custom: tui.custom } });
   await tui.waitForOpen();
   await openToolCatalog(tui);
-  let frame = tui.render().join("\n");
+  let frame = stripTuiCursorMarkers(tui.render().join("\n"));
   assert.equal(frame.includes("\u001b]0;owned"), false);
   assert.equal(frame.includes("\u0007"), false);
   tui.press("tui.select.confirm");
   const narrowFrame = tui.resize({ width: 12, rows: 16 });
   assert.ok(narrowFrame.every((line) => displayCellWidth(line) <= 12));
-  frame = narrowFrame.join("\n");
+  frame = stripTuiCursorMarkers(narrowFrame.join("\n"));
   assert.match(stripVTControlCharacters(frame), /工具|🙂/u);
   assert.equal(frame.includes("\u001b]0;owned"), false);
   assert.equal(frame.includes("\u001b[31m"), false);

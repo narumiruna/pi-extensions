@@ -60,14 +60,14 @@ export function checkpointMarker(checkpointId: string): string {
   return [
     `[PI_CODEX_REMOTE_CHECKPOINT:${checkpointId}]`,
     "Opaque checkpoint injection failed. Do not infer missing history; tell the user to re-enable",
-    "@narumitw/pi-codex-compact with the same model and Responses API.",
+    "@narumitw/pi-codex-compact with its issuing provider and a compatible Responses API and profile.",
   ].join(" ");
 }
 
 export function fallbackSummary(checkpointId: string): string {
   return [
     `Responses compaction checkpoint ${checkpointId} stores the older history opaquely.`,
-    "Full replay requires @narumitw/pi-codex-compact and the same model through a compatible Responses provider.",
+    "Full replay requires @narumitw/pi-codex-compact and its issuing provider with a compatible Responses API and profile.",
     "Without them, only Pi's retained recent messages remain available.",
   ].join(" ");
 }

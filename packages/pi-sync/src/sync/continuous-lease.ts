@@ -49,13 +49,8 @@ export async function continuousLeaseOwner(binding: string): Promise<string> {
   if (!validOwner(owner)) throw new Error("Invalid continuous sync owner");
   try {
     const guard = await fs.lstat(path.join(continuousRoot(), "scheduler.lock"));
-    if (
-      guard.isDirectory() &&
-      !guard.isSymbolicLink() &&
-      Date.now() - guard.mtimeMs <= STALE_MS &&
-      owner.binding === binding
-    )
-      return `Local scheduler lease: observed for pid ${owner.pid}; this can be another session`;
+    if (guard.isDirectory() && !guard.isSymbolicLink() && Date.now() - guard.mtimeMs <= STALE_MS)
+      return `Local scheduler lease: observed for pid ${owner.pid}; ${owner.binding === binding ? "this can be another session" : "another setup; this setup is standby"}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

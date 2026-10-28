@@ -91,6 +91,19 @@ export function registerRuntimeBuilderContract(options: RuntimeBuilderContractOp
       const metadata = validMetadata();
       requireOutput(metadata, "dist/index.ts").imports?.push({ path, kind: "import-statement", external: true });
       assert.doesNotThrow(() => builder.validateEagerGraph(metadata));
+      // Exceptions are exact specifiers, not permission for an entire dependency subtree.
+      if (
+        options.matchExternalSubpaths !== false &&
+        forbiddenExternals.some((dependency) => path.startsWith(`${dependency}/`))
+      ) {
+        const descendant = validMetadata();
+        requireOutput(descendant, "dist/index.ts").imports?.push({
+          path: `${path}/leaf`,
+          kind: "import-statement",
+          external: true,
+        });
+        assert.throws(() => builder.validateEagerGraph(descendant), /Eager external dependency/u);
+      }
     }
     for (const path of ["dist/index.ts", "dist/chunks/dependency.ts"]) {
       const metadata = validMetadata();

@@ -42,6 +42,8 @@ export const hostnameModule = defineModule({
   },
   options: {
     ssh_only: { kind: "boolean", default: true },
+    ssh_symbol: { kind: "string", default: "🌐 " },
+    detect_env_vars: { kind: "string-array", default: [], allowNegative: true },
     trim_at: { kind: "string", default: "." },
     aliases: { kind: "string-map", default: {} },
   },

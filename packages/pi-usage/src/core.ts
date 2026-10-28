@@ -1,12 +1,22 @@
 import { createHmac } from "node:crypto";
 import type { UsageReport } from "./types.js";
 
+type UsageCacheChangeReason = "updated" | "invalidated";
+
 export class UsageCache {
-  private readonly entries = new Map<string, { createdAt: number; report: UsageReport }>();
+  private readonly entries = new Map<string, { providerId: string; createdAt: number; report: UsageReport }>();
   private readonly ttlMs: number;
   private readonly maxEntries: number;
+  private notificationBatch?: {
+    changes: { providerId: string; reason: UsageCacheChangeReason }[];
+    seen: Record<UsageCacheChangeReason, Set<string>>;
+  };
 
-  constructor(ttlMs: number, maxEntries = 32) {
+  constructor(
+    ttlMs: number,
+    maxEntries = 32,
+    private readonly onChange?: (providerId: string, reason: UsageCacheChangeReason) => void,
+  ) {
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error("Cache TTL must be positive.");
     if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
       throw new Error("Cache entry limit must be a positive integer.");
@@ -20,39 +30,93 @@ export class UsageCache {
   }
 
   get(providerId: string, fingerprint: string, now = Date.now()): UsageReport | undefined {
-    this.sweepExpired(now);
-    return this.entries.get(cacheKey(providerId, fingerprint))?.report;
+    return this.getEntry(providerId, fingerprint, now)?.report;
+  }
+
+  getEntry(
+    providerId: string,
+    fingerprint: string,
+    now = Date.now(),
+  ): { report: UsageReport; expiresAt: number } | undefined {
+    this.notifyChanges(this.sweepExpired(now));
+    const entry = this.entries.get(cacheKey(providerId, fingerprint));
+    return entry ? { report: entry.report, expiresAt: entry.createdAt + this.ttlMs } : undefined;
   }
 
   set(providerId: string, fingerprint: string, report: UsageReport, now = Date.now()): void {
-    this.sweepExpired(now);
+    const invalidated = this.sweepExpired(now);
     const key = cacheKey(providerId, fingerprint);
     this.entries.delete(key);
     while (this.entries.size >= this.maxEntries) {
-      const oldest = this.entries.keys().next().value;
+      const oldest = this.entries.entries().next().value;
       if (oldest === undefined) break;
-      this.entries.delete(oldest);
+      this.entries.delete(oldest[0]);
+      invalidated.add(oldest[1].providerId);
     }
-    this.entries.set(key, { createdAt: now, report });
+    this.entries.set(key, { providerId, createdAt: now, report });
+    this.notifyChanges(invalidated, providerId);
   }
 
   delete(providerId: string, fingerprint: string): void {
-    this.entries.delete(cacheKey(providerId, fingerprint));
-  }
-
-  clearProvider(providerId: string): void {
-    for (const key of this.entries.keys()) {
-      if (key.startsWith(`${providerId}:`)) this.entries.delete(key);
+    if (this.entries.delete(cacheKey(providerId, fingerprint))) {
+      this.notifyChanges(new Set([providerId]));
     }
   }
 
-  clear(): void {
-    this.entries.clear();
+  clearProvider(providerId: string): void {
+    let removed = false;
+    for (const [key, entry] of this.entries) {
+      if (entry.providerId !== providerId) continue;
+      this.entries.delete(key);
+      removed = true;
+    }
+    if (removed) this.notifyChanges(new Set([providerId]));
   }
 
-  private sweepExpired(now: number): void {
+  clear(): void {
+    const invalidated = new Set([...this.entries.values()].map((entry) => entry.providerId));
+    this.entries.clear();
+    this.notifyChanges(invalidated);
+  }
+
+  private sweepExpired(now: number): Set<string> {
+    const invalidated = new Set<string>();
     for (const [key, entry] of this.entries) {
-      if (now - entry.createdAt >= this.ttlMs) this.entries.delete(key);
+      if (now - entry.createdAt >= this.ttlMs) {
+        this.entries.delete(key);
+        invalidated.add(entry.providerId);
+      }
+    }
+    return invalidated;
+  }
+
+  private notifyChanges(invalidated: ReadonlySet<string>, updated?: string): void {
+    if (!this.onChange || (invalidated.size === 0 && updated === undefined)) return;
+    const batch = this.notificationBatch ?? {
+      changes: [],
+      seen: { updated: new Set<string>(), invalidated: new Set<string>() },
+    };
+    const enqueue = (providerId: string, reason: UsageCacheChangeReason) => {
+      if (batch.seen[reason].has(providerId)) return;
+      batch.seen[reason].add(providerId);
+      batch.changes.push({ providerId, reason });
+    };
+    for (const providerId of invalidated) enqueue(providerId, "invalidated");
+    if (updated !== undefined) enqueue(updated, "updated");
+    if (this.notificationBatch) return;
+
+    // Coalesce each provider/reason across synchronous reentry to prevent notification loops.
+    this.notificationBatch = batch;
+    try {
+      for (const { providerId, reason } of batch.changes) {
+        try {
+          this.onChange(providerId, reason);
+        } catch {
+          // An observer failure must not interrupt cache operations or other notifications.
+        }
+      }
+    } finally {
+      this.notificationBatch = undefined;
     }
   }
 }

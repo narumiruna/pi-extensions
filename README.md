@@ -56,6 +56,7 @@ These extensions are part of my daily Pi setup:
 | Package | Use it for | Install |
 | --- | --- | --- |
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Use OpenAI Codex Remote Compaction V2 to persist and replay bounded opaque checkpoints, with `/codex-compact` manual controls and safe Pi-native fallback. | `pi install npm:@narumitw/pi-codex-compact` |
+| [`pi-codex-imagegen`](./packages/pi-codex-imagegen) | Generate images through `/codex-imagegen` and a default-enabled Codex tool, without starting a Codex agent. | [Install from source](./packages/pi-codex-imagegen#-install) |
 | [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
 | [`pi-file-context`](./packages/pi-file-context) | Browse project files, preview text, select exact lines or Git diff hunks, and attach immutable snapshots with Git provenance to the next prompt. Open it with configurable `Ctrl+Shift+X` or `/file-context`. | `pi install npm:@narumitw/pi-file-context` |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
@@ -183,6 +184,8 @@ npm run check
 ```
 
 `npm test` typechecks the test sources and runs the root and workspace suites with Vitest.
+See [test performance and isolation](./docs/test-performance.md) for package timing reports,
+cache behavior, and the reviewed shared-module test boundary.
 CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.
 See [dependency installation policy](./docs/dependency-installation.md) for script approvals, lockfile-age limitations,
 failed-update recovery, urgent-patch review, and toolchain upgrades.
@@ -262,9 +265,7 @@ Reusable libraries publish built ESM and declarations from `dist/`.
 
 The following packages remain available as source references but are excluded from active workspace scripts:
 
-- `pi-biome-lsp` and `pi-python-lsp` — replaced by [`pi-lsp`](./packages/pi-lsp)
 - `pi-codex-accounts` — replaced by [`pi-accounts`](./packages/pi-accounts)
-- `pi-codex-usage` — replaced by [`pi-usage`](./packages/pi-usage)
 - [`pi-cbmem`](./deprecated/pi-cbmem) — deprecated without a replacement because a simple benchmark found insufficient benefit and substantially higher token usage
 - [`pi-chrome-devtools`](./deprecated/pi-chrome-devtools) — replaced by Chrome DevTools MCP through Pi's native MCP support; review the [migration instructions and compatibility differences](./deprecated/pi-chrome-devtools/README.md#-migration-to-native-mcp)
 - [`pi-firecrawl`](./deprecated/pi-firecrawl) — replaced by Firecrawl MCP through Pi's native MCP support; follow the [migration instructions](./deprecated/pi-firecrawl/README.md#-migration-to-native-mcp)
@@ -274,9 +275,7 @@ The following packages remain available as source references but are excluded fr
 - [`pi-workflow`](./deprecated/pi-workflow) — replaced by focused Plan and Goal products; atomic Plan-to-Goal handoff has [no replacement](./deprecated/pi-workflow/README.md#-migration-from-pi-workflow)
 - `pi-jupyter` — deprecated without a replacement
 - `pi-webui` — deprecated without a replacement
-- `pi-auto-thinking`
 - `pi-sidebar`
-- `pi-telegram-bot`
 - `pi-telegraph`
 - `pi-wait-what`
 

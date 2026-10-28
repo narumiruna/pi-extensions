@@ -1,9 +1,35 @@
 import assert from "node:assert/strict";
 import { type ExtensionCommandContext, initTheme, type SessionTreeNode } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { type MainThreadTreeSelectorOptions, pickMainEntry } from "../src/main-tree-picker.js";
+
+// Kit accepts asynchronous custom factories; keep the package-local adapter
+// asynchronous without changing the repository's synchronous selector harness.
+async function createTreeHarness(factory: unknown, width = 80) {
+  type TreeComponent = Component & { focused?: boolean; dispose?(): void; waitForPending?(): Promise<void> };
+  let pending: Promise<TreeComponent> | undefined;
+  let component: TreeComponent | undefined;
+  const harness = createCustomSelectorHarness((...args: never[]) => {
+    pending = Promise.resolve((factory as (...args: never[]) => TreeComponent | Promise<TreeComponent>)(...args));
+    return {
+      render: (columns: number) => component?.render(columns) ?? [],
+      handleInput: (data: string) => component?.handleInput?.(data),
+      invalidate: () => component?.invalidate(),
+      dispose: () => component?.dispose?.(),
+      waitForPending: () => component?.waitForPending?.() ?? Promise.resolve(),
+      get focused() {
+        return component?.focused ?? false;
+      },
+      set focused(value: boolean) {
+        if (component) component.focused = value;
+      },
+    };
+  }, width);
+  component = await pending;
+  return harness;
+}
 
 function userNode(id: string, parentId: string | null, text: string): SessionTreeNode {
   return {
@@ -58,7 +84,7 @@ test("main-thread tree picker passes the session snapshot and current leaf to th
       getEntry: (id: string) => (id === "branch-entry" ? branch.entry : undefined),
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       (mock.ctx as ExtensionCommandContext).ui.setEditorText("newer main draft");
       harness.handleInput("select");
       return harness.resultPromise;
@@ -146,7 +172,7 @@ test("tree display strips terminal controls while copy keeps the raw selected te
       getEntry: () => root.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       harness.handleInput("copy-raw");
       await new Promise<void>((resolve) => setImmediate(resolve));
       harness.handleInput("escape");
@@ -212,7 +238,7 @@ test("Escape returns to the menu while Ctrl+C closes the overall tree flow", asy
         getEntry: () => node.entry,
       },
       custom: async (factory: unknown) => {
-        const harness = createCustomSelectorHarness(factory);
+        const harness = await createTreeHarness(factory);
         harness.handleInput(input);
         return harness.resultPromise;
       },
@@ -238,7 +264,7 @@ test("native copy success and failure are observable and terminal-safe", async (
       getEntry: () => node.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       harness.handleInput("copy");
       await new Promise<void>((resolve) => setImmediate(resolve));
       harness.handleInput("escape");
@@ -286,7 +312,7 @@ test("failed label persistence restores the previously displayed label", async (
       getEntry: () => node.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       harness.handleInput("label");
       harness.handleInput("escape");
       return harness.resultPromise;
@@ -335,7 +361,7 @@ test("native label editing writes only after the selector's explicit callback", 
       getEntry: () => node.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       assert.deepEqual(labels, []);
       harness.handleInput("label");
       harness.handleInput("escape");
@@ -366,7 +392,7 @@ test("native tree selector renders within narrow terminal widths", async () => {
       getEntry: () => root.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory, 28);
+      const harness = await createTreeHarness(factory, 28);
       const rendered = harness.render(28);
       assert.ok(rendered.every((line) => visibleWidth(line) <= 28));
       harness.handleInput("\u0003");
@@ -406,7 +432,7 @@ test("native tree selector opens with omitted and replaced context edits", async
         getEntry: () => edit.entry,
       },
       custom: async (factory: unknown) => {
-        const harness = createCustomSelectorHarness(factory, 28);
+        const harness = await createTreeHarness(factory, 28);
         renderedWide = harness.render(80);
         rendered = harness.render(28);
         harness.handleInput("\u0003");
@@ -449,7 +475,7 @@ test("context edit target IDs are display-safe without changing raw entries", as
       getEntry: () => edit.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       harness.handleInput("escape");
       return harness.resultPromise;
     },
@@ -484,7 +510,7 @@ test("disposing the tree picker aborts and drains the pending clipboard operatio
       getEntry: () => node.entry,
     },
     custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
+      const harness = await createTreeHarness(factory);
       harness.handleInput("copy");
       harness.dispose();
       return harness.resultPromise;

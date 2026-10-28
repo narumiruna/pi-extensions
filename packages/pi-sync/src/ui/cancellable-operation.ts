@@ -17,6 +17,7 @@ export type RunRoute = (
   onCommit?: () => void,
   target?: string,
   onDialog?: (active: boolean) => void,
+  retryRefusal?: boolean,
 ) => Promise<RunRouteResult | undefined>;
 
 export type CancellableOperationResult = RunRouteResult | { kind: "closed" } | { kind: "cancelled" };
@@ -106,6 +107,7 @@ export async function runCancellableOperation(
       );
       return {
         render(width: number) {
+          if (width <= 0) return [];
           const safeWidth = Math.max(1, width);
           const lines = loader.render(safeWidth);
           const bottomBorder = lines.at(-1);

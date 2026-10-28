@@ -45,7 +45,7 @@ it.each([false, true])(
             description: "Return content and diagnostics",
             parameters: Type.Object({}),
             execute: async () => ({
-              content: [fauxText(isError ? "PRIVATE-RETURNED-ERROR" : "visible tool output")],
+              output: [fauxText(isError ? "PRIVATE-RETURNED-ERROR" : "visible tool output")],
               diagnostics: [{ severity: "warn", code: "host_diagnostic", message: "PRIVATE-DIAGNOSTIC-Authorization" }],
               isError,
               details: { secretKey: "PRIVATE-TOOL-DETAILS" },
@@ -86,7 +86,7 @@ it("bounds oversized committed tool identifiers in metadata without rewriting ex
           name: "id",
           description: "Execute",
           parameters: Type.Object({}),
-          execute: async () => ({ content: [fauxText("result")] }),
+          execute: async () => ({ output: [fauxText("result")] }),
         }),
       ],
     }),

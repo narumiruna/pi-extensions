@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type Focusable, Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { componentKeyAvailable, componentKeybindings } from "./components/host-input.js";
 import { safeMenuText } from "./components/rendering.js";
 import { runCustomInteraction } from "./custom-interaction.js";
 import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
@@ -112,7 +113,11 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
       signal.throwIfAborted();
       if (!isCurrent(options)) throw new DOMException("Live choice owner became stale", "AbortError");
       let focusedItemId = selectedItemId;
-      const shortcuts = options.enableSearch ? [] : availableShortcuts(options.shortcuts, keybindings);
+      const shortcuts = options.enableSearch
+        ? []
+        : availableShortcuts(options.shortcuts, keybindings)
+            .map((shortcut) => ({ ...shortcut, keys: shortcut.keys.filter((key) => componentKeyAvailable(tui, key)) }))
+            .filter((shortcut) => shortcut.keys.length > 0);
       const previews = createPreviewQueue(ctx, options, signal, () => complete({ kind: "previewFailed" }));
       const component = createMenuScreenComponent<"liveChoice", "select">({
         screen: {
@@ -130,7 +135,7 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
         tui,
         theme,
         keybindings,
-        interactionHint: liveChoiceHint(keybindings, options, shortcuts),
+        interactionHint: liveChoiceHint(componentKeybindings(tui, keybindings), options, shortcuts),
         onSelectionChange: (itemId) => {
           focusedItemId = itemId as Item["id"];
           const item = findItem(options.items, focusedItemId);

@@ -106,6 +106,7 @@ function setup(
         () => undefined,
         reader,
         options.obsoleteArgument,
+        { openaiUseCodexUsage: true },
       ),
   };
 }

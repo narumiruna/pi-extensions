@@ -184,7 +184,7 @@ export async function showAccountsMenu(
         kind: "actions",
         title: "Default accounts for new sessions",
         lines: ["User-wide settings. Existing sessions keep their own accounts."],
-        items: sortedProviderStates(state.states).map((provider) => ({
+        items: providerStatesWithAccounts(state.states).map((provider) => ({
           id: provider.id,
           label: provider.adapter.displayName,
           description: `Default: ${provider.defaultAccount ?? "Pi built-in login"}`,

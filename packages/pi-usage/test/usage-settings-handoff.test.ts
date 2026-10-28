@@ -15,6 +15,7 @@ initTheme("dark");
 function createHost() {
   let focused: Component | undefined;
   const editor = { getText: () => "draft", setText() {} };
+  const extensionDialogs: { component: Component }[] = [];
   const container = {
     children: [] as Component[],
     clear() {
@@ -27,6 +28,8 @@ function createHost() {
   const host = Object.assign(Object.create(InteractiveMode.prototype), {
     editor,
     editorContainer: container,
+    extensionDialogs,
+    programStatus: { setBlocked() {} },
     ui: {
       terminal: { rows: 30 },
       setFocus(component: Component) {
@@ -37,7 +40,7 @@ function createHost() {
   }) as {
     showExtensionCustom: ExtensionCommandContext["ui"]["custom"];
   };
-  return { host, container, editor, focused: () => focused };
+  return { host, container, editor, extensionDialogs, focused: () => focused };
 }
 
 for (const answer of ["save", "escape", "abort", "remapped save", "hard cancel"] as const) {
@@ -45,7 +48,7 @@ for (const answer of ["save", "escape", "abort", "remapped save", "hard cancel"]
     const root = await mkdtemp(join(tmpdir(), "usage-settings-handoff-"));
     const runtime = createUsageSettingsRuntime(join(root, "pi-usage.json"));
     await runtime.reload();
-    const { host, container, editor, focused } = createHost();
+    const { host, container, editor, extensionDialogs, focused } = createHost();
     const controller = new AbortController();
 
     const bindings = getKeybindings();
@@ -87,7 +90,11 @@ for (const answer of ["save", "escape", "abort", "remapped save", "hard cancel"]
     );
     try {
       await vi.waitFor(() => assert.ok(focused()?.handleInput));
-      assert.doesNotMatch(focused()?.render(100).join("\n") ?? "", /companion|Experimental/);
+      assert.deepEqual(
+        extensionDialogs.map((dialog) => dialog.component),
+        [focused()],
+      );
+      assert.match(focused()?.render(100).join("\n") ?? "", /Use Codex login for OpenAI usage/);
       if (accepted) {
         focused()?.handleInput?.(confirm);
         await vi.waitFor(() => assert.equal(runtime.get().settings.codexFastMode, true));
@@ -98,6 +105,8 @@ for (const answer of ["save", "escape", "abort", "remapped save", "hard cancel"]
       assert.equal(consentCalls, 0);
       assert.equal(screenCount, 1);
       assert.deepEqual(container.children, [editor]);
+      assert.equal(focused(), editor);
+      assert.deepEqual(extensionDialogs, []);
 
       assert.equal(applied, accepted ? 1 : 0);
       assert.equal(runtime.get().settings.codexFastMode, accepted);

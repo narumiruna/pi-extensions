@@ -7,6 +7,7 @@ import {
   createInactiveGoalContextContract,
   hasGoalContextContract,
   hasGoalContextContractHistory,
+  hasGoalContractPublication,
   hasInactiveGoalContextContract,
 } from "./goal-contract.js";
 import { appendGoalPromptMarker, extractContinuationMarker, extractGoalPromptMarker } from "./markers.js";
@@ -163,6 +164,15 @@ export interface GoalSettingsRuntimeSnapshot {
   terminalDetails?: GoalTerminalDetails;
 }
 
+type GoalContextContract =
+  | ReturnType<typeof createGoalContextContract>
+  | ReturnType<typeof createInactiveGoalContextContract>;
+
+interface PendingGoalContract {
+  content: string;
+  publicationId: string;
+}
+
 interface PendingGoalPrompt {
   goalId: string;
   resetSafetyEpoch: boolean;
@@ -226,6 +236,7 @@ export class GoalRuntime {
   private readonly workflowMutex: WorkflowMutex;
   private workflowOwner?: WorkflowMutexOwner;
   private workflowSession?: object;
+  private pendingGoalContract?: PendingGoalContract;
   pendingGoalPromptMarkers = new Map<string, PendingGoalPrompt>();
   claimedGoalPromptMarkers = new Map<string, string>();
   cancelledGoalPromptMarkers = new Map<string, string>();
@@ -251,6 +262,7 @@ export class GoalRuntime {
   }
 
   bindWorkflowSession(session: object) {
+    this.pendingGoalContract = undefined;
     this.workflowSession = session;
     this.workflowOwner = undefined;
     this.workflowMutex.bindSession(session);
@@ -258,6 +270,7 @@ export class GoalRuntime {
 
   unbindWorkflowSession(session: object) {
     if (this.workflowSession !== session) return;
+    this.pendingGoalContract = undefined;
     this.workflowMutex.unbindSession(session);
     this.workflowOwner = undefined;
     this.workflowSession = undefined;
@@ -924,21 +937,38 @@ export class GoalRuntime {
     this.publishGoalContextContract(this.goalContextContractForPrompt(ctx));
   }
 
-  private publishGoalContextContract(contract: ReturnType<GoalRuntime["goalContextContractForPrompt"]>) {
+  private publishGoalContextContract(contract: GoalContextContract | undefined) {
     if (!contract) return;
-    // Pi may persist this after newer output when the agent is streaming; sentAt lets
-    // context reconciliation show it where it was sent.
-    this.pi.sendMessage({ ...contract, details: { ...contract.details, sentAt: Date.now() } }, { triggerTurn: false });
+    const previous = this.pendingGoalContract;
+    const pending = { content: contract.content, publicationId: randomUUID() };
+    this.pendingGoalContract = pending;
+    const message = { ...contract, details: { ...contract.details, publicationId: pending.publicationId } };
+    try {
+      // Reserve before sending: a synchronous listener can re-enter publication. Pi does not
+      // forward deferred custom-message events to extensions, so retire from saved entries.
+      this.pi.sendMessage({ ...message, details: { ...message.details, sentAt: Date.now() } }, { triggerTurn: false });
+    } catch (error) {
+      if (this.pendingGoalContract === pending) this.pendingGoalContract = previous;
+      throw error;
+    }
   }
 
   goalContextContractForPrompt(ctx: StatusContext, goal?: ActiveGoal) {
     const { contextEntries, historyEntries } = goalContractEntries(ctx);
-    if (goal) {
-      return hasGoalContextContract(contextEntries, goal) ? undefined : createGoalContextContract(goal);
+    const pending = this.pendingGoalContract;
+    if (
+      pending &&
+      (hasGoalContractPublication(contextEntries, pending.publicationId) ||
+        hasGoalContractPublication(historyEntries, pending.publicationId))
+    ) {
+      this.pendingGoalContract = undefined;
     }
+    const expected = goal ? createGoalContextContract(goal) : createInactiveGoalContextContract();
+    // The queued tail supersedes saved history: saved A -> queued inactive -> A needs a new A.
+    if (this.pendingGoalContract) return this.pendingGoalContract.content === expected.content ? undefined : expected;
+    if (goal) return hasGoalContextContract(contextEntries, goal) ? undefined : expected;
     const hasHistory = hasGoalContextContractHistory(contextEntries) || hasGoalContextContractHistory(historyEntries);
-    if (!hasHistory || hasInactiveGoalContextContract(contextEntries)) return undefined;
-    return createInactiveGoalContextContract();
+    return !hasHistory || hasInactiveGoalContextContract(contextEntries) ? undefined : expected;
   }
 
   hasGoalContextContractHistory(ctx: StatusContext) {
@@ -960,6 +990,9 @@ export class GoalRuntime {
       this.pendingGoalPromptMarkers.delete(pending.marker);
       return false;
     }
+    // A busy agent queues the prompt as a followUp, so before_agent_start cannot persist the
+    // contract until the current run ends; until then every request would append it at the tail.
+    if (ctx.isIdle?.() === false) this.ensureGoalContextContract(ctx, this.activeGoal);
     return true;
   }
 

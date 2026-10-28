@@ -80,6 +80,50 @@ test("two Pi sessions share one runtime without sharing lifecycle state", async 
   assert.equal(backend.shutdowns, 1);
 });
 
+test.each([
+  { messageType: "user", prompt: "user prompt", images: [], expected: { prompt: "user prompt" } },
+  { prompt: "legacy prompt", images: [], expected: { prompt: "legacy prompt" } },
+  { messageType: "custom", content: "custom prompt", expected: { prompt: "custom prompt" } },
+  {
+    messageType: "custom",
+    content: [
+      { type: "text", text: "inspect this" },
+      { type: "image", mimeType: "image/png", data: "private-base64" },
+    ],
+    expected: {
+      prompt: [
+        { type: "text", text: "inspect this" },
+        { type: "image", mimeType: "image/png", data: "[base64 omitted]" },
+      ],
+    },
+  },
+])("run input supports user, legacy, and custom events: %j", async ({ expected, content, ...event }) => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const session = createPiLangfuseSession(runtime);
+  const mock = createMockPi();
+  session.extension(mock.pi);
+  const { ctx } = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await mock.events.get("before_agent_start")?.[0]?.(
+    {
+      ...event,
+      ...(event.messageType === "custom"
+        ? { message: { role: "custom", customType: "test", content, display: false, timestamp: 1 } }
+        : {}),
+    },
+    ctx,
+  );
+
+  const agent = backend.observations.find(({ name }) => name === "pi.agent");
+  assert.deepEqual(agent?.attributes.input, expected);
+  assert.deepEqual(agent?.traceUpdates[0]?.input, expected);
+  await mock.events.get("agent_settled")?.[0]?.({}, ctx);
+  assert.equal(agent?.ended, true);
+  await session.dispose();
+  await runtime.shutdown();
+});
+
 test("provider-only cache warming hooks never create Langfuse generations", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);

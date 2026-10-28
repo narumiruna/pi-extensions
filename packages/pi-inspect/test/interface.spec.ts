@@ -36,7 +36,7 @@ const metadata = (page: Page, label: string) =>
 async function session(page: Page) {
   await page.goto(server.url);
   await expect(page.locator(".segment-row").first()).toBeVisible();
-  await page.getByRole("button", { name: "Session", exact: true }).click();
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
 }
 
 test("Context is independent and keeps its reading state while Session is content-first", async ({ page }) => {
@@ -48,11 +48,11 @@ test("Context is independent and keeps its reading state while Session is conten
   await page.locator(".segment-row").first().click();
   await page.getByRole("textbox", { name: "Search context" }).fill("Observed");
   await expect(page.getByRole("button", { name: "Toggle filters" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Toggle details" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Toggle event details" })).toHaveCount(0);
   await expect(page.locator(".inspector-panel")).toHaveCount(0);
   await expect(page.locator(".live-drawer")).not.toBeVisible();
   expect(details).toBe(0);
-  await page.getByRole("button", { name: "Session", exact: true }).click();
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "History", exact: true })).toBeVisible();
   const row = primary(page).locator(`[data-trace-id="${f.user}"]`);
   await row.click();
@@ -60,7 +60,7 @@ test("Context is independent and keeps its reading state while Session is conten
   await expect(page.getByRole("tab", { name: "content", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".recorded-content")).toContainText("first request <script>alert(1)</script>");
   await expect(primary(page).locator(".inline-entry")).toHaveCount(0);
-  await page.getByRole("button", { name: "Context", exact: true }).click();
+  await page.getByRole("tab", { name: "Context", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Search context" })).toHaveValue("Observed");
   await expect(page.locator(".segment-details")).toHaveCount(1);
   await expect(page.locator(".inspector-panel")).toHaveCount(0);
@@ -77,7 +77,6 @@ test("non-text session messages and model changes show their recorded payload be
 
 test("Session filters preserve simultaneous event groups without duplicate navigation", async ({ page }) => {
   await session(page);
-  await page.getByRole("button", { name: "Toggle filters" }).click();
   await page.locator(".filter-panel > summary").click();
   await page.getByRole("checkbox", { name: "Model events", exact: true }).check();
   await page.getByRole("checkbox", { name: "Tool events", exact: true }).check();
@@ -99,13 +98,12 @@ test("History search is direct, generic internal events are opt-in, branch histo
   await page.getByRole("checkbox", { name: "Show internal events" }).check();
   await expect(primary(page).locator(`[data-trace-id="${leaf}"]`)).toBeVisible();
   await page.getByRole("checkbox", { name: "Show internal events" }).uncheck();
-  await page.getByRole("button", { name: "Toggle filters" }).click();
   await page.getByRole("textbox", { name: "Search session" }).fill("first request");
   await expect(primary(page).locator(".trace-row")).toHaveCount(1);
   await expect(primary(page).locator(".trace-row")).toContainText("first request");
   await expect(primary(page).getByText("ancestor", { exact: true })).toHaveCount(0);
   await page.getByRole("textbox", { name: "Search session" }).fill("");
-  await page.getByRole("button", { name: "Branch view", exact: true }).click();
+  await page.getByRole("tab", { name: "Branch view", exact: true }).click();
   await primary(page).locator(`[data-trace-id="${f.alternate}"]`).click();
   await page.getByRole("button", { name: "History at selected entry", exact: true }).click();
   await expect(page.getByText(`Branch leaf: ${f.alternate}`, { exact: true })).toBeVisible();
@@ -137,8 +135,7 @@ test("branch preview shares composition without unrelated current information or
   await expect(page.locator(".inspector-panel")).toHaveCount(0);
   await page.getByRole("button", { name: "Back to last observed context", exact: true }).click();
   await expect(page.locator(".observed-context .segment-row").first()).toContainText("Observed input only");
-  await page.locator(".context-inventory > summary").click();
-  await page.getByText("Current tools", { exact: true }).click();
+  await page.getByRole("tab", { name: "Tools", exact: true }).click();
   await expect(page.getByText("mcp__docs__search", { exact: true })).toBeVisible();
   expect(f.manager.getLeafId()).toBe(leaf);
 });
@@ -194,7 +191,7 @@ test("Context exit aborts owned entry requests and cannot reopen stale Details",
     await session(page);
     await primary(page).locator(`[data-trace-id="${f.user}"]`).click();
     await admitted;
-    await page.getByRole("button", { name: "Context", exact: true }).click();
+    await page.getByRole("tab", { name: "Context", exact: true }).click();
     release();
     await aborted;
     await expect(page.locator(".inspector-panel")).toHaveCount(0);
@@ -234,7 +231,7 @@ test("execution details have one owner and preserve real parent navigation indep
     f.assistant,
   );
   await session(page);
-  await page.getByRole("button", { name: /^Captured executions ·/ }).click();
+  await page.getByRole("tab", { name: /^Captured executions ·/ }).click();
   await page.getByRole("button", { name: "Expand calls", exact: true }).click();
   await page.getByRole("button", { name: "inner · ok", exact: true }).click();
   await expect(page.locator(".inspector-panel")).toContainText("child result");
@@ -245,7 +242,7 @@ test("execution details have one owner and preserve real parent navigation indep
   expect(historicalRequests).toBe(0);
   await page.getByRole("button", { name: "Inspect recorded anchor →", exact: true }).click();
   await expect(page.locator(".inspector-identity")).toContainText(f.assistant);
-  await expect(page.getByRole("button", { name: "Branch view", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("tab", { name: "Branch view", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 for (const query of ["", "future-state"]) {
@@ -253,7 +250,6 @@ for (const query of ["", "future-state"]) {
     const selected = f.manager.getLeafId();
     if (!selected) throw Error("Missing fixture leaf");
     await session(page);
-    await page.getByRole("button", { name: "Toggle filters" }).click();
     await page.getByRole("textbox", { name: "Search session" }).fill(query);
     await page.getByRole("checkbox", { name: "Show internal events" }).check();
     await primary(page).locator(`[data-trace-id="${selected}"]`).click();
@@ -280,7 +276,7 @@ for (const presentation of ["List", "Timeline"] as const) {
     if (!target) throw Error("Missing target fixture leaf");
     f.manager.branch(active);
     await session(page);
-    await page.getByRole("button", { name: "Branch view", exact: true }).click();
+    await page.getByRole("tab", { name: "Branch view", exact: true }).click();
     await primary(page).getByRole("button", { name: "Expand all", exact: true }).click();
     await primary(page).getByRole("button", { name: "Next", exact: true }).click();
     await primary(page).getByRole("button", { name: presentation, exact: true }).click();
@@ -324,7 +320,7 @@ for (const presentation of ["List", "Timeline"] as const) {
   });
 }
 
-test("review round 2: closed inventories and schemas do not mount hidden trees", async ({ page }) => {
+test("resource tabs mount catalogs on first visit and schemas only on disclosure", async ({ page }) => {
   const template = tools[0];
   if (!template) throw Error("Missing tool fixture");
   inventoryTools = Array.from({ length: 256 }, (_, i) => ({
@@ -336,17 +332,14 @@ test("review round 2: closed inventories and schemas do not mount hidden trees",
   }));
   await page.goto(server.url);
   await expect(page.locator(".segment-row").first()).toBeVisible();
-  const inventory = page.locator(".context-inventory");
-  await expect(inventory.locator(".inventory-card")).toHaveCount(0);
+  await expect(page.locator(".inventory-card, .tool-inventory-table, .tool-detail-content")).toHaveCount(0);
+  await page.getByRole("tab", { name: "Tools", exact: true }).click();
+  const inventory = page.locator("#resource-panel-tools");
+  await expect(inventory.locator("tbody tr")).toHaveCount(256);
   await expect(inventory.locator(".json-tree")).toHaveCount(0);
-  await inventory.locator(":scope > summary").click();
-  await expect(inventory.getByText("Current tools", { exact: true })).toBeVisible();
-  await expect(inventory.locator(".inventory-card")).toHaveCount(0);
-  await expect(inventory.locator(".code-preview")).toHaveCount(0);
-  await inventory.getByText("Current tools", { exact: true }).click();
-  await expect(inventory.locator(".inventory-card")).toHaveCount(256);
-  await expect(inventory.locator(".json-tree")).toHaveCount(0);
-  const schema = inventory.locator(".inventory-card").first().locator(".data");
+  await inventory.getByRole("button", { name: "Inspect inventory-tool-0", exact: true }).click();
+  const details = inventory.getByRole("complementary", { name: "Tool details", exact: true });
+  const schema = details.locator(".data").last();
   await expect(schema.getByRole("button", { name: "Copy display data" })).toBeEnabled();
   const toggle = schema.getByRole("button", { name: "Schema · inventory-tool-0", exact: true });
   await toggle.click();
@@ -358,25 +351,27 @@ test("review round 2: closed inventories and schemas do not mount hidden trees",
   await expect(inventory.locator(".json-tree")).toHaveCount(0);
   await toggle.click();
   await expect(properties.locator("..")).toHaveJSProperty("open", true);
-  await page.getByRole("button", { name: "Session", exact: true }).click();
-  await page.getByRole("button", { name: "Context", exact: true }).click();
+  const table = inventory.getByRole("region", { name: "Scrollable tools table" });
+  await table.evaluate((element) => {
+    element.scrollTop = 200;
+  });
+  const top = await table.evaluate((element) => element.scrollTop);
+  expect(top).toBeGreaterThan(0);
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
+  await page.getByRole("tab", { name: "Tools", exact: true }).click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await inventory.getByText("Current tools", { exact: true }).click();
-  await expect(inventory.locator(".inventory-card")).toHaveCount(0);
-  await expect(inventory.locator(".json-tree")).toHaveCount(0);
-  await inventory.getByText("Currently advertised skills", { exact: true }).click();
-  await expect(inventory.locator(".inventory-card")).toHaveCount(1);
-  await inventory.getByText("Currently advertised skills", { exact: true }).click();
-  await inventory.locator(":scope > summary").click();
+  await page.getByRole("tab", { name: "Skills", exact: true }).click();
+  await expect(page.locator("#resource-panel-skills .inventory-card")).toHaveCount(1);
+  await expect(inventory).not.toBeVisible();
+  await page.getByRole("tab", { name: "Tools", exact: true }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(table).toHaveJSProperty("scrollTop", top);
+
   inventoryTools = inventoryTools.map((tool) => ({ ...tool, description: "Updated inventory" }));
-  const refreshed = page.waitForResponse((response) => response.url().includes("/api/snapshot") && response.ok());
+
   server.invalidate(1);
-  await refreshed;
-  await expect(inventory.locator(".inventory-card")).toHaveCount(0);
-  await inventory.locator(":scope > summary").click();
-  await inventory.getByText("Current tools", { exact: true }).click();
-  await expect(inventory.locator(".inventory-card").first()).toContainText("Updated inventory");
-  await expect(inventory.locator(".json-tree")).toHaveCount(0);
+  await expect(details).toContainText("Updated inventory");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
 });
 
 for (const action of ["select", "evict"] as const) {
@@ -388,9 +383,9 @@ for (const action of ["select", "evict"] as const) {
         f.assistant,
       );
       await session(page);
-      await page.getByRole("button", { name: /^Captured executions ·/ }).click();
+      await page.getByRole("tab", { name: /^Captured executions ·/ }).click();
       await page.getByRole("button", { name: "review-call · running", exact: true }).click();
-      await page.getByRole("button", { name: "History", exact: true }).click();
+      await page.getByRole("tab", { name: "History", exact: true }).click();
       await primary(page).getByRole("button", { name: presentation, exact: true }).click();
       if (action === "select") {
         await primary(page).locator(`[data-trace-id="${f.user}"]`).click();
@@ -400,7 +395,7 @@ for (const action of ["select", "evict"] as const) {
         server.invalidate(1);
         await expect(page.locator(".inspector-identity")).toContainText(f.assistant);
       }
-      await expect(page.getByRole("button", { name: "History", exact: true })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("tab", { name: "History", exact: true })).toHaveAttribute("aria-selected", "true");
       await expect(primary(page).getByRole("button", { name: presentation, exact: true })).toHaveAttribute(
         "aria-pressed",
         "true",
@@ -431,7 +426,7 @@ for (const relationship of ["root", "resolved", "missing", "invalid", "overlappi
       Object.assign(child, { parentToolCallId: relationship === "invalid" ? 7 : "review-parent" });
     collector.start(child, f.assistant);
     await session(page);
-    await page.getByRole("button", { name: /^Captured executions ·/ }).click();
+    await page.getByRole("tab", { name: /^Captured executions ·/ }).click();
     await page.getByRole("button", { name: "Expand calls", exact: true }).click();
     await page.getByRole("button", { name: "review-child · running", exact: true }).click();
     const expected = {
@@ -484,7 +479,7 @@ for (const anchor of ["missing", "invalid", "reused", "unrepresented", "inherite
             : f.assistant,
     );
     await session(page);
-    await page.getByRole("button", { name: /^Captured executions ·/ }).click();
+    await page.getByRole("tab", { name: /^Captured executions ·/ }).click();
     await page.getByRole("button", { name: "Expand calls", exact: true }).click();
     await page.getByRole("button", { name: "review-anchor · running", exact: true }).click();
     await expect(metadata(page, "Correlation")).toHaveText(
@@ -553,11 +548,11 @@ test("mobile content selection opens dismissible Details without horizontal over
   const row = primary(page).locator(`[data-trace-id="${f.user}"]`);
   await row.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Details" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Event details" })).toBeVisible();
   await expect(page.locator(".recorded-content")).toContainText("first request");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Toggle details" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Toggle event details" })).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && scrollY === 0)).toBe(true);
   await expect
     .poll(() =>

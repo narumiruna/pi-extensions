@@ -11,7 +11,7 @@ Pi Tool lets you browse every tool configured in the current Pi session and opti
 - Displays the complete JSON parameter schema and prompt guidelines exposed by Pi.
 - Shows the effective system-prompt snippet for each active tool.
 - Refreshes metadata every time the catalog opens.
-- Optionally shows the current active tools above the editor, with the widget off by default.
+- Optionally groups active and script-callable tools by Built-in, MCP, and Extension above the editor, with the widget off by default.
 - Persists widget changes in the extension-owned `pi-tool.json` settings file.
 - Never enables, disables, or executes Pi tools.
 
@@ -60,6 +60,7 @@ It rejects arguments, print mode, and JSON mode before opening an interactive fl
 Run `/tool` to browse configured tools and configure the active-tool widget in TUI or RPC mode.
 It accepts no arguments and rejects print and JSON modes.
 The command never enables, disables, or executes tools.
+Exact tool-detail documents support literal search in TUI mode: Space opens search, search-close dismisses it, and Back returns to the catalog with its query and selection retained. RPC keeps its existing paginated detail dialogs.
 
 ## ⚙️ Settings
 
@@ -84,10 +85,23 @@ Writes are ordered within one Pi process, but separate Pi processes do not share
 
 ## ℹ️ Active-tool widget
 
-When enabled, the widget shows every name returned by Pi's public `pi.getActiveTools()` API above the editor.
-It refreshes on relevant lifecycle events and polls for changes made by other extensions.
+When enabled, the widget shows active tools plus registered tools with `codemode` or `deferred` exposure above the editor.
+It groups tools in **Built-in**, **MCP**, and **Extension** order, omits empty groups, and shows a count for each group.
+MCP tools are summarized by namespace and tool count; tools without a namespace are counted under **Other**.
+Extension tools are summarized by source entrypoint and tool count, for example: `Extension (8): pi-goal (3) · pi-subagents (5)`.
+Extension labels use the npm package name or local entrypoint name. An `index` entrypoint uses its parent directory, skipping a `src` or `dist` directory.
+SDK tools share an **SDK** summary, and active names without metadata share **Other**.
+Use `/tool` to browse the full tool list.
+Built-in entries show `[codemode]` or `[deferred]` for these runtime exposures; Extension summaries show their counts, such as `[codemode: 2]`.
+Both exposures allow calls from codemode scripts without activation.
+Pi reports MCP tools configured as `codemode` as runtime `deferred` tools.
+Inactive `direct` and `model-only` tools are omitted, as are all `hidden` tools.
+
+Grouping uses Pi's public source metadata and MCP namespaces, not tool-name prefixes.
+MCP resource tools belong to MCP; SDK-provided tools and active names without source metadata use the Extension group.
+It refreshes on relevant lifecycle events and polls for active-tool, source, and exposure changes made by other extensions.
 It clears immediately when disabled or when the session is replaced, reloaded, or shut down.
-Tool names are sanitized and bounded before terminal rendering.
+Tool names, namespace labels, and extension labels are sanitized and bounded before terminal rendering.
 
 ## 🔒 Security and privacy
 

@@ -106,6 +106,32 @@ export function createDebugExtension(dependencies: Partial<DebugDependencies> = 
           }),
         ),
       }),
+      outputSchema: Type.Object({
+        format: Type.Literal("runtime-diagnostics/v2"),
+        action: StringEnum(DIAGNOSTIC_ACTIONS),
+        generatedAt: Type.Number(),
+        summary: Type.Record(Type.String(), Type.Unknown()),
+        export: Type.Optional(
+          Type.Object({
+            sanitized: Type.Boolean(),
+            contentType: Type.Literal("application/json"),
+            description: Type.String(),
+          }),
+        ),
+        findings: Type.Optional(
+          Type.Array(
+            Type.Object({
+              severity: StringEnum(["error", "warning", "info"]),
+              code: Type.String(),
+              message: Type.String(),
+              recommendation: Type.Optional(Type.String()),
+            }),
+          ),
+        ),
+        recommendations: Type.Optional(Type.Array(Type.String())),
+        details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+        outputNote: Type.Optional(Type.String()),
+      }),
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         signal?.throwIfAborted();
         const action: DiagnosticAction = params.action ?? "status";
@@ -133,6 +159,7 @@ export function createDebugExtension(dependencies: Partial<DebugDependencies> = 
         return {
           content: [{ type: "text", text: bounded.text }],
           details: bounded.value,
+          structuredContent: JSON.parse(bounded.text),
         };
       },
     });

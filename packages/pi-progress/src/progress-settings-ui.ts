@@ -8,7 +8,6 @@ import {
   SettingsList,
   Text,
   type TuiMouseEvent,
-  truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { sanitizeProgressText } from "./progress-renderer.js";
@@ -26,16 +25,17 @@ export async function showProgressSettings(
   ctx: ExtensionCommandContext,
   options: ProgressSettingsUIOptions,
 ): Promise<"back" | "close" | "stale"> {
-  const { formatInteractionHints, HorizontalRule, renderBoundedFrame } = await import("@narumitw/pi-tui-kit");
-  if (options.signal.aborted || !options.isCurrent()) return "stale";
-  let queue = Promise.resolve();
-  let reason: "back" | "close" | "stale" = "stale";
-  try {
-    await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+  const { formatInteractionHints, HorizontalRule, renderBoundedFrameLayout, runCustomInteraction } = await import(
+    "@narumitw/pi-tui-kit"
+  );
+  const result = await runCustomInteraction<"back" | "close" | "stale">(ctx, {
+    signal: options.signal,
+    isCurrent: options.isCurrent,
+    // The command owner reports interaction failures after pending saves drain.
+    onError: () => {},
+    create({ tui, theme, keybindings, signal, complete }) {
+      let queue = Promise.resolve();
       const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
-      const controller = new AbortController();
-      const signal = AbortSignal.any([options.signal, controller.signal]);
-      let closing = false;
       const revisions = new Map<string, number>();
       const mouseRows = new Map<number, number>();
       let renderedWidth = 0;
@@ -45,14 +45,6 @@ export async function showProgressSettings(
       let itemLimitPasting = false;
       let focused = false;
       const current = () => !signal.aborted && options.isCurrent();
-      const close = (nextReason: "back" | "close" | "stale") => {
-        if (closing) return;
-        closing = true;
-        reason = nextReason;
-        controller.abort();
-        done();
-      };
-      const cancelOwner = () => close("stale");
       const initial = options.get();
       const items: SettingItem[] = [
         {
@@ -122,7 +114,7 @@ export async function showProgressSettings(
             const handleInput = (data: string): void => {
               if (!current()) return;
               if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) {
-                close("close");
+                complete("close");
                 return;
               }
               if (itemLimitInput !== input) {
@@ -185,7 +177,7 @@ export async function showProgressSettings(
         items.length,
         getSettingsListTheme(),
         (id, value) => {
-          if (!current() || closing) return;
+          if (!current()) return;
           const key = id as keyof ProgressSettings;
           const requested =
             key === "maxVisibleItems"
@@ -218,10 +210,8 @@ export async function showProgressSettings(
             tui.requestRender();
           });
         },
-        () => close("back"),
+        () => complete("back"),
       );
-      options.signal.addEventListener("abort", cancelOwner, { once: true });
-      if (!current()) cancelOwner();
       return {
         get focused() {
           return focused;
@@ -232,27 +222,17 @@ export async function showProgressSettings(
         },
         render(width: number) {
           renderedWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
-          const content = list.render(renderedWidth);
+          // Native rows need four cells to retain their cursor; Kit clips the final frame.
+          const content = list.render(Math.max(4, renderedWidth));
           contentHeight = content.length;
           mouseRows.clear();
-          // Layout stable row tokens, then restore text and native coordinates after clipping.
-          // Blank rows stay blank so compact retention matches the original content.
-          const tokens = new Map<string, number>();
-          const layoutContent = content.map((line, index) => {
-            if (!stripVTControlCharacters(line).trim() && !(itemLimitInput && index === 0)) return line;
-            const token = `content:${index}`;
-            tokens.set(token, index);
-            return token;
-          });
-          // SettingsList reserves three cells for ellipsis, hiding its arrow below four cells.
-          // Item row positions do not depend on width, so use a wider render only to locate focus.
-          const focusContent = !itemLimitInput && renderedWidth < 4 ? list.render(4) : content;
+
           const focusedRow = itemLimitInput
             ? 0
-            : focusContent.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
+            : content.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
-          const frame = renderBoundedFrame({
-            width: Math.max(renderedWidth, `content:${content.length}`.length),
+          const frame = renderBoundedFrameLayout({
+            width: renderedWidth,
             maxRows: Math.max(1, terminalRows - 3),
             rule: rule.render(renderedWidth)[0] ?? "",
             title: new Text(
@@ -261,15 +241,12 @@ export async function showProgressSettings(
               0,
             ).render(renderedWidth),
             context: [theme.fg("muted", "Saved changes apply immediately.")],
-            content: layoutContent,
+            content,
             priorityRows: focusedRow < 0 ? [] : [focusedRow],
             focusedRow,
           });
-          return frame.map((line, row) => {
-            const nativeRow = tokens.get(line);
-            if (nativeRow !== undefined) mouseRows.set(row, nativeRow);
-            return truncateToWidth(nativeRow === undefined ? line : (content[nativeRow] ?? ""), renderedWidth, "");
-          });
+          for (const { frameIndex, contentIndex } of frame.contentRows) mouseRows.set(frameIndex, contentIndex);
+          return frame.lines;
         },
         invalidate() {
           mouseRows.clear();
@@ -277,7 +254,7 @@ export async function showProgressSettings(
           list.invalidate();
         },
         handleMouse(event: TuiMouseEvent) {
-          if (closing || !current()) return;
+          if (!current()) return;
           const nativeRow = mouseRows.get(event.y);
           if (nativeRow === undefined || event.x < 0 || event.x >= renderedWidth) {
             if (event.button === "left" && (event.type === "press" || event.type === "click")) mousePressed = false;
@@ -295,12 +272,15 @@ export async function showProgressSettings(
           return result;
         },
         handleInput(data: string) {
-          if (closing || !current()) return;
+          if (!current()) return;
           mousePressed = false;
           mouseRows.clear();
-          if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) close("close");
+          if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) complete("close");
           else list.handleInput(data);
           tui.requestRender();
+        },
+        waitForPending() {
+          return queue;
         },
         dispose() {
           if (itemLimitInput) itemLimitInput.focused = false;
@@ -308,16 +288,12 @@ export async function showProgressSettings(
           itemLimitPasting = false;
           mouseRows.clear();
           mousePressed = false;
-          controller.abort();
-          options.signal.removeEventListener("abort", cancelOwner);
-          if (!closing) cancelOwner();
         },
       };
-    });
-  } finally {
-    await queue;
-  }
-  return options.signal.aborted || !options.isCurrent() ? "stale" : reason;
+    },
+  });
+  if (result.kind === "error") throw result.error;
+  return result.kind === "completed" ? result.value : result.kind === "unsupported" ? "back" : "stale";
 }
 
 function formatValue(value: ProgressSettings[keyof ProgressSettings]): string {

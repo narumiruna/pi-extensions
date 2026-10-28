@@ -74,6 +74,7 @@ export async function executeCommand(
   onCommit?: () => void,
   setup?: string,
   onDialog?: (active: boolean) => void,
+  retryRefusal = false,
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
   try {
@@ -85,6 +86,10 @@ export async function executeCommand(
     if (signal) options.signal = signal;
     if (onCommit) options.onCommit = onCommit;
     validateCommandOptions(subcommand, options);
+    if (retryRefusal) {
+      if (subcommand !== "sync") throw new Error("A refused-model retry is available only for merged sync.");
+      options.agentRetryRefusal = true;
+    }
 
     switch (subcommand) {
       case "help":
@@ -157,8 +162,8 @@ export async function executeCommand(
       case "sync": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
-        return { kind: "completed" };
+        const outcome = await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
+        return { kind: "completed", ...(retryRefusal && outcome ? { outcome } : {}) };
       }
       case "history": {
         const operations = await loaders.operations();

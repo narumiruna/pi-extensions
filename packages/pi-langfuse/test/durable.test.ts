@@ -83,7 +83,7 @@ describe("public durable conversation tracing", () => {
             name: "echo",
             parameters: Type.Object({ value: Type.String() }),
             description: "Echo",
-            execute: async ({ value }) => ({ content: [{ type: "text", text: value }] }),
+            execute: async ({ value }) => ({ output: [{ type: "text", text: value }] }),
           }),
         ],
       }),
@@ -172,7 +172,7 @@ describe("public durable conversation tracing", () => {
             description: "Large data",
             execute: async ({ value }) => {
               executed = value;
-              return { content: [{ type: "text", text: value }] };
+              return { output: [{ type: "text", text: value }] };
             },
           }),
         ],
@@ -284,7 +284,7 @@ describe("public durable conversation tracing", () => {
             name: "duplicate",
             description: "Result",
             parameters: Type.Object({}),
-            execute: async () => ({ content: [{ type: "text", text: "result" }] }),
+            execute: async () => ({ output: [{ type: "text", text: "result" }] }),
           }),
         ],
       }),
@@ -330,7 +330,7 @@ describe("public durable conversation tracing", () => {
             execute: async (_args, _api, ctx) => {
               entered.resolve();
               await awaitWithContext(release.promise, ctx);
-              return { content: [{ type: "text", text: "later committed result" }] };
+              return { output: [{ type: "text", text: "later committed result" }] };
             },
           }),
         ],
@@ -375,7 +375,7 @@ describe("public durable conversation tracing", () => {
             execute: async (_args, _api, ctx) => {
               entered.resolve();
               await awaitWithContext(release.promise, ctx);
-              return { content: [{ type: "text", text: "complete tool result" }] };
+              return { output: [{ type: "text", text: "complete tool result" }] };
             },
           }),
         ],
@@ -611,7 +611,7 @@ describe("public durable conversation tracing", () => {
             execute: async (_args, _api, ctx) => {
               entered.resolve();
               await awaitWithContext(release.promise, ctx);
-              return { content: [{ type: "text", text: "full result after detach" }] };
+              return { output: [{ type: "text", text: "full result after detach" }] };
             },
           }),
         ],

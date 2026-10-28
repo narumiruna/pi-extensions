@@ -10,6 +10,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStarshipCommand } from "../src/commands.js";
 import { BUILT_IN_EXAMPLE, loadStarshipConfig, settingsFilePath } from "../src/config.js";
 import piStarshipRuntime from "../src/pi-starship.js";
+import { listHistory } from "../src/profile-store.js";
 
 initTheme("dark", false);
 
@@ -69,7 +70,7 @@ test("/starship keeps direct routes and opens a stateful narrow TUI menu", async
   assert.match(screen, /pi-starship/u);
   assert.match(screen, /Saved built-in configuration/u);
   assert.match(screen, /Healthy/u);
-  assert.match(screen, /Customize footer/u);
+  assert.match(screen, /Configure with agent/u);
   assert.match(screen, /Presets/u);
   assert.match(screen, /Configuration/u);
   assert.match(screen, /Help/u);
@@ -78,7 +79,7 @@ test("/starship keeps direct routes and opens a stateful narrow TUI menu", async
   assert.ok(renders.flat().every((line) => visibleWidth(line) <= 28));
 });
 
-test("Explain consumes the current snapshot without starting collection work", async () => {
+test("Configuration browsing does not start collection work", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-command-explain-snapshot-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = root;
@@ -93,32 +94,22 @@ test("Explain consumes the current snapshot without starting collection work", a
     const tui = createTuiHarness({ width: 60, rows: 18 });
     const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
     await emit(mock.events, "session_start", {}, context.ctx);
-    const footer = (context.footer as FooterFactory)(
-      { requestRender() {} },
-      {},
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        onBranchChange: () => () => undefined,
-      },
-    );
-    footer.render(60);
+    assert.equal(context.footer, undefined);
     await flushAsyncWork();
-    const callsBeforeExplain = execCalls;
+    const callsBeforeMenu = execCalls;
 
     const running = mock.commands.get("starship")?.handler("", context.ctx);
     await tui.waitForOpen();
-    tui.press("tui.select.down");
-    tui.press("tui.select.down");
+    for (let index = 0; index < 3; index++) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /Explain footer/u);
+    assert.match(tui.render().join("\n"), /Configuration/u);
     await flushAsyncWork();
-    assert.equal(execCalls, callsBeforeExplain);
+    assert.equal(execCalls, callsBeforeMenu);
     assert.equal(existsSync(settingsFilePath(root)), false);
     tui.press("ctrl+c");
     await running;
-    footer.dispose();
+    assert.equal(context.footer, undefined);
     await emit(mock.events, "session_shutdown", {}, context.ctx);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -152,7 +143,9 @@ test("settings opens the raw TOML in TUI, saves atomically, and applies immediat
       confirm: async () => true,
     });
     await emit(mock.events, "session_start", {}, context.ctx);
-    const footer = (context.footer as FooterFactory)(
+    assert.equal(context.footer, undefined);
+    await mock.commands.get("starship")?.handler("settings", context.ctx);
+    const footer = (context.footer as unknown as FooterFactory)(
       { requestRender() {} },
       {},
       {
@@ -161,7 +154,6 @@ test("settings opens the raw TOML in TUI, saves atomically, and applies immediat
         onBranchChange: () => () => undefined,
       },
     );
-    await mock.commands.get("starship")?.handler("settings", context.ctx);
     assert.equal(initial, BUILT_IN_EXAMPLE);
     assert.match(preview, /preview/iu);
     assert.match(preview, /saved/u);
@@ -502,7 +494,7 @@ test("non-TUI settings never opens an editor and status/help are protocol-safe",
     assert.equal(editorCalls, 0);
     assert.match(rpc.notifications.at(-1)?.message ?? "", /pi-starship\.toml/);
     await mock.commands.get("starship")?.handler("", rpc.ctx);
-    assert.match(rpc.notifications.at(-1)?.message ?? "", /explain.*inspect.*TUI mode/iu);
+    assert.match(rpc.notifications.at(-1)?.message ?? "", /configure with agent.*TUI mode/iu);
 
     const print = createMockContext({ mode: "print", hasUI: false });
     await mock.commands.get("starship")?.handler("status", print.ctx);
@@ -627,8 +619,7 @@ test("main and Configuration menus expose current state and a clear Back path", 
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
-      const inputs =
-        call === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : call === 1 ? ["\r"] : ["\u001b"];
+      const inputs = call === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\r"] : ["\u001b"];
       const driven = await driveTuiCustom(factory, inputs, 26);
       screens[call++] = driven.renders.flat().join("\n");
       assert.ok(driven.renders.flat().every((line) => visibleWidth(line) <= 26));
@@ -636,14 +627,14 @@ test("main and Configuration menus expose current state and a clear Back path", 
     },
   });
   await mock.commands.get("starship")?.handler("", context.ctx);
-  assert.equal(call, 5);
+  assert.equal(call, 3);
   assert.match(screens[1] ?? "", /Configuration/u);
-  assert.match(screens[2] ?? "", /State: Built-in defaults/u);
-  assert.match(screens[2] ?? "", /Source: No settings file/u);
-  assert.match(screens[4] ?? "", /Customize footer/u);
+  assert.match(screens[1] ?? "", /State: Pi native footer/u);
+  assert.match(screens[1] ?? "", /Source: No settings file/u);
+  assert.match(screens[2] ?? "", /Configure with agent/u);
 });
 
-test("Restore previews, confirms, and atomically applies the built-in footer", async () => {
+test("Restore archives exact settings bytes, removes the document, and applies Pi native footer", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-command-"));
   const path = settingsFilePath(root);
   writeFileSync(path, "format = 'custom'\nfuture = true\n");
@@ -667,8 +658,7 @@ test("Restore previews, confirms, and atomically applies the built-in footer", a
       mode: "tui",
       hasUI: true,
       custom: async (factory: unknown) => {
-        const inputs =
-          call === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : ["\r"];
+        const inputs = call === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : ["\r"];
         const driven = await driveTuiCustom(factory, inputs, 32);
         if (call === 1) restorePreview = driven.renders.flat().join("\n");
         call += 1;
@@ -684,13 +674,20 @@ test("Restore previews, confirms, and atomically applies the built-in footer", a
     assert.match(restorePreview, /Current: Custom configuration/u);
     assert.match(restorePreview, /entire settings document/iu);
     assert.match(restorePreview, /unknown fields/iu);
-    assert.match(restorePreview, /No backup/iu);
-    assert.match(restorePreview, /\$brand\$model/u);
-    assert.match(confirmation, /All custom settings, unknown fields, and comments will be removed/u);
-    assert.match(confirmation, /No backup is kept after success/u);
+    assert.match(restorePreview, /previous document.*History/isu);
+    assert.match(restorePreview, /Pi native footer/u);
+    assert.doesNotMatch(restorePreview, /\$brand\$model/u);
+    assert.match(confirmation, /Remove/u);
+    assert.match(confirmation, /exact previous document.*will be kept in History/u);
     assert.doesNotMatch(restorePreview, /░▒▓|/u);
     assert.equal(applied, 1);
-    assert.equal(readFileSync(path, "utf8"), BUILT_IN_EXAMPLE);
+    assert.equal(existsSync(path), false);
+    assert.equal(loaded.rawDocument, undefined);
+    assert.equal(loaded.source, "built-in");
+    assert.deepEqual(
+      listHistory(path).map((item) => item.rawBytes),
+      [Buffer.from("format = 'custom'\nfuture = true\n")],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -718,20 +715,90 @@ test("Restore recovers a malformed settings document", async () => {
       mode: "tui",
       hasUI: true,
       custom: async (factory: unknown) => {
-        const inputs =
-          call++ === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : ["\r"];
+        const inputs = call++ === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : ["\r"];
         return (await driveTuiCustom(factory, inputs, 60)).result;
       },
       confirm: async () => true,
     });
     await mock.commands.get("starship")?.handler("", context.ctx);
     assert.equal(applied, 1);
-    assert.equal(readFileSync(path, "utf8"), BUILT_IN_EXAMPLE);
-    assert.equal(loaded.source, "user");
+    assert.equal(existsSync(path), false);
+    assert.equal(loaded.source, "built-in");
+    assert.equal(loaded.rawDocument, undefined);
+    assert.deepEqual(
+      listHistory(path).map((item) => item.rawBytes),
+      [Buffer.from("format = [\n")],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const scenario of ["saved example", "apply failure", "concurrent rollback", "concurrent confirmation"] as const) {
+  test(`Restore Pi native footer handles ${scenario}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-starship-native-restore-"));
+    const path = settingsFilePath(root);
+    const original = scenario === "saved example" ? BUILT_IN_EXAMPLE : "# exact original\r\nformat = 'custom'\r\n";
+    const concurrent = "format = 'external'\n";
+    writeFileSync(path, original);
+    try {
+      const mock = createMockPi();
+      const initial = loadStarshipConfig(path);
+      let loaded = initial;
+      let applies = 0;
+      let nativeCandidate = false;
+      registerStarshipCommand(mock.pi, {
+        settingsPath: path,
+        getLoaded: () => loaded,
+        apply(next) {
+          applies += 1;
+          if (next.rawDocument === undefined) {
+            nativeCandidate = true;
+            assert.equal(existsSync(path), false);
+            if (scenario === "concurrent rollback") writeFileSync(path, concurrent);
+            if (scenario === "apply failure" || scenario === "concurrent rollback") throw new Error("apply failed");
+          }
+          loaded = next;
+        },
+      });
+      let calls = 0;
+      const context = createMockContext({
+        mode: "tui",
+        hasUI: true,
+        custom: async (factory: unknown) => {
+          const inputs =
+            calls === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : calls === 1 ? ["\r"] : ["\u001b"];
+          calls += 1;
+          return (await driveTuiCustom(factory, inputs, 80)).result;
+        },
+        confirm: async () => {
+          if (scenario === "concurrent confirmation") writeFileSync(path, concurrent);
+          return true;
+        },
+      });
+      await mock.commands.get("starship")?.handler("", context.ctx);
+      assert.equal(nativeCandidate, scenario !== "concurrent confirmation");
+      if (scenario === "saved example") {
+        assert.equal(applies, 1);
+        assert.equal(existsSync(path), false);
+        assert.equal(loaded.rawDocument, undefined);
+      } else {
+        assert.equal(readFileSync(path, "utf8"), scenario === "apply failure" ? original : concurrent);
+        assert.equal(loaded.rawDocument, initial.rawDocument);
+        assert.match(context.notifications.at(-1)?.message ?? "", /changed|failed/iu);
+      }
+      const history = listHistory(path);
+      if (scenario === "concurrent confirmation") assert.equal(history.length, 0);
+      else
+        assert.deepEqual(
+          history.map((item) => item.rawBytes),
+          [Buffer.from(original)],
+        );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("invalid drafts can return to editing before preview and atomic apply", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-command-"));
@@ -784,18 +851,24 @@ test("Configuration and Help stay shallow and fit narrow terminals", async () =>
       apply() {},
       settingsPath: path,
     });
-    const choices = ["Configuration", "Overview", undefined, undefined, "Help", undefined, undefined];
     const screens: string[] = [];
-    const context = createMockContext({
-      mode: "tui",
-      hasUI: true,
-      select: async (title: string) => {
-        screens.push(title);
-        return choices.shift();
-      },
-    });
-    await mock.commands.get("starship")?.handler("", context.ctx);
-    assert.equal(screens.length, 7);
+    const tui = createTuiHarness({ width: 70, rows: 26 });
+    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const running = mock.commands.get("starship")?.handler("", context.ctx);
+    await tui.waitForOpen();
+    for (let index = 0; index < 3; index++) tui.press("tui.select.down");
+    tui.press("tui.select.confirm");
+    await tui.waitForOpen();
+    screens.push(tui.render().join("\n"));
+    tui.press("tui.select.cancel");
+    await tui.waitForOpen();
+    tui.press("end");
+    tui.press("tui.select.confirm");
+    await tui.waitForOpen();
+    screens.push(tui.render().join("\n"));
+    tui.press("ctrl+c");
+    await running;
+    tui.dispose();
     assert.match(screens.join("\n"), /1 warning/u);
     assert.match(screens.join("\n"), /Configuration/u);
     assert.match(screens.join("\n"), /pi-starship help/u);
@@ -835,7 +908,7 @@ test("restore preview cancellation preserves exact settings and runtime in a nar
     });
     const running = mock.commands.get("starship")?.handler("", context.ctx);
     await tui.waitForOpen();
-    for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+    for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     const preview = tui.render();

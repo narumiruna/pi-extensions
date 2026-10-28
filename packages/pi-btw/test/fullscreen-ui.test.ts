@@ -11,14 +11,16 @@ import {
   ScrollView,
   setKeybindings,
   setKittyProtocolActive,
-  type Terminal,
   type TUI,
   TUI_KEYBINDINGS,
   TuiAltScreen,
   TuiMainScreen,
   VStack,
 } from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
+import { createMockPi } from "../../../test/support.js";
+import btw from "../src/btw.js";
 import { type BtwFullscreenTuiFactory, runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager, type TranscriptPagerAction } from "../src/transcript-pager.js";
 
@@ -57,11 +59,15 @@ function createHarness(
   options: {
     keybindings?: KeybindingsManager;
     fullscreenStopError?: Error;
-    hardCancelRemoveError?: Error;
+    hardCancelRemoveError?: unknown;
     layoutMountError?: Error;
     parentOverlayHideError?: Error;
     parentStartError?: Error;
     signal?: AbortSignal;
+    signalError?: Error;
+    parentMode?: "regular" | "fullscreen";
+    parentLayout?: unknown;
+    viewportResetError?: Error;
   } = {},
 ) {
   const events: string[] = [];
@@ -69,7 +75,8 @@ function createHarness(
   let outerDone: ((value: unknown) => void) | undefined;
   let editorText = "main draft";
   const parent = {
-    mode: "regular",
+    mode: options.parentMode ?? "regular",
+    layoutRoot: options.parentLayout,
     terminal: { rows: 24, columns: 80 },
     getShowHardwareCursor: () => false,
     stop: (options?: { preserveScreen?: boolean }) => {
@@ -105,6 +112,9 @@ function createHarness(
       active = component;
       if (component && options.layoutMountError) throw options.layoutMountError;
     },
+    setViewportTarget(target: ScrollView | undefined) {
+      if (!target && options.viewportResetError) throw options.viewportResetError;
+    },
     setFocus(component: Component | null) {
       events.push(component ? "fullscreen.focus" : "fullscreen.unfocus");
     },
@@ -122,7 +132,7 @@ function createHarness(
       fullscreenInputListener = listener;
       return () => {
         if (fullscreenInputListener === listener) fullscreenInputListener = undefined;
-        if (options.hardCancelRemoveError) throw options.hardCancelRemoveError;
+        if ("hardCancelRemoveError" in options) throw options.hardCancelRemoveError;
       };
     },
     showOverlay() {
@@ -135,7 +145,10 @@ function createHarness(
   const createTui: BtwFullscreenTuiFactory = () => fullscreen;
   const notifications: string[] = [];
   const ctx = {
-    signal: options.signal,
+    get signal() {
+      if (options.signalError) throw options.signalError;
+      return options.signal;
+    },
     ui: {
       custom: async (
         factory: (...args: never[]) => FakeComponent,
@@ -211,7 +224,7 @@ test("shortcut warnings follow negotiated mode, deduplicate, and stop at disposa
     { createTui: harness.createTui },
   );
   try {
-    await flushAsyncWork();
+    await waitForCondition(() => finish !== undefined, "side flow did not start before shortcut input");
     assert.deepEqual(harness.notifications, []);
     setKittyProtocolActive(true);
     harness.input("x");
@@ -260,29 +273,25 @@ async function waitForCondition(condition: () => boolean, message: string): Prom
   assert.fail(message);
 }
 
-class InputHandoffTerminal implements Terminal {
-  columns = 80;
-  readonly rows = 12;
-  readonly kittyProtocolActive = false;
+class InputHandoffTerminal extends FullscreenTerminal {
+  override rows = 12;
   readonly lifecycle: Array<"start" | "stop"> = [];
   readonly lifecycleDuringInput: Array<"start" | "stop"> = [];
   readonly outputDuringInput: string[] = [];
-  private inputHandler: ((data: string) => void) | undefined;
-  private inputDispatchDepth = 0;
   private nextStopError: Error | undefined;
   private pendingDrain: Promise<void> | undefined;
   private resolvePendingDrain: (() => void) | undefined;
   private rejectPendingDrain: ((error: Error) => void) | undefined;
   drainCallCount = 0;
 
-  start(onInput: (data: string) => void): void {
+  override start(onInput: (data: string) => void): void {
     this.recordLifecycle("start");
-    this.inputHandler = onInput;
+    super.start(onInput, () => {});
   }
 
-  stop(): void {
+  override stop(): void {
     this.recordLifecycle("stop");
-    this.inputHandler = undefined;
+    super.stop();
     const error = this.nextStopError;
     this.nextStopError = undefined;
     if (error) throw error;
@@ -312,37 +321,27 @@ class InputHandoffTerminal implements Terminal {
   }
 
   send(data: string): void {
-    const handler = this.inputHandler;
-    if (!handler) return;
-    this.inputDispatchDepth += 1;
-    try {
-      handler(data);
-    } finally {
-      this.inputDispatchDepth -= 1;
-    }
+    this.input(data);
   }
 
   private recordLifecycle(event: "start" | "stop"): void {
     this.lifecycle.push(event);
-    if (this.inputDispatchDepth > 0) this.lifecycleDuringInput.push(event);
+    if (this.inputDepth > 0) this.lifecycleDuringInput.push(event);
   }
 
-  async drainInput(): Promise<void> {
-    this.drainCallCount += 1;
+  override drain = async (): Promise<void> => {
     await this.pendingDrain;
+  };
+
+  override async drainInput(): Promise<void> {
+    this.drainCallCount += 1;
+    await super.drainInput();
   }
-  write(data: string): void {
-    if (this.inputDispatchDepth > 0) this.outputDuringInput.push(data);
+
+  override write(data: string): void {
+    super.write(data);
+    if (this.inputDepth > 0) this.outputDuringInput.push(data);
   }
-  moveBy(): void {}
-  hideCursor(): void {}
-  showCursor(): void {}
-  clearLine(): void {}
-  clearFromCursor(): void {}
-  clearScreen(): void {}
-  setTitle(): void {}
-  setProgress(): void {}
-  setProgramStatus(): void {}
 }
 
 class MainInput implements Component, Focusable {
@@ -447,6 +446,7 @@ function createInputHandoffHarness(
   if (options.fullscreenParent) parent.renderNow(true);
 
   const notifications: string[] = [];
+  let outerComponent: (Component & { dispose?(): void }) | undefined;
   const ctx = {
     sessionManager: {
       getBranch: () => [
@@ -492,6 +492,7 @@ function createInputHandoffHarness(
             keybindings,
             done,
           );
+          outerComponent = component;
           const overlay = parent.showOverlay(component);
           options.onHandle?.(overlay);
         }),
@@ -504,7 +505,17 @@ function createInputHandoffHarness(
       },
     },
   } as never;
-  return { ctx, mainInput, mainScrollView, notifications, parent, terminal };
+  return {
+    ctx,
+    mainInput,
+    mainScrollView,
+    notifications,
+    parent,
+    terminal,
+    get outerComponent() {
+      return outerComponent;
+    },
+  };
 }
 
 function createNativeFullscreenHarness(keybindings = createBtwTestKeybindings()) {
@@ -1576,15 +1587,177 @@ test("upstream cancellation closes a mounted composer and restores the parent", 
   assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
 });
 
-test("Ctrl+C waits for terminal input drain before restoring the parent", async () => {
+test.each(
+  ([false, true] as const).flatMap((fullscreenParent) =>
+    (["fullscreen", "left-pane", "right-pane"] as const).map((layout) => ({ fullscreenParent, layout })),
+  ),
+)(
+  "entry drains before transferring a $layout workspace with fullscreen parent=$fullscreenParent",
+  async ({ fullscreenParent, layout }) => {
+    const harness = createInputHandoffHarness(createBtwTestKeybindings(), { fullscreenParent });
+    harness.terminal.deferDrain();
+    let closeSide: (() => void) | undefined;
+    let running: Promise<string> | undefined;
+    const removeEntryListener = harness.parent.addInputListener((data) => {
+      if (data !== "open") return undefined;
+      running = runBtwFullscreen(
+        harness.ctx,
+        (ctx) =>
+          ctx.ui.custom<string>((_tui, _theme, _keys, done) => {
+            closeSide = () => done("closed");
+            return new SideInput();
+          }),
+        { layout },
+      );
+      return { consume: true };
+    });
+    try {
+      harness.terminal.send("open");
+      assert.deepEqual(harness.terminal.lifecycle, ["start"]);
+      assert.equal(harness.terminal.drainCallCount, 0);
+      await waitForCondition(() => harness.terminal.drainCallCount === 1, "entry drain did not start");
+      assert.deepEqual([closeSide], [undefined]);
+      assert.deepEqual(harness.terminal.lifecycle, ["start"]);
+      assert.deepEqual(harness.terminal.lifecycleDuringInput, []);
+
+      harness.terminal.resolveDrain();
+      await waitForCondition(() => closeSide !== undefined, "side UI did not mount after entry drain");
+      assert.deepEqual(harness.terminal.lifecycle, ["start", "stop", "start"]);
+      closeSide?.();
+      assert.equal(await running, "closed");
+      assert.equal(harness.terminal.drainCallCount, 2);
+      assert.deepEqual(harness.terminal.lifecycle, ["start", "stop", "start", "stop", "start"]);
+      assert.deepEqual(
+        harness.terminal.events,
+        ["start", "drain", "stop", "start", "drain", "stop", "start"].map((name) => ({ name, depth: 0 })),
+      );
+      assert.deepEqual(harness.terminal.lifecycleDuringInput, []);
+      harness.terminal.send("restored");
+      assert.equal(harness.mainInput.text, "restored");
+    } finally {
+      removeEntryListener();
+      harness.terminal.resolveDrain();
+      closeSide?.();
+      await running?.catch(() => undefined);
+      harness.parent.stop();
+    }
+  },
+);
+
+test.each(["abort", "dispose", "replacement", "shutdown"] as const)(
+  "%s during entry joins drain without creating a stale BTW flow",
+  async (cancellation) => {
+    const harness = createInputHandoffHarness();
+    harness.terminal.deferDrain();
+    const owner = new AbortController();
+    let restoreAllowed = true;
+    let runCalled = false;
+    let settled = false;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      async () => {
+        runCalled = true;
+        return "unexpected";
+      },
+      { signal: owner.signal, canRestoreParent: () => restoreAllowed },
+    );
+    const rejected = assert.rejects(running, /disposed/u).then(() => {
+      settled = true;
+    });
+    try {
+      await waitForCondition(() => harness.terminal.drainCallCount === 1, "entry drain did not start");
+      if (cancellation === "replacement" || cancellation === "shutdown") restoreAllowed = false;
+      if (cancellation === "dispose") {
+        harness.outerComponent?.dispose?.();
+        harness.outerComponent?.dispose?.();
+      } else if (cancellation !== "replacement") owner.abort();
+      await flushAsyncWork();
+      assert.equal(settled, false);
+      assert.equal(runCalled, false);
+      assert.deepEqual(harness.terminal.lifecycle, ["start"]);
+      harness.terminal.resolveDrain();
+      await rejected;
+      assert.equal(runCalled, false);
+      assert.equal(harness.terminal.drainCallCount, 1);
+      assert.deepEqual(harness.terminal.lifecycle, restoreAllowed ? ["start", "stop", "start"] : ["start", "stop"]);
+      assert.deepEqual(harness.terminal.lifecycleDuringInput, []);
+      if (restoreAllowed) {
+        harness.terminal.send("restored");
+        assert.equal(harness.mainInput.text, "restored");
+      }
+    } finally {
+      harness.terminal.resolveDrain();
+      owner.abort();
+      await rejected;
+      harness.parent.stop();
+    }
+  },
+);
+
+test.each(["before entry", "during Kit loading"] as const)(
+  "cancellation %s leaves the active parent terminal untouched",
+  async (timing) => {
+    const harness = createInputHandoffHarness();
+    const owner = new AbortController();
+    if (timing === "before entry") owner.abort();
+    let runCalled = false;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      async () => {
+        runCalled = true;
+      },
+      { signal: owner.signal },
+    );
+    if (timing === "during Kit loading") owner.abort();
+    try {
+      await assert.rejects(running, /disposed/u);
+      assert.equal(runCalled, false);
+      assert.equal(harness.outerComponent, undefined);
+      assert.equal(harness.terminal.drainCallCount, 0);
+      assert.deepEqual(harness.terminal.lifecycle, ["start"]);
+      harness.terminal.send("untouched");
+      assert.equal(harness.mainInput.text, "untouched");
+    } finally {
+      harness.parent.stop();
+    }
+  },
+);
+
+test("a failed entry drain restores parent keyboard ownership before reporting the error", async () => {
   const harness = createInputHandoffHarness();
   harness.terminal.deferDrain();
+  let runCalled = false;
+  const running = runBtwFullscreen(harness.ctx, async () => {
+    runCalled = true;
+  });
+  const rejected = assert.rejects(running, /entry drain failed/u);
+  try {
+    await waitForCondition(() => harness.terminal.drainCallCount === 1, "entry drain did not start");
+    harness.terminal.rejectDrain(new Error("entry drain failed"));
+    await rejected;
+    assert.equal(runCalled, false);
+    assert.deepEqual(harness.terminal.lifecycle, ["start", "stop", "start"]);
+    harness.terminal.send("restored");
+    assert.equal(harness.mainInput.text, "restored");
+  } finally {
+    harness.terminal.resolveDrain();
+    await rejected;
+    harness.parent.stop();
+  }
+});
+
+test("Ctrl+C waits for terminal input drain before restoring the parent", async () => {
+  const harness = createInputHandoffHarness();
+  let mounted = false;
   let sideCancelCount = 0;
   let settled = false;
   const running = runBtwFullscreen(harness.ctx, (ctx) =>
     ctx.ui.custom<"closed">((_tui, _theme, _keybindings, done) => ({
       focused: false,
-      render: () => ["side thread"],
+      render: () => {
+        mounted = true;
+        return ["side thread"];
+      },
       handleInput(data: string) {
         if (data !== "\u0003") return;
         sideCancelCount += 1;
@@ -1602,21 +1775,23 @@ test("Ctrl+C waits for terminal input drain before restoring the parent", async 
     },
   );
   try {
-    await flushAsyncWork();
+    await waitForCondition(() => mounted, "side UI did not mount before cancellation");
+    assert.equal(harness.terminal.drainCallCount, 1);
+    harness.terminal.deferDrain();
     const lifecycleBeforeCancel = harness.terminal.lifecycle.length;
 
     harness.terminal.send("\u0003");
 
     assert.equal(sideCancelCount, 1);
-    await Promise.resolve();
-    assert.equal(harness.terminal.drainCallCount, 1);
+    await waitForCondition(() => harness.terminal.drainCallCount === 2, "exit drain did not start");
+    assert.equal(harness.terminal.drainCallCount, 2);
     assert.equal(settled, false);
     assert.equal(harness.terminal.lifecycle.length, lifecycleBeforeCancel);
 
     harness.terminal.send("\u0003");
     await Promise.resolve();
     assert.equal(sideCancelCount, 1);
-    assert.equal(harness.terminal.drainCallCount, 1);
+    assert.equal(harness.terminal.drainCallCount, 2);
     assert.equal(harness.terminal.lifecycle.length, lifecycleBeforeCancel);
 
     harness.terminal.resolveDrain();
@@ -1632,11 +1807,14 @@ test("Ctrl+C waits for terminal input drain before restoring the parent", async 
 
 test("a drainInput failure still restores the parent once and propagates", async () => {
   const harness = createInputHandoffHarness();
-  harness.terminal.deferDrain();
+  let mounted = false;
   const running = runBtwFullscreen(harness.ctx, (ctx) =>
     ctx.ui.custom<"closed">((_tui, _theme, _keybindings, done) => ({
       focused: false,
-      render: () => ["side thread"],
+      render: () => {
+        mounted = true;
+        return ["side thread"];
+      },
       handleInput(data: string) {
         if (data === "\u0003") done("closed");
       },
@@ -1644,13 +1822,15 @@ test("a drainInput failure still restores the parent once and propagates", async
     })),
   );
   try {
-    await flushAsyncWork();
+    await waitForCondition(() => mounted, "side UI did not mount before cancellation");
+    assert.equal(harness.terminal.drainCallCount, 1);
+    harness.terminal.deferDrain();
     const lifecycleBeforeCancel = harness.terminal.lifecycle.length;
 
     harness.terminal.send("\u0003");
-    await Promise.resolve();
+    await waitForCondition(() => harness.terminal.drainCallCount === 2, "exit drain did not start");
 
-    assert.equal(harness.terminal.drainCallCount, 1);
+    assert.equal(harness.terminal.drainCallCount, 2);
     assert.equal(harness.terminal.lifecycle.length, lifecycleBeforeCancel);
     harness.terminal.rejectDrain(new Error("input drain failed"));
 
@@ -1750,10 +1930,12 @@ test("a deferred hard-cancel stop failure still restores parent input once", asy
   }
 });
 
-test("deferred restoration preserves the first cleanup error and does not retry parent start", async () => {
+test("deferred restoration retains each physical cleanup error and does not retry parent start", async () => {
+  const overlayError = new Error("overlay hide failed");
+  const startError = new Error("parent start failed");
   const harness = createHarness({
-    parentOverlayHideError: new Error("overlay hide failed"),
-    parentStartError: new Error("parent start failed"),
+    parentOverlayHideError: overlayError,
+    parentStartError: startError,
   });
   const running = runBtwFullscreen(
     harness.ctx,
@@ -1775,10 +1957,198 @@ test("deferred restoration preserves the first cleanup error and does not retry 
 
   harness.input("\u0003");
 
-  await assert.rejects(running, /overlay hide failed/u);
+  await assert.rejects(running, (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [overlayError, startError]);
+    return true;
+  });
   assert.equal(harness.events.filter((event) => event === "fullscreen.stop:true").length, 1);
   assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
   assert.equal(harness.events.filter((event) => event === "component.dispose").length, 1);
+});
+
+function assertErrorCauses(actual: unknown, expected: unknown): void {
+  if (!Array.isArray(expected)) {
+    assert.equal(actual, expected);
+    return;
+  }
+  assert.ok(actual instanceof AggregateError);
+  assert.equal(actual.errors.length, expected.length);
+  expected.forEach((cause, index) => {
+    assertErrorCauses(actual.errors[index], cause);
+  });
+}
+
+test.each([
+  ["stop", true, false, false],
+  ["overlay", false, true, false],
+  ["restart", false, false, true],
+  ["all physical cleanup", true, true, true],
+] as const)(
+  "local listener cleanup does not hide %s failures after hard cancellation",
+  async (_label, stop, overlay, restart) => {
+    const localError = new Error("listener cleanup failed");
+    const stopError = new Error("fullscreen stop failed");
+    const overlayError = new Error("overlay hide failed");
+    const startError = new Error("parent start failed");
+    const physicalErrors = [stop ? stopError : [], overlay ? overlayError : [], restart ? startError : []].flat();
+    const harness = createHarness({
+      hardCancelRemoveError: localError,
+      ...(stop ? { fullscreenStopError: stopError } : {}),
+      ...(overlay ? { parentOverlayHideError: overlayError } : {}),
+      ...(restart ? { parentStartError: startError } : {}),
+    });
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((_tui, _theme, _keys, done) => ({
+          render: () => ["side"],
+          invalidate() {},
+          handleInput(data: string) {
+            if (data === "\u0003") done("closed");
+          },
+        })),
+      {},
+      { createTui: harness.createTui },
+    );
+    await flushAsyncWork();
+    harness.input("\u0003");
+
+    await assert.rejects(running, (error: unknown) => {
+      assertErrorCauses(error, [localError, physicalErrors.length === 1 ? physicalErrors[0] : physicalErrors]);
+      return true;
+    });
+    assert.equal(harness.events.filter((event) => event === "fullscreen.stop:true").length, 1);
+    assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+  },
+);
+
+test("flow, local cleanup, and physical restoration failures retain their ordered causes", async () => {
+  const flowError = new Error("flow failed");
+  const localError = new Error("listener cleanup failed");
+  const stopError = new Error("fullscreen stop failed");
+  const overlayError = new Error("overlay hide failed");
+  const startError = new Error("parent start failed");
+  const harness = createHarness({
+    hardCancelRemoveError: localError,
+    fullscreenStopError: stopError,
+    parentOverlayHideError: overlayError,
+    parentStartError: startError,
+  });
+  await assert.rejects(
+    runBtwFullscreen(
+      harness.ctx,
+      async () => {
+        throw flowError;
+      },
+      {},
+      { createTui: harness.createTui },
+    ),
+    (error: unknown) => {
+      assertErrorCauses(error, [flowError, localError, [stopError, overlayError, startError]]);
+      return true;
+    },
+  );
+});
+
+test("an original aggregate that already contains nested cleanup causes keeps its identity", async () => {
+  const localError = new Error("listener cleanup failed");
+  const stopError = new Error("fullscreen stop failed");
+  const original = new AggregateError(
+    [new Error("flow failed"), new AggregateError([localError, stopError], "existing cleanup")],
+    "original flow aggregate",
+  );
+  const harness = createHarness({ hardCancelRemoveError: localError, fullscreenStopError: stopError });
+  await assert.rejects(
+    runBtwFullscreen(
+      harness.ctx,
+      async () => {
+        throw original;
+      },
+      {},
+      { createTui: harness.createTui },
+    ),
+    (error: unknown) => {
+      assert.equal(error, original);
+      return true;
+    },
+  );
+});
+
+test("partially repeated physical aggregates add only their distinct causes in order", async () => {
+  const repeatedError = new Error("same message");
+  const distinctError = new Error("same message");
+  const startError = new Error("parent start failed");
+  const original = new AggregateError([new Error("flow failed"), repeatedError], "original flow aggregate");
+  const harness = createHarness({
+    hardCancelRemoveError: repeatedError,
+    fullscreenStopError: repeatedError,
+    parentOverlayHideError: distinctError,
+    parentStartError: startError,
+  });
+  await assert.rejects(
+    runBtwFullscreen(
+      harness.ctx,
+      async () => {
+        throw original;
+      },
+      {},
+      { createTui: harness.createTui },
+    ),
+    (error: unknown) => {
+      assertErrorCauses(error, [original, distinctError, startError]);
+      return true;
+    },
+  );
+});
+
+test.each([undefined, null, 0, "", new Error("direct cleanup message")])(
+  "a single cleanup failure retains its thrown value: %j",
+  async (cleanupError) => {
+    const harness = createHarness({ hardCancelRemoveError: cleanupError });
+    await assert.rejects(
+      runBtwFullscreen(harness.ctx, async () => "done", {}, { createTui: harness.createTui }),
+      (error: unknown) => {
+        assert.equal(error, cleanupError);
+        return true;
+      },
+    );
+  },
+);
+
+test("custom UI mount failure retains every local cleanup cause before physical restoration", async () => {
+  const mountError = new Error("mount failed");
+  const listenerError = new Error("listener removal failed");
+  const viewportError = new Error("viewport reset failed");
+  const disposeError = new Error("component disposal failed");
+  const stopError = new Error("fullscreen stop failed");
+  const harness = createHarness({
+    layoutMountError: mountError,
+    hardCancelRemoveError: listenerError,
+    viewportResetError: viewportError,
+    fullscreenStopError: stopError,
+  });
+  await assert.rejects(
+    runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom(() => ({
+          render: () => ["side"],
+          invalidate() {},
+          dispose() {
+            throw disposeError;
+          },
+        })),
+      { layout: "left-pane" },
+      { createTui: harness.createTui },
+    ),
+    (error: unknown) => {
+      assertErrorCauses(error, [[mountError, [listenerError, viewportError]], disposeError, stopError]);
+      return true;
+    },
+  );
+  assert.equal(harness.events.filter((event) => event === "fullscreen.layout.clear").length, 1);
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
 });
 
 test("deferred listener cleanup failure restores the parent and propagates", async () => {
@@ -2028,14 +2398,14 @@ test.each([
     copy: (_text: string): Promise<void> => {
       throw new Error("clipboard unavailable");
     },
-    feedback: "Copy failed",
+    feedback: "clipboard unavailable",
   },
   {
     name: "rejected host copy",
     copy: async (_text: string) => {
       throw new Error("clipboard rejected");
     },
-    feedback: "Copy failed",
+    feedback: "clipboard rejected",
   },
 ])("default fullscreen reports $name and restores its parent", async ({ copy, feedback }) => {
   const { harness, running, sideTui, closeSide } = await startClipboardSelection(copy);
@@ -2164,7 +2534,7 @@ test("manual fullscreen contains clipboard failure and reports it", async () => 
   harness.input(copyInput);
   await flushAsyncWork();
   sideTui.renderNow(true);
-  assert.equal(harness.writes.join("").includes("Copy failed"), true);
+  assert.equal(harness.writes.join("").includes("clipboard unavailable"), true);
   closeSide();
   assert.equal(await running, "closed");
 });
@@ -2398,6 +2768,203 @@ test("default fullscreen activates OSC-8 links through the configured URL opener
   assert.deepEqual(openedBeforeClose, [url]);
 });
 
+test.each(["left-pane", "right-pane"] as const)(
+  "native %s keyboard transfer selects the active editor and viewport",
+  async (layout) => {
+    const keys = createBtwTestKeybindings();
+    const previous = getKeybindings();
+    setKeybindings(keys);
+    const harness = createInputHandoffHarness(keys, { fullscreenParent: true });
+    harness.terminal.columns = 120;
+    const side = new ScrollableSideInput();
+    let sideTui!: TUI;
+    let close!: () => void;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+          sideTui = tui;
+          close = () => done("closed");
+          return side;
+        }),
+      { layout, keybindings: { switchPane: "f9" } },
+    );
+    try {
+      await flushAsyncWork();
+      sideTui.renderNow(true);
+      assert.equal(side.scrollView.primary, true);
+      const sideTop = side.scrollView.scrollTop;
+      harness.terminal.send("\u001b[20~");
+      sideTui.renderNow(true);
+      assert.equal(harness.mainInput.focused, true);
+      assert.equal(harness.mainScrollView?.primary, true);
+      assert.equal(side.scrollView.primary, false);
+      harness.terminal.send("main");
+      assert.equal(harness.mainInput.text, "main");
+      harness.terminal.send("\u001b[1;5H");
+      assert.equal(harness.mainScrollView?.scrollTop, 0);
+      assert.equal(side.scrollView.scrollTop, sideTop);
+      const overlay = sideTui.showOverlay({ render: () => ["overlay"], handleInput() {}, invalidate() {} });
+      harness.terminal.send("\u001b[20~");
+      assert.equal(harness.mainScrollView?.primary, true);
+      overlay.hide();
+      harness.terminal.send("\u001b[20~");
+      sideTui.renderNow(true);
+      assert.equal(side.focused, true);
+      assert.equal(side.scrollView.primary, true);
+      assert.equal(harness.mainScrollView?.primary, false);
+      harness.terminal.send("\u001b[1;5H");
+      assert.equal(side.scrollView.scrollTop, 0);
+      assert.equal(harness.mainScrollView?.scrollTop, 0);
+      close();
+      assert.equal(await running, "closed");
+      assert.equal(harness.mainScrollView?.primary, true);
+    } finally {
+      close?.();
+      await running;
+      harness.parent.stop();
+      setKeybindings(previous);
+    }
+  },
+);
+
+test("the registered command forwards its session signal through the real fullscreen context proxy", async () => {
+  const harness = createHarness();
+  const mock = createMockPi();
+  let received: AbortSignal | undefined;
+  btw(mock.pi, {
+    loadSettings: async () => ({}),
+    resolveModel: async () =>
+      ({ kind: "selected", selected: { model: { id: "test", provider: "test", reasoning: false } } }) as never,
+    runFullscreen: (ctx, run, options) => runBtwFullscreen(ctx, run, options, { createTui: harness.createTui }),
+    runThread: async ({ ctx }) => {
+      received = ctx.signal;
+      return { kind: "closed" };
+    },
+  });
+  const command = mock.commands.get("btw");
+  assert.ok(command);
+  const ctx = Object.assign(Object.create(harness.ctx), {
+    mode: "tui",
+    hasUI: true,
+    sessionManager: { getBranch: () => [] },
+  }) as never;
+  await command.handler("question", ctx);
+  assert.ok(received);
+  assert.equal(received.aborted, false);
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test.each([undefined, {}, { render: () => [] }])(
+  "incompatible fullscreen parent layout %j fails before terminal handoff",
+  async (parentLayout) => {
+    const harness = createHarness({ parentMode: "fullscreen", parentLayout });
+    await assert.rejects(
+      runBtwFullscreen(harness.ctx, async () => "unused", { layout: "left-pane" }, { createTui: harness.createTui }),
+      /cannot compose/u,
+    );
+    assert.deepEqual(harness.events, []);
+  },
+);
+
+test("missing native viewport fails before terminal handoff", async () => {
+  const harness = createHarness({ parentMode: "fullscreen", parentLayout: { render: () => [], invalidate() {} } });
+  await assert.rejects(
+    runBtwFullscreen(harness.ctx, async () => "unused", { layout: "right-pane" }, { createTui: harness.createTui }),
+    /cannot identify/u,
+  );
+  assert.deepEqual(harness.events, []);
+});
+
+test("a stale signal getter settles a queued host without terminal handoff", async () => {
+  const harness = createHarness({ signalError: new Error("stale context") });
+  await assert.rejects(
+    runBtwFullscreen(harness.ctx, async () => "unused", {}, { createTui: harness.createTui }),
+    /stale context/u,
+  );
+  assert.deepEqual(harness.events, []);
+});
+
+test("split viewport cleanup failure still clears layout and disposes the component", async () => {
+  const harness = createHarness({ viewportResetError: new Error("viewport cleanup failed") });
+  let close!: () => void;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom((_tui, _theme, _keys, done) => {
+        close = () => done("closed");
+        return {
+          render: () => ["side"],
+          invalidate() {},
+          dispose() {
+            harness.events.push("component.dispose");
+          },
+        };
+      }),
+    { layout: "left-pane" },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /viewport cleanup failed/u);
+  await flushAsyncWork();
+  close();
+  await rejected;
+  assert.equal(harness.events.includes("fullscreen.layout.clear"), true);
+  assert.equal(harness.events.filter((event) => event === "component.dispose").length, 1);
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test("cancellation releases signal-ignoring work and rejects late captured UI writes", async () => {
+  const harness = createHarness();
+  const owner = new AbortController();
+  let write!: (text: string) => void;
+  let release!: () => void;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    async (ctx) => {
+      write = ctx.ui.setEditorText;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return "late";
+    },
+    { signal: owner.signal },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /disposed/u);
+  await flushAsyncWork();
+  owner.abort();
+  await rejected;
+  assert.throws(() => write("stale draft"), /disposed/u);
+  assert.equal(harness.editorText, "main draft");
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+  release();
+  await flushAsyncWork();
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test("quit ownership stops the side renderer without restarting the parent", async () => {
+  const harness = createHarness();
+  const owner = new AbortController();
+  let restoreAllowed = true;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    async () => new Promise<never>(() => {}),
+    { signal: owner.signal, canRestoreParent: () => restoreAllowed },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /disposed/u);
+  await flushAsyncWork();
+  restoreAllowed = false;
+  owner.abort();
+  await rejected;
+  assert.equal(harness.events.filter((event) => event === "fullscreen.stop:true").length, 1);
+  assert.equal(harness.events.includes("parent.start"), false);
+  assert.equal(
+    harness.events.some((event) => event.startsWith("parent.renderNow")),
+    false,
+  );
+});
+
 test("dedicated fullscreen owns the terminal while side custom UI runs and restores it afterward", async () => {
   const harness = createHarness();
   const result = await runBtwFullscreen(
@@ -2540,6 +3107,52 @@ test("dedicated fullscreen restores the parent before propagating a side-flow er
   ]);
 });
 
+test("side-flow and physical cleanup failures retain both causes", async () => {
+  const flowError = new Error("side flow failed");
+  const cleanupError = new Error("fullscreen stop failed");
+  const harness = createHarness({ fullscreenStopError: cleanupError });
+  await assert.rejects(
+    runBtwFullscreen(
+      harness.ctx,
+      async () => {
+        throw flowError;
+      },
+      {},
+      { createTui: harness.createTui },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [flowError, cleanupError]);
+      return true;
+    },
+  );
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test("failed child creation and restoration retain both causes without retrying terminal ownership", async () => {
+  const entryError = new Error("child creation failed");
+  const restoreError = new Error("parent start failed");
+  const harness = createHarness({ parentStartError: restoreError });
+  await assert.rejects(
+    runBtwFullscreen(
+      harness.ctx,
+      async () => "unused",
+      {},
+      {
+        createTui: () => {
+          throw entryError;
+        },
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [entryError, restoreError]);
+      return true;
+    },
+  );
+  assert.deepEqual(harness.events, ["parent.stop:true", "parent.start", "parent.renderNow:false"]);
+});
+
 test("a fullscreen stop failure still restarts the parent before it propagates", async () => {
   const harness = createHarness({ fullscreenStopError: new Error("fullscreen stop failed") });
   await assert.rejects(
@@ -2576,8 +3189,7 @@ test("disposing the fullscreen host closes active side UI and restores terminal 
     {},
     { createTui: harness.createTui },
   );
-  await Promise.resolve();
-  await Promise.resolve();
+  await waitForCondition(() => closeSide !== undefined, "side UI did not mount before disposal");
   assert.ok(harness.outerComponent);
   harness.outerComponent.dispose();
   harness.outerComponent.dispose();
@@ -2603,8 +3215,7 @@ test("disposal restores the parent and disposes a custom component whose factory
     {},
     { createTui: harness.createTui },
   );
-  await Promise.resolve();
-  await Promise.resolve();
+  await waitForCondition(() => releaseFactory !== undefined, "side factory did not start before disposal");
   assert.ok(harness.outerComponent);
   harness.outerComponent.dispose();
   await assert.rejects(running, /dedicated pi-btw UI was disposed/i);

@@ -7,6 +7,7 @@ import {
   PROGRESS_DETAILS_VERSION,
   type ProgressStep,
   renderProgressWidget,
+  TOOL_NAME,
   WIDGET_KEY,
 } from "../src/progress-widget.js";
 import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettingsLoadResult } from "../src/settings.js";
@@ -21,6 +22,16 @@ import {
 
 function customText(message: ContextEvent["messages"][number] | undefined): string {
   return message?.role === "custom" && typeof message.content === "string" ? message.content : "";
+}
+
+function widgetHidden(current: ReturnType<typeof createContext>): boolean {
+  const widget = current.widgets.at(-1);
+  return widget?.content === undefined && widget?.lines === undefined;
+}
+
+function widgetTail(current: ReturnType<typeof createContext>, mode: "tui" | "rpc"): string | undefined {
+  if (mode === "rpc") return current.widgets.at(-1)?.lines?.at(-1);
+  return current.widgets.at(-1)?.content?.(current.tui, identityTheme().theme).render(80).at(-1);
 }
 
 test("adapts widget rows, prioritizes active work, and honors display settings", async () => {
@@ -119,6 +130,60 @@ test("shows a transient completion summary while retaining Progress state", asyn
     );
     assert.match(customText(restored[1]), /"status":"completed"/u);
     assert.match(customText(restored[1]), /"text":"finish"/u);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("keeps a completed snapshot hidden on session start without dropping restored state", async () => {
+  vi.useFakeTimers();
+  try {
+    const snapshots = [
+      {
+        name: "v5",
+        toolName: TOOL_NAME,
+        details: { version: PROGRESS_DETAILS_VERSION, steps: [{ text: "finish", status: "completed" }] },
+        text: "finish",
+      },
+      {
+        name: "widget v2",
+        toolName: "todo_widget",
+        details: { version: 2, todos: [{ step: "widget two", status: "completed" }] },
+        text: "widget two",
+      },
+    ];
+    for (const mode of ["tui", "rpc"] as const) {
+      for (const snapshot of snapshots) {
+        const label = `${mode} ${snapshot.name}`;
+        const current = createContext({
+          mode,
+          branch: [toolResultEntry(snapshot.details, snapshot.toolName)],
+        });
+        const harness = createHarness();
+        await harness.emit("session_start", current.ctx);
+        assert.equal(vi.getTimerCount(), 0, label);
+        assert.equal(widgetHidden(current), true, label);
+
+        const restored = await harness.context(
+          [{ role: "compactionSummary", summary: "Earlier work", tokensBefore: 10, timestamp: 0 }],
+          current.ctx,
+        );
+        assert.match(customText(restored[1]), new RegExp(`"text":"${snapshot.text}"`, "u"), label);
+        assert.match(customText(restored[1]), /"status":"completed"/u, label);
+
+        await harness.emit("session_tree", current.ctx);
+        assert.equal(widgetTail(current, mode), `✓ ${snapshot.text}`, label);
+
+        const resumed = createHarness();
+        await resumed.emit("session_start", current.ctx);
+        assert.equal(vi.getTimerCount(), 0, label);
+        assert.equal(widgetHidden(current), true, label);
+
+        await setProgress(resumed, current.ctx, [{ text: "follow-up", status: "pending" }]);
+        assert.equal(widgetTail(current, mode), "○ follow-up", label);
+        await resumed.emit("session_shutdown", current.ctx);
+      }
+    }
   } finally {
     vi.useRealTimers();
   }

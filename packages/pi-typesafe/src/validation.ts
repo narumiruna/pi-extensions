@@ -206,8 +206,9 @@ function normalizeProbabilities(value: unknown, expectedKeys: string[], answerPa
 
 function normalizeUsage(value: unknown): JevUsage {
   const usage = requireRecord(value, "response.usage");
-  const inputTokens = usage.input_tokens ?? usage.prompt_tokens;
-  const outputTokens = usage.output_tokens ?? usage.completion_tokens;
+  // Null means unreported usage in the SDK; retain OpenRouter aliases when available.
+  const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? (usage.input_tokens === null ? 0 : undefined);
+  const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? (usage.output_tokens === null ? 0 : undefined);
   if (!isNonNegativeInteger(inputTokens) || !isNonNegativeInteger(outputTokens)) {
     throw new Error("response.usage must contain non-negative input_tokens and output_tokens");
   }

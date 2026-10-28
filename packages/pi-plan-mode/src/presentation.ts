@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import type { PlanModeState } from "./state.js";
 
 const STATUS_KEY = "plan-mode";
@@ -23,11 +24,12 @@ export function updatePlanModeUi(ctx: ExtensionContext, state: PlanModeState, to
 }
 
 export function renderPlanModeWidget(lines: readonly string[], theme: Theme, width: number): string[] {
-  const renderWidth = Math.max(0, width);
-  return [
-    theme.fg("borderMuted", "─".repeat(renderWidth)),
-    ...lines.map((line) => truncateToWidth(sanitizePlanModeWidgetLine(line), renderWidth, "")),
-  ];
+  return createPlanModeWidget(lines, theme).render(width);
+}
+
+function createPlanModeWidget(lines: readonly string[], theme: Theme): EditorStatusWidget {
+  // Kit normalizes fractional and invalid widths before clipping sanitized body rows.
+  return new EditorStatusWidget({ theme, renderBody: () => lines.map(sanitizePlanModeWidgetLine) });
 }
 
 export function sanitizePlanModeWidgetLine(value: string): string {
@@ -100,10 +102,7 @@ function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] |
   }
 
   const snapshot = [...lines];
-  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => ({
-    render: (width) => renderPlanModeWidget(snapshot, theme, width),
-    invalidate: () => {},
-  }));
+  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => createPlanModeWidget(snapshot, theme));
 }
 
 function formatStatus(state: PlanModeState) {

@@ -14,6 +14,7 @@ import {
 import { formatInteractionHints } from "../interaction-hints.js";
 import type { MenuBrowseItem } from "../types.js";
 import type { BrowseOptions, MenuKeybindings, MenuScreenComponent } from "./contracts.js";
+import { createDocumentCopy } from "./document-copy.js";
 import {
   createDocumentLineCache,
   type DocumentPresentation,
@@ -27,6 +28,7 @@ import {
   documentSearchActionMatches,
   documentSearchActivationAvailable,
 } from "./document-search.js";
+import { componentKeyAvailable } from "./host-input.js";
 import { componentRows, handleSearchInput, renderHorizontalRule, safeMenuText } from "./rendering.js";
 import { reviewDialogPages } from "./review.js";
 
@@ -49,7 +51,9 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
   const searchInput = new Input();
   const detailSearch = options.screen.enableDetailSearch ? new DocumentSearchController() : undefined;
   const detailSearchActivationAvailable = Boolean(
-    detailSearch && documentSearchActivationAvailable(options.keybindings, false),
+    detailSearch &&
+      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY) &&
+      documentSearchActivationAvailable(options.keybindings, false),
   );
   const allItems: SearchableItem[] = options.screen.items.map((item) => ({
     item,
@@ -89,6 +93,22 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
     | undefined;
   const detailLineCache = createDocumentLineCache(options.theme, Boolean(options.screen.enableDetailSearch));
   const selected = () => filteredItems[selectedIndex];
+  const copy = createDocumentCopy({
+    ...options,
+    includeConfirm: false,
+    searchEnabled: detailSearchActivationAvailable,
+    document: () => {
+      const item = selected()?.item;
+      const document = view === "detail" ? item?.detailDocument : undefined;
+      return document?.copy
+        ? { owner: document, action: document.copy, content: document.content, itemId: item?.id }
+        : undefined;
+    },
+  });
+  const finish: typeof options.onEvent = (event) => {
+    copy.cancel();
+    options.onEvent(event);
+  };
   const syncFocus = () => {
     searchInput.focused = focused && view === "list" && searchInputVisible;
     if (detailSearch) detailSearch.focused = focused && view === "detail";
@@ -128,12 +148,13 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
     const previousIndex = filteredItems.findIndex((candidate) => candidate.item.id === previouslySelectedId);
     if (previousIndex < 0 && previouslySelectedId) restoreItemId ??= previouslySelectedId;
     const restoreIndex = filteredItems.findIndex((candidate) => candidate.item.id === restoreItemId);
-    const nextIndex = restoreIndex >= 0 ? restoreIndex : previousIndex >= 0 ? previousIndex : 0;
+    const nextIndex = restoreIndex >= 0 ? restoreIndex : Math.max(previousIndex, 0);
     if (restoreIndex >= 0) restoreItemId = undefined;
     setSelectedIndex(nextIndex, false, false);
   };
   const openDetail = () => {
     if (!selected()) return;
+    copy.cancel();
     view = "detail";
     detailScrollOffset = 0;
     lastDetailLines = [];
@@ -200,7 +221,12 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
             ? [
                 options.theme.fg(
                   "dim",
-                  detailHint(options.keybindings, detailSearchActivationAvailable, detailSearch?.active ?? false),
+                  [
+                    detailHint(options.keybindings, detailSearchActivationAvailable, detailSearch?.active ?? false),
+                    copy.hint(detailSearch?.active ?? false),
+                  ]
+                    .filter(Boolean)
+                    .join(" · "),
                 ),
               ]
             : []),
@@ -271,7 +297,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
           data,
           (outsidePaste) => {
             if (matchesKey(outsidePaste, Key.ctrl("c"))) {
-              options.onEvent({ kind: "close" });
+              finish({ kind: "close" });
               return false;
             }
             if (options.keybindings.matches(outsidePaste, "tui.altScreen.searchClose")) {
@@ -303,9 +329,10 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
         return;
       }
       if (matchesKey(data, Key.ctrl("c"))) {
-        options.onEvent({ kind: "close" });
+        finish({ kind: "close" });
       } else if (options.keybindings.matches(data, "tui.select.cancel")) {
         if (view === "detail") {
+          copy.cancel();
           view = "list";
           detailScrollOffset = 0;
           lastDetailLines = [];
@@ -314,7 +341,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
           lastDetailSearchSources = [];
           detailSearch?.close();
           syncFocus();
-        } else options.onEvent({ kind: options.screen.hint ?? "back" });
+        } else finish({ kind: options.screen.hint ?? "back" });
       } else if (view === "detail") {
         if (options.keybindings.matches(data, "tui.select.up")) {
           detailScrollOffset = clamp(detailScrollOffset - 1, 0, detailMaximumScroll);
@@ -334,7 +361,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
             lastDetailSearchSources,
             detailScrollOffset,
           );
-        }
+        } else copy.handleInput(data);
       } else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
       else if (options.keybindings.matches(data, "tui.select.down")) move(1);
       else if (options.keybindings.matches(data, "tui.select.pageUp")) page(-1);
@@ -344,7 +371,8 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
         setSelectedIndex(filteredItems.length - 1, false, true);
       } else if (options.keybindings.matches(data, "tui.select.confirm")) {
         openDetail();
-      } else if (searchInputVisible) {
+      } else {
+        // Compact layouts hide the field, not its native query editing behavior.
         handleSearchInput(searchInput, data);
         applyFilter();
       }
@@ -355,10 +383,11 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
       if (mouseLayout.view === "detail") return handleDetailMouse(event);
       return handleListMouse(event);
     },
-    async waitForPending() {},
+    waitForPending: () => copy.waitForPending(),
     dispose() {
       if (disposed) return;
       disposed = true;
+      copy.dispose();
       mousePressedIndex = undefined;
       mouseLayout = undefined;
       searchInput.focused = false;
@@ -439,13 +468,18 @@ function listRows<ScreenId extends string, ActionId extends string>(
   if (options.screen.items.length === 0) {
     return [options.theme.fg("dim", "  No items available")];
   }
-  if (items.length === 0) return [options.theme.fg("dim", "  No matching items")];
+  if (items.length === 0) return [options.theme.fg("dim", "  No matching items; edit search")];
   return items.slice(viewportStart, viewportStart + viewportRows).map((candidate, offset) => {
     const index = viewportStart + offset;
     const prefix = index === selectedIndex ? "› " : "  ";
-    const suffix = candidate.statusText ? `  [${candidate.statusText}]` : "";
-    const labelWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(suffix));
-    const label = truncateToWidth(candidate.label, labelWidth, "");
+    const contentWidth = Math.max(0, width - visibleWidth(prefix));
+    // Reserve at least half the content cells for the label, unless it needs less.
+    const reservedLabelWidth = Math.min(visibleWidth(candidate.label), Math.ceil(contentWidth / 2));
+    const statusWidth = Math.max(0, contentWidth - reservedLabelWidth - 4);
+    const suffix =
+      candidate.statusText && statusWidth > 0 ? `  [${truncateToWidth(candidate.statusText, statusWidth, "…")}]` : "";
+    const labelWidth = Math.max(0, contentWidth - visibleWidth(suffix));
+    const label = truncateToWidth(candidate.label, labelWidth, "…");
     const line = truncateToWidth(`${prefix}${label}${suffix}`, width, "");
     return index === selectedIndex ? options.theme.fg("accent", line) : line;
   });

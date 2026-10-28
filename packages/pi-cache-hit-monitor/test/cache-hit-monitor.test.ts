@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import type { Api, AssistantMessage, Model, ModelCostRates } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { test, vi } from "vitest";
 import cacheHitMonitor, { COMMAND_NAME, renderCacheMonitor, WIDGET_KEY } from "../src/index.js";
 import { createCacheMonitorView, createCacheSample, formatMonitorLines } from "../src/metrics.js";
 
@@ -333,6 +333,10 @@ test("clears replacement UI and ignores stale replacement-session events", async
 
   await harness.emit("session_shutdown", {}, current.ctx);
   assert.deepEqual(current.widgets.at(-1), [WIDGET_KEY, undefined, undefined]);
+  const shutdownWrites = current.widgets.length;
+  await harness.emit("session_shutdown", {}, current.ctx);
+  await harness.emit("message_update", { message: assistant(100, 900) }, current.ctx);
+  assert.equal(current.widgets.length, shutdownWrites);
 });
 
 test("uses plain string widgets in RPC mode and remains silent without UI", async () => {
@@ -351,6 +355,81 @@ test("uses plain string widgets in RPC mode and remains silent without UI", asyn
   await assert.rejects(() => harness.command("", json.ctx), {
     message: `/${COMMAND_NAME} requires TUI or RPC mode.`,
   });
+});
+
+test.each([0, 1, 2, 12, 80, 200, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0.5, 12.9])(
+  "preserves styled body wrapping and bounds at width %s",
+  (width) => {
+    const sample = createCacheSample(assistant(200, 800, 0, { model: "界界e\u0301_model" }), 0, MODEL);
+    assert.ok(sample);
+    const view = createCacheMonitorView([sample]);
+    const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+    const roles = {
+      title: "accent",
+      good: "success",
+      warning: "warning",
+      bad: "error",
+      muted: "muted",
+      dim: "dim",
+    } as const;
+    const theme = {
+      fg: (role: string, text: string) => `\u001b[${role === "borderMuted" ? "90" : "32"}m${text}\u001b[0m`,
+      bold: (text: string) => `\u001b[1m${text}\u001b[22m`,
+    } as unknown as Theme;
+    const lines = renderCacheMonitor(view, theme, width);
+    const body = formatMonitorLines(view).flatMap((line) =>
+      normalized === 0
+        ? [""]
+        : wrapTextWithAnsi(
+            theme.fg(roles[line.role], line.role === "title" ? theme.bold(line.text) : line.text),
+            normalized,
+          ),
+    );
+    assert.deepEqual(lines, [
+      normalized === 0 ? "" : theme.fg("borderMuted", "─".repeat(normalized)),
+      ...body.map((line) => truncateToWidth(line, normalized, "")),
+    ]);
+    assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
+    if (normalized === 0) assert.ok(lines.every((line) => line === ""));
+  },
+);
+
+test("uses the callback theme after resize and invalidation without changing publication caching", async () => {
+  const harness = createHarness();
+  const current = createContext("tui", [messageEntry(assistant(200, 800))]);
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+  const record = current.widgets.at(-1);
+  assert.equal(record?.[0], WIDGET_KEY);
+  assert.deepEqual(record?.[2], { placement: "aboveEditor" });
+  const factory = record?.[1];
+  assert.equal(typeof factory, "function");
+  if (typeof factory !== "function") return;
+  let color = "\u001b[31m";
+  const fg = vi.fn((_role: string, text: string) => `${color}${text}\u001b[0m`);
+  const component = factory(undefined as never, { fg, bold: (text: string) => text } as unknown as Theme);
+  for (const width of [0, 1, 2, 40, 160, 12, 160]) {
+    fg.mockClear();
+    const lines = component.render(width);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    if (width === 0) {
+      assert.ok(lines.every((line) => line === ""));
+      assert.equal(fg.mock.calls.length, 0);
+    } else {
+      assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+      assert.ok(fg.mock.calls.some(([role]) => role === "accent"));
+      assert.ok(fg.mock.calls.some(([role]) => role === "success"));
+    }
+  }
+  color = "\u001b[32m";
+  component.invalidate();
+  const lines = component.render(160);
+  assert.ok(lines.every((line) => line.startsWith(color)));
+  assert.equal(current.widgets.length, 1);
+  await harness.emit("session_tree", {}, current.ctx);
+  assert.equal(current.widgets.length, 1);
+  assert.equal(current.widgets.at(-1)?.[1], factory);
+  await harness.emit("session_shutdown", {}, current.ctx);
 });
 
 test("renders every line within narrow widths and strips unsafe model text", () => {

@@ -11,16 +11,21 @@ export async function withAgentSyncLock<T>(
   ctx: ExtensionContext,
   options: CommandOptions,
   run: (options: CommandOptions) => Promise<T>,
-): Promise<T> {
+): Promise<T | "cancelled"> {
   let request: AgentResolutionRequired;
   const background = options.background;
+  const retry = Boolean(options.agentRetryRefusal);
+  if (retry && (options.auto || background || !ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")))
+    throw new Error("A refused-model retry requires a foreground TUI or RPC manager review.");
   try {
     return await withLock("sync", () => run(options));
   } catch (error) {
     if (!(error instanceof AgentResolutionRequired)) throw error;
     request = error;
   }
-  const { withAgentClaim, readAgentCandidate, saveAgentCandidate } = await import("./agent-store.js");
+  const { withAgentClaim, readAgentCandidate, saveAgentCandidate, replaceRefusedAgentCandidate } = await import(
+    "./agent-store.js"
+  );
   const { parseAgentCandidate } = await import("./agent-candidate.js");
   const { runAgentResolver } = await import("./agent-runner.js");
   return withAgentClaim(async (assertOwner) => {
@@ -36,27 +41,48 @@ export async function withAgentSyncLock<T>(
     try {
       options.signal?.throwIfAborted();
       for (let attempt = 0; attempt < AGENT_MAX_ATTEMPTS; attempt++) {
-        const validate = () =>
+        let expectedRefusal: ReturnType<typeof parseAgentCandidate> | undefined;
+        const validate = (signal = options.signal) =>
           withLock("agent-validate", async () => {
-            options.signal?.throwIfAborted();
+            signal?.throwIfAborted();
             await assertOwner();
-            await request.validate();
-            options.signal?.throwIfAborted();
+            signal?.throwIfAborted();
+            if (
+              expectedRefusal &&
+              JSON.stringify(await readAgentCandidate(request.key)) !== JSON.stringify(expectedRefusal)
+            )
+              throw new Error("Cached refusal changed during review; reopen the manager.");
+            signal?.throwIfAborted();
+            await request.validate(signal);
+            signal?.throwIfAborted();
           });
         await validate();
         setSyncStatus(ctx, "sync resolving");
         const cached = await withLock("agent-cache-read", async () => {
           await assertOwner();
+          options.signal?.throwIfAborted();
           return readAgentCandidate(request.key);
         });
+        options.signal?.throwIfAborted();
+        if (retry) {
+          if (cached === undefined)
+            throw new Error("No eligible cached refusal for the current evidence. Use Sync now first.");
+          expectedRefusal = parseAgentCandidate(JSON.stringify(cached), request.evidence);
+          if (!expectedRefusal.results.some((row) => "refuse" in row))
+            throw new Error("The current cached result is not a refusal. Use Sync now.");
+          const { confirmAgentRefusalRetry } = await import("./agent-refusal-retry.js");
+          options.signal?.throwIfAborted();
+          if (!(await confirmAgentRefusalRetry(ctx, options.setup, request.evidence, validate, options.signal)))
+            return "cancelled" as const;
+        }
         const raw =
-          cached === undefined
+          cached === undefined || retry
             ? await runAgentResolver(
                 ctx,
                 request.evidence,
                 validate,
                 options.signal,
-                background ? () => background.reserve(request.key) : undefined,
+                background ? (signal) => background.reserve(request.key, signal) : undefined,
               )
             : JSON.stringify(cached);
         let candidate: ReturnType<typeof parseAgentCandidate>;
@@ -65,12 +91,35 @@ export async function withAgentSyncLock<T>(
         } catch {
           throw new ContinuousError("model", "Agent mode paused: invalid resolver output; evidence retained.");
         }
+        if (retry && candidate.results.some((row) => "refuse" in row))
+          throw new ContinuousError("model", "The model refused again. The previous refusal was retained.");
         await validate();
-        await withLock("agent-cache-save", async () => {
-          await assertOwner();
-          await saveAgentCandidate(request.key, candidate);
-        });
-        const acceptance: AgentAcceptance = { key: request.key, candidate };
+        const previous = expectedRefusal;
+        if (!previous)
+          await withLock("agent-cache-save", async () => {
+            await assertOwner();
+            options.signal?.throwIfAborted();
+            await saveAgentCandidate(request.key, candidate);
+          });
+        let retryCacheCommitted = false;
+        const acceptance: AgentAcceptance = {
+          key: request.key,
+          candidate,
+          ...(previous
+            ? {
+                commitCandidate: async () => {
+                  if (retryCacheCommitted) return;
+                  await replaceRefusedAgentCandidate(request.key, previous, candidate, async () => {
+                    options.signal?.throwIfAborted();
+                    await assertOwner();
+                    await request.validate(options.signal);
+                    options.signal?.throwIfAborted();
+                  });
+                  retryCacheCommitted = true;
+                },
+              }
+            : {}),
+        };
         try {
           return await withLock("sync", async () => {
             await assertOwner();
@@ -79,6 +128,7 @@ export async function withAgentSyncLock<T>(
           });
         } catch (error) {
           if (!(error instanceof AgentResolutionRequired)) throw error;
+          if (retry) throw new ContinuousError("stale", "Reviewed refusal evidence changed; reopen the manager.");
           request = error;
         }
       }

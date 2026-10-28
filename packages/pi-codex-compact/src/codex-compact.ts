@@ -19,8 +19,14 @@ import {
   parseCheckpointDetails,
   REPLACEMENT_BYTE_BUDGET,
 } from "./checkpoint.js";
+import {
+  checkpointIssuerRequest,
+  PLAINTEXT_CHECKPOINT_TYPE,
+  plaintextCheckpointMessages,
+  savedPlaintextCheckpoint,
+} from "./checkpoint-portability.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
-import { recoverCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
+import { recoverCheckpoint, summarizeCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
 import {
   compactionFailureDetail,
   compactionFailureMessage,
@@ -62,9 +68,9 @@ function isCheckpointCompatible(
   return (
     route.kind === "remote" &&
     model !== undefined &&
+    model.provider === details.provider &&
     route.api === details.api &&
-    route.profile === details.profile &&
-    model.id === details.modelId
+    route.profile === details.profile
   );
 }
 
@@ -91,19 +97,14 @@ function activeTools(pi: ExtensionAPI): Tool[] {
 
 function projectedCurrentMessages(
   event: SessionBeforeCompactEvent,
-  model: Model<Api>,
   route: Extract<CompactionRoute, { kind: "remote" }>,
 ): { messages: AgentMessage[]; prior?: CodexCheckpointDetails } {
   const leafId = event.branchEntries.at(-1)?.id ?? null;
   const session = buildSessionContext(event.branchEntries, leafId);
   const prior = latestCheckpoint(event.branchEntries);
   if (!prior) return { messages: session.messages };
-  if (
-    prior.details.api !== route.api ||
-    prior.details.profile !== route.profile ||
-    prior.details.modelId !== model.id
-  ) {
-    throw new Error("The active opaque checkpoint belongs to a different Responses model");
+  if (prior.details.api !== route.api || prior.details.profile !== route.profile) {
+    throw new Error("The active opaque checkpoint belongs to an incompatible Responses API/profile");
   }
   const projected = projectSessionCheckpointContext(session.messages, event.branchEntries, prior);
   if (!projected) {
@@ -213,7 +214,19 @@ async function compactRemotely(
     );
     const provider = ctx.modelRegistry.getProvider(model.provider);
     if (!provider) throw new Error("The active Responses provider is unavailable");
-    const current = projectedCurrentMessages(event, model, route);
+    const current = projectedCurrentMessages(event, route);
+    if (checkpoint && current.prior && checkpoint.details.provider !== model.provider) {
+      if (settings.checkpointRecovery === "cancel") return { cancel: true };
+      ctx.ui.setStatus(STATUS_KEY, "Transferring checkpoint through its issuing provider…");
+      const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
+      const request = await checkpointIssuerRequest(ctx, checkpoint, messages, settings, signal, stillCurrent, fetch);
+      if (!stillCurrent()) return { cancel: true };
+      const compaction = await recoverCheckpoint(request, event).catch(() => {
+        throw new Error("Checkpoint transfer through its issuing provider failed; history preserved");
+      });
+      if (!stillCurrent()) return { cancel: true };
+      return { compaction };
+    }
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
       messages: convertToLlm(current.messages),
@@ -316,10 +329,11 @@ async function compactRemotely(
       notifyFailure(ctx, rejectionError ?? error, settings, requestValues, checkpointPresent, rejected.has(routeKey));
     if (!checkpointPresent) return undefined;
     if (!checkpoint) return { cancel: true };
+    if (checkpoint.details.provider !== model.provider) return { cancel: true };
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
     let nativeFallbackAllowed = false;
     try {
-      const current = projectedCurrentMessages(event, model, route);
+      const current = projectedCurrentMessages(event, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
       // Native fallback is intentionally lossy, but never bypass projection or ownership checks.
@@ -664,13 +678,104 @@ export function createCodexCompactExtension(
       if (owner) owner.run = undefined;
     });
 
-    pi.on("context", (event, ctx) => {
+    pi.on("context", async (event, ctx) => {
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return undefined;
+      if (!checkpoint) return undefined;
+      const route = resolveCompactionRoute(ctx.model, settings);
+      if (
+        route.kind !== "remote" ||
+        route.api !== checkpoint.details.api ||
+        route.profile !== checkpoint.details.profile
+      )
+        return undefined;
       const messages = projectSessionCheckpointContext(event.messages, ctx.sessionManager.getBranch(), checkpoint);
-      return messages ? { messages } : undefined;
+      if (!messages) return undefined;
+      if (isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return { messages };
+      let summary = savedPlaintextCheckpoint(ctx.sessionManager.getBranch(), checkpoint);
+      if (summary) return { messages: plaintextCheckpointMessages(messages, checkpoint, summary) };
+      const owner = ownerFor(ctx);
+      if (owner.controller.signal.aborted || ctx.signal?.aborted) return undefined;
+      cancelOperation(ctx);
+      const operation = new AbortController();
+      owner.operation = operation;
+      const signal = AbortSignal.any([owner.controller.signal, operation.signal, ...(ctx.signal ? [ctx.signal] : [])]);
+      const model = ctx.model;
+      const branchIsCurrent = captureCompactionBranch(ctx.sessionManager.getBranch());
+      const systemPrompt = ctx.getSystemPrompt();
+      const stillCurrent = () =>
+        !signal.aborted &&
+        owners.get(ctx.sessionManager) === owner &&
+        owner.operation === operation &&
+        owner.sessionId === ctx.sessionManager.getSessionId() &&
+        ctx.model === model &&
+        JSON.stringify(settingsRuntime.get().settings) === JSON.stringify(settings) &&
+        ctx.getSystemPrompt() === systemPrompt &&
+        branchIsCurrent(ctx.sessionManager.getBranch());
+      let transferred = false;
+      ctx.ui.setStatus(STATUS_KEY, "Transferring checkpoint through its issuing provider…");
+      try {
+        if (settings.checkpointRecovery === "cancel") throw new Error("Checkpoint recovery is disabled");
+        const marker = messages.find(
+          (message) =>
+            message.role === "user" &&
+            Array.isArray(message.content) &&
+            message.content.some(
+              (part) => part.type === "text" && part.text === checkpointMarker(checkpoint.details.checkpointId),
+            ),
+        );
+        if (!marker) throw new Error("The checkpoint marker is unavailable");
+        const request = await checkpointIssuerRequest(
+          ctx,
+          checkpoint,
+          [marker],
+          settings,
+          signal,
+          stillCurrent,
+          options.fetch,
+        );
+        if (!stillCurrent()) return undefined;
+        const result = await summarizeCheckpoint(request, {
+          maxTokens: Math.min(request.model.maxTokens, settings.replacementTokenBudget),
+        });
+        if (!stillCurrent()) return undefined;
+        summary = result.summary;
+        pi.appendEntry(PLAINTEXT_CHECKPOINT_TYPE, {
+          entryId: checkpoint.entry.id,
+          checkpointId: checkpoint.details.checkpointId,
+          summary,
+        });
+        transferred = true;
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            "Checkpoint transferred as a plaintext summary through its issuing provider. Encrypted state was not sent to the selected provider.",
+            "info",
+          );
+        return { messages: plaintextCheckpointMessages(messages, checkpoint, summary) };
+      } catch {
+        if (stillCurrent()) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Checkpoint transfer could not complete; request stopped and history preserved. Switch back to the checkpoint's issuing provider and verify its authentication, or enable checkpoint summary recovery.",
+              "warning",
+            );
+        }
+        return undefined;
+      } finally {
+        if (
+          !transferred &&
+          owners.get(ctx.sessionManager) === owner &&
+          owner.sessionId === ctx.sessionManager.getSessionId() &&
+          (owner.operation === operation || owner.operation === undefined)
+        )
+          ctx.abort();
+        if (owner.operation === operation) {
+          owner.operation = undefined;
+          ctx.ui.setStatus(STATUS_KEY, undefined);
+        }
+        operation.abort();
+      }
     });
 
     pi.on("before_provider_request", (event, ctx) => {
@@ -681,8 +786,12 @@ export function createCodexCompactExtension(
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return undefined;
+      if (!checkpoint) return undefined;
       const marker = checkpointMarker(checkpoint.details.checkpointId);
+      if (!isCheckpointCompatible(checkpoint.details, ctx.model, settings)) {
+        if (hasCheckpointMarker(event.payload, marker)) ctx.abort();
+        return undefined;
+      }
       if (!hasCheckpointMarker(event.payload, marker)) return undefined;
       return rewriteCheckpointMarker(event.payload, marker, checkpoint.details.replacementHistory);
     });
@@ -706,7 +815,7 @@ export function createCodexCompactExtension(
       providerWarnings.add(key);
       if (ctx.hasUI) {
         ctx.ui.notify(
-          "The active Responses checkpoint cannot replay on this model; Pi will expose only its fallback marker and retained recent messages.",
+          "The active Responses checkpoint cannot replay directly on this provider/API. For a compatible API/profile, the next request transfers it through its issuing provider as a plaintext summary; otherwise only the fallback marker and recent messages remain available.",
           "warning",
         );
       }

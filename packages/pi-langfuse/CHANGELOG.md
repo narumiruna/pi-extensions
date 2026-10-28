@@ -1,5 +1,37 @@
 # @narumitw/pi-langfuse
 
+## 0.53.3
+
+### Patch Changes
+
+- fa69a68: Keep OpenTelemetry dependencies compatible with the tracing SDK by bounding the API below 1.10 and declaring the matching OTLP exporter base directly. This prevents runtime import failures from the incompatible exporter release line.
+
+## 0.53.2
+
+### Patch Changes
+
+- 4a266d6: Update the Turso database dependency to 0.8.3 and the Langfuse runtime dependencies to 6.0.1.
+
+## 0.53.1
+
+### Patch Changes
+
+- 1f1c293: Update React to 19.3.1, Langfuse to 6.0, and the TypeSafe SDK to 0.7 in their respective packages. Preserve trace-only input and output updates, metadata encoding, and root observation detection with Langfuse 6. Accept unreported TypeSafe token usage without rejecting valid answers.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.53.0
+
+### Minor Changes
+
+- 1dabb0b: Upgrade the experimental durable adapter contract to pi-durable 1.2.0 and Chord ^1.2.0. Update durable tool test results to the public `output` field and keep compatibility guidance aligned with the tested host versions.
+
+### Patch Changes
+
+- fe6e621: Support Pi's user and custom `before_agent_start` events, capturing custom message content with existing trace sanitization.
+
 ## 0.52.0
 
 ### Minor Changes

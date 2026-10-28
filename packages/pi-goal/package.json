@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-goal",
-  "version": "0.54.11",
+  "version": "0.54.13",
   "description": "Pi extension for autonomous single-objective /goal completion.",
   "type": "module",
   "license": "MIT",
@@ -39,11 +39,11 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "esbuild": "0.28.2",
-    "typebox": "1.3.36",
+    "typebox": "1.4.3",
     "typescript": "7.0.2"
   },
   "dependencies": {

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { type Component, type Focusable, isFocusable, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  type Focusable,
+  isFocusable,
+  KeybindingsManager,
+  ScrollView,
+  TUI_KEYBINDINGS,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { type BtwShortcuts, resolveBtwShortcuts } from "../src/keybindings.js";
 import { BtwMainThreadInput, BtwSplitPane, MIN_BTW_SPLIT_COLUMNS } from "../src/workspace-layout.js";
 
 function theme() {
@@ -13,6 +23,10 @@ function theme() {
 class SideComponent implements Component, Focusable {
   focused = false;
   readonly inputs: string[] = [];
+  focusLabel: ["side" | "main", string | undefined] | undefined;
+  setWorkspaceFocus(pane: "side" | "main", shortcutLabel: string | undefined): void {
+    this.focusLabel = [pane, shortcutLabel];
+  }
 
   constructor(private readonly rows: number) {}
 
@@ -58,7 +72,11 @@ function split(
   layout: "left-pane" | "right-pane",
   rows = 8,
   paneTheme = theme(),
-  options: { sidePaneRatio?: number; persistSidePaneRatio?(ratio: number): Promise<void> } = {},
+  options: {
+    sidePaneRatio?: number;
+    shortcuts?: BtwShortcuts;
+    persistSidePaneRatio?(ratio: number): Promise<void>;
+  } = {},
 ) {
   const side = new SideComponent(rows);
   const main = new MainThreadComponent();
@@ -73,6 +91,7 @@ function split(
     sideLayout: side,
     mainThread: main,
     mainInput,
+    shortcuts: options.shortcuts,
     layout,
     theme: paneTheme,
     terminalColumns: () => terminal.columns,
@@ -110,6 +129,102 @@ test.each([
   assert.equal(plainLine.indexOf("SIDE") < plainLine.indexOf("MAIN initial"), sideFirst);
   assert.equal(styledLine.includes("\u001b[44mMAIN initial\u001b[49m"), true);
   assert.ok(lines.every((line) => visibleWidth(line) <= 120));
+});
+
+test.each(["left-pane", "right-pane"] as const)(
+  "%s keyboard transfer preserves focus ownership, rejects paste/releases and respects overlays",
+  (layout) => {
+    const shortcuts = resolveBtwShortcuts({ switchPane: "f9" }, new KeybindingsManager(TUI_KEYBINDINGS));
+    const { component, focus, side, mainInput, overlay, terminal } = split(layout, 8, theme(), { shortcuts });
+    assert.deepEqual(side.focusLabel, ["side", "F9"]);
+    assert.equal(component.handleTerminalInput("\u001b[20~"), true);
+    assert.equal(focus.current, mainInput);
+    assert.deepEqual(side.focusLabel, ["main", "F9"]);
+    component.handleTerminalInput("\u001b[200~\u001b[20~\u001b[201~");
+    assert.equal(focus.current, mainInput);
+    assert.deepEqual(mainInput.inputs, ["\u001b[200~\u001b[20~\u001b[201~"]);
+    assert.equal(component.handleTerminalInput("\u001b[57372;1:3u"), false);
+    assert.equal(focus.current, mainInput);
+    overlay.focused = true;
+    assert.equal(component.handleTerminalInput("\u001b[20~"), false);
+    assert.equal(focus.current, mainInput);
+    overlay.focused = false;
+    terminal.columns = 79;
+    component.render(79);
+    assert.equal(focus.current, side);
+    terminal.columns = 120;
+    component.handleTerminalInput("\u001b[20~");
+    assert.equal(focus.current, mainInput);
+    component.handleTerminalInput("\u001b[20~");
+    assert.equal(focus.current, side);
+    component.dispose();
+  },
+);
+
+test.each([null, { render: () => [], invalidate() {} }])(
+  "main input releases a missing/non-input target %j",
+  (missing) => {
+    const initial = new InputComponent();
+    const next = new InputComponent();
+    let target: Component | null = initial;
+    const input = new BtwMainThreadInput(
+      initial,
+      () => target,
+      () => {},
+    );
+    input.focused = true;
+    target = missing;
+    input.handleInput("stale");
+    assert.deepEqual(initial.inputs, []);
+    assert.equal(initial.focused, false);
+    target = next;
+    input.handleInput("fresh");
+    assert.deepEqual(next.inputs, ["fresh"]);
+    assert.equal(next.focused, true);
+    input.dispose();
+    assert.equal(next.focused, false);
+  },
+);
+
+test("split panes reject a readonly primary flag before changing viewport ownership", () => {
+  const side = new ScrollView({ render: () => [], invalidate() {} }, { primary: true });
+  Object.defineProperty(side, "primary", { value: true, writable: false });
+  assert.throws(
+    () =>
+      new BtwSplitPane({
+        sideComponent: side,
+        sideLayout: side,
+        sideScrollView: side,
+        mainThread: side,
+        mainInput: side,
+        layout: "left-pane",
+        theme: theme(),
+        terminalColumns: () => 120,
+        terminalRows: () => 12,
+        hasFocusedOverlay: () => false,
+        setFocus() {},
+        setViewportTarget() {},
+        requestRender() {},
+      }),
+    /cannot route/u,
+  );
+  assert.equal(side.primary, true);
+});
+
+test("disposing a split pane releases its owned main scrollbar timer", () => {
+  const { component } = split("left-pane");
+  const root = component.getFullscreenLayout() as Component & { children: Component[] };
+  const mainScroll = root.children.find((child) => child instanceof ScrollView && child.scrollbar === "auto") as
+    | ScrollView
+    | undefined;
+  assert.ok(mainScroll);
+  mainScroll.updateLayout(100, 8, () => {});
+  mainScroll.scrollBy(-1);
+  assert.equal(mainScroll.isScrollbarVisible, true);
+  component.dispose();
+  component.dispose();
+  assert.equal(mainScroll.isScrollbarVisible, false);
+  assert.equal(mainScroll.scrollbar, "hidden");
 });
 
 test("split panes render live main-thread state instead of an opening snapshot", () => {

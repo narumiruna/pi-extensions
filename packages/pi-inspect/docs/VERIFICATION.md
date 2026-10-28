@@ -1,5 +1,48 @@
 # Verification evidence
 
+## Compact inspector interface
+
+Only Environment resource presentation changes. The original monospace font, spacing, palette, header, primary navigation, footer, Context, Session, Cache, and Event details styles are preserved. `style.css`, `composition.css`, `session.css`, and `tool-inspector.css` are byte-identical to pre-PR commit `d977f562`; `app.tsx` differs only by the Environment stylesheet import. Every new selector is scoped to `.environment-surface`. Environment uses a bounded 1040px column, compact cards, complete wrapping descriptions, semantic status badges, and consistent Copy rows. Source and Schema remain collapsed by default.
+
+- All 435 package tests pass across 21 files. The complete Chromium suite passes 134/134, including six new cases for 320/375/900/1672px layouts and light/dark portaled drawer focus.
+- Browser assertions preserve the original monospace font and 64px/80px header and 34px footer heights. Environment coverage includes complete multiline descriptions, both navigation levels, hover/focus states, clipboard contents, normal-text contrast of at least 4.5:1, no document overflow, and scrolling the last Copy action and card bottom above the footer even when a card exceeds the viewport height. Existing tests retain lazy catalogs, disclosure/scroll state, live updates, session replacement, cancellation, and read-only behavior.
+- Scope review confirms Environment inherits the original typography and palette instead of replacing shared theme tokens. Original global focus rules are unchanged; drawer Close and Copy keyboard focus remain tested in both themes.
+- Earlier full-workspace test attempts did not pass: the first run exceeded the 300-second tool limit, and a single-worker retry was stopped after repeated failures in unchanged `pi-subagents`, `pi-starship`, `pi-fleet`, `pi-langfuse`, and `pi-worktree` tests. No timeout or unrelated source was changed. Logs: `/tmp/pi-inspect-interface-tests.log` and `/tmp/pi-inspect-interface-tests-serial.log`.
+- After limiting the change to Environment, `npm run check`, all 134 Chromium tests, and the CI affected root gate pass. The root command was `PI_EXTENSIONS_BUILD_READY=1 PI_EXTENSIONS_TEST_BASE=origin/main VITEST_MAX_WORKERS=1 npm test`: 595 tests across 44 files, including all root tests and the Inspector workspace. An earlier subset run passed 594/595 with one dependency-installation timeout; the later pass does not establish a full-workspace pass or waive the broader failures above. Current logs: `/tmp/pi-inspect-environment-only-check.log`, `/tmp/pi-inspect-environment-only-root-tests.log`, and `/tmp/pi-inspect-environment-only-browser.log`.
+- Final review against `AGENTS.md` and `docs/extension-conventions.md` confirms no changes to data collection, payloads, resource ownership, asynchronous work, settings, commands, model-visible prefixes, dependencies, metadata, or runtime loading. Pack and package-loader smokes are not required for these browser-only changes. The browser suite includes the existing real-Pi reload/shutdown smoke. A patch Changeset records the interface change; no publication is authorized.
+
+Synthetic captures are ignored under `packages/pi-inspect/test-results/`: `environment-compact-resour-7177e-board-disclosures-at-1672px/resources-1672-light.png` and `environment-compact-resour-64909-yboard-disclosures-at-375px/resources-375-dark.png` show representative desktop/mobile layouts. Both were inspected, together with `composition-reference-comp-2b550-content-and-explicit-source/context-composition-reference.png` to confirm the original Context appearance. Regenerate all sizes and appearances with `npm --workspace @narumitw/pi-inspect run test:browser`; each run replaces generated output. Baseline captures are local under `/tmp/pi-inspect-interface-before/baseline/`; no images or session data are committed.
+
+Maintainer handoff: after regenerating captures, review spacing and readability in the intended browser/font and on a physical touch device. Expected behavior is readable text, reachable controls, and unobscured content. Native browser/font rendering and physical touch behavior remain unverified by headless Chromium. The required affected CI gate passed; no full-workspace-suite pass is claimed. The completed interface plan was removed after its evidence and external handoff were retained here. Release still requires explicit approval.
+
+## Cache trend chart
+
+The Cache trend now uses fixed 0–100% vertical bars with Low/Moderate/High text labels, explicit empty and unknown states, current-window summaries, and known epoch separators. The 32-point and 200-row bounds, accounting formulas, branch-weighted totals, and read-only session behavior are unchanged. Epoch metadata is additive and optional; absent or invalid epochs do not create separators.
+
+- Package build and typecheck pass; 435 package Vitest tests pass across 21 files.
+- Focused cache browser tests pass 29/29; the complete Chromium suite passes 128/128. Coverage includes raw thresholds and midpoint rounding, unknown versus known-zero marks, sparse slots, auxiliary-only usage, displaced unknown-response actions, epoch boundaries, older snapshots, incomplete reports, native pointer/Enter/Space actions, branch replacement, and stale snapshot cancellation.
+- All four band text colors meet 4.5:1 contrast in both themes. Initial light-theme amber/green contrast failures were corrected with stronger text tokens; distinct fills and visible focus remain tested.
+- `npm run check` passes. The CI-equivalent root test gate passes 595 tests across 44 files with `PI_EXTENSIONS_BUILD_READY=1 PI_EXTENSIONS_TEST_BASE=origin/main VITEST_MAX_WORKERS=1 npm test`: all root tests plus the affected `pi-inspect` workspace. The build-ready flag reuses the successful root build; the 5,000 ms test budget is unchanged.
+- Broad local `npm test` attempts did not complete successfully: the first hit the tool's 300-second limit; later attempts were stopped after timeouts in unchanged workspaces. The single-worker attempt still timed out in `pi-sync` convergence and Git-route tests. No timeout was increased or unrelated test changed; no full-workspace-suite pass is claimed. Local logs are `/tmp/pi-inspect-cache-trend-test.log`, `/tmp/pi-inspect-cache-trend-test-full.log`, and `/tmp/pi-inspect-cache-trend-test-serial.log`.
+- `npm run package:pack -- inspect` passes. An actual 65-file tarball was also inspected: entrypoint, chart source, browser assets, documentation, and license are present; tests, scripts, and dependencies are excluded. The Pi smoke passes text/JSON opening rejection, explicit package loading, trusted discovery, RPC rejection, stop, reload, session replacement, and shutdown without a provider request.
+- A fenced-code-aware audit passes required headings and order for 35 package READMEs; seven local documentation links resolve.
+- Independent review and the final diff audit against `AGENTS.md`, `docs/extension-conventions.md`, and `docs/readme-conventions.md` cover correctness, security, lifecycle, compatibility, regressions, and scope. Midpoint formatting now uses one rounding result, and all-unknown samples retain Event details actions even after auxiliary rows displace their usage records.
+- No dependency, settings, command, consent, authentication, model-visible prefix, resource ownership, package metadata, or runtime-loading path changed. The chart adds no new fetch path, timer, observer, storage, or animation loop. A patch Changeset records the behavior change; no publication or release dispatch is authorized.
+
+Synthetic chart captures are ignored generated files under `packages/pi-inspect/test-results/`; no images or real session data are committed:
+
+| Case | Artifact relative to `test-results/` |
+| --- | --- |
+| Empty, desktop light | `cache-trend-empty-and-auxi-9d1de--fabricated-axes-or-samples/empty-desktop-light.png` |
+| One sample, desktop light | `cache-trend-1-sparse-sampl-52a45-es-and-fixed-capacity-slots/1-samples-desktop-light.png` |
+| Two samples, narrow dark | `cache-trend-2-sparse-sampl-c0277-es-and-fixed-capacity-slots/2-samples-narrow-dark.png` |
+| Three samples, desktop light | `cache-trend-3-sparse-sampl-0e8ba-es-and-fixed-capacity-slots/3-samples-desktop-light.png` |
+| Mixed unknowns and epochs, narrow dark | `cache-trend-epoch-separato-1ffbe-luding-unknown-rate-samples/mixed-unknown-epochs-narrow-dark.png` |
+| 32 samples, desktop light | `cache-trend-32-point-clipp-080e8-e-a-bounded-narrow-document/32-samples-desktop-light.png` |
+| 32 samples, narrow dark | `cache-trend-32-point-clipp-080e8-e-a-bounded-narrow-document/32-samples-narrow-dark.png` |
+
+The captures were inspected for readable labels, normal sparse bar widths, and bounded chart scrolling. Subjective acceptance remains with the user: after obtaining these captures, review spacing, band readability, and dense-chart legibility in the intended browser and font. Physical touch devices and the user's actual browser/font preferences remain unverified by headless Chromium. This visual review is not an agent-plan completion gate; publication still requires explicit approval. Reproduce the captures with the package's documented browser-test command; each full run replaces the previous generated test output.
+
 ## Package migration
 
 The inspector now lives under `packages/pi-inspect/`, with a thin source entrypoint, prebuilt browser assets, package-owned development dependencies and root workspace registration. Current verification commands are in the [package README](../README.md#development-verification).

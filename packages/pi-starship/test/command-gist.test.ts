@@ -71,15 +71,25 @@ async function waitForText(tui: ReturnType<typeof createTuiHarness>, text: strin
   assert.fail(`Expected screen: ${text}; actual: ${tui.isOpen ? tui.render().join("\n") : "closed"}`);
 }
 
+async function waitForNotice(f: ReturnType<typeof fixture>, pattern: RegExp) {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (f.context.notifications.some((item) => pattern.test(item.message))) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.fail(`Expected notification: ${pattern}; actual: ${JSON.stringify(f.context.notifications)}`);
+}
+
 async function openGistAction(f: ReturnType<typeof fixture>, action: "share" | "import") {
   const mock = createMockPi();
   registerStarshipCommand(mock.pi, f.options);
   const running = Promise.resolve(mock.commands.get("starship")?.handler("", f.context.ctx));
-  await waitForText(f.tui, "Customize footer");
-  for (let index = 0; index < 4; index += 1) f.tui.press("tui.select.down");
+  await f.tui.waitForOpen();
+  for (let index = 0; index < 3; index += 1) f.tui.press("tui.select.down");
   f.tui.press("tui.select.confirm");
-  await waitForText(f.tui, "Share settings as Gist");
-  for (let index = 0; index < (action === "share" ? 4 : 5); index += 1) f.tui.press("tui.select.down");
+  await f.tui.waitForOpen();
+  assert.match(f.tui.render().join("\n"), /Share settings as Gist/u);
+  for (let index = 0; index < (action === "share" ? 1 : 2); index += 1) f.tui.press("tui.select.down");
   f.tui.press("tui.select.confirm");
   return { running };
 }
@@ -104,7 +114,7 @@ test("Gist import reviews raw TOML, previews, confirms full replacement, and pre
     await running;
     assert.equal(f.applies, 1);
     assert.equal(readFileSync(f.path, "utf8"), raw);
-    assert.match(confirmations[0] ?? "", /entirely.*Gist.*unknown fields.*No backup/u);
+    assert.match(confirmations[0] ?? "", /entirely.*Gist.*unknown fields.*previous document.*History/u);
   } finally {
     f.cleanup();
   }
@@ -138,12 +148,15 @@ test("Gist import blocks concurrent disk changes after review", async () => {
     await waitForText(f.tui, "Gist footer preview");
     writeFileSync(f.path, "format = 'external'\n");
     f.tui.press("tui.select.confirm");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForNotice(f, /changed/u);
+    await waitForText(f.tui, "Gist footer preview");
     f.tui.press("ctrl+c");
     await running;
     assert.equal(readFileSync(f.path, "utf8"), "format = 'external'\n");
     assert.equal(f.applies, 0);
-    assert.ok(f.context.notifications.some((item) => /Settings changed during import/u.test(item.message)));
+    assert.ok(
+      f.context.notifications.some((item) => /Settings changed during import|changed concurrently/u.test(item.message)),
+    );
   } finally {
     f.cleanup();
   }
@@ -163,7 +176,8 @@ test("Gist import restores the previous document when runtime application fails"
     f.tui.press("tui.select.confirm");
     await waitForText(f.tui, "Gist footer preview");
     f.tui.press("tui.select.confirm");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForNotice(f, /previous configuration was restored/u);
+    await waitForText(f.tui, "Gist footer preview");
     f.tui.press("ctrl+c");
     await running;
     assert.equal(readFileSync(f.path, "utf8"), previous.rawDocument);
@@ -375,6 +389,8 @@ test("configuration changes during final confirmation prevent import publication
 test("import write failure preserves the previous document and active footer", async () => {
   const f = fixture();
   writeFileSync(f.path, "format = 'previous'\n");
+  const previous = loadStarshipConfig(f.path);
+  f.options.getLoaded = () => previous;
   f.options.save = () => {
     throw new Error("disk full");
   };
@@ -384,7 +400,8 @@ test("import write failure preserves the previous document and active footer", a
     f.tui.press("tui.select.confirm");
     await waitForText(f.tui, "Gist footer preview");
     f.tui.press("tui.select.confirm");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForNotice(f, /disk full/u);
+    await waitForText(f.tui, "Gist footer preview");
     f.tui.press("ctrl+c");
     await running;
     assert.equal(readFileSync(f.path, "utf8"), "format = 'previous'\n");

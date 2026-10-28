@@ -1,3 +1,8 @@
+import type { ThemeToken } from "@earendil-works/pi-coding-agent";
+import { backgroundAnsi, foregroundAnsi } from "@earendil-works/pi-tui";
+import { sanitizeFormatText } from "./terminal-safety.js";
+import { isThemeRole, type ThemeColors } from "./theme-colors.js";
+
 export type NamedColor =
   | "black"
   | "red"
@@ -19,7 +24,8 @@ export type NamedColor =
 export type ColorSpec =
   | { kind: "named"; name: NamedColor }
   | { kind: "fixed"; value: number }
-  | { kind: "rgb"; red: number; green: number; blue: number };
+  | { kind: "rgb"; red: number; green: number; blue: number }
+  | { kind: "theme"; role: ThemeToken };
 
 export type PreviousColorSource = "foreground" | "background";
 
@@ -116,7 +122,7 @@ export function parseStyleResult(styleString: string, palette: ColorPalette = {}
       continue;
     }
     const color = parseColor(token, palette);
-    if (!foreground && !color) {
+    if (!foreground && !color && !token.toLowerCase().startsWith("pi:")) {
       delete style.background;
       continue;
     }
@@ -132,15 +138,17 @@ export function parseStyle(styleString: string, palette: ColorPalette = {}): Tex
 }
 
 function normalizeStyleToken(rawToken: string): { token: string; foreground: boolean } {
-  let token = rawToken.toLowerCase();
-  if (token.startsWith("fg:")) {
-    return { token: token.replace(/^(?:fg:)+/u, ""), foreground: true };
+  if (/^fg:/iu.test(rawToken)) {
+    return { token: normalizeColorToken(rawToken.replace(/^(?:fg:)+/iu, "")), foreground: true };
   }
-  if (token.startsWith("bg:")) {
-    token = token.replace(/^(?:bg:)+/u, "");
-    return { token, foreground: false };
+  if (/^bg:/iu.test(rawToken)) {
+    return { token: normalizeColorToken(rawToken.replace(/^(?:bg:)+/iu, "")), foreground: false };
   }
-  return { token, foreground: true };
+  return { token: normalizeColorToken(rawToken), foreground: true };
+}
+
+function normalizeColorToken(token: string): string {
+  return /^pi:/iu.test(token) ? `pi:${token.slice(3)}` : token.toLowerCase();
 }
 
 function applyModifier(style: TextStyle, token: string): boolean {
@@ -175,8 +183,16 @@ function applyModifier(style: TextStyle, token: string): boolean {
 }
 
 export function parseColor(token: string, palette: ColorPalette = {}): ColorSpec | undefined {
-  const paletteValue = Object.hasOwn(palette, token) ? palette[token] : undefined;
-  if (paletteValue !== undefined) return parseColor(paletteValue.toLowerCase(), {});
+  // Legacy style lookups lowercase palette names, including names that now look
+  // like Pi references. Palette values remain direct colors, never aliases.
+  const paletteKey = token.toLowerCase();
+  const paletteValue = Object.hasOwn(palette, paletteKey) ? palette[paletteKey] : undefined;
+  if (paletteValue !== undefined) return parseColor(normalizeColorToken(paletteValue), {});
+  token = normalizeColorToken(token);
+  if (token.startsWith("pi:")) {
+    const role = token.slice(3);
+    return isThemeRole(role) ? { kind: "theme", role } : undefined;
+  }
   if (NAMED_COLORS.has(token as NamedColor)) {
     return { kind: "named", name: token as NamedColor };
   }
@@ -200,21 +216,30 @@ interface ResolvedStyle
   background?: ColorSpec;
 }
 
-export function renderChunksToAnsi(chunks: readonly LayoutChunk[], trueColor = true): string {
+export function renderChunksToAnsi(
+  chunks: readonly LayoutChunk[],
+  trueColor = true,
+  themeColors?: ThemeColors,
+): string {
   const runs: Array<{ text: string; style: ResolvedStyle }> = [];
   let previous: ResolvedStyle | undefined;
   for (const chunk of chunks) {
     if (isFillChunk(chunk)) continue;
     const style = resolveStyle(chunk.style, previous);
+    const text = sanitizeFormatText(chunk.text);
     const last = runs.at(-1);
-    if (chunk.text && last && stylesEqual(last.style, style)) last.text += chunk.text;
-    else if (chunk.text) runs.push({ text: chunk.text, style });
+    if (text && last && stylesEqual(last.style, style)) last.text += text;
+    else if (text) runs.push({ text, style });
     previous = style;
   }
   return runs
     .map(({ text, style }) => {
       const codes = ansiCodes(style, trueColor);
-      return codes.length > 0 ? `\u001b[${codes.join(";")}m${text}\u001b[0m` : text;
+      const prefix =
+        themeColorAnsi(style.foreground, false, trueColor, themeColors) +
+        themeColorAnsi(style.background, true, trueColor, themeColors) +
+        (codes.length > 0 ? `\u001b[${codes.join(";")}m` : "");
+      return prefix ? `${prefix}${text}\u001b[0m` : text;
     })
     .join("");
 }
@@ -257,7 +282,21 @@ function ansiCodes(style: ResolvedStyle, trueColor: boolean): string[] {
   return codes;
 }
 
+function themeColorAnsi(
+  color: ColorSpec | undefined,
+  background: boolean,
+  trueColor: boolean,
+  themeColors: ThemeColors | undefined,
+): string {
+  // Non-UI callers (for example, plain module inspection and width measurement)
+  // need no active theme. Keep the renderer pure and omit unresolved colors.
+  if (color?.kind !== "theme" || !themeColors) return "";
+  const mode = trueColor ? "truecolor" : "256color";
+  return (background ? backgroundAnsi : foregroundAnsi)(themeColors[color.role], mode);
+}
+
 function colorCodes(color: ColorSpec, background: boolean, trueColor: boolean): string[] {
+  if (color.kind === "theme") return [];
   if (color.kind === "named") {
     const foreground = FOREGROUND_CODES[color.name];
     return [`${background ? foreground + 10 : foreground}`];

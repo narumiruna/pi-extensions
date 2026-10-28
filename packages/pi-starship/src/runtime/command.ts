@@ -107,7 +107,7 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
 function explicitEnvironment(source: Readonly<Record<string, string | undefined>>): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = Object.create(null);
   for (const [name, value] of Object.entries(source)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || value === undefined || value.includes("\0")) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || typeof value !== "string" || value.includes("\0")) {
       continue;
     }
     Object.defineProperty(result, name, {

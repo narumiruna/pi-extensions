@@ -53,7 +53,7 @@ test("composer hints reflect custom keys, fallback preserves non-default editing
     await harness.waitForOpen();
     const lines = harness.render().join("\n");
     assert.match(lines, /F7 bring to main/);
-    assert.match(lines, /F6 cycle/);
+    assert.match(lines, /F6 thinking/);
     assert.match(lines, /Ctrl\+C exit/);
     assert.doesNotMatch(lines, /Ctrl\+R bring|Ctrl\+Q exit|Shift\+Tab cycle/);
     harness.type("abc");
@@ -103,7 +103,7 @@ test("answering view cycles via custom key, preserves steering submission and ab
   try {
     await harness.waitForOpen();
     assert.match(harness.render().join("\n"), /Ctrl\+Q cancel/);
-    assert.match(harness.render().join("\n"), /F6 cycle/);
+    assert.match(harness.render().join("\n"), /F6 thinking/);
     assert.deepEqual(view?.render(0), []);
     for (const width of [1, 12, 32, 80]) assert.ok(harness.render(width).every((line) => visibleWidth(line) <= width));
     harness.send("\u001b[17~");

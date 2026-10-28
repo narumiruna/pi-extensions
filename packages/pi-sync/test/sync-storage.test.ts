@@ -33,7 +33,8 @@ import sync, {
   snapshotWithoutSessions,
 } from "../src/sync.js";
 
-import { requiredConfig, snapshot, v3S3Settings, withEnv, withTempHome, writeOldLock } from "./helpers.js";
+import { requiredConfig, snapshot, v3S3Settings, withEnv, withTempHome } from "./helpers.js";
+import { writeOldLock } from "./old-lock-helper.js";
 
 initTheme("dark", false);
 

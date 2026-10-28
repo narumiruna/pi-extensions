@@ -137,6 +137,38 @@ test("rolls back inline reordering when persistence fails", async () => {
   await running;
 });
 
+test.each([
+  { candidate: "SHIFT+DOWN", blocked: true },
+  { candidate: "meta+shift+down", blocked: false },
+  { candidate: "shift+shift+down", blocked: false },
+  { candidate: "ctrl+shift+down", blocked: false },
+  { candidate: "ctrl++", blocked: false },
+])("configured syntax $candidate does not repair invalid reorder blockers", async ({ candidate, blocked }) => {
+  const native = new KeybindingsManager(TUI_KEYBINDINGS);
+  const tui = createTuiHarness({
+    width: 100,
+    keybindings: {
+      matches: native.matches.bind(native),
+      getKeys: (binding) => (binding === "tui.editor.undo" ? [candidate as never] : native.getKeys(binding as never)),
+    },
+  });
+  const { ctx } = context(tui);
+  const state = createOptions(["NVDA", "AAPL"]);
+  const running = showTickerTuiMenu(ctx, state.options);
+  try {
+    await tui.waitForOpen();
+    const hints = tui.render().at(-1) ?? "";
+    assert.equal(hints.includes("shift+down move down"), !blocked);
+    tui.send(SHIFT_DOWN);
+    await tui.waitForPending();
+    assert.deepEqual(state.symbols, blocked ? ["NVDA", "AAPL"] : ["AAPL", "NVDA"]);
+  } finally {
+    state.controller.abort();
+    tui.dispose();
+    await running;
+  }
+});
+
 test("keeps standard remapped navigation ahead of reorder shortcuts", async () => {
   const tui = createTuiHarness({
     width: 72,

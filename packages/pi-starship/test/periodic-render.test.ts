@@ -1,11 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { foregroundAnsi, getCapabilities, rgbColor, setCapabilities, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { StarshipCommandOptions } from "../src/commands.js";
+import type { ThemeColors } from "../src/format/theme-colors.js";
 import type { GitSnapshot, WorkspaceSnapshot } from "../src/modules/types.js";
+import { execWorkspaceCommand } from "../src/runtime/command.js";
+import { detectEnvironment } from "../src/runtime/helpers.js";
 
 const readers = vi.hoisted(() => ({
   git: vi.fn<(...args: unknown[]) => Promise<GitSnapshot | undefined>>(),
@@ -41,7 +45,7 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
-async function setup(document: string, width = 80) {
+async function setup(document: string, width = 80, initialColors?: ThemeColors, trueColor?: boolean) {
   const directory = mkdtempSync(join(tmpdir(), "starship-periodic-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = directory;
@@ -53,6 +57,11 @@ async function setup(document: string, width = 80) {
   writeFileSync(join(directory, "pi-starship.toml"), document);
   vi.resetModules();
   const { default: piStarship } = await import("../src/pi-starship.js");
+  if (trueColor !== undefined) {
+    const previousCapabilities = getCapabilities();
+    setCapabilities({ ...previousCapabilities, trueColor });
+    cleanups.push(() => setCapabilities(previousCapabilities));
+  }
   vi.useFakeTimers();
   vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
   readers.git.mockResolvedValue(undefined);
@@ -68,15 +77,24 @@ async function setup(document: string, width = 80) {
   let branchChange = () => {};
   const render = vi.fn();
   type Factory = Parameters<ExtensionContext["ui"]["setFooter"]>[0];
-  const footer = (context.footer as NonNullable<Factory>)({ requestRender: render } as never, {} as never, {
-    getGitBranch: () => null,
-    getAvailableProviderCount: () => 0,
-    getExtensionStatuses: () => new Map(),
-    onBranchChange: (callback) => {
-      branchChange = callback;
-      return unsubscribe;
+  let colors = initialColors;
+  const footer = (context.footer as NonNullable<Factory>)(
+    { requestRender: render } as never,
+    {
+      get colors() {
+        return colors;
+      },
+    } as never,
+    {
+      getGitBranch: () => null,
+      getAvailableProviderCount: () => 0,
+      getExtensionStatuses: () => new Map(),
+      onBranchChange: (callback) => {
+        branchChange = callback;
+        return unsubscribe;
+      },
     },
-  });
+  );
   cleanups.push(async () => {
     footer.dispose?.();
     await emit("session_shutdown");
@@ -87,6 +105,7 @@ async function setup(document: string, width = 80) {
   const entries = vi.spyOn((context.ctx as ExtensionContext).sessionManager, "getEntries");
   const branch = vi.spyOn((context.ctx as ExtensionContext).sessionManager, "getBranch");
   return {
+    settingsPath: join(directory, "pi-starship.toml"),
     mock,
     context,
     emit,
@@ -96,8 +115,96 @@ async function setup(document: string, width = 80) {
     branch,
     unsubscribe,
     branchChange: () => branchChange(),
+    setThemeColors(next: ThemeColors) {
+      colors = next;
+      footer.invalidate();
+    },
   };
 }
+
+test("configured presence detectors preserve empty prototype-like environment names", async () => {
+  for (const name of ["__proto__", "constructor"]) {
+    const owned = Object.hasOwn(process.env, name);
+    const previous = process.env[name];
+    process.env[name] = "";
+    cleanups.push(() => {
+      if (owned) process.env[name] = previous;
+      else delete process.env[name];
+    });
+  }
+  await setup("format = '$conda'\n[conda]\ndetect_env_vars = ['__proto__', '!constructor']\n");
+  const input = readers.workspace.mock.calls[0]?.[0] as { environment: Record<string, string | undefined> };
+  expect(Object.hasOwn(input.environment, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(input.environment, "__proto__")?.value).toBe("");
+  expect(Object.hasOwn(input.environment, "constructor")).toBe(true);
+  expect(input.environment.constructor).toBe("");
+});
+
+test("absent prototype-like detector names stay absent and do not block child commands", async () => {
+  const names = ["__proto__", "constructor", "toString", "hasOwnProperty"];
+  for (const name of names) {
+    const owned = Object.hasOwn(process.env, name);
+    const previous = process.env[name];
+    delete process.env[name];
+    cleanups.push(() => {
+      if (owned) process.env[name] = previous;
+      else delete process.env[name];
+    });
+  }
+  await setup(`format = '$conda'\n[conda]\ndetect_env_vars = ${JSON.stringify(names.map((name) => `!${name}`))}\n`);
+  const input = readers.workspace.mock.calls[0]?.[0] as { environment: Record<string, string | undefined> };
+  for (const name of names) {
+    expect(Object.getOwnPropertyDescriptor(input.environment, name)?.value).toBeUndefined();
+    expect(detectEnvironment(input.environment, [name])).toBe(false);
+    expect(detectEnvironment(input.environment, [`!${name}`])).toBe(true);
+  }
+  const result = await execWorkspaceCommand(process.execPath, ["-e", "process.stdout.write('ok')"], {
+    cwd: process.cwd(),
+    timeout: 2_000,
+    maxOutputBytes: 64 * 1_024,
+    environment: input.environment,
+  });
+  expect(result.code).toBe(0);
+  expect(result.stdout).toBe("ok");
+});
+
+test("explicit second formats update at the existing periodic boundary without history scans", async () => {
+  const h = await setup("format = '$time'\n[time]\ntime_format = '%S'\n");
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(h.render).toHaveBeenCalledTimes(1);
+  expect(h.entries).not.toHaveBeenCalled();
+  expect(h.branch).not.toHaveBeenCalled();
+  expect(h.footer.render(80).join("\n")).toContain("30");
+});
+
+test("fractional output zones can advance the display within one local minute", async () => {
+  const h = await setup("format = '$time'\n[time]\nutc_time_offset = '0.01'\n");
+  vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 12, 0, 0)));
+  expect(h.footer.render(80).join("\n")).toContain("12:00");
+  h.render.mockClear();
+  h.entries.mockClear();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(h.render).toHaveBeenCalledTimes(1);
+  expect(h.entries).not.toHaveBeenCalled();
+  expect(h.footer.render(80).join("\n")).toContain("12:01");
+});
+
+test("static time formats still enter and leave local-clock visibility ranges", async () => {
+  const h = await setup("format = '$time'\n[time]\nformat = 'clock'\ntime_range = '12:00:00-12:00:45'\n");
+  expect(h.footer.render(80).join("\n")).not.toContain("clock");
+  h.render.mockClear();
+  h.entries.mockClear();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(h.render).toHaveBeenCalledTimes(1);
+  expect(h.entries).not.toHaveBeenCalled();
+  expect(h.footer.render(80).join("\n")).toContain("clock");
+  h.render.mockClear();
+  h.entries.mockClear();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(h.render).toHaveBeenCalledTimes(1);
+  expect(h.entries).not.toHaveBeenCalled();
+  expect(h.footer.render(80).join("\n")).not.toContain("clock");
+});
 
 test("unchanged periodic collectors do not request renders or scan session history", async () => {
   const h = await setup("format = '$git_branch$package'\n");
@@ -190,6 +297,61 @@ test("clock comparison follows wall-clock rollback and fresh host renders", asyn
   expect(h.render).not.toHaveBeenCalled();
   expect(h.footer.render(80).join("\n")).toContain("00:00");
 });
+
+test.each([true, false])(
+  "footer and previews read the current theme after invalidation (trueColor=%s)",
+  async (trueColor) => {
+    const first = { accent: rgbColor(1, 2, 3) } as ThemeColors;
+    const next = { accent: rgbColor(4, 5, 6) } as ThemeColors;
+    const mode = trueColor ? "truecolor" : "256color";
+    const firstAnsi = foregroundAnsi(first.accent, mode);
+    const nextAnsi = foregroundAnsi(next.accent, mode);
+    expect(nextAnsi).not.toBe(firstAnsi);
+    const document = "format = '[current](pi:accent)'\n";
+    const h = await setup(document, 80, first, trueColor);
+    let options!: StarshipCommandOptions;
+    readers.command.mockImplementation((_args, _ctx, value) => {
+      options = value;
+    });
+    await h.mock.commands.get("starship")?.handler("", h.context.ctx);
+    const config = options.getLoaded();
+    expect(h.footer.render(80).join("\n")).toContain(firstAnsi);
+    expect(options.renderPreview?.(config, 80, h.context.ctx).join("\n")).toContain(firstAnsi);
+
+    h.setThemeColors(next);
+    for (const width of [0, 1, 3, 80]) {
+      const lines = h.footer.render(width);
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+      if (width > 0) expect(lines.join("\n")).toContain(nextAnsi);
+      expect(lines.join("\n")).not.toContain(firstAnsi);
+    }
+    expect(options.renderPreview?.(config, 80, h.context.ctx).join("\n")).toContain(nextAnsi);
+    const { normalizeConfig } = await import("../src/config.js");
+    const preview = { ...config, ...normalizeConfig({ format: "[preview](pi:accent)" }) };
+    options.preview?.(preview, h.context.ctx as ExtensionCommandContext);
+    expect(h.footer.render(80).join("\n")).toContain(nextAnsi);
+    options.preview?.(undefined, h.context.ctx as ExtensionCommandContext);
+    expect(h.footer.render(80).join("\n")).toContain(nextAnsi);
+    expect(readFileSync(h.settingsPath, "utf8")).toBe(document);
+  },
+);
+
+test.each([true, false])(
+  "periodic comparison uses current theme colors instead of cached colors (trueColor=%s)",
+  async (trueColor) => {
+    const first = { accent: rgbColor(1, 2, 3) } as ThemeColors;
+    const next = { accent: rgbColor(4, 5, 6) } as ThemeColors;
+    const nextAnsi = foregroundAnsi(next.accent, trueColor ? "truecolor" : "256color");
+    const h = await setup("format = '$time'\n[time]\nstyle = 'pi:accent'\n", 80, first, trueColor);
+    h.setThemeColors(next);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.render).toHaveBeenCalledTimes(1);
+    expect(h.footer.render(80).join("\n")).toContain(nextAnsi);
+    h.render.mockClear();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.render).not.toHaveBeenCalled();
+  },
+);
 
 test("failed refreshes keep an already empty footer quiet", async () => {
   const h = await setup("format = '$git_branch$package'\n");

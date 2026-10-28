@@ -1,5 +1,27 @@
 # @narumitw/pi-herdr
 
+## 0.3.3
+
+### Patch Changes
+
+- a21d39b: Add opt-in editor status presentation helpers for stable snapshot publication, session-local view controls, and bounded whole-snapshot collections. Keep the existing EditorStatusWidget API unchanged.
+  
+  Retain visible Progress, Subagents, and Herdr widgets during updates. Add bounded summaries, manual view and item controls, and explicit one-shot compaction policies to Progress and Subagents without changing task state or persistent defaults. Preserve Progress completion retention and keep Herdr observation policies local. Keep tree navigation and manual context compaction separate from response-cycle tracking.
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 0.3.2
+
+### Patch Changes
+
+- 419a94c: Refresh the agent widget from authoritative reads on pane and workspace updates, without replaying stale events or retaining cleared presentation fields. Validate reporting acknowledgements, recover safely from lost events, and drain session-owned reporting during shutdown while leaving native ownership and restore behavior unchanged.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
 ## 0.3.1
 
 ### Patch Changes

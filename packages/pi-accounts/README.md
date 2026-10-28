@@ -99,7 +99,7 @@ Removal returns the current session's affected selection to `default`, but other
 
 ## ⚙️ Settings
 
-Open `/accounts` → **Set default account**, choose a provider, then select a saved account or **Pi built-in login**.
+Open `/accounts` → **Set default account**, choose a provider, then select a saved account or **Pi built-in login**. Only providers with saved accounts appear.
 The picker shows the saved default and saves your selection immediately; leaving it before selecting changes nothing.
 
 Defaults are user-wide settings in `<getAgentDir()>/pi-accounts.json` (normally `~/.pi/agent/pi-accounts.json`); project overrides are not supported.
@@ -132,9 +132,13 @@ Trusted extensions can use Pi's in-process `pi.events` API to discover named acc
 activate one for the current session, and request a verified active OAuth credential.
 Topology and activation replies contain account identifiers, never credential material;
 the separate OAuth credential offer **does** contain secrets. No package import or
-credential-file read is needed. See the repository's [Named Account Protocols v1](https://github.com/narumiruna/pi-extensions/blob/main/docs/api/accounts-v1.md)
-for topology and activation; it links to the separate OAuth readiness and credential-source
-specifications. These references describe payloads, reply timing, cancellation, and consumer safety.
+credential-file read is needed. The package includes these specifications under `docs/api/`:
+
+- [Named Account Protocols v1](./docs/api/accounts-v1.md): account topology, activation, and selection notifications.
+- [OAuth Credential Readiness v1](./docs/api/oauth-credential-readiness-v1.md): wait for session-owned authentication sync.
+- [OAuth Credential Source v1](./docs/api/oauth-credential-source-v1.md): collect and verify credential offers.
+
+These references describe payloads, reply timing, cancellation, and consumer safety.
 
 Activation does not change the user-wide default. When `PI_ACCOUNT` is set, protocol activation
 (including restoration of Pi auth) returns `activation_failed` without changing the selection.
@@ -174,6 +178,8 @@ Compatible consumers can use the extension-neutral `oauth:credential-readiness:v
 The protocols do not persist or log the offer, which contains neither the account name nor extension identity.
 Consumers must match its access token and provider metadata against freshly resolved runtime authentication.
 Without a compatible consumer, account activation works unchanged and no credential is requested.
+
+After an explicit session selection is persisted, the extension emits `accounts:selection-committed:v1` with the exact session object, session ID, and provider ID. Consumers can use it to invalidate account-derived state, then await credential readiness before querying the selected account. The notification contains no account name or credential. See [Named Account Protocols v1](./docs/api/accounts-v1.md).
 
 Pi extensions run with the user's process privileges; `pi.events` does not isolate installed extensions.
 Install only trusted extensions because any extension can read user files and process memory.
@@ -257,6 +263,7 @@ packages/pi-accounts/
 │   ├── index.ts                       # Thin Pi entrypoint
 │   └── accounts.ts                    # Account activation and session lifecycle
 ├── dist/                              # Generated Jiti runtime
+├── docs/api/                          # Published account and OAuth protocol specifications
 ├── scripts/build-runtime.mjs          # Runtime builder
 └── test/                              # Behavior and lifecycle coverage
 ```

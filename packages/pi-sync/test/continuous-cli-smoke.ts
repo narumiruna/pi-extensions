@@ -10,7 +10,7 @@ import { continuousBinding } from "../src/sync/continuous-storage.js";
 import { push } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { v3WebDavSettings, withTempHome } from "./helpers.js";
-import { mergeOptions } from "./merged-sync-fixture.js";
+import { mergeOptions } from "./merge-options.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
 // Standalone package-directory RPC smoke. It is not a long-running Vitest test.

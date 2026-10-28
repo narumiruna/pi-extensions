@@ -206,8 +206,8 @@ test("restores every supported historical result contract", async () => {
     {
       name: "widget v2",
       toolName: "todo_widget",
-      details: { version: 2, todos: [{ step: "widget two", status: "completed" }] },
-      expected: "✓ widget two",
+      details: { version: 2, todos: [{ step: "widget two", status: "in_progress" }] },
+      expected: "▶ widget two",
     },
     {
       name: "todo v1",

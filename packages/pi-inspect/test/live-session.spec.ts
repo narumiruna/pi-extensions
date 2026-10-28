@@ -131,8 +131,8 @@ test("real Pi codemode, live browser, reload credential rotation and shutdown", 
     await session.prompt("/inspect");
     await expect(page.getByText("Live", { exact: true })).toBeVisible();
     await session.prompt("run real codemode");
-    await page.getByRole("button", { name: "Session", exact: true }).click();
-    await page.getByRole("button", { name: /^Captured executions ·/ }).click();
+    await page.getByRole("tab", { name: "Session", exact: true }).click();
+    await page.getByRole("tab", { name: /^Captured executions ·/ }).click();
     await expect(page.getByRole("button", { name: "codemode · ok", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Expand calls", exact: true }).click();
     const child = page.getByRole("button", { name: "fixture_child · ok", exact: true });

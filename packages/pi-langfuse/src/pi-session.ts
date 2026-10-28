@@ -290,8 +290,8 @@ export function createPiLangfuseSessionController(
       lastSnapshot = contextSnapshot(ctx);
       startRootTrace((nextRequestId) => {
         active.recorder.beginAgent({
-          prompt: event.prompt,
-          images: event.images,
+          prompt: event.messageType === "custom" ? event.message.content : event.prompt,
+          images: event.messageType === "custom" ? undefined : event.images,
           model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
           git,
           snapshot: lastSnapshot,

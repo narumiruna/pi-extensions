@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-recall",
-  "version": "0.50.8",
+  "version": "0.50.9",
   "description": "Pi extension for saving and recalling messages across sessions.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.59.0",
+    "@narumitw/pi-tui-kit": "^0.60.0",
     "proper-lockfile": "^4.1.2"
   },
   "peerDependencies": {
@@ -41,9 +41,9 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
-    "@types/node": "26.6.4",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@types/node": "26.6.5",
     "@types/proper-lockfile": "^4.1.4",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"

@@ -11,14 +11,14 @@ import { registerStarshipCommand } from "../src/commands.js";
 import { BUILT_IN_EXAMPLE, type LoadedStarshipConfig, loadStarshipConfig } from "../src/config.js";
 import { STARSHIP_PRESETS } from "../src/presets/catalog.js";
 
-test("/starship distinguishes built-in defaults, saved built-in, custom, and fallback states", async () => {
+test("/starship distinguishes Pi native footer, saved Starship built-in, custom, and fallback states", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-command-state-"));
   try {
     const cases = [
       {
         name: "missing",
         path: join(root, "missing.toml"),
-        expected: /Built-in defaults · Healthy/u,
+        expected: /Pi native footer · Healthy/u,
       },
       {
         name: "saved built-in",
@@ -314,8 +314,8 @@ test("preset preview cancellation is inert and confirmed apply replaces atomical
     assert.equal(readFileSync(path, "utf8"), STARSHIP_PRESETS[0]?.rawDocument);
     assert.equal(applied, 1);
     assert.match(confirmation, /Minimal/u);
-    assert.match(confirmation, /custom settings, unknown fields, and comments will be removed/iu);
-    assert.match(confirmation, /No backup is kept after success/u);
+    assert.match(confirmation, /custom settings, unknown fields, and comments will be replaced/iu);
+    assert.match(confirmation, /previous document will be kept in History/u);
     assert.equal(previewed.at(-1), undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -476,9 +476,7 @@ test("Configuration combines state, source, path, health, and diagnostics", asyn
     const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
     const running = mock.commands.get("starship")?.handler("", context.ctx);
     await tui.waitForOpen();
-    for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
-    tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     const frame = tui.render().join("\n");
@@ -518,10 +516,10 @@ test("healthy missing settings disable restore without creating a document", asy
     });
     const running = mock.commands.get("starship")?.handler("", context.ctx);
     await tui.waitForOpen();
-    for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+    for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /Already using defaults · no file to replace/u);
+    assert.match(tui.render().join("\n"), /Already using Pi native footer · no file to remove/u);
     assert.equal(confirmations, 0);
     assert.equal(existsSync(path), false);
     tui.press("ctrl+c");
@@ -685,7 +683,7 @@ test("preview uses injected keybindings and exposes their hints", async () => {
   }
 });
 
-test("Escape returns a preview draft to editing and restores the main selection", async () => {
+test("compatibility editor returns a preview draft to editing without a main-menu editor", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-command-preview-edit-"));
   const path = join(root, "pi-starship.toml");
   try {
@@ -710,18 +708,13 @@ test("Escape returns a preview draft to editing and restores the main selection"
         return editorCalls === 1 ? "format = 'draft'\n" : undefined;
       },
     });
-    const running = mock.commands.get("starship")?.handler("", context.ctx);
-    await tui.waitForOpen();
-    tui.press("tui.select.confirm");
+    const running = mock.commands.get("starship")?.handler("settings", context.ctx);
     await tui.waitForOpen();
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await running;
     assert.equal(editorCalls, 2);
     assert.equal(drafts[1], "format = 'draft'\n");
-    assert.match(tui.render().join("\n"), /→ Customize footer/u);
-    tui.press("ctrl+c");
-    await running;
     assert.equal(existsSync(path), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -748,12 +741,10 @@ test("Ctrl+C in preview closes the whole /starship workflow", async () => {
       editor: async () => "format = 'draft'\n",
     });
     let settled = false;
-    const running = Promise.resolve(mock.commands.get("starship")?.handler("", context.ctx));
+    const running = Promise.resolve(mock.commands.get("starship")?.handler("settings", context.ctx));
     void running.then(() => {
       settled = true;
     });
-    await tui.waitForOpen();
-    tui.press("tui.select.confirm");
     await tui.waitForOpen();
     tui.press("ctrl+c");
     await flushAsyncWork();

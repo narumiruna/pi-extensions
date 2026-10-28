@@ -1,5 +1,50 @@
 # @narumitw/pi-btw
 
+## 0.63.2
+
+### Patch Changes
+
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 0.63.1
+
+### Patch Changes
+
+- 57eeae7: Add the opt-in `createFullscreenHandoff()` resource and native test harness. Share terminal entry/exit drain, cancellation-safe restoration, keyboard-protocol recovery, owned overlay handling, and cleanup errors through public Pi TUI APIs. Keep ordinary Kit interactions unchanged.
+  
+  Use the resource in Starship's configuration chat and BTW's multi-screen workspace. Keep each extension's input policy, layouts, domain state, permissions, and persistence local. BTW now waits for native input drain before entry. Changesets raises both consumer floors to the Kit API release; dependent publication requires its exact registry artifact.
+- Updated dependencies [57eeae7]
+  - @narumitw/pi-tui-kit@0.67.0
+
+## 0.63.0
+
+### Minor Changes
+
+- ec9e092: Add manual preview and import of new main-thread context into retained side threads. Keep imported updates in conversation order, preserve earlier request prefixes, and reject incompatible branch or context-boundary changes. Add a configurable import shortcut with F9–F11 fallbacks.
+
+## 0.62.0
+
+### Minor Changes
+
+- 7d15a96: Align the BTW workspace with native Pi input, prompt navigation, scrollbars, and cursor-first dock layout. Add a conflict-checked keyboard shortcut to switch panes. Keep effective key hints, native mouse editing, draft safeguards, and queue timing clear. Cancel and drain session-owned work on replacement and shutdown, and contain renderer cleanup and clipboard failures.
+
+### Patch Changes
+
+- d60fa4e: Bring the BTW conversation appearance closer to native Pi. Move side identity, model, thinking, focus, and concise key hints below the editor; match native working borders and message spacing while retaining cursor-first short layouts. Keep tools absent and preserve existing input, queue, lifecycle, and draft-safety behavior.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.61.2
+
+### Patch Changes
+
+- 033dead: Reject unknown and duplicate modifiers when selecting the fullscreen jump-to-latest key hint. Match Pi's strict key parser so the hint names a usable binding.
+
 ## 0.61.1
 
 ### Patch Changes

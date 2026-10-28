@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
@@ -11,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
+import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { showProgressSettings } from "../src/progress-settings-ui.js";
 import { DEFAULT_PROGRESS_SETTINGS } from "../src/settings.js";
 import { createContext } from "./progress-harness.js";

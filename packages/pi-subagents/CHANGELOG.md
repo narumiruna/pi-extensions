@@ -1,5 +1,69 @@
 # @narumitw/pi-subagents
 
+## 3.4.0
+
+### Minor Changes
+
+- a21d39b: Add opt-in editor status presentation helpers for stable snapshot publication, session-local view controls, and bounded whole-snapshot collections. Keep the existing EditorStatusWidget API unchanged.
+  
+  Retain visible Progress, Subagents, and Herdr widgets during updates. Add bounded summaries, manual view and item controls, and explicit one-shot compaction policies to Progress and Subagents without changing task state or persistent defaults. Preserve Progress completion retention and keep Herdr observation policies local. Keep tree navigation and manual context compaction separate from response-cycle tracking.
+- 106ef89: Add optional `provider` and `model` parameters to `subagent_spawn`. Each omitted value inherits independently from the effective parent model at spawn time. Explicit IDs use exact matching without fallback, including listed case-distinct and provider-prefixed IDs. Only the child checks model registration and current availability. The requested pair bypasses CLI pattern matching and is bound exactly before the child receives its task. A missing or unavailable model fails the job after `subagent_spawn` returns its `jobId`.
+  
+  Unlisted custom model IDs previously accepted through Pi's CLI now fail, including inherited IDs. Register each exact model in Pi's `models.json` or attach a trusted extension that registers it in the child. Parent-only providers, runtime API keys, and virtual routing state are not forwarded. Reload or replace the session after upgrading to load the new tool schema.
+  
+  Reject oversized provider and model IDs before character validation. Schema bounds and runtime byte checks use the existing shared 16 KiB child-bootstrap limit without adding a shorter naming limit.
+
+### Patch Changes
+
+- 1e33872: Use task-first widget rows and hide job IDs and tool names by default while preserving saved preferences. Show thinking only when it differs from the main agent's level captured at spawn. Omit redundant running labels and unset timeout text; show elapsed time for running jobs and queued status for waiting jobs.
+- 99b7c92: Show provider and model IDs in expanded widget rows only when they differ from the main agent's effective values captured at spawn, matching thinking-level display. Keep inherited and explicit-equal values hidden, and preserve each job's comparison after parent model changes.
+- Updated dependencies [a21d39b]
+- Updated dependencies [f68aa54]
+- Updated dependencies [b062d21]
+  - @narumitw/pi-tui-kit@0.68.0
+
+## 3.3.3
+
+### Patch Changes
+
+- Updated dependencies [57eeae7]
+  - @narumitw/pi-tui-kit@0.67.0
+
+## 3.3.2
+
+### Patch Changes
+
+- 168248c: Reuse published TUI Kit frame metadata, masked input, configured-key syntax, and interaction ownership while retaining extension-owned settings and cancellation policy. Keep malformed Ticker key strings from suppressing valid reorder shortcuts, and drain Usage settings saves after cancellation.
+
+## 3.3.1
+
+### Patch Changes
+
+- 9edf94b: Show each active job’s spawn-time thinking level in the above-editor widget.
+
+## 3.3.0
+
+### Minor Changes
+
+- 53730f9: Add the `/subagents` job manager and `/subagents settings` route. Support confirmed active-job cancellation and persistent widget, job ID, tool, and timing display preferences without changing model tools or job execution.
+
+### Patch Changes
+
+- 9f80b89: Reuse published Kit interaction ownership for native Progress and Subagents settings while preserving ordered saves, rollback, and durable-save recovery after the screen closes.
+  
+  Share passive widget framing in Subagents, Tool, Plan Mode, and Cache Hit Monitor. Keep domain rendering and lifecycle ownership local, bound narrow and invalid widths, and retain lazy loading of Kit menus and other interactive APIs.
+- 3dd82ec: Add transcript expansion and collapse for child requests and responses using Pi's configured tool-output expansion key.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 3.2.1
+
+### Patch Changes
+
+- dfc020b: Show a sanitized, shortened preview of each active subagent's existing task in the TUI widget without changing the spawn schema or inspection metadata.
+
 ## 3.2.0
 
 ### Minor Changes

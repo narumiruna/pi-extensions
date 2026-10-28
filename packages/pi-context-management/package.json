@@ -45,12 +45,12 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "1.1.0",
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@types/node": "26.6.4",
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "26.6.5",
     "esbuild": "0.28.2",
-    "typebox": "1.3.36",
+    "typebox": "1.4.3",
     "typescript": "7.0.2"
   },
   "repository": {

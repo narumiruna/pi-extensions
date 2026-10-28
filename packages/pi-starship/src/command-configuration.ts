@@ -1,9 +1,16 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionCommandContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
-import { BUILT_IN_EXAMPLE, type LoadedStarshipConfig, loadStarshipConfig } from "./config.js";
-import { serializeEffectiveConfig } from "./effective-config.js";
+import {
+  assertConfigDocumentUnchanged,
+  BUILT_IN_EXAMPLE,
+  type ConfigDocumentSnapshot,
+  type LoadedStarshipConfig,
+  loadStarshipConfig,
+  readConfigDocumentSnapshot,
+} from "./config.js";
 import { presetForDocument } from "./presets/catalog.js";
+import { archiveConfigDocument } from "./profile-store.js";
 
 const RELOAD_ACTIONS = {
   apply: "apply",
@@ -13,6 +20,10 @@ const RELOAD_ACTIONS = {
 export interface WorkflowOwner {
   signal: AbortSignal;
   isCurrent(): boolean;
+  /** Session ownership independent of command cancellation and candidate/revision guards. */
+  isSessionCurrent?(): boolean;
+  /** The shared parent terminal can remain live after its session context changes. */
+  canRestoreTerminal?(): boolean;
 }
 
 export interface ConfigurationCommandOptions {
@@ -22,6 +33,7 @@ export interface ConfigurationCommandOptions {
   settingsPath: string;
   renderPreview?(loaded: LoadedStarshipConfig, width: number, ctx: ExtensionCommandContext): string[];
   read?: (settingsPath: string) => LoadedStarshipConfig;
+  archive?: typeof archiveConfigDocument;
 }
 
 export interface ConfigurationPresentation {
@@ -39,7 +51,7 @@ export function configurationPresentation(loaded: LoadedStarshipConfig): Configu
   const fallback = loaded.source === "built-in" && loaded.diagnostics.length > 0;
   return {
     state: healthyMissing
-      ? "Built-in defaults"
+      ? "Pi native footer"
       : savedBuiltIn
         ? "Saved built-in configuration"
         : activePreset
@@ -55,44 +67,25 @@ export function configurationPresentation(loaded: LoadedStarshipConfig): Configu
           ? "User file"
           : "Built-in fallback",
     health: configurationHealth(loaded),
-    restoreDisabled: healthyMissing || savedBuiltIn,
+    restoreDisabled: healthyMissing,
     restoreDescription: healthyMissing
-      ? "Already using defaults · no file to replace"
-      : savedBuiltIn
-        ? "Built-in configuration already saved"
-        : fallback
-          ? "Preview before replacing invalid settings"
-          : "Preview before replacing the document",
+      ? "Already using Pi native footer · no file to remove"
+      : "Preview before restoring Pi native footer",
   };
 }
 
-export function configurationMenuScreen(loaded: LoadedStarshipConfig) {
+export function configurationMenuScreen(loaded: LoadedStarshipConfig, settingsPath: string) {
   const presentation = configurationPresentation(loaded);
   return {
     kind: "actions" as const,
     title: "Configuration",
-    lines: [`${presentation.state} · ${presentation.health}`],
+    lines: [
+      `State: ${presentation.state}`,
+      `Source: ${presentation.source}`,
+      `Path: ${sanitizeTerminalText(settingsPath)}`,
+      ...diagnosticLines(loaded, true, loaded.diagnostics.length),
+    ],
     items: [
-      {
-        id: "configuration-overview",
-        label: "Overview",
-        description: "State, source, path, health, and warnings",
-        to: "configuration-overview" as const,
-      },
-      {
-        id: "configuration-effective",
-        label: "Effective configuration",
-        description: "Normalized public TOML currently in use",
-        to: "configuration-effective" as const,
-      },
-      {
-        id: "configuration-document",
-        label: "Settings document",
-        description: isHealthyMissing(loaded)
-          ? "No settings file · built-in defaults are active"
-          : "Exact loaded UTF-8 text · read-only",
-        to: "configuration-document" as const,
-      },
       {
         id: "configuration-reload",
         label: "Reload from disk…",
@@ -111,63 +104,12 @@ export function configurationMenuScreen(loaded: LoadedStarshipConfig) {
         description: "Review and preview remote TOML before replacing settings · requires gh",
         action: "gist-import" as const,
       },
-    ],
-    hint: "back" as const,
-  };
-}
-
-export function configurationOverviewScreen(loaded: LoadedStarshipConfig, settingsPath: string) {
-  const presentation = configurationPresentation(loaded);
-  return {
-    kind: "detail" as const,
-    title: "Configuration overview",
-    lines: [
-      `State: ${presentation.state}`,
-      `Source: ${presentation.source}`,
-      `Path: ${sanitizeTerminalText(settingsPath)}`,
-      ...diagnosticLines(loaded, true),
-    ],
-    hint: "back" as const,
-  };
-}
-
-export function effectiveConfigurationScreen(loaded: LoadedStarshipConfig) {
-  const presentation = configurationPresentation(loaded);
-  return {
-    kind: "review" as const,
-    title: "Effective configuration",
-    lines: [
-      `${presentation.state} · ${presentation.health}`,
-      "Normalized public TOML; comments and unknown fields are intentionally excluded.",
-    ],
-    content: serializeEffectiveConfig(loaded.config),
-    format: { kind: "code" as const, language: "toml" },
-    viewportSize: "adaptive" as const,
-    hint: "back" as const,
-  };
-}
-
-export function settingsDocumentScreen(loaded: LoadedStarshipConfig, settingsPath: string) {
-  const path = sanitizeTerminalText(settingsPath);
-  if (loaded.rawDocument !== undefined) {
-    return {
-      kind: "review" as const,
-      title: "Settings document",
-      lines: ["Exact loaded UTF-8 text · display controls sanitized · read-only", `Path: ${path}`],
-      content: loaded.rawDocument,
-      format: { kind: "code" as const, language: "toml" },
-      viewportSize: "adaptive" as const,
-      hint: "back" as const,
-    };
-  }
-  return {
-    kind: "detail" as const,
-    title: "Settings document",
-    lines: [
-      ...(isHealthyMissing(loaded)
-        ? ["No settings document exists.", "Built-in defaults are active; this read created no file."]
-        : ["The settings document could not be loaded.", ...diagnosticLines(loaded, false)]),
-      `Path: ${path}`,
+      {
+        id: "history",
+        label: "History",
+        description: "Review and restore recovery copies; legacy skill backups are read-only",
+        action: "history" as const,
+      },
     ],
     hint: "back" as const,
   };
@@ -182,6 +124,13 @@ export async function reloadConfiguration(
   const previous = options.getLoaded();
   const revision = options.getLoadedRevision?.();
   const candidate = readReloadCandidate(options);
+  let disk: ConfigDocumentSnapshot;
+  try {
+    disk = readConfigDocumentSnapshot(options.settingsPath);
+  } catch (error) {
+    ctx.ui.notify(`Footer reload was blocked: ${safeError(error)}`, "error");
+    return "stay";
+  }
   if (!candidate.ok) {
     ctx.ui.notify(`Footer reload was blocked: ${safeError(candidate.error)}`, "error");
     return "stay";
@@ -209,48 +158,68 @@ export async function reloadConfiguration(
   const confirmed = await ctx.ui.confirm(
     "Apply configuration from disk?",
     candidate.loaded.rawDocument === undefined
-      ? "Use built-in defaults for this session? No settings file will be created."
-      : "Apply the validated settings document to this session without changing its bytes?",
+      ? "Show Pi's native footer for this session? No settings file will be created."
+      : "Apply the validated settings document to this session without changing its bytes? The previous loaded document will be kept in History.",
+    { signal: owner.signal },
   );
   if (!isCurrentOwner(owner) || activeRevisionChanged(options, revision) || !confirmed) {
     return "stay";
   }
 
-  const fresh = readReloadCandidate(options);
-  if (!fresh.ok) {
-    ctx.ui.notify(
-      `Footer reload was blocked after confirmation: ${safeError(fresh.error)}. The previous footer remains active.`,
-      "error",
-    );
-    return "stay";
-  }
-  if (!sameLoadedDocument(candidate.loaded, fresh.loaded)) {
-    ctx.ui.notify(
-      "The settings document changed after preview. The previous footer remains active; reload again to review the latest version.",
-      "warning",
-    );
-    return "stay";
-  }
-
+  let warnings = 0;
   try {
-    options.apply(fresh.loaded, ctx);
+    const applied = await withFileMutationQueue(options.settingsPath, async () => {
+      if (
+        !isCurrentOwner(owner) ||
+        activeRevisionChanged(options, revision) ||
+        !sameLoadedDocument(previous, options.getLoaded())
+      )
+        return false;
+      assertConfigDocumentUnchanged(options.settingsPath, disk);
+      const fresh = readReloadCandidate(options);
+      if (!fresh.ok) throw new Error(fresh.error);
+      if (!sameLoadedDocument(candidate.loaded, fresh.loaded)) {
+        throw new Error(
+          "The settings document changed after preview. The previous footer remains active; reload again to review the latest version.",
+        );
+      }
+      let recoveryPath: string | undefined;
+      const previousBytes = previous.rawBytes ?? previous.rawDocument;
+      if (previousBytes !== undefined) {
+        recoveryPath = (options.archive ?? archiveConfigDocument)(options.settingsPath, previousBytes).path;
+      }
+      assertConfigDocumentUnchanged(options.settingsPath, disk);
+      if (!isCurrentOwner(owner) || activeRevisionChanged(options, revision)) return false;
+      try {
+        options.apply(fresh.loaded, ctx);
+      } catch (error) {
+        let rollbackError: unknown;
+        try {
+          if (!isCurrentOwner(owner)) throw new Error("The session owner changed; stale restoration was blocked");
+          const current = options.getLoaded();
+          if (!sameLoadedDocument(current, previous) && !sameLoadedDocument(current, fresh.loaded))
+            throw new Error("The active runtime changed; stale restoration was blocked");
+          options.apply(previous, ctx);
+        } catch (rollback) {
+          rollbackError = rollback;
+        }
+        throw new Error(
+          `Footer reload failed: ${formatError(error)}. ${
+            rollbackError
+              ? `Restoring the previous configuration also failed: ${formatError(rollbackError)}.`
+              : "The previous configuration was restored."
+          }${recoveryPath ? ` Recovery copy retained: ${recoveryPath}.` : ""}`,
+        );
+      }
+      warnings = fresh.loaded.diagnostics.length;
+      return true;
+    });
+    if (!isCurrentOwner(owner) || !applied) return "stay";
   } catch (error) {
-    let rollbackError: unknown;
-    try {
-      options.apply(previous, ctx);
-    } catch (rollback) {
-      rollbackError = rollback;
-    }
-    ctx.ui.notify(
-      rollbackError
-        ? `Footer reload failed: ${safeError(error)}. Restoring the previous configuration also failed: ${safeError(rollbackError)}.`
-        : `Footer reload failed: ${safeError(error)}. The previous configuration was restored.`,
-      "error",
-    );
+    if (isCurrentOwner(owner))
+      ctx.ui.notify(`Footer reload was blocked after confirmation: ${safeError(error)}`, "error");
     return "stay";
   }
-
-  const warnings = fresh.loaded.diagnostics.length;
   ctx.ui.notify(
     warnings === 0
       ? "Footer configuration reloaded and applied."
@@ -294,7 +263,7 @@ function reloadPreviewBody(
     `Source: ${presentation.source}`,
     `Path: ${sanitizeTerminalText(options.settingsPath)}`,
     loaded.rawDocument === undefined
-      ? "Applying uses built-in defaults and creates no settings file."
+      ? "Applying shows Pi's native footer and creates no settings file."
       : "Applying changes only the active session; the settings document bytes stay unchanged.",
     ...diagnosticLines(loaded, true),
     "",
@@ -302,9 +271,9 @@ function reloadPreviewBody(
   ];
 }
 
-export function diagnosticLines(loaded: LoadedStarshipConfig, includeSummary: boolean): string[] {
+export function diagnosticLines(loaded: LoadedStarshipConfig, includeSummary: boolean, limit = 8): string[] {
   const diagnostics = loaded.diagnostics
-    .slice(0, 8)
+    .slice(0, limit)
     .map((item) => `${sanitizeTerminalText(item.path || "root")}: ${sanitizeTerminalText(item.message)}`);
   const remaining = loaded.diagnostics.length - diagnostics.length;
   return [

@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-tui-kit",
-  "version": "0.65.6",
+  "version": "0.68.0",
   "description": "Declarative UI flows and navigation helpers built on Pi TUI.",
   "type": "module",
   "license": "MIT",
@@ -38,9 +38,25 @@
       "types": "./dist/document-review.d.ts",
       "import": "./dist/document-review.js"
     },
+    "./editor-status-collection": {
+      "types": "./dist/editor-status-collection.d.ts",
+      "import": "./dist/editor-status-collection.js"
+    },
+    "./editor-status-publisher": {
+      "types": "./dist/editor-status-publisher.d.ts",
+      "import": "./dist/editor-status-publisher.js"
+    },
+    "./editor-status-view": {
+      "types": "./dist/editor-status-view.d.ts",
+      "import": "./dist/editor-status-view.js"
+    },
     "./editor-status-widget": {
       "types": "./dist/editor-status-widget.d.ts",
       "import": "./dist/editor-status-widget.js"
+    },
+    "./fullscreen-handoff": {
+      "types": "./dist/fullscreen-handoff.d.ts",
+      "import": "./dist/fullscreen-handoff.js"
     },
     "./interaction-hints": {
       "types": "./dist/interaction-hints.d.ts",
@@ -95,8 +111,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "typescript": "7.0.2"
   },
   "repository": {

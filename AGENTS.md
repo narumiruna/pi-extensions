@@ -11,7 +11,7 @@
 ## Code style
 
 - Follow KISS and YAGNI, add dependencies only for current needs, and use Pi core functions when they already provide the required behavior.
-- Use NodeNext modules, ES2022, strict TypeScript, and no emit for root TypeScript.
+- Use NodeNext modules, ES2024, strict TypeScript, and no emit for root TypeScript.
 - Upgrade outdated dependencies instead of removing or downgrading valid code to hide their type errors.
 - Split source files over 1,000 lines by clear responsibility, but do not mechanically split generated, vendored, migration, snapshot, or mainly declarative files.
 

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Focusable, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { formatDocumentLines } from "../src/components/document-formatting.js";
 import { createMenuScreenComponent } from "../src/components/index.js";
 import { defineMenu, type ReviewScreen, runMenu } from "../src/index.js";

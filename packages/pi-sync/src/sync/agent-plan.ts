@@ -28,7 +28,11 @@ export async function resolveAgentPlan(
   snapshotOptions: SnapshotOptions,
   validate: () => Promise<void>,
 ): Promise<FileMergePlan> {
-  if (plan.kind !== "planned" || !plan.conflicts.length) return plan;
+  if (plan.kind !== "planned" || !plan.conflicts.length) {
+    if (options.agentRetryRefusal)
+      throw new ContinuousError("unsafe", "No eligible cached refusal for the current evidence. Use Sync now.");
+    return plan;
+  }
   if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc"))
     throw new Error("Agent mode paused: TUI/RPC is required.");
   const ancestors = (await readMergeAncestors(config, state)) ?? [];
@@ -39,14 +43,22 @@ export async function resolveAgentPlan(
   } catch {
     throw new ContinuousError("unsafe", "Agent mode paused: unsafe or unsupported conflict evidence.");
   }
+  if (!config.partialSync && evidence.unsupported.length)
+    throw new ContinuousError("unsafe", "Agent mode paused: unsupported conflicts prevent an all-or-nothing transfer.");
   if (!evidence.files.length) {
+    if (options.agentRetryRefusal)
+      throw new ContinuousError("unsafe", "No eligible cached refusal for the current evidence. Use Sync now.");
     if (config.partialSync) return plan;
     throw new ContinuousError(
       "unsafe",
       "Agent mode paused: unsupported conflict or missing verified ancestor; evidence is unchanged.",
     );
   }
-  if (!evidence.units.length) return applyAgentCandidate(plan, evidence, { version: 1, results: [] });
+  if (!evidence.units.length) {
+    if (options.agentRetryRefusal)
+      throw new ContinuousError("unsafe", "No eligible cached refusal for the current evidence. Use Sync now.");
+    return applyAgentCandidate(plan, evidence, { version: 1, results: [] });
+  }
   if (!ctx.model) throw new ContinuousError("model", "Agent mode paused: select an available model first.");
   const model = digest(ctx.model);
   const key = digest([
@@ -66,15 +78,20 @@ export async function resolveAgentPlan(
       throw new ContinuousError("unsafe", "Agent mode paused: candidate refused or unsupported conflict remains.");
     }
   }
-  const validateEvidence = async () => {
-    await validate();
+  const validateEvidence = async (signal = options.signal) => {
+    const check = async () => {
+      signal?.throwIfAborted();
+      await validate();
+      signal?.throwIfAborted();
+    };
+    await check();
     if (digest(ctx.model) !== model) throw new Error("Agent mode paused: selected model changed.");
-    const current = await createSnapshot(config.snapshotIdentity, snapshotOptions);
-    await validate();
+    const current = await createSnapshot(config.snapshotIdentity, { ...snapshotOptions, signal });
+    await check();
     const currentState = await readStateForConfig(config);
-    await validate();
-    const currentHead = await backend.readHead(options.signal);
-    await validate();
+    await check();
+    const currentHead = await backend.readHead(signal);
+    await check();
     if (
       !sameHashes(fileHashMap(current), fileHashMap(localRaw)) ||
       syncStateFingerprint(currentState) !== syncStateFingerprint(state) ||

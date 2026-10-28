@@ -96,10 +96,31 @@ export type ReviewFormat =
   | { kind: "diff"; filePath?: string }
   | { kind: "markdown"; renderLatex?: boolean; renderMermaid?: boolean };
 
+/** An exact source snapshot, not the sanitized or rendered preview. */
+export interface DocumentCopyContext {
+  content: string;
+  /** Original browse item ID; omitted for a review. */
+  itemId?: string;
+  signal: AbortSignal;
+}
+
+/** TUI-only, in-place copy. The owner supplies transport and sensitivity policy. */
+export interface DocumentCopyAction {
+  label: string;
+  /**
+   * Receives the complete original content, including whitespace and controls hidden
+   * by the preview. Honor signal where possible; completed clipboard writes cannot
+   * be cancelled or restored by Kit. Failures show generic, retryable feedback.
+   */
+  onCopy(context: DocumentCopyContext): void | Promise<void>;
+}
+
 /** Exact full-body content for a browse detail view. */
 export interface BrowseDetailDocument {
   content: string;
   format?: ReviewFormat;
+  /** Copy this original content without closing the TUI detail view. */
+  copy?: DocumentCopyAction;
 }
 
 export interface MenuBrowseItem {
@@ -169,6 +190,8 @@ export interface ReviewScreen<ActionId extends string> {
   viewportSize?: number | "adaptive";
   /** Enable TUI-only literal search over displayed document text. */
   enableSearch?: boolean;
+  /** Copy this original content without confirming or closing the TUI review. */
+  copy?: DocumentCopyAction;
   confirm?: ReviewConfirmation<ActionId>;
   hint?: "back" | "close";
 }

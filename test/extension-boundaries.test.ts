@@ -100,7 +100,7 @@ async function createFixture(options: FixtureOptions) {
   await writeFile(
     join(root, "tsconfig.json"),
     `${JSON.stringify({
-      compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", target: "ES2022" },
+      compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", target: "ES2024" },
       include: ["packages/**/*.ts"],
     })}\n`,
     "utf8",

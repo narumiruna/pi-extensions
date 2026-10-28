@@ -66,6 +66,29 @@ test("settings selects whole coupled units and preserves unrelated/unknown field
   });
 });
 
+test("package versions are code-owned even when the model selects other settings", () => {
+  for (const themeConflict of [false, true]) {
+    const f = evidence(
+      JSON.stringify({ packages: ["npm:x@1.0.0"], theme: "base" }),
+      JSON.stringify({ packages: ["npm:x@3.0.0"], theme: themeConflict ? "local" : "base" }),
+      JSON.stringify({ packages: ["npm:x@2.0.0"], theme: themeConflict ? "remote" : "base" }),
+      "settings.json",
+    );
+    assert.equal(f.evidence.units.length, themeConflict ? 1 : 0);
+    assert.doesNotMatch(JSON.stringify(f.evidence.units), /packages/);
+    const plan = applyAgentCandidate(
+      f.plan,
+      f.evidence,
+      parseAgentCandidate(selectRemote(f.evidence.units), f.evidence),
+    );
+    if (plan.kind !== "planned" || plan.decisions[0]?.kind !== "accepted") throw new Error("not resolved");
+    assert.deepEqual(JSON.parse(Buffer.from(plan.decisions[0].file?.contentBase64 ?? "", "base64").toString()), {
+      packages: ["npm:x@3.0.0"],
+      theme: themeConflict ? "remote" : "base",
+    });
+  }
+});
+
 for (const filePath of [
   "keybindings.json",
   "sessions/project/s.jsonl",

@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu, runSecretInput, runTask } from "@narumitw/pi-tui-kit";
 import type { Coordinator } from "./coordinator.js";
+import {
+  credentialLabels,
+  destinationDescription,
+  destinationLines,
+  displayServerUrl,
+  providerLabel,
+} from "./destination-ui.js";
 import { displayPath, notificationMetadata, safeText } from "./metadata.js";
 import type { Destination, Notification, Providers } from "./provider.js";
 import {
@@ -19,6 +26,7 @@ import {
 type Screen =
   | "main"
   | "destinations"
+  | "addDestination"
   | "destination"
   | "settings"
   | "targets"
@@ -27,6 +35,9 @@ type Screen =
   | "label"
   | "chat"
   | "topic"
+  | "serverUrl"
+  | "priority"
+  | "ntfyTopic"
   | "review"
   | "remove"
   | "testSelect"
@@ -41,12 +52,27 @@ type Action =
   | "target"
   | "inheritTargets"
   | "add"
+  | "addGotify"
+  | "addSlack"
+  | "addNtfy"
+  | "addPushover"
+  | "addDiscord"
+  | "addBark"
+  | "addWebhook"
+  | "addTeams"
+  | "addLine"
+  | "recipientId"
+  | "userKey"
+  | "bearerToken"
+  | "ntfyTopic"
   | "edit"
   | "select"
   | "token"
   | "label"
   | "chat"
   | "topic"
+  | "serverUrl"
+  | "priority"
   | "save"
   | "saveOnly"
   | "remove"
@@ -66,15 +92,27 @@ export interface MenuOptions {
 export const helpLines = [
   "Create a bot with @BotFather in Telegram, then start a private conversation or add it to your group with permission to send messages.",
   "Obtain the numeric chat ID from Telegram Bot API getUpdates after sending a message. Do not share or paste the token into Pi chat. Stop other update consumers before using getUpdates; this extension does not poll.",
-  "Setup needs only a bot token and chat ID. Labels are generated automatically. Edit the label or optional forum topic ID from the destination review.",
+  "Telegram setup needs a bot token and chat ID. Labels are generated automatically. Edit the label or optional forum topic ID from the destination review.",
+  "For Gotify, create an application on your server and use its application token, not a client token. Enter the server base URL, including any reverse-proxy path. Prefer HTTPS; HTTP sends credentials without encryption.",
+  "Gotify labels are generated automatically. Edit the label or optional safe-integer priority from the destination review. An empty priority uses the server default.",
+  "For Slack, enable Incoming Webhooks in a Slack app and add a webhook to your workspace. Its installation fixes the channel. Paste the complete hooks.slack.com URL only into the masked field; never into Pi chat.",
+  "Slack webhook URLs are secrets. Reviews and Status show only that a webhook is configured. Revoke an exposed webhook in the Slack app before replacing it.",
+  "For Microsoft Teams, create a Workflows webhook with Anyone authentication. Enter its complete current signed URL only in the masked field. The workflow owns its target. HTTP 202 means trigger acceptance, not proof of a Teams post; live interoperability is not yet verified. See docs/settings.md for supported URLs, setup, and revocation.",
+  "For LINE, enable Messaging API on an Official Account and enter its channel access token and user/group/room ID in masked inputs. Recipient eligibility and account quotas apply. LINE Notify is not supported. See docs/settings.md for setup and revocation.",
+  "For ntfy, subscribe to a topic and configure server authentication and topic permissions. Topic secrecy is not access control. Review the server, optional Bearer token, and priority from 1 to 5.",
+  "For Pushover, enter the application token and user key in masked inputs. Delivery uses normal priority only, without emergency acknowledgement or retries.",
+  "For Discord, paste a normal text-channel webhook URL into the masked input. Mentions and link embeds are disabled; forum/media channels and thread selection are not supported.",
+  "For Bark, enter the device key in the masked input and review the hosted or self-hosted server base. JSON delivery keeps the key and message out of URLs, not server body logs. Native Basic authentication is not supported.",
+  "For Generic webhooks, enter the endpoint in the masked input and set an optional Bearer token in review. The fixed JSON payload has id, title, body, and settledAt (Unix milliseconds); no templates or custom headers.",
+  "Self-hosted ntfy, Bark, and Generic endpoints can reach private networks. Prefer HTTPS; HTTP sends credentials and metadata without encryption. See the bundled docs/settings.md for setup and revocation.",
   "Use a negative group/supergroup chat ID when applicable. Forum topic IDs are optional positive integers.",
   "Destinations are User settings only. Project settings require trust and may select existing destinations but cannot change credentials or addresses.",
   "Notifications disclose hostname, session name/ID, workspace and Git metadata, elapsed time and timestamp. No conversation or code is sent.",
   "Inactivity uses only input Pi forwards to this extension. Fullscreen focus, mouse, and viewport/search keys can be consumed first and do not reliably cancel reminders. Reading without typing can still trigger a notification.",
   "Input or new work cancels a pending reminder. Saved policy/destination changes cancel pending reminders. Settings save immediately; closing does not undo them.",
   "RPC/print/JSON cannot observe terminal activity and deliver at settlement instead. Short-lived processes can exit before delivery completes.",
-  "Delivery is best effort, one attempt, with no automatic retries or history replay. Accepted means Telegram accepted the message, not that it was read.",
-  "Manual file changes require /reload or session start. Repair malformed files before saving. Revoke exposed tokens through BotFather.",
+  "Delivery is best effort, one attempt, with no automatic retries or history replay. Accepted means the provider accepted the message, not that it was read.",
+  "Manual file changes require /reload or session start. Repair malformed files before saving. Revoke exposed Telegram tokens through BotFather or Gotify application tokens on your server.",
 ];
 
 export async function showNotifyMenu(ctx: ExtensionCommandContext, options: MenuOptions) {
@@ -111,22 +149,71 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
     if (!draft) throw new Error("Destination draft is unavailable.");
     return draft;
   };
+  const telegramDraft = () => {
+    const destination = assertDraft();
+    if (destination.provider !== "telegram") throw new Error("Not a Telegram destination.");
+    return destination;
+  };
+  const ntfyDraft = () => {
+    const destination = assertDraft();
+    if (destination.provider !== "ntfy") throw new Error("Not an ntfy destination.");
+    return destination;
+  };
+  const serverDraft = () => {
+    const destination = assertDraft();
+    if (destination.provider !== "gotify" && destination.provider !== "ntfy" && destination.provider !== "bark")
+      throw new Error("Not a server destination.");
+    return destination;
+  };
+  const priorityDraft = () => {
+    const destination = serverDraft();
+    if (destination.provider === "bark") throw new Error("Priority is unavailable.");
+    return destination;
+  };
+  const reportError = () => {
+    if (isCurrent())
+      ctx.ui.notify(
+        "Notify operation failed. Check the input, settings file, and Project selections. No credential values are shown.",
+        "error",
+      );
+  };
   const saveDraft = async (actionSignal: AbortSignal, selectNew: boolean) => {
-    const destination = providers.get("telegram")?.validate(assertDraft());
-    if (!destination) throw new Error("Invalid Telegram destination. Check the bot token and chat ID.");
+    const value = assertDraft();
+    const destination = providers.get(value.provider)?.validate(value);
+    if (!destination) throw new Error("Invalid destination settings. Check the required fields.");
     await apply(saveDestination(store, selectedId, destination, actionSignal, selectNew));
     draft = undefined;
     return { kind: "to", screen: "main" } as const;
   };
-  const draftLines = () =>
-    draft
-      ? [
-          `Label: ${safeText(draft.label)}`,
-          `Chat: ${safeText(draft.chatId)}`,
-          `Topic: ${draft.messageThreadId ?? "none"}`,
-          "Bot token: configured (hidden)",
-        ]
-      : ["No destination draft."];
+  const addWebhook = async (provider: "discord" | "webhook" | "teams", actionSignal: AbortSignal) => {
+    const result = await runSecretInput(menuCtx, {
+      title:
+        provider === "teams"
+          ? "Teams workflow webhook URL"
+          : `${provider === "discord" ? "Discord" : "Generic webhook"} URL`,
+      signal: actionSignal,
+      isCurrent,
+      onError: reportError,
+    });
+    actionSignal.throwIfAborted();
+    current();
+    if (result.kind === "closed" && result.reason === "close") return { kind: "close" } as const;
+    if (result.kind !== "submitted") return { kind: "stay" } as const;
+    const destination = providers.get(provider)?.validate({
+      provider,
+      label:
+        provider === "teams"
+          ? "Microsoft Teams notifications"
+          : provider === "discord"
+            ? "Discord notifications"
+            : "Generic webhook notifications",
+      webhookUrl: result.value,
+    });
+    if (!destination) throw new Error("Use a valid webhook URL.");
+    selectedId = randomUUID();
+    draft = destination;
+    return { kind: "to", screen: "review" } as const;
+  };
   const menu = defineMenu<State, Screen, Action>({
     start: "main",
     screens: {
@@ -140,8 +227,8 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           ...state.snapshot.diagnostics,
         ],
         items: [
-          { id: "destinations", label: "Telegram destinations", to: "destinations" },
-          { id: "test", label: "Send test to Telegram…", to: "testSelect" },
+          { id: "destinations", label: "Destinations", to: "destinations" },
+          { id: "test", label: "Send test…", to: "testSelect" },
           { id: "settings", label: "Settings", to: "settings" },
           { id: "status", label: "Status", to: "status" },
           { id: "help", label: "Help", to: "help" },
@@ -150,25 +237,38 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       destinations: ({ state }) => ({
         kind: "actions",
-        title: "Telegram destinations · User",
+        title: "Destinations · User",
         items: [
           ...Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
-            id,
+            // Stored IDs cannot contain ':', so rows cannot shadow the add actions.
+            id: `destination:${id}`,
             label: safeText(value.label),
-            description: `Telegram · ${safeText(value.chatId)} · token configured`,
+            description: destinationDescription(value),
             action: "select" as const,
           })),
+          { id: "add:destination", label: "Add destination…", to: "addDestination" },
+        ],
+      }),
+      addDestination: () => ({
+        kind: "actions",
+        title: "Add destination · User",
+        items: [
           { id: "add", label: "Add Telegram destination", action: "add" },
+          { id: "addGotify", label: "Add Gotify destination", action: "addGotify" },
+          { id: "addSlack", label: "Add Slack destination", action: "addSlack" },
+          { id: "addNtfy", label: "Add ntfy destination", action: "addNtfy" },
+          { id: "addPushover", label: "Add Pushover destination", action: "addPushover" },
+          { id: "addDiscord", label: "Add Discord destination", action: "addDiscord" },
+          { id: "addBark", label: "Add Bark destination", action: "addBark" },
+          { id: "addWebhook", label: "Add Generic webhook destination", action: "addWebhook" },
+          { id: "addLine", label: "Add LINE destination", action: "addLine" },
+          { id: "addTeams", label: "Add Microsoft Teams destination", action: "addTeams" },
         ],
       }),
       destination: () => ({
         kind: "actions",
-        title: "Telegram destination · User",
-        lines: [
-          `Label: ${safeText(knownDestination().label)}`,
-          `Chat: ${safeText(knownDestination().chatId)}`,
-          "Bot token: configured (hidden)",
-        ],
+        title: `${providerLabel(knownDestination())} destination · User`,
+        lines: destinationLines(knownDestination()),
         items: [
           { id: "edit", label: "Edit destination", action: "edit" },
           { id: "remove", label: "Remove destination…", to: "remove" },
@@ -223,7 +323,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
               label: "Send notifications to",
               currentValue: `${state.editing.targetIds.length}${inherited("targetIds") ? " (inherited)" : ""}`,
               action: "target",
-              description: "Choose which saved Telegram chats receive notifications.",
+              description: "Choose which saved destinations receive notifications.",
             },
           ],
         };
@@ -234,14 +334,14 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         items: Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
           id,
           label: safeText(value.label),
-          description: safeText(value.chatId),
+          description: destinationDescription(value),
           selected: state.editing.targetIds.includes(id),
         })),
         action: "target",
         enableSearch: true,
         actions:
           scope === "project"
-            ? [{ id: "inherit", label: "Restore inherited selection", action: "inheritTargets" }]
+            ? [{ id: "inherit:targets", label: "Restore inherited selection", action: "inheritTargets" }]
             : [],
       }),
       delay: () => ({
@@ -265,7 +365,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       label: () => ({
         kind: "input",
-        title: "Telegram destination label",
+        title: `${providerLabel(assertDraft())} destination label`,
         initialValue: assertDraft().label,
         action: "label",
       }),
@@ -273,27 +373,52 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         kind: "input",
         title: "Telegram chat ID",
         lines: ["Numeric private chat, group, or supergroup ID. Group IDs can be negative."],
-        initialValue: assertDraft().chatId,
+        initialValue: telegramDraft().chatId,
         action: "chat",
       }),
       topic: () => ({
         kind: "input",
         title: "Forum topic ID (optional)",
         lines: ["Leave empty for no topic."],
-        initialValue: String(assertDraft().messageThreadId ?? ""),
+        initialValue: String(telegramDraft().messageThreadId ?? ""),
         action: "topic",
+      }),
+      ntfyTopic: () => ({
+        kind: "input",
+        title: "ntfy topic",
+        lines: ["A topic name is not access control. Configure server authentication and topic permissions."],
+        initialValue: ntfyDraft().topic,
+        action: "ntfyTopic",
+      }),
+      serverUrl: () => ({
+        kind: "input",
+        title: `${providerLabel(serverDraft())} server URL`,
+        lines: ["HTTP(S) base URL with an optional reverse-proxy path. No credentials, query, or fragment."],
+        initialValue: serverDraft().serverUrl,
+        action: "serverUrl",
+      }),
+      priority: () => ({
+        kind: "input",
+        title: `${providerLabel(priorityDraft())} priority (optional)`,
+        lines: [
+          priorityDraft().provider === "ntfy"
+            ? "Integer from 1 to 5. Leave empty for the server default."
+            : "Safe integer from -9007199254740991 to 9007199254740991. Leave empty for the server default.",
+        ],
+        initialValue: String(priorityDraft().priority ?? ""),
+        action: "priority",
       }),
       review: () => ({
         kind: "actions",
-        title: "Review Telegram destination · User",
+        title: `Review ${providerLabel(assertDraft())} destination · User`,
         lines: [
-          ...draftLines(),
+          ...destinationLines(assertDraft()),
           ...(store.snapshot.effective.destinations[selectedId]
             ? ["Save keeps your current notification selection."]
             : [
-                "Use this chat for notifications?",
-                "Save and use: save this chat and select it for User notifications.",
-                "Save only: save this chat without selecting it.",
+                "Use this destination for notifications?",
+                "Save and use: save this destination and select it for User notifications.",
+                "Save only: save this destination without selecting it.",
               ]),
           "Automatic notifications default to On. Saved Off settings and Project choices are unchanged.",
         ],
@@ -303,10 +428,38 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             label: store.snapshot.effective.destinations[selectedId] ? "Save changes" : "Save and use",
             action: "save",
           },
-          { id: "token", label: "Replace bot token…", action: "token" },
-          { id: "chat", label: "Change chat ID…", to: "chat" },
+          {
+            id: "token",
+            label: `Replace ${credentialLabels[assertDraft().provider]}…`,
+            action: "token",
+          },
+          ...(assertDraft().provider === "telegram"
+            ? [{ id: "chat", label: "Change chat ID…", to: "chat" as const }]
+            : []),
+          ...(assertDraft().provider === "gotify" ||
+          assertDraft().provider === "ntfy" ||
+          assertDraft().provider === "bark"
+            ? [{ id: "serverUrl", label: "Change server URL…", to: "serverUrl" as const }]
+            : []),
+          ...(assertDraft().provider === "pushover"
+            ? [{ id: "userKey", label: "Replace user key…", action: "userKey" as const }]
+            : []),
+          ...(assertDraft().provider === "line"
+            ? [{ id: "recipientId", label: "Replace recipient ID…", action: "recipientId" as const }]
+            : []),
           { id: "label", label: "Change label…", to: "label" },
-          { id: "topic", label: "Set forum topic ID…", to: "topic" },
+          ...(assertDraft().provider === "webhook"
+            ? [{ id: "bearerToken", label: "Set Bearer token (empty for none)…", action: "bearerToken" as const }]
+            : []),
+          ...(assertDraft().provider === "telegram"
+            ? [{ id: "topic", label: "Set forum topic ID…", to: "topic" as const }]
+            : []),
+          ...(assertDraft().provider === "ntfy"
+            ? [{ id: "ntfyTopic", label: "Change topic…", to: "ntfyTopic" as const }]
+            : []),
+          ...(assertDraft().provider === "gotify" || assertDraft().provider === "ntfy"
+            ? [{ id: "priority", label: "Set priority…", to: "priority" as const }]
+            : []),
           ...(!store.snapshot.effective.destinations[selectedId]
             ? [{ id: "saveOnly", label: "Save only", action: "saveOnly" as const }]
             : []),
@@ -314,7 +467,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       remove: () => ({
         kind: "actions",
-        title: "Remove Telegram destination?",
+        title: `Remove ${providerLabel(knownDestination())} destination?`,
         lines: [
           safeText(knownDestination().label),
           "Also removes its User selection. Existing messages are not recalled.",
@@ -328,15 +481,21 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         items: Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
           id,
           label: safeText(value.label),
+          description: destinationDescription(value),
           action: "prepareTest" as const,
         })),
       }),
       testReview: () => ({
         kind: "review",
-        title: `Send test to ${safeText(testDestination?.label ?? "Telegram")}?`,
+        title: `Send test to ${safeText(testDestination?.label ?? "destination")}?`,
+        lines: testDestination ? [destinationDescription(testDestination)] : [],
         content: `${testNotification?.title ?? ""}\n${testNotification?.body ?? ""}`,
         viewportSize: "adaptive",
-        confirm: { id: "send", label: "Send test to Telegram", action: "sendTest" },
+        confirm: {
+          id: "send",
+          label: `Send test to ${testDestination ? providerLabel(testDestination) : "destination"}`,
+          action: "sendTest",
+        },
       }),
       status: ({ state }) => ({
         kind: "detail",
@@ -351,7 +510,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           `Pending reminder: ${coordinator.pendingAt ? new Date(coordinator.pendingAt).toISOString() : "none"}`,
           ...Object.entries(state.snapshot.effective.destinations).map(([id, value]) => {
             const result = coordinator.statuses.get(id)?.result;
-            return `${safeText(value.label)} · ${state.snapshot.effective.targetIds.includes(id) ? "selected" : "not selected"} · token configured (User) · ${result ? (result.state === "failed" ? `${result.code}${result.retryAfterSeconds ? `; retry after ${result.retryAfterSeconds}s (not automatic)` : ""}` : result.state) : "no delivery"}`;
+            return `${safeText(value.label)} · ${destinationDescription(value)} (User) · ${state.snapshot.effective.targetIds.includes(id) ? "selected" : "not selected"} · ${result ? (result.state === "failed" ? `${result.code}${result.retryAfterSeconds ? `; retry after ${result.retryAfterSeconds}s (not automatic)` : ""}` : result.state) : "no delivery"}`;
           }),
           ...state.snapshot.diagnostics,
         ],
@@ -420,11 +579,16 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         return { kind: "stay" };
       },
       select: ({ itemId }) => {
-        selectedId = itemId;
+        selectedId = itemId.slice("destination:".length);
         return { kind: "to", screen: "destination" };
       },
       add: async ({ signal: actionSignal }) => {
-        const result = await runSecretInput(menuCtx, { title: "Telegram bot token", signal: actionSignal, isCurrent });
+        const result = await runSecretInput(menuCtx, {
+          title: "Telegram bot token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
         actionSignal.throwIfAborted();
         current();
         if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
@@ -433,19 +597,270 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         draft = { provider: "telegram", label: "", botToken: result.value.trim(), chatId: "" };
         return { kind: "to", screen: "chat" };
       },
+      addGotify: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Gotify application token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind !== "submitted") return { kind: "stay" };
+        selectedId = randomUUID();
+        draft = { provider: "gotify", label: "", appToken: result.value.trim(), serverUrl: "" };
+        return { kind: "to", screen: "serverUrl" };
+      },
+      addSlack: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Slack webhook URL",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("slack")?.validate({
+          provider: "slack",
+          label: "Slack notifications",
+          webhookUrl: result.value,
+        });
+        if (destination?.provider !== "slack") throw new Error("Use a valid Slack Incoming Webhook URL.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      addLine: async ({ signal: actionSignal }) => {
+        const token = await runSecretInput(menuCtx, {
+          title: "LINE channel access token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (token.kind === "closed" && token.reason === "close") return { kind: "close" };
+        if (token.kind !== "submitted") return { kind: "stay" };
+        const recipient = await runSecretInput(menuCtx, {
+          title: "LINE recipient ID (user, group, or room)",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (recipient.kind === "closed" && recipient.reason === "close") return { kind: "close" };
+        if (recipient.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("line")?.validate({
+          provider: "line",
+          label: "LINE notifications",
+          channelAccessToken: token.value.trim(),
+          recipientId: recipient.value.trim(),
+        });
+        if (!destination) throw new Error("Use a valid LINE token and recipient ID.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      recipientId: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Replace LINE recipient ID",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          const valid = providers.get("line")?.validate({ ...destination, recipientId: result.value.trim() });
+          if (destination.provider !== "line" || valid?.provider !== "line")
+            throw new Error("Use a valid LINE user, group, or room ID.");
+          destination.recipientId = valid.recipientId;
+        }
+        return { kind: "stay" };
+      },
+      addDiscord: ({ signal: actionSignal }) => addWebhook("discord", actionSignal),
+      addWebhook: ({ signal: actionSignal }) => addWebhook("webhook", actionSignal),
+      addTeams: ({ signal: actionSignal }) => addWebhook("teams", actionSignal),
+      addBark: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Bark device key",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("bark")?.validate({
+          provider: "bark",
+          label: "Bark notifications",
+          serverUrl: "https://api.day.app",
+          deviceKey: result.value.trim(),
+        });
+        if (!destination) throw new Error("Use a valid Bark device key.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      addPushover: async ({ signal: actionSignal }) => {
+        const app = await runSecretInput(menuCtx, {
+          title: "Pushover application token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (app.kind === "closed" && app.reason === "close") return { kind: "close" };
+        if (app.kind !== "submitted") return { kind: "stay" };
+        const user = await runSecretInput(menuCtx, {
+          title: "Pushover user key",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (user.kind === "closed" && user.reason === "close") return { kind: "close" };
+        if (user.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("pushover")?.validate({
+          provider: "pushover",
+          label: "Pushover notifications",
+          appToken: app.value.trim(),
+          userKey: user.value.trim(),
+        });
+        if (!destination) throw new Error("Use a valid application token and user key.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      userKey: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Replace Pushover user key",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          const valid = providers.get("pushover")?.validate({ ...destination, userKey: result.value.trim() });
+          if (destination.provider !== "pushover" || valid?.provider !== "pushover")
+            throw new Error("Use a valid user key.");
+          destination.userKey = valid.userKey;
+        }
+        return { kind: "stay" };
+      },
+      bearerToken: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Bearer token (empty for none)",
+          required: false,
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          const valid = providers
+            .get("webhook")
+            ?.validate({ ...destination, bearerToken: result.value.trim() || undefined });
+          if (destination.provider !== "webhook" || valid?.provider !== "webhook")
+            throw new Error("Use a valid Bearer token or leave it empty.");
+          destination.bearerToken = valid.bearerToken;
+        }
+        return { kind: "stay" };
+      },
+      addNtfy: () => {
+        selectedId = randomUUID();
+        draft = { provider: "ntfy", label: "ntfy notifications", serverUrl: "https://ntfy.sh", topic: "" };
+        return { kind: "to", screen: "ntfyTopic" };
+      },
+      ntfyTopic: ({ value }) => {
+        const destination = assertDraft();
+        const valid = providers.get("ntfy")?.validate({ ...destination, topic: value?.trim() });
+        if (destination.provider !== "ntfy" || valid?.provider !== "ntfy") throw new Error("Use a valid ntfy topic.");
+        destination.topic = valid.topic;
+        return { kind: "to", screen: "review" };
+      },
       edit: () => {
         draft = { ...knownDestination() };
         return { kind: "to", screen: "review" };
       },
       token: async ({ signal: actionSignal }) => {
         const result = await runSecretInput(menuCtx, {
-          title: "Replace Telegram bot token",
+          title: `Replace ${providerLabel(assertDraft())} ${credentialLabels[assertDraft().provider]}`,
+          required: assertDraft().provider !== "ntfy",
           signal: actionSignal,
           isCurrent,
+          onError: reportError,
         });
         actionSignal.throwIfAborted();
         current();
-        if (result.kind === "submitted") assertDraft().botToken = result.value.trim();
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          switch (destination.provider) {
+            case "telegram":
+              destination.botToken = result.value.trim();
+              break;
+            case "gotify":
+              destination.appToken = result.value.trim();
+              break;
+            case "pushover": {
+              const valid = providers.get("pushover")?.validate({ ...destination, appToken: result.value.trim() });
+              if (valid?.provider !== "pushover") throw new Error("Use a valid application token.");
+              destination.appToken = valid.appToken;
+              break;
+            }
+            case "bark": {
+              const valid = providers.get("bark")?.validate({ ...destination, deviceKey: result.value.trim() });
+              if (valid?.provider !== "bark") throw new Error("Use a valid device key.");
+              destination.deviceKey = valid.deviceKey;
+              break;
+            }
+            case "line": {
+              const valid = providers
+                .get("line")
+                ?.validate({ ...destination, channelAccessToken: result.value.trim() });
+              if (valid?.provider !== "line") throw new Error("Use a valid LINE channel access token.");
+              destination.channelAccessToken = valid.channelAccessToken;
+              break;
+            }
+            case "teams":
+            case "discord":
+            case "webhook": {
+              const valid = providers.get(destination.provider)?.validate({ ...destination, webhookUrl: result.value });
+              if (valid?.provider !== destination.provider) throw new Error("Use a valid webhook URL.");
+              destination.webhookUrl = valid.webhookUrl;
+              break;
+            }
+            case "ntfy": {
+              const valid = providers
+                .get("ntfy")
+                ?.validate({ ...destination, accessToken: result.value.trim() || undefined });
+              if (valid?.provider !== "ntfy") throw new Error("Use a valid access token or leave it empty.");
+              destination.accessToken = valid.accessToken;
+              break;
+            }
+            case "slack": {
+              const valid = providers.get("slack")?.validate({ ...destination, webhookUrl: result.value });
+              if (valid?.provider !== "slack") throw new Error("Use a valid Slack Incoming Webhook URL.");
+              destination.webhookUrl = valid.webhookUrl;
+              break;
+            }
+          }
+        }
         if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
         return { kind: "stay" };
       },
@@ -456,7 +871,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       },
       chat: ({ value }) => {
         if (!value || !/^-?[1-9]\d{0,30}$/.test(value.trim())) throw new Error("Use a numeric Telegram chat ID.");
-        const destination = assertDraft();
+        const destination = telegramDraft();
         destination.chatId = value.trim();
         if (!destination.label) destination.label = `Telegram ${destination.chatId}`;
         return { kind: "to", screen: "review" };
@@ -465,8 +880,35 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         const topic = value?.trim();
         if (topic && (!/^\d+$/.test(topic) || !Number.isSafeInteger(Number(topic)) || Number(topic) <= 0))
           throw new Error("Use a positive whole topic ID or leave it empty.");
-        if (topic) assertDraft().messageThreadId = Number(topic);
-        else delete assertDraft().messageThreadId;
+        if (topic) telegramDraft().messageThreadId = Number(topic);
+        else delete telegramDraft().messageThreadId;
+        return { kind: "to", screen: "review" };
+      },
+      serverUrl: ({ value }) => {
+        const destination = serverDraft();
+        const normalized = providers.get(destination.provider)?.validate({
+          ...destination,
+          label: destination.label || "Gotify",
+          serverUrl: value?.trim(),
+        });
+        if (
+          !normalized ||
+          (normalized.provider !== "gotify" && normalized.provider !== "ntfy" && normalized.provider !== "bark")
+        )
+          throw new Error("Use a valid server URL and credentials. No URL credentials, query, or fragment.");
+        destination.serverUrl = normalized.serverUrl;
+        if (!destination.label) destination.label = `Gotify ${displayServerUrl(destination.serverUrl)}`.slice(0, 128);
+        return { kind: "to", screen: "review" };
+      },
+      priority: ({ value }) => {
+        const priority = value?.trim();
+        if (priority && (!/^-?\d+$/.test(priority) || !Number.isSafeInteger(Number(priority))))
+          throw new Error("Use a safe-integer priority or leave it empty.");
+        const destination = priorityDraft();
+        if (priority && destination.provider === "ntfy" && (Number(priority) < 1 || Number(priority) > 5))
+          throw new Error("Use a priority from 1 to 5.");
+        if (priority) destination.priority = Number(priority);
+        else delete destination.priority;
         return { kind: "to", screen: "review" };
       },
       save: ({ signal: actionSignal }) => saveDraft(actionSignal, true),
@@ -502,9 +944,10 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         const destination = testDestination;
         const notification = testNotification;
         const result = await runTask(menuCtx, {
-          label: "Sending Telegram test…",
+          label: `Sending ${providerLabel(destination)} test…`,
           signal: actionSignal,
           isCurrent,
+          onError: reportError,
           task: ({ signal: taskSignal }) => coordinator.send(selectedId, destination, notification, taskSignal),
         });
         actionSignal.throwIfAborted();
@@ -512,8 +955,8 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         if (result.kind === "completed")
           ctx.ui.notify(
             result.value.state === "accepted"
-              ? "Telegram accepted the test notification."
-              : `Telegram test: ${result.value.state === "failed" ? result.value.code : result.value.state}.`,
+              ? `${providerLabel(destination)} accepted the test notification.`
+              : `${providerLabel(destination)} test: ${result.value.state === "failed" ? result.value.code : result.value.state}.`,
             result.value.state === "accepted" ? "info" : "warning",
           );
         if (result.kind === "cancelled") return { kind: "close" };
@@ -530,13 +973,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         editing: resolveSettings(store.snapshot.user, scope === "project" ? store.snapshot.project : {}, providers)
           .effective,
       }),
-      onError: () => {
-        if (isCurrent())
-          ctx.ui.notify(
-            "Notify operation failed. Check the input, settings file, and Project selections. No credential values are shown.",
-            "error",
-          );
-      },
+      onError: reportError,
     });
   } finally {
     draft = undefined;

@@ -4,13 +4,14 @@ import {
   type Focusable,
   HStack,
   isFocusable,
+  isKeyRelease,
   ScrollView,
   type TuiMouseEvent,
   type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { BtwPasteGuard } from "./keybindings.js";
+import { BtwPasteGuard, type BtwShortcuts } from "./keybindings.js";
 import {
   type BtwLayout,
   DEFAULT_BTW_SIDE_PANE_RATIO,
@@ -27,6 +28,7 @@ type BtwActivePane = "side" | "main";
 export interface BtwFullscreenLayoutComponent extends Component {
   getFullscreenLayout(): Component;
   getPrimaryScrollView?(): ScrollView;
+  setWorkspaceFocus?(pane: "side" | "main", shortcutLabel: string | undefined): void;
 }
 
 export class BtwMainThreadInput implements Component, Focusable {
@@ -69,11 +71,12 @@ export class BtwMainThreadInput implements Component, Focusable {
 
   refreshTarget(): void {
     if (this.disposed) return;
-    const next = this.resolveTarget();
-    if (!hasInput(next) || next === this.target) return;
+    const resolved = this.resolveTarget();
+    const next = hasInput(resolved) ? resolved : undefined;
+    if (next === this.target) return;
     if (this._focused && this.target && isFocusable(this.target)) this.target.focused = false;
     this.target = next;
-    if (this._focused && isFocusable(next)) next.focused = true;
+    if (this._focused && next && isFocusable(next)) next.focused = true;
   }
 
   invalidate(): void {}
@@ -81,9 +84,11 @@ export class BtwMainThreadInput implements Component, Focusable {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (this._focused && this.target && isFocusable(this.target)) this.target.focused = false;
+    const target = this.target;
+    const wasFocused = this._focused;
     this.target = undefined;
     this._focused = false;
+    if (wasFocused && target && isFocusable(target)) target.focused = false;
   }
 }
 
@@ -92,8 +97,10 @@ export interface BtwSplitPaneOptions {
   sideLayout: Component;
   mainThread: Component;
   mainLayout?: Component;
+  mainScrollView?: ScrollView;
   mainInput: Component;
   sideScrollView?: ScrollView;
+  shortcuts?: BtwShortcuts;
   layout: Exclude<BtwLayout, "fullscreen">;
   theme: Theme;
   terminalColumns(): number;
@@ -124,20 +131,27 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   constructor(private readonly options: BtwSplitPaneOptions) {
     this.sidePaneRatio = clampSidePaneRatio(options.sidePaneRatio ?? DEFAULT_BTW_SIDE_PANE_RATIO);
     this.persistedSidePaneRatio = this.sidePaneRatio;
-    this.mainPane = new MainThreadPane(options.mainThread, options.mainLayout, options.theme, options.terminalRows);
+    this.mainPane = new MainThreadPane(
+      options.mainThread,
+      options.mainLayout,
+      options.mainScrollView,
+      options.theme,
+      options.terminalRows,
+    );
+    const side = options.sideScrollView ? options.sideLayout : new ScrollView(options.sideLayout, { primary: true });
     this.viewportRouter = new PaneViewportRouter(
-      options.sideScrollView ?? findPrimaryScrollView(options.sideLayout),
+      options.sideScrollView ?? (side as ScrollView),
       this.mainPane.getPrimaryScrollView(),
       options.setViewportTarget,
     );
     this.viewportRouter.activate("side");
+    this.updateFocusLabel();
     const separator: Component = {
       render: (width) =>
         Array.from({ length: Math.max(1, options.terminalRows()) }, () => truncateToWidth(this.renderDivider(), width)),
       handleMouse: (event) => this.handleDividerMouse(event),
       invalidate() {},
     };
-    const side = options.sideLayout;
     const main = this.mainPane.getLayout();
     this.layoutRoot =
       options.layout === "left-pane"
@@ -173,7 +187,14 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
       this.forwardPastedInput(data);
       return true;
     }
-    if (width < MIN_BTW_SPLIT_COLUMNS) return false;
+    if (width < MIN_BTW_SPLIT_COLUMNS || isKeyRelease(data)) return false;
+    if (this.options.shortcuts?.matches(data, "switchPane")) {
+      this.focusGeneration += 1;
+      this.cancelDividerDrag();
+      this.activatePane(this.activePane === "side" ? "main" : "side");
+      return true;
+    }
+    this.updateFocusLabel();
     const pane = paneForMouseClick(data, width, this.options.layout, this.sidePaneRatio);
     if (pane) this.queuePaneFocus(pane);
     return false;
@@ -215,7 +236,29 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     this.focusGeneration += 1;
     this.dividerDragStartRatio = undefined;
     this.failedRatioSaveGenerationDuringDrag = undefined;
-    this.viewportRouter.dispose();
+    let error: unknown;
+    for (const cleanup of [
+      () => this.viewportRouter.dispose(),
+      () => this.mainPane.dispose(),
+      () => this.setFocusLabel(undefined),
+    ]) {
+      try {
+        cleanup();
+      } catch (failure) {
+        error ??= failure;
+      }
+    }
+    if (error !== undefined) throw error;
+  }
+
+  private updateFocusLabel(): void {
+    const shortcuts = this.options.shortcuts;
+    this.setFocusLabel(shortcuts?.keys.switchPane.length ? shortcuts.label("switchPane") : undefined);
+  }
+
+  private setFocusLabel(shortcutLabel: string | undefined): void {
+    const component = this.options.sideComponent as BtwFullscreenLayoutComponent;
+    component.setWorkspaceFocus?.(this.activePane, shortcutLabel);
   }
 
   private renderDivider(): string {
@@ -290,7 +333,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
     void Promise.resolve()
       .then(() => persist(ratio))
       .then(() => {
-        if (saveGeneration <= this.confirmedRatioSaveGeneration) return;
+        if (this.disposed || saveGeneration <= this.confirmedRatioSaveGeneration) return;
         this.confirmedRatioSaveGeneration = saveGeneration;
         this.persistedSidePaneRatio = ratio;
       })
@@ -341,6 +384,7 @@ export class BtwSplitPane implements BtwFullscreenLayoutComponent {
   private activatePane(pane: BtwActivePane): void {
     if (this.disposed) return;
     this.activePane = pane;
+    this.updateFocusLabel();
     this.viewportRouter.activate(pane);
     this.options.setFocus(pane === "side" ? this.options.sideComponent : this.options.mainInput);
     this.options.requestRender();
@@ -404,6 +448,7 @@ class ResponsivePaneRow extends HStack {
 }
 
 class MainThreadPane {
+  private readonly borrowedScroll: boolean;
   private readonly body: Component;
   private readonly layout: Component;
   private readonly scroll: ScrollView | undefined;
@@ -411,16 +456,19 @@ class MainThreadPane {
   constructor(
     mainThread: Component,
     mainLayout: Component | undefined,
+    mainScrollView: ScrollView | undefined,
     theme: Theme,
     private readonly terminalRows: () => number,
   ) {
+    this.borrowedScroll = mainLayout !== undefined;
     this.body = {
       render: (width) => mainThread.render(Math.max(1, width)).map((line) => truncateToWidth(line, Math.max(1, width))),
       invalidate() {},
     };
     if (mainLayout) {
       this.layout = mainLayout;
-      this.scroll = findPrimaryScrollView(mainLayout);
+      if (!mainScrollView) throw new Error("The native main pane has no compatible viewport.");
+      this.scroll = mainScrollView;
       return;
     }
     this.scroll = new ScrollView(this.body, {
@@ -434,6 +482,12 @@ class MainThreadPane {
 
   getLayout(): Component {
     return this.layout;
+  }
+
+  dispose(): void {
+    if (this.borrowedScroll) return;
+    this.scroll?.setScrollbarActive(false);
+    this.scroll?.setScrollbar("hidden");
   }
 
   getPrimaryScrollView(): ScrollView | undefined {
@@ -459,22 +513,46 @@ class PaneViewportRouter {
     private readonly setViewportTarget: (scrollView: ScrollView | undefined) => void,
   ) {
     for (const scrollView of [side, main]) {
-      if (scrollView) this.originalPrimary.set(scrollView, scrollView.primary);
+      if (!scrollView) continue;
+      const primary = Object.getOwnPropertyDescriptor(scrollView, "primary");
+      if (!primary?.writable || typeof primary.value !== "boolean") {
+        throw new Error("Pi BTW cannot route this viewport; update Pi.");
+      }
+      this.originalPrimary.set(scrollView, scrollView.primary);
     }
   }
 
   activate(pane: BtwActivePane): void {
     if (this.disposed) return;
     const target = pane === "side" ? this.side : this.main;
-    for (const scrollView of this.originalPrimary.keys()) setScrollViewPrimary(scrollView, scrollView === target);
-    this.setViewportTarget(target);
+    const previous = new Map([...this.originalPrimary.keys()].map((scrollView) => [scrollView, scrollView.primary]));
+    try {
+      for (const scrollView of this.originalPrimary.keys()) setScrollViewPrimary(scrollView, scrollView === target);
+      this.setViewportTarget(target);
+    } catch (error) {
+      for (const [scrollView, primary] of previous) setScrollViewPrimary(scrollView, primary);
+      throw error;
+    }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const [scrollView, primary] of this.originalPrimary) setScrollViewPrimary(scrollView, primary);
-    this.setViewportTarget(undefined);
+    let error: unknown;
+    for (const [scrollView, primary] of this.originalPrimary) {
+      try {
+        setScrollViewPrimary(scrollView, primary);
+      } catch (failure) {
+        error ??= failure;
+      }
+    }
+    this.originalPrimary.clear();
+    try {
+      this.setViewportTarget(undefined);
+    } catch (failure) {
+      error ??= failure;
+    }
+    if (error !== undefined) throw error;
   }
 }
 
@@ -482,25 +560,7 @@ class PaneViewportRouter {
 // active-pane viewport router. Preserve and restore this runtime field so Pi's
 // native search, prompt navigation, and scrolling keep their standard behavior.
 function setScrollViewPrimary(scrollView: ScrollView, primary: boolean): void {
-  Reflect.set(scrollView, "primary", primary);
-}
-
-function findPrimaryScrollView(root: Component): ScrollView | undefined {
-  const visited = new Set<Component>();
-  let fallback: ScrollView | undefined;
-  let primary: ScrollView | undefined;
-  const visit = (component: Component) => {
-    if (visited.has(component)) return;
-    visited.add(component);
-    if (component instanceof ScrollView) {
-      fallback ??= component;
-      if (component.primary) primary = component;
-    }
-    if (!("children" in component) || !Array.isArray(component.children)) return;
-    for (const child of component.children) visit(child);
-  };
-  visit(root);
-  return primary ?? fallback;
+  if (!Reflect.set(scrollView, "primary", primary)) throw new Error("Pi BTW could not restore viewport ownership.");
 }
 
 function paneForMouseClick(

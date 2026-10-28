@@ -119,8 +119,11 @@ test("persisted server checkpoints replay after reload/resume/fork and stop befo
       assert.deepEqual(replayed.tools, payload.tools);
       assert.doesNotMatch(JSON.stringify(replayed), /old user history|old assistant-only fact|PI_CONTEXT_COMPACTION/);
       assert.deepEqual(latestCheckpoint(current.getBranch())?.details.replacementHistory, history);
-      const wrongModel = createMockContext({ model: { ...model, id: "other" }, sessionManager: current }).ctx;
-      assert.equal(await mock.events.get("context")?.[0]?.({ type: "context", messages }, wrongModel), undefined);
+      const selectedModel = createMockContext({ model: { ...model, id: "other" }, sessionManager: current }).ctx;
+      assert.deepEqual(
+        await mock.events.get("context")?.[0]?.({ type: "context", messages }, selectedModel),
+        projected,
+      );
       await mock.events.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "reload" }, ctx);
     }
     forked.branch(userId);

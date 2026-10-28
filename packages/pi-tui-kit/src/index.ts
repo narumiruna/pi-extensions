@@ -1,4 +1,10 @@
-export { type BoundedFrameOptions, renderBoundedFrame } from "./bounded-frame.js";
+export {
+  type BoundedFrameContentRow,
+  type BoundedFrameLayout,
+  type BoundedFrameOptions,
+  renderBoundedFrame,
+  renderBoundedFrameLayout,
+} from "./bounded-frame.js";
 export {
   type RunConfirmationOptions,
   type RunConfirmationResult,
@@ -18,9 +24,34 @@ export {
   runDocumentReview,
 } from "./document-review.js";
 export {
+  createEditorStatusCollection,
+  type EditorStatusCollection,
+  type EditorStatusCollectionInput,
+  type EditorStatusCollectionItem,
+  type EditorStatusCollectionOptions,
+  type EditorStatusItemHandle,
+} from "./editor-status-collection.js";
+export {
+  createEditorStatusPublisher,
+  type EditorStatusPublisher,
+  type EditorStatusPublisherOptions,
+} from "./editor-status-publisher.js";
+export {
+  createEditorStatusView,
+  type EditorStatusMode,
+  type EditorStatusTrigger,
+  type EditorStatusView,
+  type EditorStatusViewOptions,
+} from "./editor-status-view.js";
+export {
   EditorStatusWidget,
   type EditorStatusWidgetOptions,
 } from "./editor-status-widget.js";
+export {
+  createFullscreenHandoff,
+  type FullscreenHandoff,
+  type FullscreenHandoffOptions,
+} from "./fullscreen-handoff.js";
 export {
   HorizontalRule,
   type HorizontalRuleLabelAlignment,
@@ -32,6 +63,7 @@ export {
   type InteractionHint,
   type InteractionKeybindings,
 } from "./interaction-hints.js";
+export { canonicalizeConfiguredKey } from "./key-matching.js";
 export {
   type LiveChoiceItem,
   type LiveChoiceSelectionContext,
@@ -91,6 +123,8 @@ export type {
   BrowseScreen,
   ChoiceScreen,
   DetailScreen,
+  DocumentCopyAction,
+  DocumentCopyContext,
   InputScreen,
   MenuActionContext,
   MenuActionHandler,
@@ -113,4 +147,4 @@ export type {
   SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 20;
+export const PI_EXTENSION_MENU_API_VERSION = 22;

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { getLangfuseTracerProvider, setLangfuseTracerProvider } from "@langfuse/tracing";
-import { test } from "vitest";
+import { afterAll, beforeAll, test } from "vitest";
 import { listFiles } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
 
@@ -40,6 +40,67 @@ type RuntimeBuilder = {
   ): Promise<void>;
 };
 
+type BuildFixture = Readonly<{ root: string; output: string; metadata: BuildMetadata }>;
+let buildFixture: BuildFixture | undefined;
+let fixtureOwner: ReturnType<typeof createBuildFixture> | undefined;
+
+function createBuildFixture(build: (output: string, signal: AbortSignal) => Promise<BuildMetadata>) {
+  const controller = new AbortController();
+  let root: string | undefined;
+  // Retain the task immediately: Vitest does not cancel a timed-out beforeAll continuation.
+  const ready = (async () => {
+    root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+    try {
+      controller.signal.throwIfAborted();
+      const output = join(root, "dist");
+      const metadata = await build(output, controller.signal);
+      controller.signal.throwIfAborted();
+      // Never import or modify this graph; runtime consumers receive full copies.
+      return freezeFixture({ root, output, metadata });
+    } catch (error) {
+      await rm(root, { force: true, recursive: true });
+      throw error;
+    }
+  })();
+  // Keep rejection observed even when setup has already timed out.
+  void ready.catch(() => {});
+  return {
+    ready,
+    async dispose() {
+      controller.abort(new Error("Build fixture disposed"));
+      // The builder has no cancellation API. Drain it before removing its output.
+      await ready.catch(() => {});
+      if (root) await rm(root, { force: true, recursive: true });
+    },
+  };
+}
+
+beforeAll(async () => {
+  fixtureOwner = createBuildFixture(async (output, signal) => {
+    const builder = await loadBuilder();
+    signal.throwIfAborted();
+    return builder.buildRuntime({ outputDirectory: output });
+  });
+  buildFixture = await fixtureOwner.ready;
+});
+
+afterAll(async () => {
+  await fixtureOwner?.dispose();
+  buildFixture = undefined;
+});
+
+function requireBuildFixture() {
+  assert.ok(buildFixture, "runtime build fixture is not ready");
+  return buildFixture;
+}
+
+function freezeFixture<T extends object>(value: T): Readonly<T> {
+  for (const nested of Object.values(value)) {
+    if (nested !== null && typeof nested === "object") freezeFixture(nested);
+  }
+  return Object.freeze(value);
+}
+
 async function loadBuilder(): Promise<RuntimeBuilder> {
   return (await import(`${builderUrl}?test=${crypto.randomUUID()}`)) as RuntimeBuilder;
 }
@@ -63,6 +124,73 @@ function validMetadata(): BuildMetadata {
   }
   return { outputs };
 }
+
+test("fixture disposal drains pending setup and prevents late publication", async ({ onTestFinished }) => {
+  let release!: () => void;
+  let entered!: () => void;
+  let outputPath = "";
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const owner = createBuildFixture(async (output) => {
+    outputPath = output;
+    entered();
+    await gate;
+    return {};
+  });
+  onTestFinished(async () => {
+    release();
+    await owner.dispose();
+  });
+  await started;
+  const outcome = owner.ready.then(
+    () => "published",
+    () => "cancelled",
+  );
+  let drained = false;
+  const disposal = owner.dispose().then(() => {
+    drained = true;
+  });
+  try {
+    await Promise.resolve();
+    assert.equal(drained, false);
+  } finally {
+    release();
+    await disposal;
+  }
+  assert.equal(await outcome, "cancelled");
+  await assert.rejects(readdir(join(outputPath, "..")), { code: "ENOENT" });
+});
+
+test("fixture setup failure removes partial output and remains disposable", async ({ onTestFinished }) => {
+  let outputPath = "";
+  const owner = createBuildFixture(async (output) => {
+    outputPath = output;
+    await mkdir(output);
+    await writeFile(join(output, "partial.ts"), "partial");
+    throw new Error("injected fixture setup failure");
+  });
+  onTestFinished(() => owner.dispose());
+  await assert.rejects(owner.ready, /injected fixture setup failure/u);
+  await owner.dispose();
+  await assert.rejects(readdir(join(outputPath, "..")), { code: "ENOENT" });
+});
+
+test("completed fixture disposal is idempotent", async ({ onTestFinished }) => {
+  const owner = createBuildFixture(async (output) => {
+    await mkdir(output);
+    return {};
+  });
+  onTestFinished(() => owner.dispose());
+  const value = await owner.ready;
+  assert.equal(Object.isFrozen(value), true);
+  await owner.dispose();
+  await owner.dispose();
+  await assert.rejects(readdir(value.root), { code: "ENOENT" });
+});
 
 test("eager graph validation preserves first-use boundaries and external packages", async () => {
   const builder = await loadBuilder();
@@ -121,9 +249,8 @@ test("runtime builds are deterministic, mapped, external, and remove stale outpu
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   try {
-    const first = join(root, "first");
+    const { output: first, metadata: firstMetadata } = requireBuildFixture();
     const second = join(root, "second");
-    const firstMetadata = await builder.buildRuntime({ outputDirectory: first });
     await mkdir(join(second, "chunks"), { recursive: true });
     await writeFile(join(second, "chunks", "stale.ts"), "stale", "utf8");
     await builder.buildRuntime({ outputDirectory: second });
@@ -166,11 +293,10 @@ test("runtime builds are deterministic, mapped, external, and remove stale outpu
 });
 
 test("generated JavaScript root exposes the host API without eagerly loading production runtime", async () => {
-  const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   try {
     const output = join(root, "dist");
-    await builder.buildRuntime({ outputDirectory: output });
+    await cp(requireBuildFixture().output, output, { recursive: true });
     const entrySource = await readFile(join(output, "index.js"), "utf8");
     assert.doesNotMatch(entrySource, /@langfuse\/otel/u);
 
@@ -186,26 +312,27 @@ test("generated JavaScript root exposes the host API without eagerly loading pro
 });
 
 test("generated host controller remains registered across resource reloads", async () => {
-  const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let tracing: { dispose(): Promise<void> } | undefined;
   try {
-    await builder.buildRuntime({ outputDirectory: output });
+    await cp(requireBuildFixture().output, output, { recursive: true });
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const module = await import(`${pathToFileURL(join(output, "index.js")).href}?test=${crypto.randomUUID()}`);
-    const tracing = module.createPiLangfuseSession({
+    const controller = module.createPiLangfuseSession({
       closed: false,
       flush: async () => undefined,
       shutdown: async () => undefined,
     });
+    tracing = controller;
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,
       settingsManager: SettingsManager.inMemory({}),
-      extensionFactories: [{ name: "langfuse", factory: tracing.extension }],
+      extensionFactories: [{ name: "langfuse", factory: controller.extension }],
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -220,15 +347,17 @@ test("generated host controller remains registered across resource reloads", asy
       assert.equal(loaded.extensions.length, 1);
     }
   } finally {
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(root, { force: true, recursive: true });
+    try {
+      await tracing?.dispose();
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      await rm(root, { force: true, recursive: true });
+    }
   }
 });
 
 test("generated package copies share runtime session capabilities", async () => {
-  const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   let runtime: { shutdown(): Promise<void> } | undefined;
   let tracing: { dispose(): Promise<void> } | undefined;
   const runtimeSlots = ["v1", "v2"].map((version) => {
@@ -236,13 +365,14 @@ test("generated package copies share runtime session capabilities", async () => 
     return { key, descriptor: Object.getOwnPropertyDescriptor(globalThis, key) };
   });
   const previousProvider = getLangfuseTracerProvider();
+  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   try {
     // Own a fresh runtime without closing any runtime inherited from another test.
     for (const { key } of runtimeSlots) Reflect.deleteProperty(globalThis, key);
     const firstOutput = join(root, "first");
     const secondOutput = join(root, "second");
-    await builder.buildRuntime({ outputDirectory: firstOutput });
-    await cp(firstOutput, secondOutput, { recursive: true });
+    await cp(requireBuildFixture().output, firstOutput, { recursive: true });
+    await cp(requireBuildFixture().output, secondOutput, { recursive: true });
     // Distinct emitted modules in one process exercise the shared runtime contract
     // directly, without making child startup or stdout a second test protocol.
     const first = await import(pathToFileURL(join(firstOutput, "index.js")).href);
@@ -278,25 +408,30 @@ test("generated package copies share runtime session capabilities", async () => 
       try {
         await runtime?.shutdown();
       } finally {
-        for (const { key, descriptor } of runtimeSlots) {
-          if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-          else Reflect.deleteProperty(globalThis, key);
+        try {
+          for (const { key, descriptor } of runtimeSlots) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+            else Reflect.deleteProperty(globalThis, key);
+          }
+        } finally {
+          try {
+            setLangfuseTracerProvider(previousProvider);
+          } finally {
+            await rm(root, { force: true, recursive: true });
+          }
         }
-        setLangfuseTracerProvider(previousProvider);
-        await rm(root, { force: true, recursive: true });
       }
     }
   }
 });
 
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
-  const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
-    await builder.buildRuntime({ outputDirectory: output });
+    await cp(requireBuildFixture().output, output, { recursive: true });
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({

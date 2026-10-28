@@ -15,6 +15,7 @@ import {
 type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
 import { ancestry } from "./ancestry.js";
+import { type CostModelResolver, cacheHistory } from "./cache-history.js";
 import type { Collector } from "./collector.js";
 import { captureContext, sessionContext } from "./context.js";
 import { correlatedCalls } from "./correlation.js";
@@ -25,6 +26,7 @@ import type { BranchView, ContextComposition, DetailView, EntrySummary, SkillVie
 import { nativeProjection } from "./native-projection.js";
 import { capture, displayText, readSessionId, readSessionName } from "./privacy.js";
 import { systemReplayIssue } from "./system-message.js";
+import { projectToolCatalog } from "./tool-catalog.js";
 
 export function summarize(entry: SessionEntry, label?: string): EntrySummary {
   const issue = identityIssue(entry);
@@ -87,6 +89,7 @@ export function snapshot(
   skills: SkillView[],
   index = new EntryIndex(manager.getEntries()),
   observedContext?: ContextComposition,
+  resolveCostModel?: CostModelResolver,
 ): Snapshot {
   const entries = index.entries;
   const owning = new Map<string, { id: string; ids: Set<string> }>();
@@ -147,21 +150,18 @@ export function snapshot(
     invalidEntryCount,
     invalidEntries,
     context: observedContext ?? sessionContext(manager, index),
+    cache: cacheHistory(manager, index, resolveCostModel),
     currentPrompt: capture(prompt, 65536),
-    tools: tools.slice(0, 256).map((t) => ({
-      name: displayText(t.name),
-      description: displayText(t.description).slice(0, 512),
-      exposure: t.exposure,
-      active: active.includes(t.name),
-      callable:
-        t.exposure === "codemode" || t.exposure === "deferred" || (t.exposure === "direct" && active.includes(t.name)),
-      namespace: t.namespace ? displayText(t.namespace.name) : undefined,
-      schema: capture(t.parameters, 2048),
-    })),
+    tools: projectToolCatalog(tools, active),
     skills: skills.slice(0, 256).map((s) => ({
-      name: displayText(s.name),
-      path: displayText(s.path),
+      name: displayText(s.name).slice(0, 512),
+      path: displayText(s.path).slice(0, 2048),
+      pathTruncated: displayText(s.path).length > 2048,
       description: displayText(s.description).slice(0, 512),
+      metadataTruncated:
+        displayText(s.name).length > 512 ||
+        displayText(s.path).length > 2048 ||
+        displayText(s.description).length > 512,
     })),
     calls: collector.list(),
     droppedCalls: collector.dropped,

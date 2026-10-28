@@ -88,3 +88,7 @@ An invalid file remains unchanged and blocks subsequent saves until repaired and
 
 Unknown JSON fields are ignored at runtime and preserved during ordinary settings saves, including unknown fields inside `statuslineDisplay`.
 Reads remain side-effect free. Existing ordered, private temporary-file-plus-rename save behavior remains unchanged; separate Pi processes are not mutually locked.
+
+## Verification scope
+
+Verification covers deterministic formatting, settings validation, and offline Pi loading. Live-provider output and interactive visual behavior remain unverified. A maintainer with an already configured provider can apply the examples above, run `/reload`, and confirm unchanged quota values and the intended spacing in the target terminal.

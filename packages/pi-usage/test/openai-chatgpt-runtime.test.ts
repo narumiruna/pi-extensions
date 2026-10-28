@@ -88,7 +88,7 @@ for (const mode of ["tui", "rpc"] as const) {
       try {
         await runCommand(mock, "usage", context.ctx);
         assert.match(menus[0]?.title ?? "", /ChatGPT plan authentication/);
-        assert.match(menus[0]?.title ?? "", /Numerical usage requires a companion/);
+        assert.match(menus[0]?.title ?? "", /Codex companion usage is disabled/);
         assert.match(menus[0]?.title ?? "", /https:\/\/chatgpt\.com\/settings\/usage/);
         assert.doesNotMatch(menus[0]?.title ?? "", /Unsupported|[0-9]+%|synthetic-/);
         assert.equal(context.statuses.get("usage"), "chatgpt usage: web only");

@@ -1,5 +1,17 @@
 # @narumitw/pi-caffeinate
 
+## 0.49.13
+
+### Patch Changes
+
+- 348412a: Update the dbus-native dependency to include its latest patch fixes.
+
+## 0.49.12
+
+### Patch Changes
+
+- cd67ac2: Prevent the Windows keep-awake helper from overwriting the terminal title.
+
 ## 0.49.11
 
 ### Patch Changes

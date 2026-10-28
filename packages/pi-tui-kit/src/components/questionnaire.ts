@@ -19,6 +19,7 @@ import {
 import { HorizontalRule } from "../horizontal-rule.js";
 import type { QuestionnaireAnswer, QuestionnaireLabels, QuestionnaireQuestion } from "../questionnaire.js";
 import type { MenuCloseReason } from "../types.js";
+import { componentKeyAvailable, componentKeybindings } from "./host-input.js";
 import { isBidiControl, RawPreservingEditor } from "./questionnaire-editor.js";
 
 type EditorFactory = NonNullable<ReturnType<ExtensionUIContext["getEditorComponent"]>>;
@@ -300,7 +301,8 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
   }
 
   private renderHintGroups(): string[] {
-    const { keybindings, theme } = this.options;
+    const { theme, tui } = this.options;
+    const keybindings = componentKeybindings(tui, this.options.keybindings);
     const cancel = cancelHint(theme, keybindings);
     if (this.editorKind) {
       if (this.options.editorFactory) {
@@ -317,7 +319,13 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
         cancel,
       ];
     }
-    const questions = this.hasReviewPage() ? rawKeyHint(theme, questionNavigationKeys(keybindings), "questions") : "";
+    const questions = this.hasReviewPage()
+      ? rawKeyHint(
+          theme,
+          questionNavigationKeys(keybindings, (key) => componentKeyAvailable(tui, key)),
+          "questions",
+        )
+      : "";
     if (this.isReviewPage()) {
       return [keybindingHint(theme, keybindings, "tui.select.confirm", "submit"), cancel, questions];
     }
@@ -326,7 +334,9 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
       keybindingHint(theme, keybindings, "tui.select.confirm", this.hasReviewPage() ? "select" : "submit"),
       cancel,
       questions,
-      ...(this.options.allowNotes && noteShortcutAvailable(keybindings) ? [rawKeyHint(theme, "n", "note")] : []),
+      ...(this.options.allowNotes && noteShortcutAvailable(keybindings) && componentKeyAvailable(tui, "n")
+        ? [rawKeyHint(theme, "n", "note")]
+        : []),
     ];
   }
 
@@ -715,16 +725,16 @@ function selectionNavigationKeys(keybindings: KeybindingsManager): string {
   return formatHintKeys([...up, ...down]);
 }
 
-function questionNavigationKeys(keybindings: KeybindingsManager): string {
+function questionNavigationKeys(keybindings: KeybindingsManager, available: (key: string) => boolean): string {
   const conflictingKeys = new Set(
     ["tui.select.cancel", "tui.select.up", "tui.select.down", "tui.select.confirm"].flatMap((binding) =>
       keybindings.getKeys(binding as QuestionnaireKeybinding),
     ),
   );
   const keys: string[] = keybindings.getKeys("tui.input.tab").filter((key) => !conflictingKeys.has(key));
-  const left = !conflictingKeys.has("left");
-  const right = !conflictingKeys.has("right");
-  if (!conflictingKeys.has("shift+tab")) keys.push("shift+tab");
+  const left = !conflictingKeys.has("left") && available("left");
+  const right = !conflictingKeys.has("right") && available("right");
+  if (!conflictingKeys.has("shift+tab") && available("shift+tab")) keys.push("shift+tab");
   if (left && right) keys.push("←→");
   else if (left) keys.push("←");
   else if (right) keys.push("→");

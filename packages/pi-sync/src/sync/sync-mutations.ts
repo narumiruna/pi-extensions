@@ -431,6 +431,17 @@ export async function syncBoth(
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
   options.background?.validate(config);
+  if (options.agentRetryRefusal) {
+    if (!config.agentMode || options.auto || options.background || !ctx.hasUI)
+      throw new Error("Enable Agent mode and use the foreground manager to retry a cached refusal.");
+    const state = await readStateForConfig(config);
+    validateMutation();
+    const pending = await readMergeJournal(config);
+    validateMutation();
+    if (!config.include.length || !state.lastAppliedSnapshot || pending)
+      throw new Error("Retry requires an accepted baseline and no pending journal. Use Sync now or reviewed recovery.");
+    return mergeSync(ctx, options, factory);
+  }
   if (config.include.length > 0 && options.auto && startupTransferEnabled(config))
     return mergeSync(ctx, options, factory);
   if (!options.auto && config.include.length > 0 && (await readMergeJournal(config)))

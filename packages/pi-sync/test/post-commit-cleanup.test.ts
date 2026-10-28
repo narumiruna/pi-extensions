@@ -12,7 +12,7 @@ import { readStateForConfig, statePathForConfig, syncStateFingerprint } from "..
 import { pull, push, rollback } from "../src/sync/sync-mutations.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
-import { mergeOptions as options } from "./merged-sync-fixture.js";
+import { mergeOptions as options } from "./merge-options.js";
 
 for (const route of ["push", "pull", "rollback-local", "rollback-remote"] as const) {
   test(`${route} completes acceptance and prunes before returning after post-commit cancellation`, async () =>

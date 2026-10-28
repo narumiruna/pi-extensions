@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import type { ExtensionCommandContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 
@@ -18,7 +18,7 @@ export type PreviewMenuResult<Value extends string> =
 export async function showPreviewActionMenu<Value extends string>(
   ctx: ExtensionCommandContext,
   title: string,
-  body: (width: number) => readonly string[],
+  body: (width: number, theme: Theme) => readonly string[],
   items: readonly PreviewMenuItem<Value>[],
   signal?: AbortSignal,
   isCurrent: () => boolean = () => !signal?.aborted,
@@ -52,7 +52,7 @@ export async function showPreviewActionMenu<Value extends string>(
           const safeWidth = Math.max(1, width);
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
           const availableRows = Math.max(1, terminalRows - RESERVED_HOST_ROWS);
-          const bodyLines = body(safeWidth).flatMap((line) => (line ? wrapTextWithAnsi(line, safeWidth) : [""]));
+          const bodyLines = body(safeWidth, theme).flatMap((line) => (line ? wrapTextWithAnsi(line, safeWidth) : [""]));
           const layout = allocateLayout(availableRows, items.length, bodyLines.length);
           lastViewportSize = layout.previewRows;
           lastMaximumScroll = Math.max(0, bodyLines.length - layout.previewRows);
