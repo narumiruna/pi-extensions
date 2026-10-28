@@ -1,5 +1,5 @@
 ---
-"@narumitw/pi-subagents": major
+"@narumitw/pi-subagents": minor
 ---
 
 Add optional `provider` and `model` parameters to `subagent_spawn`. Each omitted value inherits independently from the effective parent model at spawn time. Explicit IDs use exact matching without fallback, including listed case-distinct and provider-prefixed IDs. Only the child checks model registration and current availability. The requested pair bypasses CLI pattern matching and is bound exactly before the child receives its task. A missing or unavailable model fails the job after `subagent_spawn` returns its `jobId`.
