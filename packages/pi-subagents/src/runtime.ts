@@ -41,7 +41,6 @@ interface InternalJob extends JobSummary {
   result?: string;
   error?: string;
   limitations: string[];
-  deliverySent: boolean;
   generation: number;
 }
 
@@ -89,7 +88,6 @@ export class SubagentRuntime {
   private readonly now: () => number;
   private counter = 0;
   private generation = 0;
-  private deliveryEnabled = false;
   private sessionActive = false;
   private omittedJobs = 0;
   private readonly jobListeners = new Set<() => void>();
@@ -108,7 +106,6 @@ export class SubagentRuntime {
     this.generation++;
     this.jobs.clear();
     this.omittedJobs = 0;
-    this.deliveryEnabled = true;
     this.sessionActive = true;
     this.notifyJobsChanged();
   }
@@ -187,7 +184,6 @@ export class SubagentRuntime {
       rejectControl,
       sendQueue: Promise.resolve(),
       limitations: [],
-      deliverySent: false,
       generation: this.generation,
     };
     this.jobs.set(jobId, job);
@@ -373,7 +369,6 @@ export class SubagentRuntime {
 
   async shutdown(): Promise<void> {
     if (!this.sessionActive) return;
-    this.deliveryEnabled = false;
     this.sessionActive = false;
     const active = [...this.jobs.values()].filter((job) => !isTerminal(job.state));
     await Promise.allSettled(
@@ -432,8 +427,7 @@ export class SubagentRuntime {
   }
 
   private deliver(job: InternalJob): void {
-    if (!this.deliveryEnabled || job.deliverySent || job.generation !== this.generation) return;
-    job.deliverySent = true;
+    if (!this.sessionActive || job.generation !== this.generation) return;
     const payload = this.waitResult(job, false);
     try {
       this.pi.sendMessage(

@@ -42,7 +42,6 @@ export interface MessageBrokerOptions {
 interface JobRecord {
   jobId: string;
   generation: number;
-  token: string;
 }
 
 interface RequestWaiter {
@@ -55,9 +54,6 @@ interface RequestRecord {
   jobId: string;
   generation: number;
   origin: BrokerRequestOrigin;
-  expectedResponder: BrokerRequestOrigin;
-  message: string;
-  createdAt: number;
   response?: string;
   consumedAt?: number;
   deliveryQueued?: boolean;
@@ -159,7 +155,7 @@ export class MessageBroker {
       throw new Error(`Subagent messaging credentials already exist for ${input.jobId}.`);
     }
     const token = randomBytes(32).toString("hex");
-    const record: JobRecord = { ...input, token };
+    const record: JobRecord = { ...input };
     this.jobsByToken.set(token, record);
     this.tokenByJob.set(input.jobId, token);
     return { host: BROKER_HOST, port: this.address?.port ?? 0, token };
@@ -285,9 +281,6 @@ export class MessageBroker {
       jobId: job.jobId,
       generation: job.generation,
       origin,
-      expectedResponder: origin === "main" ? "child" : "main",
-      message,
-      createdAt: this.now(),
     };
     this.requests.set(request.requestId, request);
     if (origin === "child") {
@@ -296,7 +289,7 @@ export class MessageBroker {
           kind: "request",
           requestId: request.requestId,
           jobId: request.jobId,
-          message: request.message,
+          message,
         });
       } catch (error) {
         this.requests.delete(request.requestId);
@@ -317,7 +310,7 @@ export class MessageBroker {
     const request = this.requests.get(requestId);
     if (
       !request ||
-      request.expectedResponder !== responder ||
+      request.origin === responder ||
       (job && (request.jobId !== job.jobId || request.generation !== job.generation))
     ) {
       throw new Error("Unknown, expired, or unauthorized subagent request.");
@@ -535,6 +528,26 @@ export class MessageBroker {
     this.sockets.clear();
     this.address = undefined;
   }
+}
+
+export function optionalIdentifier(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : requiredIdentifier(value, field);
+}
+
+/** Tool arguments accept trimmed IDs; broker request IDs have a separate UUID check. */
+export function requiredIdentifier(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Subagent ${field} is required.`);
+  const identifier = value.trim();
+  if (
+    identifier.length > MAX_IDENTIFIER_LENGTH ||
+    [...identifier].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    })
+  ) {
+    throw new Error(`Subagent ${field} is invalid.`);
+  }
+  return identifier;
 }
 
 export function validateMessage(message: string, label: string): void {

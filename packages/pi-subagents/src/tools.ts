@@ -7,6 +7,8 @@ import {
   MAX_IDENTIFIER_LENGTH,
   MAX_MESSAGE_BYTES,
   MessageBroker,
+  optionalIdentifier,
+  requiredIdentifier,
   sanitizeTerminalText,
   validateMessage,
 } from "./message-broker.js";
@@ -492,27 +494,9 @@ function resolveMainSendArguments(params: SendArguments): MainSendSelection {
     : { kind: "response", requestId: requestId ?? "", message: params.message };
 }
 
-function optionalIdentifier(value: unknown, field: string): string | undefined {
-  return value === undefined ? undefined : requiredIdentifier(value, field);
-}
-
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Subagent ${field} is required.`);
   return value.trim();
-}
-
-function requiredIdentifier(value: unknown, field: string): string {
-  const identifier = requiredString(value, field);
-  if (
-    identifier.length > MAX_IDENTIFIER_LENGTH ||
-    [...identifier].some((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
-    })
-  ) {
-    throw new Error(`Subagent ${field} is invalid.`);
-  }
-  return identifier;
 }
 
 function assertNotNested(): void {
