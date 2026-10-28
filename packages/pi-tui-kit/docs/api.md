@@ -74,6 +74,14 @@ export function publishProgress(ctx: ExtensionContext, lines: readonly string[])
 Sanitize untrusted values before styling or width-sensitive formatting, and perform product-specific wrapping in `renderBody()`.
 Publish plain string arrays separately when an extension supports Pi RPC widgets because RPC ignores component factories.
 
+Optional focused helpers provide stable publication (`createEditorStatusPublisher`), session-local view transitions (`createEditorStatusView`), and bounded whole-snapshot items (`createEditorStatusCollection`).
+Their subpaths are `editor-status-publisher`, `editor-status-view`, and `editor-status-collection`; the same functions and types are available from the root export.
+The publisher retains visible TUI components and adapts RPC snapshots, while owners keep data, settings, timing, events, and priority policy.
+See [editor status presentation](./editor-status-presentation.md) for ownership, exact event semantics, capacity failures, two-consumer admission, recovery, and terminal/release limits.
+No `upsert`, `push`, `append`, shared registry, or sidebar API is provided.
+
+Optional [editor status presentation helpers](./editor-status-presentation.md) provide stable snapshot publication, explicit session-local view transitions, and bounded whole-snapshot item collections. Use the focused `editor-status-publisher`, `editor-status-view`, and `editor-status-collection` subpaths, or their root exports. The frame remains unchanged; owners retain data, policy, events, timers, row reservations, and cleanup. No helper coordinates extensions or adds a right sidebar.
+
 ## Bounded frames
 
 Use `renderBoundedFrame()` to share the standard menu's height-bounded presentation without adopting its input or save lifecycle. It accepts already sanitized, styled, wrapped single-line rows and a rendered horizontal rule. The caller owns terminal row reservations, themes, input, persistence, and which content must survive clipping. This is a stateless layout primitive, not another screen or lifecycle API.
@@ -1157,6 +1165,10 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `hardWrapTerminalDocument()` — sanitizes, expands tabs, and hard-wraps exact multiline display text by terminal cells; `@narumitw/pi-tui-kit/terminal-document` also exports it.
 - `sanitizeTerminalText()` — removes terminal and bidirectional controls from untrusted single-line display text without changing raw payloads; `@narumitw/pi-tui-kit/terminal-text` also exports it.
 - `EditorStatusWidget` — frames passive editor status rows with a muted top rule and terminal-width guard; `@narumitw/pi-tui-kit/editor-status-widget` exports it and its options.
+- `createEditorStatusPublisher` — retains one owner-scoped TUI mount and publishes plain RPC snapshots; its focused subpath is `editor-status-publisher`.
+- `createEditorStatusView` — applies session-local manual modes and explicitly armed one-shot compaction; its focused subpath is `editor-status-view`.
+- `createEditorStatusCollection` — holds bounded whole-snapshot items with independent presentation controls; its focused subpath is `editor-status-collection`.
+- `createEditorStatusPublisher`, `createEditorStatusView`, and `createEditorStatusCollection` — optional [owner-local presentation helpers](./editor-status-presentation.md); each has a dependency-free focused subpath with the corresponding `editor-status-*` name.
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
 - `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
 - `renderBoundedFrameLayout()`, `BoundedFrameLayout`, and `BoundedFrameContentRow` — provide the same frame with original content indexes for caller-owned coordinate mapping.

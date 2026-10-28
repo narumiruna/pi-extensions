@@ -16,7 +16,7 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 - Gives every child `subagent_wait` for an answer to a child-originated request.
 - Lets the main agent question a queued or running job through Pi RPC steering without retaining the child after completion.
 - Publishes one asynchronous terminal completion and shows active-job progress above the editor.
-- Provides a job manager with confirmed cancellation and immediate widget display settings.
+- Provides a job manager with confirmed cancellation, immediate display settings, and session-local widget controls.
 - Exposes privacy-filtered metadata without task text, output, prompts, selected tools, or broker credentials.
 - Cancels session-owned work and closes the broker during replacement, reload, or shutdown.
 
@@ -94,6 +94,32 @@ The manager supports TUI and RPC modes. RPC uses dialogs and reports the setting
 Print and JSON modes reject these interactive commands with an error; the model tools remain available.
 Job lists and details always show job IDs, regardless of widget preferences, and omit task text and child output.
 Jobs do not survive reload or session replacement.
+
+## 🖥️ Widget presentation
+
+The widget is TUI-only and contains only queued or running jobs. Its default detail rows stay unchanged when space permits.
+Ordinary updates refresh the mounted widget without changing its position among other widgets. Hiding and showing it again can change that position.
+The widget uses at most ten rows, including one separator, and reserves eight terminal rows for the editor and footer. This is a local height limit, not a calculation of space left by other widgets.
+With fewer than two available rows it renders nothing. Short layouts use a summary with active, running, queued, and omitted-row counts. Narrow layouts clip each line to the terminal width.
+
+In `/subagents`, **Widget view** provides details, summary, hide/show, pin/unpin, automatic compaction, and item-view reset controls.
+These controls are session-local and do not write settings. Manual hide remains in effect across job changes until you show the widget again.
+A pin prevents automatic compaction, but does not override `showWidget: false`, width limits, or row limits. Unpinning does not immediately compact the view.
+An explicit details, summary, or hide/show choice cancels the pending automatic rule.
+
+Automatic compaction is off by default. Choose **Next consumed user message** to compact when Pi emits `message_start` for a user message, including extension-generated user messages and queued messages when consumed. Input submission, rejected input, and unconsumed queues do not count.
+Choose **Next eligible settled cycle** to wait for `agent_settled` after later consumed user activity in that same cycle. The cycle already active when the rule is armed is excluded, including run preparation before `agent_start` and a cycle that started during settings loading.
+Retries, tool turns, continuations, automatic context compaction, and batched queued messages can share one cycle. Tree navigation and manual context compaction are not response cycles.
+Eligibility requires a non-aborted settlement and a latest observed turn outcome other than error or abort; a non-aborted settlement alone is insufficient.
+A pending rule rearms on meaningful active-job changes, but not elapsed-time refreshes, repaint, or resize. A rule that compacts is consumed once; otherwise it stays pending. Pins, disabled settings, and manual hide prevent automatic compaction.
+
+If maintenance ends and an extension starts a custom run without an observed idle gap, the rule can wait one extra cycle. Pi exposes no exact run-activity query to extensions.
+
+An active job's manager detail screen can compact or remove only that job's widget row. Removal does not cancel the job or suppress completion messages.
+Removal remains in effect across active-job snapshots until **Reset item views**, or until the job ID leaves the active snapshot. Reset restores the current active rows and their item details, not the overall view, pin, or trigger.
+If all items are removed, the widget and separator disappear. The summary counts include removed and otherwise omitted rows; the manager still lists the jobs.
+Widget presentation choices reset on `session_start` (including reload and session replacement), `session_tree` navigation, and shutdown. Tree navigation resets presentation without cancelling active jobs.
+Jobs, saved preferences, tool definitions, model context, and completion delivery are not changed by widget controls.
 
 ## 🛠️ Tools
 
@@ -284,7 +310,9 @@ packages/pi-subagents/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
 │   ├── subagents.ts                   # Commands and session lifecycle
-│   ├── menu.ts                        # Job manager
+│   ├── menu.ts                        # Job manager and session-local display controls
+│   ├── widget.ts                      # Retained widget ownership and event policies
+│   ├── widget-renderer.ts             # Bounded rows and active-job summaries
 │   ├── settings.ts                    # User preferences and atomic storage
 │   └── settings-ui.ts                 # Native settings editor
 ├── dist/                              # Generated Jiti runtime, child bridge, and readiness probe

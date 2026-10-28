@@ -384,7 +384,8 @@ test("shows spawn-time thinking, tasks, timing, timeout, and selected tools abov
 
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.equal(typeof factory, "function");
-  const lines = factory?.({}, identityTheme()).render(120) ?? [];
+  const component = factory?.({ terminal: { rows: 36 }, requestRender() {} }, identityTheme());
+  const lines = component?.render(120) ?? [];
   assert.equal(lines[0], "─".repeat(120));
   assert.equal(lines[1], "Subagents · 2 active");
   assert.match(
@@ -409,11 +410,12 @@ test("shows spawn-time thinking, tasks, timing, timeout, and selected tools abov
   const refreshedFactory = context.widgets.get(SUBAGENT_WIDGET_KEY) as
     | ((_tui: unknown, theme: Theme) => Component)
     | undefined;
-  const refreshedLines = refreshedFactory?.({}, identityTheme()).render(120) ?? [];
+  assert.equal(refreshedFactory, factory, "elapsed updates retain the visible mount");
+  const refreshedLines = component?.render(120) ?? [];
   assert.match(refreshedLines[2] ?? "", /running · thinking: off · 1m 6s \/ 2m/u);
   assert.match(refreshedLines[3] ?? "", /running · thinking: high · 1s \/ no timeout/u);
   assert.doesNotMatch(refreshedLines.join("\n"), /thinking: low|thinking: max/u);
-  for (const line of refreshedFactory?.({}, identityTheme()).render(24) ?? []) {
+  for (const line of component?.render(24) ?? []) {
     assert.ok(visibleWidth(line) <= 24);
   }
 
@@ -454,7 +456,7 @@ test("displays the Pi fallback thinking level at spawn without tracking later pa
   const next = await spawnJob(mock, context, "New parent level");
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.ok(factory);
-  const lines = factory({}, identityTheme()).render(200);
+  const lines = factory({ terminal: { rows: 36 }, requestRender() {} }, identityTheme()).render(200);
   assert.match(lines[2] ?? "", /Reason carefully · running · thinking: xhigh/u);
   assert.match(lines[3] ?? "", /New parent level · running · thinking: max/u);
   assert.deepEqual(

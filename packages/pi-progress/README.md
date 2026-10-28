@@ -17,7 +17,8 @@ It restores valid progress after reloads, branch navigation, and compaction with
 - Keeps at most one step in progress and distinguishes blocked work from completion.
 - Adapts the themed TUI widget to terminal height while prioritizing active and blocked steps.
 - Shows a transient completion summary when every tracked step becomes complete.
-- Lets users dismiss the widget without changing saved progress.
+- Provides session-local detailed, compact, hidden, pin, and per-item display controls.
+- Supports opt-in compaction after consumed user input or a future eligible settled cycle.
 - Restores the latest valid state from current and historical session results on the active branch.
 - Preserves an established pre-migration compaction boundary until its summary epoch ends.
 - Provides one settings screen with saved display preferences and immediate widget updates.
@@ -93,7 +94,7 @@ Its guidance recommends updates for meaningful progress changes, skips simple ta
 
 ## 💬 Commands
 
-`/progress` opens the main menu in TUI or RPC mode. It shows current widget state and offers Settings, Status, Help, and Clear widget.
+`/progress` opens the main menu in TUI or RPC mode. It shows current widget state and provides display controls, task-item controls, Settings, Status, Help, and Clear widget.
 Settings opens the same TUI settings screen as the direct route; RPC reports the file path. Status and Help are read-only views.
 Back returns to the main menu; Ctrl+C closes the flow.
 
@@ -165,15 +166,59 @@ When leading compaction or branch summaries remove that evidence, the extension 
 A Progress version 4 or Todo boundary already established before upgrade remains byte-stable for that summary epoch, including after updates, clears, reloads, and branch navigation.
 A later summary epoch uses only canonical Progress context for the then-current state.
 
-In TUI mode, the widget appears above the editor and starts with a full-width themed separator.
-Adaptive mode uses up to one third of terminal height, bounded between four and twelve rows.
-It prioritizes the in-progress step, blocked steps, and pending steps before summarizing completed or hidden rows.
-Completing every non-empty step shows a three-second summary, then hides the widget without clearing session state.
-Session start keeps a fully completed snapshot hidden and does not replay that summary.
-Tree navigation still shows the completed branch, and a later update that is not already complete shows the widget again.
-Updates, clears, tree navigation, replacement, and shutdown cancel stale summaries.
-RPC mode publishes progress and completion summaries as string-line snapshots at 80 columns using the default 36-row budget because Pi does not expose client dimensions.
-Print and JSON modes retain structured tool behavior without creating a widget.
+## 🖥️ Widget presentation
+
+In TUI mode, the widget appears above the editor with one full-width themed separator.
+Visible updates, including the completion-summary transition, keep the same mounted component and sibling position.
+Hide removes the widget and its separator; showing it again uses Pi's current insertion position.
+RPC publishes string-line snapshots at 80 columns with a 36-row terminal budget because Pi does not expose client dimensions.
+Print and JSON retain structured tool behavior without creating a widget or completion timer.
+
+The total row budget includes the separator. It uses one third of terminal height, bounded between four and twelve rows, but never exceeds terminal height.
+With fewer than two rows, the widget renders nothing. All views, including detailed and pinned views, obey this limit.
+When detail does not fit, active and blocked work has priority; the summary retains blocked counts and reports hidden or omitted work.
+This is a local limit, not a measurement of space left by other widgets.
+
+### Manual views and task items
+
+Use Widget view in `/progress` to select detailed, compact, hidden, or the default configured view.
+Compact shows saved completion, active, blocked, and hidden-item counts instead of a sliced detail list.
+Manual view choices cancel automatic compaction. Manual hide stays hidden across tool updates until you show it again or reset the session/branch view.
+In contrast, Clear widget and `/progress clear` are transient: even an identical tool update can show saved progress again.
+The persistent `enabled: false` setting takes priority over all session-local controls.
+
+Task items can compact, expand, or remove one step from the display without editing saved progress or canceling work.
+Identity uses raw step text plus its duplicate occurrence, not its sanitized label or array position.
+Status changes preserve item view choices. Changing text creates a new display identity.
+A removed identity stays removed while it remains in later complete snapshots; it can return after an update omits it and a later update includes it again.
+Removing every item clears the widget, including its separator. Session start and tree navigation reset all item choices, view choices, pins, and automatic rules.
+The collection stores at most the tool's existing 50 steps and 503 grapheme clusters per step; it is not a history log.
+
+### Completion retention
+
+Completing every non-empty step shows a three-second summary in the default view, then hides the widget without clearing saved progress.
+Detailed and compact views keep their selected format during the same retention period.
+Pin pauses expiry and automatic compaction; unpin starts a full three-second period for a retained completion result.
+A changed completion result restarts that period. Identical updates, rendering, resize, and theme changes do not extend it.
+Clear, manual hide, incomplete or blocked replacement, tree navigation, session replacement, and shutdown cancel the owned timer.
+Explicitly showing a retained completion result starts a new period; a tool update after clear or expiry can instead show the saved completed steps without replaying the summary.
+Session start keeps fully completed progress hidden without replaying retention. Tree navigation can show the completed branch.
+
+### Automatic compaction
+
+Automatic compaction is off by default and is session-local. Select one single-use rule from Widget view:
+
+1. **Next consumed user message:** compact when `message_start` consumes a user-role message, including one sent by an extension. Submission, rejected or handled input, and input removed from a queue do not count.
+2. **Next eligible future user cycle settled:** exclude the cycle already active when armed, then wait for a later cycle with consumed user activity to reach `agent_settled`. Queued messages can share one cycle; tools, retries, and continuations do not settle it at `agent_end`.
+
+A settled cycle is eligible only when it was not aborted and its final assistant outcome is not an error or abort. A successful retry can make that cycle eligible.
+A cycle without later consumed user activity does not consume the rule. Custom and tool-result messages are not user messages.
+Tree navigation and manual context compaction are not response cycles. Automatic context compaction remains part of its agent cycle.
+Blocked work, pins, and disabled display prevent compaction and leave the rule armed for a later eligible boundary.
+A meaningful progress replacement rearms against the new content and current event position; identical updates and cosmetic refreshes do not.
+A manual view choice cancels the rule. Compaction changes presentation only: it never clears steps, changes tools or model instructions, or rewrites conversation history.
+
+If maintenance ends and an extension starts a custom run without an observed idle gap, the rule can wait one extra cycle. Pi exposes no exact run-activity query to extensions.
 
 ## ⚙️ Settings
 
@@ -228,8 +273,9 @@ packages/pi-progress/
 │   ├── index.ts                       # Thin Pi entrypoint
 │   ├── progress-widget.ts             # Tool/command registration and session/widget lifecycle
 │   ├── progress-state.ts              # Validation, history decoding, and context reconciliation
+│   ├── progress-presentation.ts       # Stable publication, retention, and display collection
 │   ├── progress-renderer.ts           # Bounded sanitized widget rendering
-│   ├── progress-menu.ts               # Kit main menu and read-only Status/Help views
+│   ├── progress-menu.ts               # Kit view/item controls and read-only Status/Help views
 │   ├── progress-settings-ui.ts        # Display settings screen and save lifecycle
 │   └── settings.ts                    # Validated settings reads and atomic queued saves
 ├── dist/                              # Generated Jiti runtime

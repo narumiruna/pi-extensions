@@ -1,4 +1,5 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { createEditorStatusPublisher, type EditorStatusPublisher } from "@narumitw/pi-tui-kit/editor-status-publisher";
 import { type HerdrRequest, type HerdrSubscription, openHerdrSubscription, requestHerdr } from "./herdr-client.js";
 import {
   type HerdrPane,
@@ -11,7 +12,13 @@ import {
   parsePaneListResult,
   parseWorkspaceGetResult,
 } from "./herdr-protocol.js";
-import { createHerdrWidget, HERDR_WIDGET_KEY, HerdrWidgetModel, herdrWidgetFingerprint } from "./herdr-widget.js";
+import {
+  createHerdrWidget,
+  HERDR_WIDGET_KEY,
+  HerdrWidgetModel,
+  type HerdrWidgetSnapshot,
+  herdrWidgetFingerprint,
+} from "./herdr-widget.js";
 
 export interface HerdrObserverEnvironment {
   paneId: string;
@@ -38,6 +45,11 @@ export interface HerdrWidgetObserver {
 }
 
 class HerdrTopologyChangedError extends Error {}
+class HerdrCleanupError extends AggregateError {}
+
+function renderHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme, width: number): readonly string[] {
+  return createHerdrWidget(snapshot, theme).render(width);
+}
 
 function isRelevantEvent(model: HerdrWidgetModel, event: HerdrPaneEvent): boolean {
   if (event.type === "created" || event.type === "updated") {
@@ -85,20 +97,21 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
   const subscribe = options.subscribe ?? openHerdrSubscription;
   const retryDelayMs = options.retryDelayMs ?? 200;
   let generation = 0;
-  let activeContext: ExtensionContext | undefined;
+  let publisher: EditorStatusPublisher<HerdrWidgetSnapshot> | undefined;
   let activeSession: ExtensionContext["sessionManager"] | undefined;
   let controller: AbortController | undefined;
   const ownedTasks = new Set<Promise<void>>();
+  const taskErrors = new Set<unknown>();
   let publishedFingerprint: string | undefined;
   let hasPublished = false;
 
   const owns = (ctx: ExtensionContext, expectedGeneration = generation) =>
-    ctx.sessionManager === activeSession && expectedGeneration === generation;
+    expectedGeneration === generation && ctx.sessionManager === activeSession;
 
   const requestId = (kind: string) => `herdr:pi:widget:${kind}:${now()}:${random().toString(36).slice(2)}`;
 
-  const clearWidget = (ctx: ExtensionContext) => {
-    if (ctx.mode === "tui") ctx.ui.setWidget(HERDR_WIDGET_KEY, undefined);
+  const clearWidget = () => {
+    publisher?.publish(undefined);
     publishedFingerprint = undefined;
     hasPublished = false;
   };
@@ -108,13 +121,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     const snapshot = model.snapshot();
     const fingerprint = herdrWidgetFingerprint(snapshot);
     if (hasPublished && fingerprint === publishedFingerprint) return;
-    if (!snapshot) {
-      ctx.ui.setWidget(HERDR_WIDGET_KEY, undefined);
-    } else {
-      ctx.ui.setWidget(HERDR_WIDGET_KEY, (_tui: unknown, theme: Theme) => createHerdrWidget(snapshot, theme), {
-        placement: "aboveEditor",
-      });
-    }
+    publisher?.publish(snapshot);
     publishedFingerprint = fingerprint;
     hasPublished = true;
   };
@@ -196,6 +203,8 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     let attemptActive = true;
     let subscription: HerdrSubscription | undefined;
     let failure: Error | undefined;
+    let attemptError: { error: unknown } | undefined;
+    let cleanupFailure: { error: unknown } | undefined;
     let wake: (() => void) | undefined;
     const wakeRefresh = () => {
       const resolve = wake;
@@ -206,72 +215,93 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     const failAttempt = (error: Error) => {
       if (!attemptActive || signal.aborted) return;
       failure = error;
-      if (owns(ctx, expectedGeneration)) clearWidget(ctx);
-      attemptController.abort(error);
+      try {
+        if (owns(ctx, expectedGeneration)) clearWidget();
+      } catch (cleanupError) {
+        failure = new AggregateError([error, cleanupError], "Herdr subscription and widget cleanup failed");
+      } finally {
+        // Never leave the refresh wait alive because UI cleanup failed.
+        attemptController.abort(failure);
+      }
     };
     try {
-      const discovered = await loadPaneSet(ctx, expectedGeneration, signal);
-      if (!discovered) return;
-      const subscribedFingerprint = subscriptionFingerprint(discovered.currentPane, discovered.panes);
-      const model = new HerdrWidgetModel();
-      model.reset(discovered.currentPane, discovered.panes, discovered.workspace);
-      let dirty = true;
+      await (async () => {
+        const discovered = await loadPaneSet(ctx, expectedGeneration, signal);
+        if (!discovered) return;
+        const subscribedFingerprint = subscriptionFingerprint(discovered.currentPane, discovered.panes);
+        const model = new HerdrWidgetModel();
+        model.reset(discovered.currentPane, discovered.panes, discovered.workspace);
+        let dirty = true;
 
-      subscription = await subscribe(
-        options.environment.socketEndpoint,
-        {
-          id: requestId("subscribe"),
-          method: "events.subscribe",
-          params: { subscriptions: herdrWidgetSubscriptions(discovered.panes) },
-        },
-        signal,
-        (frame) => {
-          if (!attemptActive || !owns(ctx, expectedGeneration) || signal.aborted) return;
-          const event = parseHerdrPaneEvent(frame);
-          if (!event || !isRelevantEvent(model, event)) return;
-          dirty = true;
-          wakeRefresh();
-        },
-      ).catch(async (error: unknown) => {
-        if (!owns(ctx, expectedGeneration) || signal.aborted) throw error;
-        // A pane can disappear between discovery and subscription acceptance.
-        // Verify a changed target set before exempting this from outage retries.
-        const latest = await loadPaneSet(ctx, expectedGeneration, signal);
-        if (latest && subscriptionFingerprint(latest.currentPane, latest.panes) !== subscribedFingerprint) {
-          throw new HerdrTopologyChangedError();
-        }
-        throw error;
-      });
-      void subscription.closed.then(
-        () => failAttempt(new Error("Herdr subscription ended")),
-        (error) => failAttempt(error instanceof Error ? error : new Error(String(error))),
-      );
-
-      while (owns(ctx, expectedGeneration) && !signal.aborted) {
-        dirty = false;
-        const refreshed = await loadPaneSet(ctx, expectedGeneration, signal);
-        if (!refreshed || signal.aborted) break;
-        // Events and reads have no common sequence boundary. Never replay event
-        // payloads over a read, or publish a read invalidated while in flight.
-        if (dirty) continue;
-        if (subscriptionFingerprint(refreshed.currentPane, refreshed.panes) !== subscribedFingerprint) {
-          throw new HerdrTopologyChangedError();
-        }
-        model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspace);
-        publish(ctx, model, expectedGeneration);
-        await new Promise<void>((resolve) => {
-          wake = resolve;
-          if (dirty || signal.aborted) wakeRefresh();
+        subscription = await subscribe(
+          options.environment.socketEndpoint,
+          {
+            id: requestId("subscribe"),
+            method: "events.subscribe",
+            params: { subscriptions: herdrWidgetSubscriptions(discovered.panes) },
+          },
+          signal,
+          (frame) => {
+            if (!attemptActive || !owns(ctx, expectedGeneration) || signal.aborted) return;
+            const event = parseHerdrPaneEvent(frame);
+            if (!event || !isRelevantEvent(model, event)) return;
+            dirty = true;
+            wakeRefresh();
+          },
+        ).catch(async (error: unknown) => {
+          if (!owns(ctx, expectedGeneration) || signal.aborted) throw error;
+          // A pane can disappear between discovery and subscription acceptance.
+          // Verify a changed target set before exempting this from outage retries.
+          const latest = await loadPaneSet(ctx, expectedGeneration, signal);
+          if (latest && subscriptionFingerprint(latest.currentPane, latest.panes) !== subscribedFingerprint) {
+            throw new HerdrTopologyChangedError();
+          }
+          throw error;
         });
-      }
-      if (failure) throw failure;
+        void subscription.closed.then(
+          () => failAttempt(new Error("Herdr subscription ended")),
+          (error) => failAttempt(error instanceof Error ? error : new Error(String(error))),
+        );
+
+        while (owns(ctx, expectedGeneration) && !signal.aborted) {
+          dirty = false;
+          const refreshed = await loadPaneSet(ctx, expectedGeneration, signal);
+          if (!refreshed || signal.aborted) break;
+          // Events and reads have no common sequence boundary. Never replay event
+          // payloads over a read, or publish a read invalidated while in flight.
+          if (dirty) continue;
+          if (subscriptionFingerprint(refreshed.currentPane, refreshed.panes) !== subscribedFingerprint) {
+            throw new HerdrTopologyChangedError();
+          }
+          model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspace);
+          publish(ctx, model, expectedGeneration);
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            if (dirty || signal.aborted) wakeRefresh();
+          });
+        }
+        if (failure) throw failure;
+      })();
+    } catch (error) {
+      attemptError = { error };
     } finally {
       attemptActive = false;
       attemptController.abort(new DOMException("Herdr widget attempt ended", "AbortError"));
       signal.removeEventListener("abort", wakeRefresh);
       sessionSignal.removeEventListener("abort", abortAttempt);
-      subscription?.close();
+      try {
+        subscription?.close();
+      } catch (cleanupError) {
+        cleanupFailure = { error: cleanupError };
+      }
     }
+    if (cleanupFailure) {
+      throw new HerdrCleanupError(
+        attemptError ? [attemptError.error, cleanupFailure.error] : [cleanupFailure.error],
+        "Herdr subscription cleanup failed",
+      );
+    }
+    if (attemptError) throw attemptError.error;
   };
 
   const run = async (ctx: ExtensionContext, expectedGeneration: number, signal: AbortSignal): Promise<void> => {
@@ -281,8 +311,13 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         await runAttempt(ctx, expectedGeneration, signal);
         return;
       } catch (error) {
+        if (error instanceof HerdrCleanupError) throw error;
         if (!owns(ctx, expectedGeneration) || signal.aborted) return;
-        clearWidget(ctx);
+        try {
+          clearWidget();
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], "Herdr observation and widget cleanup failed");
+        }
         if (error instanceof HerdrTopologyChangedError) continue;
         failures += 1;
         if (failures >= 2) return;
@@ -298,34 +333,65 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
 
   return {
     start(ctx) {
-      generation += 1;
       controller?.abort(new DOMException("Herdr widget session replaced", "AbortError"));
-      if (activeContext) clearWidget(activeContext);
-      activeContext = undefined;
-      activeSession = undefined;
-      controller = undefined;
+      try {
+        publisher?.dispose();
+      } finally {
+        // Invalidate old reads even if clearing the old widget throws.
+        publisher = undefined;
+        generation += 1;
+        activeSession = undefined;
+        controller = undefined;
+        publishedFingerprint = undefined;
+        hasPublished = false;
+      }
       if (ctx.mode !== "tui") return;
 
-      activeContext = ctx;
       activeSession = ctx.sessionManager;
       controller = new AbortController();
       const expectedGeneration = generation;
-      clearWidget(ctx);
-      const task = run(ctx, expectedGeneration, controller.signal).finally(() => {
-        ownedTasks.delete(task);
+      publisher = createEditorStatusPublisher({
+        key: HERDR_WIDGET_KEY,
+        context: ctx,
+        isCurrent: () => expectedGeneration === generation,
+        render: renderHerdrWidget,
       });
+      const task = run(ctx, expectedGeneration, controller.signal);
       ownedTasks.add(task);
+      // Observe every background rejection immediately; shutdown reports failures
+      // after joining source cleanup instead of leaking an unhandled rejection.
+      void task.then(
+        () => ownedTasks.delete(task),
+        (error) => {
+          taskErrors.add(error);
+          ownedTasks.delete(task);
+        },
+      );
     },
     async shutdown(ctx) {
-      if (!owns(ctx)) return;
-      const shutdownGeneration = ++generation;
+      if (activeSession !== undefined && !owns(ctx)) return;
       controller?.abort(new DOMException("Herdr widget session shut down", "AbortError"));
-      clearWidget(ctx);
+      const errors: unknown[] = [];
+      try {
+        publisher?.dispose();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        publisher = undefined;
+        generation += 1;
+        publishedFingerprint = undefined;
+        hasPublished = false;
+      }
+      const shutdownGeneration = generation;
       await Promise.allSettled([...ownedTasks]);
-      if (generation !== shutdownGeneration) return;
-      activeContext = undefined;
-      activeSession = undefined;
-      controller = undefined;
+      errors.push(...taskErrors);
+      taskErrors.clear();
+      if (generation === shutdownGeneration) {
+        activeSession = undefined;
+        controller = undefined;
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, "Herdr widget cleanup failed");
     },
   };
 }

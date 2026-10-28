@@ -56,6 +56,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       mode: "tui",
       hasUI: true,
       sessionManager,
+      isIdle: () => true,
       ui: {
         setWidget(key: string, content: unknown) {
           widgets.push({ key, content });
