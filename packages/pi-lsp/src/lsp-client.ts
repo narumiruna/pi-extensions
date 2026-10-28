@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, type SpawnOptions, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -11,12 +11,37 @@ export function resolveSpawnCommand(
   command: ServerCommand,
   platform: NodeJS.Platform = process.platform,
   comSpec = process.env.ComSpec,
-): ServerCommand {
+): ServerCommand & Pick<SpawnOptions, "windowsVerbatimArguments"> {
   if (platform !== "win32" || !/\.(?:bat|cmd)$/i.test(command.command)) return command;
+  const shellCommand = [escapeCmd(command.command), ...command.args.map(quoteCmdArgument)].join(" ");
   return {
     command: comSpec?.trim() || "cmd.exe",
-    args: ["/d", "/s", "/c", command.command, ...command.args],
+    // /s removes the outer quotes. Node must not quote this command line again.
+    args: ["/d", "/s", "/c", `"${shellCommand}"`],
+    windowsVerbatimArguments: true,
   };
+}
+
+function escapeCmd(value: string) {
+  return value.replace(/([()\][%!^"`<>&|;, *?])/g, "^$1");
+}
+
+function quoteCmdArgument(value: string) {
+  // Quote pairs encode a literal quote without unbalancing cmd's quote state
+  // when a batch launcher forwards %*. Double preceding and trailing backslashes
+  // for Windows argv parsing, then escape the initial cmd parsing pass once.
+  let quoted = '"';
+  let backslashes = 0;
+  for (const character of value) {
+    if (character === "\\") {
+      backslashes++;
+      continue;
+    }
+    quoted += "\\".repeat(character === '"' ? backslashes * 2 : backslashes);
+    quoted += character === '"' ? '""' : character;
+    backslashes = 0;
+  }
+  return escapeCmd(`${quoted}${"\\".repeat(backslashes * 2)}"`);
 }
 
 // Quiet period (ms) after each publish before treating push diagnostics as settled.
@@ -92,6 +117,7 @@ export class LspClient {
       cwd: this.#cwd,
       env: mergeEnvironment(this.#adapter.env),
       stdio: "pipe",
+      windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
     });
     this.#child = child;
     this.#process = child;

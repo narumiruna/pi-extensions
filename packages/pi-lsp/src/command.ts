@@ -48,7 +48,9 @@ export function resolveCommandPath(
   platform: NodeJS.Platform = process.platform,
   pathValue = process.env.PATH ?? "",
 ) {
-  const extensions = platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  // npm installs a POSIX shim beside its Windows shim. Prefer the Windows file,
+  // but do not append another suffix to an explicitly configured filename.
+  const extensions = platform === "win32" && !path.extname(command) ? [".exe", ".cmd", ".bat", ""] : [""];
   if (command.includes("/") || command.includes("\\")) {
     const commandPath = path.isAbsolute(command) ? command : path.resolve(cwd, command);
     return resolveRunnableFile(commandPath, extensions, platform);

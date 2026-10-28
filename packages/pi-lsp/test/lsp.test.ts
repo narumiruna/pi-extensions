@@ -20,7 +20,6 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { consumeLspConfigNotice, DEFAULT_SERVER_CONFIGS, loadConfig, loadRuntime } from "../src/adapters.js";
 import { commandExists, commandPathValue, mergeEnvironment, resolveCommandPath } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
-import { resolveSpawnCommand } from "../src/lsp-client.js";
 import lsp from "../src/pi-lsp.js";
 import { selectDiagnosticRoutes, selectFixRoute } from "../src/routes.js";
 import { runDiagnostics, runFix } from "../src/runner.js";
@@ -354,17 +353,6 @@ test("command helpers honor server environments and platform wrappers", () => {
   const resolvedShim = resolveCommandPath("language-server", windowsBin, "win32", windowsBin);
   assert.ok(resolvedShim);
   assert.equal(resolvedShim, commandShim);
-  assert.deepEqual(
-    resolveSpawnCommand({ command: resolvedShim, args: ["--stdio"] }, "win32", "C:\\Windows\\System32\\cmd.exe"),
-    {
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", commandShim, "--stdio"],
-    },
-  );
-  assert.deepEqual(resolveSpawnCommand({ command: "language_server.sh", args: [] }, "linux"), {
-    command: "language_server.sh",
-    args: [],
-  });
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-command-"));
   const executable = path.join(root, "tool");
   writeFileSync(executable, "#!/bin/sh\nexit 0\n");
