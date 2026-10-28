@@ -20,21 +20,25 @@ const displayJob: ActiveJobDisplay = {
   task: "Review authentication tests",
   state: "running",
   thinkingLevel: "medium",
+  defaultThinkingLevel: "high",
   elapsedMs: 123_000,
   tools: ["read", "bash"],
 };
 const cleanups: Array<() => Promise<void>> = [];
 
 test.each(
-  SUBAGENT_THINKING_LEVELS.flatMap((thinkingLevel) =>
-    (["queued", "running"] as const).map((state) => ({ thinkingLevel, state })),
+  SUBAGENT_THINKING_LEVELS.flatMap((defaultThinkingLevel) =>
+    SUBAGENT_THINKING_LEVELS.flatMap((thinkingLevel) =>
+      (["queued", "running"] as const).map((state) => ({ defaultThinkingLevel, thinkingLevel, state })),
+    ),
   ),
-)("renders $thinkingLevel thinking for a $state job", ({ thinkingLevel, state }) => {
-  const lines = renderSubagentWidget([{ ...displayJob, thinkingLevel, state }], theme, 200);
+)("renders $state thinking $thinkingLevel relative to default $defaultThinkingLevel", (job) => {
+  const lines = renderSubagentWidget([{ ...displayJob, ...job }], theme, 200);
+  const thinking = job.thinkingLevel === job.defaultThinkingLevel ? "" : ` · thinking: ${job.thinkingLevel}`;
   assert.equal(lines.length, 3);
-  assert.match(
-    lines[2] ?? "",
-    new RegExp(` · ${state} · thinking: ${thinkingLevel} · 2m 3s / no timeout · tools: read, bash$`, "u"),
+  assert.equal(
+    lines[2],
+    `${job.state === "running" ? "▶" : "○"} Review authentication tests${thinking} · ${job.state === "running" ? "2m 3s" : "queued"}`,
   );
 });
 
@@ -75,11 +79,7 @@ test.each([
 ])("renders a safe task preview: %s", (_name, task, expected) => {
   const job = { ...displayJob, task };
   const lines = renderSubagentWidget([job], theme, 200);
-  const preview = expected ? ` · ${expected}` : "";
-  assert.equal(
-    lines[2],
-    `▶ job_preview${preview} · running · thinking: medium · 2m 3s / no timeout · tools: read, bash`,
-  );
+  assert.equal(lines[2], `▶ ${expected || "running"} · thinking: medium · 2m 3s`);
   assert.ok(visibleWidth(expected) <= 40);
   for (const line of lines) assert.doesNotMatch(line, /[\p{Cc}\p{Bidi_Control}]/u);
   assert.equal(job.task, task);
@@ -94,7 +94,7 @@ test.each(["\u001b[", "\u001b]", "\u001b_", "\u001bP", "\u001bX", "\u001b^", "\u
     const lines = renderSubagentWidget(jobs, theme, 200);
     assert.equal(lines.length, 10);
     for (const line of lines) assert.doesNotMatch(line, /[\p{Cc}\p{Bidi_Control}]/u);
-    assert.ok(lines.slice(2).every((line) => / · running · /u.test(line)));
+    assert.ok(lines.slice(2).every((line) => line.startsWith("▶ ") && line.includes("thinking: medium")));
   },
 );
 
@@ -167,14 +167,16 @@ test("carries separate queued and running tasks and levels without changing chil
     tasks.map((task, index) => ({ task, state: "queued", thinkingLevel: levels[index] })),
   );
   const queuedRows = widgetComponent(context).render(200);
-  assert.match(queuedRows[2] ?? "", /Review authentication with full constra… · queued · thinking: off/u);
-  assert.match(queuedRows[3] ?? "", /Implement .*… · queued · thinking: max/u);
+  assert.match(queuedRows[2] ?? "", /Review authentication with full constra… · thinking: off · queued/u);
+  assert.match(queuedRows[3] ?? "", /Implement .*… · thinking: max · queued/u);
   const firstSnapshot = queued[0];
   assert.ok(firstSnapshot);
   firstSnapshot.task = "mutated snapshot";
   firstSnapshot.thinkingLevel = "low";
+  firstSnapshot.defaultThinkingLevel = "low";
   assert.equal(runtime.activeJobsForDisplay()[0]?.task, tasks[0]);
   assert.equal(runtime.activeJobsForDisplay()[0]?.thinkingLevel, "off");
+  assert.equal(runtime.activeJobsForDisplay()[0]?.defaultThinkingLevel, "high");
 
   await Promise.resolve();
   assert.deepEqual(
@@ -190,8 +192,8 @@ test("carries separate queued and running tasks and levels without changing chil
     [...children.values()].map(({ request }) => request.thinkingLevel),
     levels,
   );
-  assert.match(runningRows[2] ?? "", / · running · thinking: off/u);
-  assert.match(runningRows[3] ?? "", / · running · thinking: max/u);
+  assert.match(runningRows[2] ?? "", / · thinking: off/u);
+  assert.match(runningRows[3] ?? "", / · thinking: max/u);
   assert.deepEqual(Object.keys(spawned[0] ?? {}).sort(), ["jobId", "state"]);
   const activeMetadata = JSON.stringify(runtime.inspectJobs());
   assert.doesNotMatch(activeMetadata, /task|preview|thinkingLevel|Review authentication|Implement/u);
@@ -274,7 +276,7 @@ test("clears task rows and levels and releases refresh ownership across session 
   cleanups.push(async () => controller.shutdown(replacement.ctx));
   assert.ok(timers.mock.calls.length > 0);
   runtime.start(jobInput("New session task", "max"));
-  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task · queued · thinking: max/u);
+  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task · thinking: max · queued/u);
   assert.doesNotMatch(widgetComponent(replacement).render(200).join("\n"), /Old session task|thinking: off/u);
   controller.shutdown(context.ctx);
   assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task/u);
@@ -298,7 +300,7 @@ test.each(
   assert.equal(text.includes("job_preview"), preferences.showJobId);
   assert.equal(text.includes("tools: read, bash"), preferences.showTools);
   assert.equal(text.includes("2m 3s / 5m"), preferences.showTiming);
-  assert.match(text, /Review authentication tests · running · thinking: medium/u);
+  assert.match(text, /Review authentication tests · thinking: medium/u);
   assert.equal(text.includes(" ·  · "), false);
   assert.equal(text.endsWith(" · "), false);
   for (const width of [0, 1, 10, 80, 200]) {
@@ -308,11 +310,33 @@ test.each(
   }
 });
 
+test.each([
+  { state: "running" as const, timeout: undefined, showTiming: true, suffix: "2m 3s" },
+  { state: "running" as const, timeout: 120, showTiming: true, suffix: "2m 3s / 2m" },
+  { state: "running" as const, timeout: 120, showTiming: false, suffix: "" },
+  { state: "queued" as const, timeout: undefined, showTiming: true, suffix: "queued" },
+  { state: "queued" as const, timeout: 120, showTiming: true, suffix: "queued · timeout: 2m" },
+  { state: "queued" as const, timeout: 120, showTiming: false, suffix: "queued" },
+])(
+  "renders timing for $state with timeout $timeout and timing $showTiming",
+  ({ state, timeout, showTiming, suffix }) => {
+    const job = { ...displayJob, state, timeout, defaultThinkingLevel: displayJob.thinkingLevel };
+    const settings = { ...DEFAULT_SUBAGENT_SETTINGS, showTiming };
+    const text = renderSubagentWidget([job], theme, 200, settings)[2];
+    assert.equal(text, `${state === "running" ? "▶" : "○"} Review authentication tests${suffix ? ` · ${suffix}` : ""}`);
+  },
+);
+
 test("keeps state readable when all optional fields and the task preview are absent", () => {
   const settings = { showWidget: true, showJobId: false, showTools: false, showTiming: false };
   for (const state of ["queued", "running"] as const) {
     const lines = renderSubagentWidget([{ ...displayJob, task: "\u0007\n", state }], theme, 80, settings);
-    assert.equal(lines[2], `${state === "running" ? "▶" : "○"} ${state} · thinking: medium`);
+    const label = `${state === "running" ? "▶" : "○"} ${state}`;
+    assert.equal(lines[2], `${label} · thinking: medium`);
+    const defaultJob = { ...displayJob, task: "\u0007\n", state, defaultThinkingLevel: displayJob.thinkingLevel };
+    assert.equal(renderSubagentWidget([defaultJob], theme, 80, settings)[2], label);
+    const emptyId = { ...defaultJob, jobId: "\u0007\u001b[31m\u001b[0m" };
+    assert.equal(renderSubagentWidget([emptyId], theme, 80, { ...settings, showJobId: true })[2], label);
   }
   assert.deepEqual(renderSubagentWidget([displayJob], theme, 80, { ...settings, showWidget: false }), []);
 });
@@ -328,8 +352,8 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   controller.update(context.ctx, preferences);
   const rows = widgetComponent(context).render(200);
   assert.doesNotMatch(rows.join("\n"), /job_|tools:|no timeout/u);
-  assert.match(rows[2] ?? "", /▶ Keep running when hidden · running · thinking: off/u);
-  assert.match(rows[3] ?? "", /Finish while hidden · running · thinking: max/u);
+  assert.match(rows[2] ?? "", /▶ Keep running when hidden · thinking: off/u);
+  assert.match(rows[3] ?? "", /Finish while hidden · thinking: max/u);
   assert.equal(widgetComponent(context), original);
   assert.doesNotMatch(original.render(200).join("\n"), /job_|tools:|no timeout/u);
   controller.update(context.ctx, { ...preferences, showWidget: false });
@@ -345,7 +369,7 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   controller.update(context.ctx, preferences);
   const restored = widgetComponent(context).render(200);
   assert.equal(restored.length, 3);
-  assert.match(restored[2] ?? "", /Keep running when hidden · running · thinking: off/u);
+  assert.match(restored[2] ?? "", /Keep running when hidden · thinking: off/u);
   assert.doesNotMatch(restored.join("\n"), /job_|tools:|no timeout|thinking: max/u);
   assert.doesNotMatch(JSON.stringify(mock.sentMessages), /thinkingLevel/u);
   assert.equal(children.get("Keep running when hidden")?.request.task, "Keep running when hidden");
@@ -415,6 +439,7 @@ function jobInput(task: string, thinkingLevel: SubagentThinkingLevel = "medium")
     toolSources: {},
     model: "test-provider/test-model",
     thinkingLevel,
+    defaultThinkingLevel: "high" as const,
     cwd: process.cwd(),
     projectTrusted: false,
   };

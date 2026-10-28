@@ -76,15 +76,20 @@ test("all four boolean rows save in one native list without moving the selection
   assert.equal(current.tui.openCount, 1);
   assert.deepEqual(saves, [
     ["showWidget", false],
-    ["showJobId", false],
-    ["showTools", false],
+    ["showJobId", true],
+    ["showTools", true],
     ["showTiming", false],
   ]);
-  assert.deepEqual(current.options.get(), { showWidget: false, showJobId: false, showTools: false, showTiming: false });
-  for (const label of ["Show widget", "Show job ID", "Show tools", "Show timing"])
-    assert.match(initial, new RegExp(label, "u"));
+  assert.deepEqual(current.options.get(), { showWidget: false, showJobId: true, showTools: true, showTiming: false });
+  for (const [label, value] of [
+    ["Show widget", true],
+    ["Show job ID", false],
+    ["Show tools", false],
+    ["Show timing", true],
+  ])
+    assert.match(initial, new RegExp(`${label}\\s+${value}`, "u"));
   assert.deepEqual(
-    selected.map((line) => line.replace(/\s+false$/u, "").trim()),
+    selected.map((line) => line.replace(/\s+(?:true|false)$/u, "").trim()),
     ["→ Show widget", "→ Show job ID", "→ Show tools", "→ Show timing"],
   );
 });
@@ -234,7 +239,7 @@ test("full save results refresh unrelated rows before the next toggle", async ()
   current.options.save = async (key, value) => {
     saves.push([key, value]);
     return saves.length === 1
-      ? { ...current.options.get(), [key]: value, showTools: false }
+      ? { ...current.options.get(), [key]: value, showTools: true }
       : { ...current.options.get(), [key]: value };
   };
   const command = showSubagentSettings(current.ctx, current.options);
@@ -248,12 +253,12 @@ test("full save results refresh unrelated rows before the next toggle", async ()
   await current.tui.waitForPending();
   current.tui.press("ctrl+c");
   await command;
-  assert.match(refreshed, /Show tools\s+false/u);
+  assert.match(refreshed, /Show tools\s+true/u);
   assert.deepEqual(saves, [
-    ["showJobId", false],
-    ["showTools", true],
+    ["showJobId", true],
+    ["showTools", false],
   ]);
-  assert.equal(current.options.get().showTools, true);
+  assert.equal(current.options.get().showTools, false);
 });
 
 test("full save results retain other queued optimistic changes", async () => {
@@ -288,13 +293,13 @@ test("full save results retain other queued optimistic changes", async () => {
   await current.tui.waitForPending();
   current.tui.press("ctrl+c");
   await command;
-  assert.match(pending, /Show tools\s+false/u);
+  assert.match(pending, /Show tools\s+true/u);
   assert.match(pending, /Show timing\s+false/u);
   assert.deepEqual(saves, [
     ["showWidget", false],
-    ["showTools", false],
+    ["showTools", true],
   ]);
-  assert.equal(current.options.get().showTools, false);
+  assert.equal(current.options.get().showTools, true);
   assert.equal(current.options.get().showTiming, false);
 });
 
@@ -414,7 +419,7 @@ test.each(["\u0018", "\u0003"])("native custom navigation/cancel and hard Ctrl+C
     current.tui.send(cancel);
     const reason = await command;
     assert.equal(reason, cancel === "\u0003" ? "close" : "back");
-    assert.equal(current.options.get().showJobId, false);
+    assert.equal(current.options.get().showJobId, true);
     assert.equal(current.options.get().showWidget, true);
     assert.match(frame, /→ Show job ID/u);
   } finally {
@@ -483,7 +488,7 @@ test("configured collisions keep native navigation priority and Ctrl+C remains h
     const result = await command;
     assert.equal(result, "close");
     assert.equal(current.options.get().showWidget, true);
-    assert.equal(current.options.get().showJobId, false);
+    assert.equal(current.options.get().showJobId, true);
   } finally {
     setKeybindings(original);
   }

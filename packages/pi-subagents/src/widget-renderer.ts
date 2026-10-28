@@ -78,19 +78,28 @@ function renderJob(job: ActiveJobDisplay, theme: Theme, settings: SubagentSettin
   // Pi's truncation adds ANSI resets; remove them before applying the callback theme.
   const task = stripTerminalSequences(truncateToWidth(taskText, TASK_PREVIEW_WIDTH, "…"));
   const labels = [
-    ...(settings.showJobId ? [theme.fg("text", jobId)] : []),
+    ...(settings.showJobId && visibleWidth(jobId) > 0 ? [theme.fg("text", jobId)] : []),
     ...(visibleWidth(task) > 0 ? [theme.fg("text", task)] : []),
-    state,
   ];
-  if (compact) return `${symbol}${labels.join(" · ")}`;
+  const hasLabel = labels.length > 0;
+  // Keep a readable label when the task has no visible text and IDs are hidden.
+  if (!hasLabel) labels.push(state);
+  if (compact) return `${symbol}${labels.join(" · ")}${!running && hasLabel ? ` · ${state}` : ""}`;
   const tools = job.tools.length > 0 ? job.tools.map(sanitizeLabel).join(", ") : "none";
-  const timeout = job.timeout === undefined ? "no timeout" : formatSeconds(job.timeout);
+  const timeout = job.timeout === undefined ? undefined : formatSeconds(job.timeout);
+  const elapsed = formatSeconds(Math.floor(job.elapsedMs / 1_000));
+  const timing = running
+    ? `${elapsed}${timeout === undefined ? "" : ` / ${timeout}`}`
+    : timeout === undefined
+      ? undefined
+      : `timeout: ${timeout}`;
   const details = [
-    `thinking: ${sanitizeLabel(job.thinkingLevel)}`,
-    ...(settings.showTiming ? [`${formatSeconds(Math.floor(job.elapsedMs / 1_000))} / ${timeout}`] : []),
+    ...(job.thinkingLevel !== job.defaultThinkingLevel ? [`thinking: ${sanitizeLabel(job.thinkingLevel)}`] : []),
+    ...(!running && hasLabel ? ["queued"] : []),
+    ...(settings.showTiming && timing !== undefined ? [timing] : []),
     ...(settings.showTools ? [`tools: ${tools}`] : []),
   ];
-  return `${symbol}${labels.join(" · ")}${theme.fg("muted", ` · ${details.join(" · ")}`)}`;
+  return `${symbol}${labels.join(" · ")}${details.length > 0 ? theme.fg("muted", ` · ${details.join(" · ")}`) : ""}`;
 }
 
 function formatSeconds(value: number): string {

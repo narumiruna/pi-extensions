@@ -11,8 +11,8 @@ export interface SubagentSettings {
 
 export const DEFAULT_SUBAGENT_SETTINGS: Readonly<SubagentSettings> = Object.freeze({
   showWidget: true,
-  showJobId: true,
-  showTools: true,
+  showJobId: false,
+  showTools: false,
   showTiming: true,
 });
 

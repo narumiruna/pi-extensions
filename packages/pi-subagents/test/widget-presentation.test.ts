@@ -17,6 +17,7 @@ const job: ActiveJobDisplay = {
   task: "Review tests",
   state: "running",
   thinkingLevel: "medium",
+  defaultThinkingLevel: "high",
   elapsedMs: 0,
   tools: ["read"],
 };
