@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.3.0",
-    "@narumitw/pi-tui-kit": "0.49.3",
-    "@types/node": "26.1.2",
-    "dbus-native": "0.15.1",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@narumitw/pi-tui-kit": "0.67.0",
+    "@types/node": "26.6.5",
+    "dbus-native": "0.16.2",
     "typescript": "7.0.2"
+  },
+  "overrides": {
+    "undici@8": "8.12.3"
   }
 }
