@@ -164,9 +164,18 @@ function handle(message) {
               }
             : scenario === "resolve-enabled"
               ? { codeActionProvider: { resolveProvider: true } }
-              : scenario === "resolve-disabled"
-                ? { codeActionProvider: true }
-                : {},
+              : scenario === "resolve-literal"
+                ? {
+                    codeActionProvider:
+                      message.params.capabilities.textDocument?.codeAction?.codeActionLiteralSupport?.codeActionKind?.valueSet?.includes(
+                        "source.fixAll",
+                      )
+                        ? { resolveProvider: true }
+                        : true,
+                  }
+                : scenario === "resolve-disabled"
+                  ? { codeActionProvider: true }
+                  : {},
       },
     });
     return;
@@ -234,8 +243,41 @@ function handle(message) {
     return;
   }
 
+  if (message.method === "textDocument/codeAction" && scenario === "resolve-literal") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: [
+        {
+          title: "deferred fixture fix",
+          kind: "source.fixAll.fixture",
+          data: { uri: message.params.textDocument.uri },
+        },
+      ],
+    });
+    return;
+  }
+
   if (message.method === "codeAction/resolve") {
-    if (scenario === "resolve-enabled") {
+    if (scenario === "resolve-literal") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          ...message.params,
+          edit: {
+            changes: {
+              [message.params.data.uri]: [
+                {
+                  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                  newText: "// fixed\n",
+                },
+              ],
+            },
+          },
+        },
+      });
+    } else if (scenario === "resolve-enabled") {
       send({
         jsonrpc: "2.0",
         id: message.id,
