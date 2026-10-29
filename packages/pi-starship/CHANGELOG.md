@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.64.3
+
+### Patch Changes
+
+- da96231: Keep ambiguous legacy Backspace input with the configuration chat editor instead of treating it as a cancel shortcut. Preserve explicitly encoded cancellation keys, native editing and viewport precedence, and normal response cancellation.
+
 ## 0.64.2
 
 ### Patch Changes
