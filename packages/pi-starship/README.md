@@ -139,6 +139,8 @@ These message shortcuts use Pi's configured bindings and native precedence, incl
 The configured cancel action stops an active response and restores undelivered messages to the editor; when idle, it leaves the conversation open without opening a menu.
 Failed or aborted responses also restore undelivered messages without restarting automatically.
 Editor actions win conflicting cancel bindings, and Escape remains a stop fallback unless assigned to an editor action.
+Ambiguous legacy Backspace bytes stay with the editor, including when cancel is bound to Ctrl+H or Ctrl+Backspace.
+Unambiguous Kitty or modifyOtherKeys input still follows the configured cancel binding when no editor or viewport action owns it.
 Ctrl+C discards the entire flow, including when cancellation is remapped, and restores the current session's active footer.
 The fullscreen chat uses a Starship-owned `TuiAltScreen` with Pi's native user, assistant, and tool message components, including Markdown, user-message backgrounds, and message spacing.
 A native `ScrollView` holds the history; queued messages, the editor, diagnostics, and footer preview stay in a fixed bottom dock.

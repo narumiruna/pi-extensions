@@ -143,8 +143,11 @@ export function settingsChatStopInput(data: string, keybindings: Pick<Keybinding
   const textKey = parsed?.startsWith("shift+") ? parsed.slice(6) : parsed;
   const printable =
     data.charCodeAt(0) >= 32 || (textKey !== undefined && (Array.from(textKey).length === 1 || textKey === "space"));
-  // These native Editor branches remain active even when their configurable actions are remapped.
+  // Keep ambiguous legacy BS editor-owned: it also matches Ctrl+H and can decode
+  // as Ctrl+Backspace in Windows Terminal. The other native branches stay active
+  // even when their configurable actions are remapped.
   const nativeEditing =
+    data === "\x08" ||
     printable ||
     matchesKey(data, "shift+backspace") ||
     matchesKey(data, "shift+delete") ||
