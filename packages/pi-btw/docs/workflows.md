@@ -74,6 +74,9 @@ Pi's search and keyboard viewport controls apply to the active pane.
 The mouse wheel scrolls the pane under the pointer without moving keyboard focus, and a narrow terminal returns focus to the visible side thread.
 A branch selected through **Start from main thread tree…** supplies side-model context but does not replace the active main thread shown in the other pane.
 The main agent may keep running, and the main pane redraws its progress while either pane is active.
+With **Main focus**, submissions start or steer main work without closing BTW, whether BTW opened while the main agent was idle or responding.
+The initial manager and fullscreen-only workspaces remain modal; a split releases the command wait only after its first view mounts and receives focus.
+Another `/btw` invocation warns instead of opening an overlapping manager or workspace, including during startup and cleanup.
 Submit each question with Pi's effective editor submission binding, Enter by default; successful prior questions and answers remain available to the side model.
 
 Drag the primary mouse button across the transcript to select text.

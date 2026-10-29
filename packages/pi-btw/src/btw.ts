@@ -216,6 +216,7 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
   const subscribeMainThreadUpdates = registerBtwMainThreadUpdates(pi);
   const getLifetime = registerBtwSessionLifetimes(pi);
   const sessionThreads = new WeakMap<BtwSessionLifetime, Map<string, BtwThreadState>>();
+  const activeCommands = new WeakSet<BtwSessionLifetime>();
   let nextThreadNumber = 1;
   const listResumeThreads = (resumableThreads: Map<string, BtwThreadState>): BtwResumeThreadSummary[] =>
     [...resumableThreads.values()]
@@ -234,15 +235,39 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
       if (lifetime.signal.aborted) return Promise.resolve();
       const commandCtx = Object.create(ctx) as ExtensionCommandContext;
       Object.defineProperty(commandCtx, "signal", { value: lifetime.signal, configurable: true });
-      return lifetime.track(
-        handleCommand(args, commandCtx, lifetime).catch((error: unknown) => {
-          if (!lifetime.signal.aborted) throw error;
-        }),
+      if (activeCommands.has(lifetime)) {
+        notifySafely(commandCtx, "A /btw workspace is already open; close it before opening another.", "warning");
+        return Promise.resolve();
+      }
+      activeCommands.add(lifetime);
+      const ready = Promise.withResolvers<void>();
+      let released = false;
+      const task = lifetime.track(
+        handleCommand(args, commandCtx, lifetime, () => {
+          if (lifetime.signal.aborted) return;
+          released = true;
+          ready.resolve();
+        })
+          .catch((error: unknown) => {
+            if (lifetime.signal.aborted) return;
+            if (!released) throw error;
+            // Pi no longer awaits this task after the split releases its command.
+            notifySafely(commandCtx, `Pi BTW: ${formatError(error)}`, "error");
+          })
+          .finally(() => activeCommands.delete(lifetime)),
       );
+      // Pi's idle input loop awaits command completion. Keep the full UI task
+      // session-owned, but release that wait only after a split is mounted.
+      return Promise.race([task, ready.promise]);
     },
   });
 
-  async function handleCommand(args: string, ctx: ExtensionCommandContext, lifetime: BtwSessionLifetime) {
+  async function handleCommand(
+    args: string,
+    ctx: ExtensionCommandContext,
+    lifetime: BtwSessionLifetime,
+    releaseMainInput: () => void,
+  ) {
     let resumableThreads = sessionThreads.get(lifetime);
     if (!resumableThreads) {
       resumableThreads = new Map();
@@ -338,6 +363,7 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
           canRestoreParent: lifetime.canRestoreParent,
           copyOnSelect: effectiveFullscreenCopyOnSelect(settings),
           layout: effectiveBtwLayout(settings),
+          ...(effectiveBtwLayout(settings) !== "fullscreen" ? { onSplitReady: releaseMainInput } : {}),
           sidePaneRatio: effectiveBtwSidePaneRatio(settings),
           persistSidePaneRatio: (ratio, signal) =>
             updateBtwSettings({ sidePaneRatio: ratio }, { signal }).then(() => undefined),

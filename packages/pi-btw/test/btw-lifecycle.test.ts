@@ -137,6 +137,396 @@ function harness(dependencies: BtwExtensionDependencies = {}) {
   };
 }
 
+for (const layout of ["left-pane", "right-pane"] as const) {
+  for (const question of ["", "question"]) {
+    test(`${layout} ${question ? "direct" : "manager"} releases its command only after split readiness`, async () => {
+      const entered = deferred();
+      const finish = deferred();
+      let options: BtwFullscreenOptions | undefined;
+      let settled = false;
+      const app = harness({
+        loadSettings: async () => ({ layout }),
+        runFullscreen: async (ctx, run, value) => {
+          options = value;
+          entered.resolve();
+          return run(ctx);
+        },
+        runThread: async () => {
+          await finish.promise;
+          return { kind: "closed" };
+        },
+      });
+      await app.emit("session_start");
+      const command = app.command(question).then(() => {
+        settled = true;
+      });
+      await entered.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const beforeReady = settled;
+      options?.onSplitReady?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const afterReady = settled;
+      finish.resolve();
+      await command;
+      await app.emit("session_shutdown", "quit");
+      assert.equal(beforeReady, false);
+      assert.equal(afterReady, true, "the mounted split still blocks Pi's idle input consumer");
+    });
+  }
+}
+
+for (const stage of ["manager", "settings", "model", "workspace", "cleanup"] as const) {
+  test(`overlapping commands cannot enter another flow during ${stage}`, async () => {
+    const entered = deferred();
+    const release = deferred();
+    const calls: string[] = [];
+    let paused = false;
+    const visit = async (name: typeof stage) => {
+      calls.push(name);
+      if (name !== stage || paused) return;
+      paused = true;
+      entered.resolve();
+      await release.promise;
+    };
+    const app = harness({
+      showCommandMenu: async () => {
+        await visit("manager");
+        return "start";
+      },
+      loadSettings: async () => {
+        await visit("settings");
+        return { layout: "right-pane" };
+      },
+      resolveModel: async () => {
+        await visit("model");
+        return { kind: "selected", selected };
+      },
+      runFullscreen: async (ctx, run, options) => {
+        options?.onSplitReady?.();
+        await visit("workspace");
+        try {
+          return await run(ctx);
+        } finally {
+          await visit("cleanup");
+        }
+      },
+      runThread: async () => ({ kind: "closed" }),
+    });
+    await app.emit("session_start");
+    const first = app.command("");
+    await entered.promise;
+    const beforeOverlap = [...calls];
+    await app.command("overlap");
+    const afterOverlap = [...calls];
+    release.resolve();
+    await first;
+    await app.emit("session_shutdown", "quit");
+    assert.deepEqual(afterOverlap, beforeOverlap);
+    assert.equal(app.notifications.length, 1);
+    assert.match(app.notifications[0]?.message ?? "", /already open/u);
+  });
+}
+
+for (const reason of ["new", "resume", "fork", "reload", "quit"]) {
+  test(`released split remains owned until session_shutdown(${reason}) drains cleanup`, async () => {
+    const entered = deferred();
+    const finish = deferred();
+    let options: BtwFullscreenOptions | undefined;
+    let settled = false;
+    let restored = false;
+    const app = harness({
+      loadSettings: async () => ({ layout: "left-pane" }),
+      runFullscreen: async (ctx, run, value) => {
+        options = value;
+        value?.onSplitReady?.();
+        entered.resolve();
+        try {
+          return await run(ctx);
+        } finally {
+          restored = value?.canRestoreParent?.() ?? false;
+        }
+      },
+      runThread: async () => {
+        await finish.promise;
+        return { kind: "closed" };
+      },
+    });
+    await app.emit("session_start");
+    const command = app.command().then(() => {
+      settled = true;
+    });
+    await entered.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const released = settled;
+    let drained = false;
+    const shutdown = app.emit("session_shutdown", reason).then(() => {
+      drained = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const drainedBeforeCleanup = drained;
+    finish.resolve();
+    await Promise.all([command, shutdown]);
+    assert.equal(released, true);
+    assert.equal(drainedBeforeCleanup, false);
+    assert.equal(restored, reason !== "quit");
+    assert.equal(options?.canRestoreParent?.(), false);
+  });
+}
+
+test("fullscreen-only commands stay modal and do not expose split readiness", async () => {
+  const entered = deferred();
+  const finish = deferred();
+  let options: BtwFullscreenOptions | undefined;
+  let settled = false;
+  const app = harness({
+    runFullscreen: async (ctx, run, value) => {
+      options = value;
+      entered.resolve();
+      return run(ctx);
+    },
+    runThread: async () => {
+      await finish.promise;
+      return { kind: "closed" };
+    },
+  });
+  const command = app.command().then(() => {
+    settled = true;
+  });
+  await entered.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const modal = !settled;
+  finish.resolve();
+  await command;
+  await app.emit("session_shutdown", "quit");
+  assert.equal(modal, true);
+  assert.equal(options?.onSplitReady, undefined);
+});
+
+test("post-release errors are observed and sanitized, and release the command guard", async () => {
+  const entered = deferred();
+  const fail = deferred();
+  let calls = 0;
+  let settled = false;
+  const app = harness({
+    loadSettings: async () => ({ layout: "right-pane" }),
+    runThread: async () => ({ kind: "closed" }),
+    runFullscreen: async (ctx, run, options) => {
+      if (++calls > 1) return run(ctx);
+      options?.onSplitReady?.();
+      entered.resolve();
+      await fail.promise;
+      throw new Error("late\u001b[31m failure\nunsafe");
+    },
+  });
+  const command = app.command().then(
+    () => {
+      settled = true;
+      return undefined;
+    },
+    (error: unknown) => error,
+  );
+  await entered.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const released = settled;
+  fail.resolve();
+  const error = await command;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await app.command("retry");
+  await app.emit("session_shutdown", "quit");
+  assert.equal(released, true);
+  assert.equal(error, undefined);
+  assert.equal(calls, 2);
+  assert.equal(app.notifications.length, 1);
+  assert.equal(app.notifications[0]?.level, "error");
+  // Removing control bytes leaves printable escape-sequence text inert.
+  assert.equal(app.notifications[0]?.message, "Pi BTW: late[31m failure unsafe");
+});
+
+test("notification failures cannot reject released work or retain its command guard", async () => {
+  const entered = deferred();
+  const fail = deferred();
+  let calls = 0;
+  let notifications = 0;
+  const app = harness({
+    loadSettings: async () => ({ layout: "right-pane" }),
+    runThread: async () => ({ kind: "closed" }),
+    runFullscreen: async (ctx, run, options) => {
+      if (++calls > 1) return run(ctx);
+      options?.onSplitReady?.();
+      entered.resolve();
+      await fail.promise;
+      throw new Error("late failure");
+    },
+  });
+  app.ctx.ui.notify = () => {
+    notifications += 1;
+    throw new Error("UI is unavailable");
+  };
+  const command = app.command();
+  await entered.promise;
+  await app.command("overlap");
+  fail.resolve();
+  await command;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await app.command("retry");
+  await app.emit("session_shutdown", "quit");
+  assert.equal(notifications, 2);
+  assert.equal(calls, 2);
+});
+
+test("released commands and their guards remain separate across a reused session manager", async () => {
+  const entered = [deferred(), deferred()];
+  const finish = [deferred(), deferred()];
+  const options: BtwFullscreenOptions[] = [];
+  let calls = 0;
+  const app = harness({
+    loadSettings: async () => ({ layout: "left-pane" }),
+    runThread: async () => ({ kind: "closed" }),
+    runFullscreen: async (ctx, run, value) => {
+      const index = calls++;
+      assert.ok(value);
+      options.push(value);
+      value.onSplitReady?.();
+      entered[index]?.resolve();
+      await finish[index]?.promise;
+      return run(ctx);
+    },
+  });
+  await app.emit("session_start");
+  const oldCommand = app.command("old");
+  await entered[0]?.promise;
+  await oldCommand;
+  const replacement = app.emit("session_start");
+  assert.equal(options[0]?.signal?.aborted, true);
+  const newCommand = app.command("new");
+  await entered[1]?.promise;
+  await newCommand;
+  options[0]?.onSplitReady?.();
+  finish[0]?.resolve();
+  await replacement;
+  await app.command("overlap");
+  const liveGuard = calls === 2;
+  finish[1]?.resolve();
+  await app.emit("session_shutdown", "quit");
+  assert.equal(liveGuard, true);
+  assert.equal(options[1]?.signal?.aborted, true);
+  assert.equal(app.notifications.length, 1);
+  assert.match(app.notifications[0]?.message ?? "", /already open/u);
+});
+
+for (const stage of ["settings", "model", "workspace"] as const) {
+  test(`a pre-release ${stage} error propagates and releases the command guard`, async () => {
+    const failure = new Error(`${stage} failed`);
+    let first = true;
+    const failOnce = (name: typeof stage) => {
+      if (name !== stage || !first) return;
+      first = false;
+      throw failure;
+    };
+    const app = harness({
+      loadSettings: async () => {
+        failOnce("settings");
+        return { layout: "right-pane" };
+      },
+      resolveModel: async () => {
+        failOnce("model");
+        return { kind: "selected", selected };
+      },
+      runFullscreen: async (ctx, run) => {
+        failOnce("workspace");
+        return run(ctx);
+      },
+      runThread: async () => ({ kind: "closed" }),
+    });
+    await assert.rejects(app.command(), (error) => error === failure);
+    await app.command("retry");
+    await app.emit("session_shutdown", "quit");
+    assert.deepEqual(app.notifications, []);
+  });
+}
+
+for (const reason of ["reload", "quit"]) {
+  test(`a released task's late error cannot notify after ${reason}`, async () => {
+    const entered = deferred();
+    const fail = deferred();
+    let settled = false;
+    const app = harness({
+      loadSettings: async () => ({ layout: "left-pane" }),
+      runFullscreen: async (_ctx, _run, options) => {
+        options?.onSplitReady?.();
+        entered.resolve();
+        await fail.promise;
+        throw new Error("stale failure");
+      },
+    });
+    const command = app.command().then(() => {
+      settled = true;
+    });
+    await entered.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const released = settled;
+    const shutdown = app.emit("session_shutdown", reason);
+    fail.resolve();
+    await Promise.all([command, shutdown]);
+    assert.equal(released, true);
+    assert.deepEqual(app.notifications, []);
+  });
+}
+
+test("overlap warnings use the session lifetime instead of an aborted agent-run signal", async () => {
+  const entered = deferred();
+  const finish = deferred();
+  const run = new AbortController();
+  run.abort();
+  const app = harness({
+    runFullscreen: async (ctx, execute) => {
+      entered.resolve();
+      return execute(ctx);
+    },
+    runThread: async () => {
+      await finish.promise;
+      return { kind: "closed" };
+    },
+  });
+  const ctx = { ...app.ctx, signal: run.signal } as ExtensionCommandContext;
+  const first = app.command("question", ctx);
+  await entered.promise;
+  await app.command("overlap", ctx);
+  finish.resolve();
+  await first;
+  await app.emit("session_shutdown", "quit");
+  assert.equal(app.notifications.length, 1);
+  assert.match(app.notifications[0]?.message ?? "", /already open/u);
+});
+
+test("late split readiness cannot release a cancelled session's command", async () => {
+  const entered = deferred();
+  const finish = deferred();
+  let options: BtwFullscreenOptions | undefined;
+  let settled = false;
+  const app = harness({
+    loadSettings: async () => ({ layout: "left-pane" }),
+    runFullscreen: async (ctx, run, value) => {
+      options = value;
+      entered.resolve();
+      await finish.promise;
+      return run(ctx);
+    },
+  });
+  const command = app.command().then(() => {
+    settled = true;
+  });
+  await entered.promise;
+  const shutdown = app.emit("session_shutdown", "reload");
+  options?.onSplitReady?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const releasedAfterCancellation = settled;
+  finish.resolve();
+  await Promise.all([command, shutdown]);
+  assert.equal(releasedAfterCancellation, false);
+  assert.deepEqual(app.notifications, []);
+});
+
 for (const reason of ["new", "resume", "fork", "reload", "quit"]) {
   test(`idle session_shutdown(${reason}) aborts and drains commands with correct parent restoration`, async () => {
     const entered = deferred();

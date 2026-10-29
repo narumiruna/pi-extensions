@@ -14,6 +14,46 @@ The [retained shared matrix and verification record](https://github.com/narumiru
 
 Pi's official [TUI guidance](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/tui.md) advises against a second terminal renderer. BTW intentionally deviates: a second TUI instance exists, but only one renderer actively owns the shared terminal. Extracting the physical lifecycle into Kit does not make that deviation officially supported or remove private layout access from BTW.
 
+## Command and workspace lifetimes
+
+A split workspace releases Pi's command wait after its first non-overlay root mounts, receives focus, and requests rendering.
+This lets Pi's idle loop consume main-pane submissions without closing BTW; the streaming path keeps Pi's normal steering behavior.
+The initial manager and fullscreen-only workspaces remain modal.
+
+Command completion does not end resource ownership.
+`BtwSessionLifetime` still tracks the complete UI task and drains retained thread work and settings writes during shutdown.
+The active-command guard lasts through cleanup, so another invocation cannot overlap a manager, startup, live workspace, or restoration.
+Startup failures propagate through Pi's command handler; failures after split readiness produce sanitized notifications only while the owning session remains active.
+Cancellation or a late factory cannot publish readiness for a disposed workspace.
+
+```mermaid
+sequenceDiagram
+    participant Pi as Pi idle input loop
+    participant Command as BTW command
+    participant View as BTW split workspace
+    participant Lifetime as BTW session lifetime
+    Pi->>Command: Await command handler
+    Command->>Lifetime: Track complete workspace task
+    Command->>View: Mount and focus split
+    View-->>Command: onSplitReady, once
+    Command-->>Pi: Command wait completes
+    Pi->>Pi: Consume main submissions normally
+    Note over View,Lifetime: Workspace task stays session-owned
+    alt Normal close
+        View->>View: Restore terminal owner
+        View-->>Lifetime: Complete workspace task
+    else Session shutdown
+        Lifetime->>View: Abort and drain owned work
+        View->>View: Restore only when permitted
+        View-->>Lifetime: Cleanup completes
+    end
+```
+
+`btw-lifecycle.test.ts` verifies the separate completion boundaries, startup overlap, error visibility, stale readiness, and shutdown draining.
+`fullscreen-ui.test.ts` verifies readiness ordering, one-time publication, failed mounting/focus, and late factories.
+The local-provider `fullscreen-handoff-smoke.py` routes verify main-provider completion before BTW closes and use `agent_settled` for the final-idle barrier.
+These checks retain the private-layout and shared-terminal limits below; readiness is not a physical-terminal visual acceptance signal.
+
 ## Evidence boundary
 
 The alignment review uses Pi core source at commit `1402973a9` and the installed public runtime.

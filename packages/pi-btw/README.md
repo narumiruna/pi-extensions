@@ -54,6 +54,7 @@ The side thread stays separate until you explicitly bring context to the main ed
 | `/btw <question>` | Start a new side thread immediately with the supplied question. |
 
 Both routes require TUI mode and a model with usable credentials; see [Settings](#-settings).
+Only one BTW flow can be open per session; close it before running `/btw` again.
 Side questions and selected conversation context are sent to that model's provider.
 Bringing context back fills the main editor without submitting; replacing an existing draft requires confirmation.
 Ctrl+C cancels the response and discards the current draft and queued questions, but completed exchanges remain resumable in memory.
@@ -122,7 +123,8 @@ Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
 A single muted divider separates the panes; click either pane or use the pane-switch shortcut to move keyboard focus.
 The footer below the editor shows **BTW focus** or **Main focus** and the available switch key.
-It also shows the selected side model and thinking level when space permits; narrow or short views omit optional fields and hints before the active input row.
+Main-focus submissions use Pi's normal submission and steering behavior without closing BTW, including when the workspace opens while the main agent is idle.
+The footer also shows the selected side model and thinking level when space permits; narrow or short views omit optional fields and hints before the active input row.
 Drag the divider with the primary mouse button to resize both panes.
 The side-thread share is limited to 20–80% and saved as `sidePaneRatio` when the button is released, independent of whether the side thread is on the left or right.
 If the save fails, the workspace restores the last saved ratio and reports the error.
