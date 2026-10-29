@@ -38,6 +38,25 @@ function transcriptContent(lines: readonly string[]) {
   return lines.map((line) => stripVTControlCharacters(line).replace(/[│┃]$/u, "").trimEnd());
 }
 
+const TERMINAL_ENVIRONMENT_KEYS = ["WT_SESSION", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] as const;
+
+function setTerminalEnvironment(
+  environment: Partial<Record<(typeof TERMINAL_ENVIRONMENT_KEYS)[number], string>>,
+): () => void {
+  const previous = TERMINAL_ENVIRONMENT_KEYS.map((key) => [key, process.env[key]] as const);
+  for (const key of TERMINAL_ENVIRONMENT_KEYS) {
+    const value = environment[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  return () => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
+
 const CHAT_KEYS = {
   ...TUI_KEYBINDINGS,
   "app.message.followUp": { defaultKeys: "alt+enter" },
@@ -1063,6 +1082,151 @@ for (const [name, configured, packet, kitty, follows, history] of [
     } finally {
       setKeybindings(previous);
       setKittyProtocolActive(previousKitty);
+    }
+  });
+}
+
+for (const [terminal, environment] of [
+  ["legacy terminal", {}],
+  ["Windows Terminal", { WT_SESSION: "starship-test-terminal" }],
+  [
+    "Windows Terminal with empty SSH values",
+    { WT_SESSION: "starship-test-terminal", SSH_CONNECTION: "", SSH_CLIENT: "", SSH_TTY: "" },
+  ],
+  ["SSH_CONNECTION", { WT_SESSION: "starship-test-terminal", SSH_CONNECTION: "test-connection" }],
+  ["SSH_CLIENT", { WT_SESSION: "starship-test-terminal", SSH_CLIENT: "test-client" }],
+  ["SSH_TTY", { WT_SESSION: "starship-test-terminal", SSH_TTY: "test-tty" }],
+] as const) {
+  for (const kitty of [false, true]) {
+    for (const editing of ["default", "remapped", "disabled"] as const) {
+      test(`legacy Backspace stays editor-owned in ${terminal}, kitty=${kitty}, editing=${editing}`, () => {
+        const restoreEnvironment = setTerminalEnvironment(environment);
+        const previous = getKeybindings();
+        const previousKitty = isKittyProtocolActive();
+        setKittyProtocolActive(kitty);
+        try {
+          for (const [name, configured, packet, expected] of [
+            ["raw BS", "ctrl+h", "\x08", false],
+            ["raw BS alias", "CTRL+H", "\x08", false],
+            ["raw Ctrl+Backspace", "ctrl+backspace", "\x08", false],
+            ["raw Backspace binding", "backspace", "\x08", false],
+            ["DEL", "backspace", "\x7f", false],
+            ["CSI-u Backspace", "backspace", "\x1b[127u", editing !== "default"],
+            ["modifyOtherKeys Backspace", "backspace", "\x1b[27;1;127~", editing !== "default"],
+            ["CSI-u Ctrl+Backspace", "ctrl+backspace", "\x1b[127;5u", true],
+            ["modifyOtherKeys Ctrl+Backspace", "ctrl+backspace", "\x1b[27;5;127~", true],
+            ["CSI-u Ctrl+H", "ctrl+h", "\x1b[104;5u", true],
+            ["modifyOtherKeys Ctrl+H", "ctrl+h", "\x1b[27;5;104~", true],
+            ["modifier order", "ALT+CTRL+H", "\x1b[104;7u", true],
+            ["invalid binding", "ctrl+", "\x08", false],
+            ["first usable binding", ["ctrl+", "ctrl+h"], "\x1b[104;5u", true],
+          ] as const) {
+            const keys = new KeybindingsManager(TUI_KEYBINDINGS, {
+              "tui.select.cancel": configured as never,
+              ...(editing !== "default"
+                ? {
+                    "tui.editor.deleteCharBackward": editing === "disabled" ? [] : "ctrl+alt+b",
+                    "tui.editor.deleteWordBackward": editing === "disabled" ? [] : "ctrl+alt+w",
+                  }
+                : {}),
+            });
+            setKeybindings(keys);
+            assert.equal(settingsChatStopInput(packet, keys), expected, name);
+            assert.equal(settingsChatStopInput("\x1b", keys), true, `${name}: Escape fallback`);
+          }
+        } finally {
+          setKeybindings(previous);
+          setKittyProtocolActive(previousKitty);
+          restoreEnvironment();
+        }
+      });
+    }
+  }
+}
+
+for (const action of ["tui.editor.deleteCharBackward", "tui.altScreen.lineUp"] as const) {
+  for (const kitty of [false, true]) {
+    test(`explicit Ctrl+H preserves ${action} precedence, kitty=${kitty}`, () => {
+      const restoreEnvironment = setTerminalEnvironment({ WT_SESSION: "starship-test-terminal" });
+      const previous = getKeybindings();
+      const previousKitty = isKittyProtocolActive();
+      const keys = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "ctrl+h", [action]: "ctrl+h" });
+      setKeybindings(keys);
+      setKittyProtocolActive(kitty);
+      try {
+        for (const packet of ["\x08", "\x1b[104;5u", "\x1b[27;5;104~"]) {
+          assert.equal(settingsChatStopInput(packet, keys), false);
+        }
+      } finally {
+        setKeybindings(previous);
+        setKittyProtocolActive(previousKitty);
+        restoreEnvironment();
+      }
+    });
+  }
+}
+
+for (const [windowsTerminal, stopName, stopPacket] of [
+  [false, "Escape", "\x1b"],
+  [true, "Escape", "\x1b"],
+  [false, "CSI-u Ctrl+H", "\x1b[104;5u"],
+  [true, "CSI-u Ctrl+H", "\x1b[104;5u"],
+  [false, "modifyOtherKeys Ctrl+H", "\x1b[27;5;104~"],
+  [true, "modifyOtherKeys Ctrl+H", "\x1b[27;5;104~"],
+] as const) {
+  test(`raw Backspace preserves a pending response and native draft behavior, Windows Terminal=${windowsTerminal}, stop=${stopName}`, async () => {
+    const restoreEnvironment = setTerminalEnvironment(windowsTerminal ? { WT_SESSION: "starship-test-terminal" } : {});
+    const previousKitty = isKittyProtocolActive();
+    setKittyProtocolActive(false);
+    const started = Promise.withResolvers<void>();
+    let aborted = false;
+    const keys = new KeybindingsManager(CHAT_KEYS, { "tui.select.cancel": "ctrl+h" });
+    const f = fixture((_model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+          void response([], "aborted")
+            .result()
+            .then((error) => stream.push({ type: "error", reason: "aborted", error }));
+        },
+        { once: true },
+      );
+      started.resolve();
+      return stream;
+    }, keys);
+    try {
+      await f.tui.waitForOpen();
+      f.tui.type("Wait");
+      f.tui.send("\r");
+      await started.promise;
+      f.tui.type("draft");
+      const native = new SettingsChatEditor(
+        { requestRender() {} } as ConstructorParameters<typeof Editor>[0],
+        { fg: (_role: string, text: string) => text } as ConstructorParameters<typeof SettingsChatEditor>[1],
+        () => ({ top: "", bottom: "" }),
+        keys as unknown as ConstructorParameters<typeof SettingsChatEditor>[3],
+      );
+      native.setText("draft");
+      native.handleInput("\x08");
+      f.tui.send("\x08");
+      assert.equal(aborted, false);
+      assert.equal(f.agent.state.isStreaming, true);
+      assert.equal(f.tui.isOpen, true);
+      f.tui.send(stopPacket);
+      await f.tui.waitForPending();
+      assert.equal(aborted, true, `${stopName} must still stop the active response`);
+      f.tui.send("\x13");
+      assert.equal(await f.running, "save");
+      assert.equal(f.state.input, native.getExpandedText());
+    } finally {
+      try {
+        await f.dispose();
+      } finally {
+        setKittyProtocolActive(previousKitty);
+        restoreEnvironment();
+      }
     }
   });
 }
