@@ -122,6 +122,8 @@ Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
 A single muted divider separates the panes; click either pane or use the pane-switch shortcut to move keyboard focus.
 The footer below the editor shows **BTW focus** or **Main focus** and the available switch key.
+With **Main focus**, prompts can start while BTW remains open, including when the main thread was idle when BTW opened.
+Close the current BTW flow before invoking `/btw` again; overlapping commands are rejected.
 It also shows the selected side model and thinking level when space permits; narrow or short views omit optional fields and hints before the active input row.
 Drag the divider with the primary mouse button to resize both panes.
 The side-thread share is limited to 20–80% and saved as `sidePaneRatio` when the button is released, independent of whether the side thread is on the left or right.

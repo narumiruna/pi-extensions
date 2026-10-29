@@ -40,6 +40,8 @@ type FocusInspectableTui = TUI & {
 
 export interface BtwFullscreenOptions {
   signal?: AbortSignal;
+  /** The first split workspace is mounted; its owning command may release Pi's input loop. */
+  onReady?(): void;
   canRestoreParent?(): boolean;
   keybindings?: BtwKeybindingOverrides;
   copyOnSelect?: boolean;
@@ -154,6 +156,7 @@ class BtwFullscreenHost<T> implements Component {
   private removeHardCancelListener: (() => void) | undefined;
   private removeUpstreamAbortListener: (() => void) | undefined;
   private started = false;
+  private ready = false;
   private disposed = false;
   private finished = false;
   private parentRestorePromise: Promise<void> | undefined;
@@ -652,6 +655,16 @@ class BtwFullscreenHost<T> implements Component {
             }
             fullscreen.setFocus(component);
             fullscreen.requestRender();
+            if (
+              splitPane &&
+              !this.ready &&
+              !this.disposed &&
+              !this.finished &&
+              !this.lifetimeController.signal.aborted
+            ) {
+              this.ready = true;
+              this.options.onReady?.();
+            }
           }
         })
         .catch(fail);

@@ -3299,3 +3299,102 @@ test("done restores the parent without waiting for an asynchronous custom factor
   assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
   assert.equal(harness.events.filter((event) => event === "late-after-done.dispose").length, 1);
 });
+
+for (const layout of ["left-pane", "right-pane"] as const) {
+  test(`${layout} signals readiness once after the first mounted view, not on later side screens`, async () => {
+    const harness = createHarness();
+    const closes: Array<(value: string) => void> = [];
+    let ready = 0;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      async (ctx) => {
+        const show = () =>
+          ctx.ui.custom<string>((_tui, _theme, _keys, done) => {
+            closes.push(done);
+            return { render: () => ["side"], invalidate() {}, dispose() {} };
+          });
+        await show();
+        return show();
+      },
+      {
+        layout,
+        onReady: () => {
+          ready++;
+          harness.events.push("workspace.ready");
+        },
+      },
+      { createTui: harness.createTui },
+    );
+    try {
+      assert.equal(ready, 0);
+      await waitForCondition(() => ready === 1, "split readiness was not reported");
+      assert.ok(harness.events.indexOf("fullscreen.layout") < harness.events.indexOf("workspace.ready"));
+      assert.ok(harness.events.indexOf("fullscreen.focus") < harness.events.indexOf("workspace.ready"));
+      closes[0]?.("next screen");
+      await waitForCondition(() => closes.length === 2, "second side screen did not open");
+      assert.equal(ready, 1);
+      closes[1]?.("closed");
+      assert.equal(await running, "closed");
+      assert.equal(ready, 1);
+    } finally {
+      harness.outerComponent?.dispose();
+      await running.catch(() => {});
+    }
+  });
+}
+
+test("failed split mounts do not report readiness and restore the parent", async () => {
+  const harness = createHarness({ layoutMountError: new Error("mount failed") });
+  let ready = 0;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) => ctx.ui.custom<string>(() => ({ render: () => ["side"], invalidate() {}, dispose() {} })),
+    {
+      layout: "left-pane",
+      onReady: () => {
+        ready++;
+      },
+    },
+    { createTui: harness.createTui },
+  );
+  await assert.rejects(running, /mount failed/);
+  assert.equal(ready, 0);
+  assert.ok(harness.events.includes("parent.start"));
+});
+
+test("a cancelled asynchronous split factory cannot release the main command loop late", async () => {
+  const harness = createHarness();
+  let resolveFactory!: (component: FakeComponent) => void;
+  let ready = 0;
+  let disposed = 0;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom<string>(
+        () =>
+          new Promise<FakeComponent>((resolve) => {
+            resolveFactory = resolve;
+          }),
+      ),
+    {
+      layout: "right-pane",
+      onReady: () => {
+        ready++;
+      },
+    },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /disposed/);
+  await waitForCondition(() => resolveFactory !== undefined, "side factory did not start");
+  harness.outerComponent?.dispose();
+  await rejected;
+  resolveFactory({
+    render: () => ["stale"],
+    invalidate() {},
+    dispose() {
+      disposed++;
+    },
+  });
+  await waitForCondition(() => disposed === 1, "late side factory was not disposed");
+  assert.equal(ready, 0);
+});

@@ -2,6 +2,8 @@
 
 Use the existing built package, a local provider, and an isolated Unix PTY.
 Keep all runtime fixtures and transcripts outside the repository, also on failure.
+Add --main-submission to exercise the real idle main loop in both split layouts.
+Add --opened-while-streaming to open BTW during a gated main response, then submit after it settles.
 """
 
 import fcntl
@@ -14,6 +16,7 @@ import select
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -26,7 +29,7 @@ QUESTION = "BTW_PTY_ONLY_QUESTION"
 
 def fixture():
     path = ARTIFACTS / "fixture.ts"
-    imports = "import {writeFileSync} from 'node:fs';\n"
+    imports = "import {writeFileSync, existsSync} from 'node:fs';\n"
     for package, names in [
         ("pi-ai", "createAssistantMessageEventStream"),
         ("pi-tui", "TuiMainScreen, TuiAltScreen"),
@@ -52,24 +55,34 @@ export default function(pi) {
     models: [{id: 'fixture', name: 'fixture', reasoning: false, input: ['text'],
       contextWindow: 128000, maxTokens: 4096,
       cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0}}],
-    streamSimple(model, context) {
+    streamSimple(model, context, options) {
       record.requests++;
       record.userMessages = context.messages.filter(m => m.role === 'user').map(m =>
         typeof m.content === 'string' ? m.content : m.content.filter(p => p.type === 'text').map(p => p.text).join(''));
-      if (record.requests !== 1 || record.userMessages.length !== 1 ||
-          !record.userMessages[0].includes('<side_question>\\nBTW_PTY_ONLY_QUESTION\\n</side_question>')) {
+      const mainSubmission = record.userMessages.at(-1) === 'MAIN_PANE_IDLE_QUESTION';
+      const warmup = record.userMessages.at(-1) === 'MAIN_PANE_WARMUP';
+      if (!mainSubmission && !warmup && (record.userMessages.length !== 1 ||
+          !record.userMessages[0].includes('<side_question>\\nBTW_PTY_ONLY_QUESTION\\n</side_question>'))) {
         record.errors.push('Unexpected provider request');
         save();
         throw new Error('Unexpected provider request');
       }
       save();
       const message = {role: 'assistant', api: model.api, provider: model.provider, model: model.id,
-        content: [{type: 'text', text: Array.from({length: 100}, (_, i) => `btw-pty-row-${String(i).padStart(3, '0')}`).join('\\n')}],
+        content: [{type: 'text', text: mainSubmission ? 'MAIN_PANE_COMPLETED' : warmup ? 'MAIN_WARMUP_COMPLETED' : Array.from({length: 100}, (_, i) => `btw-pty-row-${String(i).padStart(3, '0')}`).join('\\n')}],
         usage: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
           cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0}},
         stopReason: 'stop', timestamp: 0};
       const stream = createAssistantMessageEventStream();
-      stream.push({type: 'done', reason: 'stop', message});
+      if (warmup) {
+        writeFileSync('main-streaming', 'ready');
+        const timer = setInterval(() => {
+          if (!existsSync('finish-main')) return;
+          clearInterval(timer);
+          stream.push({type: 'done', reason: 'stop', message});
+        }, 10);
+        options?.signal?.addEventListener('abort', () => clearInterval(timer), {once: true});
+      } else stream.push({type: 'done', reason: 'stop', message});
       return stream;
     },
   });
@@ -78,6 +91,7 @@ export default function(pi) {
     save();
     writeFileSync('ready', 'ready');
   });
+  pi.on('agent_end', () => { writeFileSync('main-idle', 'ready'); });
   pi.registerCommand('smoke-parent', {
     description: 'Record restored input and stop the smoke',
     handler: async (_args, ctx) => {
@@ -94,7 +108,7 @@ export default function(pi) {
     return path
 
 
-def smoke(mode, layout, extension):
+def smoke(mode, layout, extension, submit_main=False, opened_streaming=False):
     work = ARTIFACTS / f"{mode}-{layout}"
     work.mkdir()
     agent = work / "agent"
@@ -155,9 +169,23 @@ def smoke(mode, layout, extension):
         # The caller bounds startup. Interaction timing starts after READY only.
         until(lambda: (work / "ready").exists(), "session readiness")
         deadline = time.monotonic() + 25
+        if opened_streaming:
+            send(b"MAIN_PANE_WARMUP\r")
+            until(lambda: (work / "main-streaming").exists(), "main stream readiness")
         send(f"/btw {QUESTION}\r".encode())
         until(lambda: "btw-pty-row-099" in text(), "last answer row")
         assert starts() >= 2, "No dedicated terminal start"
+        if opened_streaming:
+            (work / "finish-main").write_text("finish")
+            until(lambda: (work / "main-idle").exists(), "main stream settlement while BTW remains open")
+        if submit_main:
+            # Real idle-loop regression: Main must run before BTW is dismissed.
+            send(b"\x1b[17~")  # F6, the native pane-switch fallback.
+            until(lambda: "Main focus" in text(), "main pane focus")
+            send(b"MAIN_PANE_IDLE_QUESTION\r")
+            until(lambda: "MAIN_PANE_COMPLETED" in text(), "main answer while BTW remains open")
+            send(b"\x1b[17~")
+            until(lambda: "BTW focus" in text(), "return to BTW focus")
         send(b"\x1b[5~")
         until(lambda: bool(rows()), "native PageUp redraw")
         assert 99 not in rows() and max(rows()) < 99, "PageUp did not move away from end"
@@ -187,13 +215,18 @@ def smoke(mode, layout, extension):
         child.wait(timeout=5)
         assert child.returncode == 0, child.returncode
         record = json.loads((work / "record.json").read_text())
-        assert record["requests"] == 1 and not record["errors"], record
-        assert record["baseline"] == record["mainMessages"] == 0, record
+        expected_requests = 3 if opened_streaming else 2 if submit_main else 1
+        assert record["requests"] == expected_requests and not record["errors"], record
+        assert record["baseline"] == 0, record
+        assert record["mainMessages"] >= 2 if submit_main else record["mainMessages"] == 0, record
+        if submit_main:
+            expected_users = (["MAIN_PANE_WARMUP"] if opened_streaming else []) + ["MAIN_PANE_IDLE_QUESTION"]
+            assert record["userMessages"] == expected_users, record
         assert settings.read_bytes() == original_settings, "BTW settings changed"
-        result = {"parent": mode, "layout": layout, "status": "passed", "provider_requests": 1,
+        result = {"parent": mode, "layout": layout, "status": "passed", "opened_streaming": opened_streaming, "provider_requests": expected_requests,
                   "proofs": ["answer", "PageUp", "wheel", "search-close", "nested-root-Ctrl+C",
                              "parent-start", "separate-printable", "parent-command", "shutdown",
-                             "zero-main-messages", "unchanged-settings"]}
+                             "main-submission-before-BTW-close" if submit_main else "zero-main-messages", "unchanged-settings"]}
         (work / "result.json").write_text(json.dumps(result, indent=2))
         print(json.dumps(result), flush=True)
     finally:
@@ -225,9 +258,11 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, terminate)
     try:
         extension = fixture()
+        opened_streaming = "--opened-while-streaming" in sys.argv[1:]
+        submit_main = opened_streaming or "--main-submission" in sys.argv[1:]
         for mode in ["regular", "fullscreen"]:
-            for layout in ["fullscreen", "left-pane", "right-pane"]:
-                smoke(mode, layout, extension)
+            for layout in (["left-pane", "right-pane"] if submit_main else ["fullscreen", "left-pane", "right-pane"]):
+                smoke(mode, layout, extension, submit_main, opened_streaming)
         print("Limits: no physical IME, clipboard, platform, parent viewport, or draft-preservation proof; "
               "regular split parents have no native main viewport semantics.")
     finally:

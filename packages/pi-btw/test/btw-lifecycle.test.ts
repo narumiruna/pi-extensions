@@ -537,3 +537,198 @@ for (const confirmReplace of [false, true]) {
     }
   });
 }
+
+for (const layout of ["left-pane", "right-pane"] as const) {
+  test(`${layout} releases the idle main command loop only after mounting, while retaining shutdown ownership`, async () => {
+    const entered = deferred();
+    const finish = deferred();
+    let mounted: (() => void) | undefined;
+    let threadEnded = false;
+    let mainSubmitted = false;
+    let shutdownFinished = false;
+    const app = harness({
+      loadSettings: async () => ({ layout }),
+      runFullscreen: async (ctx, run, options) => {
+        mounted = options?.onReady;
+        return run(ctx);
+      },
+      runThread: async () => {
+        entered.resolve();
+        await finish.promise;
+        threadEnded = true;
+        return { kind: "closed" };
+      },
+    });
+    await app.emit("session_start");
+    // Model Pi's idle interactive loop: it cannot consume the next input until
+    // the extension-command promise settles, regardless of which pane has focus.
+    const loop = (async () => {
+      await app.command("side question");
+      mainSubmitted = true;
+    })();
+    try {
+      await entered.promise;
+      assert.equal(mainSubmitted, false);
+      assert.ok(mounted);
+      mounted();
+      await loop;
+      assert.equal(mainSubmitted, true);
+      assert.equal(threadEnded, false);
+      const shutdown = app.emit("session_shutdown", "reload").then(() => {
+        shutdownFinished = true;
+      });
+      await Promise.resolve();
+      assert.equal(shutdownFinished, false);
+      finish.resolve();
+      await shutdown;
+      assert.equal(threadEnded, true);
+    } finally {
+      finish.resolve();
+      await loop;
+      await app.emit("session_shutdown", "quit");
+    }
+  });
+}
+
+test("a mounted split rejects duplicate commands until its UI task closes, then permits reopening", async () => {
+  const entered = deferred();
+  const finish = deferred();
+  let runs = 0;
+  const app = harness({
+    loadSettings: async () => ({ layout: "left-pane" }),
+    runFullscreen: async (ctx, run, options) => {
+      const task = run(ctx);
+      options?.onReady?.();
+      return task;
+    },
+    runThread: async () => {
+      runs++;
+      entered.resolve();
+      await finish.promise;
+      return { kind: "closed" };
+    },
+  });
+  await app.emit("session_start");
+  try {
+    await app.command("first");
+    await entered.promise;
+    await app.command("second");
+    assert.equal(runs, 1);
+    assert.match(app.notifications.at(-1)?.message ?? "", /already open/);
+    finish.resolve();
+    await vi.waitFor(async () => {
+      await app.command("after close");
+      assert.equal(runs, 2);
+    });
+  } finally {
+    finish.resolve();
+    await app.emit("session_shutdown", "quit");
+  }
+});
+
+test("post-mount errors are observed and notified instead of becoming unhandled rejections", async () => {
+  const finish = deferred();
+  const app = harness({
+    loadSettings: async () => ({ layout: "right-pane" }),
+    runFullscreen: async (ctx, run, options) => {
+      const task = run(ctx);
+      options?.onReady?.();
+      return task;
+    },
+    runThread: async () => {
+      await finish.promise;
+      throw new Error("late split failure\u001b[31m");
+    },
+  });
+  await app.emit("session_start");
+  await app.command();
+  finish.resolve();
+  await vi.waitFor(() => assert.ok(app.notifications.some((item) => /late split failure/.test(item.message))));
+  assert.ok(app.notifications.every((item) => !item.message.includes("\u001b")));
+  await app.emit("session_shutdown", "quit");
+});
+
+test("fullscreen-only commands remain modal even if an injected renderer reports readiness", async () => {
+  const entered = deferred();
+  const finish = deferred();
+  let returned = false;
+  const app = harness({
+    loadSettings: async () => ({ layout: "fullscreen" }),
+    runFullscreen: async (ctx, run, options) => {
+      assert.equal(options?.onReady, undefined);
+      return run(ctx);
+    },
+    runThread: async () => {
+      entered.resolve();
+      await finish.promise;
+      return { kind: "closed" };
+    },
+  });
+  await app.emit("session_start");
+  const command = app.command().then(() => {
+    returned = true;
+  });
+  await entered.promise;
+  assert.equal(returned, false);
+  finish.resolve();
+  await command;
+  assert.equal(returned, true);
+  await app.emit("session_shutdown", "quit");
+});
+
+for (const reason of ["new", "resume", "fork", "reload", "quit"]) {
+  test(`released split shutdown(${reason}) aborts and drains its still-owned task`, async () => {
+    const finish = deferred();
+    let options: BtwFullscreenOptions | undefined;
+    let signal: AbortSignal | undefined;
+    const app = harness({
+      loadSettings: async () => ({ layout: "left-pane" }),
+      runFullscreen: async (ctx, run, value) => {
+        options = value;
+        const task = run(ctx);
+        value?.onReady?.();
+        return task;
+      },
+      runThread: async ({ ctx }) => {
+        signal = ctx.signal;
+        await finish.promise;
+        return { kind: "closed" };
+      },
+    });
+    await app.emit("session_start");
+    await app.command();
+    let drained = false;
+    const shutdown = app.emit("session_shutdown", reason).then(() => {
+      drained = true;
+    });
+    try {
+      assert.equal(signal?.aborted, true);
+      assert.equal(options?.canRestoreParent?.(), reason !== "quit");
+      options?.onReady?.();
+      await Promise.resolve();
+      assert.equal(drained, false);
+    } finally {
+      finish.resolve();
+      await shutdown;
+    }
+    assert.equal(options?.canRestoreParent?.(), false);
+    assert.deepEqual(app.notifications, []);
+  });
+}
+
+test("a failed split startup releases the command lease for a later attempt", async () => {
+  let attempts = 0;
+  const failure = new Error("startup failed");
+  const app = harness({
+    loadSettings: async () => ({ layout: "left-pane" }),
+    runFullscreen: async <T>() => {
+      if (++attempts === 1) throw failure;
+      return { kind: "closed" } as T;
+    },
+  });
+  await app.emit("session_start");
+  await assert.rejects(app.command(), (error) => error === failure);
+  await app.command();
+  assert.equal(attempts, 2);
+  await app.emit("session_shutdown", "quit");
+});

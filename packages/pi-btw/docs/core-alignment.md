@@ -283,3 +283,23 @@ Neither deterministic frames nor a passing package-directory load replaces manua
 The terminal operator must still inspect regular/fullscreen parents, all three layouts, non-default bindings, mouse selection/copy/links, Chinese IME cursor placement, narrow/short resize, and light/dark/system themes.
 Legacy and enhanced keyboard terminals, operating-system clipboard behavior, browser launch, and subjective readability remain manual acceptance paths.
 A safety failure blocks the affected release. Publication, external issue creation, and future core adoption each require separate authorization.
+
+
+## Split command completion and main input
+
+Pi's idle interactive loop awaits `session.prompt(userInput)`, and extension command dispatch awaits the command handler. Keeping that handler pending for the lifetime of a split workspace therefore prevents the idle loop from consuming `pendingUserInputs`, even when the main editor has focus. Streaming input takes a direct prompt/steer path, which previously masked this problem.
+
+BTW now releases the command only after the first split view is mounted and focused. The session lifetime continues tracking the complete UI task, including terminal restoration and settings writes. Fullscreen-only flows remain modal. A per-session command lease rejects overlapping invocations; failures before mounting still reject the command, while failures after release are observed and reported through a sanitized notification. Session replacement and shutdown abort and drain the owned task rather than abandoning it.
+
+`btw-lifecycle.test.ts` covers the awaited idle-loop boundary, one active command, pre/post-mount failures, and shutdown after release. `fullscreen-ui.test.ts` verifies that readiness follows a successful mount exactly once, and that failed/disposed/late factories cannot signal readiness. Existing native focus, remapped-key, paste, nested hard-cancel, and input-drain tests remain required.
+
+The local-provider PTY smoke exercises the real installed Pi interactive loop without provider credentials:
+
+```bash
+python3 packages/pi-btw/test/fullscreen-handoff-smoke.py --main-submission
+python3 packages/pi-btw/test/fullscreen-handoff-smoke.py --opened-while-streaming
+```
+
+Both routes test regular/fullscreen parents and left/right splits. The second route opens BTW during a gated main response, waits for that response to settle, then submits another main prompt before closing BTW. The smoke also retains paging, wheel, nested-search cancellation, parent-restoration, post-restoration input, and unchanged-settings assertions. Its original no-argument route retains the zero-main-message handoff matrix.
+
+A separate unchanged-base worktree reproduced the blocked idle main submission with the same smoke; the fixed runtime completed all four idle and four streaming-start cases. These are Unix PTY/local-provider checks, not Windows 11, physical-terminal, IME, clipboard, or visual acceptance. The private-layout and second-renderer deviations above remain unchanged.
