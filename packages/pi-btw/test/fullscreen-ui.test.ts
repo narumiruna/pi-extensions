@@ -61,6 +61,7 @@ function createHarness(
     fullscreenStopError?: Error;
     hardCancelRemoveError?: unknown;
     layoutMountError?: Error;
+    focusError?: Error;
     parentOverlayHideError?: Error;
     parentStartError?: Error;
     signal?: AbortSignal;
@@ -117,6 +118,7 @@ function createHarness(
     },
     setFocus(component: Component | null) {
       events.push(component ? "fullscreen.focus" : "fullscreen.unfocus");
+      if (component && options.focusError) throw options.focusError;
     },
     start() {
       events.push("fullscreen.start");
@@ -203,6 +205,150 @@ function createHarness(
       fullscreenInputListener(data);
     },
   };
+}
+
+for (const layout of ["left-pane", "right-pane"] as const) {
+  test(`${layout} signals readiness once after mounting and focus, not after later root changes`, async () => {
+    const harness = createHarness();
+    const close: Array<(value: string) => void> = [];
+    let ready = 0;
+    let readyEvents: string[] = [];
+    const running = runBtwFullscreen(
+      harness.ctx,
+      async (ctx) => {
+        for (let view = 0; view < 2; view += 1) {
+          await ctx.ui.custom<string>((_tui, _theme, _keys, done) => {
+            close.push(done);
+            return { render: () => ["side"], invalidate() {} };
+          });
+        }
+        return "closed";
+      },
+      {
+        layout,
+        onSplitReady: () => {
+          ready += 1;
+          readyEvents = harness.events.slice(-3);
+        },
+      },
+      { createTui: harness.createTui },
+    );
+    await waitForCondition(
+      () => harness.events.filter((event) => event === "fullscreen.layout").length === 1,
+      "first split did not mount",
+    );
+    await flushAsyncWork();
+    const readyWithFirstRoot = ready;
+    close[0]?.("next");
+    await waitForCondition(
+      () => harness.events.filter((event) => event === "fullscreen.layout").length === 2,
+      "second split root did not mount",
+    );
+    close[1]?.("closed");
+    assert.equal(await running, "closed");
+    assert.equal(readyWithFirstRoot, 1);
+    assert.equal(ready, 1);
+    assert.deepEqual(readyEvents, ["fullscreen.layout", "fullscreen.focus", "fullscreen.render"]);
+  });
+}
+
+test("a fullscreen-only root never signals split readiness", async () => {
+  const harness = createHarness();
+  let close: (() => void) | undefined;
+  let ready = false;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom((_tui, _theme, _keys, done) => {
+        close = () => done("closed");
+        return { render: () => ["side"], invalidate() {} };
+      }),
+    {
+      onSplitReady: () => {
+        ready = true;
+      },
+    },
+    { createTui: harness.createTui },
+  );
+  await waitForCondition(() => harness.events.includes("fullscreen.focus"), "fullscreen root did not mount");
+  close?.();
+  await running;
+  assert.equal(ready, false);
+});
+
+for (const stage of ["layout", "focus"] as const) {
+  test(`failed split ${stage} cannot signal readiness`, async () => {
+    const failure = new Error(`${stage} failed`);
+    const harness = createHarness(stage === "layout" ? { layoutMountError: failure } : { focusError: failure });
+    let ready = false;
+    let disposed = 0;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom(() => ({
+          render: () => ["side"],
+          invalidate() {},
+          dispose() {
+            disposed += 1;
+          },
+        })),
+      {
+        layout: "right-pane",
+        onSplitReady: () => {
+          ready = true;
+        },
+      },
+      { createTui: harness.createTui },
+    );
+    await assert.rejects(running, (error) => error === failure);
+    assert.equal(ready, false);
+    assert.equal(disposed, 1);
+    assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+  });
+}
+
+for (const outcome of ["disposed", "completed"] as const) {
+  test(`a ${outcome} split factory cannot signal late readiness`, async () => {
+    const harness = createHarness();
+    let releaseFactory: ((component: FakeComponent) => void) | undefined;
+    let ready = false;
+    let disposed = 0;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom((_tui, _theme, _keys, done) => {
+          if (outcome === "completed") done("closed");
+          return new Promise<FakeComponent>((resolve) => {
+            releaseFactory = resolve;
+          });
+        }),
+      {
+        layout: "left-pane",
+        onSplitReady: () => {
+          ready = true;
+        },
+      },
+      { createTui: harness.createTui },
+    );
+    await waitForCondition(() => releaseFactory !== undefined, "split factory did not start");
+    if (outcome === "disposed") {
+      harness.outerComponent?.dispose();
+      await assert.rejects(running, /dedicated pi-btw UI was disposed/iu);
+    } else {
+      assert.equal(await running, "closed");
+    }
+    releaseFactory?.({
+      render: () => ["late"],
+      invalidate() {},
+      dispose() {
+        disposed += 1;
+      },
+    });
+    await flushAsyncWork();
+    assert.equal(ready, false);
+    assert.equal(disposed, 1);
+    assert.equal(harness.events.includes("fullscreen.layout"), false);
+  });
 }
 
 test("shortcut warnings follow negotiated mode, deduplicate, and stop at disposal", async () => {
