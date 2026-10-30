@@ -33,7 +33,7 @@ The inspected implementation paths are Pi's `model-registry`, `model-runtime`, a
 
 ## Provider-specific refresh checks
 
-Refresh continues to use the existing guarded auth path. Native OpenAI requires provider OAuth and a matching complete native grant; its optional companion path validates both identities without claiming independent proof of the same user or workspace. GitHub Copilot and xAI require uniquely matched OAuth credentials, not arbitrary API keys. Moonshot sibling-region queries retain their shared-environment-key restriction. DeepSeek retains its Bearer requirement. All providers retain effective official-origin validation.
+Refresh continues to use the existing guarded auth path. Native OpenAI requires provider OAuth and a matching complete native grant; its optional companion path validates both identities without claiming independent proof of the same user or workspace. Anthropic extra usage requires explicit opt-in, a matching complete OAuth grant, and agreement with Pi/SDK effective Bearer authentication; SDK-owned auth overrides fail closed. It reports only the extra-usage spending cap, not ordinary Claude plan windows. GitHub Copilot and xAI require uniquely matched OAuth credentials, not arbitrary API keys. Moonshot sibling-region queries retain their shared-environment-key restriction. DeepSeek retains its Bearer requirement. All providers retain effective official-origin validation.
 
 API refreshes add request-boundary and final-publication revalidation for every adapter, including adapters that do not perform their own multi-step guards. A changed session, model, credential, target, policy, or query owner cannot publish an API ready result. API refresh bypasses cached reports but not failure backoff, and never falls back to a previous report after failure.
 
@@ -43,6 +43,7 @@ Capabilities describe possible normalized fields, not present credentials, entit
 
 | Provider | Possible measurements |
 | --- | --- |
+| `anthropic` | quota, spend; requires opt-in Claude extra usage and matching OAuth |
 | `baseten` | spend |
 | `openai` | quota, reset-time; numerical data requires the optional companion source |
 | `openai-codex` | quota, balance, reset-time |
@@ -59,4 +60,4 @@ Capabilities describe possible normalized fields, not present credentials, entit
 | `zai`, `zai-coding-cn` | quota, reset-time |
 | `xai` | quota, balance, spend, reset-time; API refresh is explicit and does not start status polling |
 
-OpenRouter's remaining key spend cap is not an account balance. Baseten's consumed credits are spend, not a remaining balance. Native OpenAI does not inherit the unrelated Codex credit-balance metric. Currency, target, and provider semantics remain separate.
+Anthropic's remaining monthly extra-usage spending allowance is not an account balance. OpenRouter's remaining key spend cap is not an account balance. Baseten's consumed credits are spend, not a remaining balance. Native OpenAI does not inherit the unrelated Codex credit-balance metric. Currency, target, and provider semantics remain separate.

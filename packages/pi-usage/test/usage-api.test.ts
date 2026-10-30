@@ -289,6 +289,7 @@ describe("usage potential capabilities and conservative cache reads", () => {
     "openai-codex": ["quota", "balance", "reset-time"],
     deepseek: ["balance"],
     "github-copilot": ["quota", "reset-time"],
+    anthropic: ["quota", "spend"],
     openrouter: ["quota", "spend"],
     "vercel-ai-gateway": ["balance", "spend"],
     "command-code": ["quota", "balance", "spend", "reset-time"],
@@ -310,7 +311,7 @@ describe("usage potential capabilities and conservative cache reads", () => {
         .map((adapter) => adapter.id)
         .sort(),
     );
-    expect(Object.keys(expected)).toHaveLength(18);
+    expect(Object.keys(expected)).toHaveLength(19);
   });
 
   it.each(Object.entries(expected))(

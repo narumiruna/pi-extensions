@@ -2,6 +2,7 @@
 // account cache, cancellation, and session lifecycle share one consistency boundary.
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { UnsupportedAnthropicUsageAuthError } from "./anthropic-auth.js";
 import { isOfficialCodexModel } from "./codex-fast.js";
 import { FAST_USAGE_WARNING, registerCodexFastMode } from "./codex-fast-runtime.js";
 import {
@@ -86,8 +87,12 @@ type QueryOutcome = {
   fingerprint?: string;
   authState?: "unavailable" | "unsupported" | "failed";
   rememberedTargetId?: string;
-  openaiPolicy?: { generation: number; enabled: boolean };
+  usagePolicy?: { providerId: "openai" | "anthropic"; generation: number; enabled: boolean };
 };
+
+function isUnsupportedUsageAuthError(error: unknown): boolean {
+  return error instanceof UnsupportedOpenAIUsageAuthError || error instanceof UnsupportedAnthropicUsageAuthError;
+}
 
 class UsageTargetSelectionChangedError extends Error {
   override readonly name = "UsageTargetSelectionChangedError";
@@ -103,15 +108,21 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const credentialCandidates = createOAuthCredentialCandidateReader(pi, credentialReader);
   const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
   const settingsRuntime = dependencies.settingsRuntime ?? createUsageSettingsRuntime();
-  let openaiUsageGeneration = 0;
-  const openaiPolicy = () => ({
-    generation: openaiUsageGeneration,
-    enabled: settingsRuntime.get().settings.openaiUseCodexUsage,
-  });
-  const openaiPolicyIsCurrent = (policy: QueryOutcome["openaiPolicy"]) =>
-    !policy ||
-    (policy.generation === openaiUsageGeneration &&
-      policy.enabled === settingsRuntime.get().settings.openaiUseCodexUsage);
+  const usageGenerations = { openai: 0, anthropic: 0 };
+  const usagePolicy = (providerId: string): QueryOutcome["usagePolicy"] => {
+    if (providerId !== "openai" && providerId !== "anthropic") return undefined;
+    const settings = settingsRuntime.get().settings;
+    return {
+      providerId,
+      generation: usageGenerations[providerId],
+      enabled: providerId === "openai" ? settings.openaiUseCodexUsage : settings.anthropicExtraUsage,
+    };
+  };
+  const usagePolicyIsCurrent = (policy: QueryOutcome["usagePolicy"]) => {
+    if (!policy) return true;
+    const current = usagePolicy(policy.providerId);
+    return policy.generation === current?.generation && policy.enabled === current.enabled;
+  };
   const resolveUsageAuth: typeof resolveRuntimeUsageAuth = async (
     ctx,
     adapter,
@@ -121,12 +132,13 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     _obsolete,
     options,
   ) => {
-    const policy = adapter.id === "openai" ? openaiPolicy() : undefined;
+    const policy = usagePolicy(adapter.id);
+    if (policy?.providerId === "anthropic" && !policy.enabled) return undefined;
     const ownerSession = sessionGeneration;
     const ownerModel = modelIdentity(ctx.model);
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const controller = policy ? new AbortController() : undefined;
-    if (controller) nativeQueryControllers.add(controller);
+    if (controller && policy) policyQueryControllers.set(controller, policy.providerId);
     const signal = controller
       ? options?.signal
         ? AbortSignal.any([options.signal, controller.signal])
@@ -136,7 +148,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       options?.checkCurrent?.();
       if (
         policy &&
-        (!openaiPolicyIsCurrent(policy) ||
+        (!usagePolicyIsCurrent(policy) ||
           ownerSession !== sessionGeneration ||
           modelIdentity(ctx.model) !== ownerModel ||
           ctx.sessionManager.getSessionId() !== ownerSessionId)
@@ -145,7 +157,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     };
     try {
       const auth = await resolveRuntimeUsageAuth(ctx, adapter, salt, reader, candidates, undefined, {
-        openaiUseCodexUsage: policy?.enabled,
+        openaiUseCodexUsage: policy?.providerId === "openai" ? policy.enabled : undefined,
         signal,
         ...(policy || options?.checkCurrent ? { checkCurrent } : {}),
       });
@@ -155,7 +167,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (policy || options?.checkCurrent) checkCurrent();
       throw error;
     } finally {
-      if (controller) nativeQueryControllers.delete(controller);
+      if (controller) policyQueryControllers.delete(controller);
     }
   };
   let usageApi: ReturnType<typeof registerUsageApi> | undefined;
@@ -168,7 +180,12 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const presentationQueries = new Map<string, Set<Promise<QueryOutcome>>>();
   const providerIdentities = new Map<string, string>();
   const activeControllers = new Set<AbortController>();
-  const nativeQueryControllers = new Set<AbortController>();
+  const policyQueryControllers = new Map<AbortController, "openai" | "anthropic">();
+  const cancelPolicyQueries = (providerId?: "openai" | "anthropic") => {
+    for (const [controller, owner] of policyQueryControllers) {
+      if (providerId === undefined || owner === providerId) controller.abort();
+    }
+  };
   let querySequence = 0;
   let activeCurrentIdentity: string | undefined;
   let activeContext: ExtensionContext | undefined;
@@ -225,7 +242,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   };
 
   const publishStatus = (ctx: ExtensionContext, outcome: QueryOutcome, model: PiModel, shouldSchedule: boolean) => {
-    if (!openaiPolicyIsCurrent(outcome.openaiPolicy)) return;
+    if (!usagePolicyIsCurrent(outcome.usagePolicy)) return;
     clearStatusCountdownTimer();
     if (adapterForProvider(model.provider)?.publishesStatusline === false) {
       clearStatusRefreshTimer();
@@ -329,7 +346,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     deadlineAt = Date.now() + DEFAULT_TIMEOUT_MS,
     apiRequest?: ApiQueryRequest,
   ): Promise<QueryOutcome> => {
-    const expectedPolicy = adapter.id === "openai" ? openaiPolicy() : undefined;
+    const expectedPolicy = usagePolicy(adapter.id);
     const expectedSessionGeneration = sessionGeneration;
     const expectedSessionId = ctx.sessionManager.getSessionId();
     const expectedModelIdentity = modelIdentity(ctx.model);
@@ -347,7 +364,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         providerQueries.get(adapter.id) !== queryId ||
         expectedSessionGeneration !== sessionGeneration ||
         ctx.sessionManager.getSessionId() !== expectedSessionId ||
-        !openaiPolicyIsCurrent(expectedPolicy) ||
+        !usagePolicyIsCurrent(expectedPolicy) ||
         (displayState === "current" && JSON.stringify(ctx.model) !== expectedModel) ||
         (adapter.targets !== undefined &&
           settingsRuntime.get().settings.selectedTargets[adapter.id] !== expectedTargetId)
@@ -356,6 +373,22 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         throw abortError();
       }
     };
+    checkOwnership();
+    if (expectedPolicy?.providerId === "anthropic" && !expectedPolicy.enabled) {
+      observeProviderIdentity(adapter.id, "disabled");
+      invalidateProviderState(adapter.id);
+      checkOwnership();
+      return {
+        state: {
+          providerId: adapter.id,
+          providerName,
+          displayState,
+          status: "unsupported",
+          message:
+            "Claude extra usage is off. Enable Claude extra usage in /usage Settings to use the experimental endpoint. Manage usage: https://claude.ai/settings/usage",
+        },
+      };
+    }
     let auth: ResolvedUsageAuth | undefined;
     try {
       auth = await awaitWithDeadline(
@@ -369,16 +402,15 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       );
     } catch (error) {
       checkOwnership();
-      if (signal.aborted || !openaiPolicyIsCurrent(expectedPolicy)) throw abortError();
+      if (signal.aborted || !usagePolicyIsCurrent(expectedPolicy)) throw abortError();
       if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
       observeProviderIdentity(adapter.id, "auth-error");
-      if (adapter.id === "openai") invalidateProviderState(adapter.id);
-      const authState =
-        error instanceof UnsupportedOpenAIUsageAuthError
-          ? "unsupported"
-          : adapter.id === "openai" && !isTimeoutError(error)
-            ? "failed"
-            : undefined;
+      if (expectedPolicy) invalidateProviderState(adapter.id);
+      const authState = isUnsupportedUsageAuthError(error)
+        ? "unsupported"
+        : expectedPolicy && !isTimeoutError(error)
+          ? "failed"
+          : undefined;
       if (displayState === "current") {
         transitionCurrentIdentity(`${adapter.id}:auth-error`, adapter.id);
       }
@@ -399,6 +431,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       apiRequest !== undefined ||
       adapter.targets !== undefined ||
       [
+        "anthropic",
         "baseten",
         "command-code",
         "deepseek",
@@ -413,7 +446,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         "zai-coding-cn",
       ].includes(adapter.id);
     const requestContextChanged = () =>
-      !openaiPolicyIsCurrent(expectedPolicy) ||
+      !usagePolicyIsCurrent(expectedPolicy) ||
       expectedSessionGeneration !== sessionGeneration ||
       ctx.sessionManager.getSessionId() !== expectedSessionId ||
       modelIdentity(ctx.model) !== expectedModelIdentity ||
@@ -426,7 +459,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     }
     if (!auth) {
       observeProviderIdentity(adapter.id, "auth-unavailable");
-      if (adapter.id === "openai") invalidateProviderState(adapter.id);
+      if (expectedPolicy) invalidateProviderState(adapter.id);
       if (displayState === "current") {
         transitionCurrentIdentity(`${adapter.id}:unavailable`, adapter.id);
       }
@@ -671,10 +704,10 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
 
   const executeAdapterState = async (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
     const [ctx, adapter, displayState, force, signal, ...rest] = args;
-    if (adapter.id !== "openai") return queryAdapterStateInternal(...args);
-    const policy = openaiPolicy();
+    const policy = usagePolicy(adapter.id);
+    if (!policy) return queryAdapterStateInternal(...args);
     const controller = new AbortController();
-    nativeQueryControllers.add(controller);
+    policyQueryControllers.set(controller, policy.providerId);
     try {
       const outcome = await queryAdapterStateInternal(
         ctx,
@@ -684,11 +717,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         AbortSignal.any([signal, controller.signal]),
         ...rest,
       );
-      if (signal.aborted || controller.signal.aborted || !openaiPolicyIsCurrent(policy)) throw abortError();
-      return { ...outcome, openaiPolicy: policy };
+      if (signal.aborted || controller.signal.aborted || !usagePolicyIsCurrent(policy)) throw abortError();
+      return { ...outcome, usagePolicy: policy };
     } finally {
       controller.abort();
-      nativeQueryControllers.delete(controller);
+      policyQueryControllers.delete(controller);
     }
   };
 
@@ -708,7 +741,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
 
   usageApi = registerUsageApi(pi, {
     policyIdentity: () =>
-      JSON.stringify({ openai: openaiPolicy(), targets: settingsRuntime.get().settings.selectedTargets }),
+      JSON.stringify({
+        openai: usagePolicy("openai"),
+        anthropic: usagePolicy("anthropic"),
+        targets: settingsRuntime.get().settings.selectedTargets,
+      }),
     refresh: async (ctx, providerId, signal, deadlineAt, checkCurrent): Promise<UsageQueryResultV1> => {
       // A read must not race a queued user settings publication. Cancelling this waiter must
       // not cancel the settings transaction owned by the menu.
@@ -829,7 +866,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       clearStatus(ctx);
       return;
     }
-    if (adapter.publishesStatusline === false) {
+    if (
+      adapter.publishesStatusline === false ||
+      (adapter.id === "anthropic" && !settingsRuntime.get().settings.anthropicExtraUsage)
+    ) {
+      if (adapter.id === "anthropic") invalidateProviderState(adapter.id);
       clearStatus(ctx);
       return;
     }
@@ -948,7 +989,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     signal: AbortSignal,
   ): Promise<boolean> => {
     if (
-      !openaiPolicyIsCurrent(outcome.openaiPolicy) ||
+      !usagePolicyIsCurrent(outcome.usagePolicy) ||
       generation !== statusGeneration ||
       modelIdentity(ctx.model) !== modelIdentity(model)
     ) {
@@ -968,7 +1009,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
           `revalidating ${adapter.displayName} runtime auth`,
         );
         return (
-          openaiPolicyIsCurrent(outcome.openaiPolicy) &&
+          usagePolicyIsCurrent(outcome.usagePolicy) &&
           generation === statusGeneration &&
           modelIdentity(ctx.model) === modelIdentity(model) &&
           (!adapter.targets ||
@@ -981,15 +1022,15 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         // Stable failures are still useful. A recovered credential or changed reason must
         // retry, but confirming the same native failure must not create a refresh loop.
         const unchangedFailure =
-          (outcome.authState === "unsupported" && error instanceof UnsupportedOpenAIUsageAuthError) ||
+          (outcome.authState === "unsupported" && isUnsupportedUsageAuthError(error)) ||
           (outcome.authState === "failed" &&
             outcome.state.status === "auth-unavailable" &&
-            !(error instanceof UnsupportedOpenAIUsageAuthError) &&
+            !isUnsupportedUsageAuthError(error) &&
             !isTimeoutError(error) &&
             errorMessage(error) === outcome.state.message);
         return (
           unchangedFailure &&
-          openaiPolicyIsCurrent(outcome.openaiPolicy) &&
+          usagePolicyIsCurrent(outcome.usagePolicy) &&
           generation === statusGeneration &&
           modelIdentity(ctx.model) === modelIdentity(model) &&
           (!adapter.targets ||
@@ -1007,7 +1048,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         `revalidating ${adapter.displayName} runtime auth`,
       );
       return (
-        openaiPolicyIsCurrent(outcome.openaiPolicy) &&
+        usagePolicyIsCurrent(outcome.usagePolicy) &&
         generation === statusGeneration &&
         modelIdentity(ctx.model) === modelIdentity(model) &&
         (!adapter.targets ||
@@ -1027,8 +1068,8 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     force: boolean,
     signal: AbortSignal,
   ): Promise<QueryOutcome> => {
-    if (adapter.id !== "openai") return queryAdapterState(ctx, adapter, displayState, force, signal);
-    // Configured/all-provider views must confirm native auth failures too, independently
+    if (!usagePolicy(adapter.id)) return queryAdapterState(ctx, adapter, displayState, force, signal);
+    // Configured/all-provider views must confirm gated auth failures too, independently
     // of the selected provider's subsequent revalidation.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const model = ctx.model;
@@ -1038,7 +1079,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (await outcomeStillCurrent(ctx, model, generation, outcome, signal)) return outcome;
       force = false;
     }
-    throw new Error("OpenAI runtime authentication kept changing; reopen /usage to retry.");
+    throw new Error(`${adapter.displayName} runtime authentication kept changing; reopen /usage to retry.`);
   };
 
   const queryStableCurrent = async (
@@ -1418,15 +1459,33 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
               controller.signal,
               () => statusGeneration === menuGeneration && !controller.signal.aborted,
               (id, uiClosed) => {
-                if (id === "openaiUseCodexUsage") {
+                if (id === "openaiUseCodexUsage" || id === "anthropicExtraUsage") {
                   // A completed rename can outlive UI cancellation. Invalidate owned work
                   // after durable publication, but never touch a replacement session's UI.
                   if (menuSessionGeneration !== sessionGeneration) return;
-                  openaiUsageGeneration += 1;
-                  for (const query of nativeQueryControllers) query.abort();
-                  invalidateProviderState("openai");
+                  const providerId = id === "openaiUseCodexUsage" ? "openai" : "anthropic";
+                  usageGenerations[providerId] += 1;
+                  cancelPolicyQueries(providerId);
+                  invalidateProviderState(providerId);
+                  // Clear menu-owned reports at the durability boundary too. Cancelling the
+                  // following refresh must not reveal a report from the previous policy.
+                  const clearReport = (state: ProviderUsageState): ProviderUsageState =>
+                    state.providerId !== providerId
+                      ? state
+                      : {
+                          providerId: state.providerId,
+                          providerName: state.providerName,
+                          displayState: state.displayState,
+                          status: "unsupported",
+                          message: "Usage settings changed. Refresh usage to load the current report.",
+                        };
+                  visibleStates = visibleStates.map(clearReport);
+                  if (current.state.providerId === providerId) {
+                    current = { state: clearReport(current.state), usagePolicy: usagePolicy(providerId) };
+                    stableCurrent = { model: stableCurrent?.model, outcome: current };
+                  }
                   usageApi?.observe(ctx);
-                  if (ctx.model?.provider === "openai") {
+                  if (ctx.model?.provider === providerId) {
                     statusController?.abort();
                     clearStatusTimers();
                     safeSetStatus(ctx, undefined);
@@ -1645,11 +1704,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
             const revalidated = await queryStableCurrent(ctx, false, controller, "Revalidating current usage…");
             if (!revalidated) return { kind: "back" };
             // Current-provider revalidation can await unrelated work after the configured
-            // native report was checked. Refresh its identity at the publication boundary.
-            if (adapter.id === "openai") {
+            // gated report was checked. Refresh its identity at the publication boundary.
+            if (usagePolicy(adapter.id)) {
               outcome = await runMenuOperation(
                 ctx,
-                "Revalidating ChatGPT companion usage…",
+                `Revalidating ${adapter.displayName} usage…`,
                 controller.signal,
                 (signal) => queryStableAdapterState(ctx, adapter, "configured", false, signal),
               );
@@ -1702,24 +1761,39 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
             });
             const revalidated = await queryStableCurrent(ctx, false, controller, "Revalidating current usage…");
             if (!revalidated) return { kind: "stay" };
-            const nativeIndex = adapters.findIndex(
-              (adapter) => adapter.id === "openai" && adapter.id !== currentProviderId,
-            );
-            if (nativeIndex >= 0) {
-              const nativeAdapter = adapters[nativeIndex];
-              if (nativeAdapter) {
-                const native = await runMenuOperation(
-                  ctx,
-                  "Revalidating ChatGPT companion usage…",
-                  controller.signal,
-                  (signal) => queryStableAdapterState(ctx, nativeAdapter, "configured", false, signal),
-                );
-                if (!native) return { kind: "stay" };
-                queriedStates[nativeIndex] = native.state;
-              }
+            // Revalidate gated reports together after unrelated provider work. Keep the
+            // current gated provider in the same final batch and check all local policies
+            // after it settles, rather than holding one report across another serial query.
+            const gatedAdapters = adapters.filter((adapter) => usagePolicy(adapter.id));
+            const currentAdapter = adapterForProvider(currentProviderId);
+            if (currentAdapter && usagePolicy(currentAdapter.id) && !gatedAdapters.includes(currentAdapter))
+              gatedAdapters.push(currentAdapter);
+            const gated =
+              gatedAdapters.length === 0
+                ? []
+                : await runMenuOperation(ctx, "Revalidating subscription usage…", controller.signal, async (signal) => {
+                    const outcomes = await Promise.all(
+                      gatedAdapters.map((adapter) =>
+                        queryStableAdapterState(
+                          ctx,
+                          adapter,
+                          adapter.id === currentProviderId ? "current" : "configured",
+                          false,
+                          signal,
+                        ),
+                      ),
+                    );
+                    if (outcomes.some((outcome) => !usagePolicyIsCurrent(outcome.usagePolicy))) throw abortError();
+                    return outcomes;
+                  });
+            if (!gated) return { kind: "stay" };
+            for (const outcome of gated) {
+              const index = adapters.findIndex((adapter) => adapter.id === outcome.state.providerId);
+              if (index >= 0) queriedStates[index] = outcome.state;
             }
-            stableCurrent = revalidated;
-            current = revalidated.outcome;
+            const latestCurrent = gated.find((outcome) => outcome.state.providerId === currentProviderId);
+            stableCurrent = latestCurrent ? { outcome: latestCurrent, model: revalidated.model } : revalidated;
+            current = stableCurrent.outcome;
             visibleStates = [
               current.state,
               ...queriedStates.filter((state) => state.providerId !== current.state.providerId),
@@ -1772,7 +1846,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     for (const controller of activeControllers) controller.abort();
     activeControllers.clear();
     statusController = undefined;
-    for (const controller of nativeQueryControllers) controller.abort();
+    cancelPolicyQueries();
     sessionActive = true;
     const ownerGeneration = sessionGeneration;
     try {
@@ -1792,8 +1866,8 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   pi.on("model_select", (event, ctx) => {
     activeContext = ctx;
     usageApi?.observe(ctx);
-    // Cancel read-only native queries, not confirmed legacy reset mutations.
-    for (const controller of nativeQueryControllers) controller.abort();
+    // Cancel read-only gated queries, not confirmed legacy reset mutations.
+    cancelPolicyQueries();
     startStatusRefresh(ctx, event.model, false);
   });
   pi.on("turn_start", (_event, ctx) => {
@@ -1810,7 +1884,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     for (const controller of activeControllers) controller.abort();
     activeControllers.clear();
     statusController = undefined;
-    for (const controller of nativeQueryControllers) controller.abort();
+    cancelPolicyQueries();
     failureBackoff.clear();
     latestQueries.clear();
     providerQueries.clear();

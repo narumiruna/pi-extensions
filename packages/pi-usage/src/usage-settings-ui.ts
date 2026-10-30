@@ -9,7 +9,12 @@ const ON = "On";
 const REMAINING = "Remaining";
 const USED = "Used";
 
-type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown" | "codexStatusPercentage" | "openaiUseCodexUsage";
+type UsageSettingId =
+  | "codexFastMode"
+  | "codexStatusResetCountdown"
+  | "codexStatusPercentage"
+  | "openaiUseCodexUsage"
+  | "anthropicExtraUsage";
 
 function settingValueLabel(id: UsageSettingId, value: UsageSettings[UsageSettingId]): string {
   if (id === "codexStatusPercentage") return value === "used" ? USED : REMAINING;
@@ -68,6 +73,14 @@ export async function showUsageSettings(
           currentValue: state.settings.openaiUseCodexUsage ? ON : OFF,
           values: [OFF, ON],
         },
+        {
+          id: "anthropicExtraUsage",
+          label: "Claude extra usage",
+          description:
+            "Experimental: read Claude extra-usage spending and the monthly limit with the matched Anthropic OAuth login. Sends the access token to an undocumented Anthropic usage endpoint; no billing settings are changed.",
+          currentValue: state.settings.anthropicExtraUsage ? ON : OFF,
+          values: [OFF, ON],
+        },
       ];
       const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
 
@@ -119,7 +132,12 @@ export async function showUsageSettings(
           if (closing || signal.aborted || !isCurrent()) return;
           if (id === "codexStatusPercentage") {
             queueUpdate(id, value === USED ? "used" : "remaining", value);
-          } else if (id === "codexFastMode" || id === "codexStatusResetCountdown" || id === "openaiUseCodexUsage") {
+          } else if (
+            id === "codexFastMode" ||
+            id === "codexStatusResetCountdown" ||
+            id === "openaiUseCodexUsage" ||
+            id === "anthropicExtraUsage"
+          ) {
             queueUpdate(id, value === ON, value);
           }
         },

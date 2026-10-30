@@ -2,9 +2,11 @@
 // separating that security boundary would duplicate request and redaction policy across providers.
 import { randomBytes } from "node:crypto";
 import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { resolveAnthropicUsageAuth } from "./anthropic-auth.js";
 import { createUsageAuthGuard, type UsageAuthLifecycle } from "./auth-resolution-guard.js";
 import { abortError, errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
 import { fallbackOAuthCredentialCandidates, type OAuthCredentialCandidateReader } from "./oauth-credential-source.js";
+import { type AnthropicUsagePayload, normalizeAnthropicUsagePayload } from "./providers/anthropic.js";
 import { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
 import { normalizeCodexBackendPayload } from "./providers/codex.js";
 import { commandCodeOrgId, normalizeCommandCodeUsagePayload } from "./providers/command-code.js";
@@ -55,6 +57,7 @@ import type {
 } from "./types.js";
 import { resolveUsageTarget } from "./usage-targets.js";
 
+const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const BASETEN_BILLING_USAGE_URL = "https://api.baseten.co/v1/billing/usage_summary";
 const BASETEN_USAGE_WINDOW_DAYS = 30;
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -91,6 +94,29 @@ const MAX_ERROR_BODY_BYTES = 4 * 1024;
 export const AUTH_FINGERPRINT_SALT = randomBytes(32);
 
 export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
+  {
+    id: "anthropic",
+    displayName: "Anthropic",
+    semantics: { kind: "consumer-subscription", label: "Claude extra-usage spending limit" },
+    invalidateCacheOnFailure: true,
+    async query(auth, signal, timeoutMs, guard) {
+      if (!guard) throw new Error("Claude extra usage requires request-boundary revalidation.");
+      const startedAt = Date.now();
+      await guard();
+      signal.throwIfAborted();
+      const payload = await fetchProviderJson(
+        ANTHROPIC_USAGE_URL,
+        auth,
+        signal,
+        remainingTimeout(timeoutMs, startedAt, "fetching Claude extra usage"),
+        "Claude extra-usage endpoint",
+        { redirect: "error" },
+      );
+      await guard();
+      signal.throwIfAborted();
+      return normalizeAnthropicUsagePayload(payload as AnthropicUsagePayload, Date.now());
+    },
+  },
   {
     id: "baseten",
     displayName: "Baseten",
@@ -435,24 +461,45 @@ export async function resolveUsageAuth(
       `${adapter.displayName} usage cannot send an overridden provider credential to the official usage endpoint.`,
     );
   }
+  // Pi can include provider response text in OAuth errors before a candidate is available
+  // for redaction. Anthropic failures use a fixed message instead of echoing that text.
+  const readRuntimeAuth = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+    try {
+      return await guard.wait(operation);
+    } catch (error) {
+      guard.check();
+      if (adapter.id !== "anthropic") throw error;
+      throw Object.assign(
+        new Error("Anthropic runtime authentication could not be resolved; retry /login anthropic."),
+        {
+          name: error instanceof Error && error.name === "TimeoutError" ? "TimeoutError" : "Error",
+        },
+      );
+    }
+  };
   let modelAuth: RequestAuth | undefined;
   const currentModel = ctx.model?.provider === adapter.id ? ctx.model : undefined;
   const resolveCurrentModelAuth = async (): Promise<RequestAuth | undefined> => {
     if (!currentModel || typeof registry.getApiKeyAndHeaders !== "function") return undefined;
-    const result = await guard.wait(() => registry.getApiKeyAndHeaders?.(currentModel));
+    const result = await readRuntimeAuth(() => registry.getApiKeyAndHeaders?.(currentModel));
     if (!result) return undefined;
-    if (!result.ok) throw new Error(redactUsageError(result.error));
+    if (!result.ok)
+      throw new Error(
+        adapter.id === "anthropic"
+          ? "Anthropic model authentication could not be resolved."
+          : redactUsageError(result.error),
+      );
     // Native plan status must inspect explicit empty/null Authorization overrides, not fall
     // back to provider OAuth when the selected model removes or replaces its authorization.
-    return adapter.id === "openai" || authorizationFrom(result) ? result : undefined;
+    return adapter.id === "openai" || adapter.id === "anthropic" || authorizationFrom(result) ? result : undefined;
   };
-  const resolveSelectedAuthLast = ["deepseek", "minimax", "minimax-cn", "openai"].includes(adapter.id);
+  const resolveSelectedAuthLast = ["anthropic", "deepseek", "minimax", "minimax-cn", "openai"].includes(adapter.id);
   if (!resolveSelectedAuthLast) modelAuth = await guard.wait(resolveCurrentModelAuth);
   if (typeof registry.getProviderAuth !== "function") {
     throw new Error("pi-usage requires Pi 0.81.0 or newer to validate resolved provider auth.");
   }
   if (!moonshotProviderAuthIsAllowed(ctx, adapter.id)) return undefined;
-  const providerResult = await guard.wait(() => registry.getProviderAuth?.(adapter.id));
+  const providerResult = await readRuntimeAuth(() => registry.getProviderAuth?.(adapter.id));
   if (!moonshotProviderAuthIsAllowed(ctx, adapter.id)) return undefined;
   if (providerResult?.auth.baseUrl && !hasOfficialUrlOrigin(providerResult.auth.baseUrl, adapter.id)) {
     throw new Error(
@@ -501,6 +548,18 @@ export async function resolveUsageAuth(
       ),
     };
   };
+  if (adapter.id === "anthropic") {
+    if (!providerResult) return undefined;
+    const offered = await guard.wait(() =>
+      candidateReader
+        ? candidateReader(ctx, adapter.id)
+        : fallbackOAuthCredentialCandidates(adapter.id, credentialReader),
+    );
+    if (!offered.ok) throw new Error("Anthropic OAuth credential discovery failed closed.");
+    return finalize(
+      resolveAnthropicUsageAuth(auth, providerResult.auth, model, offered.candidates, currentModel?.headers),
+    );
+  }
   if (adapter.id === "openai") {
     // Pi can return empty compatibility model auth without any provider credential.
     if (!providerResult) return undefined;
@@ -1005,6 +1064,7 @@ function hasOfficialUrlOrigin(value: string, providerId: string): boolean {
     if (providerId === "baseten") {
       return ["https://inference.baseten.co", "https://api.baseten.co"].includes(url.origin);
     }
+    if (providerId === "anthropic") return url.origin === "https://api.anthropic.com";
     if (providerId === "openai") return url.origin === "https://api.openai.com";
     if (providerId === "openai-codex") return url.origin === "https://chatgpt.com";
     if (providerId === "command-code") return url.origin === COMMAND_CODE_API_ORIGIN;

@@ -68,7 +68,7 @@ Read the [query and reset guide](./docs/operations.md) for target selection, can
 
 ## ⚙️ Settings
 
-Choose **Settings** in `/usage` to edit Codex Fast mode, percentage display, reset countdown, and optional [OpenAI companion usage](#chatgpt-companion-usage) through Pi's settings-list interaction in TUI mode.
+Choose **Settings** in `/usage` to edit Codex Fast mode, percentage display, reset countdown, optional [Claude extra usage](#claude-extra-usage), and optional [OpenAI companion usage](#chatgpt-companion-usage) through Pi's settings-list interaction in TUI mode.
 RPC mode reports the active manual settings path instead of opening terminal UI.
 
 These preferences live in `pi-usage.json` under Pi's user agent directory, normally `~/.pi/agent/pi-usage.json`.
@@ -128,6 +128,22 @@ Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `fal
 }
 ```
 
+## Claude extra usage
+
+**Experimental and Off by default:** this feature reads the undocumented Anthropic OAuth usage endpoint. Its contract is based on one user-reported Enterprise response; live Pro/Max coverage and provider-disabled response shapes remain unverified.
+
+Use `/login anthropic` with a Claude subscription, select an official `anthropic` model, then turn **Claude extra usage** On in `/usage` → **Settings**.
+In RPC mode, set `"anthropicExtraUsage": true` in the user settings file and run `/reload`.
+The setting accepts only a boolean and defaults to `false`; TUI changes apply immediately.
+
+`/usage` shows extra-usage spend, the monthly spending limit, and the amount left. The supplied example produces `$80.00` used, a `$100.00` limit, and `anthropic $20.00 left` in the statusline.
+This is a spending allowance, not a prepaid balance or the Claude plan's five-hour/seven-day quota. No reset date is inferred.
+Amounts keep their explicit currency and decimal scale; missing fields remain unavailable.
+
+Off prevents Anthropic usage requests and credential discovery. Disabling cancels owned requests and clears previous numerical cache, menu, and status data; a request already sent cannot be recalled.
+API keys, unmatched OAuth grants, custom/proxy origins, and authentication overrides cannot inherit subscription usage.
+See the [Anthropic provider reference](./docs/providers.md#anthropic-claude-extra-usage) for authentication constraints, supported fields, and unverified paths.
+
 ## ChatGPT companion usage
 
 **Experimental source:** this read-only feature uses undocumented ChatGPT backend endpoints that may change without notice.
@@ -178,6 +194,7 @@ Currencies and billing targets remain separate.
 
 | Provider | Reported data |
 | --- | --- |
+| Anthropic (Claude subscription OAuth) | Opt-in extra-usage spend, monthly limit, and remaining allowance |
 | OpenAI (native ChatGPT OAuth) | Authentication status by default; optional companion-sourced plan percentages and plan/app resets |
 | OpenAI Codex (legacy) | Subscription windows, credits, resets, and model buckets |
 | Kimi For Coding | Plan request windows and a separate booster wallet |
@@ -223,6 +240,7 @@ Their countdowns are not controlled by the Codex-only settings. Codex and ChatGP
 Countdowns repaint locally every minute while a displayed eligible reset remains in the future, without additional provider requests; hidden windows and unselected model groups do not activate this repaint for the newly supported providers.
 
 The status item refreshes every five minutes while the session remains on a provider that publishes usage and is cleared when the model changes to an unsupported or menu-only provider.
+With Claude extra usage enabled, Anthropic publishes the remaining monthly spending allowance, such as `anthropic $20.00 left`; disabled or incomplete allowance data has no monetary status.
 DeepSeek publishes each returned currency as a separate exact balance segment and reports when the API is unavailable.
 Fireworks publishes exact per-currency rated spend totals and reports when no rated usage exists.
 Moonshot AI publishes the available balance with its region-native currency.
@@ -300,7 +318,7 @@ The generated runtime is built from `src/index.ts` and does not import back into
 
 ## 🔎 Keywords
 
-Pi extension, provider usage, Codex usage, subscription limits, reset times, API balances, spending, Codex Fast mode.
+Pi extension, provider usage, Claude extra usage, Anthropic OAuth, Codex usage, subscription limits, reset times, API balances, spending, Codex Fast mode.
 
 ## 📄 License
 

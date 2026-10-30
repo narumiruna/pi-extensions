@@ -5,6 +5,7 @@
 This reference preserves each provider's endpoint, authentication boundary, billing semantics, and contract evidence.
 The README contains the capability overview and shared security requirements.
 
+- [Anthropic Claude extra usage](#anthropic-claude-extra-usage)
 - [OpenAI native ChatGPT OAuth](#openai-native-chatgpt-oauth)
 - [OpenAI Codex](#openai-codex)
 - [Kimi For Coding](#kimi-for-coding)
@@ -22,6 +23,37 @@ The README contains the capability overview and shared security requirements.
 - [Z.AI](#zai-glm-coding-plan)
 
 ## 📋 Provider semantics
+
+### Anthropic Claude extra usage
+
+- Provider ID: `anthropic`
+- Semantics: Claude subscription extra-usage spending and monthly cap, not ordinary plan quotas or a prepaid balance
+- Source: undocumented `GET https://api.anthropic.com/api/oauth/usage`
+- Enablement: `anthropicExtraUsage: true` in user settings, or **Claude extra usage** in the TUI Settings screen; default Off
+- Displayed data: `extra_usage.used_credits`, `monthly_limit`, and derived nonnegative remaining allowance
+- Statusline example: `anthropic $20.00 left`
+
+The source contract is the redacted Enterprise-seat response in [issue #1757](https://github.com/narumiruna/pi-extensions/issues/1757), not a published Anthropic API specification.
+Live availability, agreement with the Claude usage page, Pro/Max behavior, and provider-disabled shapes remain unverified.
+An eligible account owner can enable the feature with their own Pi login and compare `/usage` and the statusline with [Claude usage settings](https://claude.ai/settings/usage); no credential sharing is needed.
+Keep the experimental warning and do not claim broader live compatibility from fixture tests alone.
+
+The adapter requires Pi's freshly resolved access token to match a complete OAuth credential from Pi's login or the versioned credential-source protocol.
+Provider and selected-model authorization must agree with that token and with the installed Anthropic transport's effective Bearer header, with no additional API-key header.
+Pi owns token refresh and persistence; usage cancellation stops its own continuation without cancelling a token rotation that Pi must finish.
+The inference model, configured provider, and resolved-auth origins must be official `https://api.anthropic.com` origins.
+Only the matched access-token Bearer header reaches the fixed usage route; refresh tokens, model headers, and unrelated SDK headers are not forwarded. Redirects are rejected, requests have deadlines, and responses are size-bounded.
+
+The SDK reads `ANTHROPIC_CUSTOM_HEADERS` outside Pi's resolved-auth result. Authentication or Host entries in that variable are deliberately unsupported, even when another header would override them.
+Explicit model/provider Authorization replacements or removals, conflicting OAuth grants, expired grants, and ordinary API-key credentials cannot inherit another login's usage.
+Auth behavior is characterized with synthetic credentials through Pi's real runtime and Anthropic SDK transport, including case collisions, null/empty headers, runtime keys, ambient tokens, federation, and refresh failures.
+
+`is_enabled` must explicitly be true for monetary reporting. False produces a disabled note without monetary fields; missing data produces an unavailable note.
+Currency must be an explicit uppercase three-letter label and `decimal_places` an integer from 0 through 6; neither USD nor cents is assumed.
+Amounts must be finite, nonnegative numbers no larger than `Number.MAX_SAFE_INTEGER`. Decimal-string normalization retains fractional minor units without binary subtraction errors.
+Zero caps remain zero; usage above the cap remains visible, with zero remaining and an over-limit note. Missing counters do not become zero, and present invalid fields fail the query.
+The mirrored `spend` object, utilization percentages, ordinary plan windows, reset fields, and raw disabled reasons are ignored.
+The read-only API advertises spend and spending-cap quota, not balance or reset-time measurements.
 
 ### OpenAI native ChatGPT OAuth
 

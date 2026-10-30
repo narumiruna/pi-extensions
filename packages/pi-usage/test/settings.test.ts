@@ -25,6 +25,7 @@ afterEach(async () => {
 test("normalizes owned settings and ignores the retired xAI field", () => {
   assert.deepEqual(normalizeUsageSettings({}), DEFAULT_USAGE_SETTINGS);
   assert.deepEqual(normalizeUsageSettings({ codexFastMode: true }), {
+    anthropicExtraUsage: false,
     openaiUseCodexUsage: false,
     codexFastMode: true,
     codexStatusResetCountdown: true,
@@ -33,6 +34,7 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
     statuslineDisplay: DEFAULT_USAGE_SETTINGS.statuslineDisplay,
   });
   assert.deepEqual(normalizeUsageSettings({ fireworksAccountId: "acme-prod" }), {
+    anthropicExtraUsage: false,
     openaiUseCodexUsage: false,
     codexFastMode: false,
     codexStatusResetCountdown: true,
@@ -46,6 +48,7 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
       selectedTargets: { fireworks: "current", custom: "project-1" },
     }),
     {
+      anthropicExtraUsage: false,
       openaiUseCodexUsage: false,
       codexFastMode: false,
       codexStatusResetCountdown: true,
@@ -288,6 +291,7 @@ test("failed explicit target migration keeps legacy data and allows a retry", as
 
 test("normalizes the Codex reset countdown status preference", () => {
   assert.deepEqual(normalizeUsageSettings({ codexStatusResetCountdown: false }), {
+    anthropicExtraUsage: false,
     openaiUseCodexUsage: false,
     codexFastMode: false,
     codexStatusResetCountdown: false,
@@ -300,6 +304,7 @@ test("normalizes the Codex reset countdown status preference", () => {
 
 test("normalizes the Codex status percentage preference", () => {
   assert.deepEqual(normalizeUsageSettings({ codexStatusPercentage: "used" }), {
+    anthropicExtraUsage: false,
     openaiUseCodexUsage: false,
     codexFastMode: false,
     codexStatusResetCountdown: true,
