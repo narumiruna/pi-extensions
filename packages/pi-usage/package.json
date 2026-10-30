@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-usage",
-  "version": "0.68.4",
+  "version": "0.69.0",
   "description": "Pi extension for provider usage, limits, reset times, API balances, and Codex Fast mode.",
   "type": "module",
   "license": "MIT",
