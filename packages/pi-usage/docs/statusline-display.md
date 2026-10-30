@@ -4,7 +4,7 @@
 
 Set `statuslineDisplay` in Pi's user `pi-usage.json`, normally `~/.pi/agent/pi-usage.json`, then run `/reload`.
 The extension loads settings at each session start. It does not read project overrides or create a file merely to load defaults.
-The existing Settings screen edits Codex preferences only; templates require manual JSON editing.
+The Settings screen edits provider preferences; templates require manual JSON editing.
 
 ## Defaults and syntax
 
@@ -75,6 +75,10 @@ They do not change percentages, window selection or ordering, model groups, or r
 One available segment has no separator; unavailable quotas do not create empty segments.
 Unlimited windows use `window`, not `countdown`.
 
+By default, static labels precede values, such as `cmd 5h:100% · wk:97% · mo:98%`.
+Countdown segments omit window labels but retain spacing, such as `codex 89% ↻ 2h30m · 97% ↻ 5d17h`; a missing reset uses a static label, such as `codex 89% ↻ 2h30m · wk:97%`.
+These presentation changes do not alter reported values. Consumers that parse older status text must adapt to the current format; ChatGPT companion formatting is unchanged.
+
 The existing `codexStatusResetCountdown` setting still controls only Codex.
 Other scoped providers still show countdowns automatically for valid future resets and use static labels for missing, invalid, or expired resets.
 Codex retains its existing expired-reset `0m` countdown.
@@ -88,6 +92,13 @@ An invalid file remains unchanged and blocks subsequent saves until repaired and
 
 Unknown JSON fields are ignored at runtime and preserved during ordinary settings saves, including unknown fields inside `statuslineDisplay`.
 Reads remain side-effect free. Existing ordered, private temporary-file-plus-rename save behavior remains unchanged; separate Pi processes are not mutually locked.
+
+## Countdown updates
+
+Eligible countdowns repaint locally every minute while a displayed reset remains in the future, without additional provider requests.
+Hidden windows and unselected model groups do not activate this repaint for Kimi, MiniMax Token Plan, Z.AI, Command Code, OpenCode Go, or GitHub Copilot.
+Balance and spend reports do not show reset countdowns.
+See the [provider guides](./providers/README.md) for provider-specific status examples and availability.
 
 ## Verification scope
 
