@@ -14,28 +14,31 @@ const VALUE_COLUMN = 29;
 export function formatUsageReport(report: UsageReport, displayState: UsageDisplayState): string {
   const stateLabel = displayState === "current" ? "Current" : "Configured";
   const title =
-    report.providerId === "baseten"
-      ? "Baseten Model APIs Spend"
-      : report.providerId === "deepseek"
-        ? "DeepSeek API Balance"
-        : report.providerId === "fireworks"
-          ? "Fireworks API Spend"
-          : report.providerId === "vercel-ai-gateway"
-            ? "Vercel AI Gateway Credits"
-            : report.providerId === "moonshotai" || report.providerId === "moonshotai-cn"
-              ? `${report.providerName} Balance`
-              : report.providerId === "minimax" || report.providerId === "minimax-cn"
-                ? report.source === "minimax-account-balance"
-                  ? `${report.providerName} API Balance`
-                  : `${report.providerName} Token Plan`
-                : report.source === "openai-chatgpt-auth"
-                  ? `${report.providerName} ChatGPT Plan Status`
-                  : `${report.providerName} Usage`;
+    report.providerId === "anthropic"
+      ? "Claude Extra Usage"
+      : report.providerId === "baseten"
+        ? "Baseten Model APIs Spend"
+        : report.providerId === "deepseek"
+          ? "DeepSeek API Balance"
+          : report.providerId === "fireworks"
+            ? "Fireworks API Spend"
+            : report.providerId === "vercel-ai-gateway"
+              ? "Vercel AI Gateway Credits"
+              : report.providerId === "moonshotai" || report.providerId === "moonshotai-cn"
+                ? `${report.providerName} Balance`
+                : report.providerId === "minimax" || report.providerId === "minimax-cn"
+                  ? report.source === "minimax-account-balance"
+                    ? `${report.providerName} API Balance`
+                    : `${report.providerName} Token Plan`
+                  : report.source === "openai-chatgpt-auth"
+                    ? `${report.providerName} ChatGPT Plan Status`
+                    : `${report.providerName} Usage`;
   const lines = [`${title} · ${stateLabel}`];
   if (report.accountLabel) lines.push(`Account: ${report.accountLabel}`);
   lines.push(`Semantics: ${report.semantics.label}`, "");
 
   if (report.source === "openai-chatgpt-companion") formatOpenAICompanionReport(lines, report);
+  else if (report.providerId === "anthropic") formatAnthropicReport(lines, report);
   else if (report.providerId === "baseten") formatBasetenReport(lines, report);
   else if (report.providerId === "openai-codex") formatCodexReport(lines, report);
   else if (report.providerId === "deepseek") formatDeepSeekReport(lines, report);
@@ -123,6 +126,10 @@ function formatStatusline(
       });
     return `chatgpt plan ${windows.join(" ")}`;
   }
+  if (report.providerId === "anthropic") {
+    const remaining = formatAnthropicMoney(report.metrics.find((metric) => metric.id === "extra-usage-remaining"));
+    return remaining ? `anthropic ${remaining} left` : undefined;
+  }
   if (report.providerId === "baseten") return formatBasetenStatusline(report);
   if (report.providerId === "openai-codex") {
     return formatCodexStatusline(
@@ -177,6 +184,30 @@ export function formatProviderStates(states: readonly ProviderUsageState[]): str
       return `${state.providerName} · ${label}\n${status}: ${state.message}`;
     })
     .join("\n\n");
+}
+
+function formatAnthropicReport(lines: string[], report: UsageReport): void {
+  for (const [id, label] of [
+    ["extra-usage-used", "Used this month"],
+    ["extra-usage-limit", "Monthly limit"],
+    ["extra-usage-remaining", "Remaining"],
+  ]) {
+    const value = formatAnthropicMoney(report.metrics.find((metric) => metric.id === id));
+    if (value) lines.push(`${`${label}:`.padEnd(VALUE_COLUMN)}${value}`);
+  }
+}
+
+function formatAnthropicMoney(metric: UsageReport["metrics"][number] | undefined): string | undefined {
+  if (
+    metric?.unit !== "currency" ||
+    typeof metric.value !== "string" ||
+    metric.value !== metric.value.trim() ||
+    !/^\d+(?:\.\d+)?$/u.test(metric.value) ||
+    metric.currency?.length !== 3 ||
+    !/^[A-Z]{3}$/u.test(metric.currency)
+  )
+    return undefined;
+  return metric.currency === "USD" ? `$${metric.value}` : `${metric.currency} ${metric.value}`;
 }
 
 function formatBasetenReport(lines: string[], report: UsageReport): void {

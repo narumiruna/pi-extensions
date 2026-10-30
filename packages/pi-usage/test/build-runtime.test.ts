@@ -187,6 +187,100 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   }
 });
 
+test("generated Anthropic runtime loads its adapter and lazy usage menu through Pi Jiti", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-usage-build-test-anthropic-"));
+  const agentDir = join(root, "agent");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let cleanup = async () => {};
+  let dispose = () => {};
+  try {
+    await builder.buildRuntime({ outputDirectory: join(root, "dist") });
+    await mkdir(agentDir);
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "");
+    const credential = {
+      type: "oauth",
+      access: "sk-ant-oat-synthetic-jiti",
+      refresh: "synthetic-jiti-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+    await writeFile(join(agentDir, "auth.json"), JSON.stringify({ anthropic: credential }), { mode: 0o600 });
+    await writeFile(join(agentDir, "pi-usage.json"), JSON.stringify({ anthropicExtraUsage: true }));
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir,
+      settingsManager: SettingsManager.inMemory({}),
+      additionalExtensionPaths: [join(root, "dist/index.ts")],
+    });
+    await loader.reload();
+    const loaded = loader.getExtensions();
+    dispose = () => loaded.runtime.invalidate("Anthropic generated test cleanup");
+    assert.deepEqual(loaded.errors, []);
+    const extension = loaded.extensions[0];
+    assert.ok(extension);
+    const model = {
+      id: "claude-synthetic",
+      name: "Claude",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+    };
+    let title = "";
+    const context = createMockContext({
+      mode: "rpc",
+      cwd: root,
+      model,
+      select: async (value: string) => {
+        title = value;
+        return "Close";
+      },
+      modelRegistry: {
+        getAll: () => [model],
+        getAvailable: () => [model],
+        getProviderAuth: async () => ({ source: "OAuth", auth: { apiKey: credential.access } }),
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: credential.access }),
+      },
+    });
+    const ctx = context.ctx as ExtensionContext;
+    cleanup = async () => {
+      for (const handler of extension.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
+    };
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            extra_usage: {
+              is_enabled: true,
+              currency: "USD",
+              decimal_places: 2,
+              used_credits: 8000,
+              monthly_limit: 10000,
+            },
+          }),
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    for (const handler of extension.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const command = extension.commands.get("usage");
+    assert.ok(command);
+    await command.handler("", context.ctx);
+    assert.match(title, /Claude Extra Usage/);
+    assert.match(title, /Remaining:\s+\$20\.00/);
+    assert.equal(context.statuses.get("usage"), "anthropic $20.00 left");
+    assert.equal(fetch.mock.calls.length, 1);
+    await cleanup();
+    assert.equal(context.statuses.get("usage"), undefined);
+  } finally {
+    await cleanup();
+    dispose();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("generated API refresh crosses native lazy boundaries and disposes its bus listeners", async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-usage-build-test-api-"));

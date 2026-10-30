@@ -34,6 +34,8 @@ export {
   UsageCache,
 } from "./core.js";
 export { formatProviderStates, formatUsageReport, formatUsageStatusline } from "./format.js";
+export type { AnthropicUsagePayload } from "./providers/anthropic.js";
+export { normalizeAnthropicUsagePayload } from "./providers/anthropic.js";
 export { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
 export { normalizeCodexBackendPayload } from "./providers/codex.js";
 export { commandCodeOrgId, normalizeCommandCodeUsagePayload } from "./providers/command-code.js";

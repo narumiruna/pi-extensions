@@ -23,6 +23,7 @@ const supportedProviders = new Set(usageAdapters().map((adapter) => adapter.id))
 // Potential normalized fields, not entitlement or the current auth mode. Native OpenAI can
 // optionally use companion app/plan quota windows, but does not expose Codex credit balance.
 const measurements: Readonly<Record<string, readonly UsageMeasurementV1[]>> = {
+  anthropic: ["quota", "spend"],
   baseten: ["spend"],
   openai: ["quota", "reset-time"],
   "openai-codex": ["quota", "balance", "reset-time"],

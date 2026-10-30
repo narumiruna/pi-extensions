@@ -771,10 +771,10 @@ test.each(
   }
 });
 
-test("Z.AI and native ChatGPT adapters opt into failed-query cache invalidation", () => {
+test("Claude, Z.AI, and native ChatGPT adapters opt into failed-query cache invalidation", () => {
   assert.deepEqual(
     SUPPORTED_ADAPTERS.filter((adapter) => adapter.invalidateCacheOnFailure).map((adapter) => adapter.id),
-    ["openai", "zai", "zai-coding-cn"],
+    ["anthropic", "openai", "zai", "zai-coding-cn"],
   );
 });
 
