@@ -1,53 +1,73 @@
-export const TOKYO_NIGHT_PRESET = `# Pi-native adaptation of Starship's Tokyo Night preset.
-format = "[░▒▓](#a3aed2)$brand$model[](bg:#769ff0 fg:#a3aed2)$directory[](fg:#769ff0 bg:#394260)$git_branch$git_status[](fg:#394260 bg:#212736)$thinking$activity[](fg:#212736 bg:#1d2230)$context$time[](fg:#1d2230)"
+export const TOKYO_NIGHT_PRESET = `# Pi-native adaptation of Tokyo Night.
+# Source: https://starship.rs/presets/tokyo-night
+# Original configuration: https://starship.rs/presets/toml/tokyo-night.toml
+# Font: Nerd Font. See NOTICES.md for attribution and license terms.
+# Replace OS and language probes with Pi and the selected model. Use the final dark block for context and the clock.
+
+format = "[░▒▓](lead)$brand$directory([](fg:prev_bg bg:git)$git_branch$git_status)([](fg:prev_bg bg:model)$model$thinking)([](fg:prev_bg bg:meter)$context$time)[](fg:prev_bg)(\\n$extension_status)"
+palette = "tokyo_night"
+
+[palettes.tokyo_night]
+lead = "#a3aed2"
+ink = "#090c0c"
+blue = "#769ff0"
+fg = "#e3e5e5"
+git = "#394260"
+model = "#212736"
+meter = "#1d2230"
+muted = "#a0a9cb"
 
 [brand]
 format = "[ $symbol ]($style)"
-symbol = ""
-style = "fg:#090c0c bg:#a3aed2 bold"
-
-[model]
-format = "[$model ]($style)"
-symbol = ""
-style = "fg:#090c0c bg:#a3aed2 bold"
+style = "bold fg:ink bg:lead"
+symbol = "π"
 
 [directory]
-format = "[ $path ]($style)"
-symbol = ""
-style = "fg:#e3e5e5 bg:#769ff0 bold"
-truncation_length = 3
+format = "([](fg:prev_bg bg:blue)[ $symbol $path ]($style))"
+style = "bold fg:ink bg:blue"
+symbol = ""
+truncation_length = 2
 truncation_symbol = "…/"
 
 [git_branch]
-format = "[ $symbol $branch ]($style)"
+format = "([ $symbol $branch ]($style))"
+style = "fg:blue bg:git"
 symbol = ""
-style = "fg:#769ff0 bg:#394260 bold"
+truncation_length = 18
 
 [git_status]
-format = "[$all_status$ahead_behind ]($style)"
-style = "fg:#769ff0 bg:#394260 bold"
+format = "([ $all_status$ahead_behind ]($style))"
+style = "fg:blue bg:git"
+
+[model]
+format = "([ $symbol $model ]($style))"
+style = "fg:blue bg:model"
+symbol = "◆"
+shorten_model = true
+truncation_length = 22
+truncation_direction = "middle"
 
 [thinking]
-format = "[ $symbol $level ]($style)"
-symbol = "󰔟"
-style = "fg:#769ff0 bg:#212736 bold"
-
-[activity]
-format = "[ $text ]($style)"
-symbol = "󰑮"
-style = "fg:#769ff0 bg:#212736 bold"
+format = "([ $level ]($style))"
+style = "fg:muted bg:model"
 
 [context]
-format = "[ $symbol $percentage ](fg:#a0a9cb bg:#1d2230 bold)"
-symbol = "󰍛"
+format = "([ ctx $percentage ]($style))"
 
 [[context.display]]
 threshold = 0
-style = "#1d2230"
+style = "fg:muted bg:meter"
 hidden = false
 
 [time]
-format = "[ $time ]($style)"
-symbol = ""
-style = "fg:#a0a9cb bg:#1d2230 bold"
+format = "[ $time ]($style)"
+style = "fg:muted bg:meter"
+time_format = "%H:%M"
+
+[extension_status]
+format = "([$statuses]($style))"
+style = "fg:muted"
+separator = " · "
+max_statuses = 2
+icons = { fallback = "" }
 `;

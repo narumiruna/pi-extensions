@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { sep } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { BUILT_IN_CONFIG, normalizeConfig, validateConfigDocument } from "../src/config.js";
+import { activePalette, BUILT_IN_CONFIG, normalizeConfig, validateConfigDocument } from "../src/config.js";
 import { parseFormat } from "../src/format/formatter.js";
+import { parseStyle } from "../src/format/style.js";
 import {
   formatCount,
   formatExtensionStatus,
@@ -96,20 +97,29 @@ test("bundled presets render their promised Pi-native information", () => {
   assert.doesNotMatch(plainById.get("minimal") ?? "", /π|75\.0%|09:05/u);
   assert.match(plainById.get("bracketed-segments") ?? "", /\[π\].*\[AI claude-sonnet-4-20250514\].*\[09:05\]/u);
   assert.match(plainById.get("catppuccin-powerline") ?? "", /.*.*claude-sonnet-4-20250514.*.*/u);
-  assert.match(plainById.get("gruvbox-rainbow") ?? "", /.*.*claude-sonnet-4-20250514.*.*/u);
+  assert.match(
+    plainById.get("gruvbox-rainbow") ?? "",
+    /.*π.*pi-extensions.* feature.*sonnet-4.*high.*\n.*read.*75\.0%.*09:05/u,
+  );
   assert.match(plainById.get("jetpack") ?? "", /◄.*read.*◯ 75\.0%.*pi-extensions.*△ feature/u);
   assert.match(plainById.get("nerd-font-symbols") ?? "", /.*󰚩.*󰉋.*.*/u);
   assert.match(plainById.get("no-empty-icons") ?? "", /model claude-sonnet-4-20250514.*in \/work\/pi-extensions/u);
   assert.match(plainById.get("no-nerd-font") ?? "", /✦.*◆ claude-sonnet-4-20250514.*⌂ \/work\/pi-extensions.*◴ 09:05/u);
   assert.doesNotMatch(plainById.get("no-runtime-versions") ?? "", /claude-sonnet-4-20250514|high/u);
   assert.match(plainById.get("no-runtime-versions") ?? "", /π.*AI.*think.*pi-extensions/u);
-  assert.match(plainById.get("pastel-powerline") ?? "", /.*.*claude-sonnet-4-20250514.*.*/u);
+  assert.match(
+    plainById.get("pastel-powerline") ?? "",
+    /.*π.*pi-extensions.* feature.*◆ sonnet-4.*high.*ctx 75\.0%.*09:05/u,
+  );
   assert.match(
     plainById.get("plain-text-symbols") ?? "",
     /pi.*model claude-sonnet-4-20250514.*dir \/work\/pi-extensions.*git feature/u,
   );
   assert.match(plainById.get("pure-preset") ?? "", /pi-extensions feature.*\nclaude-sonnet-4-20250514 high/u);
-  assert.match(plainById.get("tokyo-night") ?? "", /░▒▓.*.*claude-sonnet-4-20250514.*.*.*󰑮.*󰍛.*/u);
+  assert.match(
+    plainById.get("tokyo-night") ?? "",
+    /░▒▓.*π.*pi-extensions.*.* feature.*◆ sonnet-4.*high.*ctx 75\.0%.*09:05/u,
+  );
   for (const [id, rendered] of plainById) {
     assert.ok(rendered.length > 0, id);
     assert.doesNotMatch(rendered, /undefined|\$[a-z_]+/u, id);
@@ -246,14 +256,15 @@ test("a selectorless style rule is an ordered catch-all", () => {
   assert.deepEqual(rendered.modules.thinking[0]?.style?.foreground, { kind: "named", name: "white" });
 });
 
-test("thinking fallback keeps bundled Powerline preset backgrounds and modifiers", () => {
+test("thinking fallback keeps bundled Powerline preset text styles", () => {
   for (const id of ["catppuccin-powerline", "gruvbox-rainbow", "pastel-powerline", "tokyo-night"] as const) {
     const preset = STARSHIP_PRESETS.find((candidate) => candidate.id === id);
     assert.ok(preset, id);
     const loaded = validateConfigDocument(`/presets/${id}.toml`, preset.rawDocument);
-    const style = renderStatusline(loaded.config, fixture()).modules.thinking[0]?.style;
+    const chunks = renderStatusline(loaded.config, fixture()).modules.thinking;
+    const style = chunks.find((chunk) => chunk.text.includes("high"))?.style;
     assert.notEqual(style?.background, undefined, id);
-    assert.equal(style?.bold, true, id);
+    assert.deepEqual(style, parseStyle(loaded.config.modules.thinking.style, activePalette(loaded.config)), id);
   }
 });
 

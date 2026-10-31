@@ -19,7 +19,7 @@ import {
 import { projectEffectiveConfig, serializeEffectiveConfig } from "../src/effective-config.js";
 import { MODULE_DEFINITIONS } from "../src/modules/catalog.js";
 import { reachableModuleRequirements } from "../src/modules/index.js";
-import { presetForDocument, STARSHIP_PRESETS } from "../src/presets/catalog.js";
+import { getStarshipPreset, presetForDocument, STARSHIP_PRESETS } from "../src/presets/catalog.js";
 
 test("bundled presets are distinct, valid, and limited to local core modules", () => {
   assert.deepEqual(
@@ -28,22 +28,40 @@ test("bundled presets are distinct, valid, and limited to local core modules", (
       "minimal",
       "bracketed-segments",
       "catppuccin-powerline",
+      "catppuccin-tmux",
+      "dracula-tmux",
       "gruvbox-rainbow",
       "jetpack",
+      "lualine-bubbles",
+      "lualine-evil",
+      "lualine-slanted-gaps",
       "nerd-font-symbols",
       "no-empty-icons",
       "no-nerd-font",
       "no-runtime-versions",
+      "oh-my-posh-atomic",
       "pastel-powerline",
       "plain-text-symbols",
+      "powerlevel10k-lean",
       "pure-preset",
       "tokyo-night",
     ],
   );
   assert.equal(new Set(STARSHIP_PRESETS.map((preset) => preset.id)).size, STARSHIP_PRESETS.length);
+  assert.equal(new Set(STARSHIP_PRESETS.map((preset) => preset.rawDocument)).size, STARSHIP_PRESETS.length);
   assert.deepEqual(
     STARSHIP_PRESETS.filter((preset) => preset.requiresNerdFont).map((preset) => preset.id),
-    ["catppuccin-powerline", "gruvbox-rainbow", "nerd-font-symbols", "pastel-powerline", "tokyo-night"],
+    [
+      "catppuccin-powerline",
+      "catppuccin-tmux",
+      "gruvbox-rainbow",
+      "lualine-bubbles",
+      "lualine-slanted-gaps",
+      "nerd-font-symbols",
+      "oh-my-posh-atomic",
+      "pastel-powerline",
+      "tokyo-night",
+    ],
   );
 
   const allowedModules = new Set([
@@ -56,8 +74,10 @@ test("bundled presets are distinct, valid, and limited to local core modules", (
     "git_status",
     "activity",
     "context",
+    "tokens",
     "time",
     "fill",
+    "extension_status",
   ]);
   for (const preset of STARSHIP_PRESETS) {
     const loaded = validateConfigDocument(`/presets/${preset.id}.toml`, preset.rawDocument);
@@ -71,6 +91,18 @@ test("bundled presets are distinct, valid, and limited to local core modules", (
     assert.equal(presetForDocument(`${preset.rawDocument}\n`), undefined);
   }
   assert.equal(presetForDocument(undefined), undefined);
+});
+
+test("preset display names are distinct and keep established IDs", () => {
+  assert.equal(new Set(STARSHIP_PRESETS.map((preset) => preset.label)).size, STARSHIP_PRESETS.length);
+  assert.equal(getStarshipPreset("no-runtime-versions").label, "Session Indicators");
+  assert.match(
+    getStarshipPreset("no-runtime-versions").description,
+    /model names, thinking levels, and activity details/u,
+  );
+  assert.equal(getStarshipPreset("pure-preset").label, "Pure");
+  assert.equal(getStarshipPreset("lualine-evil").label, "Lualine Eviline");
+  assert.match(getStarshipPreset("lualine-bubbles").description, /Violet Pi badge, gray workspace/u);
 });
 
 test("effective configuration projects every public catalog field in stable order", () => {

@@ -5,7 +5,7 @@ import {
   getAgentDir,
   type ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
-import { getCapabilities, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getCapabilities, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { completeStarshipArguments } from "./command-contract.js";
 import type { StarshipCommandOptions } from "./commands.js";
 import { type LoadedStarshipConfig, loadStarshipConfig, type StarshipConfig, settingsFilePath } from "./config.js";
@@ -755,7 +755,11 @@ function formatDiagnostics(loaded: LoadedStarshipConfig): string {
 
 export function wrapFormattedStatusline(format: string, width: number): string[] {
   if (width <= 0) return [];
-  return wrapTextWithAnsi(format, width);
+  // Pi can keep a whole grapheme wider than the viewport. Bound only those
+  // residual rows; ordinary wrapping and its ANSI state remain unchanged.
+  return wrapTextWithAnsi(format, width).map((line) =>
+    visibleWidth(line) > width ? truncateToWidth(line, width, "…") : line,
+  );
 }
 
 export {

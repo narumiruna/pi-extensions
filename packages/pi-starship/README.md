@@ -10,12 +10,12 @@ The extension parses and renders the footer itself, so it does not need the `sta
 
 ## ✨ Features
 
-- Keeps Pi's native footer until settings are saved and offers Starship presets plus a Pi-native Minimal preset.
+- Keeps Pi's native footer until settings are saved and offers Starship, Lualine, Tmux, Powerlevel10k, and Oh My Posh-inspired presets plus a Pi-native Minimal preset.
 - Supports root and module formats, conditional groups, `$all`, styles, palettes, and width-aware `$fill` alignment.
 - Selects provider, model, and thinking styles from exact runtime values with ordered module rules.
 - Provides Pi, model, usage, Git, pull request, package, language, environment, deployment, cloud, and execution modules, with usage totals including persisted cache warming.
 - Offers opt-in Jujutsu, native RAM/optional Linux swap, and Linux sysfs battery modules, all disabled by default.
-- Wraps native multiline layouts to terminal width instead of truncating them.
+- Wraps native multiline layouts to terminal width, with an ellipsis fallback for a grapheme wider than the terminal.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
 - Uses `/starship` for named TOML profiles, live previews, presets, customization, and recovery history.
 - Offers a separate configuration chat with the bundled skill and draft-only file tools; valid edits preview immediately without reload.
@@ -50,6 +50,10 @@ Do not enable this with `@narumitw/pi-statusline`: both own Pi's footer, and Pi 
 
 Start Pi with the extension to keep Pi's native footer without creating a settings file.
 Run `/starship` and choose **Configure with agent** for edits and explanations, or choose a preset.
+
+Open **Presets** for connected Powerline segments, rounded Bubbles, Slanted Gaps, Catppuccin and Dracula Tmux, Lean, and Atomic layouts.
+The picker marks Nerd Font requirements; some layouts use two rows and wrap at narrow widths.
+Preset updates do not rewrite an already applied footer or saved profile. See [presets and adaptation notes](./skills/configure-pi-starship/references/configuration.md#-presets).
 
 The bundled configuration skill is manual-only and is not available for automatic model invocation.
 Run `/skill:configure-pi-starship` before asking Pi to explain or edit `pi-starship.toml`:
@@ -262,4 +266,4 @@ Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native sta
 
 MIT.
 See [`LICENSE`](./LICENSE).
-Starship attribution and its ISC license are included in [`NOTICES.md`](./NOTICES.md).
+Preset source attribution and applicable third-party licenses are included in [`NOTICES.md`](./NOTICES.md).
