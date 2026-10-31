@@ -1,5 +1,11 @@
 # @narumitw/pi-stamp
 
+## 0.54.0
+
+### Minor Changes
+
+- ced6be5: Add a main-menu Presets action with Compact, Model, Usage, Cost, Abnormal, Detailed, and None starting points for assistant metadata and independent Settings controls for layout, model provenance, token fields, call cost, stop reasons, and opt-in debug data. Preserve legacy metadata settings on read and translate them on the next explicit save without changing unrelated settings. Require the TUI Kit fixes for bounded menus and readable settings values at narrow widths. Keep action-screen summaries concise, describe every main-menu action, and mark the current preset. Apply preset changes immediately to the original right-aligned transcript Stamp rows as the TUI cursor moves, without a separate preview block. When a Stamp has no saved metadata, recover ordinary display fields from its matching earlier assistant response on the active branch; preserve saved metadata and retain the result after confirmation. Never recover response content, IDs, diagnostics, or raw/current Thinking. Keep recording settings, saved entries, transcript expansion, and unrelated preferences unchanged. Save only after confirmation and retain an ordinary RPC selector without cursor previews.
+
 ## 0.53.0
 
 ### Minor Changes

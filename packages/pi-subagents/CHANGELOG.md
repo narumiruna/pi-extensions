@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 3.4.1
+
+### Patch Changes
+
+- 5803891: Wake an idle main agent when a subagent job reaches a terminal state. Keep steering delivery for a running main agent and suppress stale completions after session replacement or shutdown.
+
 ## 3.4.0
 
 ### Minor Changes
