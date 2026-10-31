@@ -206,22 +206,9 @@ test("turn replacement, cancellation, session replacement, and shutdown clear pe
 function settingsRuntimeWithToolStamps(toolStamps = true): StampSettingsRuntime {
   const state: StampSettingsState = {
     settings: { ...DEFAULT_STAMP_SETTINGS, toolStamps },
-    sources: {
-      hourCycle: "built-in",
-      showSeconds: "built-in",
-      dateContext: "built-in",
-      locale: "built-in",
-      timeZone: "built-in",
-      responseTiming: "built-in",
-      showOutputThroughput: "built-in",
-      assistantMetadata: "built-in",
-      showExactTimeline: "built-in",
-      showThinkingLevel: "built-in",
-      showCompactAbnormalOutcome: "built-in",
-      showCostSinceUser: "built-in",
-      showTimeSinceUser: "built-in",
-      toolStamps: "user",
-    },
+    sources: Object.fromEntries(
+      Object.keys(DEFAULT_STAMP_SETTINGS).map((key) => [key, key === "toolStamps" ? "user" : "built-in"]),
+    ) as StampSettingsState["sources"],
     canSave: true,
   };
   return {

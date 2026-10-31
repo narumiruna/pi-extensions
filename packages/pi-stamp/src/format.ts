@@ -1,7 +1,5 @@
-import { formatElapsedSeconds, isReportedTokenCount, type StampAssistantMetadataMode } from "./metadata.js";
-
-export type { StampAssistantMetadataMode } from "./metadata.js";
-export { ASSISTANT_METADATA_MODES } from "./metadata.js";
+import { formatElapsedSeconds, isReportedTokenCount } from "./metadata.js";
+import { DEFAULT_METADATA_SETTINGS, type StampMetadataSettings } from "./metadata-settings.js";
 
 export const HOUR_CYCLES = ["24h", "12h"] as const;
 export const DATE_CONTEXTS = ["day-change", "always", "never"] as const;
@@ -15,7 +13,7 @@ export type StampTimelineBoundary = (typeof TIMELINE_BOUNDARIES)[number];
 export type StampLocale = "invariant" | "system" | string;
 export type StampTimeZone = "local" | string;
 
-export interface StampSettings {
+export interface StampSettings extends StampMetadataSettings {
   hourCycle: StampHourCycle;
   showSeconds: boolean;
   dateContext: StampDateContext;
@@ -23,16 +21,14 @@ export interface StampSettings {
   timeZone: StampTimeZone;
   responseTiming: StampResponseTimingMode;
   showOutputThroughput: boolean;
-  assistantMetadata: StampAssistantMetadataMode;
   showExactTimeline: boolean;
-  showThinkingLevel: boolean;
-  showCompactAbnormalOutcome: boolean;
   showCostSinceUser: boolean;
   showTimeSinceUser: boolean;
   toolStamps: boolean;
 }
 
 export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
+  ...DEFAULT_METADATA_SETTINGS,
   hourCycle: "24h",
   showSeconds: true,
   dateContext: "day-change",
@@ -40,10 +36,7 @@ export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
   timeZone: "local",
   responseTiming: "off",
   showOutputThroughput: false,
-  assistantMetadata: "off",
   showExactTimeline: true,
-  showThinkingLevel: true,
-  showCompactAbnormalOutcome: true,
   showCostSinceUser: false,
   showTimeSinceUser: false,
   toolStamps: false,

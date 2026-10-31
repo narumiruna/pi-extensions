@@ -9,6 +9,7 @@ Optionally show response timing and output throughput, assistant provenance and 
 
 - Shows each message's recorded creation time on a dim, right-aligned row.
 - Supports 12/24-hour clocks, seconds, automatic date context, locales, and time zones.
+- Applies metadata presets live to the original transcript Stamp rows before saving.
 - Optionally shows response latency, average output throughput, elapsed time since user, model and provider identity, effective Pi Thinking level, stop reason, tokens, call cost, and cost since user.
 - Optionally records tool duration and success or error after each complete tool block.
 - Shows exact UTC ISO 8601 and Unix millisecond observation times only during transcript expansion.
@@ -34,10 +35,11 @@ Try this package from a local checkout:
 
 ```bash
 npm --workspace @narumitw/pi-stamp run build
-pi -e ./packages/pi-stamp
+pi --no-extensions -e ./packages/pi-stamp
 ```
 
 The package declares `dist/index.ts`, so build an unbuilt local checkout before Pi loads the package directory.
+The isolated local command avoids loading an installed copy at the same time.
 Install only from sources you trust because Pi extensions run with Pi's permissions.
 
 ## 🚀 Quick start
@@ -53,20 +55,11 @@ Assistant reply
                                  14:32:11
 ```
 
-Run `/stamp` to open the presentation menu:
-
-```text
-Stamp
-24-hour · seconds · Day changes · Invariant · Local · Timing off · Throughput hidden · Timeline shown · Metadata off · Thinking shown · Abnormal shown · Cost since user hidden · Time since user hidden · Tool stamps hidden
-
-Settings
-Status
-Help
-Close
-```
-
-Settings save immediately.
-Existing compatible stamps reformat on the next render, and new stamps use the same settings.
+Run `/stamp` and choose **Presets**. In TUI, move through the list to change the Stamp rows attached to the original assistant responses immediately, then confirm a preset to save it. Use **Settings** to adjust individual fields.
+There is no separate preview block. A Stamp without saved metadata can display ordinary fields from its matching response in the active session branch. This does not rewrite history or read response content, IDs, diagnostics, or unrecorded Thinking values.
+Presets leave timestamps, response timing, throughput, since-user controls, and tool stamps unchanged.
+Settings edits save immediately. Closing a preview removes it without undoing confirmed saves.
+Existing compatible stamps reformat on the next render.
 
 ## 💬 Commands
 
@@ -75,28 +68,11 @@ The command rejects arguments, print mode, and JSON mode without changing settin
 
 ## ⚙️ Settings
 
-The `/stamp` Settings screen provides these controls:
-
-| Field | Accepted values | Default | Behavior |
-| --- | --- | --- | --- |
-| `hourCycle` | `"24h"`, `"12h"` | `"24h"` | Selects the clock style. |
-| `showSeconds` | boolean | `true` | Shows or hides seconds. |
-| `dateContext` | `"day-change"`, `"always"`, `"never"` | `"day-change"` | Adds a date at recorded day boundaries, every time, or never. |
-| `locale` | `"invariant"`, `"system"`, or one BCP 47 tag | `"invariant"` | Controls localized date/time presentation. |
-| `timeZone` | `"local"` or one supported IANA zone | `"local"` | Controls time and day-boundary interpretation; `UTC` is accepted. |
-| `responseTiming` | `"off"`, `"duration"`, `"detailed"` | `"off"` | Keeps timestamps minimal, adds total assistant duration, or labels first-content and total timing. |
-| `showOutputThroughput` | boolean | `false` | Captures and shows average reported output tokens per second, independently of metadata and duration display. |
-| `showExactTimeline` | boolean | `true` | Shows exact UTC and Unix observation times when transcript details are expanded. |
-| `assistantMetadata` | `"off"`, `"compact"`, `"expanded"` | `"off"` | Captures and shows no assistant metadata, a compact model/Thinking-level/total/cost summary, or all supported provenance and usage fields. |
-| `showThinkingLevel` | boolean | `true` | Captures and shows Pi's effective turn Thinking level when assistant metadata is enabled. |
-| `showCompactAbnormalOutcome` | boolean | `true` | Shows `length`, `error`, and `aborted` stop reasons in compact assistant metadata. |
-| `showCostSinceUser` | boolean | `false` | Shows the cost since user and final call cost on a non-`toolUse` assistant response. |
-| `showTimeSinceUser` | boolean | `false` | Records and shows fixed elapsed time from the latest user message to a non-`toolUse` assistant response's completion. |
-| `toolStamps` | boolean | `false` | Records and shows duration plus success/error for newly observed tools. |
-
-The compatibility defaults produce local `HH:mm:ss` for ordinary same-day messages.
-`invariant` uses Gregorian ISO dates, Latin digits, and English `AM`/`PM`.
-`system` uses the operating system locale; examples of explicit locales are `en-US`, `fr-FR`, and `zh-TW`.
+Use `/stamp` → **Presets** for assistant metadata starting points, or **Settings** for independent layout, field, timing, and tool controls.
+The current preset is derived from the metadata settings; combinations that match no preset are **Custom**.
+RPC provides an ordinary selector without cursor previews.
+New defaults show local `HH:mm:ss`, add dates at day changes, and keep metadata hidden.
+Response IDs and diagnostic summaries require separate opt-in and remain hidden until transcript expansion.
 
 The canonical user file is:
 
@@ -106,37 +82,22 @@ The canonical user file is:
 
 Pi's configured agent directory replaces `~/.pi/agent` when applicable.
 The file is a partial JSON object.
-This example enables 12-hour Taipei time without seconds, compact metadata without Thinking or abnormal labels, cost and time since user, an exact expanded timeline, and tool stamps:
+For example, show Taipei time with only the requested model and reported call cost:
 
 ```json
 {
-  "hourCycle": "12h",
-  "showSeconds": false,
   "timeZone": "Asia/Taipei",
-  "responseTiming": "duration",
-  "showExactTimeline": true,
-  "assistantMetadata": "compact",
-  "showThinkingLevel": false,
-  "showCompactAbnormalOutcome": false,
-  "showCostSinceUser": true,
-  "showTimeSinceUser": true,
-  "toolStamps": true
+  "showRequestedModel": true,
+  "showCallCost": true
 }
 ```
 
-Settings precedence is intentionally:
+There are no project settings or extension-specific environment overrides.
+Confirmed presets and Settings edits apply immediately; manual edits load at startup, `/reload`, or session replacement.
+Missing settings do not create a file or directory, and invalid files block saving instead of being overwritten.
+Fix an invalid file and run `/reload`; a running process retains its last valid settings.
 
-```text
-built-in defaults -> user pi-stamp.json
-```
-
-Presentation is a personal preference, so `pi-stamp` does not read project settings or extension-specific environment variables.
-Missing settings do not create a file or directory.
-Updates preserve unknown fields and publish through a private temporary file plus atomic rename.
-Malformed or invalid files become read-only and are never overwritten; fix the reported file and run `/reload`.
-A fresh process uses defaults while the file is invalid, and a running process retains its last valid settings.
-Reads and writes are serialized within one Pi process.
-Separate Pi processes do not share a lock, so concurrent saves are last-writer-wins even though each process rereads immediately before atomic publication.
+Read the [settings reference](./docs/settings.md) for all fields, preset contents, legacy-setting compatibility, precedence, and persistence guarantees.
 
 Transcript stamps are appended only in TUI mode; RPC provides configuration dialogs without adding transcript entries.
 
@@ -226,8 +187,9 @@ Sub-minute durations use tenths of a second; longer durations show whole minutes
 
 ## 🧾 Assistant provenance and usage
 
-Assistant metadata is captured when the stamp is finalized and only when `assistantMetadata` is `"compact"` or `"expanded"`.
-When `showThinkingLevel` and assistant metadata are enabled and Pi exposes an effective Thinking level for that turn, the stamp records it as Pi provenance rather than provider-reported reasoning behavior.
+Enable individual metadata fields in Settings or choose a preset.
+While any metadata field is enabled, finalized stamps retain a compatible snapshot of reported provenance and usage so recorded fields can be shown later without rewriting history.
+`showPiThinkingLevel` independently captures Pi's effective turn setting as Pi provenance, not provider-reported reasoning behavior.
 A compact stamp can look like:
 
 ```text
@@ -235,20 +197,22 @@ A compact stamp can look like:
 claude-sonnet-4-6 · thinking high · 842 tok · est $0.018
 ```
 
-When Pi reports a response model different from the requested model, compact mode keeps both:
+With both model fields enabled, compact layout keeps distinct requested and response models:
 
 ```text
 requested-alias → provider-response-model · 842 tok
 ```
 
-With `showCompactAbnormalOutcome: true`, compact mode adds `stop length`, `stop error`, or `stop aborted` for abnormal outcomes while keeping normal `stop` and `toolUse` outcomes quiet.
-This compact control does not remove the complete stop reason from expanded assistant metadata.
-Disabling `showThinkingLevel` prevents new Thinking-level capture and hides that field on compatible persisted stamps without rewriting them.
-Expanded mode adds labeled rows for API, provider, requested model, provider-reported response model, effective Pi Thinking level, stop reason, and each individually reported input/output/reasoning/cache-read/cache-write/total token or estimated-cost field.
+Layout changes only presentation, not the selected fields.
+`stopReason` independently selects hidden, abnormal-only, or all outcomes in either layout.
+Disabling `showPiThinkingLevel` prevents new Thinking-level capture and hides recorded values.
+Provider, API, each model field, each token count, and call cost have separate display controls.
 Missing values stay absent; `pi-stamp` never derives a Thinking level, token total, response model, cost, or diagnostic message.
 
 Use Pi's transcript expansion action (`app.tools.expand`, `Ctrl+O` by default) to open the debug view.
-With assistant metadata enabled, it may additionally show the sanitized response ID and at most five diagnostic summaries.
+Enable `showResponseId` or `showDiagnostics` explicitly to capture and show those expansion-only fields.
+Neither is enabled by the new presets.
+Diagnostics retain at most five summaries.
 A summary contains only diagnostic type, error name, and error code.
 Stamp data never copies diagnostic messages, stacks, details, raw payloads, message content, tool arguments, or `textSignature`, `thinkingSignature`, and `thoughtSignature` fields.
 Terminal controls are removed and retained text is bounded before persistence.
@@ -269,9 +233,9 @@ The next assistant response whose stop reason is not `toolUse` records and displ
 claude-sonnet-4-6 · thinking high · 842 tok · est $0.009 · since user $0.039
 ```
 
-Cost since user reads only the reported cost field and does not require `assistantMetadata` capture.
-When assistant metadata is off, the final stamp uses a separate cost-only row.
-Intermediate `toolUse` stamps continue to show their call cost only when assistant metadata is enabled.
+Cost since user reads only the reported cost field and does not require metadata capture.
+With metadata hidden, the final stamp uses a separate cost-only row.
+This independently enabled control retains the final call cost even when `showCallCost` is off; intermediate `toolUse` stamps show call cost only when `showCallCost` is enabled.
 Missing or invalid reported costs are omitted rather than estimated, while valid reported zero costs still count toward the total.
 
 ## 🛠️ Tool timing
@@ -324,6 +288,7 @@ Messages and tools created before `pi-stamp` observed them are not backfilled be
 ## 🚧 Limitations
 
 - Pi does not currently expose a public decorator for built-in message or tool rows, so stamps appear as separate transcript rows rather than inside the original bubble/block.
+- In short regular-mode terminals, the Presets menu can push changed Stamp rows into scrollback; enlarge the terminal to see them while selecting.
 - Another extension can append transcript entries at the same lifecycle boundary, so strict visual adjacency between independently loaded extensions is not guaranteed.
 - There are no arbitrary format strings, relative labels, provider-server latency, token aggregates, raw diagnostics, or analytics dashboard.
 - Thinking level is Pi's effective turn setting and does not claim that a provider honored or reported the same reasoning behavior.
@@ -336,6 +301,7 @@ packages/pi-stamp/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
 │   └── stamp.ts                       # Transcript entries and rendering lifecycle
+├── docs/                              # Settings and compatibility reference
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
 └── test/                              # Behavior and lifecycle coverage
