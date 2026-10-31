@@ -1,8 +1,8 @@
-export const ASSISTANT_METADATA_MODES = ["off", "compact", "expanded"] as const;
+import { hasAssistantMetadata, METADATA_PRESETS, type StampMetadataSettings } from "./metadata-settings.js";
+
 export const ASSISTANT_STOP_REASONS = ["stop", "toolUse", "length", "error", "aborted"] as const;
 export const STAMP_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-export type StampAssistantMetadataMode = (typeof ASSISTANT_METADATA_MODES)[number];
 export type AssistantStopReason = (typeof ASSISTANT_STOP_REASONS)[number];
 export type StampThinkingLevel = (typeof STAMP_THINKING_LEVELS)[number];
 export type ToolStampOutcome = "success" | "error";
@@ -72,17 +72,20 @@ export function captureCompletedOutputTokens(value: unknown): number | undefined
   return value.usage.output;
 }
 
-export function captureAssistantMetadata(value: unknown): AssistantMetadataData | undefined {
-  if (!isRecord(value)) return undefined;
+export function captureAssistantMetadata(
+  value: unknown,
+  settings: Readonly<StampMetadataSettings> = METADATA_PRESETS.detailed,
+): AssistantMetadataData | undefined {
+  if (!hasAssistantMetadata(settings) || !isRecord(value)) return undefined;
   const api = sanitizeMetadataText(value.api);
   const provider = sanitizeMetadataText(value.provider);
   const model = sanitizeMetadataText(value.model);
   if (!api || !provider || !model || !isAssistantStopReason(value.stopReason)) return undefined;
 
   const responseModel = sanitizeMetadataText(value.responseModel);
-  const responseId = sanitizeMetadataText(value.responseId);
+  const responseId = settings.showResponseId ? sanitizeMetadataText(value.responseId) : undefined;
   const usage = captureUsage(value.usage);
-  const capturedDiagnostics = captureDiagnostics(value.diagnostics);
+  const capturedDiagnostics = settings.showDiagnostics ? captureDiagnostics(value.diagnostics) : {};
   return {
     api,
     provider,
@@ -145,10 +148,9 @@ export function isAssistantMetadataData(value: unknown): value is AssistantMetad
 
 export function formatAssistantMetadataLines(
   metadata: Readonly<AssistantMetadataData> | undefined,
-  mode: StampAssistantMetadataMode,
+  settings: Readonly<StampMetadataSettings>,
   debug: boolean,
   thinkingLevel?: StampThinkingLevel,
-  showCompactAbnormalOutcome = true,
   costSinceUserData?: Readonly<AssistantCostSinceUserData>,
 ): string[] {
   if (
@@ -159,16 +161,13 @@ export function formatAssistantMetadataLines(
   }
   const costSinceUserLine =
     costSinceUserData === undefined ? undefined : formatAssistantCostSinceUserLine(costSinceUserData);
-  if (mode === "off" || !isAssistantMetadataData(metadata)) {
+  if (!hasAssistantMetadata(settings) || !isAssistantMetadataData(metadata)) {
     return costSinceUserLine === undefined ? [] : [costSinceUserLine];
   }
-  const lines =
-    mode === "compact"
-      ? [formatCompactMetadata(metadata, thinkingLevel, showCompactAbnormalOutcome, costSinceUserData)]
-      : formatExpandedMetadata(metadata, thinkingLevel, costSinceUserData);
+  const lines = formatSelectedMetadata(metadata, settings, thinkingLevel, costSinceUserData);
   if (!debug) return lines;
-  if (metadata.responseId) lines.push(`debug · response id ${metadata.responseId}`);
-  if (metadata.diagnosticCount !== undefined) {
+  if (settings.showResponseId && metadata.responseId) lines.push(`debug · response id ${metadata.responseId}`);
+  if (settings.showDiagnostics && metadata.diagnosticCount !== undefined) {
     const showing = metadata.diagnostics?.length ?? 0;
     lines.push(
       showing > 0 && showing < metadata.diagnosticCount
@@ -270,70 +269,71 @@ function captureDiagnostics(value: unknown): Pick<AssistantMetadataData, "diagno
   };
 }
 
-function formatCompactMetadata(
+function formatSelectedMetadata(
   metadata: Readonly<AssistantMetadataData>,
-  thinkingLevel: StampThinkingLevel | undefined,
-  showCompactAbnormalOutcome: boolean,
-  costSinceUserData: Readonly<AssistantCostSinceUserData> | undefined,
-): string {
-  const model =
-    metadata.responseModel && metadata.responseModel !== metadata.model
-      ? `${metadata.model} → ${metadata.responseModel}`
-      : metadata.model;
-  const tokens = metadata.usage?.totalTokens;
-  const cost = costSinceUserData?.estimatedCost ?? metadata.usage?.estimatedCost;
-  const abnormalStopReason =
-    showCompactAbnormalOutcome &&
-    (metadata.stopReason === "length" || metadata.stopReason === "error" || metadata.stopReason === "aborted")
-      ? metadata.stopReason
-      : undefined;
-  return [
-    model,
-    thinkingLevel === undefined ? undefined : `thinking ${thinkingLevel}`,
-    abnormalStopReason === undefined ? undefined : `stop ${abnormalStopReason}`,
-    tokens === undefined ? undefined : `${formatInteger(tokens)} tok`,
-    cost === undefined ? undefined : `est ${formatCost(cost)}`,
-    costSinceUserData === undefined ? undefined : `since user ${formatCost(costSinceUserData.costSinceUser)}`,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join(" · ");
-}
-
-function formatExpandedMetadata(
-  metadata: Readonly<AssistantMetadataData>,
+  settings: Readonly<StampMetadataSettings>,
   thinkingLevel: StampThinkingLevel | undefined,
   costSinceUserData: Readonly<AssistantCostSinceUserData> | undefined,
 ): string[] {
-  const provenance = [
-    `api ${metadata.api}`,
-    `provider ${metadata.provider}`,
-    `requested ${metadata.model}`,
-    metadata.responseModel ? `response ${metadata.responseModel}` : undefined,
-    thinkingLevel === undefined ? undefined : `thinking ${thinkingLevel}`,
-    `stop ${metadata.stopReason}`,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join(" · ");
+  const expanded = settings.metadataLayout === "expanded";
+  const stopReason =
+    settings.stopReason === "all" ||
+    (settings.stopReason === "abnormal" && ["length", "error", "aborted"].includes(metadata.stopReason))
+      ? metadata.stopReason
+      : undefined;
+  const provenance = joinMetadataParts([
+    settings.showApi ? `api ${metadata.api}` : undefined,
+    settings.showProvider ? `provider ${metadata.provider}` : undefined,
+    ...formatSelectedModels(metadata, settings),
+    settings.showPiThinkingLevel && thinkingLevel !== undefined ? `thinking ${thinkingLevel}` : undefined,
+    stopReason === undefined ? undefined : `stop ${stopReason}`,
+  ]);
   const usage = metadata.usage;
-  if (!usage) {
-    return costSinceUserData === undefined
-      ? [provenance]
-      : [provenance, formatAssistantCostSinceUserLine(costSinceUserData)];
-  }
-  const estimatedCost = costSinceUserData?.estimatedCost ?? usage.estimatedCost;
-  const usageLine = [
-    usage.input === undefined ? undefined : `tokens in ${formatInteger(usage.input)}`,
-    usage.output === undefined ? undefined : `out ${formatInteger(usage.output)}`,
-    usage.reasoning === undefined ? undefined : `reasoning ${formatInteger(usage.reasoning)}`,
-    usage.cacheRead === undefined ? undefined : `cache read ${formatInteger(usage.cacheRead)}`,
-    usage.cacheWrite === undefined ? undefined : `cache write ${formatInteger(usage.cacheWrite)}`,
-    usage.totalTokens === undefined ? undefined : `total ${formatInteger(usage.totalTokens)}`,
-    estimatedCost === undefined ? undefined : `est cost ${formatCost(estimatedCost)}`,
+  // Cost since user retains its independently enabled final-call cost display.
+  const cost =
+    settings.showCallCost || costSinceUserData !== undefined
+      ? (costSinceUserData?.estimatedCost ?? usage?.estimatedCost)
+      : undefined;
+  const usageLine = joinMetadataParts([
+    settings.showInputTokens && usage?.input !== undefined ? `tokens in ${formatInteger(usage.input)}` : undefined,
+    settings.showOutputTokens && usage?.output !== undefined ? `out ${formatInteger(usage.output)}` : undefined,
+    settings.showReasoningTokens && usage?.reasoning !== undefined
+      ? `reasoning ${formatInteger(usage.reasoning)}`
+      : undefined,
+    settings.showCacheReadTokens && usage?.cacheRead !== undefined
+      ? `cache read ${formatInteger(usage.cacheRead)}`
+      : undefined,
+    settings.showCacheWriteTokens && usage?.cacheWrite !== undefined
+      ? `cache write ${formatInteger(usage.cacheWrite)}`
+      : undefined,
+    settings.showTotalTokens && usage?.totalTokens !== undefined
+      ? expanded
+        ? `total ${formatInteger(usage.totalTokens)}`
+        : `${formatInteger(usage.totalTokens)} tok`
+      : undefined,
+    cost === undefined ? undefined : `${expanded ? "est cost" : "est"} ${formatCost(cost)}`,
     costSinceUserData === undefined ? undefined : `since user ${formatCost(costSinceUserData.costSinceUser)}`,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join(" · ");
-  return usageLine ? [provenance, usageLine] : [provenance];
+  ]);
+  return expanded
+    ? [provenance, usageLine].filter(Boolean)
+    : [joinMetadataParts([provenance, usageLine])].filter(Boolean);
+}
+
+function formatSelectedModels(
+  metadata: Readonly<AssistantMetadataData>,
+  settings: Readonly<StampMetadataSettings>,
+): Array<string | undefined> {
+  const requested = settings.showRequestedModel ? metadata.model : undefined;
+  const response = settings.showResponseModel ? metadata.responseModel : undefined;
+  if (settings.metadataLayout === "expanded") {
+    return [requested ? `requested ${requested}` : undefined, response ? `response ${response}` : undefined];
+  }
+  if (requested && response && requested !== response) return [`${requested} → ${response}`];
+  return [requested ?? response];
+}
+
+function joinMetadataParts(parts: Array<string | undefined>): string {
+  return parts.filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 function formatInteger(value: number): string {

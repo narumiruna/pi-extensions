@@ -8,6 +8,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS, formatTimeSinceUser, type StampSettings } from "../src/format.js";
+import { METADATA_PRESETS } from "../src/metadata-settings.js";
 import { normalizeStampSettingsDocument, type StampSettingsRuntime } from "../src/settings.js";
 import stamp, { createStampEntryRenderer, isMessageStampData, STAMP_ENTRY_TYPE } from "../src/stamp.js";
 
@@ -200,19 +201,19 @@ test("missing, malformed, backwards, and unobserved boundaries omit elapsed time
 
 test("capture is opt-in and works independently of or together with metadata and cost", async () => {
   for (const enabled of [false, true]) {
-    for (const metadata of ["off", "compact", "expanded"] as const) {
+    for (const preset of ["none", "compact", "detailed"] as const) {
       for (const showCostSinceUser of [false, true]) {
-        const h = harness({ showTimeSinceUser: enabled, assistantMetadata: metadata, showCostSinceUser });
+        const h = harness({ showTimeSinceUser: enabled, ...METADATA_PRESETS[preset], showCostSinceUser });
         await h.emit("session_start");
         await h.user(BASE);
         const data = await h.response(BASE + 1_000, BASE + 2_000);
-        assert.equal(data.version, enabled ? 7 : showCostSinceUser ? 6 : metadata === "off" ? 3 : 5);
+        assert.equal(data.version, enabled ? 7 : showCostSinceUser ? 6 : preset === "none" ? 3 : 5);
         assert.equal(elapsed(data), enabled ? 2_000 : undefined);
         if (data.version === 6 || data.version === 7) {
           assert.equal(data.costSinceUser, showCostSinceUser ? 0.01 : undefined);
           assert.equal(data.estimatedCost, showCostSinceUser ? 0.01 : undefined);
-          assert.equal(data.metadata !== undefined, metadata !== "off");
-          assert.equal(data.thinkingLevel, metadata === "off" ? undefined : "high");
+          assert.equal(data.metadata !== undefined, preset !== "none");
+          assert.equal(data.thinkingLevel, preset === "none" ? undefined : "high");
         }
       }
     }

@@ -4,7 +4,6 @@ import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
-  ASSISTANT_METADATA_MODES,
   canonicalizeLocale,
   canonicalizeTimeZone,
   DATE_CONTEXTS,
@@ -13,6 +12,16 @@ import {
   RESPONSE_TIMING_MODES,
   type StampSettings,
 } from "./format.js";
+import {
+  LEGACY_METADATA_MODES,
+  type LegacyMetadataMode,
+  legacyMetadataSettings,
+  METADATA_BOOLEAN_FIELDS,
+  METADATA_LAYOUTS,
+  METADATA_SETTING_FIELDS,
+  STOP_REASON_MODES,
+  type StampMetadataSettings,
+} from "./metadata-settings.js";
 
 export const STAMP_SETTINGS_FILE = "pi-stamp.json";
 export const MAX_STAMP_SETTINGS_BYTES = 64 * 1024;
@@ -71,23 +80,9 @@ interface StampSettingsRuntimeOptions {
   operations?: Partial<StampSettingsOperations>;
 }
 
-const SETTING_FIELDS = [
-  "hourCycle",
-  "showSeconds",
-  "dateContext",
-  "locale",
-  "timeZone",
-  "responseTiming",
-  "showOutputThroughput",
-  "assistantMetadata",
-  "showExactTimeline",
-  "showThinkingLevel",
-  "showCompactAbnormalOutcome",
-  "showCostSinceUser",
-  "showTimeSinceUser",
-  "toolStamps",
-] as const satisfies readonly StampSettingsField[];
+const SETTING_FIELDS = Object.keys(DEFAULT_STAMP_SETTINGS) as StampSettingsField[];
 const SETTING_FIELD_SET = new Set<string>(SETTING_FIELDS);
+const LEGACY_SETTING_FIELDS = ["assistantMetadata", "showThinkingLevel", "showCompactAbnormalOutcome"] as const;
 
 export function stampSettingsFilePath(): string {
   return join(getAgentDir(), STAMP_SETTINGS_FILE);
@@ -141,27 +136,41 @@ export function normalizeStampSettingsDocument(value: unknown): NormalizedStampS
     settings.showOutputThroughput = value.showOutputThroughput;
     sources.showOutputThroughput = "user";
   }
+  const legacyMode = Object.hasOwn(value, "assistantMetadata") ? value.assistantMetadata : "off";
+  const legacyThinking = Object.hasOwn(value, "showThinkingLevel") ? value.showThinkingLevel : true;
+  const legacyAbnormal = Object.hasOwn(value, "showCompactAbnormalOutcome") ? value.showCompactAbnormalOutcome : true;
+  if (
+    !LEGACY_METADATA_MODES.includes(legacyMode as LegacyMetadataMode) ||
+    typeof legacyThinking !== "boolean" ||
+    typeof legacyAbnormal !== "boolean"
+  ) {
+    return undefined;
+  }
+  Object.assign(settings, legacyMetadataSettings(legacyMode as LegacyMetadataMode, legacyThinking, legacyAbnormal));
+  // Without an explicit mode, legacy toggles are inactive because metadata defaults to off.
   if (Object.hasOwn(value, "assistantMetadata")) {
-    if (!ASSISTANT_METADATA_MODES.includes(value.assistantMetadata as StampSettings["assistantMetadata"])) {
-      return undefined;
-    }
-    settings.assistantMetadata = value.assistantMetadata as StampSettings["assistantMetadata"];
-    sources.assistantMetadata = "user";
+    for (const field of METADATA_SETTING_FIELDS) sources[field] = "user";
+  }
+  for (const field of METADATA_BOOLEAN_FIELDS) {
+    if (!Object.hasOwn(value, field)) continue;
+    if (typeof value[field] !== "boolean") return undefined;
+    settings[field] = value[field];
+    sources[field] = "user";
+  }
+  if (Object.hasOwn(value, "metadataLayout")) {
+    if (!METADATA_LAYOUTS.includes(value.metadataLayout as StampMetadataSettings["metadataLayout"])) return undefined;
+    settings.metadataLayout = value.metadataLayout as StampMetadataSettings["metadataLayout"];
+    sources.metadataLayout = "user";
+  }
+  if (Object.hasOwn(value, "stopReason")) {
+    if (!STOP_REASON_MODES.includes(value.stopReason as StampMetadataSettings["stopReason"])) return undefined;
+    settings.stopReason = value.stopReason as StampMetadataSettings["stopReason"];
+    sources.stopReason = "user";
   }
   if (Object.hasOwn(value, "showExactTimeline")) {
     if (typeof value.showExactTimeline !== "boolean") return undefined;
     settings.showExactTimeline = value.showExactTimeline;
     sources.showExactTimeline = "user";
-  }
-  if (Object.hasOwn(value, "showThinkingLevel")) {
-    if (typeof value.showThinkingLevel !== "boolean") return undefined;
-    settings.showThinkingLevel = value.showThinkingLevel;
-    sources.showThinkingLevel = "user";
-  }
-  if (Object.hasOwn(value, "showCompactAbnormalOutcome")) {
-    if (typeof value.showCompactAbnormalOutcome !== "boolean") return undefined;
-    settings.showCompactAbnormalOutcome = value.showCompactAbnormalOutcome;
-    sources.showCompactAbnormalOutcome = "user";
   }
   if (Object.hasOwn(value, "showCostSinceUser")) {
     if (typeof value.showCostSinceUser !== "boolean") return undefined;
@@ -263,7 +272,13 @@ export function createStampSettingsRuntime(options: StampSettingsRuntimeOptions 
           state = { ...state, issue: latest.issue, canSave: false };
           throw new Error(`Cannot update malformed or invalid settings: ${latest.issue.message}`);
         }
-        const document = { ...latest.document, ...canonicalPatch };
+        const document = { ...latest.document };
+        if (LEGACY_SETTING_FIELDS.some((field) => Object.hasOwn(document, field))) {
+          // Materialize the latest effective metadata before removing its legacy dependencies.
+          for (const field of METADATA_SETTING_FIELDS) document[field] = latest.settings[field];
+          for (const field of LEGACY_SETTING_FIELDS) delete document[field];
+        }
+        Object.assign(document, canonicalPatch);
         const normalized = normalizeStampSettingsDocument(document);
         if (!normalized) throw new Error("Refusing to publish invalid pi-stamp settings.");
         await publishSettingsDocument(document, getPath(), operations);
@@ -394,22 +409,10 @@ function invalidLoad(path: string, reason: string): StampSettingsLoadResult {
 }
 
 function builtInSources(): Record<StampSettingsField, StampSettingsSource> {
-  return {
-    hourCycle: "built-in",
-    showSeconds: "built-in",
-    dateContext: "built-in",
-    locale: "built-in",
-    timeZone: "built-in",
-    responseTiming: "built-in",
-    showOutputThroughput: "built-in",
-    assistantMetadata: "built-in",
-    showExactTimeline: "built-in",
-    showThinkingLevel: "built-in",
-    showCompactAbnormalOutcome: "built-in",
-    showCostSinceUser: "built-in",
-    showTimeSinceUser: "built-in",
-    toolStamps: "built-in",
-  };
+  return Object.fromEntries(SETTING_FIELDS.map((field) => [field, "built-in"])) as Record<
+    StampSettingsField,
+    StampSettingsSource
+  >;
 }
 
 function freezeState(state: StampSettingsState): Readonly<StampSettingsState> {

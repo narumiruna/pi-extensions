@@ -3,8 +3,10 @@ import { existsSync } from "node:fs";
 import { access, cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { dirname, join } from "node:path";
+import { DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
@@ -118,7 +120,21 @@ test("generated lazy boundary resolves Pi peers through Jiti aliases", async () 
     await cp(join(resolvedKitRoot, "dist"), join(isolatedKitRoot, "dist"), {
       recursive: true,
     });
-    await cp(join(resolvedKitRoot, "package.json"), join(isolatedKitRoot, "package.json"));
+    const kitManifestPath = join(resolvedKitRoot, "package.json");
+    await cp(kitManifestPath, join(isolatedKitRoot, "package.json"));
+    const kitManifest = JSON.parse(await readFile(kitManifestPath, "utf8"));
+    const kitRequire = createRequire(kitManifestPath);
+    // Reproduce Kit's declared runtime dependencies, but keep Pi peers absent.
+    for (const dependency of Object.keys(kitManifest.dependencies ?? {})) {
+      const dependencyRoot = kitRequire.resolve
+        .paths(dependency)
+        ?.map((modulesRoot) => join(modulesRoot, dependency))
+        .find((candidate) => existsSync(join(candidate, "package.json")));
+      assert.ok(dependencyRoot, `Missing installed Kit dependency: ${dependency}`);
+      const destination = join(isolatedRoot, "node_modules", dependency);
+      await mkdir(dirname(destination), { recursive: true });
+      await cp(dependencyRoot, destination, { recursive: true });
+    }
     await assert.rejects(access(join(isolatedRoot, "node_modules", "@earendil-works", "pi-tui")));
 
     await mkdir(agentDir, { recursive: true });
@@ -134,8 +150,92 @@ test("generated lazy boundary resolves Pi peers through Jiti aliases", async () 
     assert.deepEqual(loaded.errors, []);
     const command = loaded.extensions[0]?.commands.get("stamp");
     assert.ok(command);
-    const { ctx } = createMockContext({ cwd: isolatedRoot, mode: "tui" });
+    const offered: string[][] = [];
+    const { ctx, notifications } = createMockContext({
+      cwd: isolatedRoot,
+      mode: "rpc",
+      select: async (_title: string, choices: string[]) => {
+        offered.push([...choices]);
+        const target = ["Presets", "← Back", "Close"][offered.length - 1];
+        return choices.find((choice) => target !== undefined && choice.startsWith(target));
+      },
+    });
     await command.handler("", ctx);
+    assert.equal(offered.length, 3);
+    assert.equal(offered[1]?.length, 8);
+    assert.ok(offered[1]?.some((choice) => choice.startsWith("Compact —")));
+    assert.ok(offered[1]?.some((choice) => choice.startsWith("None — current")));
+    assert.equal(offered[1]?.at(-1), "← Back");
+    assert.deepEqual(notifications, []);
+
+    const tui = createTuiHarness({ width: 120, rows: 40 });
+    const sessionManager = SessionManager.inMemory(isolatedRoot);
+    const timestamp = 1_793_376_000_000;
+    sessionManager.appendMessage({
+      role: "assistant",
+      timestamp,
+      content: [],
+      api: "smoke-api",
+      provider: "smoke-provider",
+      model: "smoke-model",
+      stopReason: "stop",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    const stampId = sessionManager.appendCustomEntry("pi-stamp", {
+      version: 3,
+      role: "assistant",
+      timestamp,
+      completedAt: timestamp + 1_000,
+    });
+    const stamp = sessionManager.getEntry(stampId);
+    assert.ok(stamp?.type === "custom");
+    const { ctx: tuiCtx } = createMockContext({ cwd: isolatedRoot, mode: "tui", custom: tui.custom, sessionManager });
+    const extension = loaded.extensions[0];
+    assert.ok(extension);
+    for (const handler of extension.handlers.get("session_start") ?? []) {
+      await handler({ type: "session_start", reason: "startup" } as never, tuiCtx);
+    }
+    const renderer = extension.entryRenderers?.get("pi-stamp");
+    assert.ok(renderer);
+    const component = renderer(stamp, { expanded: false }, {
+      fg: (_role: string, text: string) => text,
+    } as never) as Component | undefined;
+    assert.ok(component);
+    const before = component.render(120);
+    const sessionBefore = JSON.stringify(sessionManager.getEntries());
+    const running = Promise.resolve(command.handler("", tuiCtx));
+    let menu = "";
+    let rows = "";
+    try {
+      await tui.waitForOpen();
+      tui.press("tui.select.confirm");
+      await tui.waitForOpen();
+      for (let index = 0; index < 7; index += 1) {
+        if (tui.render().some((line) => line.startsWith("→ Detailed"))) break;
+        tui.press("tui.select.down");
+      }
+      menu = tui.render().join("\n");
+      rows = component.render(120).join("\n");
+      tui.press("ctrl+c");
+      await running;
+      assert.deepEqual(component.render(120), before);
+      assert.equal(JSON.stringify(sessionManager.getEntries()), sessionBefore);
+    } finally {
+      tui.dispose();
+      await running;
+      for (const handler of extension.handlers.get("session_shutdown") ?? []) {
+        await handler({ type: "session_shutdown", reason: "quit" } as never, tuiCtx);
+      }
+    }
+    assert.doesNotMatch(menu, /Preview ·|smoke-model/u);
+    assert.match(rows, /api smoke-api · provider smoke-provider · requested smoke-model/u);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

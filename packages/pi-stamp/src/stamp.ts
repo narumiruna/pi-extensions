@@ -10,6 +10,7 @@ import {
   type StampSettings,
   type StampTimelineBoundary,
 } from "./format.js";
+import { createMessageMetadataReader } from "./message-metadata.js";
 import {
   type AssistantCostSinceUserData,
   type AssistantMetadataData,
@@ -19,108 +20,47 @@ import {
   formatAssistantMetadataLines,
   formatToolStampLabel,
   isAssistantEstimatedCost,
-  isAssistantMetadataData,
-  isReportedTokenCount,
   isStampThinkingLevel,
   type StampThinkingLevel,
   sanitizeMetadataText,
   sanitizeTerminalText,
   type ToolStampOutcome,
 } from "./metadata.js";
+import { hasAssistantMetadata } from "./metadata-settings.js";
+import { createStampDisplaySettings } from "./preset-preview.js";
 import { createStampSettingsRuntime, type StampSettingsRuntime } from "./settings.js";
+import {
+  type AssistantMessageStampDataV3,
+  isMessageStampData,
+  isRecord,
+  isSafePersistedText,
+  isToolStampData,
+  isValidTimestamp,
+  type MessageStampData,
+  type MessageStampDataV2,
+  STAMP_ENTRY_TYPE,
+  type StampEntryData,
+  type ToolStampDataV1,
+} from "./stamp-data.js";
 
-export const STAMP_ENTRY_TYPE = "pi-stamp";
+export {
+  type AssistantMessageStampDataV3,
+  type AssistantMessageStampDataV4,
+  type AssistantMessageStampDataV5,
+  type AssistantMessageStampDataV6,
+  type AssistantMessageStampDataV7,
+  type AssistantMessageStampDataV8,
+  isMessageStampData,
+  isToolStampData,
+  type MessageStampData,
+  type MessageStampDataV1,
+  type MessageStampDataV2,
+  STAMP_ENTRY_TYPE,
+  type StampEntryData,
+  type ToolStampDataV1,
+} from "./stamp-data.js";
+
 export const MAX_TOOL_STAMP_OBSERVATIONS = 256;
-
-export interface MessageStampDataV1 {
-  version: 1;
-  role: "user" | "assistant";
-  timestamp: number;
-}
-
-export interface MessageStampDataV2 {
-  version: 2;
-  role: "user" | "assistant";
-  timestamp: number;
-  previousTimestamp?: number;
-}
-
-export interface AssistantMessageStampDataV3 {
-  version: 3;
-  role: "assistant";
-  timestamp: number;
-  previousTimestamp?: number;
-  completedAt: number;
-  firstContentAt?: number;
-}
-
-export interface AssistantMessageStampDataV4 {
-  version: 4;
-  role: "assistant";
-  timestamp: number;
-  previousTimestamp?: number;
-  completedAt?: number;
-  firstContentAt?: number;
-  metadata: AssistantMetadataData;
-}
-
-export interface AssistantMessageStampDataV5 {
-  version: 5;
-  role: "assistant";
-  timestamp: number;
-  previousTimestamp?: number;
-  completedAt?: number;
-  firstContentAt?: number;
-  metadata: AssistantMetadataData;
-  thinkingLevel: StampThinkingLevel;
-}
-
-export interface AssistantMessageStampDataV6 {
-  version: 6;
-  role: "assistant";
-  timestamp: number;
-  previousTimestamp?: number;
-  completedAt?: number;
-  firstContentAt?: number;
-  metadata?: AssistantMetadataData;
-  thinkingLevel?: StampThinkingLevel;
-  estimatedCost?: number;
-  costSinceUser: number;
-}
-
-export interface AssistantMessageStampDataV7 extends Omit<AssistantMessageStampDataV6, "version" | "costSinceUser"> {
-  version: 7;
-  completedAt: number;
-  timeSinceUserMs: number;
-  costSinceUser?: number;
-}
-
-export interface AssistantMessageStampDataV8 extends Omit<AssistantMessageStampDataV7, "version" | "timeSinceUserMs"> {
-  version: 8;
-  outputTokens: number;
-  timeSinceUserMs?: number;
-}
-
-export interface ToolStampDataV1 {
-  version: 1;
-  kind: "tool";
-  toolCallId: string;
-  toolName: string;
-  startedAt: number;
-  completedAt: number;
-  outcome: ToolStampOutcome;
-}
-
-export type MessageStampData =
-  | MessageStampDataV1
-  | MessageStampDataV2
-  | AssistantMessageStampDataV3
-  | AssistantMessageStampDataV4
-  | AssistantMessageStampDataV5
-  | AssistantMessageStampDataV6
-  | AssistantMessageStampDataV7
-  | AssistantMessageStampDataV8;
-export type StampEntryData = MessageStampData | ToolStampDataV1;
 
 export interface StampExtensionOptions {
   settingsRuntime?: StampSettingsRuntime;
@@ -158,108 +98,15 @@ export function formatStampTime(timestamp: number): string | undefined {
   });
 }
 
-export function isMessageStampData(value: unknown): value is MessageStampData {
-  if (!isRecord(value) || !isStampRole(value.role) || !isValidTimestamp(value.timestamp)) {
-    return false;
-  }
-  if (value.version === 1) {
-    return hasOnlyKeys(value, ["version", "role", "timestamp"]);
-  }
-  if (value.version === 2) {
-    return (
-      hasOnlyKeys(value, ["version", "role", "timestamp", "previousTimestamp"]) &&
-      (!Object.hasOwn(value, "previousTimestamp") || isValidTimestamp(value.previousTimestamp))
-    );
-  }
-  if (value.version === 3) {
-    return (
-      value.role === "assistant" &&
-      hasOnlyKeys(value, ["version", "role", "timestamp", "previousTimestamp", "completedAt", "firstContentAt"]) &&
-      isValidTimestamp(value.completedAt) &&
-      value.completedAt >= value.timestamp &&
-      (!Object.hasOwn(value, "previousTimestamp") || isValidTimestamp(value.previousTimestamp)) &&
-      (!Object.hasOwn(value, "firstContentAt") ||
-        (isValidTimestamp(value.firstContentAt) &&
-          value.firstContentAt >= value.timestamp &&
-          value.firstContentAt <= value.completedAt))
-    );
-  }
-  if (value.version === 6 || value.version === 7 || value.version === 8) {
-    return (
-      value.role === "assistant" &&
-      hasOnlyKeys(value, [
-        "version",
-        "role",
-        "timestamp",
-        "previousTimestamp",
-        "completedAt",
-        "firstContentAt",
-        "metadata",
-        "thinkingLevel",
-        "estimatedCost",
-        "costSinceUser",
-        ...(value.version !== 6 ? ["timeSinceUserMs"] : []),
-        ...(value.version === 8 ? ["outputTokens"] : []),
-      ]) &&
-      (value.version === 6 || isValidTimestamp(value.completedAt)) &&
-      (value.version !== 8 ||
-        (isReportedTokenCount(value.outputTokens) &&
-          (value.completedAt as number) > value.timestamp &&
-          (!Object.hasOwn(value, "metadata") || captureCompletedOutputTokens(value.metadata) !== undefined))) &&
-      (!(value.version === 7 || Object.hasOwn(value, "timeSinceUserMs")) ||
-        (typeof value.timeSinceUserMs === "number" &&
-          Number.isFinite(value.timeSinceUserMs) &&
-          value.timeSinceUserMs >= 0)) &&
-      (!Object.hasOwn(value, "metadata") || isAssistantMetadataData(value.metadata)) &&
-      (!Object.hasOwn(value, "thinkingLevel") || isStampThinkingLevel(value.thinkingLevel)) &&
-      (Object.hasOwn(value, "costSinceUser")
-        ? isAssistantEstimatedCost(value.costSinceUser) &&
-          (!Object.hasOwn(value, "estimatedCost") ||
-            (isAssistantEstimatedCost(value.estimatedCost) && value.estimatedCost <= value.costSinceUser))
-        : value.version !== 6 && !Object.hasOwn(value, "estimatedCost")) &&
-      hasValidOptionalAssistantTiming(value, value.timestamp)
-    );
-  }
-  if ((value.version !== 4 && value.version !== 5) || value.role !== "assistant") return false;
-  const allowedKeys = [
-    "version",
-    "role",
-    "timestamp",
-    "previousTimestamp",
-    "completedAt",
-    "firstContentAt",
-    "metadata",
-    ...(value.version === 5 ? ["thinkingLevel"] : []),
-  ];
-  return (
-    hasOnlyKeys(value, allowedKeys) &&
-    isAssistantMetadataData(value.metadata) &&
-    (value.version !== 5 || isStampThinkingLevel(value.thinkingLevel)) &&
-    hasValidOptionalAssistantTiming(value, value.timestamp)
-  );
-}
-
-export function isToolStampData(value: unknown): value is ToolStampDataV1 {
-  return (
-    isRecord(value) &&
-    value.version === 1 &&
-    value.kind === "tool" &&
-    hasOnlyKeys(value, ["version", "kind", "toolCallId", "toolName", "startedAt", "completedAt", "outcome"]) &&
-    isSafePersistedText(value.toolCallId) &&
-    isSafePersistedText(value.toolName) &&
-    isValidTimestamp(value.startedAt) &&
-    isValidTimestamp(value.completedAt) &&
-    value.completedAt >= value.startedAt &&
-    (value.outcome === "success" || value.outcome === "error")
-  );
-}
-
 interface RightAlignedLine {
   text: string;
   exact: boolean;
 }
 
-export function createStampEntryRenderer(getSettings: () => Readonly<StampSettings>): EntryRenderer<StampEntryData> {
+export function createStampEntryRenderer(
+  getSettings: () => Readonly<StampSettings>,
+  getFallbackMetadata?: (entryId: string) => AssistantMetadataData | undefined,
+): EntryRenderer<StampEntryData> {
   return (entry, options, theme) => {
     if (isToolStampData(entry.data)) {
       if (!getSettings().toolStamps) return undefined;
@@ -285,62 +132,66 @@ export function createStampEntryRenderer(getSettings: () => Readonly<StampSettin
     if (!isMessageStampData(entry.data)) return undefined;
     const data = entry.data;
     return dynamicRightAlignedText(
-      memoizeStampLines(getSettings, (settings) => {
-        const hasAssistantTiming = data.version !== 1 && data.version !== 2;
-        const outputTokens =
-          data.version === 8
-            ? data.outputTokens
-            : "metadata" in data
-              ? captureCompletedOutputTokens(data.metadata)
-              : undefined;
-        const label = formatMessageStampLabel(
-          {
-            timestamp: data.timestamp,
-            outputTokens,
-            ...(data.version === 7 || data.version === 8 ? { timeSinceUserMs: data.timeSinceUserMs } : {}),
-            ...(data.version === 1 ? {} : { previousTimestamp: data.previousTimestamp }),
-            ...(hasAssistantTiming
-              ? {
-                  completedAt: data.completedAt,
-                  firstContentAt: data.firstContentAt,
-                }
-              : {}),
-          },
-          settings,
-        );
-        if (!label) return [];
-        const timelineObservations: Array<readonly [StampTimelineBoundary, number]> = [["created", data.timestamp]];
-        if (hasAssistantTiming && data.firstContentAt !== undefined) {
-          timelineObservations.push(["first content", data.firstContentAt]);
-        }
-        if (hasAssistantTiming && data.completedAt !== undefined) {
-          timelineObservations.push(["completed", data.completedAt]);
-        }
-        const timelineLines =
-          options.expanded && settings.showExactTimeline ? exactTimelineLines(timelineObservations) : [];
-        const metadataLines =
-          data.version === 4 || data.version === 5 || data.version === 6 || data.version === 7 || data.version === 8
-            ? formatAssistantMetadataLines(
-                data.metadata,
-                settings.assistantMetadata,
-                options.expanded,
-                (data.version === 5 || data.version === 6 || data.version === 7 || data.version === 8) &&
-                  settings.showThinkingLevel
-                  ? data.thinkingLevel
-                  : undefined,
-                settings.showCompactAbnormalOutcome,
-                (data.version === 6 || data.version === 7 || data.version === 8) &&
-                  data.costSinceUser !== undefined &&
-                  settings.showCostSinceUser
-                  ? {
-                      ...(data.estimatedCost === undefined ? {} : { estimatedCost: data.estimatedCost }),
-                      costSinceUser: data.costSinceUser,
-                    }
-                  : undefined,
-              )
-            : [];
-        return [regularLine(label), ...timelineLines, ...metadataLines.map(regularLine)];
-      }),
+      memoizeStampLines(
+        getSettings,
+        (settings, fallbackMetadata) => {
+          const hasAssistantTiming = data.version !== 1 && data.version !== 2;
+          const outputTokens =
+            data.version === 8
+              ? data.outputTokens
+              : "metadata" in data
+                ? captureCompletedOutputTokens(data.metadata)
+                : undefined;
+          const label = formatMessageStampLabel(
+            {
+              timestamp: data.timestamp,
+              outputTokens,
+              ...(data.version === 7 || data.version === 8 ? { timeSinceUserMs: data.timeSinceUserMs } : {}),
+              ...(data.version === 1 ? {} : { previousTimestamp: data.previousTimestamp }),
+              ...(hasAssistantTiming
+                ? {
+                    completedAt: data.completedAt,
+                    firstContentAt: data.firstContentAt,
+                  }
+                : {}),
+            },
+            settings,
+          );
+          if (!label) return [];
+          const timelineObservations: Array<readonly [StampTimelineBoundary, number]> = [["created", data.timestamp]];
+          if (hasAssistantTiming && data.firstContentAt !== undefined) {
+            timelineObservations.push(["first content", data.firstContentAt]);
+          }
+          if (hasAssistantTiming && data.completedAt !== undefined) {
+            timelineObservations.push(["completed", data.completedAt]);
+          }
+          const timelineLines =
+            options.expanded && settings.showExactTimeline ? exactTimelineLines(timelineObservations) : [];
+          const metadataLines =
+            data.role === "assistant"
+              ? formatAssistantMetadataLines(
+                  ("metadata" in data ? data.metadata : undefined) ?? fallbackMetadata,
+                  settings,
+                  options.expanded,
+                  data.version === 5 || data.version === 6 || data.version === 7 || data.version === 8
+                    ? data.thinkingLevel
+                    : undefined,
+                  (data.version === 6 || data.version === 7 || data.version === 8) &&
+                    data.costSinceUser !== undefined &&
+                    settings.showCostSinceUser
+                    ? {
+                        ...(data.estimatedCost === undefined ? {} : { estimatedCost: data.estimatedCost }),
+                        costSinceUser: data.costSinceUser,
+                      }
+                    : undefined,
+                )
+              : [];
+          return [regularLine(label), ...timelineLines, ...metadataLines.map(regularLine)];
+        },
+        data.role === "assistant" && !("metadata" in data && data.metadata !== undefined) && getFallbackMetadata
+          ? () => getFallbackMetadata(entry.id)
+          : undefined,
+      ),
       (line) => theme.fg("dim", line),
     );
   };
@@ -350,23 +201,31 @@ export const renderStampEntry = createStampEntryRenderer(() => DEFAULT_STAMP_SET
 
 function memoizeStampLines(
   getSettings: () => Readonly<StampSettings>,
-  createLines: (settings: Readonly<StampSettings>) => readonly RightAlignedLine[],
+  createLines: (
+    settings: Readonly<StampSettings>,
+    fallbackMetadata?: AssistantMetadataData,
+  ) => readonly RightAlignedLine[],
+  getFallbackMetadata?: () => AssistantMetadataData | undefined,
 ): () => readonly RightAlignedLine[] {
+  let previousFallbackMetadata: AssistantMetadataData | undefined;
   let previousSettings: StampSettings | undefined;
   let previousEnvironment: Readonly<StampFormatEnvironment> | undefined;
   let lines: readonly RightAlignedLine[] = [];
   return () => {
     const settings = getSettings();
+    const fallbackMetadata = hasAssistantMetadata(settings) ? getFallbackMetadata?.() : undefined;
     const environment = resolveStampFormatEnvironment(settings);
     if (
       !previousSettings ||
+      previousFallbackMetadata !== fallbackMetadata ||
       !haveSameStampSettings(previousSettings, settings) ||
       !previousEnvironment ||
       !haveSameStampFormatEnvironment(settings, previousEnvironment, environment)
     ) {
       previousSettings = { ...settings };
       previousEnvironment = environment;
-      lines = createLines(settings);
+      previousFallbackMetadata = fallbackMetadata;
+      lines = createLines(settings, fallbackMetadata);
     }
     return lines;
   };
@@ -384,21 +243,8 @@ function haveSameStampFormatEnvironment(
 }
 
 function haveSameStampSettings(left: Readonly<StampSettings>, right: Readonly<StampSettings>): boolean {
-  return (
-    left.hourCycle === right.hourCycle &&
-    left.showSeconds === right.showSeconds &&
-    left.dateContext === right.dateContext &&
-    left.locale === right.locale &&
-    left.timeZone === right.timeZone &&
-    left.responseTiming === right.responseTiming &&
-    left.showOutputThroughput === right.showOutputThroughput &&
-    left.assistantMetadata === right.assistantMetadata &&
-    left.showExactTimeline === right.showExactTimeline &&
-    left.showThinkingLevel === right.showThinkingLevel &&
-    left.showCompactAbnormalOutcome === right.showCompactAbnormalOutcome &&
-    left.showCostSinceUser === right.showCostSinceUser &&
-    left.showTimeSinceUser === right.showTimeSinceUser &&
-    left.toolStamps === right.toolStamps
+  return (Object.keys(DEFAULT_STAMP_SETTINGS) as Array<keyof StampSettings>).every(
+    (field) => left[field] === right[field],
   );
 }
 
@@ -467,11 +313,10 @@ function hardWrapExactText(text: string, width: number): string[] {
 
 export default function stampExtension(pi: ExtensionAPI, options: StampExtensionOptions = {}): void {
   const settingsRuntime = options.settingsRuntime ?? createStampSettingsRuntime();
+  const displaySettings = createStampDisplaySettings(() => settingsRuntime.get().settings);
+  const messageMetadata = createMessageMetadataReader();
   const now = options.now ?? Date.now;
-  pi.registerEntryRenderer(
-    STAMP_ENTRY_TYPE,
-    createStampEntryRenderer(() => settingsRuntime.get().settings),
-  );
+  pi.registerEntryRenderer(STAMP_ENTRY_TYPE, createStampEntryRenderer(displaySettings.get, messageMetadata.get));
 
   let generation = 0;
   let sessionController = new AbortController();
@@ -504,6 +349,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
       }
       await showStampMenu(ctx, settingsRuntime, {
         signal: commandController.signal,
+        beginPreview: displaySettings.begin,
         isCurrent: () =>
           commandGeneration === generation &&
           commandController === sessionController &&
@@ -534,7 +380,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
   ): void => {
     const matchingTiming = timing?.timestamp === timestamp ? timing : undefined;
     const settings = settingsRuntime.get().settings;
-    const metadata = settings.assistantMetadata === "off" ? undefined : captureAssistantMetadata(message);
+    const metadata = captureAssistantMetadata(message, settings);
     const outputTokens = settings.showOutputThroughput ? captureCompletedOutputTokens(message) : undefined;
     const common = {
       role: "assistant" as const,
@@ -639,6 +485,8 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    messageMetadata.bind(ctx.sessionManager);
+    displaySettings.clear();
     sessionController.abort(new Error("pi-stamp session replaced"));
     sessionController = new AbortController();
     const controller = sessionController;
@@ -674,10 +522,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     finalizedAssistantTiming = undefined;
     const settings = settingsRuntime.get().settings;
     activeThinkingLevel =
-      tuiSessionActive &&
-      settings.assistantMetadata !== "off" &&
-      settings.showThinkingLevel &&
-      isStampThinkingLevel(ctx.thinkingLevel)
+      tuiSessionActive && settings.showPiThinkingLevel && isStampThinkingLevel(ctx.thinkingLevel)
         ? ctx.thinkingLevel
         : undefined;
     activeToolTimings.clear();
@@ -825,6 +670,8 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
   });
 
   pi.on("session_shutdown", async () => {
+    messageMetadata.clear();
+    displaySettings.clear();
     sessionController.abort(new Error("pi-stamp session shut down"));
     generation += 1;
     flushPendingUsers();
@@ -924,21 +771,6 @@ function lastStampTimestampFromBranch(entries: readonly unknown[]): number | und
   return undefined;
 }
 
-function hasValidOptionalAssistantTiming(value: Record<string, unknown>, timestamp: number): boolean {
-  if (Object.hasOwn(value, "previousTimestamp") && !isValidTimestamp(value.previousTimestamp)) {
-    return false;
-  }
-  if (!Object.hasOwn(value, "completedAt")) return !Object.hasOwn(value, "firstContentAt");
-  return (
-    isValidTimestamp(value.completedAt) &&
-    value.completedAt >= timestamp &&
-    (!Object.hasOwn(value, "firstContentAt") ||
-      (isValidTimestamp(value.firstContentAt) &&
-        value.firstContentAt >= timestamp &&
-        value.firstContentAt <= value.completedAt))
-  );
-}
-
 function isMeaningfulAssistantUpdate(value: unknown): boolean {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "text_delta" || value.type === "thinking_delta" || value.type === "toolcall_delta") {
@@ -948,27 +780,6 @@ function isMeaningfulAssistantUpdate(value: unknown): boolean {
     return typeof value.content === "string" && value.content.length > 0;
   }
   return value.type === "toolcall_end" && isRecord(value.toolCall);
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
-  const allowedKeys = new Set(allowed);
-  return Object.keys(value).every((key) => allowedKeys.has(key));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStampRole(value: unknown): value is MessageStampData["role"] {
-  return value === "user" || value === "assistant";
-}
-
-function isValidTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && !Number.isNaN(new Date(value).getTime());
-}
-
-function isSafePersistedText(value: unknown): value is string {
-  return typeof value === "string" && sanitizeMetadataText(value) === value;
 }
 
 function safeTerminalText(value: string): string {

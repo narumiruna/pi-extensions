@@ -15,6 +15,7 @@ import {
 } from "../src/format.js";
 import { createStampMenu } from "../src/menu.js";
 import { captureCompletedOutputTokens } from "../src/metadata.js";
+import { METADATA_PRESETS } from "../src/metadata-settings.js";
 import {
   createStampSettingsRuntime,
   normalizeStampSettingsDocument,
@@ -149,9 +150,9 @@ test("throughput uses only output and exact creation-to-completion time, regardl
 
 test("eligible stops capture independently of metadata, durations, costs, and elapsed-since-user settings", async () => {
   for (const stopReason of ["stop", "toolUse", "length"]) {
-    for (const assistantMetadata of ["off", "compact", "expanded"] as const) {
+    for (const preset of ["none", "compact", "detailed"] as const) {
       for (const extras of [false, true]) {
-        const h = harness({ assistantMetadata, showCostSinceUser: extras, showTimeSinceUser: extras });
+        const h = harness({ ...METADATA_PRESETS[preset], showCostSinceUser: extras, showTimeSinceUser: extras });
         h.session.appendMessage({ role: "user", timestamp: BASE - 1000, content: "hello" });
         await h.emit("session_start");
         const data = await h.response(message(stopReason));
@@ -159,8 +160,8 @@ test("eligible stops capture independently of metadata, durations, costs, and el
         assert.equal(data.outputTokens, 134);
         assert.equal(data.completedAt, BASE + 3_200);
         assert.equal(data.firstContentAt, BASE + 800);
-        assert.equal(data.metadata !== undefined, assistantMetadata !== "off");
-        assert.equal(data.thinkingLevel, assistantMetadata === "off" ? undefined : "high");
+        assert.equal(data.metadata !== undefined, preset !== "none");
+        assert.equal(data.thinkingLevel, preset === "none" ? undefined : "high");
         assert.equal(data.costSinceUser, extras && stopReason !== "toolUse" ? 0.01 : undefined);
         assert.equal(data.timeSinceUserMs, extras && stopReason !== "toolUse" ? 4_200 : undefined);
         assert.ok(render(data)[0]?.endsWith("41.9 tok/s"));
@@ -179,7 +180,7 @@ test("missing or invalid output and error/aborted/unknown stops never produce th
     })),
     ...["error", "aborted", "unknown"].map((reason) => message(reason)),
   ]) {
-    const h = harness({ assistantMetadata: "expanded" });
+    const h = harness({ ...METADATA_PRESETS.detailed });
     await h.emit("session_start");
     assert.equal(captureCompletedOutputTokens(reply), undefined);
     const data = await h.response(reply);

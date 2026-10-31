@@ -6,6 +6,7 @@ import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { DEFAULT_STAMP_SETTINGS, type StampSettings } from "../src/format.js";
 import { captureAssistantMetadata } from "../src/metadata.js";
+import { METADATA_PRESETS, METADATA_SETTING_FIELDS } from "../src/metadata-settings.js";
 import { createStampEntryRenderer, isMessageStampData, isToolStampData, STAMP_ENTRY_TYPE } from "../src/stamp.js";
 
 const USER_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 7, 123).getTime();
@@ -467,7 +468,7 @@ test("version-6 rendering gates cost since user without requiring assistant meta
     ["00:01:02", "est $0.009 · since user $0.039"],
   );
 
-  settings = { ...settings, assistantMetadata: "compact" };
+  settings = { ...settings, ...METADATA_PRESETS.compact };
   assert.deepEqual(
     component.render(80).map((line) => line.trim()),
     ["00:01:02", "test-model · 2 tok · est $0.009 · since user $0.039"],
@@ -484,11 +485,11 @@ test("version-6 rendering gates cost since user without requiring assistant meta
   }
 });
 
-test("diagnostic settings independently control timeline, Thinking, and compact outcomes", () => {
+test("diagnostic settings independently control timeline, Thinking, and stop reasons", () => {
   let settings: StampSettings = {
     ...DEFAULT_STAMP_SETTINGS,
+    ...METADATA_PRESETS.compact,
     timeZone: "UTC",
-    assistantMetadata: "compact",
   };
   const renderer = createStampEntryRenderer(() => settings);
   const assistant = assistantMessage(Date.UTC(2026, 6, 30, 0, 1, 2), "error");
@@ -523,15 +524,15 @@ test("diagnostic settings independently control timeline, Thinking, and compact 
   assert.match(render(), /thinking high/u);
   assert.match(render(), /stop error/u);
 
-  settings = { ...settings, showExactTimeline: true, showThinkingLevel: false };
+  settings = { ...settings, showExactTimeline: true, showPiThinkingLevel: false };
   assert.match(render(), /timeline · created/u);
   assert.doesNotMatch(render(), /thinking high/u);
   assert.match(render(), /stop error/u);
 
   settings = {
     ...settings,
-    showThinkingLevel: true,
-    showCompactAbnormalOutcome: false,
+    showPiThinkingLevel: true,
+    stopReason: "hidden",
   };
   assert.match(render(), /timeline · created/u);
   assert.match(render(), /thinking high/u);
@@ -541,8 +542,8 @@ test("diagnostic settings independently control timeline, Thinking, and compact 
 test("entry renderer composes opt-in assistant metadata, explicit debug details, and tool stamps", () => {
   let settings: StampSettings = {
     ...DEFAULT_STAMP_SETTINGS,
+    ...METADATA_PRESETS.compact,
     timeZone: "UTC",
-    assistantMetadata: "compact",
   };
   const renderer = createStampEntryRenderer(() => settings);
   const assistant = {
@@ -557,7 +558,11 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
       },
     ],
   };
-  const metadata = captureAssistantMetadata(assistant);
+  const metadata = captureAssistantMetadata(assistant, {
+    ...METADATA_PRESETS.detailed,
+    showResponseId: true,
+    showDiagnostics: true,
+  });
   assert.ok(metadata);
   const data = {
     version: 5,
@@ -576,7 +581,13 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
     ["00:01:02", "test-model → actual-model · thinking high · 2 tok · est $0"],
   );
 
-  settings = { ...settings, assistantMetadata: "expanded", responseTiming: "duration" };
+  settings = {
+    ...settings,
+    ...METADATA_PRESETS.detailed,
+    showResponseId: true,
+    showDiagnostics: true,
+    responseTiming: "duration",
+  };
   const debug = renderer({ data } as never, { expanded: true }, theme);
   assert.ok(debug);
   assert.deepEqual(
@@ -638,6 +649,97 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
       assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
     }
   }
+});
+
+test.each(METADATA_SETTING_FIELDS)("entry renderer invalidates mounted metadata after changing %s", (field) => {
+  const initial: StampSettings = {
+    ...DEFAULT_STAMP_SETTINGS,
+    ...METADATA_PRESETS.detailed,
+    timeZone: "UTC",
+    showExactTimeline: false,
+    showResponseId: true,
+    showDiagnostics: true,
+  };
+  const assistant = {
+    ...assistantMessage(Date.UTC(2026, 6, 30, 0, 1, 2), "error"),
+    responseModel: "actual-model",
+    responseId: "response-1",
+    diagnostics: [{ type: "retry", error: { name: "HTTPError", code: 429 } }],
+    usage: { ...assistantMessage(ASSISTANT_TIMESTAMP).usage, reasoning: 1 },
+  };
+  const metadata = captureAssistantMetadata(assistant, initial);
+  assert.ok(metadata);
+  for (const expanded of [false, true]) {
+    let settings = { ...initial };
+    const renderer = createStampEntryRenderer(() => settings);
+    const component = renderer(
+      {
+        data: { version: 5, role: "assistant", timestamp: assistant.timestamp, metadata, thinkingLevel: "high" },
+      } as never,
+      { expanded },
+      { fg: (_color: string, text: string) => text } as never,
+    );
+    assert.ok(component);
+    const before = component.render(240);
+    assert.equal(component.render(240), before);
+    settings = {
+      ...settings,
+      [field]: field === "metadataLayout" ? "compact" : field === "stopReason" ? "hidden" : false,
+    };
+    const after = component.render(240);
+    assert.notEqual(after, before, `Changing ${field} must invalidate the rendered output`);
+    assert.equal(component.render(240), after);
+    if (expanded || (field !== "showResponseId" && field !== "showDiagnostics")) {
+      assert.notDeepEqual(after, before, `Changing ${field} must change visible metadata`);
+    }
+    for (const width of [0, 1, 4, 8, 12, 80]) {
+      assert.ok(component.render(width).every((line) => visibleWidth(line) <= width));
+    }
+  }
+});
+
+test("old persisted debug values stay hidden until their own flags and transcript expansion permit them", () => {
+  const assistant = {
+    ...assistantMessage(Date.UTC(2026, 6, 30, 0, 1, 2)),
+    responseId: "old-response-id",
+    diagnostics: [{ type: "old-retry", error: { name: "HTTPError", code: 429 } }],
+  };
+  const metadata = captureAssistantMetadata(assistant, {
+    ...METADATA_PRESETS.detailed,
+    showResponseId: true,
+    showDiagnostics: true,
+  });
+  assert.ok(metadata);
+  const data = { version: 4, role: "assistant", timestamp: assistant.timestamp, metadata } as const;
+  const snapshot = JSON.stringify(data);
+  for (const expanded of [false, true]) {
+    for (const metadataLayout of ["compact", "expanded"] as const) {
+      let settings: StampSettings = {
+        ...DEFAULT_STAMP_SETTINGS,
+        ...METADATA_PRESETS.detailed,
+        metadataLayout,
+        timeZone: "UTC",
+        showExactTimeline: false,
+      };
+      const renderer = createStampEntryRenderer(() => settings);
+      const component = renderer({ data } as never, { expanded }, {
+        fg: (_color: string, text: string) => text,
+      } as never);
+      assert.ok(component);
+      const render = () => component.render(240).map((line) => line.trim());
+      assert.doesNotMatch(render().join("\n"), /debug|old-response-id|old-retry|HTTPError/u);
+      settings = { ...settings, ...METADATA_PRESETS.none, metadataLayout };
+      assert.deepEqual(render(), ["00:01:02"]);
+      settings = { ...settings, showResponseId: true };
+      assert.deepEqual(render(), expanded ? ["00:01:02", "debug · response id old-response-id"] : ["00:01:02"]);
+      settings = { ...settings, showResponseId: false, showDiagnostics: true };
+      assert.deepEqual(
+        render(),
+        expanded ? ["00:01:02", "debug · diagnostics 1", "debug · old-retry · HTTPError · code 429"] : ["00:01:02"],
+      );
+    }
+  }
+  assert.equal(JSON.stringify(data), snapshot);
 });
 
 test("Pi persists version-6 stamp entries across reopen without adding them to model context", (t) => {

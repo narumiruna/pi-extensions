@@ -3,6 +3,7 @@ import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS, type StampSettings } from "../src/format.js";
 import { captureAssistantMetadata } from "../src/metadata.js";
+import { METADATA_PRESETS } from "../src/metadata-settings.js";
 import type { StampSettingsRuntime, StampSettingsState } from "../src/settings.js";
 import stamp, {
   createStampEntryRenderer,
@@ -97,7 +98,7 @@ test("TUI lifecycle appends one user stamp before the assistant and measured ass
 
 test("opt-in assistant metadata persists a sanitized version-4 snapshot with measured timing", async () => {
   const mock = createMockPi();
-  const runtime = settingsRuntimeWith({ assistantMetadata: "compact" });
+  const runtime = settingsRuntimeWith({ ...METADATA_PRESETS.compact });
   stamp(mock.pi, {
     settingsRuntime: runtime,
     now: () => ASSISTANT_TIMESTAMP + 3_200,
@@ -112,8 +113,9 @@ test("opt-in assistant metadata persists a sanitized version-4 snapshot with mea
   await emit(mock, "message_start", { message: assistant }, ctx);
   await emit(mock, "message_end", { message: assistant }, ctx);
   await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
-  const metadata = captureAssistantMetadata(assistant);
+  const metadata = captureAssistantMetadata(assistant, METADATA_PRESETS.compact);
   assert.ok(metadata);
+  assert.equal(Object.hasOwn(metadata, "responseId"), false);
   assert.deepEqual(mock.entries, [
     {
       customType: STAMP_ENTRY_TYPE,
@@ -129,7 +131,7 @@ test("opt-in assistant metadata persists a sanitized version-4 snapshot with mea
 
   const reversed = createMockPi();
   stamp(reversed.pi, {
-    settingsRuntime: settingsRuntimeWith({ assistantMetadata: "compact" }),
+    settingsRuntime: settingsRuntimeWith({ ...METADATA_PRESETS.compact }),
     now: () => ASSISTANT_TIMESTAMP - 1,
   });
   await emit(reversed, "session_start", { reason: "startup" }, ctx);
@@ -151,7 +153,7 @@ test("opt-in assistant metadata persists a sanitized version-4 snapshot with mea
 
 test("opt-in assistant metadata persists the effective turn Thinking level in version 5", async () => {
   const mock = createMockPi();
-  const runtime = settingsRuntimeWith({ assistantMetadata: "compact" });
+  const runtime = settingsRuntimeWith({ ...METADATA_PRESETS.compact });
   stamp(mock.pi, {
     settingsRuntime: runtime,
     now: () => ASSISTANT_TIMESTAMP + 3_200,
@@ -163,7 +165,7 @@ test("opt-in assistant metadata persists the effective turn Thinking level in ve
   await emit(mock, "message_start", { message: assistant }, ctx);
   await emit(mock, "message_end", { message: assistant }, ctx);
   await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
-  const metadata = captureAssistantMetadata(assistant);
+  const metadata = captureAssistantMetadata(assistant, METADATA_PRESETS.compact);
   assert.ok(metadata);
   assert.deepEqual(mock.entries, [
     {
@@ -181,7 +183,7 @@ test("opt-in assistant metadata persists the effective turn Thinking level in ve
 
   const reversed = createMockPi();
   stamp(reversed.pi, {
-    settingsRuntime: settingsRuntimeWith({ assistantMetadata: "compact" }),
+    settingsRuntime: settingsRuntimeWith({ ...METADATA_PRESETS.compact }),
     now: () => ASSISTANT_TIMESTAMP - 1,
   });
   await emit(reversed, "session_start", { reason: "startup" }, ctx);
@@ -218,7 +220,7 @@ test("opt-in assistant metadata persists the effective turn Thinking level in ve
 test("Thinking level state cannot survive turn, agent, session, or shutdown boundaries", async () => {
   for (const boundary of ["turn_start", "agent_end", "session_start", "session_shutdown"] as const) {
     const mock = createMockPi();
-    stamp(mock.pi, { settingsRuntime: settingsRuntimeWith({ assistantMetadata: "compact" }) });
+    stamp(mock.pi, { settingsRuntime: settingsRuntimeWith({ ...METADATA_PRESETS.compact }) });
     const active = createMockContext({ mode: "tui", thinkingLevel: "high" });
     const replacement = createMockContext({ mode: "tui" });
     const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
@@ -241,15 +243,15 @@ test("Thinking level state cannot survive turn, agent, session, or shutdown boun
 
 test("disabled, missing, or invalid Thinking levels retain version-4 metadata", async () => {
   for (const scenario of [
-    { thinkingLevel: "high", showThinkingLevel: false },
-    { thinkingLevel: undefined, showThinkingLevel: true },
-    { thinkingLevel: "ultra", showThinkingLevel: true },
+    { thinkingLevel: "high", showPiThinkingLevel: false },
+    { thinkingLevel: undefined, showPiThinkingLevel: true },
+    { thinkingLevel: "ultra", showPiThinkingLevel: true },
   ] as const) {
     const mock = createMockPi();
     stamp(mock.pi, {
       settingsRuntime: settingsRuntimeWith({
-        assistantMetadata: "compact",
-        showThinkingLevel: scenario.showThinkingLevel,
+        ...METADATA_PRESETS.compact,
+        showPiThinkingLevel: scenario.showPiThinkingLevel,
       }),
     });
     const { ctx } = createMockContext({ mode: "tui", thinkingLevel: scenario.thinkingLevel });
@@ -881,22 +883,9 @@ async function emit(mock: ReturnType<typeof createMockPi>, name: string, event: 
 function defaultSettingsState(): Readonly<StampSettingsState> {
   return {
     settings: { ...DEFAULT_STAMP_SETTINGS },
-    sources: {
-      hourCycle: "built-in",
-      showSeconds: "built-in",
-      dateContext: "built-in",
-      locale: "built-in",
-      timeZone: "built-in",
-      responseTiming: "built-in",
-      showOutputThroughput: "built-in",
-      assistantMetadata: "built-in",
-      showExactTimeline: "built-in",
-      showThinkingLevel: "built-in",
-      showCompactAbnormalOutcome: "built-in",
-      showCostSinceUser: "built-in",
-      showTimeSinceUser: "built-in",
-      toolStamps: "built-in",
-    },
+    sources: Object.fromEntries(
+      Object.keys(DEFAULT_STAMP_SETTINGS).map((key) => [key, "built-in"]),
+    ) as StampSettingsState["sources"],
     canSave: true,
   };
 }
