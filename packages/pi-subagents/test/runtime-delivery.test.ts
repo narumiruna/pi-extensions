@@ -149,7 +149,7 @@ test("throwing sendMessage with reentrant cancellation retains the result withou
   assert.equal(send.mock.calls.length, 1);
   const [message, options] = send.mock.calls[0] ?? [];
   assert.deepEqual((message as { details: unknown }).details, result);
-  assert.deepEqual(options, { deliverAs: "steer" });
+  assert.deepEqual(options, { deliverAs: "steer", triggerTurn: true });
   await f.runtime.cancel(jobId);
   assert.deepEqual(await f.runtime.wait(jobId, undefined), result);
   assert.equal(f.runtime.inspectJobs().jobs[0]?.state, "completed");
@@ -248,7 +248,7 @@ function assertCompletion(mock: ReturnType<typeof createMockPi>, result: unknown
   const message = sent.message as { customType: string; details: unknown };
   assert.equal(message.customType, COMPLETION_MESSAGE_TYPE);
   assert.deepEqual(message.details, result);
-  assert.deepEqual(sent.options, { deliverAs: "steer" });
+  assert.deepEqual(sent.options, { deliverAs: "steer", triggerTurn: true });
 }
 
 function completed(result: string): ChildResult {

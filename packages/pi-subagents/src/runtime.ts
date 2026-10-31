@@ -437,7 +437,7 @@ export class SubagentRuntime {
           display: true,
           details: payload,
         },
-        { deliverAs: "steer" },
+        { deliverAs: "steer", triggerTurn: true },
       );
     } catch {
       // Completion remains available through wait; inspect continues to report status.
