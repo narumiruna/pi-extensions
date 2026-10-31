@@ -47,6 +47,6 @@
   },
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.59.0",
-    "dbus-native": "^0.16.2"
+    "dbus-native": "^0.16.3"
   }
 }
