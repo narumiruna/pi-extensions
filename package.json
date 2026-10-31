@@ -87,7 +87,7 @@
     "publish-packages:sequential": "node ./scripts/publish-packages-sequentially.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
+    "@biomejs/biome": "2.6.3",
     "@changesets/cli": "3.0.3",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-agent-core": "1.4.0",
