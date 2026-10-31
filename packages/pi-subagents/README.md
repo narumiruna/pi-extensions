@@ -62,6 +62,7 @@ Call `subagent_spawn` with a self-contained task and only the work tools that ta
 
 The call returns a `jobId` immediately, and the job continues in the background.
 Continue useful main-agent work until the result is required or a completion arrives.
+A completion starts a new main-agent model turn if the main agent is idle.
 
 In TUI mode, the widget above the editor shows queued and running tasks; no new parameter is required.
 
@@ -321,7 +322,6 @@ Parallel writers require disjoint ownership or workspace isolation outside this 
 - The extension does not provide custom agents, custom system prompts, peer-to-peer child messaging, retained conversations, user-directed follow-up work, mailboxes, Agent Teams, chains, fan-in aggregators, panels, workflow DAGs, dynamic scheduling, verification orchestration, nested subagents, or extension-owned semantic memory.
 - Bidirectional messages use request-response coordination, not a retained conversational session.
 - The main agent must verify child claims against the actual diff and deterministic checks.
-- Child requests and responses trigger a main-agent turn, but asynchronous job completions do not wake an otherwise idle model turn automatically.
 - Jobs, broker requests, and retained results do not survive extension reload, session replacement, or process exit.
 
 ## 🗂️ Package layout

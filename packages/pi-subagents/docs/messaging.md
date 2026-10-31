@@ -4,6 +4,8 @@ Main and child processes have separate `subagent_send` definitions. The main age
 
 ## Delivery and waiting
 
+Child requests, responses, and terminal completions use Pi steering while the main agent is running. If it is idle, they start a new model turn. A completion does not require a pending `subagent_wait` call.
+
 A main-originated request to a queued job waits for the child RPC prompt to be accepted, then uses Pi steering to reach the running child. After RPC accepts steering, the runtime interrupts active child response waits without consuming their original requests. The child may retry `subagent_wait` for a response it still needs.
 
 Caller cancellation before RPC delivery starts rolls the request back. Once delivery starts, cancellation stops only the caller's wait: the request may still arrive and remains answerable until delivery fails or the job terminates. A wait timeout likewise stops only that wait, not the job or the underlying message request.
@@ -16,7 +18,7 @@ Each job may have up to four unresolved or answered-but-not-consumed requests ac
 
 A job starts `queued`, becomes `running`, and reaches exactly one terminal state: `completed`, `partial`, `failed`, `timed_out`, or `cancelled`. Job execution timeouts start after Pi accepts the RPC prompt. The runtime retains up to 32 recent terminal records for up to 24 hours in the current extension session; inspection reports removed records through `omitted.jobs`.
 
-Cancelling or terminalizing a job revokes its communication token and rejects pending child waits before stale output can replace the terminal state. Session replacement and shutdown cancel active work, suppress stale completion delivery, revoke credentials, close sockets, and stop the broker. An asynchronous job completion does not wake an otherwise idle main-agent model turn.
+Cancelling or terminalizing a job revokes its communication token and rejects pending child waits before stale output can replace the terminal state. Session replacement and shutdown cancel active work, suppress stale completion delivery, revoke credentials, close sockets, and stop the broker.
 
 The session starts one loopback TCP broker on `127.0.0.1` with an ephemeral port. Each job receives a random token bound to its job identity and session generation. The parent passes credentials through a private inherited pipe rather than the child's initial environment or command line. Child broker calls use request-scoped connections; response waits use abortable long polling.
 
