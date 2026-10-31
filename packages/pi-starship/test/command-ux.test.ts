@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
@@ -104,10 +104,11 @@ test("Presets stays shallow, identifies the exact active document, and restores 
     assert.match(full, /Minimal/u);
     assert.match(full, /Bracketed Segments/u);
     assert.match(full, /Catppuccin Powerline/u);
-    assert.match(full, /Nerd Font Symbols/u);
+    assert.match(full, /Catppuccin Tmux/u);
+    assert.match(full, /Lualine Bubbles/u);
     assert.match(full, /Currently applied/u);
     assert.match(full, /Cannot apply: Already applied; press e to customize/u);
-    assert.match(full, /\(1\/13\)/u);
+    assert.ok(full.includes(`(1/${STARSHIP_PRESETS.length})`));
     assert.deepEqual(previewed, ["minimal"]);
     tui.press("tui.select.confirm");
     await flushAsyncWork();
@@ -116,12 +117,12 @@ test("Presets stays shallow, identifies the exact active document, and restores 
     const lastPreset = tui.render().join("\n");
     assert.match(lastPreset, /Tokyo Night/u);
     assert.match(lastPreset, /requires Nerd Font/u);
-    assert.match(lastPreset, /\(13\/13\)/u);
+    assert.ok(lastPreset.includes(`(${STARSHIP_PRESETS.length}/${STARSHIP_PRESETS.length})`));
     assert.equal(previewed.at(-1), "tokyo-night");
     tui.press("home");
     assert.equal(previewed.at(-1), "minimal");
     tui.press("tui.select.pageDown");
-    assert.equal(previewed.at(-1), "plain-text-symbols");
+    assert.equal(previewed.at(-1), STARSHIP_PRESETS[10]?.id);
     tui.press("tui.select.cancel");
     await tui.waitForOpen();
     assert.match(tui.render().join("\n"), /→ Presets/u);
@@ -294,6 +295,9 @@ test("preset preview cancellation is inert and confirmed apply replaces atomical
     assert.equal(applied, 0);
     assert.equal(previewed.at(-1), undefined);
 
+    const selectedPresetIndex = STARSHIP_PRESETS.findIndex((preset) => preset.id === "lualine-bubbles");
+    const selectedPreset = STARSHIP_PRESETS[selectedPresetIndex];
+    assert.ok(selectedPreset);
     const appliedTui = createTuiHarness({ width: 50, rows: 16 });
     const appliedContext = createMockContext({
       mode: "tui",
@@ -309,13 +313,19 @@ test("preset preview cancellation is inert and confirmed apply replaces atomical
     appliedTui.press("tui.select.down");
     appliedTui.press("tui.select.confirm");
     await appliedTui.waitForOpen();
+    for (let index = 0; index < selectedPresetIndex; index++) appliedTui.press("tui.select.down");
+    assert.equal(previewed.at(-1), selectedPreset.id);
     appliedTui.press("tui.select.confirm");
     await running;
-    assert.equal(readFileSync(path, "utf8"), STARSHIP_PRESETS[0]?.rawDocument);
+    assert.equal(readFileSync(path, "utf8"), selectedPreset.rawDocument);
     assert.equal(applied, 1);
-    assert.match(confirmation, /Minimal/u);
+    assert.match(confirmation, /Lualine Bubbles/u);
     assert.match(confirmation, /custom settings, unknown fields, and comments will be replaced/iu);
     assert.match(confirmation, /previous document will be kept in History/u);
+    const historyDirectory = join(root, "pi-starship", "history");
+    const history = readdirSync(historyDirectory);
+    assert.equal(history.length, 1);
+    assert.equal(readFileSync(join(historyDirectory, history[0] ?? ""), "utf8"), original);
     assert.equal(previewed.at(-1), undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -615,6 +625,9 @@ test("preset picker uses injected navigation bindings and exposes their hints", 
     assert.match(frame, /q\s+back/u);
     tui.send("j");
     assert.equal(previewed.at(-1), "bracketed-segments");
+    tui.send("j");
+    tui.send("j");
+    assert.equal(previewed.at(-1), "catppuccin-tmux");
     tui.send("q");
     await tui.waitForOpen();
     assert.equal(previewed.at(-1), undefined);

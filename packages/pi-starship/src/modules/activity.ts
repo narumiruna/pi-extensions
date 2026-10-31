@@ -51,7 +51,8 @@ export const activityModule = defineModule({
 
     const active = [...runtime.activeTools.entries()];
     if (active.length > 0) {
-      const [tool = "tool", count = 1] = active[0] ?? [];
+      const [rawTool = "tool", count = 1] = active[0] ?? [];
+      const tool = sanitizeTerminalText(rawTool);
       const suffix = count > 1 ? `×${count}` : "";
       const more = active.length > 1 ? `+${active.length - 1}` : "";
       return {
@@ -72,12 +73,13 @@ export const activityModule = defineModule({
       };
     }
     if (runtime.lastCompletedTool) {
+      const tool = sanitizeTerminalText(runtime.lastCompletedTool);
       return {
         state: "completed",
-        tool: runtime.lastCompletedTool,
+        tool,
         count: "0",
         ...EMPTY_PROMPT_VALUES,
-        text: `${symbol} completed ${runtime.lastCompletedTool}`,
+        text: `${symbol} completed ${tool}`,
       };
     }
     return {

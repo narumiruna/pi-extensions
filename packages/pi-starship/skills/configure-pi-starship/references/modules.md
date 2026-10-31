@@ -206,6 +206,7 @@ These are inert labels, not evidence of cluster access or valid credentials.
 
 - During a blocking extension UI prompt, `activity` sets `$state` to `waiting`, `$kind` to the prompt kind, and `$title` to the sanitized bounded title or an empty string.
 - Prompt waiting takes precedence without losing the underlying tool, streaming, completed, or idle state, which returns when the prompt closes.
+- Active and completed tool names in `$tool` and `$text` are single-line display text: line separators become spaces, and terminal and direction controls are removed. Raw tool identities remain unchanged.
 - `tokens`, `cache`, and `cost` total every usage-bearing session entry, matching Pi's native footer.
   This includes assistant messages, nested-LLM tool results, compactions, and branch summaries, including abandoned branches retained in the session.
 - Cache `$read` and `$write` are cumulative.

@@ -36,7 +36,7 @@ truncation_length = 11
 truncation_symbol = "⋯"
 
 [git_state]
-format = "([⎪$state $progress_current/$progress_total⎥]($style))"
+format = "([⎪$state( $progress_current/$progress_total)⎥]($style))"
 symbol = ""
 style = "italic bright-purple"
 

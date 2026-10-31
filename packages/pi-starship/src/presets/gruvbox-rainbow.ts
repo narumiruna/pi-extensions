@@ -1,66 +1,89 @@
-export const GRUVBOX_RAINBOW_PRESET = `# Pi-native adaptation of Starship's Gruvbox Rainbow preset.
-format = "[](color_orange)$brand$model[](bg:color_yellow fg:color_orange)$directory[](fg:color_yellow bg:color_aqua)$git_branch$git_status[](fg:color_aqua bg:color_blue)$thinking$activity[](fg:color_blue bg:color_bg3)$context[](fg:color_bg3 bg:color_bg1)$time[](fg:color_bg1)"
+export const GRUVBOX_RAINBOW_PRESET = `# Pi-native adaptation of Gruvbox Rainbow.
+# Source: https://starship.rs/presets/gruvbox-rainbow
+# Original configuration: https://starship.rs/presets/toml/gruvbox-rainbow.toml
+# Font: Nerd Font. See NOTICES.md for attribution and license terms.
+# Keep Gruvbox color order. Move activity, tokens, context, and time to a second footer row instead of a shell input line.
+
+format = "[](orange)$brand$directory([](fg:prev_bg bg:aqua)$git_branch$git_status)$model$thinking[](fg:prev_bg)\\n$activity\${fill}$tokens$context$time(\\n$extension_status)"
 palette = "gruvbox_dark"
 
 [palettes.gruvbox_dark]
-color_fg0 = "#fbf1c7"
-color_bg1 = "#3c3836"
-color_bg3 = "#665c54"
-color_blue = "#458588"
-color_aqua = "#689d6a"
-color_green = "#98971a"
-color_orange = "#d65d0e"
-color_purple = "#b16286"
-color_red = "#cc241d"
-color_yellow = "#d79921"
+fg = "#fbf1c7"
+bg = "#282828"
+bg1 = "#3c3836"
+bg3 = "#665c54"
+orange = "#d65d0e"
+yellow = "#d79921"
+aqua = "#689d6a"
+blue = "#458588"
+green = "#b8bb26"
+red = "#fb4934"
+muted = "#a89984"
 
 [brand]
 format = "[ $symbol ]($style)"
-symbol = ""
-style = "fg:color_fg0 bg:color_orange bold"
-
-[model]
-format = "[$model ]($style)"
-symbol = ""
-style = "fg:color_fg0 bg:color_orange bold"
+style = "bold fg:fg bg:orange"
+symbol = "π"
 
 [directory]
-format = "[ $path ]($style)"
-symbol = ""
-style = "fg:color_fg0 bg:color_yellow bold"
-truncation_length = 3
+format = "([](fg:prev_bg bg:yellow)[ $path ]($style))"
+style = "bold fg:bg bg:yellow"
+symbol = ""
+truncation_length = 2
 truncation_symbol = "…/"
 
 [git_branch]
-format = "[ $symbol $branch ]($style)"
+format = "([ $symbol $branch ]($style))"
+style = "fg:bg bg:aqua"
 symbol = ""
-style = "fg:color_fg0 bg:color_aqua bold"
+truncation_length = 18
 
 [git_status]
-format = "[$all_status$ahead_behind ]($style)"
-style = "fg:color_fg0 bg:color_aqua bold"
+format = "([ $all_status$ahead_behind ]($style))"
+style = "fg:bg bg:aqua"
+
+[model]
+format = "([](fg:prev_bg bg:blue)[ $model ]($style))"
+style = "bold fg:fg bg:blue"
+symbol = "◆"
+shorten_model = true
+truncation_length = 22
+truncation_direction = "middle"
 
 [thinking]
-format = "[ $symbol $level ]($style)"
-symbol = "󰔟"
-style = "fg:color_fg0 bg:color_blue bold"
+format = "([](fg:prev_bg bg:bg3)[ $level ]($style))"
+style = "fg:fg bg:bg3"
 
 [activity]
 format = "[ $text ]($style)"
-symbol = "󰑮"
-style = "fg:color_fg0 bg:color_blue bold"
+style = "fg:yellow"
+symbol = "●"
+
+[tokens]
+format = "[↑$input ↓$output  ]($style)"
+style = "fg:aqua"
 
 [context]
-format = "[ $symbol $percentage ](fg:color_fg0 bg:color_bg3 bold)"
-symbol = "󰍛"
+format = "[ctx $percentage  ]($style)"
 
 [[context.display]]
 threshold = 0
-style = "color_bg3"
+style = "fg:green"
 hidden = false
 
 [time]
-format = "[  $time ]($style)"
-symbol = ""
-style = "fg:color_fg0 bg:color_bg1 bold"
+format = "[$time ]($style)"
+style = "fg:muted"
+time_format = "%H:%M"
+
+[fill]
+style = "fg:muted"
+symbol = " "
+
+[extension_status]
+format = "([$statuses]($style))"
+style = "fg:muted"
+separator = " · "
+max_statuses = 2
+icons = { fallback = "" }
 `;

@@ -139,24 +139,45 @@ A stale cooperative mutation lock is never removed automatically; after confirmi
 ### 🎛️ Presets
 
 Choose **Presets** from `/starship` to browse complete Pi-native starting points.
-The catalog adapts all styles listed by `starship preset --list` in Starship 1.26.0, plus a Pi-specific Minimal option.
-Colors, separators, typography, and layout follow the named Starship preset; modules are deliberately selected for Pi's model, thinking, workspace, Git, activity, context, and time snapshots.
+The catalog combines Starship-inspired presets with Lualine, Tmux, Powerlevel10k, and Oh My Posh statusline adaptations, plus a Pi-specific Minimal option.
+Colors, separators, typography, and layout follow the named upstream design; modules are deliberately selected for Pi's model, thinking, workspace, Git, activity, context, and time snapshots.
 
 | Preset | Adapted visual treatment | Font requirement |
 | --- | --- | --- |
 | **Minimal** | Compact Pi essentials | Standard Unicode |
 | **Bracketed Segments** | Balanced Pi and Git information in brackets | Standard Unicode |
 | **Catppuccin Powerline** | Connected Catppuccin Mocha blocks; other Catppuccin palettes remain in the document for customization | Nerd Font |
-| **Gruvbox Rainbow** | Warm Gruvbox connected segments | Nerd Font |
+| **Catppuccin Tmux** | Single-row Mocha statusline with accent labels and dark rounded values | Nerd Font |
+| **Dracula Tmux** | Full-width dark rail with vivid rectangular blocks | Standard Unicode |
+| **Gruvbox Rainbow** | Warm connected segments above a separate activity and usage row | Nerd Font |
 | **Jetpack** | Airy geometric activity/context and workspace columns joined by fill | Standard Unicode |
+| **Lualine Bubbles** | Violet Pi badge, gray workspace, and separate session pills | Nerd Font |
+| **Lualine Eviline** | Flat dark statusline with colored text and blue edge bars | Standard Unicode |
+| **Lualine Slanted Gaps** | Light statusline with opposing diagonal segments | Nerd Font |
 | **Nerd Font Symbols** | Balanced default layout with icon-rich symbols | Nerd Font |
 | **No Empty Icons** | Conditional text labels that cannot appear without their values | Standard Unicode |
 | **No Nerd Font** | Portable Unicode symbols without private-use glyphs | Standard Unicode |
-| **No Runtime Versions** | Presence indicators without model or thinking details | Standard Unicode |
-| **Pastel Powerline** | Connected magenta, coral, orange, blue, teal, and navy blocks | Nerd Font |
+| **Session Indicators** | Hide model names, thinking levels, and activity details | Standard Unicode |
+| **Oh My Posh Atomic** | Two-row frame with a warm chain and cool usage pills | Nerd Font |
+| **Pastel Powerline** | Connected magenta, coral, peach, blue, teal, and navy blocks | Nerd Font |
 | **Plain Text Symbols** | Plain words replace pictograms | Standard Unicode |
-| **Pure Preset** | Clean two-line workspace and session context | Standard Unicode |
-| **Tokyo Night** | Connected cool blue Tokyo Night blocks | Nerd Font |
+| **Powerlevel10k Lean** | Background-free workspace row above Pi session details | Standard Unicode |
+| **Pure** | Clean two-line workspace and session context | Standard Unicode |
+| **Tokyo Night** | Shaded lead-in and rounded blue-to-navy connected blocks | Nerd Font |
+
+Session Indicators retains the `no-runtime-versions` ID, and Pure retains `pure-preset`.
+Pastel Powerline, Gruvbox Rainbow, and Tokyo Night retain their preset IDs with refreshed layouts.
+Existing active documents and profiles remain unchanged until an explicit application; an older copy can appear as **Custom configuration** because recognition compares exact document bytes.
+
+These three refreshed designs and the seven Lualine, Tmux, Lean, and Atomic adaptations shorten model names and retain up to 22 model-label grapheme clusters, 18 branch-label graphemes, and two trailing directory components, subject to native directory contraction.
+They show context from 0% when available and place at most two public extension statuses on a separate conditional line.
+Eviline changes context color at 60% and 80%; the other nine retain fixed palette colors instead of the default context warning colors.
+
+The adaptations replace editor mode, filename, cursor progress, shell runtimes, CPU, weather, and cloud fields with Pi identity, workspace, model, thinking, activity, token totals, context, or time.
+Eviline uses thinking-level styles instead of Vim modes; Dracula uses rectangular segments; Lean wraps rather than hiding overlapping right content; Atomic uses real activity instead of command duration and keeps a fixed Git background.
+Catppuccin Tmux keeps workspace details on the left and session details on the right of one logical row, so its default layout does not stack the rounded pills. Narrow terminals still wrap; public extension statuses retain their separate conditional line.
+The light Slanted Gaps palette is intentional. Nerd Font glyph joins, terminal font metrics, and visual contrast still need review in the user's terminal.
+These are visual adaptations, not compatibility with the upstream runtimes or their complete configuration formats; [NOTICES.md](../../../NOTICES.md) lists sources and licenses.
 
 Moving through the preset picker temporarily renders the selected preset in the footer without writing settings or starting collectors.
 Press Enter to confirm replacement, press `e` to edit the selected complete TOML document before preview and confirmation, or use the displayed `s` save-as-profile action without applying.
@@ -171,7 +192,7 @@ Use **Restore built-in…** for deterministic recovery.
 
 The bundled presets use only pi-starship's local Pi and Git snapshot modules.
 They do not enable the GitHub PR query, cloud/deployment readers, or optional command-backed workspace collectors.
-They are Pi-native adaptations of the color and format treatments emitted by Starship 1.26.0; they do not copy Starship's module selections because Pi exposes different runtime information.
+They adapt upstream colors and layouts to Pi's runtime information; they do not execute or load Starship, Lualine, Tmux, Powerlevel10k, or Oh My Posh configurations.
 There is no `/starship preset` textual route and no remote preset download.
 
 ### 📝 Example

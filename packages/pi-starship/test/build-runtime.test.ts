@@ -31,6 +31,16 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "src/settings-draft.ts",
     "src/settings-snapshots.ts",
     "src/presets/catalog.ts",
+    "src/presets/catppuccin-tmux.ts",
+    "src/presets/dracula-tmux.ts",
+    "src/presets/gruvbox-rainbow.ts",
+    "src/presets/lualine-bubbles.ts",
+    "src/presets/lualine-evil.ts",
+    "src/presets/lualine-slanted-gaps.ts",
+    "src/presets/oh-my-posh-atomic.ts",
+    "src/presets/pastel-powerline.ts",
+    "src/presets/powerlevel10k-lean.ts",
+    "src/presets/tokyo-night.ts",
     "src/runtime/cloud.ts",
     "src/runtime/deployment.ts",
     "src/runtime/development.ts",
@@ -145,6 +155,41 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       assert.ok(command);
       await command.handler("status", { ...(context.ctx as ExtensionCommandContext), mode: "rpc" });
       assert.match(context.notifications.at(-1)?.message ?? "", /source: user[\s\S]*warnings: none/u);
+      // Load the generated preset catalog and preview every entry without publishing settings.
+      const beforePresets = await readFile(join(agentDir, "pi-starship.toml"), "utf8");
+      const presetMenu = command.handler("", context.ctx);
+      try {
+        await tui.waitForOpen();
+        tui.press("tui.select.down");
+        tui.press("tui.select.confirm");
+        await tui.waitForOpen();
+        const presetFrames: string[] = [];
+        for (let index = 0; index < 20; index++) {
+          presetFrames.push(tui.render().join("\n"));
+          tui.press("tui.select.down");
+        }
+        for (const label of [
+          "Catppuccin Tmux",
+          "Dracula Tmux",
+          "Lualine Bubbles",
+          "Lualine Eviline",
+          "Lualine Slanted Gaps",
+          "Oh My Posh Atomic",
+          "Powerlevel10k Lean",
+        ]) {
+          assert.ok(
+            presetFrames.some((frame) => frame.includes(`Selected: ${label}`)),
+            label,
+          );
+        }
+        assert.match(presetFrames[0] ?? "", /\(1\/20\)/u);
+        assert.match(presetFrames.at(-1) ?? "", /\(20\/20\)/u);
+      } finally {
+        tui.press("ctrl+c");
+        await presetMenu;
+      }
+      assert.equal(await readFile(join(agentDir, "pi-starship.toml"), "utf8"), beforePresets);
+
       // Exercise the generated menu, summary, profile, chat, and snapshot chunks through Jiti.
       const running = command.handler("", context.ctx);
       try {

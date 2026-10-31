@@ -238,7 +238,8 @@ style = "dimmed"
 Fill resolves independently on each logical line before ANSI serialization and wrapping.
 Multiple fills divide remaining cells left-to-right; complete positive-width patterns repeat and any remainder uses styled spaces.
 Empty/zero-width patterns become spaces.
-Fixed content is never truncated: when it already meets or exceeds the width, fill contributes zero and normal ANSI-aware wrapping applies.
+When fixed content meets or exceeds the width, fill contributes zero and normal ANSI-aware wrapping applies.
+A grapheme wider than the terminal cannot wrap safely; any resulting overwide row is truncated with `…` using Pi TUI utilities. Other wrapped rows remain unchanged.
 Unicode wide/combining symbols, palettes, `prev_fg`/`prev_bg`, ANSI, and OSC hyperlinks use Pi TUI visible-width semantics.
 `$all` deliberately includes enabled fill, so use `$all` only when that whole-catalog layout is intended.
 There is no `line_break` module; use literal newlines in `format`.
