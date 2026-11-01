@@ -588,6 +588,136 @@ describe("native Jiti runtime", () => {
     expect(errors).toEqual([]);
   });
 
+  it("keeps a recovered off notice fixed after stale native history, ordinary requests, and reload", async () => {
+    const fixture = createFixture();
+    const { session, errors } = await open(fixture);
+    const initial = loadout(session);
+    const head: AgentMessage = {
+      role: "system",
+      content: "Native leading instruction",
+      timestamp: 1,
+      toolsAdded: [{ name: "write", description: "Native writer", parameters: Type.Object({}) }],
+    };
+    const first = await session.extensionRunner.emitContext([
+      head,
+      { role: "user", content: "old request", timestamp: 2 },
+    ]);
+    const retained = first.at(-1) as AgentMessage;
+    expect(retained).toMatchObject({ role: "custom", customType: "scope-contract" });
+    const oldLeafId = fixture.manager.getLeafId();
+    const newLeafId = fixture.manager.appendCustomEntry("scope-state", { version: 1, cwd: fixture.cwd, targets: null });
+    await session.extensionRunner.emit({ type: "session_tree", oldLeafId, newLeafId });
+    const input: AgentMessage[] = [
+      head,
+      { role: "compactionSummary", summary: "Replaced old request", tokensBefore: 100, timestamp: 3 },
+      retained,
+    ];
+    const normalized = (messages: AgentMessage[]) =>
+      JSON.stringify(
+        sdk
+          .convertToLlm(messages)
+          .map((message) =>
+            Object.fromEntries(
+              Object.entries(message).filter(([key]) => !["timestamp", "usage", "durationMs"].includes(key)),
+            ),
+          ),
+      );
+    const anchors = () =>
+      fixture.manager
+        .getBranch()
+        .filter((entry) => entry.type === "custom" && entry.customType === "scope-context-anchor");
+    const recovered = await session.extensionRunner.emitContext(input);
+    const offNotice = recovered.at(-1) as AgentMessage;
+    expect(recovered.slice(0, input.length)).toEqual(input);
+    expect(offNotice).toMatchObject({ role: "custom", content: expect.stringContaining("ended the Scope") });
+    expect(anchors()).toHaveLength(2);
+
+    const delta: AgentMessage = {
+      role: "system",
+      content: "Native additive tail instruction",
+      timestamp: 4,
+      toolsAdded: [{ name: "grep", description: "Native reader", parameters: Type.Object({}) }],
+    };
+    const ordinaryInput: AgentMessage[] = [
+      ...input,
+      assistant([{ type: "text", text: "answer after off" }]),
+      delta,
+      { role: "user", content: "ordinary request", timestamp: 5 },
+    ];
+    const ordinary = await session.extensionRunner.emitContext(ordinaryInput);
+    expect(normalized(ordinary.slice(0, recovered.length))).toBe(normalized(recovered));
+    expect(ordinary[0]).toEqual(head);
+    expect(ordinary.filter((message) => message.role === "system")).toEqual([head, delta]);
+    expect(anchors()).toHaveLength(2);
+
+    await session.reload();
+    const afterReload = await session.extensionRunner.emitContext([
+      ...ordinaryInput,
+      offNotice,
+      { role: "user", content: "late publication after reload", timestamp: 6 },
+    ]);
+    expect(normalized(afterReload.slice(0, ordinary.length))).toBe(normalized(ordinary));
+    expect(
+      afterReload.filter((message) => message.role === "custom" && message.customType === "scope-contract"),
+    ).toHaveLength(2);
+    expect(afterReload.filter((message) => message.role === "system")).toEqual([head, delta]);
+    expect(anchors()).toHaveLength(2);
+    expect(loadout(session)).toBe(initial);
+    expect(errors).toEqual([]);
+  });
+
+  it("preserves native active history through a real blocked loadout and reload to the same state", async () => {
+    const fixture = createFixture();
+    const { createScopeNotice } = await import("../contracts.ts");
+    const notice = createScopeNotice({
+      state: "active",
+      entryId: fixture.scopeEntry,
+      snapshot: { version: 1, cwd: fixture.cwd, targets: fixture.snapshot.targets },
+    });
+    if (!notice) throw new Error("Missing fixture notice");
+    fixture.manager.appendCustomMessageEntry(notice.customType, notice.content, notice.display, notice.details);
+    const { session, errors } = await open(fixture);
+    const activeTools = session.getActiveToolNames();
+    const head: AgentMessage = { role: "system", content: "Native instructions", timestamp: 1 };
+    const input: AgentMessage[] = [head, ...session.messages];
+    const normalized = (messages: AgentMessage[]) => JSON.stringify(sdk.convertToLlm(messages));
+    session.setActiveToolsByName(["read"]);
+    const blocked = await session.extensionRunner.emitContext(input);
+    expect(blocked.at(-1)).toMatchObject({ role: "custom", content: expect.stringContaining("state is unavailable") });
+    expect(blocked.slice(0, input.length)).toEqual(input);
+
+    session.setActiveToolsByName(activeTools);
+    expect((await callTool(session, "write", { path: fixture.allowed, content: "still blocked" })).isError).toBe(true);
+    const answer = assistant([{ type: "text", text: "answer before reload" }]);
+    fixture.manager.appendMessage(answer);
+    await session.reload();
+    const restored = await session.extensionRunner.emitContext([...input, answer]);
+    expect(normalized(restored.slice(0, blocked.length))).toBe(normalized(blocked));
+    expect(restored.at(-1)).toMatchObject({
+      role: "custom",
+      content: expect.stringContaining("restriction is active"),
+    });
+    const ordinary = await session.extensionRunner.emitContext([
+      ...input,
+      answer,
+      { role: "user", content: "next ordinary request", timestamp: 5 },
+    ]);
+    expect(normalized(ordinary.slice(0, restored.length))).toBe(normalized(restored));
+    expect(
+      fixture.manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "scope-state"),
+    ).toHaveLength(1);
+    expect(
+      fixture.manager
+        .getBranch()
+        .filter((entry) => entry.type === "custom" && entry.customType === "scope-context-anchor"),
+    ).toHaveLength(2);
+    expect((await callTool(session, "write", { path: fixture.allowed, content: "active after reload" })).isError).toBe(
+      false,
+    );
+    expect((await callTool(session, "write", { path: fixture.outside, content: "not selected" })).isError).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
   it("keeps normalized provider input prefixes and declarations stable across real offline agent requests", async () => {
     const fixture = createFixture();
     const { session, errors } = await open(fixture);

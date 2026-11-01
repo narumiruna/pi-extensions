@@ -36,6 +36,8 @@ Scope adds no tool definitions and does not change active tool names, snippets, 
 
 Missing or compacted-away notices create one deterministic tail recovery and a non-model persisted prefix anchor. Ordinary requests reuse its original boundary. Deferred original publication is placed at that first-seen boundary, not after newer output. Retained historical contracts remain in order after replacement and exit.
 
+Stale anchors are rejected one at a time in branch order. Restoring an older native notice to the digest base must not discard a newer valid recovery. A repeated logical contract uses a separate recovery sequence, so it does not remove an earlier instance that belongs to a historical anchor's prefix. This covers blocked-state recovery followed by reload to the same active state ID. Saved anchors without a recovery sequence remain valid.
+
 Restoration uses `context_with_system`, not legacy `context`. Native legacy context restoration folds prompt/tool deltas into the leading system message when the conversation changes. The full-system hook preserves existing system messages, including the leading message at index zero. Regression tests use the real runner with additive native deltas, also after Scope exit; an empty-prefix saved anchor cannot precede the leading system message.
 
 A separate native agent-loop test replaces only the stream function with a local completed stream. It compares effective prompt, ordered provider-visible tool definitions, active names, and the serialized earlier message prefix across ordinary requests. It excludes timestamps, usage, and other non-model accounting. It makes no transport request and claims no provider-reported cache hit.
@@ -54,6 +56,15 @@ All new-file targets receive one exact review; ordinary in-cwd file selection ha
 
 Preference ordering uses a stable absolute lexical path across loads, first creation, and atomic replacement. It is not a file-identity or cross-process lock. Different parent-directory aliases are not coordinated. Native target mutations retain Pi's own queue.
 
+## PR review ledger
+
+Review target: [PR #1770](https://github.com/narumiruna/pi-extensions/pull/1770), reviewed head `09256f95`. The checkout belongs to the same repository. All review, inline-comment, conversation, and thread pages were checked. The review receipt and automated status comment contain no separate change request.
+
+| Item | Evidence and relationship to the goal | Severity | Outcome |
+| --- | --- | --- | --- |
+| [R1: stale notice exclusions](https://github.com/narumiruna/pi-extensions/pull/1770#discussion_r4436025218) | The new `inactive/1/1` regression failed before the fix: the next ordinary request created a new anchor after the answer. `project()` removed a valid newer recovery before restoring an older retained notice to its digest base. This conflicts with the PR's fixed-prefix requirement. | P2: repeated prefix changes and anchor writes; no file-guard bypass. | Already addressed in this follow-up. One-at-a-time rejection preserves newer recoveries. Tests cover active/off/blocked states, multiple stale anchors and retained notices, missing-count failures, historical replacement, late publication, native deltas, and reload. |
+| R2: repeated contract after blocked-state recovery | Independent review found another exclusion failure. A retained active notice forms part of a valid blocked anchor's digest. Reload can restore the same active state ID. The old recovery path removes that earlier active notice, then drops the blocked anchor. A new regression fails with the original prefix replaced by the answer and a moved active notice. This violates retained-history behavior introduced by this PR. | P2: historical model instructions are removed; no file-guard bypass. | Already addressed in this follow-up. An optional recovery sequence keeps repeated notices distinct without removing earlier history. Pure and real-runner tests cover blocked-to-active reload, repeated transitions on the same prefix, old anchors, and unchanged file enforcement. |
+
 ## Recorded checks
 
 Run from the repository root, sequentially. Root checks clear and rebuild Kit output; do not run consumer tests during that build.
@@ -61,13 +72,13 @@ Run from the repository root, sequentially. Root checks clear and rebuild Kit ou
 | Check | Status |
 | --- | --- |
 | Local TypeScript: `npm exec -- tsc -p .pi/extensions/scope/tsconfig.json` | Passed. |
-| Local tests: `npm exec -- vitest run --config .pi/extensions/scope/vitest.config.ts` | Passed: 343 tests in 11 files; 1 Windows-only test skipped on this host. |
+| Local tests: `npm exec -- vitest run --config .pi/extensions/scope/vitest.config.ts` | Passed: 368 tests in 11 files; 1 Windows-only test skipped on this host. |
 | CLI smoke: `node .pi/extensions/scope/test/runtime-smoke.mjs` | Passed: all 5 CLI paths after the final context change. |
 | Local Biome: `npm exec -- biome check .pi/extensions/scope --error-on-warnings` | Passed: 29 files. |
 | `npm run check` | Passed: builds, Biome, boundaries, and all workspace typechecks. |
 | `npm test` | Passed: 17,517 tests; 15 platform/conditional skips; no unhandled errors. |
 
-Independent final source review found no remaining concrete defect after the pointer-identity, lexical-reservation repair, and full-system context corrections. Follow-up review also checked manual path resolution, pinned reservations, existing-file revalidation through canonical deduplication, and preservation of live missing reservations. Existing root informational diagnostics about the Biome schema and `pi-sync` remain unchanged; neither failed a gate. No package metadata, root test wiring, dependencies, Changeset, or publishing operation changed.
+Independent source review found no remaining concrete defect after the fixes in the review ledger. The final audit covered the full stale-exclusion class, repeated notice identities, old-anchor compatibility, unchanged synchronous ownership, and native prompt/tool preservation. Earlier review also checked manual path resolution, pinned reservations, existing-file revalidation through canonical deduplication, and preservation of live missing reservations. No item was deferred, and no clarification is needed. Existing root informational diagnostics about the Biome schema and `pi-sync` remain unchanged; neither failed a gate. No package metadata, root test wiring, dependencies, Changeset, or publishing operation changed.
 
 CLI smoke coverage includes explicit `--no-extensions -e` loading, trusted-project discovery, trust denial, print mode, and JSON mode. Each command rejection is observed without a model run or protocol corruption. Subprocess deadlines start only after readiness, and all child exits are awaited.
 

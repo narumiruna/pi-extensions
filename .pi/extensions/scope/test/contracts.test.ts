@@ -118,6 +118,100 @@ describe("durable scope model contracts", () => {
     const retained = [user("unrelated summary"), createScopeNotice(active, 30) as AgentMessage];
     expect(reconcileScopeContext(retained, twice, active).messages).toEqual(retained);
   });
+  it.each(
+    [inactive, { ...active, entryId: "again" }, { state: "blocked", entryId: "broken" } as ScopeState].flatMap(
+      (current) =>
+        [1, 2].flatMap((oldAnchors) =>
+          [0, 1, 2].map((retained) => ({
+            current,
+            oldAnchors,
+            retained,
+            label: `${current.state}/${oldAnchors}/${retained}`,
+          })),
+        ),
+    ),
+  )(
+    "keeps a newer recovery fixed after stale exclusions change the base: $label",
+    ({ current, oldAnchors, retained }) => {
+      const persisted = [...branch];
+      for (let index = 0; index < oldAnchors; index += 1) {
+        const old = reconcileScopeContext(
+          Array.from({ length: index === 0 ? 5 : 1 }, (_, item) => user(`old prefix ${index}/${item}`)),
+          persisted,
+          active,
+          index + 1,
+        );
+        expect(old.anchor).toBeDefined();
+        persisted.push(customEntry(ANCHOR_TYPE, old.anchor, `old-anchor-${index}`));
+      }
+      persisted.push(customEntry(STATE_TYPE, current.snapshot ?? { version: 2 }, current.entryId));
+      const head: AgentMessage = { role: "system", content: "Native head", timestamp: 1 };
+      const summary: AgentMessage = {
+        role: "compactionSummary",
+        summary: "compacted",
+        tokensBefore: 100,
+        timestamp: 2,
+      };
+      const input: AgentMessage[] = [
+        head,
+        summary,
+        ...Array.from({ length: retained }, (_, index) => createScopeNotice(active, index + 3) as AgentMessage),
+      ];
+      const recovered = reconcileScopeContext(input, persisted, current, 10);
+      expect(recovered.anchor).toBeDefined();
+      expect(recovered.messages.slice(0, input.length)).toEqual(input);
+      persisted.push(customEntry(ANCHOR_TYPE, recovered.anchor, "recovery"));
+
+      const answer = assistant("answer", 11);
+      const next = reconcileScopeContext([...input, answer], persisted, current, 20);
+      expect(next.anchor).toBeUndefined();
+      expect(normalized(next.messages).slice(0, recovered.messages.length)).toEqual(normalized(recovered.messages));
+      expect(next.messages.at(-1)).toEqual(answer);
+      expect(noticeCount(next.messages)).toBe(retained + 1);
+
+      const late = createScopeNotice(current, 21) as AgentMessage;
+      const ordinary = reconcileScopeContext([...input, answer, late, user("next", 22)], persisted, current, 30);
+      expect(ordinary.anchor).toBeUndefined();
+      expect(normalized(ordinary.messages).slice(0, next.messages.length)).toEqual(normalized(next.messages));
+      expect(noticeCount(ordinary.messages)).toBe(retained + 1);
+      expect(reconcileScopeContext(ordinary.messages, persisted, current).messages).toEqual(ordinary.messages);
+    },
+  );
+  it("rechecks a recovery after several distinct historical notices return to the base", () => {
+    const first = reconcileScopeContext([user("old")], branch, active, 1);
+    const history = [
+      ...branch,
+      customEntry(ANCHOR_TYPE, first.anchor, "old-active"),
+      customEntry(STATE_TYPE, inactive.snapshot, "off"),
+    ];
+    const off = reconcileScopeContext([user("old"), assistant("done")], history, inactive, 2);
+    history.push(customEntry(ANCHOR_TYPE, off.anchor, "old-off"));
+    const again: ScopeState = { ...active, entryId: "again" };
+    history.push(customEntry(STATE_TYPE, snapshot, "again"));
+    const input = [
+      user("compacted history"),
+      createScopeNotice(active, 3) as AgentMessage,
+      createScopeNotice(inactive, 4) as AgentMessage,
+    ];
+    const recovered = reconcileScopeContext(input, history, again, 5);
+    history.push(customEntry(ANCHOR_TYPE, recovered.anchor, "new-recovery"));
+    const next = reconcileScopeContext([...input, assistant("next")], history, again, 6);
+    expect(next.anchor).toBeUndefined();
+    expect(normalized(next.messages).slice(0, recovered.messages.length)).toEqual(normalized(recovered.messages));
+    expect(next.messages.slice(0, input.length)).toEqual(input);
+    expect(noticeCount(next.messages)).toBe(3);
+    const current: ScopeState = { ...inactive, entryId: "off-again" };
+    history.push(customEntry(STATE_TYPE, current.snapshot, current.entryId));
+    const later = reconcileScopeContext(
+      [...input, assistant("next"), createScopeNotice(current, 7) as AgentMessage],
+      history,
+      current,
+      8,
+    );
+    expect(later.anchor).toBeUndefined();
+    expect(normalized(later.messages).slice(0, next.messages.length)).toEqual(normalized(next.messages));
+    expect(noticeCount(later.messages)).toBe(4);
+  });
   it("preserves historical contracts across off and a later activation of the same files", () => {
     const first = reconcileScopeContext([user("one")], branch, active, 10);
     const persisted = [
@@ -151,6 +245,8 @@ describe("durable scope model contracts", () => {
     { version: 2 },
     { version: 1, stateId: "active", state: "active", count: -1, digest: "a".repeat(64), sentAt: 1 },
     { version: 1, stateId: "missing", state: "active", count: 0, digest: "a".repeat(64), sentAt: 1 },
+    { version: 1, stateId: "active", state: "active", count: 1, digest: "a".repeat(64), sentAt: 1, recovery: -1 },
+    { version: 1, stateId: "active", state: "active", count: 1, digest: "a".repeat(64), sentAt: 1, recovery: "1" },
   ])("does not trust malformed or unrelated anchors %#", (data) => {
     const result = reconcileScopeContext([user("work")], [...branch, customEntry(ANCHOR_TYPE, data)], active);
     expect(result.anchor).toBeDefined();
@@ -162,7 +258,42 @@ describe("durable scope model contracts", () => {
     const result = reconcileScopeContext(history, branch, active, 3);
     expect(result.anchor).toBeDefined();
     expect(hasCurrentScopeNotice(result.messages, active)).toBe(true);
-    expect(noticeCount(result.messages)).toBe(2);
+    expect(result.messages.slice(0, history.length)).toEqual(history);
+    expect(noticeCount(result.messages)).toBe(3);
+  });
+  it("retains active history and a blocked recovery when reload restores the same active state", () => {
+    const head: AgentMessage = { role: "system", content: "Native head", timestamp: 1 };
+    const input = [head, user("request"), createScopeNotice(active, 2) as AgentMessage];
+    const blocked: ScopeState = { state: "blocked", entryId: active.entryId };
+    const stopped = reconcileScopeContext(input, branch, blocked, 3);
+    const persisted = [...branch, customEntry(ANCHOR_TYPE, stopped.anchor, "blocked-anchor")];
+    const answer = assistant("answer before reload", 4);
+    const restored = reconcileScopeContext([...input, answer], persisted, active, 5);
+    expect(restored.anchor).toBeDefined();
+    expect(normalized(restored.messages).slice(0, stopped.messages.length)).toEqual(normalized(stopped.messages));
+    expect(restored.messages.slice(stopped.messages.length, -1)).toEqual([answer]);
+    expect(noticeCount(restored.messages)).toBe(3);
+    persisted.push(customEntry(ANCHOR_TYPE, restored.anchor, "active-again"));
+    const ordinary = reconcileScopeContext([...input, answer, user("next", 6)], persisted, active, 7);
+    expect(ordinary.anchor).toBeUndefined();
+    expect(normalized(ordinary.messages).slice(0, restored.messages.length)).toEqual(normalized(restored.messages));
+    expect(reconcileScopeContext(ordinary.messages, persisted, active).messages).toEqual(ordinary.messages);
+  });
+  it("keeps distinct repeated instances even when several transitions share the same raw prefix", () => {
+    const input = [user("unchanged request")];
+    const persisted = [...branch];
+    const blocked: ScopeState = { state: "blocked", entryId: active.entryId };
+    let previous: AgentMessage[] = input;
+    for (const [index, current] of [active, blocked, active, blocked, active].entries()) {
+      const result = reconcileScopeContext(input, persisted, current, index);
+      expect(result.anchor).toBeDefined();
+      expect(normalized(result.messages).slice(0, previous.length)).toEqual(normalized(previous));
+      persisted.push(customEntry(ANCHOR_TYPE, result.anchor, `anchor-${index}`));
+      expect(reconcileScopeContext(input, persisted, current).anchor).toBeUndefined();
+      expect(reconcileScopeContext(result.messages, persisted, current).messages).toEqual(result.messages);
+      previous = result.messages;
+    }
+    expect(noticeCount(previous)).toBe(5);
   });
   it("keeps a blocked-state instruction deterministic and quotes tool paths through file URLs", () => {
     const blocked = createScopeNotice({ state: "blocked", entryId: "bad", error: "volatile error" });

@@ -16,6 +16,8 @@ export interface ContractAnchor {
   count: number;
   digest: string;
   sentAt: number;
+  /** A new instance of a contract that already exists earlier in the projected history. */
+  recovery?: number;
 }
 
 type ScopeNotice = Extract<AgentMessage, { role: "custom" }>;
@@ -69,11 +71,24 @@ export function createScopeNotice(state: ScopeState, timestamp = 0): ScopeNotice
   };
 }
 
-function noticeKey(message: AgentMessage): string | undefined {
+function contractKey(message: AgentMessage): string | undefined {
   if (message.role !== "custom" || message.customType !== NOTICE_TYPE || typeof message.content !== "string") return;
   const details = message.details as { version?: unknown; stateId?: unknown } | undefined;
   if (details?.version !== 1 || typeof details.stateId !== "string") return;
   return JSON.stringify([details.stateId, message.content]);
+}
+
+function noticeKey(message: AgentMessage): string | undefined {
+  const key = contractKey(message);
+  if (!key) return;
+  const recovery = (message as ScopeNotice).details as { recovery?: unknown } | undefined;
+  return JSON.stringify([key, typeof recovery?.recovery === "number" ? recovery.recovery : 0]);
+}
+
+function anchoredNotice(notice: ScopeNotice, anchor: ContractAnchor): ScopeNotice {
+  return anchor.recovery === undefined
+    ? notice
+    : { ...notice, details: { version: 1, stateId: anchor.stateId, recovery: anchor.recovery } };
 }
 
 function prefixDigests(messages: readonly AgentMessage[], counts: ReadonlySet<number>): Map<number, string> {
@@ -111,7 +126,8 @@ function readAnchors(branch: readonly SessionEntry[]): PlacedAnchor[] {
       typeof value.digest !== "string" ||
       !/^[a-f0-9]{64}$/.test(value.digest) ||
       typeof value.sentAt !== "number" ||
-      !Number.isFinite(value.sentAt)
+      !Number.isFinite(value.sentAt) ||
+      (value.recovery !== undefined && (!Number.isSafeInteger(value.recovery) || value.recovery <= 0))
     )
       continue;
     const source = states.get(value.stateId);
@@ -125,8 +141,8 @@ function readAnchors(branch: readonly SessionEntry[]): PlacedAnchor[] {
       const anchor = value as ContractAnchor;
       const notice = createScopeNotice(state, anchor.sentAt);
       if (!notice) continue;
-      const key = JSON.stringify([anchor.stateId, anchor.state, anchor.count, anchor.digest]);
-      if (!found.has(key)) found.set(key, { anchor, notice });
+      const key = JSON.stringify([anchor.stateId, anchor.state, anchor.count, anchor.digest, anchor.recovery ?? 0]);
+      if (!found.has(key)) found.set(key, { anchor, notice: anchoredNotice(notice, anchor) });
     } catch {
       // An invalid historical anchor cannot become model instructions.
     }
@@ -149,17 +165,19 @@ function project(
   candidates: readonly PlacedAnchor[],
   exclude: readonly ScopeNotice[] = [],
 ) {
-  let anchors = [...candidates];
+  const anchors = [...candidates];
   let base: AgentMessage[];
   for (;;) {
     base = baseFor(messages, anchors, exclude);
     const hashes = prefixDigests(base, new Set(anchors.map(({ anchor }) => anchor.count)));
     const firstSlot = base[0]?.role === "system" ? 1 : 0;
-    const valid = anchors.filter(
-      ({ anchor }) => anchor.count >= firstSlot && hashes.get(anchor.count) === anchor.digest,
+    const stale = anchors.findIndex(
+      ({ anchor }) => anchor.count < firstSlot || hashes.get(anchor.count) !== anchor.digest,
     );
-    if (valid.length === anchors.length) break;
-    anchors = valid;
+    if (stale < 0) break;
+    // Removing an older anchor restores its native notice to the base. A newer recovery
+    // digest can include that notice, so recompute before rejecting the next candidate.
+    anchors.splice(stale, 1);
   }
   const at = new Map<number, ScopeNotice[]>();
   for (const { anchor, notice } of anchors) {
@@ -180,7 +198,7 @@ export function hasCurrentScopeNotice(messages: readonly AgentMessage[], state: 
   if (!expected) return true;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "custom" && (messages[index] as ScopeNotice).customType === NOTICE_TYPE) {
-      return noticeKey(messages[index]) === noticeKey(expected);
+      return contractKey(messages[index]) === contractKey(expected);
     }
   }
   return false;
@@ -198,14 +216,27 @@ export function reconcileScopeContext(
   state: ScopeState,
   sentAt = Date.now(),
 ): { messages: AgentMessage[]; anchor?: ContractAnchor } {
-  const placed = project(messages, readAnchors(branch));
+  const candidates = readAnchors(branch);
+  const placed = project(messages, candidates);
   if (hasCurrentScopeNotice(placed.messages, state)) return { messages: placed.messages };
   const notice = createScopeNotice(state, sentAt);
   if (!notice || !state.entryId) return { messages: placed.messages };
-  const prepared = project(messages, placed.anchors, [notice]);
+  // A repeated contract starts a new instance. Removing its earlier native notice can
+  // invalidate historical anchors whose digests include it, for example after blocked -> active.
+  const repeated = placed.messages.some((message) => contractKey(message) === contractKey(notice));
+  const prepared = project(messages, placed.anchors, repeated ? [] : [notice]);
   const count = prepared.base.length;
   const digest = prefixDigests(prepared.base, new Set([count])).get(count) as string;
   const anchor: ContractAnchor = { version: 1, stateId: state.entryId, state: state.state, count, digest, sentAt };
-  const next = project(messages, [...prepared.anchors, { anchor, notice }]);
+  if (repeated) {
+    anchor.recovery =
+      candidates.reduce(
+        (latest, candidate) =>
+          candidate.anchor.stateId === state.entryId ? Math.max(latest, candidate.anchor.recovery ?? 0) : latest,
+        0,
+      ) + 1;
+    if (!Number.isSafeInteger(anchor.recovery)) throw new Error("Scope recovery sequence is exhausted");
+  }
+  const next = project(messages, [...prepared.anchors, { anchor, notice: anchoredNotice(notice, anchor) }]);
   return { messages: next.messages, anchor };
 }
