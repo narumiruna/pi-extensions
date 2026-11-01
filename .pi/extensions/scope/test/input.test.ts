@@ -1,0 +1,306 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  CURSOR_MARKER,
+  getKeybindings,
+  Input,
+  type KeybindingsConfig,
+  KeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { displayPath, exactRows } from "../display.ts";
+import { ScopeInput, showScopePathInput } from "../input.ts";
+import * as paths from "../paths.ts";
+
+const originalKeys = getKeybindings();
+beforeEach(() => setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS)));
+afterEach(() => {
+  setKeybindings(originalKeys);
+  vi.restoreAllMocks();
+});
+
+function harness(bindings: KeybindingsConfig = {}) {
+  const keys = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
+  setKeybindings(keys);
+  const roles = new Set<string>();
+  const zeroFrames: string[][] = [];
+  const tui = createTuiHarness({
+    width: 90,
+    rows: 30,
+    keybindings: keys,
+    theme: {
+      fg: (role, text) => {
+        roles.add(role);
+        return text;
+      },
+      bold: (text) => text,
+    },
+  });
+  const custom: ExtensionCommandContext["ui"]["custom"] = (factory, options) =>
+    tui.custom(async (...args) => {
+      const component = await factory(...args);
+      zeroFrames.push(component.render(0));
+      return component;
+    }, options);
+  const ctx = { mode: "tui", hasUI: true, ui: { custom, notify() {} } } as unknown as ExtensionCommandContext;
+  return { tui, ctx, roles, zeroFrames };
+}
+
+test("ScopeInput preserves native editing, newline, submission, and paste semantics", () => {
+  const adapted = new ScopeInput();
+  const native = new Input();
+  const actual: string[] = [];
+  const expected: string[] = [];
+  adapted.input.onSubmit = (value) => actual.push(value);
+  native.onSubmit = (value) => expected.push(value);
+  for (const data of [
+    "one",
+    " ",
+    "two",
+    "\x7f",
+    "o",
+    "\x1b[D",
+    "X",
+    "\x01",
+    "A",
+    "\x05",
+    "\x1b[200~ b\nc\t d\x1b[201~",
+    "\x1b[13;2u",
+    "\n",
+    "\r",
+  ]) {
+    adapted.handleInput(data, () => false);
+    native.handleInput(data);
+    expect(adapted.input.getValue()).toBe(native.getValue());
+    adapted.render(40);
+    native.render(40);
+    expect(adapted.input.getValue()).toBe(native.getValue());
+  }
+  expect(actual).toEqual(expected);
+  expect(actual).not.toHaveLength(0);
+});
+
+test("paste fragments cannot become screen actions, including a split terminator", () => {
+  const editor = new ScopeInput();
+  const actions: string[] = [];
+  const action = (data: string) => {
+    actions.push(data);
+    return false;
+  };
+  for (const data of ["\x1b[200~", " a ", "\x03", "\r", "\x1b[20", "1~", " "]) editor.handleInput(data, action);
+  expect(editor.input.getValue()).toBe(" a \x03 ");
+  expect(actions).toEqual([" "]);
+  editor.handleInput("\x1b[200~b\x1b[201~\x03", action);
+  expect(actions).toEqual([" ", "\x03"]);
+});
+
+test("display masking never changes the raw draft or exposes terminal/bidi controls", () => {
+  const editor = new ScopeInput();
+  editor.input.focused = true;
+  editor.handleInput("\x1b[200~/a\x1b]52;c;bad\x07/\u202e\u00a0b\x1b[201~", () => false);
+  const raw = editor.input.getValue();
+  const lines = editor.render(90);
+  expect(lines.join("")).toContain(CURSOR_MARKER);
+  expect(lines.join("")).not.toContain("\x1b]52;");
+  expect(lines.join("")).not.toContain("\u202e");
+  expect(editor.input.getValue()).toBe(raw);
+  expect(displayPath(raw)).toContain("\\u001b]52;c;bad\\u0007");
+  expect(displayPath(raw)).toContain("\\u202e\\u00a0");
+  const exact = displayPath(" /a  b\\\n\t終 ");
+  expect(exactRows(exact, 9).join("")).toBe(exact);
+});
+
+test("new-path rejection retains the draft, allows correction, and creates no target", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "scope-input-"));
+  try {
+    await writeFile(join(cwd, "exists"), "");
+    const { tui, ctx } = harness();
+    const running = showScopePathInput(ctx, { cwd, signal: new AbortController().signal, isCurrent: () => true });
+    await tui.waitForOpen();
+    tui.setFocused(true);
+    tui.type("exists");
+    tui.press("tui.input.submit");
+    await tui.waitForPending();
+    const rejected = stripVTControlCharacters(tui.render().join("\n"));
+    expect(rejected).toContain('Draft: "exists"');
+    expect(rejected).toContain("already exists");
+    tui.send("\x15");
+    tui.type("new file");
+    tui.press("tui.input.submit");
+    const result = await running;
+    expect(result).toMatchObject({
+      kind: "completed",
+      value: { kind: "selected", target: { path: join(cwd, "new file") } },
+    });
+    await expect(import("node:fs/promises").then((fs) => fs.stat(join(cwd, "new file")))).rejects.toThrow();
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("path input uses input.submit, not select.confirm; bounds, focus, theme, and mouse survive resize", async () => {
+  const { tui, ctx, roles, zeroFrames } = harness({
+    "tui.input.submit": "f2",
+    "tui.select.confirm": "f3",
+    "tui.select.cancel": "q",
+  });
+  const validator = vi.spyOn(paths, "resolveScopeTarget").mockRejectedValue(new Error("Rejected draft"));
+  const owner = new AbortController();
+  const running = showScopePathInput(ctx, { cwd: tmpdir(), signal: owner.signal, isCurrent: () => true });
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.type("scope-not-created");
+  tui.send("\x1bOR");
+  expect(tui.isOpen).toBe(true);
+  expect(tui.render().join("")).toContain(CURSOR_MARKER);
+  expect(tui.render().join("")).not.toMatch(/f[23] (submit|confirm)/u);
+  for (const rows of [4, 7, 8, 18, 30]) {
+    for (const width of [1, 2, 8, 40, 90]) {
+      const frame = tui.resize({ rows, width });
+      expect(frame.length).toBeLessThanOrEqual(Math.max(1, rows - 3));
+      expect(frame.every((line) => visibleWidth(line) <= width)).toBe(true);
+    }
+  }
+  tui.resize({ width: 90, rows: 30 });
+  tui.invalidate();
+  const inputRow = tui.render().findIndex((line) => line.startsWith("> "));
+  tui.mouse({ type: "press", x: 2, y: inputRow });
+  tui.type("X");
+  expect(stripVTControlCharacters(tui.render().join("\n"))).toContain('Draft: "Xscope-not-created"');
+  expect(validator).not.toHaveBeenCalled();
+  tui.send("\x1bOQ");
+  await tui.waitForPending();
+  expect(validator).toHaveBeenCalledWith("Xscope-not-created", tmpdir(), "new", expect.any(AbortSignal));
+  expect(stripVTControlCharacters(tui.render().join("\n"))).toContain("Rejected draft");
+  tui.send("\x03");
+  expect(await running).toEqual({ kind: "completed", value: { kind: "cancelled", reason: "close" } });
+  expect(zeroFrames).toHaveLength(1);
+  expect(zeroFrames.flat().every((line) => visibleWidth(line) === 0)).toBe(true);
+  expect(roles.has("border")).toBe(true);
+  expect(roles.has("muted")).toBe(true);
+});
+
+for (const ending of ["back", "close", "dispose", "owner"] as const) {
+  test(`path validation aborts and drains owned I/O on ${ending}`, async () => {
+    let release!: (value: paths.ResolvedScopeTarget) => void;
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(paths, "resolveScopeTarget").mockImplementation((_raw, _cwd, _requirement, signal) => {
+      observedSignal = signal;
+      ready();
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    });
+    const { tui, ctx } = harness();
+    const owner = new AbortController();
+    const running = showScopePathInput(ctx, { cwd: tmpdir(), signal: owner.signal, isCurrent: () => true });
+    let settled = false;
+    void running.then(() => {
+      settled = true;
+    });
+    await tui.waitForOpen();
+    tui.type("new");
+    tui.press("tui.input.submit");
+    await started;
+    // Input remains frozen while an accepted validation is pending.
+    tui.send("\x1b[200~other\x1b[201~");
+    if (ending === "dispose") tui.dispose();
+    else if (ending === "owner") owner.abort();
+    else tui.send(ending === "close" ? "\x03" : "\x1b");
+    await Promise.resolve();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(settled).toBe(false);
+    release({ path: "/new", canonical: "/new", exists: false });
+    const result = await running;
+    expect(result).toEqual(
+      ending === "owner" || ending === "dispose"
+        ? { kind: "stale" }
+        : {
+            kind: "completed",
+            value: { kind: "cancelled", reason: ending },
+          },
+    );
+  });
+}
+
+test("paste started during validation is discarded as text, never treated as cancellation", async () => {
+  let reject!: (error: Error) => void;
+  let ready!: () => void;
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  let signal: AbortSignal | undefined;
+  vi.spyOn(paths, "resolveScopeTarget").mockImplementation((_raw, _cwd, _requirement, operation) => {
+    signal = operation;
+    ready();
+    return new Promise((_resolve, fail) => {
+      reject = fail;
+    });
+  });
+  const { tui, ctx } = harness();
+  const running = showScopePathInput(ctx, {
+    cwd: tmpdir(),
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+  tui.type("new-file");
+  tui.press("tui.input.submit");
+  await started;
+  tui.send("\x1b[200~");
+  tui.send("\x03");
+  tui.send("\r");
+  expect(signal?.aborted).toBe(false);
+  reject(new Error("Try another path"));
+  await tui.waitForPending();
+  tui.send("discarded\x1b[201~");
+  expect(stripVTControlCharacters(tui.render().join("\n"))).toContain('Draft: "new-file"');
+  tui.type("X");
+  expect(stripVTControlCharacters(tui.render().join("\n"))).toContain('Draft: "new-fileX"');
+  tui.send("\x03");
+  expect(await running).toEqual({ kind: "completed", value: { kind: "cancelled", reason: "close" } });
+});
+
+test("ownership changes detected after validation settle the input as stale without a second signal", async () => {
+  let release!: (target: paths.ResolvedScopeTarget) => void;
+  vi.spyOn(paths, "resolveScopeTarget").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const { tui, ctx } = harness();
+  let current = true;
+  const running = showScopePathInput(ctx, {
+    cwd: tmpdir(),
+    signal: new AbortController().signal,
+    isCurrent: () => current,
+  });
+  await tui.waitForOpen();
+  tui.type("new");
+  tui.press("tui.input.submit");
+  current = false;
+  release({ path: "/new", canonical: "/new", exists: false });
+  expect(await running).toEqual({ kind: "stale" });
+  expect(tui.isOpen).toBe(false);
+});
+
+test.each(["rpc", "json", "print"] as const)("path input does not attempt custom UI in %s", async (mode) => {
+  const custom = vi.fn();
+  const ctx = { mode, hasUI: mode === "rpc", ui: { custom } } as unknown as ExtensionCommandContext;
+  expect(
+    await showScopePathInput(ctx, { cwd: "/", signal: new AbortController().signal, isCurrent: () => true }),
+  ).toEqual({ kind: "unsupported", mode });
+  expect(custom).not.toHaveBeenCalled();
+});
