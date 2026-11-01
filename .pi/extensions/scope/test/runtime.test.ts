@@ -1,5 +1,16 @@
-import { existsSync, linkSync, readFileSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import type {
@@ -9,7 +20,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assistant,
   callTool,
@@ -29,10 +40,15 @@ async function open(...args: Parameters<typeof createNativeSession>) {
   sessions.add(result.session);
   return result;
 }
+beforeEach(() => vi.unstubAllEnvs());
 afterEach(async () => {
-  const outcomes = await Promise.allSettled([...sessions].map(disposeNativeSession));
-  sessions.clear();
-  for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
+  try {
+    const outcomes = await Promise.allSettled([...sessions].map(disposeNativeSession));
+    sessions.clear();
+    for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 afterAll(cleanupSmokeRoot);
 
@@ -402,6 +418,110 @@ describe("native Jiti runtime", () => {
       ).toHaveLength(2);
     } finally {
       tui.dispose();
+    }
+  });
+
+  it("activates real home and absolute external files through Jiti and enforces them with stock write", async () => {
+    sdk.initTheme("dark", false);
+    const fixture = createFixture();
+    const home = mkdtempSync(join(dirname(fixture.cwd), "manual-home-"));
+    const config = mkdtempSync(join(dirname(fixture.cwd), "manual-config-"));
+    vi.stubEnv(process.platform === "win32" ? "USERPROFILE" : "HOME", home);
+    const projectFile = join(home, "src", "another_project", "AGENTS.md");
+    const planFile = join(home, ".plan", "PLAN_A.md");
+    const configFile = join(config, "editor settings.json");
+    const unselected = join(home, ".config", "unselected.json");
+    for (const path of [projectFile, planFile, configFile, unselected]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "external original\n");
+    }
+    const selections = [
+      ["~/src/another_project/AGENTS.md", projectFile],
+      ["~/.plan/PLAN_A.md", planFile],
+      [configFile, configFile],
+    ] as const;
+    const tui = createTuiHarness({ width: 240, rows: 44 });
+    const notify = vi.fn();
+    const uiContext = { custom: tui.custom, notify, setWidget() {} } as unknown as ExtensionUIContext;
+    const { session, errors } = await open(fixture, { mode: "tui", uiContext });
+    const initial = loadout(session);
+    const stateEntries = () =>
+      fixture.manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "scope-state");
+    const text = () => stripVTControlCharacters(tui.render().join("\n"));
+    const command = session.prompt("/scope");
+    try {
+      await Promise.race([
+        tui.waitForOpen(),
+        command.then(() => {
+          throw new Error(`Scope did not open: ${JSON.stringify(errors)}`);
+        }),
+      ]);
+      const managerClosed = tui.resultPromise;
+      tui.press("tui.select.confirm");
+      await managerClosed;
+      await tui.waitForOpen();
+      await tui.waitForPending();
+      for (const [raw, path] of selections) {
+        tui.type(raw);
+        expect(text()).toContain(`→ Add file: ${JSON.stringify(raw)}`);
+        expect(text()).not.toContain("Apply changes");
+        tui.press("tui.select.confirm");
+        await tui.waitForPending();
+        const draft = text();
+        expect(draft).toContain(`→ [x] ${JSON.stringify(path)}`);
+        expect(draft).toContain(`Path: ${JSON.stringify(path)}`);
+        expect(draft).toContain("Outside the current directory");
+        expect(draft).not.toContain(`> ${raw}`);
+        expect(stateEntries()).toHaveLength(1);
+        expect((await callTool(session, "write", { path: raw, content: "draft must not grant writes" })).isError).toBe(
+          true,
+        );
+        expect(readFileSync(path, "utf8")).toBe("external original\n");
+        expect(loadout(session)).toBe(initial);
+      }
+      expect(text()).toContain(`[x] ${JSON.stringify(fixture.allowed)}`);
+      expect(text()).toContain(`[x] ${JSON.stringify(fixture.reserved)}`);
+      expect(text()).toContain("5 selected");
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await command;
+      expect(tui.isOpen).toBe(false);
+      expect(stateEntries()).toHaveLength(2);
+      expect(stateEntries().at(-1)).toMatchObject({
+        data: {
+          version: 1,
+          cwd: fixture.cwd,
+          targets: expect.arrayContaining(
+            [fixture.allowed, fixture.reserved, projectFile, planFile, configFile].map((path) => ({
+              path,
+              canonical: path === fixture.reserved ? path : realpathSync(path),
+            })),
+          ),
+        },
+      });
+      expect(session.getAllTools().find(({ name }) => name === "write")?.sourceInfo).toMatchObject({
+        path: "builtin:write",
+        source: "builtin",
+      });
+      for (const [raw, path] of selections) {
+        const outcome = await callTool(session, "write", { path: raw, content: "selected external update\n" });
+        expect(outcome.isError, resultText(outcome)).toBe(false);
+        expect(readFileSync(path, "utf8")).toBe("selected external update\n");
+      }
+      for (const path of [unselected, fixture.outside]) {
+        const outcome = await callTool(session, "write", { path, content: "blocked" });
+        expect(outcome.isError, resultText(outcome)).toBe(true);
+      }
+      expect(readFileSync(unselected, "utf8")).toBe("external original\n");
+      expect(readFileSync(fixture.outside, "utf8")).toBe("outside original\n");
+      expect(existsSync(fixture.reserved)).toBe(false);
+      expect(existsSync(join(sdk.getAgentDir(), "pi-scope.json"))).toBe(false);
+      expect(loadout(session)).toBe(initial);
+      expect(errors).toEqual([]);
+      expect(notify.mock.calls.filter(([, kind]) => kind === "error")).toEqual([]);
+    } finally {
+      tui.dispose();
+      await command;
     }
   });
 

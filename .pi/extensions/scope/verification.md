@@ -22,6 +22,10 @@ The final semantic audit covers user cancellation, disposal, session replacement
 
 The conformance matrix uses the installed native `write` and `edit` implementations, not only a copied path helper. It covers relative and absolute paths, dot segments, leading `@`, `~`, file URLs and URI errors, Unicode and literal whitespace, POSIX literal backslashes, macOS read-only fallback separation, symbolic links, missing ancestors, hard links, nonregular files, metadata failures, and cancellation.
 
+Select files also accepts explicit existing-file paths outside cwd. Real-file menu and native Jiti tests cover sandboxed home/project and hidden-plan paths, absolute configuration files, relative paths, file URLs, and unchanged discovery preferences. No fixture touches the user's actual home files. The Add action changes only the checked draft; native writes remain blocked until Apply. Duplicate normalized paths are idempotent, and canonical redirects are shown before approval.
+
+Manual entries remain canonical-pinned and must still exist at selection completion and the final scope commit. Tests cover deletion, directory replacement, hard links, symlink removal/retargeting, and canonical alias deduplication. Previously approved missing reservations remain valid. These checks do not claim race-free containment against other processes.
+
 Native SDK tests execute the exported tool pipeline with real session hooks. They verify selected writes/edits and deferred creation, unselected read/ls, and no target side effects from unselected write/edit, shell, codemode, or opaque tools. A trusted host-only fixture invokes a delegation wrapper to prove its `ctx.executeTool()` children retain real nested events and guards. The same wrapper is blocked when model-issued; production contains no test allowlist.
 
 Codemode is blocked because not all of its branches are nested tool calls. Active router-only loadouts fail clearly instead of changing core tools or settings. SDK replacement tools are not accepted by name. Arbitrary SDK `baseToolsOverride` and custom `prepareLoadout` behavior cannot be attested through public metadata and remain unsupported.
@@ -42,6 +46,8 @@ The manager, settings, review, and task screens use public Kit APIs. The selecto
 
 The standalone Kit selector does not expose the required in-place validation, live count, exact path preview, and paste-safe completion behavior. The local adapter retains the checked draft and query after validation failure. It treats literal Space as text, uses configured selection confirmation, preserves a pressed raw file ID when scrolling recenters the viewport, and discards pasted controls during pending validation.
 
+Path-shaped input focuses Add file ahead of substring matches and hides completion until the path is added or the field is cleared. Filesystem lookup runs only on explicit confirmation. Success checks/focuses the normalized path and clears the field for another addition. Failure preserves the input and prior checks. Manual catalogs have a fixed 100-path bound per picker. Delayed lookup tests cover Back, Ctrl+C, disposal, ownership changes, and paste during validation; frame tests cover both the Add action and redirected target previews.
+
 Custom selector/input screens intentionally show no key hints or additive shortcuts. Pi's configured matchers remain authoritative; host listeners can consume keys before component dispatch. Table-driven tests cover aliases, modifier order, legacy collisions, Kitty/legacy differences, invalid strings, and remapped confirmation/submission. No fallback shortcut is selected or advertised. Ctrl+C remains a hard-cancel path outside paste.
 
 All new-file targets receive one exact review; ordinary in-cwd file selection has no second routine confirmation. A changed or removed alias can be repaired by explicitly selecting its real path, even if both reservations have the same canonical target.
@@ -55,13 +61,13 @@ Run from the repository root, sequentially. Root checks clear and rebuild Kit ou
 | Check | Status |
 | --- | --- |
 | Local TypeScript: `npm exec -- tsc -p .pi/extensions/scope/tsconfig.json` | Passed. |
-| Local tests: `npm exec -- vitest run --config .pi/extensions/scope/vitest.config.ts` | Passed: 301 tests in 11 files; 1 Windows-only test skipped on this host. |
+| Local tests: `npm exec -- vitest run --config .pi/extensions/scope/vitest.config.ts` | Passed: 343 tests in 11 files; 1 Windows-only test skipped on this host. |
 | CLI smoke: `node .pi/extensions/scope/test/runtime-smoke.mjs` | Passed: all 5 CLI paths after the final context change. |
 | Local Biome: `npm exec -- biome check .pi/extensions/scope --error-on-warnings` | Passed: 29 files. |
 | `npm run check` | Passed: builds, Biome, boundaries, and all workspace typechecks. |
 | `npm test` | Passed: 17,517 tests; 15 platform/conditional skips; no unhandled errors. |
 
-Independent final source review found no remaining concrete defect after the pointer-identity, lexical-reservation repair, and full-system context corrections. Existing root informational diagnostics about the Biome schema and `pi-sync` remain unchanged; neither failed a gate. No package metadata, root test wiring, dependencies, Changeset, or publishing operation changed.
+Independent final source review found no remaining concrete defect after the pointer-identity, lexical-reservation repair, and full-system context corrections. Follow-up review also checked manual path resolution, pinned reservations, existing-file revalidation through canonical deduplication, and preservation of live missing reservations. Existing root informational diagnostics about the Biome schema and `pi-sync` remain unchanged; neither failed a gate. No package metadata, root test wiring, dependencies, Changeset, or publishing operation changed.
 
 CLI smoke coverage includes explicit `--no-extensions -e` loading, trusted-project discovery, trust denial, print mode, and JSON mode. Each command rejection is observed without a model run or protocol corruption. Subprocess deadlines start only after readiness, and all child exits are awaited.
 
@@ -84,7 +90,7 @@ pi --no-extensions -e "$repo/.pi/extensions/scope/index.ts"
 
 1. Open `/scope`; confirm that the first action is selected and cwd and inactive state are clear.
 2. Select `a.txt`, filter and toggle it, then finish with **Start restriction**. Confirm return to the prompt and the active widget.
-3. Reopen the selector, change its draft, then cancel. Confirm the live set is still only `a.txt`.
+3. Reopen the selector and add several existing home and absolute paths outside cwd. Confirm Add file is first, resolved/canonical previews are clear, earlier checks remain, and each successful addition clears the field. Test a missing file and confirm the input is retained without creating content. Cancel once and confirm the live set is still only `a.txt`; repeat and Apply to approve the larger set, then restore the one-file set for the remaining steps.
 4. Try **Use only a new file…** with `a.txt`; confirm the draft survives rejection. Correct it to a new nested path, review it, then cancel. Confirm that no file or parent directory was created.
 5. Repeat new-file reservation and complete it. Confirm that the set has one deferred target, not the earlier file plus the new path.
 6. Exercise literal and bracketed-pasted spaces, long and Unicode text, Backspace, cursor movement, resize, pointer selection, and IME. Repeat with non-default submit, confirm, and cancel bindings; use Ctrl+C as the hard-cancel path.

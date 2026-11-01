@@ -216,6 +216,12 @@ export function createScopeExtension(show: ShowMenu = showMenu) {
       signal.throwIfAborted();
       mutationCheck(owner, ctx, flow);
       const proposed = createSnapshot(resolve(ctx.cwd), targets);
+      // Newly resolved existing files must still exist at commit. Keep the
+      // requirement across canonical alias deduplication; live reserved paths
+      // without resolution metadata may still be missing.
+      const existing = new Set(
+        targets.filter((target) => "exists" in target && target.exists === true).map((target) => target.canonical),
+      );
       if (newFile && proposed.targets?.length !== 1) throw new Error("New file requires exactly one target");
       assertUsableLoadout(pi);
       const checked: ScopeTarget[] = [];
@@ -223,7 +229,7 @@ export function createScopeExtension(show: ShowMenu = showMenu) {
         const candidate = await resolveScopeTarget(
           pathToFileURL(target.path).href,
           ctx.cwd,
-          newFile ? "new" : "either",
+          newFile ? "new" : existing.has(target.canonical) ? "existing" : "either",
           signal,
         );
         signal.throwIfAborted();

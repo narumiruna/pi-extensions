@@ -1,6 +1,6 @@
 import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
@@ -12,6 +12,7 @@ import type {
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ScopeMenuOptions, ScopeView } from "../menu.ts";
+import type { ScopeTarget } from "../paths.ts";
 
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const root = await mkdtemp(join(tmpdir(), "scope-lifecycle-"));
@@ -141,7 +142,7 @@ async function harness(start = true) {
     async close() {
       await emit("session_shutdown", { reason: "quit" });
     },
-    async apply(targets = [target]) {
+    async apply(targets: readonly ScopeTarget[] = [target]) {
       await menu((options) => options.apply(targets));
     },
     async off() {
@@ -275,6 +276,27 @@ describe("scope lifecycle and command ownership", () => {
       "Select between",
     );
     expect((await h.view()).state).toBe("active");
+  });
+  it("does not convert a newly resolved existing file into a reservation at commit", async () => {
+    const h = await harness();
+    const prior = await resolveScopeTarget(pathToFileURL(h.other).href, h.cwd, "existing");
+    await h.apply([prior]);
+    await fs.unlink(h.allowed);
+    await expect(h.apply()).rejects.toThrow("does not exist");
+    expect((await h.view()).targets).toEqual([{ path: prior.path, canonical: prior.canonical }]);
+    expect(await h.gate("write", { path: h.other })).toBeUndefined();
+    expect((await h.gate("write", { path: h.allowed }))?.block).toBe(true);
+  });
+  it("retains existing-file requirements when canonical dedup keeps a live-style parent alias", async () => {
+    const h = await harness();
+    const prior = await resolveScopeTarget(pathToFileURL(h.other).href, h.cwd, "existing");
+    await h.apply([prior]);
+    const parentAlias = join(h.cwd, "parent-alias");
+    await fs.symlink(h.cwd, parentAlias, "dir");
+    const alias = { path: join(parentAlias, basename(h.allowed)), canonical: h.target.canonical };
+    await fs.unlink(h.allowed);
+    await expect(h.apply([alias, h.target])).rejects.toThrow("does not exist");
+    expect((await h.view()).targets).toEqual([{ path: prior.path, canonical: prior.canonical }]);
   });
   it("reserves a new target without creating directories and rejects appearance during review", async () => {
     const h = await harness();

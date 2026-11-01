@@ -142,6 +142,7 @@ export async function showScopeMenu(ctx: ExtensionCommandContext, options: Scope
         lines: [
           "Select files to start a restriction or replace the complete allowed-file set.",
           "Search does not change checked files. Confirm file rows to toggle, then confirm Start restriction or Apply changes.",
+          "Enter a full or ~/ path and confirm Add file to check an existing file, including files outside cwd. Adding a path changes only the draft.",
           "New file reserves one target; it replaces all allowed files and creates no content here.",
           "Cancelling a draft, closing this menu, and run completion do not release the restriction.",
           "Use End restriction or /scope off to release it explicitly.",
@@ -163,19 +164,35 @@ export async function showScopeMenu(ctx: ExtensionCommandContext, options: Scope
           signal,
           isCurrent: current,
           discover: (scanSignal) => discoverScopeFiles(view.cwd, options.getSettings().showHiddenFiles, scanSignal),
-          validate: async (paths, validationSignal) => {
+          resolvePath: async (raw, validationSignal) => {
+            const target = await resolveScopeTarget(raw, view.cwd, "existing", validationSignal);
+            if (!current() || validationSignal.aborted)
+              throw validationSignal.reason ?? new Error("Scope flow is stale.");
+            return target;
+          },
+          validate: async (paths, validationSignal, added) => {
             if (paths.length > MAX_TARGETS) throw new Error(`Select no more than ${MAX_TARGETS} files.`);
+            const manual = new Map(added.map((target) => [target.path, target] as const));
+            const known = new Map([...live, ...manual]);
             const targets: ScopeTarget[] = [];
             for (const path of paths) {
               // Discovery/snapshots already contain lexical native paths. A file
               // URL preserves literal Unicode spaces through Pi's raw-input resolver.
               const nativePath = pathToFileURL(path).href;
-              const existing = live.get(path);
+              const existing = known.get(path);
               if (existing) {
-                await assertScopeTarget(nativePath, view.cwd, view.targets, validationSignal);
+                let checked = existing;
+                if (manual.has(path)) {
+                  checked = await resolveScopeTarget(nativePath, view.cwd, "existing", validationSignal);
+                  if (!current() || validationSignal.aborted)
+                    throw validationSignal.reason ?? new Error("Scope flow is stale.");
+                  if (checked.canonical !== existing.canonical)
+                    throw new Error(`The added target changed: ${displayPath(path)}. Add it again.`);
+                }
+                await assertScopeTarget(nativePath, view.cwd, [existing], validationSignal);
                 if (!current() || validationSignal.aborted)
                   throw validationSignal.reason ?? new Error("Scope flow is stale.");
-                targets.push(existing);
+                targets.push(checked);
               } else {
                 const target = await resolveScopeTarget(nativePath, view.cwd, "existing", validationSignal);
                 if (!current() || validationSignal.aborted)

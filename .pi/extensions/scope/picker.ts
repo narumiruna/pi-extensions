@@ -1,9 +1,11 @@
+import { isAbsolute, relative, sep } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type SelectItem, SelectList, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 import { displayError, displayPath, exactRows, scopeFrame } from "./display.ts";
 import { ScopeInput } from "./input.ts";
 import type { ScopeTarget } from "./paths.ts";
+import { MAX_TARGETS } from "./state.ts";
 
 type PickerValue =
   | { kind: "selected"; targets: readonly ScopeTarget[] }
@@ -17,7 +19,21 @@ export interface ScopePickerOptions {
   signal: AbortSignal;
   isCurrent(): boolean;
   discover(signal: AbortSignal): Promise<string[]>;
-  validate(paths: readonly string[], signal: AbortSignal): Promise<readonly ScopeTarget[]>;
+  resolvePath(raw: string, signal: AbortSignal): Promise<ScopeTarget>;
+  validate(
+    paths: readonly string[],
+    signal: AbortSignal,
+    added: readonly ScopeTarget[],
+  ): Promise<readonly ScopeTarget[]>;
+}
+
+function isPathInput(raw: string): boolean {
+  return raw.includes("/") || (process.platform === "win32" && raw.includes("\\"));
+}
+
+function outsideCwd(cwd: string, path: string): boolean {
+  const fromCwd = relative(cwd, path);
+  return isAbsolute(fromCwd) || fromCwd === ".." || fromCwd.startsWith(`..${sep}`);
 }
 
 export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePickerOptions) {
@@ -29,15 +45,18 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
       const signal = AbortSignal.any([ownerSignal, controller.signal]);
       const search = new ScopeInput();
       const checked = new Set(options.targets.map((target) => target.path));
+      const added = new Map<string, ScopeTarget>();
       let paths: string[] = [];
       let rows: SelectItem[] = [];
       let list: SelectList;
       let loading = true;
-      let validating = false;
+      let validating: "path" | "selection" | undefined;
+      let pending = Promise.resolve();
       let disposed = false;
       let closing = false;
       let error = "";
       let doneId = "__scope_apply__";
+      let addId = "__scope_add_path__";
       let mousePressedId: string | undefined;
       let mouseLayout: { width: number; input?: number; rows: Map<number, number> } | undefined;
       const current = () => {
@@ -58,15 +77,22 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
       };
       const rebuild = (selectedId = list?.getSelectedItem()?.value) => {
         mousePressedId = undefined;
-        const query = displayPath(search.input.getValue()).slice(1, -1).toLowerCase();
+        const raw = search.input.getValue();
+        const query = displayPath(raw).slice(1, -1).toLowerCase();
         const matching = paths.filter((path) => displayPath(path).toLowerCase().includes(query));
-        rows = matching.map((path) => ({
-          value: path,
-          label: `${checked.has(path) ? "[x]" : "[ ]"} ${displayPath(path)}`,
-        }));
-        // An empty filtered list has no completion target. Editing an unmatched
-        // query (especially a literal Space) must never activate Apply.
-        if (!query || matching.length > 0) rows.push({ value: doneId, label: options.completionLabel });
+        const pathInput = isPathInput(raw);
+        // Resolve path-shaped input explicitly before exposing completion. The
+        // Add action precedes substring matches so an external absolute path
+        // cannot accidentally check a similarly named cwd file instead.
+        rows = [
+          ...(pathInput ? [{ value: addId, label: `Add file: ${displayPath(raw)}` }] : []),
+          ...matching.map((path) => ({
+            value: path,
+            label: `${checked.has(path) ? "[x]" : "[ ]"} ${displayPath(path)}`,
+          })),
+        ];
+        // Ordinary unmatched search (especially a literal Space) cannot apply.
+        if (!pathInput && (!query || matching.length > 0)) rows.push({ value: doneId, label: options.completionLabel });
         list = new SelectList(rows, 8, {
           selectedPrefix: (text) => theme.fg("accent", text),
           selectedText: (text) => theme.fg("accent", text),
@@ -82,8 +108,38 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
         );
         list.onSelect = (item) => activate(item.value);
       };
+      const runValidation = (kind: "path" | "selection", work: () => Promise<void>) => {
+        validating = kind;
+        error = "";
+        pending = (async () => {
+          try {
+            await work();
+          } catch (failure) {
+            if (current()) error = displayError(failure);
+          } finally {
+            validating = undefined;
+            if (current()) tui.requestRender();
+          }
+        })();
+      };
       const activate = (id: string) => {
         if (!current() || loading || validating) return;
+        if (id === addId) {
+          const draft = search.input.getValue();
+          runValidation("path", async () => {
+            const target = await options.resolvePath(draft, signal);
+            if (!current()) return;
+            if (!added.has(target.path) && added.size >= MAX_TARGETS) {
+              throw new Error(`Add no more than ${MAX_TARGETS} distinct paths in one picker.`);
+            }
+            added.set(target.path, { path: target.path, canonical: target.canonical });
+            if (!paths.includes(target.path)) paths.push(target.path);
+            checked.add(target.path);
+            search.input.setValue("");
+            rebuild(target.path);
+          });
+          return;
+        }
         if (id !== doneId) {
           if (checked.has(id)) checked.delete(id);
           else checked.add(id);
@@ -96,29 +152,21 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
           close({ kind: "selected", targets: [] });
           return;
         }
-        validating = true;
-        error = "";
-        pending = (async () => {
-          try {
-            const targets = await options.validate(selectedPaths, signal);
-            if (current()) close({ kind: "selected", targets });
-          } catch (failure) {
-            if (current()) error = displayError(failure);
-          } finally {
-            validating = false;
-            if (current()) tui.requestRender();
-          }
-        })();
+        runValidation("selection", async () => {
+          const targets = await options.validate(selectedPaths, signal, [...added.values()]);
+          if (current()) close({ kind: "selected", targets });
+        });
       };
       rebuild();
-      let pending = (async () => {
+      pending = (async () => {
         try {
           const discovered = await options.discover(signal);
           if (!current()) return;
           paths = [...new Set([...options.targets.map((target) => target.path), ...discovered])];
           while (paths.includes(doneId)) doneId = `_${doneId}`;
+          while (paths.includes(addId) || addId === doneId) addId = `_${addId}`;
           loading = false;
-          rebuild(paths[0]);
+          rebuild(isPathInput(search.input.getValue()) ? addId : paths[0]);
           tui.requestRender();
         } catch (failure) {
           if (current()) close({ kind: "error", error: failure });
@@ -144,17 +192,33 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
           // back to those native rows for pointer input.
           const start = Math.max(0, Math.min(selectedIndex - 4, rows.length - 8));
           const focusedRow = 2 + Math.max(0, selectedIndex - start);
-          const preview =
-            activeId && activeId !== doneId
-              ? exactRows(`Path: ${displayPath(activeId)}`, safeWidth).map((line) => theme.fg("muted", line))
-              : [];
+          const target = added.get(activeId ?? "") ?? options.targets.find((item) => item.path === activeId);
+          const previewLines =
+            activeId === addId
+              ? [`Existing file path: ${displayPath(search.input.getValue())}`]
+              : activeId && activeId !== doneId
+                ? [
+                    `Path: ${displayPath(activeId)}`,
+                    ...(target && (outsideCwd(options.cwd, target.path) || outsideCwd(options.cwd, target.canonical))
+                      ? ["Outside the current directory."]
+                      : []),
+                    ...(target && target.path !== target.canonical
+                      ? [`Canonical target: ${displayPath(target.canonical)}`]
+                      : []),
+                  ]
+                : [];
+          const preview = previewLines.flatMap((line) =>
+            exactRows(line, safeWidth).map((part) => theme.fg("muted", part)),
+          );
           const content = [
             ...search.render(safeWidth),
             "",
             ...listRows,
             ...preview,
             ...(error ? exactRows(error, safeWidth).map((line) => theme.fg("error", line)) : []),
-            ...(validating ? [theme.fg("dim", "Checking selected files…")] : []),
+            ...(validating
+              ? [theme.fg("dim", validating === "path" ? "Checking file path…" : "Checking selected files…")]
+              : []),
           ];
           const frame = scopeFrame(
             tui,
@@ -164,6 +228,7 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
             [
               `Cwd: ${displayPath(options.cwd)}`,
               `${checked.size} selected. Confirm a file to toggle; confirm the completion row to finish.`,
+              "Search, or enter a full or ~/ path and confirm Add file to check an existing file.",
             ],
             content,
             loading || rows.length === 0 ? [0] : [focusedRow, 0],
@@ -205,7 +270,8 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
             return true;
           };
           search.handleInput(data, action, !validating);
-          if (search.input.getValue() !== previous && !loading) rebuild();
+          if (search.input.getValue() !== previous && !loading)
+            rebuild(isPathInput(search.input.getValue()) ? addId : undefined);
           tui.requestRender();
         },
         handleMouse(event: TuiMouseEvent) {

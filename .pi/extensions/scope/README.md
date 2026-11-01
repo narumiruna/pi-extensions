@@ -6,7 +6,7 @@ Temporarily limit Pi's `write` and `edit` tool calls to files selected by the us
 
 ## Load
 
-This is a project-local extension, not an npm package. Pi discovers `index.ts` after the project is trusted. It uses the public Pi and Kit APIs supplied by this repository.
+This is a repository-local extension, not an npm package. Pi discovers `index.ts` after the project is trusted. That source location does not limit selection to this repository or cwd. It uses the public Pi and Kit APIs supplied by this repository.
 
 For an isolated load, run these commands from the repository root:
 
@@ -47,6 +47,19 @@ build  coverage  dist  target  .next
 ```
 
 It does not read `.gitignore`. Scan errors and work limits fail the scan instead of showing a partial inventory. Current targets appear first and remain available even when hidden, excluded, outside cwd, or not yet created. Filtering and checkboxes change only the picker draft until completion.
+
+To add an existing file outside the inventory, enter a path in the same field, then confirm **Add file**:
+
+```text
+~/src/another_project/AGENTS.md
+~/.plan/PLAN_A.md
+/absolute/path/PLAN_B.md
+~/.config/atuin/config.toml
+```
+
+Path input containing `/` (or `\` on Windows) puts **Add file** first instead of treating confirmation as Apply. Absolute, home, file-URL, and cwd-relative forms are accepted; use `./` for a relative filename. The lookup runs only when that action is confirmed, not while typing.
+
+A successful add checks and focuses the resolved path, shows outside-cwd and canonical details, and clears the field for the next path. Earlier checks remain selected. Repeat for more files, then confirm **Start restriction** or **Apply changes**. Clear the field to return to ordinary search without adding it. Missing paths, directories, hard links, and invalid input retain the draft and show an error. These actions create no file or parent directory; existing-file and canonical checks run again before apply.
 
 **New file…** replaces the entire scope with one target after a target review. Relative paths use cwd. Existing targets are rejected without discarding the input draft. Selection only reserves the path: the first normal `write` creates the file and required parent directories. Opening or cancelling this flow creates no target content.
 
@@ -117,6 +130,7 @@ These are fixed safety limits, not settings:
 | Visited directory entries | 20,000, including hidden or excluded names encountered |
 | Directory depth | 64 below cwd; cwd is depth zero |
 | Selected entries | 100 before canonical deduplication |
+| Distinct manually added paths | 100 per picker, including entries later unchecked |
 | Serialized scope snapshot | 24,000 bytes |
 | Model notice | 48,000 bytes |
 
