@@ -3,11 +3,13 @@ import { completeSyncArguments, splitArgs } from "./commands/command.js";
 import { handleCommand } from "./commands/command-handler.js";
 import type { AnySyncConfig } from "./settings/settings-types.js";
 import { withStateDirectoryAccess } from "./state/state-directory.js";
+import { startupTransferEnabled } from "./sync/agent-policy.js";
 import { autoPushSessions, startSession } from "./sync/automatic-sync.js";
 import { combineSignals } from "./sync/signals.js";
 import { createStartupCheck } from "./sync/startup-check.js";
 import { errorMessage } from "./sync/sync-errors.js";
 import { createSyncLoaders, type SyncDependencies } from "./sync/sync-loaders.js";
+import { registerStartupTimings } from "./ui/startup-timings-entry.js";
 import { createSyncAttentionController } from "./ui/sync-attention.js";
 import { setSyncStatus } from "./ui/sync-status.js";
 import { safeTerminalText } from "./ui/terminal-text.js";
@@ -15,13 +17,15 @@ import { safeTerminalText } from "./ui/terminal-text.js";
 export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDependencies> = {}) {
   const loaders = createSyncLoaders(dependencies);
   const attention = createSyncAttentionController();
-  const check = createStartupCheck(loaders, attention);
+  const publishTimings = registerStartupTimings(pi);
+  const check = createStartupCheck(loaders, attention, 30_000, publishTimings);
   let sessionAbort = new AbortController();
   let shutdownAbort: AbortController | undefined;
   let initialization = Promise.resolve<AnySyncConfig | false | undefined>(undefined);
   let continuous: ReturnType<typeof import("./sync/continuous-sync.js")["createContinuousSync"]> | undefined;
   let owner: ExtensionContext["sessionManager"] | undefined;
   let continuousPossible = false;
+  let startupDebug = false;
   const foreground = new Map<ExtensionContext["sessionManager"], number>();
   async function resumeContinuous(ctx: ExtensionContext, signal: AbortSignal, retry?: { setup?: string }) {
     const isCurrent = () => !signal.aborted && !foreground.has(ctx.sessionManager) && owner === ctx.sessionManager;
@@ -38,8 +42,13 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       }
       const { createContinuousSync } = await import("./sync/continuous-sync.js");
       if (!isCurrent()) return;
-      continuous ??= createContinuousSync(loaders);
-      continuous.start(ctx, signal, Boolean(retry && (retry.setup === undefined || retry.setup === config.setupName)));
+      continuous ??= createContinuousSync(loaders, undefined, publishTimings);
+      continuous.start(
+        ctx,
+        signal,
+        Boolean(retry && (retry.setup === undefined || retry.setup === config.setupName)),
+        startupDebug,
+      );
     } catch {
       /* Existing initialization/command paths report settings errors. */
     }
@@ -97,6 +106,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     const signal = sessionAbort.signal;
     owner = ctx.sessionManager;
     continuousPossible = false;
+    startupDebug = false;
     attention.reset(ctx);
     const previous = initialization;
     initialization = (async () => {
@@ -107,8 +117,10 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       await check.stop();
       if (signal.aborted) return false;
       try {
-        const config = await withStateDirectoryAccess(() => startSession(ctx, signal));
-        return signal.aborted ? false : config;
+        const startup = await withStateDirectoryAccess(() => startSession(ctx, signal, publishTimings));
+        if (signal.aborted) return false;
+        startupDebug = startup?.debug ?? false;
+        return startup?.config;
       } catch (error) {
         if (!signal.aborted && ctx.hasUI) {
           ctx.ui.notify(`pi-sync recovery required: ${safeTerminalText(errorMessage(error))}`, "error");
@@ -119,7 +131,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     const ready = await initialization;
     if (ready && !signal.aborted) {
       if (ready.continuous && ready.agentMode) await resumeContinuous(ctx, signal);
-      else check.start(ctx, signal, ready);
+      else if (ready.automatic || startupTransferEnabled(ready)) check.start(ctx, signal, ready);
     }
   });
 

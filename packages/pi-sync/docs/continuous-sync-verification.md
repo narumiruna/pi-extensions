@@ -58,6 +58,16 @@ Final verification:
 | README heading audit | Required headings/order checked across all 36 active package READMEs. |
 | Package build, RPC and archive | Passed as described below. |
 
+## Startup timing report verification
+
+Startup timing reports use native custom session entries in TUI and retain RPC notifications. Entry renderers and live append events were checked at the declared Pi peer floor. Tests verify transcript retention across renderer replacement and ordinary notifications, unchanged model context, control sanitization, and zero/narrow/resized rendering.
+
+Continuous timing tests cover the initial check, nested transfer stages, failure, timeout, later polls, foreground pauses, idle resume, replacement, and shutdown. Debug is captured during awaited session initialization, including when Continuous sync is initially Off or no setup exists; both directions of a later debug edit retain the session-start value. Automatic sync and startup transfer remain Off when not authorized. No new watcher, timer, setting, command, provider request, or model-visible prefix transition is added.
+
+The package-directory RPC smoke now waits for both local and initial Continuous timing notifications before making a synthetic edit. It verifies exactly two timing reports, conditional loopback publication, zero provider requests, and released ownership. The startup timing fix passed both root gates, the package pack workflow, archive inspection, generated-runtime tests, and the fenced-code-aware README heading audit.
+
+Physical-terminal visual acceptance and production storage/provider behavior remain unverified by this fix. Automated native rendering and RPC tests do not replace that acceptance. Existing installed npm copies are not modified by a source checkout; the user must explicitly load the local build or install a later release. No package was published, tagged, or installed into the user's managed npm root.
+
 ## CLI, package and load checks
 
 The required package build and dry-run pack use:

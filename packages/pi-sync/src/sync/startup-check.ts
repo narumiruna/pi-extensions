@@ -12,12 +12,17 @@ import { safeTerminalText } from "../ui/terminal-text.js";
 import { startupTransferEnabled } from "./agent-policy.js";
 import { withAgentSyncLock } from "./agent-sync.js";
 import { combineSignals, throwIfAborted } from "./signals.js";
-import { createStartupTimings } from "./startup-timings.js";
+import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 
 /** One owned task per extension session, never keyed by the shared headless UI. */
-export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentionController, timeoutMs = 30_000) {
+export function createStartupCheck(
+  loaders: SyncLoaders,
+  attention: SyncAttentionController,
+  timeoutMs = 30_000,
+  publish?: StartupTimingPublisher,
+) {
   let active:
     | {
         controller: AbortController;
@@ -49,7 +54,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
         return;
       }
       if (active) throw new Error("Previous startup check has not been drained.");
-      const timings = createStartupTimings();
+      const timings = createStartupTimings(publish);
       const controller = new AbortController();
       const signal = combineSignals(sessionSignal, controller.signal);
       const task = {

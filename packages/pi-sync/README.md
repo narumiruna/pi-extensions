@@ -167,7 +167,7 @@ Missing settings stay unconfigured without creating files or locks.
 ### Debug startup timings
 
 Set the top-level `"debug": true` in `pi-sync.json`, or enable **Settings → Advanced → Debug startup timings**, then restart Pi or use `/reload`.
-The default is `false`. Timing reports appear in TUI/RPC notifications, not the model context or a log file.
+The default is `false`. Timing reports remain in the TUI session transcript or arrive as RPC notifications, including the initial Continuous sync check. They do not enter model context or create a separate log file.
 See [Debug startup timings](./skills/configure-pi-sync/references/configuration.md#debug-startup-timings) for measured stages and limits.
 
 ### Background startup checks

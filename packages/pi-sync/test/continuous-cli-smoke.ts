@@ -21,7 +21,7 @@ await withTempHome(async (agentDir) => {
   let exited: Promise<number | null> | undefined;
   try {
     await fs.mkdir(agentDir, { recursive: true });
-    const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
+    const settings = { ...v3WebDavSettings({ include: ["AGENTS.md"] }), debug: true };
     settings.storageConnections.dav.url = server.url;
     Object.assign(settings.syncSetups.home.sync, { agentMode: true, continuous: true });
     await fs.writeFile(localConfigPath(), JSON.stringify(settings));
@@ -57,7 +57,15 @@ await withTempHome(async (agentDir) => {
     });
     let buffer = "";
     let ready = false;
+    let editStarted = false;
+    const timingReports: string[] = [];
     const synced = new Promise<void>((resolve, reject) => {
+      const editAfterStartup = () => {
+        if (!ready || editStarted || !timingReports.some((report) => report.startsWith("pi-sync debug: continuous")))
+          return;
+        editStarted = true;
+        void fs.writeFile(path.join(agentDir, "AGENTS.md"), "synthetic continuous edit\n").catch(reject);
+      };
       cli.once("error", reject);
       cli.once("exit", (code) => {
         if (!ready || code !== 0) reject(new Error(`RPC smoke exit ${code}: ${stderr}`));
@@ -79,7 +87,15 @@ await withTempHome(async (agentDir) => {
               ready = true;
               // Start the operation deadline only after CLI readiness is observed.
               deadline = setTimeout(() => reject(new Error(`Continuous RPC smoke deadline: ${stderr}`)), 20_000);
-              void fs.writeFile(path.join(agentDir, "AGENTS.md"), "synthetic continuous edit\n").catch(reject);
+              editAfterStartup();
+            }
+            if (
+              record.type === "extension_ui_request" &&
+              record.method === "notify" &&
+              String(record.message).startsWith("pi-sync debug:")
+            ) {
+              timingReports.push(record.message);
+              editAfterStartup();
             }
             if (record.type === "extension_error") reject(new Error(JSON.stringify(record)));
             if (
@@ -99,6 +115,10 @@ await withTempHome(async (agentDir) => {
     cli.stdin?.end();
     assert.equal(await exited, 0, stderr);
     clearTimeout(deadline);
+    assert.equal(timingReports.length, 2, "local and initial continuous timings only");
+    assert.match(timingReports[0] ?? "", /^pi-sync debug: local initialization \(completed\)/u);
+    assert.match(timingReports[1] ?? "", /^pi-sync debug: continuous startup \(completed\)/u);
+    assert.doesNotMatch(timingReports.join("\n"), /access-key|secret-key|settings\.json/u);
     const config = await loadConfig();
     const backend = await createSyncBackend(config);
     const head = await backend.readHead();
@@ -116,6 +136,7 @@ await withTempHome(async (agentDir) => {
         mode: "rpc",
         entry: "packages/pi-sync",
         continuous: true,
+        startupTimingReports: timingReports.length,
         providerRequests: 0,
         remotePublished: true,
         leaseReleased: true,

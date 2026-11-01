@@ -5,6 +5,7 @@ import { loadConfig, loadPartialConfig } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
+import type { AnySyncConfig } from "../settings/settings-types.js";
 import { sessionDirFromContext, snapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { recoverSnapshotTransactionsOnStartup } from "../snapshot/snapshot-transaction.js";
 import { withLock } from "../state/lock.js";
@@ -12,9 +13,8 @@ import { stateDirectoryMigrationNotice } from "../state/state-directory.js";
 import { ensureStateDir, readStateForConfig } from "../state/sync-state-store.js";
 import { configureSyncStatus, setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
-import { startupTransferEnabled } from "./agent-policy.js";
 import { throwIfAborted } from "./signals.js";
-import { createStartupTimings } from "./startup-timings.js";
+import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 import { captureMutationOwner } from "./sync-local.js";
@@ -29,8 +29,12 @@ const AUTO_SYNC_OPTIONS: CommandOptions = {
   args: [],
 };
 
-export async function startSession(ctx: ExtensionContext, signal: AbortSignal) {
-  const timings = createStartupTimings();
+export async function startSession(
+  ctx: ExtensionContext,
+  signal: AbortSignal,
+  publish?: StartupTimingPublisher,
+): Promise<{ debug: boolean; config?: AnySyncConfig } | undefined> {
+  const timings = createStartupTimings(publish);
   let debug = false;
   let outcome: "completed" | "stopped" = "stopped";
   try {
@@ -64,19 +68,20 @@ export async function startSession(ctx: ExtensionContext, signal: AbortSignal) {
     const migrationNotice = consumeLocalConfigMigrationNotice();
     if (migrationNotice && ctx.hasUI) ctx.ui.notify(migrationNotice, "warning");
     throwIfAborted(signal);
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI) return { debug };
     try {
       const config = await timings.measure("config resolution", () => loadConfig());
       throwIfAborted(signal);
       configureSyncStatus(ctx, config.showStatus);
       outcome = "completed";
-      return config.automatic || startupTransferEnabled(config) ? config : undefined;
+      return { debug, config };
     } catch (error) {
       throwIfAborted(signal);
       if (!isMissingConfigError(error)) {
         ctx.ui.notify(`pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}`, "warning");
       }
     }
+    return { debug };
   } finally {
     timings.publish(ctx, debug, signal, "local initialization", outcome);
   }
