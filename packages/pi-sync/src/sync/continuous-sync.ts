@@ -18,6 +18,7 @@ import {
 import { continuousBinding, hashContinuous } from "./continuous-storage.js";
 import { watchContinuous } from "./continuous-watch.js";
 import { readMergeJournal } from "./merge-journal.js";
+import { createStartupTimings, type StartupTimingPublisher, type StartupTimings } from "./startup-timings.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 import { captureMutationOwner } from "./sync-local.js";
 import { fileHashMap } from "./sync-state.js";
@@ -43,18 +44,34 @@ const LOCAL_CHECK_MS = 5_000;
 const POLL_MS = 60_000;
 const DEBOUNCE_MS = 1_000;
 
+interface ContinuousStartup {
+  signal: AbortSignal;
+  debug: boolean;
+  reported: boolean;
+}
+
 /** Created on first enabled session. No module/factory-owned timers or watchers. */
-export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousClock = systemClock) {
+export function createContinuousSync(
+  loaders: SyncLoaders,
+  clock: ContinuousClock = systemClock,
+  publish?: StartupTimingPublisher,
+) {
+  const startups = new WeakMap<ExtensionContext["sessionManager"], ContinuousStartup>();
   const repairNotices = new WeakSet<ExtensionContext["sessionManager"]>();
   let task:
     | { owner: ExtensionContext["sessionManager"]; controller: AbortController; promise: Promise<void>; clear(): void }
     | undefined;
   return {
-    start(ctx: ExtensionContext, sessionSignal: AbortSignal, explicitRetry = false) {
+    start(ctx: ExtensionContext, sessionSignal: AbortSignal, explicitRetry = false, debug = false) {
       if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc") || sessionSignal.aborted || task) return;
       const controller = new AbortController();
       const signal = AbortSignal.any([sessionSignal, controller.signal]);
       const validateContext = captureMutationOwner(ctx);
+      // The caller supplies the session-start debug value, including first activation after settings edits.
+      const previousStartup = startups.get(ctx.sessionManager);
+      const startup: ContinuousStartup =
+        previousStartup?.signal === sessionSignal ? previousStartup : { signal: sessionSignal, debug, reported: false };
+      startups.set(ctx.sessionManager, startup);
       const current = {
         owner: ctx.sessionManager,
         controller,
@@ -73,7 +90,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
         let explicit = explicitRetry;
         while (!signal.aborted) {
           try {
-            await run(ctx, signal, explicit);
+            await run(ctx, signal, explicit, startup);
             return;
           } catch {
             if (signal.aborted) return;
@@ -113,7 +130,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
     },
   };
 
-  async function run(ctx: ExtensionContext, signal: AbortSignal, explicitRetry: boolean) {
+  async function run(ctx: ExtensionContext, signal: AbortSignal, explicitRetry: boolean, startup: ContinuousStartup) {
     const validateOwner = captureMutationOwner(ctx, signal);
     try {
       while (!signal.aborted) {
@@ -134,7 +151,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
                 validateOwner();
               });
               if (lease) {
-                await monitor(ctx, config, binding, lease, signal, explicitRetry);
+                await monitor(ctx, config, binding, lease, signal, explicitRetry, startup);
                 explicitRetry = false;
               } else setSyncStatus(ctx, "sync waiting: another local owner");
             } finally {
@@ -172,6 +189,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
     lease: ContinuousLease,
     parent: AbortSignal,
     explicitRetry: boolean,
+    startup: ContinuousStartup,
   ) {
     const signal = AbortSignal.any([parent, lease.signal]);
     const validateOwner = captureMutationOwner(ctx, signal);
@@ -230,6 +248,10 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
         const hintDue = dirtyAt === undefined ? Number.POSITIVE_INFINITY : dirtyAt + DEBOUNCE_MS;
         const due = Math.max(record.error === "budget" ? 0 : record.next, Math.min(pollDue, hintDue));
         if (now >= due) {
+          const timings = createStartupTimings(publish);
+          const report = !startup.reported && startup.debug;
+          startup.reported = true;
+          let outcome: "completed" | "stopped" = "stopped";
           const force = explicitRetry || controlChanged;
           explicitRetry = false;
           const expectedModel = hashContinuous(ctx.model);
@@ -277,7 +299,9 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
               validateCycle,
               configuration,
               force,
+              timings,
             );
+            outcome = "completed";
           } catch (error) {
             if (signal.aborted || !ctx.isIdle()) return;
             // A settings hint interrupts the old authorization; load it afresh, not as a failed transfer.
@@ -313,6 +337,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
             guard.abort();
             await guardTask;
             cycle = undefined;
+            timings.publish(ctx, report, signal, "continuous startup", outcome);
           }
           pollDue = clock.now() + POLL_MS + Math.floor(clock.random() * 6_000);
           closeWatch();
@@ -356,6 +381,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
     validateOwner: (config?: AnySyncConfig) => void,
     configuration: string,
     force: boolean,
+    timings: StartupTimings,
   ) {
     const validate = (latest?: AnySyncConfig) => {
       signal.throwIfAborted();
@@ -375,27 +401,35 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
     )
       return;
     setSyncStatus(ctx, "sync checking");
-    const inspectionModule = await loaders.inspection();
+    const inspectionModule = await timings.measure("inspection import", () => loaders.inspection());
     validate();
-    const observed = await guardedLock("continuous-check", async () => {
-      validate();
-      const inspection = await inspectionModule.inspectSync(config, snapshotOptionsForContext(ctx, config), signal);
-      validate();
-      let localIdentity = inspection.localIdentity;
-      if (!localIdentity) {
-        const snapshotModule = await loaders.snapshot();
+    const observed = await timings.measure("inspection and guards", () =>
+      guardedLock("continuous-check", async () => {
         validate();
-        const local = await snapshotModule.createSnapshot(config.snapshotIdentity, {
-          ...snapshotOptionsForContext(ctx, config),
+        const inspection = await inspectionModule.inspectSync(
+          config,
+          snapshotOptionsForContext(ctx, config),
           signal,
-        });
+          undefined,
+          timings,
+        );
         validate();
-        localIdentity = hashContinuous(fileHashMap(local));
-      }
-      const journal = await readMergeJournal(config);
-      validate();
-      return { inspection, journal, localIdentity };
-    });
+        let localIdentity = inspection.localIdentity;
+        if (!localIdentity) {
+          const snapshotModule = await loaders.snapshot();
+          validate();
+          const local = await snapshotModule.createSnapshot(config.snapshotIdentity, {
+            ...snapshotOptionsForContext(ctx, config),
+            signal,
+          });
+          validate();
+          localIdentity = hashContinuous(fileHashMap(local));
+        }
+        const journal = await readMergeJournal(config);
+        validate();
+        return { inspection, journal, localIdentity };
+      }),
+    );
     validate();
     const evidence = hashContinuous([
       configuration,
@@ -434,28 +468,31 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
       throw new ContinuousError("unsafe", "Continuous sync needs an accepted baseline and matching remote selection.");
     let transferred = false;
     if (observed.journal || observed.inspection.localChanged || observed.inspection.remoteChanged) {
-      const operations = await loaders.operations();
+      const operations = await timings.measure("operations import", () => loaders.operations());
       validate();
       setSyncStatus(ctx, "sync syncing");
-      const result = await withStateDirectoryAccess(() =>
-        withAgentSyncLock(
-          ctx,
-          {
-            args: [],
-            yes: true,
-            force: false,
-            stale: false,
-            silent: true,
-            reload: false,
-            auto: true,
-            signal,
-            background: {
-              validate,
-              reserve: (key, requestSignal) =>
-                reserveContinuousRequest(binding, lease, key, () => clock.now(), requestSignal),
+      const result = await timings.measure("automatic transfer", () =>
+        withStateDirectoryAccess(() =>
+          withAgentSyncLock(
+            ctx,
+            {
+              args: [],
+              yes: true,
+              force: false,
+              stale: false,
+              silent: true,
+              reload: false,
+              auto: true,
+              signal,
+              startupTimings: timings,
+              background: {
+                validate,
+                reserve: (key, requestSignal) =>
+                  reserveContinuousRequest(binding, lease, key, () => clock.now(), requestSignal),
+              },
             },
-          },
-          (options) => operations.syncBoth(ctx, options),
+            (options) => operations.syncBoth(ctx, options),
+          ),
         ),
       );
       validate();

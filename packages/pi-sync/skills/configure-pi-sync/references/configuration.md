@@ -225,7 +225,10 @@ Edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`) or use
 UI changes save immediately through the existing ordered, atomic settings writer; both manual and UI changes take effect on the next session start, including `/reload`, new, resume, and fork.
 There is no project or environment override.
 
-With `debug: true`, TUI/RPC notifications report local initialization after recovery and settings resolution, then background work when it ends.
+With `debug: true`, reports show local initialization after recovery and settings resolution, then background work when it ends.
+TUI reports are stored as custom session entries, so they remain in the transcript after `/reload` and later notifications without entering model context.
+RPC reports remain notifications.
+When Continuous sync is enabled, the background report covers its first cycle rather than the separate one-shot startup check; later polls and same-session idle resumes do not publish more timing reports.
 Stages include transaction recovery, settings reads, inspection import, backend initialization, local snapshot, sync state read, remote head, operations import, and automatic transfer when those stages run.
 Automatic-transfer details separate authorization, journal recovery, state and local reads, remote-head reads, snapshot downloads, merge planning, backup, publication, local apply, baseline writes, and cleanup.
 Repeated stages aggregate elapsed time and show a call count.
@@ -237,10 +240,11 @@ Recovery failures before valid settings can be read cannot enable a timing repor
 
 Interrupted stages are marked `interrupted`; cancelled or failed background work is marked `stopped`.
 Session replacement and shutdown suppress late reports from the old session.
+Pausing Continuous sync cancels its active cycle and suppresses that cycle’s late report; it does not schedule another startup report on idle resume.
 Labels and durations contain no credentials, paths, file contents, remote addresses, or error text.
-No log file or model message is created.
-Print/JSON produce no timing notifications.
-The setting does not enable automatic sync or transfer, change safety checks, or measure manual/shutdown operations.
+No separate log file or model message is created; TUI reports remain in session history even after debugging is disabled.
+Print/JSON produce no timing reports.
+The setting does not enable automatic sync or transfer, change safety checks, or report manual/shutdown operations.
 Set `debug` to `false` or remove it, then start a new session to disable reports.
 
 ### Secret scanning

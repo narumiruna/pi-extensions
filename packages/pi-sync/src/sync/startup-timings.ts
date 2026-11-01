@@ -33,8 +33,12 @@ type StartupStage =
   | "transfer baseline write"
   | "transfer cleanup";
 
+export type StartupTimingPublisher = (ctx: ExtensionContext, report: string) => void;
+
 /** Fixed labels and durations only: never retain errors, paths, settings, or payloads. */
-export function createStartupTimings() {
+export function createStartupTimings(
+  publishReport: StartupTimingPublisher = (ctx, report) => ctx.ui.notify(report, "info"),
+) {
   const started = performance.now();
   const stages = new Map<StartupStage, { ms: number; calls: number; interrupted: boolean }>();
   let unchanged = false;
@@ -62,12 +66,13 @@ export function createStartupTimings() {
       ctx: ExtensionContext,
       enabled: boolean,
       sessionSignal: AbortSignal,
-      scope: "local initialization" | "background startup",
+      scope: "local initialization" | "background startup" | "continuous startup",
       outcome: "completed" | "stopped" = "completed",
     ) {
       if (!enabled || !ctx.hasUI || sessionSignal.aborted) return;
       try {
-        ctx.ui.notify(
+        publishReport(
+          ctx,
           [
             `pi-sync debug: ${scope} (${outcome})`,
             ...Array.from(
@@ -78,7 +83,6 @@ export function createStartupTimings() {
             ...(unchanged ? ["transfer result: unchanged (fast path)"] : []),
             `total: ${(performance.now() - started).toFixed(1)} ms`,
           ].join("\n"),
-          "info",
         );
       } catch {
         // Diagnostics must not change sync behavior if the UI is unavailable during teardown.

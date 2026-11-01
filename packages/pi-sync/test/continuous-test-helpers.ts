@@ -36,7 +36,8 @@ export function continuousDependencies(
 ): Partial<SyncDependencies> {
   return {
     loadSyncInspection: async () => ({
-      inspectSync: (config, options, signal) => inspectSync(config, options, signal, () => backend),
+      inspectSync: (config, options, signal, _factory, timings) =>
+        inspectSync(config, options, signal, () => backend, timings),
     }),
     loadSyncOperations: async () => ({
       ...(await import("../src/sync/sync-operations.js")),

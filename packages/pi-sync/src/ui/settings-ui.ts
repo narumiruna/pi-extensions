@@ -256,7 +256,7 @@ export async function showSyncSettings(
             id: "debug",
             label: "Debug startup timings",
             description:
-              "All setups on this device: show startup durations in TUI/RPC notifications. Applies next session start; no credentials or file contents.",
+              "All setups on this device: show startup durations in the TUI transcript or RPC notifications, including initial Continuous sync. Applies next session start; no credentials or file contents.",
             currentValue: state.debug ? "On" : "Off",
             values: ["On", "Off"],
             action: "debug",

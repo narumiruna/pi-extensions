@@ -10,11 +10,17 @@ import { localConfigTemplate, updateLocalConfig } from "../src/settings/settings
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { createStartupTimings } from "../src/sync/startup-timings.js";
 import { inspectSync } from "../src/sync/sync-inspection.js";
+import { STARTUP_TIMING_ENTRY, type StartupTimingEntry } from "../src/ui/startup-timings-entry.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { contextUi, deferred, inspectionFixture } from "./startup-check-helpers.js";
 
-function reports(context: ReturnType<typeof createMockContext>) {
-  return context.notifications.filter((entry) => entry.message.startsWith("pi-sync debug:"));
+function reports(context: ReturnType<typeof createMockContext>, mock?: ReturnType<typeof createMockPi>) {
+  return [
+    ...context.notifications.filter((entry) => entry.message.startsWith("pi-sync debug:")),
+    ...(mock?.entries
+      .filter((entry) => entry.customType === STARTUP_TIMING_ENTRY)
+      .map((entry) => ({ message: (entry.data as StartupTimingEntry).report })) ?? []),
+  ];
 }
 
 async function configured(debug: boolean | undefined, run: () => Promise<void>, transfer = false) {
@@ -109,27 +115,24 @@ for (const debug of [undefined, false, true]) {
         const { default: sync } = await import("../src/sync-extension.js");
         const mock = createMockPi();
         const context = createMockContext({ mode });
-        const completed = deferred();
-        const ui = contextUi(context.ctx);
-        const notify = ui.notify.bind(ui);
-        ui.notify = (message, type) => {
-          notify(message, type);
-          if (message.startsWith("pi-sync debug: background")) completed.resolve();
-        };
         sync(mock.pi, { loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }) });
         await mock.events.get("session_start")?.[0]?.({}, context.ctx);
         const enabled = debug === true && (mode === "tui" || mode === "rpc");
-        if (enabled) await completed.promise;
+        if (enabled) await vi.waitFor(() => assert.equal(reports(context, mock).length, 2), { interval: 5 });
         await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-        assert.equal(reports(context).length, enabled ? 2 : 0);
+        assert.equal(reports(context, mock).length, enabled ? 2 : 0);
+        assert.equal(mock.entries.length, enabled && mode === "tui" ? 2 : 0);
         if (enabled) {
           assert.match(
-            reports(context)[0]?.message ?? "",
+            reports(context, mock)[0]?.message ?? "",
             /transaction recovery:.*settings read:.*config resolution:/su,
           );
-          assert.match(reports(context)[1]?.message ?? "", /inspection import:.*inspection and guards:.*total:/su);
+          assert.match(
+            reports(context, mock)[1]?.message ?? "",
+            /inspection import:.*inspection and guards:.*total:/su,
+          );
           assert.doesNotMatch(
-            reports(context)
+            reports(context, mock)
               .map((entry) => entry.message)
               .join("\n"),
             /access-key|secret-key|example\.r2|settings\.json/u,
