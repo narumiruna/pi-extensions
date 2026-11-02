@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 
 const cliRequire = createRequire(createRequire(import.meta.url).resolve("@changesets/cli/bin.js"));
 const { cac } = await import(cliRequire.resolve("cac"));
@@ -33,7 +33,7 @@ type Release = {
   tarball?: { path: string; integrity: string };
 };
 type Manifest = { name: string; version: string; [key: string]: unknown };
-type Result = { code: number; stdout?: string };
+type Result = { code: number; stdout?: string; stderr?: string };
 
 async function fixture(field = "dependencies", range = "^2.0.0") {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "packed-publish-test-"));
@@ -72,6 +72,15 @@ async function fixture(field = "dependencies", range = "^2.0.0") {
   const calls: string[] = [];
   const nativePlans: Release[][] = [];
   const nativeArgs: string[][] = [];
+  const nativeDirectories: string[] = [];
+  const waits: number[] = [];
+  const logs: string[] = [];
+  let onWait: () => unknown = () => {};
+  const wait = async (ms: number) => {
+    waits.push(ms);
+    await onWait();
+  };
+  const log = (message: string) => logs.push(message);
   let metadata: unknown = {
     name: "@test/core",
     version: "2.0.0",
@@ -95,6 +104,7 @@ async function fixture(field = "dependencies", range = "^2.0.0") {
     assert.match(args[0], /@changesets\/cli\/bin.js$/u);
     const directory = nativeOptions(args.slice(2)).fromPackDir;
     assert.equal(typeof directory, "string");
+    nativeDirectories.push(directory);
     const document = JSON.parse(await readFile(path.join(directory, "publish-plan.json"), "utf8"));
     assert.equal(document.version, 1);
     assert.equal(document.plan.length, 1);
@@ -132,14 +142,21 @@ async function fixture(field = "dependencies", range = "^2.0.0") {
     calls,
     nativePlans,
     nativeArgs,
+    nativeDirectories,
+    waits,
+    logs,
     output,
     execute: (args: string[] = [], fetchOverride: unknown = fetch) =>
-      publishPackedPackages(["--from-pack-dir", pack, ...args], { cwd, run, fetch: fetchOverride }),
-    executeEquals: (args: string[]) => publishPackedPackages([`--from-pack-dir=${pack}`, ...args], { cwd, run, fetch }),
+      publishPackedPackages(["--from-pack-dir", pack, ...args], { cwd, run, fetch: fetchOverride, wait, log }),
+    executeEquals: (args: string[]) =>
+      publishPackedPackages([`--from-pack-dir=${pack}`, ...args], { cwd, run, fetch, wait, log }),
+    onWait: (value: () => unknown) => {
+      onWait = value;
+    },
     metadata: (value: unknown) => {
       metadata = value;
     },
-    viewResult: (value: Result) => {
+    viewResult: (value: Result | undefined) => {
       viewResult = value;
     },
     publishCode: (value: number) => {
@@ -183,7 +200,7 @@ for (const status of [200, 404]) {
         await assert.rejects(f.execute([], globalThis.fetch), /artifact unavailable/u);
         assert.ok(!f.calls.includes("@test/consumer"));
       }
-      assert.equal(requests, 1);
+      assert.equal(requests, status === 200 ? 1 : 6);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -200,6 +217,213 @@ test("guard chunks preserve packed entries, paths, bytes, forwarded args and sim
   assert.deepEqual(f.nativePlans, [[f.releases[0]], [f.releases[1]]]);
   assert.deepEqual(f.nativeArgs, Array(2).fill(["--output", f.output, "--otp", "123456"]));
   assert.equal((await readFile(f.output, "utf8")).trim().split("\n").length, 2);
+});
+
+test("metadata can become available on the last attempt without republishing earlier chunks", async () => {
+  const f = await fixture();
+  f.viewResult({ code: 1, stdout: '{"error":{"code":"E404"}}' });
+  f.onWait(() => {
+    if (f.waits.length === 5) f.viewResult(undefined);
+  });
+  await f.execute(["--output", f.output]);
+  assert.deepEqual(f.waits, Array(5).fill(2_000));
+  assert.equal(f.calls.filter((call) => call === "view").length, 6);
+  assert.deepEqual(f.nativePlans, [[f.releases[0]], [f.releases[1]]]);
+  assert.equal((await readFile(f.output, "utf8")).trim().split("\n").length, 2);
+  assert.match(f.logs[4], /E404.*attempt 5\/6.*retrying in 2000 ms/u);
+  for (const directory of f.nativeDirectories)
+    await assert.rejects(readFile(path.join(directory, "publish-plan.json")), { code: "ENOENT" });
+});
+
+for (const code of [
+  "E404",
+  "E408",
+  "E429",
+  "E500",
+  "E502",
+  "E503",
+  "E504",
+  "E599",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ECONNECTIONTIMEOUT",
+  "EIDLETIMEOUT",
+  "ERESPONSETIMEOUT",
+  "ETRANSFERTIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]) {
+  test(`temporary npm ${code} retries exact metadata before consumers`, async () => {
+    const f = await fixture();
+    f.viewResult({ code: 1, stdout: JSON.stringify({ error: { code } }) });
+    f.onWait(() => f.viewResult(undefined));
+    await f.execute();
+    assert.deepEqual(f.calls, ["@test/core", "view", "view", "fetch", "@test/consumer"]);
+    assert.deepEqual(f.waits, [2_000]);
+    assert.ok(f.logs[0].includes(code));
+  });
+}
+
+for (const stdout of [
+  '{"error":{"code":"E401"}}',
+  '{"error":{"code":"E403"}}',
+  '{"error":{"code":"ENEEDAUTH"}}',
+  '{"error":{"code":"E400"}}',
+  '{"error":{"code":"EINVALIDCONFIG"}}',
+  '{"error":{"code":"E404\\nsecret"}}',
+  "invalid secret",
+  "{}",
+  "null",
+]) {
+  test(`terminal npm error ${stdout} stops without retries or raw diagnostics`, async () => {
+    const f = await fixture();
+    f.viewResult({ code: 1, stdout, stderr: "https://user:secret@registry.example/private-token" });
+    await assert.rejects(
+      f.execute(),
+      (error: Error) =>
+        /Registry metadata unavailable.*npm exit 1.*attempt 1\/6/u.test(error.message) &&
+        !error.message.includes("secret"),
+    );
+    assert.deepEqual(f.calls, ["@test/core", "view"]);
+    assert.deepEqual(f.waits, []);
+    assert.deepEqual(f.logs, []);
+  });
+}
+
+for (const status of [404, 408, 429, 500, 502, 503, 504, 599]) {
+  test(`temporary artifact HTTP ${status} retries metadata and bytes`, async () => {
+    const f = await fixture();
+    f.status(status);
+    f.onWait(() => f.status(200));
+    await f.execute();
+    assert.deepEqual(f.calls, ["@test/core", "view", "fetch", "view", "fetch", "@test/consumer"]);
+    assert.deepEqual(f.waits, [2_000]);
+    assert.ok(f.logs[0].includes(`(${status})`));
+  });
+}
+
+for (const status of [301, 302, 400, 401, 403, 410]) {
+  test(`terminal artifact HTTP ${status} stops without retry`, async () => {
+    const f = await fixture();
+    f.status(status);
+    await assert.rejects(f.execute(), /Registry artifact unavailable/u);
+    assert.deepEqual(f.waits, []);
+    assert.ok(!f.calls.includes("@test/consumer"));
+  });
+}
+
+for (const phase of ["fetch", "body"]) {
+  for (const failure of [
+    Object.assign(new Error("private URL"), { code: "ECONNRESET" }),
+    new TypeError("private URL", { cause: { code: "UND_ERR_SOCKET" } }),
+    new DOMException("private URL", "TimeoutError"),
+  ]) {
+    test(`temporary ${phase} ${failure.name} retries without exposing errors`, async () => {
+      const f = await fixture();
+      let attempts = 0;
+      await f.execute([], async () => {
+        attempts++;
+        if (attempts > 1) return new Response(f.bytes[0]);
+        if (phase === "fetch") throw failure;
+        return {
+          ok: true,
+          arrayBuffer: async () => {
+            throw failure;
+          },
+        };
+      });
+      assert.equal(attempts, 2);
+      assert.deepEqual(f.waits, [2_000]);
+      assert.ok(!f.logs[0].includes("private URL"));
+      assert.equal(f.calls.at(-1), "@test/consumer");
+    });
+  }
+}
+
+for (const phase of ["fetch", "body"]) {
+  test(`download timeout retries when ${phase} reports AbortError`, async () => {
+    const f = await fixture();
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(controller.signal);
+    let attempts = 0;
+    try {
+      await f.execute([], async (_url: URL, options: RequestInit) => {
+        attempts++;
+        if (attempts > 1) return new Response(f.bytes[0]);
+        assert.equal(options.signal, controller.signal);
+        const abort = () => {
+          controller.abort(new DOMException("private URL", "TimeoutError"));
+          throw new DOMException("private URL", "AbortError");
+        };
+        if (phase === "fetch") abort();
+        return { ok: true, arrayBuffer: async () => abort() };
+      });
+      assert.equal(attempts, 2);
+      assert.deepEqual(f.waits, [2_000]);
+      assert.ok(!f.logs[0].includes("private URL"));
+      assert.ok(timeout.mock.calls.every(([ms]) => ms === 30_000));
+      assert.equal(f.calls.at(-1), "@test/consumer");
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+}
+
+test("retry releases an unsuccessful response body before waiting", async () => {
+  const f = await fixture();
+  let cancelled = false;
+  let attempts = 0;
+  f.onWait(() => assert.ok(cancelled));
+  await f.execute([], async () => {
+    attempts++;
+    return attempts > 1
+      ? new Response(f.bytes[0])
+      : new Response(
+          new ReadableStream({
+            cancel: () => {
+              cancelled = true;
+            },
+          }),
+          { status: 404 },
+        );
+  });
+  assert.equal(attempts, 2);
+  assert.deepEqual(f.waits, [2_000]);
+});
+
+for (const phase of ["metadata", "artifact"]) {
+  test(`exhausted ${phase} retries block consumers and clean staging with prior reports intact`, async () => {
+    const f = await fixture();
+    if (phase === "metadata") f.viewResult({ code: 1, stdout: '{"error":{"code":"E404","detail":"secret"}}' });
+    else f.status(404);
+    await assert.rejects(
+      f.execute(["--output", f.output]),
+      (error: Error) => /attempt 6\/6/u.test(error.message) && !error.message.includes("secret"),
+    );
+    assert.equal(f.calls.filter((call) => call === "view").length, 6);
+    assert.deepEqual(f.waits, Array(5).fill(2_000));
+    assert.equal(f.logs.length, 5);
+    assert.ok(f.logs.every((line) => !line.includes("secret")));
+    assert.deepEqual(f.nativePlans, [[f.releases[0]]]);
+    assert.equal((await readFile(f.output, "utf8")).trim().split("\n").length, 1);
+    await assert.rejects(readFile(path.join(f.nativeDirectories[0], "publish-plan.json")), { code: "ENOENT" });
+  });
+}
+
+test("a failed retry wait stops and removes staging before another query", async () => {
+  const f = await fixture();
+  f.status(404);
+  f.onWait(() => {
+    throw new Error("wait interrupted");
+  });
+  await assert.rejects(f.execute(), /wait interrupted/u);
+  assert.deepEqual(f.calls, ["@test/core", "view", "fetch"]);
+  assert.deepEqual(f.waits, [2_000]);
+  await assert.rejects(readFile(path.join(f.nativeDirectories[0], "publish-plan.json")), { code: "ENOENT" });
 });
 
 test("native tag suppression is forwarded unchanged", async () => {
@@ -381,6 +605,7 @@ for (const failure of [
     if (["file-url", "invalid-url", "missing-integrity", "local-mismatch"].includes(failure))
       f.metadata({ name: "@test/core", version: "2.0.0", dist });
     await assert.rejects(f.execute(["--output", f.output]));
+    assert.deepEqual(f.waits, ["metadata-404", "artifact-404"].includes(failure) ? Array(5).fill(2_000) : []);
     assert.ok(!f.calls.includes("@test/consumer"));
     const events = (await readFile(f.output, "utf8"))
       .trim()
@@ -523,7 +748,7 @@ test("runtime graph policy matches the current root config", async () => {
 });
 
 test("registry parse and fetch errors do not expose metadata or URLs", async () => {
-  for (const failure of ["json", "fetch", "body"]) {
+  for (const failure of ["json", "fetch", "body", "abort", "redirect"]) {
     const f = await fixture();
     const secret = "https://user:secret@registry.example/private-token";
     if (failure === "json") f.viewResult({ code: 0, stdout: `invalid ${secret}` });
@@ -536,10 +761,14 @@ test("registry parse and fetch errors do not expose metadata or URLs", async () 
               throw new Error(secret);
             },
           };
+        if (failure === "abort") throw new DOMException(secret, "AbortError");
+        if (failure === "redirect") throw new TypeError(secret, { cause: new Error("unexpected redirect") });
         throw new Error(secret);
       }),
       (error: Error) => !error.message.includes(secret) && /registry|Registry/u.test(error.message),
     );
+    assert.deepEqual(f.waits, []);
+    assert.ok(!f.logs.some((line) => line.includes(secret)));
   }
 });
 

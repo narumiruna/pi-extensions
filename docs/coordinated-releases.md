@@ -16,13 +16,15 @@ The guard uses the installed Changesets public runtime dependency graph, includi
 
 Before a dependent chunk, the guard queries each required internal dependency by exact name and version, downloads its registry tarball, and verifies the strongest supported Subresource Integrity (SRI) hash. When that dependency has a tarball in the packed plan, the registry bytes must also match its recorded SHA256 hash. Dependencies omitted from a retry plan, or represented by a tag-only entry, still require exact registry metadata and a verified download; they have no local packed hash to compare. A successful publish exit is not evidence of artifact availability.
 
-Missing or incorrect metadata, unavailable tarballs, hash failures, redirects, and download timeouts block dependent publication. Downloads must be readable through HTTP(S); the guard does not add registry credentials to artifact requests. The guard rejects duplicate or native-equivalent packed-directory overrides. Other arguments pass to the native CLI unchanged. Native npm authentication, provenance, tag creation, and append-only `CHANGESETS_OUTPUT` reporting remain with Changesets; the Action handles tag pushes, GitHub releases, and publication outputs.
+Temporary availability failures receive at most six attempts, with a two-second wait between attempts. Each attempt queries exact metadata again and verifies the downloaded bytes before consumers can publish. Retryable failures are npm or HTTP 404, 408, 429, and 5xx responses, recognized connection errors, and download timeouts. Authentication failures, unknown errors, malformed or incorrect metadata, invalid URLs, redirects, and hash failures stop immediately. Exhausted retries also block dependent publication. See [registry diagnostics](publish-registry-diagnostics.md) for failure output and retry limits.
+
+Downloads must be readable through HTTP(S); the guard does not add registry credentials to artifact requests. The guard rejects duplicate or native-equivalent packed-directory overrides. Other arguments pass to the native CLI unchanged. Native npm authentication, provenance, tag creation, and append-only `CHANGESETS_OUTPUT` reporting remain with Changesets; the Action handles tag pushes, GitHub releases, and publication outputs.
 
 The exact Kit release-age exception in `.npmrc` permits fresh registry resolution without weakening the three-day rule for third-party dependencies or strict install-script review. That exception does not change external users' policies.
 
 ## Failure and recovery
 
-A native publication failure or artifact-verification failure stops later chunks. Changesets can finish concurrent peers in a reached chunk before reporting failure. Successful publications reported by the CLI remain in `CHANGESETS_OUTPUT` for the Action to process. The guard does not retry registry visibility checks automatically.
+A native publication failure or artifact-verification failure stops later chunks. Changesets can finish concurrent peers in a reached chunk before reporting failure. Successful publications reported by the CLI remain in `CHANGESETS_OUTPUT` for the Action to process. The guard retries only temporary registry availability failures; it does not retry native publication or bypass artifact checks.
 
 Inspect registry versions and the failed step before retrying through the approved release workflow. A new workflow plan normally omits versions already visible in registry metadata. Required dependency artifacts are still verified. There is no custom tag recovery. Never overwrite or reuse a published version for changed contents; prepare a corrective version instead.
 
@@ -30,7 +32,7 @@ Native Action recovery has limits. Existing local or remote tags do not emit new
 
 ## Verification
 
-The workflow pins the Actions revisions; `package.json` and the lockfile define the Changesets CLI version. Offline tests cover version propagation, the native runtime graph, packed-mode argument safety, exact-artifact failures, and native artifact-command wiring. A real installed-CLI test uses fail-closed npm and Git shims plus a local HTTP server to prove partial reporting, blocked dependents, already-published results, and a successful retry without publication or tags. Mock-registry install tests cover the exact Kit age exception and unchanged third-party/script protections.
+The workflow pins the Actions revisions; `package.json` and the lockfile define the Changesets CLI version. Offline tests cover version propagation, the native runtime graph, packed-mode argument safety, exact-artifact failures, bounded readiness retries, and native artifact-command wiring. A real installed-CLI test uses fail-closed npm and Git shims plus a local HTTP server to prove delayed metadata and tarball availability, partial reporting, blocked dependents, already-published results, and a successful retry without publication or tags. Tests inject an immediate wait to preserve the normal five-second timeout. Mock-registry install tests cover the exact Kit age exception and unchanged third-party/script protections.
 
 Run the focused tests, then both repository gates:
 

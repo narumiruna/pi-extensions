@@ -1,19 +1,26 @@
 # Publication registry diagnostics
 
-The coordinated publication script reports failed registry checks with a `[registry]` prefix. Each report identifies the package and version, operation, attempt, exit code, npm error code when available, and whether execution retries or stops. It includes bounded, sanitized npm stdout and stderr. A subprocess exception reports its reason instead of an exit code.
+The packed publication guard reports each retry with a `[registry]` prefix. The message identifies the exact package and version, metadata or artifact operation, attempt number, and two-second retry delay. Metadata failures include the npm exit code and a recognized npm error code when available. Artifact HTTP failures include the status code. The final error retains the last failed operation and attempt number.
 
-The operations are `query version`, `query tarball URL`, and `download tarball`. Cancellation during a retry delay uses `retry wait`. A version-query E404 means the version is absent and publication can continue. Readiness failures retry up to six times with the existing two-second delay; E401, E403, and ENEEDAUTH stop immediately. Parsing, artifact validation, subprocess exceptions, and cancellation still stop without readiness retries.
+## Retry policy
 
-An exhausted readiness check retains the last failed operation and npm details in the final error. Packages published before that failure remain published. An unavailable-artifact message alone does not establish whether the cause was registry propagation, network failure, or another error; use the accompanying npm details.
+Each required dependency receives at most six availability attempts, with five waits of two seconds. Every attempt queries exact metadata and verifies the downloaded artifact again. The guard retries npm and artifact HTTP 404, 408, 429, and 5xx failures. It also retries recognized temporary network errors:
+
+- `ECONNRESET`, `ECONNREFUSED`, `EAI_AGAIN`, and `ETIMEDOUT`.
+- `ECONNECTIONTIMEOUT`, `EIDLETIMEOUT`, `ERESPONSETIMEOUT`, and `ETRANSFERTIMEOUT`.
+- `UND_ERR_CONNECT_TIMEOUT`, `UND_ERR_HEADERS_TIMEOUT`, `UND_ERR_BODY_TIMEOUT`, and `UND_ERR_SOCKET`.
+- Artifact `TimeoutError` failures, including the download's 30-second timeout.
+
+These are availability attempts, not a total runtime limit: npm can perform its own internal retries, and each artifact download has its own timeout. npm `view` already requests fresh metadata in the installed implementation.
+
+Authentication errors (`E401`, `E403`, and `ENEEDAUTH`), unknown failures, malformed or incorrect metadata, invalid URLs, redirects, and integrity mismatches stop without a readiness retry. Exhausted retries block dependent publication. The guard does not retry native publication commands, republish earlier chunks, or weaken exact-artifact checks.
 
 ## Output safety
 
-The script normalizes escaped JSON delimiters and whitespace, then removes terminal controls before redaction. Normalization is limited to eight passes; output with deeper unresolved escape nesting is omitted. It omits the rest of a diagnostic field after an HTTP URL, Authorization header, npm registry credential assignment, or common secret assignment because incomplete or multiline output has no reliable closing delimiter. It also redacts recognizable npm and GitHub tokens before truncating each field to 2,000 characters. It prefixes every output line to block modern GitHub Actions commands. It changes `##[` to `## [` after normalization and terminal-control removal because the legacy Actions parser accepts that prefix anywhere in a line. Each normalization pass consumes complete backslash runs, including runs without a valid escape suffix, to keep processing linear in input size. It does not dump environment variables, npm configuration, or command arguments. Sanitization applies only to diagnostics and does not modify subprocess input or artifact validation.
-
-Free-form provider output can contain sensitive values in unknown formats. Do not use logs as a credential store or add raw configuration dumps to diagnose failures. Successful registry responses are not printed.
+Registry-check diagnostics report only recognized npm error codes, numeric exit codes or HTTP statuses, package identities, and attempt counts. They do not print captured npm stdout or stderr, registry metadata, artifact URLs, or exception details from downloads. Unknown npm errors retain the exit code without exposing arbitrary error fields. Successful registry responses are not printed. Native Changesets publication keeps its normal output. The original npm output from run `41465301437` is not available, so its precise registry failure cannot be reconstructed.
 
 ## Verification and release restriction
 
-Deterministic tests use fake npm and git executables to cover failure attribution, retries, authentication stops, invalid responses, artifact checks, subprocess exceptions, cancellation, output safety, and cleanup. They do not publish registry packages or create real Git tags.
+Deterministic tests cover delayed metadata and tarballs, terminal failures, retry exhaustion, output safety, response-body release, temporary-directory cleanup, and retained native reports. An installed-CLI fixture uses fail-closed npm and Git shims with a local HTTP server. Tests inject an immediate wait and do not publish registry packages or create real Git tags.
 
-The repository maintainer can inspect these diagnostics in the next separately authorized publish workflow after merge. Normal release approval and existing registry authentication are prerequisites. The expected result is a failure report that identifies the operation and sanitized npm error. Live registry timing, hosted-runner behavior, and actual credential-bearing provider errors remain unverified locally. No publication, version tag, or release workflow dispatch is authorized by this diagnostic change. The missing npm output from run `40076038982`, job `120821397527`, cannot be reconstructed from its existing log.
+The repository maintainer must approve any live publication or release workflow dispatch. Normal release approval and existing npm Trusted Publishing configuration are prerequisites. A later approved release must verify hosted-runner registry timing and OIDC publication. Those behaviors and real GitHub tag/release creation remain unverified locally. Inspect versions, tags, releases, and the failed step before recovery; packages published before a failure remain published. No live publication, version tag, or release workflow dispatch is authorized by this tooling change.

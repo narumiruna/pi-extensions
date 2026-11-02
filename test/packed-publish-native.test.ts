@@ -72,9 +72,11 @@ async function fixture() {
     );
   await save();
   let available = false;
+  let unavailableRequests = Number.POSITIVE_INFINITY;
   const requests: string[] = [];
   const server = createServer((request, response) => {
     requests.push(request.url ?? "");
+    if (requests.length > unavailableRequests) available = true;
     response.writeHead(available && request.url === "/core.tgz" ? 200 : 404);
     response.end(available ? bytes[0] : "not yet available");
   });
@@ -104,8 +106,17 @@ try {
   if (tool === 'npm' && args[0] === 'view') {
     assert.deepEqual(args, ['view', '@test/core@2.0.0', '--json']);
     assert.equal(process.cwd(), root);
-    log({ result: 'metadata' });
-    console.log(JSON.stringify(${JSON.stringify(metadata)}));
+    const pendingPath = path.join(root, 'metadata-pending');
+    const pending = fs.existsSync(pendingPath) ? Number(fs.readFileSync(pendingPath, 'utf8')) : 0;
+    if (pending > 0) {
+      fs.writeFileSync(pendingPath, String(pending - 1));
+      log({ result: 'metadata-pending' });
+      console.log(JSON.stringify({ error: { code: 'E404' } }));
+      process.exitCode = 1;
+    } else {
+      log({ result: 'metadata' });
+      console.log(JSON.stringify(${JSON.stringify(metadata)}));
+    }
   } else if (tool === 'npm' && args[0] === 'publish') {
     const index = ['0', '1'].indexOf(path.basename(process.cwd()));
     assert.notEqual(index, -1);
@@ -169,7 +180,7 @@ try {
       await new Promise(resolve => process.once('message', resolve));
       process.disconnect();
       const { publishPackedPackages } = await import(${JSON.stringify(guard)});
-      try { await publishPackedPackages(${JSON.stringify(["--from-pack-dir", pack])}); }
+      try { await publishPackedPackages(${JSON.stringify(["--from-pack-dir", pack])}, { wait: async () => {} }); }
       catch (error) { console.error(error.message); process.exitCode = 1; }
     `,
       ],
@@ -224,6 +235,10 @@ try {
     calls,
     events,
     requests,
+    delayMetadata: (attempts: number) => writeFile(path.join(cwd, "metadata-pending"), String(attempts)),
+    availableAfterRequests: (count: number) => {
+      unavailableRequests = count;
+    },
     available: () => {
       available = true;
     },
@@ -248,7 +263,7 @@ test("actual native publish reports core, blocks on missing bytes, and retries t
       (await f.calls()).filter((call) => call.args[0] === "publish").map((call) => [call.name, call.result]),
       [["@test/core", "published"]],
     );
-    assert.deepEqual(f.requests, ["/core.tgz"]);
+    assert.deepEqual(f.requests, Array(6).fill("/core.tgz"));
     f.available();
     const retry = await f.execute();
     assert.equal(retry.code, 0, retry.output);
@@ -266,7 +281,32 @@ test("actual native publish reports core, blocks on missing bytes, and retries t
       ],
     );
     assert.equal(calls.filter((call) => call.result === "tag-acknowledged").length, 2);
-    assert.deepEqual(f.requests, ["/core.tgz", "/core.tgz"]);
+    assert.deepEqual(f.requests, Array(7).fill("/core.tgz"));
+  } finally {
+    await f.close();
+  }
+});
+
+test("actual native publish waits for metadata and tarball propagation within one run", async () => {
+  const f = await fixture();
+  try {
+    await f.delayMetadata(2);
+    f.availableAfterRequests(2);
+    const result = await f.execute();
+    assert.equal(result.code, 0, result.output);
+    assert.deepEqual(
+      (await f.events()).map((event) => event.packageName),
+      ["@test/core", "@test/consumer"],
+    );
+    const calls = await f.calls();
+    assert.deepEqual(
+      calls.filter((call) => call.args[0] === "publish").map((call) => call.name),
+      ["@test/core", "@test/consumer"],
+    );
+    assert.equal(calls.filter((call) => call.result === "metadata-pending").length, 2);
+    assert.equal(calls.filter((call) => call.result === "metadata").length, 3);
+    assert.equal(result.output.match(/retrying in 2000 ms/gu)?.length, 4);
+    assert.deepEqual(f.requests, Array(3).fill("/core.tgz"));
   } finally {
     await f.close();
   }

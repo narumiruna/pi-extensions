@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import semver from "semver";
 
@@ -14,6 +15,33 @@ const cliRequire = createRequire(cli);
 const { getPackages } = await import(cliRequire.resolve("@manypkg/get-packages"));
 const { getDependentsGraph } = await import(cliRequire.resolve("@changesets/get-dependents-graph"));
 const digest = (bytes, algorithm) => createHash(algorithm).update(bytes).digest("base64");
+const availabilityAttempts = 6;
+const availabilityDelay = 2_000;
+const networkCodes = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ECONNECTIONTIMEOUT",
+  "EIDLETIMEOUT",
+  "ERESPONSETIMEOUT",
+  "ETRANSFERTIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+class RegistryUnavailableError extends Error {
+  constructor(message, retryable) {
+    super(message);
+    this.retryable = retryable;
+  }
+}
+
+const retryableStatus = (status) => [404, 408, 429].includes(status) || (status >= 500 && status < 600);
+const retryableNetworkError = (error) =>
+  error?.name === "TimeoutError" || networkCodes.has(error?.code) || networkCodes.has(error?.cause?.code);
 
 function runChild(command, args, { cwd, capture = false }) {
   return new Promise((resolve, reject) => {
@@ -81,7 +109,13 @@ function verifyRegistryIntegrity(bytes, integrity) {
 
 export async function publishPackedPackages(
   args,
-  { cwd = process.cwd(), run = runChild, fetch: fetchArtifact = globalThis.fetch } = {},
+  {
+    cwd = process.cwd(),
+    run = runChild,
+    fetch: fetchArtifact = globalThis.fetch,
+    wait = delay,
+    log = console.error,
+  } = {},
 ) {
   const { packDir, forwarded } = parseArgs(args);
   const artifactDir = await realpath(path.resolve(cwd, packDir));
@@ -156,11 +190,25 @@ export async function publishPackedPackages(
     chunks.push(chunk);
     for (const release of chunk) remaining.delete(release.name);
   }
-  async function verifyAvailable(name) {
+  async function verifyArtifact(name) {
     const manifest = manifests.get(name);
     const exact = `${name}@${manifest.version}`;
     const result = await run("npm", ["view", exact, "--json"], { cwd, capture: true });
-    if (result.code !== 0) throw new Error(`Registry metadata unavailable: ${exact}`);
+    if (result.code !== 0) {
+      let code;
+      try {
+        code = JSON.parse(result.stdout)?.error?.code;
+      } catch {
+        // Unknown npm failures stop without printing potentially credential-bearing output.
+      }
+      const status = typeof code === "string" && /^E\d{3}$/u.test(code) ? Number(code.slice(1)) : undefined;
+      const retryable = retryableStatus(status) || networkCodes.has(code);
+      const knownCode = retryable || ["E401", "E403", "ENEEDAUTH"].includes(code) ? `, ${code}` : "";
+      throw new RegistryUnavailableError(
+        `Registry metadata unavailable: ${exact} (npm exit ${result.code}${knownCode})`,
+        retryable,
+      );
+    }
     let metadata;
     try {
       metadata = JSON.parse(result.stdout);
@@ -175,25 +223,59 @@ export async function publishPackedPackages(
     ) {
       throw new Error(`Invalid registry metadata: ${exact}`);
     }
+    let url;
+    try {
+      url = new URL(metadata.dist.tarball);
+      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Invalid protocol");
+    } catch {
+      throw new Error(`Invalid registry artifact URL: ${exact}`);
+    }
+    const signal = AbortSignal.timeout(30_000);
     let response;
     try {
-      const url = new URL(metadata.dist.tarball);
-      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Invalid protocol");
-      response = await fetchArtifact(url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
-    } catch {
-      throw new Error(`Registry artifact unavailable: ${exact}`);
+      response = await fetchArtifact(url, { redirect: "error", signal });
+    } catch (error) {
+      throw new RegistryUnavailableError(
+        `Registry artifact unavailable: ${exact}`,
+        signal.aborted || retryableNetworkError(error),
+      );
     }
-    if (!response.ok) throw new Error(`Registry artifact unavailable: ${exact} (${response.status})`);
+    if (!response.ok) {
+      // Release error response bodies before another attempt opens a connection.
+      await response.body?.cancel().catch(() => {});
+      throw new RegistryUnavailableError(
+        `Registry artifact unavailable: ${exact} (${response.status})`,
+        retryableStatus(response.status),
+      );
+    }
     let bytes;
     try {
       bytes = Buffer.from(await response.arrayBuffer());
-    } catch {
-      throw new Error(`Registry artifact unavailable: ${exact}`);
+    } catch (error) {
+      // Node can surface a timed-out body read as AbortError rather than TimeoutError.
+      throw new RegistryUnavailableError(
+        `Registry artifact unavailable: ${exact}`,
+        signal.aborted || retryableNetworkError(error),
+      );
     }
     verifyRegistryIntegrity(bytes, metadata.dist.integrity);
     const release = releases.get(name);
     if (artifacts.has(name) && release.tarball.integrity !== `sha256-${digest(bytes, "sha256")}`) {
       throw new Error(`Registry artifact differs from packed artifact: ${exact}`);
+    }
+  }
+  async function verifyAvailable(name) {
+    for (let attempt = 1; attempt <= availabilityAttempts; attempt++) {
+      try {
+        await verifyArtifact(name);
+        return;
+      } catch (error) {
+        if (!(error instanceof RegistryUnavailableError)) throw error;
+        const message = `${error.message} (attempt ${attempt}/${availabilityAttempts})`;
+        if (!error.retryable || attempt === availabilityAttempts) throw new Error(message);
+        log(`[registry] ${message}; retrying in ${availabilityDelay} ms`);
+        await wait(availabilityDelay);
+      }
     }
   }
   const staging = await mkdtemp(path.join(os.tmpdir(), "changeset-guard-"));
