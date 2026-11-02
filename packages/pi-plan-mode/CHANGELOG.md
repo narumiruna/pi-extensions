@@ -1,5 +1,13 @@
 # @narumitw/pi-plan-mode
 
+## 0.59.5
+
+### Patch Changes
+
+- 9d3e0d7: Prevent passive UI timers from keeping Node alive while preserving status expiry, settings reloads, paste handling, and cleanup.
+- Updated dependencies [9d3e0d7]
+  - @narumitw/pi-tui-kit@0.68.1
+
 ## 0.59.4
 
 ### Patch Changes

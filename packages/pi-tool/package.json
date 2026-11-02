@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-tool",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Browse configured Pi tools and optionally show the active tool set.",
   "type": "module",
   "license": "MIT",
@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.60.0"
+    "@narumitw/pi-tui-kit": "^0.68.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

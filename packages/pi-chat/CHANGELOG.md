@@ -1,5 +1,13 @@
 # @narumitw/pi-chat
 
+## 0.1.10
+
+### Patch Changes
+
+- 9d3e0d7: Allow Pi to exit while inactivity reminders, early Chat discovery refreshes, acknowledged Herdr subscriptions, or Fleet listeners are idle. Preserve active request sockets, message delivery, cancellation, and cleanup.
+- Updated dependencies [9d3e0d7]
+  - @narumitw/pi-tui-kit@0.68.1
+
 ## 0.1.9
 
 ### Patch Changes
