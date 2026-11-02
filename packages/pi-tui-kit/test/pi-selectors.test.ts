@@ -578,6 +578,43 @@ test("thinking selector named cycle key emits Shift+Tab", async () => {
   assert.deepEqual(await running, { kind: "selected", level: "low" });
 });
 
+test("selector paste-prefix Node timers are unreferenced and cancel on paste completion and disposal", async () => {
+  const tui = createTuiHarness();
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = runThinkingSelector(context.ctx, {
+    availableLevels: ["off", "low"],
+    currentLevel: "off",
+  });
+  await tui.waitForOpen();
+  const timeout = vi.spyOn(globalThis, "setTimeout");
+  const clear = vi.spyOn(globalThis, "clearTimeout");
+  try {
+    tui.send("\u001b[");
+    const first = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(first);
+    assert.equal(first.hasRef(), false);
+    tui.send("200~low\u001b[201~");
+    assert.ok(clear.mock.calls.some(([handle]) => handle === first));
+    assert.equal(tui.isOpen, true);
+    assert.match(tui.render().join("\n"), /low/u);
+
+    tui.send("\u001b[");
+    const second = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(second);
+    assert.notEqual(second, first);
+    assert.equal(second.hasRef(), false);
+    tui.dispose();
+    tui.dispose();
+    assert.deepEqual(await running, { kind: "stale" });
+    assert.equal(clear.mock.calls.filter(([handle]) => handle === second).length, 1);
+  } finally {
+    tui.dispose();
+    await running;
+    timeout.mockRestore();
+    clear.mockRestore();
+  }
+});
+
 test("thinking selector keeps every split paste-start boundary ahead of shortcuts", async () => {
   const pasteStart = "\x1b[200~";
   for (let split = 1; split < pasteStart.length; split += 1) {

@@ -524,6 +524,7 @@ function renderStatus(
     branchWatch.expiryTimer = undefined;
     if (generation === branchWatch.generation) clearStatus(ctx);
   }, expiresAt - now);
+  branchWatch.expiryTimer.unref();
 }
 
 export function isPullRequestVisible(status: PullRequestStatus, now = Date.now()): boolean {

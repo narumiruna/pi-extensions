@@ -278,6 +278,7 @@ class TemplateEditor implements Component, Focusable {
     }
     if (this.pasteTailTimer) clearTimeout(this.pasteTailTimer);
     this.pasteTailTimer = setTimeout(() => this.flushPendingPasteInputs(), PASTE_TAIL_GUARD_MS);
+    this.pasteTailTimer.unref?.();
   }
 
   private flushPendingPasteInputs(): void {

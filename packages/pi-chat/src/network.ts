@@ -94,6 +94,7 @@ export class HyperswarmTransport implements ChatTransport {
             if (this.discovery === discovery) schedule(index + 1);
           });
       }, delayMs);
+      timer.unref();
       this.refreshTimers.add(timer);
     };
     schedule(0);

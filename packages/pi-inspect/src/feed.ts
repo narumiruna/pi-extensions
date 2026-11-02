@@ -85,6 +85,7 @@ export class SessionFeed {
         this.changed(true);
       } // Context failures must not escape a timer callback.
     }, 1000);
+    this.poll.unref();
     this.options.signal.addEventListener("abort", this.close, { once: true });
   }
   changed(structural: boolean): void {
@@ -93,11 +94,13 @@ export class SessionFeed {
       this.dirty = true;
       this.indexed = undefined;
     }
-    if (!this.notification)
+    if (!this.notification) {
       this.notification = setTimeout(() => {
         this.notification = undefined;
         if (!this.options.signal.aborted) this.options.invalidate(++this.revision);
       }, 250);
+      this.notification.unref();
+    }
   }
   snapshot(): Snapshot {
     if (this.closed || this.options.signal.aborted) throw new Error("Inspector stopped");

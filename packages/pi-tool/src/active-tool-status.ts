@@ -59,6 +59,7 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
     refreshTimer = setInterval(() => {
       if (ownsSession(ctx)) publish(ctx);
     }, ACTIVE_TOOL_REFRESH_INTERVAL_MS);
+    refreshTimer.unref();
   };
 
   return {

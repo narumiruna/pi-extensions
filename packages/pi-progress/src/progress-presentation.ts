@@ -138,6 +138,7 @@ export function createProgressPresentation(options: {
       hidden = true;
       publish();
     }, COMPLETION_SUMMARY_MS);
+    timer.unref?.();
   };
   let lastPinned = false;
   const view = createEditorStatusView({

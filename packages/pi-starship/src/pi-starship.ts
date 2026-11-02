@@ -192,6 +192,7 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
       eventDebounceTimer = undefined;
       requestRefresh(target);
     }, EVENT_DEBOUNCE_MS);
+    eventDebounceTimer.unref();
   };
 
   function restartLocalControllers(target: RefreshTarget) {
@@ -372,6 +373,7 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
               tui.requestRender();
           }, REFRESH_INTERVAL_MS)
         : undefined;
+      timer?.unref();
       let disposed = false;
 
       const dispose = () => {

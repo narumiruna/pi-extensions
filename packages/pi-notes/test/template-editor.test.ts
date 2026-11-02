@@ -10,7 +10,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { TemplateSnapshot } from "../src/storage.js";
 import { showTemplateEditor } from "../src/template-editor.js";
@@ -449,6 +449,42 @@ test("template editor honors configured submit and newline keys while Ctrl+C rem
     await cancelTui.waitForOpen();
     cancelTui.send(cancelInput);
     assert.equal(await cancelled, undefined);
+  }
+});
+
+test("paste-tail Node timers are unreferenced after creation and rearming and cancel on disposal", async () => {
+  const tui = createTuiHarness({ width: 60, rows: 20 });
+  const context = editorContext(tui);
+  const controller = new AbortController();
+  const editing = showTemplateEditor(context.ctx, snapshot("unchanged"), {
+    signal: controller.signal,
+    isCurrent: () => true,
+  });
+  await tui.waitForOpen();
+  const timeout = vi.spyOn(globalThis, "setTimeout");
+  const clear = vi.spyOn(globalThis, "clearTimeout");
+  try {
+    tui.send("\u001b[200~pending\u001b[201~");
+    const first = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(first);
+    assert.equal(first.hasRef(), false);
+    tui.send("tail");
+    const second = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(second);
+    assert.notEqual(second, first);
+    assert.equal(second.hasRef(), false);
+    assert.ok(clear.mock.calls.some(([handle]) => handle === first));
+
+    tui.dispose();
+    tui.dispose();
+    assert.equal(await editing, undefined);
+    assert.equal(clear.mock.calls.filter(([handle]) => handle === second).length, 1);
+    assert.equal(tui.isOpen, false);
+  } finally {
+    controller.abort();
+    await editing;
+    timeout.mockRestore();
+    clear.mockRestore();
   }
 });
 

@@ -90,6 +90,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
     const timeout = setTimeout(() => {
       controller.abort(new QuoteRequestTimeoutError());
     }, REQUEST_TIMEOUT_MS);
+    timeout.unref();
     try {
       const results = await fetchQuotes(symbols, controller.signal);
       if (!ownsSession(ctx, expectedGeneration) || expectedCycle !== cycleVersion) return;
@@ -131,6 +132,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
     void runCycle(ctx, expectedGeneration, expectedCycle).finally(() => {
       if (!ownsSession(ctx, expectedGeneration) || expectedCycle !== cycleVersion) return;
       pollTimer = setTimeout(() => startCycle(ctx, expectedGeneration), POLL_INTERVAL_MS);
+      pollTimer.unref();
     });
   };
 

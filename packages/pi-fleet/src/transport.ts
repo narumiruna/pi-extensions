@@ -393,6 +393,7 @@ export class FleetTransport {
     this.server = server;
     this.paths = paths;
     await listenSocketServer(server, paths.socketPath, signal);
+    server.unref();
     this.ownsEndpointFiles = true;
     await chmod(paths.socketPath, 0o600);
     throwIfAborted(signal, "Pi Fleet transport start aborted");

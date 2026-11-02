@@ -408,6 +408,7 @@ export class NotePicker implements Component, Focusable {
       this.pasteStartBuffer = "";
       if (!this.disposed && !this.completed && pending) this.handleNonPasteInput(pending);
     }, INPUT_PREFIX_TIMEOUT_MS);
+    this.pasteStartTimer.unref?.();
   }
 
   private flushPasteBuffer(): void {

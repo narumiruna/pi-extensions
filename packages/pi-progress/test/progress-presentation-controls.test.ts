@@ -32,6 +32,25 @@ function setup(mode: "tui" | "rpc" | "print" | "json" = "tui") {
 
 afterEach(() => vi.useRealTimers());
 
+test("completion expiry uses an unreferenced Node timer and still cancels on disposal", () => {
+  const timeout = vi.spyOn(globalThis, "setTimeout");
+  const clear = vi.spyOn(globalThis, "clearTimeout");
+  const { presentation } = setup();
+  try {
+    presentation.update(complete, DEFAULT_PROGRESS_SETTINGS, true);
+    const handle = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(handle);
+    assert.equal(handle.hasRef(), false);
+    presentation.dispose();
+    presentation.dispose();
+    assert.equal(clear.mock.calls.filter(([timer]) => timer === handle).length, 1);
+  } finally {
+    presentation.dispose();
+    timeout.mockRestore();
+    clear.mockRestore();
+  }
+});
+
 test("ordinary and completion updates retain the mounted instance and sibling position", async () => {
   vi.useFakeTimers();
   const harness = createHarness();
