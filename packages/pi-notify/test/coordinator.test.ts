@@ -40,6 +40,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await Promise.all(coordinators.splice(0).map((value) => value.close()));
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -189,6 +190,56 @@ it("applies policy changes only to subsequent work periods", async () => {
   await vi.advanceTimersByTimeAsync(0);
   expect(send).toHaveBeenCalledTimes(2);
 });
+it("uses an unreferenced native inactivity timer without suppressing delivery", async () => {
+  vi.useRealTimers();
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const { coordinator, send, settings } = setup("after-inactivity");
+  coordinator.apply({ ...settings, inactivitySeconds: 0.02 });
+  let delivered!: () => void;
+  const delivery = new Promise<void>((resolve) => {
+    delivered = resolve;
+  });
+  send.mockImplementationOnce(async () => {
+    delivered();
+    return { state: "accepted" };
+  });
+  coordinator.begin();
+  coordinator.settle(false, info);
+  const timer = timers.mock.results[0]?.value as NodeJS.Timeout;
+  expect(timer.hasRef()).toBe(false);
+  await Promise.resolve();
+  expect(send).not.toHaveBeenCalled();
+  // Keep the callback's deadline check deterministic while using a native timer.
+  vi.spyOn(Date, "now").mockReturnValue(coordinator.pendingAt as number);
+  await delivery;
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(coordinator.pendingAt).toBeUndefined();
+  await coordinator.close();
+  await coordinator.close();
+});
+
+it.each(["input", "new-work", "settings", "close"])("clears the native inactivity timer on %s", async (cause) => {
+  vi.useRealTimers();
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const clear = vi.spyOn(globalThis, "clearTimeout");
+  const { coordinator, send, metadata, settings } = setup("after-inactivity");
+  coordinator.begin();
+  coordinator.settle(false, info);
+  const timer = timers.mock.results[0]?.value as NodeJS.Timeout;
+  const signal = metadata.mock.calls[0]?.[1] as AbortSignal;
+  expect(timer.hasRef()).toBe(false);
+  if (cause === "input") coordinator.input("x");
+  if (cause === "new-work") coordinator.begin(true);
+  if (cause === "settings") coordinator.apply(settings);
+  if (cause === "close") await coordinator.close();
+  expect(clear).toHaveBeenCalledWith(timer);
+  expect(signal.aborted).toBe(true);
+  expect(coordinator.pendingAt).toBeUndefined();
+  await coordinator.close();
+  await coordinator.close();
+  expect(send).not.toHaveBeenCalled();
+});
+
 it("guards metadata continuations when user returns or new work starts", async () => {
   const { coordinator, send, metadata } = setup();
   let finish: ((value: Notification) => void) | undefined;

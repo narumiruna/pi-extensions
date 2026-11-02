@@ -161,6 +161,7 @@ function mockConnections() {
   vi.spyOn(net, "createConnection").mockImplementation(() => {
     const socket = new EventEmitter() as net.Socket;
     socket.write = vi.fn(() => true);
+    socket.unref = vi.fn(() => socket);
     socket.destroy = vi.fn(() => {
       socket.emit("close");
       return socket;
@@ -218,6 +219,7 @@ test("parses a response fragmented at every byte and waits for its newline", asy
   socket.emit("connect");
   socket.emit("data", Buffer.from("{bad}\n"));
   assert.equal(vi.mocked(socket.write).mock.calls.length, 1);
+  assert.equal(vi.mocked(socket.unref).mock.calls.length, 0);
   assertReleased(socket, controller.signal);
 });
 
@@ -292,6 +294,7 @@ test.each(["timeout", "abort", "end", "close", "error"] as const)(
     socket.emit("end");
     controller.abort();
     assert.equal(vi.mocked(socket.write).mock.calls.length, 0);
+    assert.equal(vi.mocked(socket.unref).mock.calls.length, 0);
     assertReleased(socket, controller.signal);
   },
 );
@@ -435,16 +438,30 @@ test("buffers pre-ack events, ignores unrelated IDs, and drains fragmented and c
   const sockets = mockConnections();
   const controller = trackedController();
   const events: unknown[] = [];
-  const pending = openHerdrSubscription("mock", subscriptionRequest, controller.signal, (value) => events.push(value));
+  const order: string[] = [];
+  const pending = openHerdrSubscription("mock", subscriptionRequest, controller.signal, (value) => {
+    order.push("event");
+    events.push(value);
+    assert.equal(vi.getTimerCount(), 0);
+  });
   const socket = sockets[0];
+  vi.mocked(socket.unref).mockImplementation(() => {
+    order.push("unref");
+    return socket;
+  });
+  socket.emit("connect");
+  assert.equal(vi.mocked(socket.write).mock.calls[0][0], `${JSON.stringify(subscriptionRequest)}\n`);
+  assert.equal(vi.mocked(socket.unref).mock.calls.length, 0);
   socket.emit("data", frame({ id: "other", error: { code: "invalid_request", message: "unrelated" } }));
   socket.emit("data", frame(event));
   const ack = frame(subscriptionAck);
   for (const byte of ack.subarray(0, -1)) socket.emit("data", Buffer.from([byte]));
   assert.deepEqual(events, []);
+  assert.equal(vi.mocked(socket.unref).mock.calls.length, 0);
   socket.emit("data", Buffer.concat([Buffer.from("\n"), frame(event), frame({ id: "other", result: {} })]));
   const subscription = await pending;
   assert.deepEqual(events, [event, event]);
+  assert.deepEqual(order, ["unref", "event", "event"]);
   subscription.close();
   subscription.close();
   controller.abort();
@@ -509,6 +526,7 @@ test.each(["timeout", "abort", "close", "error", "bad ack", "too many events"] a
     socket.emit("connect");
     socket.emit("data", Buffer.concat([frame(subscriptionAck), frame(event)]));
     assert.deepEqual(events, []);
+    assert.equal(vi.mocked(socket.unref).mock.calls.length, 0);
     assertReleased(socket, controller.signal);
   },
 );

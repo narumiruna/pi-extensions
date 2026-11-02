@@ -455,6 +455,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       settingsReloadTimer = undefined;
       void applyPlanModeSettings(generation, currentSessionContext, false);
     }, 75);
+    settingsReloadTimer.unref?.();
   };
 
   const startPlanModeSettingsWatch = (generation: number) => {

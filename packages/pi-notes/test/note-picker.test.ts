@@ -372,6 +372,35 @@ test("Escape returns Back and Ctrl+C remains a hard Close under remapped cancell
   assert.deepEqual(close.result(), { kind: "close", selectedPath: "one.md" });
 });
 
+test("paste-prefix Node timers are unreferenced and canceled by paste completion and disposal", () => {
+  const timeout = vi.spyOn(globalThis, "setTimeout");
+  const clear = vi.spyOn(globalThis, "clearTimeout");
+  const { picker, result } = createPicker([note("one.md")]);
+  try {
+    picker.handleInput("\u001b[");
+    const first = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(first);
+    assert.equal(first.hasRef(), false);
+    picker.handleInput("200~one\u001b[201~");
+    assert.ok(clear.mock.calls.some(([handle]) => handle === first));
+    assert.equal(result(), undefined);
+
+    picker.handleInput("\u001b[");
+    const second = timeout.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+    assert.ok(second);
+    assert.notEqual(second, first);
+    assert.equal(second.hasRef(), false);
+    picker.dispose();
+    picker.dispose();
+    assert.equal(clear.mock.calls.filter(([handle]) => handle === second).length, 1);
+    assert.equal(result(), undefined);
+  } finally {
+    picker.dispose();
+    timeout.mockRestore();
+    clear.mockRestore();
+  }
+});
+
 test("disposing clears a buffered paste prefix without dispatching it", () => {
   vi.useFakeTimers();
   const { picker, result } = createPicker([note("one.md")]);

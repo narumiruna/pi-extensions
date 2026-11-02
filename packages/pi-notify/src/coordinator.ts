@@ -95,7 +95,10 @@ export class Coordinator {
         : now;
     const pending: Pending = { work, dueAt, controller: new AbortController() };
     this.pending = pending;
-    if (dueAt > now) pending.timer = setTimeout(() => this.trySend(pending), dueAt - now);
+    if (dueAt > now) {
+      pending.timer = setTimeout(() => this.trySend(pending), dueAt - now);
+      pending.timer.unref?.();
+    }
     const task = this.metadata({ ...data, ...work, settledAt: now }, pending.controller.signal)
       .then((notification) => {
         if (this.pending !== pending || !this.alive || pending.controller.signal.aborted) return;

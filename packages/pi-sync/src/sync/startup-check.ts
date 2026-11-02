@@ -69,6 +69,7 @@ export function createStartupCheck(
         () => controller.abort(new DOMException("Startup check timed out", "TimeoutError")),
         timeoutMs,
       );
+      timer.unref();
       let config: AnySyncConfig | undefined;
       let checking = false;
       let stopped = false;

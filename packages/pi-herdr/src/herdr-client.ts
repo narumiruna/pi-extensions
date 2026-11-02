@@ -242,6 +242,7 @@ export async function openHerdrSubscription(
             }
             ready = true;
             clearTimeout(timeout);
+            socket.unref();
             resolveReady();
             for (const event of pendingEvents.splice(0)) deliver(event);
             continue;

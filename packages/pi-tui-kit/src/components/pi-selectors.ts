@@ -179,6 +179,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
         pasteStartBuffer = "";
         if (!disposed && pending) handleNonPasteInput(pending);
       }, INPUT_PREFIX_TIMEOUT_MS);
+      pasteStartTimer.unref?.();
     }
   }
 

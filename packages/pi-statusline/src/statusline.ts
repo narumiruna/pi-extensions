@@ -126,6 +126,7 @@ export default function statusline(pi: ExtensionAPI) {
       gitStatusDebounceTimer = undefined;
       runGitStatusRefresh(cwd, generation, requestId);
     }, GIT_STATUS_EVENT_DEBOUNCE_MS);
+    gitStatusDebounceTimer.unref();
   };
 
   const scheduleGitStatusRefreshForContext = (ctx: ExtensionContext) => {
@@ -168,6 +169,7 @@ export default function statusline(pi: ExtensionAPI) {
         refreshFooterGitStatus();
         tui.requestRender();
       }, GIT_STATUS_REFRESH_INTERVAL_MS);
+      clock.unref();
 
       return {
         dispose() {
