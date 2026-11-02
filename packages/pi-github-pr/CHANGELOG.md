@@ -1,5 +1,11 @@
 # @narumitw/pi-github-pr
 
+## 0.49.9
+
+### Patch Changes
+
+- 9d3e0d7: Unreference passive refresh, debounce, expiry, and background startup timers so they do not keep the host process alive when other work has stopped. Keep normal cancellation and resource cleanup unchanged.
+
 ## 0.49.8
 
 ### Patch Changes

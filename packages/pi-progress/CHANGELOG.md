@@ -2,6 +2,14 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.7.1
+
+### Patch Changes
+
+- 9d3e0d7: Prevent passive UI timers from keeping Node alive while preserving status expiry, settings reloads, paste handling, and cleanup.
+- Updated dependencies [9d3e0d7]
+  - @narumitw/pi-tui-kit@0.68.1
+
 ## 0.7.0
 
 ### Minor Changes

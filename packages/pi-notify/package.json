@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-notify",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Multi-provider notifications when Pi settles, with optional inactivity reminders.",
   "type": "module",
   "license": "MIT",
@@ -42,7 +42,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.65.6"
+    "@narumitw/pi-tui-kit": "^0.68.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

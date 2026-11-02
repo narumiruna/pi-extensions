@@ -1,5 +1,13 @@
 # @narumitw/pi-notes
 
+## 0.2.4
+
+### Patch Changes
+
+- 9d3e0d7: Prevent passive UI timers from keeping Node alive while preserving status expiry, settings reloads, paste handling, and cleanup.
+- Updated dependencies [9d3e0d7]
+  - @narumitw/pi-tui-kit@0.68.1
+
 ## 0.2.3
 
 ### Patch Changes
