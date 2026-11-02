@@ -39,3 +39,7 @@ They do not resolve virtual-model or sibling-model authorization headers, call t
 The listing provider need not have a physical sibling model.
 `Current` therefore means this configured provider account, not proof of the model or account that the router will dispatch next.
 A router can select another provider or a target with different credentials; the extension does not infer or aggregate those accounts.
+
+Virtual-model support is verified with synthetic credentials in deterministic Pi runtime tests for TUI, RPC, statusline, and read-only API queries.
+Live macOS arm64 coverage with a private virtual router remains unverified.
+After installing the fix, an account owner can compare `/usage` and the statusline with a physical-model session using the same configured provider account.
