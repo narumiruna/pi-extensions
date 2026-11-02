@@ -96,6 +96,7 @@ The [provider index](./docs/providers/README.md) lists supported providers and l
 ## 🧭 Current and configured accounts
 
 `Current` identifies the provider and credential used by Pi's selected model.
+For [Z.AI virtual selections](./docs/providers/zai.md#virtual-models), it identifies the configured listing provider's account, not the router's dispatched account.
 `Configured` identifies runtime auth for another supported provider, not an active provider.
 
 The extension selects one provider target for one query and never flattens targets into provider rows or aggregates every visible target.
