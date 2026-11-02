@@ -5,7 +5,7 @@
 - Provider ID: `zai` and `zai-coding-cn`
 - Semantics: GLM Coding Plan quota windows—the rolling 5-hour and weekly plan-usage windows plus the monthly MCP allowance
 - Source: the undocumented `GET {origin}/api/monitor/usage/quota/limit` endpoint also used by Z.AI's official coding plugin, plus the undocumented `GET {origin}/api/biz/subscription/list` plan endpoint
-- Allowed origins: the model base URL must resolve to `https://api.z.ai` or `https://open.bigmodel.cn`
+- Allowed origins: `https://api.z.ai` for `zai`, and `https://open.bigmodel.cn` for `zai-coding-cn`
 - Displayed data: explicit used and remaining values, reset times, provider-reported per-tool MCP details, and the plan name with its renewal date
 - Percentage-only windows remain percent-based
 - Statusline: publishes remaining plan percentages such as `zai 87% ↻ 2h30m · 76% ↻ 6d`, with static fallback `zai 5h:87% · wk:76%`; monthly MCP details remain available through `/usage`
@@ -27,3 +27,19 @@ The plan endpoint only contributes the plan name and renewal date; when it is un
 Only the official `api.z.ai` and `open.bigmodel.cn` origins are queried; other origins fail before sending the credential.
 
 Statusline usage refreshes every five minutes while the selected model remains on Z.AI. Monthly MCP details remain in `/usage` rather than the compact status.
+
+## Virtual models
+
+A Pi virtual model registered under `zai` or `zai-coding-cn` can report the configured listing provider's account quota through `/usage`, the statusline, and the read-only usage API.
+Pi gives virtual catalog entries an empty model base URL; the extension validates the configured provider origin and any request-time auth origin instead.
+A missing, malformed, custom, or wrong-region provider origin remains authentication unavailable, even if an official physical model is also registered.
+
+Virtual quota queries use only the listing provider's resolved credentials.
+They do not resolve virtual-model or sibling-model authorization headers, call the router, or change the selected model.
+The listing provider need not have a physical sibling model.
+`Current` therefore means this configured provider account, not proof of the model or account that the router will dispatch next.
+A router can select another provider or a target with different credentials; the extension does not infer or aggregate those accounts.
+
+Virtual-model support is verified with synthetic credentials in deterministic Pi runtime tests for TUI, RPC, statusline, and read-only API queries.
+Live macOS arm64 coverage with a private virtual router remains unverified.
+After installing the fix, an account owner can compare `/usage` and the statusline with a physical-model session using the same configured provider account.

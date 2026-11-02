@@ -441,21 +441,53 @@ export async function resolveUsageAuth(
 ): Promise<ResolvedUsageAuth | undefined> {
   const guard = createUsageAuthGuard(options);
   guard.check();
-  if (ctx.model?.provider === adapter.id && !hasOfficialOrigin(ctx.model, adapter.id)) {
+  const selectedModel = ctx.model?.provider === adapter.id ? ctx.model : undefined;
+  // Pi's virtual catalog entries use this API marker and an empty URL. The predicate
+  // is characterized against real registration; Pi does not export its own helper.
+  const virtualModel =
+    (adapter.id === "zai" || adapter.id === "zai-coding-cn") &&
+    selectedModel?.api === "pi-virtual" &&
+    selectedModel.baseUrl === ""
+      ? selectedModel
+      : undefined;
+  const checkVirtualSelection = () => {
+    if (
+      virtualModel &&
+      (ctx.model !== virtualModel ||
+        ctx.modelRegistry.find(adapter.id, virtualModel.id) !== virtualModel ||
+        virtualModel.api !== "pi-virtual" ||
+        virtualModel.baseUrl !== "")
+    ) {
+      throw abortError();
+    }
+  };
+  checkVirtualSelection();
+  if (selectedModel && !virtualModel && !hasOfficialOrigin(selectedModel, adapter.id)) {
     throw new Error(
       `${adapter.displayName} usage cannot send a custom provider base URL credential to the official usage endpoint.`,
     );
   }
 
-  const model = candidateModels(ctx, adapter.id).find((candidate) => hasOfficialOrigin(candidate, adapter.id));
+  let model =
+    virtualModel ?? candidateModels(ctx, adapter.id).find((candidate) => hasOfficialOrigin(candidate, adapter.id));
   if (!model) return undefined;
   // Pending activation can replace runtime keys or headers even without an OAuth credential offer.
   if (candidateReader?.waitUntilReady && !(await guard.wait(() => candidateReader.waitUntilReady?.(ctx, adapter.id)))) {
     throw new Error(`${adapter.displayName} OAuth credential readiness failed closed.`);
   }
+  checkVirtualSelection();
   // SAFETY: Pi exposes the required auth methods at runtime, and checks below narrow them before use.
   const registry = ctx.modelRegistry as unknown as UsageAuthRegistry;
   const provider = registry.getProvider?.(adapter.id);
+  const providerBaseUrl = provider?.baseUrl;
+  if (virtualModel) {
+    if (!providerBaseUrl || !hasOfficialUrlOrigin(providerBaseUrl, adapter.id)) {
+      throw new Error(`${adapter.displayName} virtual-model usage requires a verified official provider origin.`);
+    }
+    // Query the listing provider's account, not a guessed or executable router target.
+    // This usage-local clone supplies the monitor URL without changing Pi's selection.
+    model = { ...virtualModel, baseUrl: providerBaseUrl };
+  }
   if (provider?.baseUrl && !hasOfficialUrlOrigin(provider.baseUrl, adapter.id)) {
     throw new Error(
       `${adapter.displayName} usage cannot send an overridden provider credential to the official usage endpoint.`,
@@ -478,7 +510,9 @@ export async function resolveUsageAuth(
     }
   };
   let modelAuth: RequestAuth | undefined;
-  const currentModel = ctx.model?.provider === adapter.id ? ctx.model : undefined;
+  // Virtual model auth can contain unrelated model-specific Authorization overrides.
+  // Only provider auth is meaningful for this provider-scoped quota request.
+  const currentModel = !virtualModel && ctx.model?.provider === adapter.id ? ctx.model : undefined;
   const resolveCurrentModelAuth = async (): Promise<RequestAuth | undefined> => {
     if (!currentModel || typeof registry.getApiKeyAndHeaders !== "function") return undefined;
     const result = await readRuntimeAuth(() => registry.getApiKeyAndHeaders?.(currentModel));
@@ -494,18 +528,23 @@ export async function resolveUsageAuth(
     return adapter.id === "openai" || adapter.id === "anthropic" || authorizationFrom(result) ? result : undefined;
   };
   const resolveSelectedAuthLast = ["anthropic", "deepseek", "minimax", "minimax-cn", "openai"].includes(adapter.id);
-  if (!resolveSelectedAuthLast) modelAuth = await guard.wait(resolveCurrentModelAuth);
+  if (!virtualModel && !resolveSelectedAuthLast) modelAuth = await guard.wait(resolveCurrentModelAuth);
   if (typeof registry.getProviderAuth !== "function") {
     throw new Error("pi-usage requires Pi 0.81.0 or newer to validate resolved provider auth.");
   }
   if (!moonshotProviderAuthIsAllowed(ctx, adapter.id)) return undefined;
   const providerResult = await readRuntimeAuth(() => registry.getProviderAuth?.(adapter.id));
+  checkVirtualSelection();
+  if (virtualModel && (registry.getProvider?.(adapter.id) !== provider || provider?.baseUrl !== providerBaseUrl)) {
+    throw abortError();
+  }
   if (!moonshotProviderAuthIsAllowed(ctx, adapter.id)) return undefined;
   if (providerResult?.auth.baseUrl && !hasOfficialUrlOrigin(providerResult.auth.baseUrl, adapter.id)) {
     throw new Error(
       `${adapter.displayName} usage cannot send a proxy-resolved credential to the official usage endpoint.`,
     );
   }
+  if (virtualModel && providerResult?.auth.baseUrl) model = { ...model, baseUrl: providerResult.auth.baseUrl };
   // Providers with credential-change retries read selected-model auth last so a rotation during
   // provider-origin validation cannot leave the earlier credential queued for the usage request.
   if (resolveSelectedAuthLast) modelAuth = await guard.wait(resolveCurrentModelAuth);
@@ -520,7 +559,9 @@ export async function resolveUsageAuth(
     const preservedAuth = { ...(providerResult?.auth ?? auth) };
     const env = providerResult?.env ?? modelAuth?.env;
     const source = providerResult?.source;
-    const effectiveBaseUrl = modelAuth?.baseUrl ?? providerResult?.auth.baseUrl ?? provider?.baseUrl ?? model.baseUrl;
+    const effectiveBaseUrl = virtualModel
+      ? model.baseUrl
+      : (modelAuth?.baseUrl ?? providerResult?.auth.baseUrl ?? provider?.baseUrl ?? model.baseUrl);
     const redactionInputs = [
       preservedAuth.apiKey,
       ...Object.values(preservedAuth.headers ?? {}),
