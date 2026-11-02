@@ -14,6 +14,7 @@ const cliRequire = createRequire(cli);
 const { getPackages } = await import(cliRequire.resolve("@manypkg/get-packages"));
 const { getDependentsGraph } = await import(cliRequire.resolve("@changesets/get-dependents-graph"));
 const digest = (bytes, algorithm) => createHash(algorithm).update(bytes).digest("base64");
+const defaultDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function runChild(command, args, { cwd, capture = false }) {
   return new Promise((resolve, reject) => {
@@ -81,7 +82,14 @@ function verifyRegistryIntegrity(bytes, integrity) {
 
 export async function publishPackedPackages(
   args,
-  { cwd = process.cwd(), run = runChild, fetch: fetchArtifact = globalThis.fetch } = {},
+  {
+    cwd = process.cwd(),
+    run = runChild,
+    fetch: fetchArtifact = globalThis.fetch,
+    retryDelayMs = 1_000,
+    retryTimeoutMs = 30_000,
+    sleep = defaultDelay,
+  } = {},
 ) {
   const { packDir, forwarded } = parseArgs(args);
   const artifactDir = await realpath(path.resolve(cwd, packDir));
@@ -148,6 +156,7 @@ export async function publishPackedPackages(
   }
   const remaining = new Map(releases);
   const chunks = [];
+  const publishedLocally = new Set();
   while (remaining.size) {
     const chunk = [...remaining.values()].filter((release) =>
       [...dependencies.get(release.name)].every((name) => !remaining.has(name)),
@@ -159,8 +168,15 @@ export async function publishPackedPackages(
   async function verifyAvailable(name) {
     const manifest = manifests.get(name);
     const exact = `${name}@${manifest.version}`;
-    const result = await run("npm", ["view", exact, "--json"], { cwd, capture: true });
-    if (result.code !== 0) throw new Error(`Registry metadata unavailable: ${exact}`);
+    let result;
+    const deadline = Date.now() + Math.max(0, retryTimeoutMs);
+    while (true) {
+      result = await run("npm", ["view", exact, "--json"], { cwd, capture: true });
+      if (result.code === 0) break;
+      const remainingMs = deadline - Date.now();
+      if (!publishedLocally.has(name) || remainingMs <= 0) throw new Error(`Registry metadata unavailable: ${exact}`);
+      await sleep(Math.max(0, Math.min(retryDelayMs, remainingMs)));
+    }
     let metadata;
     try {
       metadata = JSON.parse(result.stdout);
@@ -214,6 +230,9 @@ export async function publishPackedPackages(
       // Put packed mode before forwarded arguments so a trailing -- cannot hide the guard's path.
       const result = await run(process.execPath, [cli, "publish", "--from-pack-dir", directory, ...forwarded], { cwd });
       if (result.code !== 0) throw new Error(`Native Changesets publish failed (${result.code})`);
+      for (const release of chunk) {
+        if (release.kind === "publish") publishedLocally.add(release.name);
+      }
     }
   } finally {
     await rm(staging, { recursive: true, force: true });

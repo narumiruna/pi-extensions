@@ -78,6 +78,7 @@ async function fixture(field = "dependencies", range = "^2.0.0") {
     dist: { tarball: "https://registry.example/core.tgz", integrity: integrity(bytes[0], "sha512") },
   };
   let viewResult: Result | undefined;
+  let queuedViewResults: Result[] = [];
   let publishCode = 0;
   let fetchBytes = bytes[0];
   let status = 200;
@@ -88,7 +89,7 @@ async function fixture(field = "dependencies", range = "^2.0.0") {
       assert.deepEqual(args, ["view", "@test/core@2.0.0", "--json"]);
       assert.equal(options.capture, true);
       calls.push("view");
-      return viewResult ?? { code: 0, stdout: JSON.stringify(metadata) };
+      return queuedViewResults.shift() ?? viewResult ?? { code: 0, stdout: JSON.stringify(metadata) };
     }
     assert.equal(command, process.execPath);
     assert.equal(args[1], "publish");
@@ -133,14 +134,31 @@ async function fixture(field = "dependencies", range = "^2.0.0") {
     nativePlans,
     nativeArgs,
     output,
-    execute: (args: string[] = [], fetchOverride: unknown = fetch) =>
-      publishPackedPackages(["--from-pack-dir", pack, ...args], { cwd, run, fetch: fetchOverride }),
-    executeEquals: (args: string[]) => publishPackedPackages([`--from-pack-dir=${pack}`, ...args], { cwd, run, fetch }),
+    execute: (args: string[] = [], fetchOverride: unknown = fetch, options: Record<string, unknown> = {}) =>
+      publishPackedPackages(["--from-pack-dir", pack, ...args], {
+        cwd,
+        run,
+        fetch: fetchOverride,
+        retryDelayMs: 0,
+        retryTimeoutMs: 0,
+        ...options,
+      }),
+    executeEquals: (args: string[]) =>
+      publishPackedPackages([`--from-pack-dir=${pack}`, ...args], {
+        cwd,
+        run,
+        fetch,
+        retryDelayMs: 0,
+        retryTimeoutMs: 0,
+      }),
     metadata: (value: unknown) => {
       metadata = value;
     },
     viewResult: (value: Result) => {
       viewResult = value;
+    },
+    viewResults: (values: Result[]) => {
+      queuedViewResults = [...values];
     },
     publishCode: (value: number) => {
       publishCode = value;
@@ -209,6 +227,21 @@ test("native tag suppression is forwarded unchanged", async () => {
     ["--no-git-tag", "--"],
     ["--no-git-tag", "--"],
   ]);
+});
+
+test("retries metadata lookup for freshly published internal dependencies", async () => {
+  const f = await fixture();
+  const sleeps: number[] = [];
+  f.viewResults([{ code: 1, stdout: '{"error":{"code":"E404"}}' }]);
+  await f.execute([], undefined, {
+    retryDelayMs: 250,
+    retryTimeoutMs: 1_000,
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.deepEqual(sleeps, [250]);
+  assert.deepEqual(f.calls, ["@test/core", "view", "view", "fetch", "@test/consumer"]);
 });
 
 for (const range of [
