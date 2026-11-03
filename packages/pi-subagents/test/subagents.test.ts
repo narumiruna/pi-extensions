@@ -210,14 +210,19 @@ test.each(["pi-subagents-completion", "pi-subagents-message"])(
       bg: (_role: string, text: string) => text,
       bold: (text: string) => text,
     } as Theme;
-    const collapsed = renderer(message, { expanded: false, outputPad: 1 }, theme) as Component;
+    const keyText = vi.fn((_action: string) => "ctrl+shift+o");
+    const keyHint = vi.fn(() => "unused keyHint");
+    const keyHints = { keyText, keyHint };
+    const collapsed = renderer(message, { expanded: false, outputPad: 1, ...keyHints }, theme) as Component;
     const collapsedLines = collapsed.render(80);
     const collapsedText = collapsedLines.join("\n");
-    assert.match(collapsedText, /to expand/i);
+    assert.match(collapsedText, /ctrl\+shift\+o to expand/i);
+    assert.deepEqual(keyText.mock.calls, [["app.tools.expand"]]);
+    assert.equal(keyHint.mock.calls.length, 0);
     assert.doesNotMatch(collapsedText, /full child result|raw details must not render/i);
     assert.ok(collapsedLines.every((line) => visibleWidth(line) <= 80));
 
-    const expanded = renderer(message, { expanded: true, outputPad: 1 }, theme) as Component;
+    const expanded = renderer(message, { expanded: true, outputPad: 1, ...keyHints }, theme) as Component;
     const expandedLines = expanded.render(80);
     const expandedText = expandedLines.join("\n");
     assert.match(expandedText, /full child result/i);
@@ -231,7 +236,7 @@ test.each(["pi-subagents-completion", "pi-subagents-message"])(
       [3, 4],
     ] as const) {
       for (const expandedState of [false, true]) {
-        const narrow = renderer(message, { expanded: expandedState, outputPad }, theme) as Component;
+        const narrow = renderer(message, { expanded: expandedState, outputPad, ...keyHints }, theme) as Component;
         const narrowLines = narrow.render(width);
         assert.ok(narrowLines.length > 0);
         assert.ok(narrowLines.every((line) => visibleWidth(line) <= width));

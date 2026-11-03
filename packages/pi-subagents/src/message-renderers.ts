@@ -1,4 +1,4 @@
-import { type ExtensionAPI, getMarkdownTheme, keyText } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "./message-broker.js";
 
@@ -31,15 +31,9 @@ export function registerMessageRenderers(pi: ExtensionAPI): void {
         new Spacer(1),
       ];
       if (!options.expanded) {
-        children.push(
-          new Text(
-            theme.fg("customMessageText", `${summary} (`) +
-              theme.fg("dim", keyText("app.tools.expand")) +
-              theme.fg("customMessageText", " to expand)"),
-            0,
-            0,
-          ),
-        );
+        const expansionKey = options.keyText?.("app.tools.expand");
+        const hint = expansionKey ? theme.fg("muted", ` (${expansionKey} to expand)`) : "";
+        children.push(new Text(theme.fg("customMessageText", summary) + hint, 0, 0));
       } else {
         const content =
           typeof message.content === "string"
