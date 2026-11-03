@@ -29,6 +29,35 @@ test("collector summarizes a settled tool loop without retaining content", () =>
   assert.doesNotMatch(JSON.stringify(run), /prompt|secret|arguments|result/i);
 });
 
+test("collector keeps requested and reported identities separate for each generation", () => {
+  const collector = new ResponseCollector();
+  collector.finishGeneration({ now: 0, stopReason: "stop", responseModel: "out-of-run" });
+  collector.begin({ id: "routed-run", now: 1, triggerSource: "interactive", model });
+  const reported = ["concrete-a", "concrete-b", model.model, undefined];
+  for (const [index, responseModel] of reported.entries()) {
+    collector.beginGeneration({ id: `routed-${index}`, now: index + 2, model });
+    collector.finishGeneration({ now: index + 3, stopReason: "toolUse", responseModel });
+    collector.finishGeneration({ now: index + 4, stopReason: "error", responseModel: "duplicate" });
+  }
+  collector.beginGeneration({ id: "unfinished", now: 10, model });
+  const run = collector.settle(11);
+  assert.ok(run);
+  assert.equal(run.initialModel, model.model);
+  assert.deepEqual(
+    run.generations.map(({ model: requested }) => requested),
+    Array(5).fill(model.model),
+  );
+  assert.deepEqual(
+    run.generations.map(({ responseModel }) => responseModel),
+    [...reported, undefined],
+  );
+
+  collector.begin({ id: "next-run", now: 12, triggerSource: "interactive", model });
+  collector.beginGeneration({ id: "next-generation", now: 13, model });
+  collector.finishGeneration({ now: 14, stopReason: "stop" });
+  assert.equal(collector.settle(15)?.generations[0]?.responseModel, undefined);
+});
+
 test("collector keeps parallel tools independent and interrupts unfinished work", () => {
   const collector = new ResponseCollector();
   collector.begin({ id: "run-2", now: 0, triggerSource: "rpc", model });
@@ -63,6 +92,7 @@ test("collector records recovered HTTP and generation failures conservatively", 
     now: 4,
     stopReason: "error",
     errorMessage: "connect ETIMEDOUT https://secret.example/token",
+    responseModel: "concrete-failed-model",
   });
   collector.beginAttempt();
   collector.beginGeneration({ id: "gen-2", now: 5, model });
@@ -76,6 +106,9 @@ test("collector records recovered HTTP and generation failures conservatively", 
   assert.equal(run.recoveredErrorCount, 2);
   assert.equal(run.providerErrors[0]?.category, "timeout");
   assert.equal(run.providerErrors[0]?.recovered, true);
+  assert.equal(run.generations[0]?.responseModel, "concrete-failed-model");
+  assert.equal(run.generations[1]?.responseModel, undefined);
+  assert.equal(run.providerErrors[0]?.model, model.model);
   assert.doesNotMatch(JSON.stringify(run), /secret\.example|token/);
 });
 

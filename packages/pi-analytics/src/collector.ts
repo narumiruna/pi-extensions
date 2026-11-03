@@ -92,13 +92,14 @@ export class ResponseCollector {
     });
   }
 
-  finishGeneration(input: { now: number; stopReason: string; errorMessage?: string }): void {
+  finishGeneration(input: { now: number; stopReason: string; responseModel?: string; errorMessage?: string }): void {
     const active = this.active;
     const generation = this.latestGeneration();
     if (!active || !generation || generation.outcome !== "pending") return;
     generation.finishedAtMs = input.now;
     generation.durationMs = elapsed(generation.startedAtMs, input.now);
     generation.stopReason = input.stopReason;
+    generation.responseModel = input.responseModel;
     generation.outcome = generationOutcome(input.stopReason);
     if (generation.outcome === "error") {
       active.providerErrors.push({

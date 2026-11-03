@@ -135,6 +135,52 @@ test("store publishes a content-free run and returns reconciled analytics", asyn
   assert.equal(snapshot.reliability.categories.timeout, 1);
 });
 
+test("reported models survive disk reads and group routed generations without inference", async (t) => {
+  const writer = await fixture(t);
+  const reported = ["concrete-a", "concrete-b", "auto", undefined, "concrete-a", "raw\u001b[31m\nmodel"];
+  const input = run("routed", 1, {
+    initialProvider: "router",
+    initialModel: "auto",
+    generations: reported.map((responseModel, ordinal) => ({
+      id: `routed-${ordinal}`,
+      ordinal,
+      provider: "router",
+      model: "auto",
+      ...(responseModel === undefined ? {} : { responseModel }),
+      startedAtMs: ordinal + 1,
+      outcome: "stop" as const,
+      responses: [],
+    })),
+  });
+  await writer.recordRun(input);
+  await writer.recordRun(input);
+  await writer.recordRun({ ...input, id: "excluded", startedAtMs: 100 });
+  await writer.close();
+
+  const reader = new AnalyticsStore(writer.path);
+  const files = new AnalyticsRunFiles(writer.path);
+  t.onTestFinished(() => reader.close());
+  t.onTestFinished(() => files.close());
+  const records = [];
+  for await (const record of files.read()) records.push(record);
+  assert.equal(records.length, 3);
+  assert.deepEqual(records[0]?.generations, input.generations);
+
+  const snapshot = await reader.getSnapshot({ fromMs: 0, toMs: 20 });
+  assert.equal(snapshot.overview.responseCycles, 1);
+  assert.equal(snapshot.responses.llmCalls, reported.length);
+  assert.equal(snapshot.responses.models.length, 5);
+  assert.equal(snapshot.responses.models[0]?.responseModel, "concrete-a");
+  assert.equal(snapshot.responses.models[0]?.count, 2);
+  for (const responseModel of new Set(reported)) {
+    const item = snapshot.responses.models.find((model) => model.responseModel === responseModel);
+    assert.ok(item);
+    assert.equal(item.provider, "router");
+    assert.equal(item.model, "auto");
+    assert.equal(item.count, reported.filter((reportedModel) => reportedModel === responseModel).length);
+  }
+});
+
 test("duplicate run ids remain idempotent across independent writer files", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-dedup-"));
   t.onTestFinished(() => rm(directory, { recursive: true, force: true }));

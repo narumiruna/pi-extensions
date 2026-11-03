@@ -99,6 +99,7 @@ function parseGeneration(value: unknown, index: number, budget: ParseBudget): Ge
     ordinal: boundedCount(item.ordinal, `${prefix}.ordinal`),
     ...optionalProperty("provider", optionalString(item.provider, `${prefix}.provider`)),
     ...optionalProperty("model", optionalString(item.model, `${prefix}.model`)),
+    ...optionalProperty("responseModel", optionalString(item.responseModel, `${prefix}.responseModel`)),
     ...optionalProperty("thinkingLevel", optionalString(item.thinkingLevel, `${prefix}.thinkingLevel`)),
     startedAtMs: timestampValue(item.startedAtMs, `${prefix}.startedAtMs`),
     ...optionalProperty("finishedAtMs", optionalTimestamp(item.finishedAtMs, `${prefix}.finishedAtMs`)),

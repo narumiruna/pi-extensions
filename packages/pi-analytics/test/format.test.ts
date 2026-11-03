@@ -66,6 +66,33 @@ test("stored runs round-trip through one versioned newline-terminated frame", ()
   assert.deepEqual(decodeStoredRun(encoded.trimEnd()), expected);
 });
 
+test("optional reported models round-trip as raw IDs in version-1 frames", () => {
+  for (const responseModel of ["routed-a", "gpt-test", undefined, "raw\u001b[31m\u009b0m\nmodel"]) {
+    const input = run();
+    const generation = input.generations[0];
+    assert.ok(generation);
+    if (responseModel !== undefined) generation.responseModel = responseModel;
+    const encoded = encodeStoredRun(input);
+    const envelope = JSON.parse(encoded) as { formatVersion: number };
+    assert.equal(envelope.formatVersion, 1);
+    const decoded = decodeStoredRun(encoded);
+    assert.deepEqual(decoded.generations, input.generations);
+    if (responseModel === undefined) {
+      assert.doesNotMatch(encoded, /responseModel/);
+      assert.equal(Object.hasOwn(decoded.generations[0] ?? {}, "responseModel"), false);
+    }
+  }
+});
+
+test("reported model validation rejects malformed or oversized IDs on reads and writes", () => {
+  for (const responseModel of [null, 42, "", {}, [], "x".repeat(4097)]) {
+    const input = run();
+    Object.assign(input.generations[0] ?? {}, { responseModel });
+    assert.throws(() => encodeStoredRun(input), /invalid .*responseModel/);
+    assert.throws(() => decodeStoredRun(JSON.stringify({ formatVersion: 1, run: input })), /invalid .*responseModel/);
+  }
+});
+
 test("encoding strips unknown fields instead of persisting accidental content", () => {
   const input = Object.assign(run(), { prompt: "private prompt", rawError: "secret" });
   const encoded = encodeStoredRun(input);

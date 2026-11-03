@@ -187,6 +187,7 @@ export function createAnalyticsExtension(
       collector.finishGeneration({
         now: deps.now(),
         stopReason: event.message.stopReason,
+        responseModel: event.message.responseModel,
         errorMessage: event.message.errorMessage,
       });
     });

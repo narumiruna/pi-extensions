@@ -27,6 +27,7 @@ export interface GenerationRecord {
   ordinal: number;
   provider?: string;
   model?: string;
+  responseModel?: string;
   thinkingLevel?: string;
   startedAtMs: number;
   finishedAtMs?: number;
