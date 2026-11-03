@@ -138,4 +138,5 @@
 - Inspect the selected diff and keep each commit focused on one intent.
 - Use `<type>[scope][!]: <description>` based on the actual diff, preferring `feat`, `fix`, `refactor`, or `docs` and omitting unused scope, body, or footers.
 - Stage only intended paths, recheck the index, reject empty commits, and report the commit ID and remaining changes.
+- When a pull request resolves an issue, use `Closes #<issue-number>` instead of `Refs #<issue-number>` in the PR description.
 - Include completed checks and relevant publication or visibility evidence in pull-request and handoff notes.
