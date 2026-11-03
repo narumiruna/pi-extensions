@@ -15,7 +15,7 @@ import githubPr, {
   runGhPrView,
 } from "../src/github-pr.js";
 
-type ExecOptions = { cwd?: string; signal?: AbortSignal; timeout?: number };
+type ExecOptions = { cwd?: string; signal?: AbortSignal; timeout?: number; maxBuffer?: number };
 type ExecCall = { command: string; args: string[]; options?: ExecOptions };
 type ExecFunction = (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
 
@@ -267,15 +267,15 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
       ? {
           command: process.env.ComSpec ?? "cmd.exe",
           args: ["/d", "/s", "/c", `set "GH_HOST=" && gh ${prArgs.join(" ")}`],
-          options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
+          options: { cwd: "/repo", signal: undefined, timeout: 10_000, maxBuffer: 1024 * 1024 },
         }
       : {
           command: "env",
           args: ["-u", "GH_HOST", "gh", ...prArgs],
-          options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
+          options: { cwd: "/repo", signal: undefined, timeout: 10_000, maxBuffer: 1024 * 1024 },
         },
   );
-  assert.deepEqual(calls[1]?.options, { cwd: "/repo", signal: undefined, timeout: 10_000 });
+  assert.deepEqual(calls[1]?.options, { cwd: "/repo", signal: undefined, timeout: 10_000, maxBuffer: 64 * 1024 });
   assert.deepEqual(calls[1]?.args.slice(0, 6), ["api", "graphql", "--hostname", "github.com", "-f", calls[1]?.args[5]]);
   assert.match(calls[1]?.args[5] ?? "", /^query=\s*query PullRequestCounts/);
   assert.deepEqual(calls[1]?.args.slice(6), ["-F", "owner=narumiruna", "-F", "name=pi-extensions", "-F", "number=123"]);
@@ -589,6 +589,8 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
   await agentEnd({}, context.ctx);
   assert.equal(calls.length, 5);
   assert.deepEqual(calls[0]?.args, ["rev-parse", "--git-path", "HEAD"]);
+  assert.equal(calls[0]?.options?.maxBuffer, 16 * 1024);
+  assert.equal(calls[0]?.options?.timeout, 5_000);
   assert.ok(calls[0]?.options?.signal);
   assert.notEqual(calls[0]?.options?.signal, signal);
   assert.equal(calls[0]?.options?.signal?.aborted, false);

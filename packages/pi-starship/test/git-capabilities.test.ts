@@ -933,7 +933,7 @@ test("Git rendering reads only snapshots and retains their values across repeate
 });
 
 function result(stdout: string) {
-  return { stdout, stderr: "", code: 0, killed: false };
+  return { stdout, stderr: "", code: 0, killed: false, truncated: false };
 }
 
 function git(cwd: string, ...args: string[]): string {

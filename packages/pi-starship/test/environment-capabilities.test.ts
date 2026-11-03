@@ -12,7 +12,7 @@ import { createFileSystem, detectEnvironment } from "../src/runtime/helpers.js";
 import type { WorkspaceExec, WorkspaceRefreshInput } from "../src/runtime/types.js";
 import { collectWorkspaceSnapshot } from "../src/runtime/workspace.js";
 
-const success = (stdout: string) => ({ stdout, stderr: "", code: 0, killed: false });
+const success = (stdout: string) => ({ stdout, stderr: "", code: 0, killed: false, truncated: false });
 
 type EnvironmentModule =
   | "conda"

@@ -5,6 +5,7 @@ export interface TmuxCommandResult {
   stderr: string;
   code: number;
   killed: boolean;
+  truncated?: boolean;
 }
 
 export type TmuxCommandExecutor = (
@@ -71,6 +72,7 @@ export class TmuxAdapter {
       if (signal?.aborted) throwIfAborted(signal, "tmux availability check aborted");
       throw new TmuxLaunchError("Pi Fleet could not run tmux to check its version");
     }
+    if (result.truncated) throw new TmuxLaunchError("tmux version output exceeded the output limit");
     throwIfAborted(signal, "tmux availability check aborted");
     if (result.code !== 0 || result.killed) {
       throw new TmuxLaunchError("Pi Fleet could not query the tmux version");
@@ -129,6 +131,9 @@ export class TmuxAdapter {
         );
       }
       throw error;
+    }
+    if (result.truncated) {
+      throw new TmuxLaunchError("tmux split output exceeded the output limit; a partial split may remain open", true);
     }
     const terminalId = /^%\d{1,20}$/u.test(result.stdout.trim()) ? result.stdout.trim() : undefined;
     if (options.signal?.aborted) {

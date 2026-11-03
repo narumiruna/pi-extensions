@@ -94,7 +94,7 @@ function input(overrides: Partial<WorkspaceRefreshInput> = {}): WorkspaceRefresh
     platform: "linux",
     hostname: "host",
     username: "user",
-    exec: async () => ({ stdout: output(), stderr: "", code: 0, killed: false }),
+    exec: async () => ({ stdout: output(), stderr: "", code: 0, killed: false, truncated: false }),
     fileSystem: {
       readDirectory: async (path) =>
         path === "/repo"
@@ -138,7 +138,7 @@ async function render(
   const snapshot = await collectWorkspaceSnapshot(
     input({
       config: settings,
-      exec: async () => ({ stdout: output(current, parents), stderr: "", code: 0, killed: false }),
+      exec: async () => ({ stdout: output(current, parents), stderr: "", code: 0, killed: false, truncated: false }),
     }),
   );
   const rendered = renderStatusline(settings, runtime(snapshot));
@@ -185,6 +185,7 @@ test.each(['a"b', "back\\slash", "line\nfeed", "emoji-🪟"])(
       stderr: "",
       code: 0,
       killed: false,
+      truncated: false,
     }));
     const snapshot = await collectWorkspaceSnapshot(input({ exec }));
     assert.ok(snapshot.modules.jj_change);
@@ -249,6 +250,7 @@ test("mixed Git/Jujutsu repos use one fixed bounded read-only argv and nearest-b
     stderr: "",
     code: 0,
     killed: false,
+    truncated: false,
   }));
   const snapshot = await collectWorkspaceSnapshot(input({ exec }));
   assert.equal(exec.mock.calls.length, 1);
@@ -433,14 +435,25 @@ test.each([
       throw new Error("ENOENT");
     },
   ],
-  ["nonzero status", async () => ({ stdout: output(), stderr: "failure", code: 1, killed: false })],
-  ["timeout", async () => ({ stdout: output(), stderr: "", code: 0, killed: true })],
+  ["nonzero status", async () => ({ stdout: output(), stderr: "failure", code: 1, killed: false, truncated: false })],
+  ["timeout", async () => ({ stdout: output(), stderr: "", code: 0, killed: true, truncated: false })],
+  ["truncated success prefix", async () => ({ stdout: output(), stderr: "", code: 0, killed: false, truncated: true })],
+  ["truncated killed output", async () => ({ stdout: output(), stderr: "", code: 1, killed: true, truncated: true })],
   [
     "oversized output",
-    async () => ({ stdout: "x".repeat(MAX_COMMAND_OUTPUT_BYTES + 1), stderr: "", code: 0, killed: false }),
+    async () => ({
+      stdout: "x".repeat(MAX_COMMAND_OUTPUT_BYTES + 1),
+      stderr: "",
+      code: 0,
+      killed: false,
+      truncated: false,
+    }),
   ],
-  ["empty output", async () => ({ stdout: "", stderr: "", code: 0, killed: false })],
-  ["malformed output", async () => ({ stdout: "current = broken", stderr: "", code: 0, killed: false })],
+  ["empty output", async () => ({ stdout: "", stderr: "", code: 0, killed: false, truncated: false })],
+  [
+    "malformed output",
+    async () => ({ stdout: "current = broken", stderr: "", code: 0, killed: false, truncated: false }),
+  ],
 ] as const)("Jujutsu collection omits unavailable data: %s", async (_label, exec) => {
   assert.deepEqual((await collectWorkspaceSnapshot(input({ exec }))).modules, {});
 });
@@ -492,7 +505,7 @@ test("Jujutsu cancellation before discovery, after discovery and after a delayed
     const controller = new AbortController();
     const exec = vi.fn<WorkspaceExec>(async () => {
       if (phase === "command") controller.abort();
-      return { stdout: output(), stderr: "", code: 0, killed: false };
+      return { stdout: output(), stderr: "", code: 0, killed: false, truncated: false };
     });
     if (phase === "before") controller.abort();
     const readDirectory = vi.fn(async () => {
@@ -522,7 +535,7 @@ test("refresh replacement and shutdown abort delayed Jujutsu work and reject sta
     signal = options.signal;
     started();
     await pending;
-    return { stdout: output(), stderr: "", code: 0, killed: false };
+    return { stdout: output(), stderr: "", code: 0, killed: false, truncated: false };
   };
   const publish = vi.fn();
   const controller = new AsyncRefreshController<WorkspaceRefreshInput, WorkspaceSnapshot>({
@@ -543,7 +556,13 @@ test("refresh replacement and shutdown abort delayed Jujutsu work and reject sta
 });
 
 test("rendering and inspection reuse immutable snapshots without I/O at narrow widths", async () => {
-  const exec = vi.fn<WorkspaceExec>(async () => ({ stdout: output(), stderr: "", code: 0, killed: false }));
+  const exec = vi.fn<WorkspaceExec>(async () => ({
+    stdout: output(),
+    stderr: "",
+    code: 0,
+    killed: false,
+    truncated: false,
+  }));
   const settings = config();
   const snapshot = await collectWorkspaceSnapshot(input({ exec, config: settings }));
   exec.mockClear();

@@ -2,8 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execWorkspaceCommand } from "../../runtime/command.js";
-import { MAX_COMMAND_OUTPUT_BYTES } from "../../runtime/helpers.js";
-import type { WorkspaceExec } from "../../runtime/types.js";
+import type { WorkspaceExec, WorkspaceExecResult } from "../../runtime/types.js";
 import type {
   GitBranchSnapshot,
   GitCommitSnapshot,
@@ -15,6 +14,8 @@ import type {
 } from "../types.js";
 
 const GIT_TIMEOUT_MS = 3_000;
+// Bound complete porcelain records and repository metadata; omit larger footer replies in full.
+const MAX_GIT_OUTPUT_BYTES = 64 * 1024;
 
 export interface ReadGitSnapshotOptions {
   includeMetrics: boolean;
@@ -69,17 +70,19 @@ export async function readGitSnapshot(
     metricsPromise,
     tagPromise,
   ]);
-  if (options.signal?.aborted || statusResult.killed) return undefined;
+  if (statusResult.truncated || options.signal?.aborted || statusResult.killed) return undefined;
   if (statusResult.code !== 0) {
     return options.inspectBare ? readBareSnapshot(pi, cwd, options, tagResult) : undefined;
   }
 
   const parsed = parseGitStatusPorcelainV2(statusResult.stdout);
   const metadata =
-    metadataResult.code === 0 && !metadataResult.killed ? parseGitRepositoryMetadata(metadataResult.stdout) : undefined;
+    !metadataResult.truncated && metadataResult.code === 0 && !metadataResult.killed
+      ? parseGitRepositoryMetadata(metadataResult.stdout)
+      : undefined;
   const commit = withTag(parsed.commit, tagResult);
   const metrics =
-    metricsResult && metricsResult.code === 0 && !metricsResult.killed
+    metricsResult && !metricsResult.truncated && metricsResult.code === 0 && !metricsResult.killed
       ? parseGitDiffShortstat(metricsResult.stdout)
       : undefined;
 
@@ -93,13 +96,7 @@ export async function readGitSnapshot(
   };
 }
 
-// Pi's executor and the bounded workspace executor share only these result fields.
-interface GitCommandResult {
-  stdout: string;
-  stderr: string;
-  code: number;
-  killed: boolean;
-}
+type GitCommandResult = WorkspaceExecResult;
 
 async function runGit(
   pi: ExtensionAPI,
@@ -107,22 +104,30 @@ async function runGit(
   args: string[],
   options: Pick<ReadGitSnapshotOptions, "signal" | "exec">,
 ): Promise<GitCommandResult> {
-  const failed = { stdout: "", stderr: "", code: 1, killed: options.signal?.aborted ?? false };
+  const failed = { stdout: "", stderr: "", code: 1, killed: options.signal?.aborted ?? false, truncated: false };
   if (options.signal?.aborted) return failed;
   try {
     const result = options.exec
       ? await options.exec("git", args, {
           cwd,
           timeout: GIT_TIMEOUT_MS,
-          maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+          maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
           signal: options.signal,
           environment: process.env,
         })
-      : await pi.exec("git", args, { cwd, signal: options.signal, timeout: GIT_TIMEOUT_MS });
-    if (options.signal?.aborted) return { ...failed, killed: true };
-    if (Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > MAX_COMMAND_OUTPUT_BYTES) {
-      return { ...failed, killed: true };
+      : await pi.exec("git", args, {
+          cwd,
+          signal: options.signal,
+          timeout: GIT_TIMEOUT_MS,
+          maxBuffer: MAX_GIT_OUTPUT_BYTES,
+        });
+    if (
+      result.truncated ||
+      Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > MAX_GIT_OUTPUT_BYTES
+    ) {
+      return { ...failed, killed: result.killed, truncated: true };
     }
+    if (options.signal?.aborted) return { ...failed, killed: true };
     return result;
   } catch {
     return failed;
@@ -138,12 +143,13 @@ async function readBareSnapshot(
   const boundedOptions = { ...options, exec: options.exec ?? execWorkspaceCommand };
   const run = (args: string[]) => runGit(pi, cwd, args, boundedOptions);
   const bare = await run(["rev-parse", "--is-bare-repository"]);
-  if (options.signal?.aborted || bare.killed || bare.code !== 0 || bare.stdout.trim() !== "true") return undefined;
+  if (bare.truncated || options.signal?.aborted || bare.killed || bare.code !== 0 || bare.stdout.trim() !== "true")
+    return undefined;
   const [head, hash] = await Promise.all([
     run(["symbolic-ref", "--short", "HEAD"]),
     run(["rev-parse", "--verify", "HEAD"]),
   ]);
-  if (options.signal?.aborted || head.killed || hash.killed) return undefined;
+  if (head.truncated || hash.truncated || options.signal?.aborted || head.killed || hash.killed) return undefined;
   const name = head.code === 0 ? head.stdout.trim() : "";
   const commitHash = hash.code === 0 ? hash.stdout.trim() : "";
   const validHash = /^[a-fA-F0-9]{4,64}$/u.test(commitHash);
@@ -155,7 +161,9 @@ async function readBareSnapshot(
     : undefined;
   if (options.signal?.aborted) return undefined;
   const upstreamFields =
-    upstreamResult?.code === 0 && !upstreamResult.killed ? upstreamResult.stdout.trimEnd().split("\0") : [];
+    upstreamResult && !upstreamResult.truncated && upstreamResult.code === 0 && !upstreamResult.killed
+      ? upstreamResult.stdout.trimEnd().split("\0")
+      : [];
   const remote = upstreamFields[0] === reference ? splitUpstream(upstreamFields[1]) : {};
   return {
     branch: { name: name || "HEAD", detached, bare: true, ...remote },
@@ -171,7 +179,7 @@ export async function readGitStatus(pi: ExtensionAPI, cwd: string): Promise<GitS
     ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--show-stash", "--untracked-files=normal"],
     {},
   );
-  if (result.code !== 0 || result.killed) return undefined;
+  if (result.truncated || result.code !== 0 || result.killed) return undefined;
   return parseGitStatusPorcelainV2(result.stdout).status;
 }
 
@@ -182,7 +190,7 @@ export async function readGitWorktree(pi: ExtensionAPI, cwd: string): Promise<Gi
     ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--git-dir"],
     {},
   );
-  if (result.code !== 0 || result.killed) return undefined;
+  if (result.truncated || result.code !== 0 || result.killed) return undefined;
   return parseGitRepositoryMetadata(result.stdout)?.worktree;
 }
 
@@ -414,15 +422,9 @@ function splitUpstream(upstream: string | undefined): {
 
 function withTag(
   commit: GitCommitSnapshot | undefined,
-  result:
-    | {
-        stdout: string;
-        code: number;
-        killed: boolean;
-      }
-    | undefined,
+  result: GitCommandResult | undefined,
 ): GitCommitSnapshot | undefined {
-  if (!commit || !result || result.code !== 0 || result.killed) return commit;
+  if (!commit || !result || result.truncated || result.code !== 0 || result.killed) return commit;
   const tag = result.stdout.trim();
   return tag ? { ...commit, tag: tag.split(/\r?\n/u)[0] } : commit;
 }

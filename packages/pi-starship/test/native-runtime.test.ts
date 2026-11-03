@@ -36,7 +36,7 @@ async function setup(document?: string) {
   commandOptions = undefined;
   const { default: piStarship } = await import("../src/pi-starship.js");
   const mock = createMockPi();
-  const exec = vi.fn<WorkspaceExec>(async () => ({ stdout: "", stderr: "", code: 1, killed: false }));
+  const exec = vi.fn<WorkspaceExec>(async () => ({ stdout: "", stderr: "", code: 1, killed: false, truncated: false }));
   piStarship(mock.pi, { gitExec: exec, githubPrExec: exec });
   const context = createMockContext({ mode: "tui", hasUI: true });
   const emit = async (name: string, ctx = context.ctx) => {
@@ -231,7 +231,7 @@ test("native restore aborts pending collectors and rejects late publication", as
   assert.ok(signals.length >= 2);
   state.options.apply(nativeFooterConfig(state.path), state.context.ctx);
   assert.ok(signals.every((signal) => signal.aborted));
-  resolve?.({ stdout: "", stderr: "", code: 1, killed: false });
+  resolve?.({ stdout: "", stderr: "", code: 1, killed: false, truncated: false });
   await pending;
   await Promise.resolve();
   mounted.branchChange();

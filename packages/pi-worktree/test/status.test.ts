@@ -218,6 +218,97 @@ test("status loading is bounded, keeps partial failures, and resolves commits fr
   }
 });
 
+for (const target of ["status", "show"]) {
+  test(`status loading rejects truncated ${target} output before parsing or timeout classification`, async () => {
+    const temporary = mkdtempSync(join(tmpdir(), "pi-worktree-status-truncated-"));
+    try {
+      for (const outcome of [
+        { code: 0, killed: false },
+        { code: 1, killed: true },
+      ]) {
+        const calls: string[] = [];
+        const controller = new AbortController();
+        const cards = await loadWorktreeStatusCards(
+          {
+            exec: async (_command, args, options) => {
+              const operation = args[0] ?? "";
+              calls.push(operation);
+              assert.equal(options?.maxBuffer, operation === "status" ? 8 * 1024 * 1024 : 64 * 1024);
+              assert.equal(options?.timeout, 15_000);
+              assert.equal(options?.signal, controller.signal);
+              const output =
+                operation === "status"
+                  ? [`# branch.oid ${oid}`, "# branch.head feature", ""].join("\0")
+                  : "2026-08-10T01:02:03+00:00\0Partial subject";
+              return operation === target ? { ...result(output), ...outcome, truncated: true } : result(output);
+            },
+          },
+          [record({ path: temporary })],
+          temporary,
+          controller.signal,
+        );
+        assert.deepEqual(calls, target === "status" ? ["status"] : ["status", "show"]);
+        assert.match(cards[0]?.statusText ?? "", /unavailable/i);
+        const details = cards[0]?.details.join("\n") ?? "";
+        assert.match(details, /output exceeded the (8388608|65536)-byte limit/i);
+        assert.doesNotMatch(details, /timed out|Last commit:|Working tree: clean/i);
+      }
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const scenario of [
+  { name: "timeout", value: { ...result(), killed: true }, expected: /git status.*timed out/i },
+  { name: "spawn result", value: result("", 1, "spawn git ENOENT"), expected: /spawn git ENOENT/ },
+  { name: "spawn rejection", error: new Error("spawn EACCES"), expected: /spawn EACCES/ },
+]) {
+  test(`status loading preserves ${scenario.name} diagnostics`, async () => {
+    const temporary = mkdtempSync(join(tmpdir(), "pi-worktree-status-diagnostic-"));
+    try {
+      const cards = await loadWorktreeStatusCards(
+        {
+          exec: async () => {
+            if (scenario.error) throw scenario.error;
+            assert.ok(scenario.value);
+            return scenario.value;
+          },
+        },
+        [record({ path: temporary })],
+        temporary,
+      );
+      assert.match(cards[0]?.statusText ?? "", /unavailable/i);
+      assert.match(cards[0]?.details.join("\n") ?? "", scenario.expected);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+}
+
+test("status loading does not publish truncated results after cancellation", async () => {
+  const temporary = mkdtempSync(join(tmpdir(), "pi-worktree-status-truncated-abort-"));
+  const controller = new AbortController();
+  try {
+    await assert.rejects(
+      loadWorktreeStatusCards(
+        {
+          exec: async () => {
+            controller.abort();
+            return { ...result(), killed: true, truncated: true };
+          },
+        },
+        [record({ path: temporary })],
+        temporary,
+        controller.signal,
+      ),
+      { name: "AbortError" },
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("status loading aborts instead of publishing cards", async () => {
   const temporary = mkdtempSync(join(tmpdir(), "pi-worktree-status-abort-"));
   const controller = new AbortController();

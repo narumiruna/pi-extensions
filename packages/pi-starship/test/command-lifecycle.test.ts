@@ -14,6 +14,7 @@ function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
         cwd: options.cwd,
         signal: options.signal,
         timeout: options.timeout,
+        maxBuffer: options.maxOutputBytes,
       }),
   });
 }
@@ -405,10 +406,10 @@ type FooterFactory = (
   },
 ) => { render(width: number): string[]; dispose(): void };
 
-type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
+type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean; truncated: boolean };
 
 function gitResult(stdout = "## main\n"): ExecResult {
-  return { stdout, stderr: "", code: 0, killed: false };
+  return { stdout, stderr: "", code: 0, killed: false, truncated: false };
 }
 
 async function flushAsync() {
