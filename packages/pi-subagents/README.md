@@ -73,8 +73,9 @@ Use messaging only when needed:
 - Answer a child-originated request by calling `subagent_send` with its `requestId`.
 
 Completion messages and child requests and responses follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
-Collapsed messages show a summary and the configured expansion key; expanded messages show the full content.
-This display state does not change the content sent to the model.
+Collapsed messages show a summary and the host's configured expansion keys.
+The hint is omitted when the action is unbound or an older host does not supply renderer key formatting.
+Expanded messages show the full content; this display state does not change the content sent to the model.
 
 ## 💬 Commands
 

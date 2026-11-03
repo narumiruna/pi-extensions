@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { DefaultResourceLoader, initTheme, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
+import {
+  CustomMessageComponent,
+  DefaultResourceLoader,
+  initTheme,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterAll, describe, test } from "vitest";
 import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
@@ -201,6 +208,92 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
           ),
           ["recipient", "requestId", "message"],
         );
+      },
+    );
+  });
+
+  test("generated message renderers use the real host's injected expansion hints", async ({ signal }) => {
+    await ensureFixture();
+    initTheme("dark", false);
+    await loaders.run(
+      () =>
+        new DefaultResourceLoader({
+          cwd: root,
+          agentDir,
+          settingsManager: SettingsManager.inMemory({}),
+          additionalExtensionPaths: [join(output, "index.ts")],
+        }),
+      signal,
+      (loader) => {
+        const loaded = loader.getExtensions();
+        assert.deepEqual(loaded.errors, []);
+        const main = loaded.extensions[0];
+        assert.ok(main);
+        const previous = getKeybindings();
+        const bindings = new KeybindingsManager({
+          "app.tools.expand": { defaultKeys: "ctrl+o", description: "Expand tool and message output" },
+        });
+        setKeybindings(bindings);
+        try {
+          for (const customType of ["pi-subagents-completion", "pi-subagents-message"]) {
+            bindings.setUserBindings({});
+            const renderer = main.messageRenderers.get(customType);
+            assert.ok(renderer);
+            const message = {
+              role: "custom" as const,
+              customType,
+              content: "Private native child body\u0007\u202e",
+              display: true,
+              timestamp: 0,
+            };
+            const before = JSON.stringify(message);
+            const actions: string[] = [];
+            const component = new CustomMessageComponent(message, (value, options, theme) =>
+              renderer(
+                value,
+                {
+                  ...options,
+                  keyText(action) {
+                    actions.push(action);
+                    return options.keyText(action);
+                  },
+                },
+                theme,
+              ),
+            );
+            const render = () => stripVTControlCharacters(component.render(100).join("\n"));
+            assert.deepEqual(actions, ["app.tools.expand"]);
+            assert.match(render(), /Subagent (?:job completion|message) \(ctrl\+o to expand\)/u);
+            assert.doesNotMatch(render(), /Private native child body/u);
+
+            bindings.setUserBindings({ "app.tools.expand": ["ctrl+shift+o"] });
+            component.invalidate();
+            assert.match(render(), /ctrl\+shift\+o to expand/u);
+            assert.equal(bindings.matches("\u001b[111;6u", "app.tools.expand"), true);
+
+            bindings.setUserBindings({ "app.tools.expand": [] });
+            component.invalidate();
+            assert.match(render(), /Subagent (?:job completion|message)/u);
+            assert.doesNotMatch(render(), /to expand|Private native child body/u);
+            const collapsedCalls = actions.length;
+            component.setExpanded(true);
+            const rawExpanded = component.render(100).join("\n");
+            assert.match(stripVTControlCharacters(rawExpanded), /Private native child body/u);
+            for (const control of ["\u0007", "\u202e"]) assert.equal(rawExpanded.includes(control), false);
+            assert.equal(actions.length, collapsedCalls);
+            for (const width of [0, 1, 2, 4, 20, 80]) {
+              for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
+            }
+            component.setExpanded(false);
+            bindings.setUserBindings({ "app.tools.expand": ["ctrl+o", "ctrl+shift+o"] });
+            component.invalidate();
+            assert.match(render(), /ctrl\+o\/ctrl\+shift\+o to expand/u);
+            assert.ok(actions.every((action) => action === "app.tools.expand"));
+            assert.equal(JSON.stringify(message), before);
+          }
+        } finally {
+          setKeybindings(previous);
+        }
       },
     );
   });
