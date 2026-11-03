@@ -262,8 +262,13 @@ Each `pi.llm` generation records:
 - ordered `http.response.status_codes`, final `http.response.status_code`, `http.response.attempt_count`, and `http.response.retry_count`;
 - allowlisted `http.response.headers`: request ids, `cf-ray`, `retry-after`, and the supported OpenAI/Anthropic rate-limit headers.
   Authorization, cookies, and unrecognized headers are never exported;
-- additive input, output, cache-read, cache-write, and total token usage plus known positive input, output, cache-read, cache-write, and total cost buckets;
+- additive input, output, cache-read, cache-write, and total token usage plus known positive component costs and the best available total cost;
 - non-additive `pi.usage.reasoning_tokens` and `pi.usage.cache_write_1h_tokens` in metadata so subsets are not double-counted.
+
+A finite zero total is exported only when Pi reports `cost.totalFromProvider === true`, even when catalog-estimated component costs are positive.
+The total is never replaced by the sum of those components.
+When provenance is absent or false, zero cost buckets remain omitted to preserve the existing unknown-pricing fallback.
+Boolean provenance is exported as `pi.usage.cost.total_from_provider` metadata, not as a numeric cost bucket; absent provenance stays omitted.
 
 The request snapshot is the payload visible to this handler, not a guaranteed final wire payload.
 A later extension can still replace it.
@@ -286,6 +291,7 @@ Duplicate, parallel, failed, no-progress, and interrupted tools are closed indep
 An active `pi.compaction` records its reason, retry state, source, token count, message counts, branch-entry count, and split-turn state.
 The exported field names are `pi.compaction.reason`, `pi.compaction.will_retry`, `pi.compaction.from_extension`, `pi.compaction.tokens_before`, `pi.compaction.messages_to_summarize`, `pi.compaction.turn_prefix_messages`, `pi.compaction.branch_entries`, and `pi.compaction.is_split_turn`.
 It adds `pi.compaction.read_file_count`, `pi.compaction.modified_file_count`, and `pi.compaction.usage.*` / `pi.compaction.cost.*` when Pi reports them.
+Compaction costs use the same zero-total rules as generations and export boolean provenance as `pi.compaction.cost.total_from_provider` metadata.
 It never records the summary, custom instructions, or message bodies.
 Manual compaction outside an active agent trace is ignored; incomplete compaction closes as a warning at settlement or shutdown.
 
