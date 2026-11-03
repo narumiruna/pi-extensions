@@ -32,12 +32,16 @@ export interface FleetToolController {
 const spawnSchema = Type.Object(
   {
     terminal: Type.Optional(
-      StringEnum(TERMINALS, {
-        description:
-          "Explicit terminal split backend override; omission uses the configured Pi Fleet preference, which may resolve automatically",
-      }),
+      Type.Unsafe<(typeof TERMINALS)[number]>(
+        StringEnum(TERMINALS, {
+          description:
+            "Explicit terminal split backend override; omission uses the configured Pi Fleet preference, which may resolve automatically",
+        }),
+      ),
     ),
-    direction: Type.Optional(StringEnum(DIRECTIONS, { description: "Terminal split direction" })),
+    direction: Type.Optional(
+      Type.Unsafe<(typeof DIRECTIONS)[number]>(StringEnum(DIRECTIONS, { description: "Terminal split direction" })),
+    ),
     task: Type.Optional(
       Type.String({
         description: "Optional first task sent after child readiness",
@@ -57,12 +61,18 @@ const spawnSchema = Type.Object(
 
 const busSchema = Type.Object(
   {
-    action: StringEnum(BUS_ACTIONS, { description: "List sessions, send a message, or reply" }),
+    action: Type.Unsafe<(typeof BUS_ACTIONS)[number]>(
+      StringEnum(BUS_ACTIONS, { description: "List sessions, send a message, or reply" }),
+    ),
     targetSessionId: Type.Optional(
       Type.String({ description: "Destination Pi session id", minLength: 1, maxLength: 128 }),
     ),
     message: Type.Optional(Type.String({ description: "Message or request body", maxLength: 16_384 })),
-    mode: Type.Optional(StringEnum(SEND_MODES, { description: "Notify without a turn or request one turn" })),
+    mode: Type.Optional(
+      Type.Unsafe<(typeof SEND_MODES)[number]>(
+        StringEnum(SEND_MODES, { description: "Notify without a turn or request one turn" }),
+      ),
+    ),
     replyTo: Type.Optional(
       Type.String({ description: "Original message id for a reply", minLength: 1, maxLength: 128 }),
     ),

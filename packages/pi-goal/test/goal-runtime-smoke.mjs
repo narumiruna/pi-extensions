@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   createAgentSession,
@@ -12,6 +12,8 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+
+import { Type } from "typebox";
 
 const extensionPath = resolve(import.meta.dirname, "../src/goal.ts");
 

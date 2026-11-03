@@ -11,6 +11,7 @@ import stamp, {
   isMessageStampData,
   STAMP_ENTRY_TYPE,
 } from "../src/stamp.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const USER_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 7, 123).getTime();
 const ASSISTANT_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 9, 456).getTime();
@@ -323,7 +324,7 @@ test("missing first content stays unavailable and tool execution does not extend
     ...DEFAULT_STAMP_SETTINGS,
     responseTiming: "detailed",
   }));
-  const component = renderer({ data: mock.entries[0]?.data } as never, { expanded: false }, {
+  const component = renderer({ data: mock.entries[0]?.data } as never, entryRenderOptions(false), {
     fg: (_color: string, text: string) => text,
   } as never);
   assert.ok(component);

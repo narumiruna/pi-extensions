@@ -22,9 +22,10 @@ test("resolveGitMetadata captures branch and commit with bounded non-shell comma
         stderr: "",
         code: 0,
         killed: false,
+        truncated: false,
       };
     }
-    return { stdout: "0123456789ab\n", stderr: "", code: 0, killed: false };
+    return { stdout: "0123456789ab\n", stderr: "", code: 0, killed: false, truncated: false };
   }, "/workspace");
 
   assert.deepEqual(metadata, {
@@ -51,14 +52,14 @@ test("resolveGitMetadata captures branch and commit with bounded non-shell comma
 test("resolveGitMetadata handles detached HEADs and omits unavailable repositories", async () => {
   const detached = await resolveGitMetadata(async (_command, args) => {
     if (args[0] === "symbolic-ref") {
-      return { stdout: "", stderr: "", code: 1, killed: false };
+      return { stdout: "", stderr: "", code: 1, killed: false, truncated: false };
     }
-    return { stdout: "abcdef012345\n", stderr: "", code: 0, killed: false };
+    return { stdout: "abcdef012345\n", stderr: "", code: 0, killed: false, truncated: false };
   }, "/detached");
   assert.deepEqual(detached, { commit: "abcdef012345", detached: true });
 
   const unavailable = await resolveGitMetadata(async () => {
-    return { stdout: "", stderr: "not a repository", code: 128, killed: false };
+    return { stdout: "", stderr: "not a repository", code: 128, killed: false, truncated: false };
   }, "/outside");
   assert.equal(unavailable, undefined);
 

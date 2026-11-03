@@ -28,7 +28,7 @@ const questionSchema = Type.Union(
   [
     Type.Object(
       {
-        type: StringEnum(["noul"] as const, { description: "Return the probability of yes." }),
+        type: Type.Unsafe<"noul">(StringEnum(["noul"] as const, { description: "Return the probability of yes." })),
         instructions: instructionsSchema(),
         criteria: Type.Optional(
           Type.Object(
@@ -44,7 +44,7 @@ const questionSchema = Type.Union(
     ),
     Type.Object(
       {
-        type: StringEnum(["choice"] as const, { description: "Select one named option." }),
+        type: Type.Unsafe<"choice">(StringEnum(["choice"] as const, { description: "Select one named option." })),
         instructions: instructionsSchema(),
         criteria: Type.Record(
           Type.String({ minLength: 1 }),
@@ -56,7 +56,7 @@ const questionSchema = Type.Union(
     ),
     Type.Object(
       {
-        type: StringEnum(["score"] as const, { description: "Rate one ordered dimension." }),
+        type: Type.Unsafe<"score">(StringEnum(["score"] as const, { description: "Rate one ordered dimension." })),
         instructions: instructionsSchema(),
         criteria: Type.Array(structuredValueSchema("One concrete ordered level."), {
           minItems: 2,

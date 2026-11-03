@@ -23,7 +23,7 @@ function record(overrides: Partial<WorktreeRecord> = {}): WorktreeRecord {
 }
 
 function result(stdout = "", code = 0, stderr = ""): ExecResult {
-  return { stdout, stderr, code, killed: false };
+  return { stdout, stderr, code, killed: false, truncated: false };
 }
 
 test("porcelain-v2 status parsing summarizes clean upstream state", () => {

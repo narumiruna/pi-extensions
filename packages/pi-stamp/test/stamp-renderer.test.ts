@@ -8,6 +8,7 @@ import { DEFAULT_STAMP_SETTINGS, type StampSettings } from "../src/format.js";
 import { captureAssistantMetadata } from "../src/metadata.js";
 import { METADATA_PRESETS, METADATA_SETTING_FIELDS } from "../src/metadata-settings.js";
 import { createStampEntryRenderer, isMessageStampData, isToolStampData, STAMP_ENTRY_TYPE } from "../src/stamp.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const USER_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 7, 123).getTime();
 const ASSISTANT_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 9, 456).getTime();
@@ -252,7 +253,7 @@ test("entry renderer reads live settings, uses the callback theme, and stays wid
         previousTimestamp: Date.UTC(2026, 6, 29, 23, 59, 58),
       },
     } as never,
-    { expanded: false },
+    entryRenderOptions(false),
     {
       fg(color: string, text: string) {
         colors.push(color);
@@ -276,7 +277,7 @@ test("entry renderer reads live settings, uses the callback theme, and stays wid
         firstContentAt: Date.UTC(2026, 6, 30, 0, 1, 2, 800),
       },
     } as never,
-    { expanded: false },
+    entryRenderOptions(false),
     { fg: (_color: string, text: string) => text } as never,
   );
   assert.ok(timedComponent);
@@ -293,7 +294,10 @@ test("entry renderer reads live settings, uses the callback theme, and stays wid
     }
   }
 
-  assert.equal(renderer({ data: { version: 99 } } as never, { expanded: false }, { fg: () => "" } as never), undefined);
+  assert.equal(
+    renderer({ data: { version: 99 } } as never, entryRenderOptions(false), { fg: () => "" } as never),
+    undefined,
+  );
 });
 
 test("entry renderer reuses stable output and invalidates width, settings, and themed caches", () => {
@@ -313,7 +317,7 @@ test("entry renderer reuses stable output and invalidates width, settings, and t
         timestamp: Date.UTC(2026, 6, 30, 0, 1, 2),
       },
     } as never,
-    { expanded: false },
+    entryRenderOptions(false),
     {
       fg(_color: string, text: string) {
         styleCalls += 1;
@@ -365,7 +369,7 @@ test("entry renderer invalidates memoized local-time output after a time-zone ch
           timestamp: Date.UTC(2026, 6, 30, 0, 1, 2),
         },
       } as never,
-      { expanded: false },
+      entryRenderOptions(false),
       { fg: (_color: string, text: string) => text } as never,
     );
     assert.ok(component);
@@ -396,7 +400,7 @@ test("entry renderer expands exact timelines from only the observations each ver
         timestamp: Date.UTC(2026, 6, 30, 0, 1, 2, 345),
       },
     } as never,
-    { expanded: true },
+    entryRenderOptions(true),
     theme,
   );
   assert.ok(user);
@@ -420,7 +424,7 @@ test("entry renderer expands exact timelines from only the observations each ver
         completedAt: Date.UTC(2026, 6, 30, 0, 1, 5, 200),
       },
     } as never,
-    { expanded: true },
+    entryRenderOptions(true),
     theme,
   );
   assert.ok(legacyAssistant);
@@ -461,7 +465,7 @@ test("version-6 rendering gates cost since user without requiring assistant meta
     costSinceUser: 0.039,
   } as const;
   const theme = { fg: (_color: string, text: string) => text } as never;
-  const component = renderer({ data } as never, { expanded: false }, theme);
+  const component = renderer({ data } as never, entryRenderOptions(false), theme);
   assert.ok(component);
   assert.deepEqual(
     component.render(80).map((line) => line.trim()),
@@ -506,7 +510,7 @@ test("diagnostic settings independently control timeline, Thinking, and stop rea
         thinkingLevel: "high",
       },
     } as never,
-    { expanded: true },
+    entryRenderOptions(true),
     { fg: (_color: string, text: string) => text } as never,
   );
   assert.ok(component);
@@ -574,7 +578,7 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
     thinkingLevel: "high",
   } as const;
   const theme = { fg: (_color: string, text: string) => text } as never;
-  const compact = renderer({ data } as never, { expanded: false }, theme);
+  const compact = renderer({ data } as never, entryRenderOptions(false), theme);
   assert.ok(compact);
   assert.deepEqual(
     compact.render(80).map((line) => line.trim()),
@@ -588,7 +592,7 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
     showDiagnostics: true,
     responseTiming: "duration",
   };
-  const debug = renderer({ data } as never, { expanded: true }, theme);
+  const debug = renderer({ data } as never, entryRenderOptions(true), theme);
   assert.ok(debug);
   assert.deepEqual(
     debug.render(120).map((line) => line.trim()),
@@ -618,15 +622,15 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
       outcome: "success",
     },
   } as never;
-  assert.equal(renderer(toolEntry, { expanded: false }, theme), undefined);
+  assert.equal(renderer(toolEntry, entryRenderOptions(false), theme), undefined);
   settings = { ...settings, toolStamps: true };
-  const tool = renderer(toolEntry, { expanded: false }, theme);
+  const tool = renderer(toolEntry, entryRenderOptions(false), theme);
   assert.ok(tool);
   assert.deepEqual(
     tool.render(80).map((line) => line.trim()),
     ["tool read · 1.3s · success"],
   );
-  const expandedTool = renderer(toolEntry, { expanded: true }, theme);
+  const expandedTool = renderer(toolEntry, entryRenderOptions(true), theme);
   assert.ok(expandedTool);
   assert.deepEqual(
     expandedTool.render(80).map((line) => line.trim()),
@@ -676,7 +680,7 @@ test.each(METADATA_SETTING_FIELDS)("entry renderer invalidates mounted metadata 
       {
         data: { version: 5, role: "assistant", timestamp: assistant.timestamp, metadata, thinkingLevel: "high" },
       } as never,
-      { expanded },
+      entryRenderOptions(expanded),
       { fg: (_color: string, text: string) => text } as never,
     );
     assert.ok(component);
@@ -722,7 +726,7 @@ test("old persisted debug values stay hidden until their own flags and transcrip
         showExactTimeline: false,
       };
       const renderer = createStampEntryRenderer(() => settings);
-      const component = renderer({ data } as never, { expanded }, {
+      const component = renderer({ data } as never, entryRenderOptions(expanded), {
         fg: (_color: string, text: string) => text,
       } as never);
       assert.ok(component);

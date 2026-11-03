@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { keyText } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { FLEET_MESSAGE_TYPE, renderFleetMessage } from "../src/renderer.js";
@@ -31,7 +32,12 @@ test("message renderer strips terminal controls and remains bounded at narrow CJ
       },
       timestamp: Date.now(),
     },
-    { expanded: true, outputPad: 0 },
+    {
+      expanded: true,
+      outputPad: 0,
+      keyText,
+      keyHint: (keybinding, description) => `${keyText(keybinding)} ${description}`,
+    },
     theme,
   );
   assert.ok(component);

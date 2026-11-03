@@ -11,6 +11,7 @@ import { DEFAULT_STAMP_SETTINGS, formatTimeSinceUser, type StampSettings } from 
 import { METADATA_PRESETS } from "../src/metadata-settings.js";
 import { normalizeStampSettingsDocument, type StampSettingsRuntime } from "../src/settings.js";
 import stamp, { createStampEntryRenderer, isMessageStampData, STAMP_ENTRY_TYPE } from "../src/stamp.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const BASE = Date.UTC(2026, 6, 30, 0, 0, 0);
 const theme = { fg: (_color: string, text: string) => text } as never;
@@ -345,7 +346,7 @@ test("persisted elapsed rendering is immutable, width-safe, and independently to
   await h.user(BASE);
   const data = await h.response(BASE + 80_800, BASE + 84_000);
   const renderer = createStampEntryRenderer(() => h.runtime.get().settings);
-  const component = renderer({ data } as never, { expanded: false }, theme);
+  const component = renderer({ data } as never, entryRenderOptions(false), theme);
   assert.ok(component);
   const render = () => component.render(120).map((line) => line.trim());
   assert.deepEqual(render(), ["00:01:20 · since user 1m 24s", "est $0.01 · since user $0.01"]);
@@ -360,7 +361,7 @@ test("persisted elapsed rendering is immutable, width-safe, and independently to
   component.invalidate();
   assert.deepEqual(render(), ["00:01:20 · since user 1m 24s"]);
   for (const expanded of [false, true]) {
-    const view = renderer({ data } as never, { expanded }, theme);
+    const view = renderer({ data } as never, entryRenderOptions(expanded), theme);
     assert.ok(view);
     for (const width of [0, 1, 4, 8, 12, 80]) {
       assert.ok(view.render(width).every((line) => visibleWidth(line) <= width));
@@ -368,7 +369,7 @@ test("persisted elapsed rendering is immutable, width-safe, and independently to
   }
   const legacy = renderer(
     { data: { version: 3, role: "assistant", timestamp: BASE, completedAt: BASE + 2_000 } } as never,
-    { expanded: false },
+    entryRenderOptions(false),
     theme,
   );
   assert.deepEqual(
@@ -384,7 +385,7 @@ test("minute rounding renders consistently in collapsed and expanded stamps", ()
       {
         data: { version: 7, role: "assistant", timestamp: BASE, completedAt: BASE + 59_950, timeSinceUserMs: 59_950 },
       } as never,
-      { expanded },
+      entryRenderOptions(expanded),
       theme,
     );
     assert.ok(component);

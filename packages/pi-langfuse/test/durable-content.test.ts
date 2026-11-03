@@ -1,9 +1,19 @@
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
-import { createRegistry, defineExtension, defineTool, Harness, MemoryStorage } from "@earendil-works/pi-durable";
+import { awaitWithContext, BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+  createRegistry,
+  defineExtension,
+  defineTool,
+  Harness,
+  hook,
+  MemoryStorage,
+  ToolTask,
+} from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { createLangfuseRuntimeFromBackend, createPiLangfuseDurableConversation } from "../src/durable.js";
 import { MAX_CAPTURE_BYTES } from "../src/sanitizer.js";
+import { deferred } from "./durable-support.js";
 import { FakeBackend, serializedBytes } from "./support.js";
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -136,3 +146,65 @@ it("omits image payloads and continuation signatures from committed messages wit
   expect(transcript).toContain(imageData);
   expect(transcript).toContain("PRIVATE-CONTINUATION-SIGNATURE");
 });
+
+it.each(["throw", "invalid", "blocked", "hook_throw", "unoffered", "abort"] as const)(
+  "omits diagnostic bodies for the real %s tool-result branch",
+  async (kind) => {
+    const f = await fixture();
+    const entered = deferred();
+    const tool = defineTool({
+      name: "private",
+      description: "Privacy test",
+      parameters: Type.Object({ value: Type.String() }),
+      execute: async (_args, _api, ctx) => {
+        if (kind === "throw") throw new Error("PRIVATE-EXECUTION-ERROR");
+        if (kind === "abort") {
+          entered.resolve();
+          await awaitWithContext(new Promise<void>(() => undefined), ctx);
+        }
+        return { output: [fauxText("visible result")] };
+      },
+    });
+    f.registry.install(
+      defineExtension({
+        name: "private",
+        tools: [tool],
+        hooks: [
+          hook(ToolTask, {
+            beforeTool: () => {
+              if (kind === "hook_throw") throw new Error("PRIVATE-HOOK-ERROR");
+              return kind === "blocked" ? { block: "PRIVATE-BLOCK-ERROR" } : undefined;
+            },
+            afterTool: (_call, result) => ({
+              ...result,
+              details: { secretKey: "PRIVATE-DETAIL" },
+              diagnostics: [
+                ...(result.diagnostics ?? []),
+                { severity: "warn", code: "host_private", message: "PRIVATE-ADDED-DIAGNOSTIC" },
+              ],
+            }),
+          }),
+        ],
+      }),
+    );
+    if (kind === "unoffered") await f.root.configure({ modelTools: [] }, context);
+    f.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("private", { value: kind === "invalid" ? 123 : "safe argument" }, { id: "private-call" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("final"),
+    ]);
+    const submission = await f.root.submit({ type: "input", content: "go" }, context);
+    if (kind === "abort") {
+      await entered.promise;
+      await f.root.abort(context);
+    }
+    await submission.wait(context);
+    await vi.waitFor(() => expect(f.backend.observations.find((span) => span.type === "tool")?.ended).toBe(true));
+    expect(JSON.stringify(f.backend.observations)).not.toContain("PRIVATE-");
+    const transcript = JSON.stringify((await f.root.context(context)).entries);
+    expect(transcript).toContain("PRIVATE-ADDED-DIAGNOSTIC");
+    expect(f.backend.observations.filter((span) => span.type === "tool")).toHaveLength(1);
+  },
+);

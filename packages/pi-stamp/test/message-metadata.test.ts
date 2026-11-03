@@ -8,6 +8,7 @@ import * as metadataModule from "../src/metadata.js";
 import { METADATA_PRESET_NAMES, METADATA_PRESETS } from "../src/metadata-settings.js";
 import { createStampEntryRenderer, STAMP_ENTRY_TYPE } from "../src/stamp.js";
 import { RESPONSE_MESSAGE, RESPONSE_METADATA_ROWS, UTC_SETTINGS } from "./menu-fixtures.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const TIMESTAMP = RESPONSE_MESSAGE.timestamp;
 const STAMP = { version: 2, role: "assistant", timestamp: TIMESTAMP } as const;
@@ -35,7 +36,7 @@ function mount(
   id = "stamp",
   expanded = false,
 ): Component {
-  const component = renderer({ id, data } as never, { expanded }, {
+  const component = renderer({ id, data } as never, entryRenderOptions(expanded), {
     fg: (_role: string, text: string) => text,
   } as never);
   assert.ok(component);

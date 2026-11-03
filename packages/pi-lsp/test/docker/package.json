@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "typebox": "1.4.3"
   },
   "overrides": {

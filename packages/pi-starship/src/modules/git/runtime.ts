@@ -93,7 +93,13 @@ export async function readGitSnapshot(
   };
 }
 
-type GitCommandResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
+// Pi's executor and the bounded workspace executor share only these result fields.
+interface GitCommandResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+  killed: boolean;
+}
 
 async function runGit(
   pi: ExtensionAPI,

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, onTestFinished, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { METADATA_PRESETS, type StampMetadataPreset } from "../src/metadata-settings.js";
 import type { StampSettingsPatch } from "../src/settings.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const BASE = Date.UTC(2026, 9, 30, 11, 22, 33);
 const directory = mkdtempSync(join(tmpdir(), "pi-stamp-display-runtime-"));
@@ -110,11 +111,9 @@ async function harness(overrides: StampSettingsPatch = {}, recordedStamp: unknow
     await running;
   });
   const mount = (data: unknown = recordedStamp, expanded = false) => {
-    const component = renderer(
-      { id: "original-stamp", data },
-      { expanded },
-      { fg: (_role: string, text: string) => text },
-    ) as Component | undefined;
+    const component = renderer({ id: "original-stamp", data }, entryRenderOptions(expanded), {
+      fg: (_role: string, text: string) => text,
+    }) as Component | undefined;
     assert.ok(component);
     return () => component.render(240).map((line) => stripVTControlCharacters(line).trim());
   };

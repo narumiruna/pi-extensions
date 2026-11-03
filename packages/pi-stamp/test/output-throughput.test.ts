@@ -21,6 +21,7 @@ import {
   normalizeStampSettingsDocument,
   type StampSettingsRuntime,
 } from "../src/settings.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const BASE = Date.UTC(2026, 6, 30);
 const theme = { fg: (_color: string, text: string) => text } as never;
@@ -108,7 +109,7 @@ function render(data: unknown, settings: Partial<StampSettings> = {}, expanded =
     ...settings,
   }));
   return (
-    renderer({ data } as never, { expanded }, theme)
+    renderer({ data } as never, entryRenderOptions(expanded), theme)
       ?.render(180)
       .map((line) => line.trim()) ?? []
   );
@@ -284,7 +285,7 @@ test("mounted rendering keeps throughput on one row in both expansion modes and 
   const renderer = extension.createStampEntryRenderer(() => h.runtime.get().settings);
   for (const expanded of [false, true]) {
     await h.runtime.update({ responseTiming: "off", showExactTimeline: true });
-    const view = renderer({ data } as never, { expanded }, theme);
+    const view = renderer({ data } as never, entryRenderOptions(expanded), theme);
     assert.ok(view);
     assert.match(view.render(180)[0] ?? "", /41\.9 tok\/s/u);
     assert.equal(view.render(180).filter((line) => line.includes("tok/s")).length, 1);

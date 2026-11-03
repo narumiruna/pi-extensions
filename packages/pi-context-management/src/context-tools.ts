@@ -134,12 +134,16 @@ export function registerContextManagementTools(pi: ExtensionAPI, runtime: Contex
     description: CONTEXT_MANAGEMENT_TOOL_DESCRIPTIONS.context_management_recall_context,
     parameters: Type.Object(
       {
-        source: StringEnum(RECALL_SOURCES, {
-          description: "Read conversation history or context notes",
-        }),
-        action: StringEnum(RECALL_ACTIONS, {
-          description: "List items, read one ID, or search text",
-        }),
+        source: Type.Unsafe<(typeof RECALL_SOURCES)[number]>(
+          StringEnum(RECALL_SOURCES, {
+            description: "Read conversation history or context notes",
+          }),
+        ),
+        action: Type.Unsafe<(typeof RECALL_ACTIONS)[number]>(
+          StringEnum(RECALL_ACTIONS, {
+            description: "List items, read one ID, or search text",
+          }),
+        ),
         id: Type.Optional(Type.String({ description: "Stable history item ID or note name", maxLength: 256 })),
         query: Type.Optional(Type.String({ description: "Case-insensitive search text", maxLength: 512 })),
         cursor: Type.Optional(Type.String({ description: "Cursor returned by an earlier result", maxLength: 12 })),
@@ -166,9 +170,11 @@ export function registerContextManagementTools(pi: ExtensionAPI, runtime: Contex
     description: CONTEXT_MANAGEMENT_TOOL_DESCRIPTIONS.context_management_update_notes,
     parameters: Type.Object(
       {
-        action: StringEnum(NOTE_ACTIONS, {
-          description: "Replace a note or append content exactly as supplied",
-        }),
+        action: Type.Unsafe<(typeof NOTE_ACTIONS)[number]>(
+          StringEnum(NOTE_ACTIONS, {
+            description: "Replace a note or append content exactly as supplied",
+          }),
+        ),
         note: Type.String({ description: "Note name", minLength: 1, maxLength: 128 }),
         content: Type.String({
           description: "Note content written or appended exactly as supplied",
