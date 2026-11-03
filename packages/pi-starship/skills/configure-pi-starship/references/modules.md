@@ -28,7 +28,7 @@ Use this authoritative public reference whenever a question or change involves a
 | `context` | `$symbol`, `$percentage`, `$tokens`, `$window` | Context-window use |
 | `tokens` | `$symbol`, `$input`, `$output`, `$total` | Token totals |
 | `cache` | `$symbol`, `$rate`, `$read`, `$write` | Prompt-cache reads, writes, and latest hit rate; disabled by default |
-| `cost` | `$symbol`, `$cost`, `$subscription` | Session cost and optional `(sub)` marker |
+| `cost` | `$symbol`, `$cost`, `$subscription`, `$source` | Session cost, provider-total provenance, and optional `(sub)` marker |
 | `time` | `$symbol`, `$time` | Formatted clock; local `HH:mm` by default |
 | `turn` | `$symbol`, `$count` | User turn count |
 | `package` | `$symbol`, `$version`, `$source` | Direct project manifest version |
@@ -208,7 +208,7 @@ These are inert labels, not evidence of cluster access or valid credentials.
 - Prompt waiting takes precedence without losing the underlying tool, streaming, completed, or idle state, which returns when the prompt closes.
 - Active and completed tool names in `$tool` and `$text` are single-line display text: line separators become spaces, and terminal and direction controls are removed. Raw tool identities remain unchanged.
 - `tokens`, `cache`, and `cost` total every usage-bearing session entry, matching Pi's native footer.
-  This includes assistant messages, nested-LLM tool results, compactions, and branch summaries, including abandoned branches retained in the session.
+  This includes assistant messages, nested-LLM tool results, compactions, branch summaries, and standalone usage such as persisted cache warming, including abandoned branches retained in the session.
 - Cache `$read` and `$write` are cumulative.
   `$rate` uses only the latest assistant prompt with `cacheRead / (input + cacheRead + cacheWrite) * 100`.
   The module is empty when Pi has reported no cache reads or writes.
@@ -218,6 +218,14 @@ These are inert labels, not evidence of cluster access or valid credentials.
   Its default display hides values below 30%.
   Customize `[[context.display]]` when lower values should remain visible.
   The module name remains `context`, not `context_usage`.
+- Cost `$source` is `provider` only for a nonempty, finite total when every included usage record has a finite nonnegative `cost.total` and `cost.totalFromProvider === true`.
+  It is `unconfirmed` for catalog estimates, mixed provenance, older sessions, empty sessions, or missing totals.
+  Records without usage do not contribute.
+- `$cost` sums Pi's best available `cost.total` values, not estimated component costs.
+  Components remain catalog estimates and can differ from a provider total; these values do not establish exact prompt-cache savings.
+  Session-response costs are separate from account/key quotas and balances.
+- The default cost format and thresholds are unchanged.
+  To show provenance, set `[cost].format` to `'$cost $source( $subscription)'`.
 - Subscription-backed OAuth models and `kimi-coding` set cost `$subscription` to `(sub)`.
   The dollar value is usage cost, not proof of an amount billed under a subscription.
 

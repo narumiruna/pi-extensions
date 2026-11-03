@@ -75,7 +75,7 @@ const MODULE_DESCRIPTIONS = {
   conda: "Active Conda environment.",
   container: "Current container or remote development environment.",
   context: "Current model context-window usage.",
-  cost: "Reported estimated session cost or subscription state.",
+  cost: "Session cost, provider-total provenance, and subscription state.",
   deno: "Deno version detected in the current workspace.",
   directory: "Current working directory.",
   direnv: "Current direnv loading and permission state.",

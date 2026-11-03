@@ -86,7 +86,7 @@ const cases: CostCase[] = [
       provenance: true,
     }),
   ),
-  ...["true", 1].map(
+  ...[null, "true", "false", 0, 1, [], {}, "data:image/png;base64,PRIVATE_PAYLOAD"].map(
     (totalFromProvider): CostCase => ({
       name: `invalid provenance ${String(totalFromProvider)}`,
       cost: { ...estimates, total: 0, totalFromProvider } as unknown as Cost,

@@ -3,7 +3,7 @@ import { defineModule } from "./types.js";
 
 export const costModule = defineModule({
   name: "cost",
-  variables: ["symbol", "cost", "subscription"],
+  variables: ["symbol", "cost", "subscription", "source"],
   defaults: {
     format: "[ $symbol \\$$cost( $subscription) ]($style)",
     symbol: "💸",
@@ -22,6 +22,7 @@ export const costModule = defineModule({
   },
   values: ({ runtime }) => ({
     cost: formatCost(runtime.tokenTotals.cost),
+    source: runtime.tokenTotals.costTotalFromProvider === true ? "provider" : "unconfirmed",
     subscription: runtime.usingSubscription ? "(sub)" : "",
   }),
 });

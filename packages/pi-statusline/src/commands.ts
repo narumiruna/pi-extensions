@@ -30,6 +30,7 @@ import {
   SEGMENT_NAMES,
   type SegmentName,
 } from "./types.js";
+import { summarizeFooterUsage } from "./usage.js";
 
 const EDIT_SETTINGS_LABEL = "Edit settings JSON";
 const SEGMENT_VIEWPORT_SIZE = 6;
@@ -817,6 +818,8 @@ function editableSettings(
 function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
   if (!canNotify(ctx)) return;
   const loaded = options.getLoaded();
+  const usage = summarizeFooterUsage(ctx.sessionManager.getEntries());
+  const costSource = usage.costTotalFromProvider ? "provider-reported" : "unconfirmed";
   const diagnostics = loaded.diagnostics
     .slice(0, 5)
     .map((item) => `${item.path || "root"}: ${item.message}`)
@@ -831,6 +834,7 @@ function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOpti
       `separator: ${loaded.config.separator}`,
       `information: ${inferInformationProfile(loaded.config.segments)}`,
       `segments: ${loaded.config.segments.join(", ") || "none"}`,
+      `session cost: $${usage.cost.toFixed(usage.cost >= 1 ? 2 : 3)} (${costSource})`,
       diagnostics ? `warnings: ${diagnostics}` : "warnings: none",
     ].join("\n"),
     loaded.diagnostics.length > 0 ? "warning" : "info",
@@ -843,7 +847,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
     [
       "/statusline — open Appearance, Information, Advanced, Status, and Help",
       "/statusline settings — edit and apply JSON",
-      "/statusline status — show source, path, information level, and warnings",
+      "/statusline status — show settings, session cost source, and warnings",
       "/statusline help — show this help",
       "Menu actions: Appearance, Information, Advanced, Status, Help.",
       "Information levels: minimal, balanced, detailed; any other segment array is custom.",

@@ -266,9 +266,10 @@ Each `pi.llm` generation records:
 - non-additive `pi.usage.reasoning_tokens` and `pi.usage.cache_write_1h_tokens` in metadata so subsets are not double-counted.
 
 A finite zero total is exported only when Pi reports `cost.totalFromProvider === true`, even when catalog-estimated component costs are positive.
-The total is never replaced by the sum of those components.
+Neither adapter replaces the total with the sum of component estimates.
 When provenance is absent or false, zero cost buckets remain omitted to preserve the existing unknown-pricing fallback.
-Boolean provenance is exported as `pi.usage.cost.total_from_provider` metadata, not as a numeric cost bucket; absent provenance stays omitted.
+Boolean provenance is exported as `pi.usage.cost.total_from_provider` metadata, not as a numeric cost bucket; absent or invalid provenance stays omitted.
+The durable adapter uses the same metadata key for assistant and nested-tool usage, while retaining its existing non-negative cost buckets, including zero totals regardless of provenance.
 
 The request snapshot is the payload visible to this handler, not a guaranteed final wire payload.
 A later extension can still replace it.

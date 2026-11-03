@@ -404,12 +404,14 @@ export class DurableRecorder {
     if (message?.role === "assistant") {
       const generation = this.generation();
       if (!generation) return;
+      const usage = durableUsage(message);
       this.end(generation, {
         output: durableContent(entry.model, this.options.captureContent ?? true),
         model: message.model,
-        ...durableUsage(message),
+        ...usage,
         level: message.stopReason === "error" ? "ERROR" : message.stopReason === "aborted" ? "WARNING" : "DEFAULT",
         metadata: {
+          ...usage.metadata,
           "pi.durable.entry_id": entry.id,
           "pi.durable.task_id": entry.byTaskId,
           "pi.durable.stop_reason": message.stopReason,
@@ -435,13 +437,18 @@ export class DurableRecorder {
         metadata: { "pi.durable.start_not_observed": true, "pi.durable.tool_call_id": callId },
       });
     const message = entry?.model?.[0];
+    const usage = message ? durableUsage(message) : {};
     this.end(tool, {
       ...(entry
         ? { output: durableContent(entry.model, this.options.captureContent ?? true, durableDiagnosticCount(entry)) }
         : {}),
-      ...(message ? durableUsage(message) : {}),
+      ...usage,
       level: message?.role === "toolResult" && message.isError ? "ERROR" : entry ? "DEFAULT" : "WARNING",
-      metadata: { "pi.durable.result_entry_id": entry?.id, "pi.durable.result_missing": !entry },
+      metadata: {
+        ...usage.metadata,
+        "pi.durable.result_entry_id": entry?.id,
+        "pi.durable.result_missing": !entry,
+      },
     });
     run.tools.delete(key);
   }

@@ -109,6 +109,7 @@ export interface StarshipRuntimeSnapshot {
     cacheRead: number;
     cacheWrite: number;
     cost: number;
+    costTotalFromProvider?: boolean;
     latestCacheHitRate?: number;
   };
   usingSubscription: boolean;

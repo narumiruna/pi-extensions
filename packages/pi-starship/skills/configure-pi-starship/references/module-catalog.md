@@ -1157,9 +1157,9 @@ Accepted style fields:
 
 ### `cost`
 
-Reported estimated session cost or subscription state.
+Session cost, provider-total provenance, and subscription state.
 
-- Format variables: `$symbol`, `$cost`, `$subscription`.
+- Format variables: `$symbol`, `$cost`, `$subscription`, `$source`.
 - Style variables in `format`: `$style`.
 - Default `format`: `"[ $symbol \\$$cost( $subscription) ]($style)"`.
 - Default `symbol`: `"💸"`.
