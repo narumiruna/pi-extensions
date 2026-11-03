@@ -29,7 +29,7 @@ afterEach(async () => {
 async function resources(discovered: boolean, trusted = true) {
   const { DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
   if (discovered) {
-    const path = join(cwd, ".pi", "extensions", "skills");
+    const path = join(cwd, ".pi", "extensions", "skill-manager");
     await mkdir(dirname(path), { recursive: true });
     await symlink(dirname(entrypoint), path, "dir");
   }

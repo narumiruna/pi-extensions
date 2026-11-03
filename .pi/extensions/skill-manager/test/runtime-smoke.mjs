@@ -29,7 +29,7 @@ async function smoke(discovered) {
   if (discovered) {
     const directory = join(cwd, ".pi", "extensions");
     await mkdir(directory, { recursive: true });
-    await symlink(dirname(extension), join(directory, "skills"), "dir");
+    await symlink(dirname(extension), join(directory, "skill-manager"), "dir");
   }
   const args = [
     cli,

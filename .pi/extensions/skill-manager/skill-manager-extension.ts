@@ -16,7 +16,7 @@ const showMenu: ShowMenu = async (ctx, route, env, guard) => {
   return showSkillsMenu(ctx, route, env, guard);
 };
 
-export function createSkillsExtension(show: ShowMenu = showMenu) {
+export function createSkillManagerExtension(show: ShowMenu = showMenu) {
   return (pi: ExtensionAPI) => {
     const owners = new Map<object, Owner>();
     const starts = new WeakMap<object, object>();
@@ -99,4 +99,4 @@ export function createSkillsExtension(show: ShowMenu = showMenu) {
   };
 }
 
-export default createSkillsExtension();
+export default createSkillManagerExtension();
