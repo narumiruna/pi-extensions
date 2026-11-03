@@ -42,7 +42,7 @@ for (const key of invalidKeys) {
     assert.equal(matchesKey("\x1b[120;5u", key as KeyId), false);
     const fixture = createRendererHost("fullscreen", rendererTheme(), {
       kitty: true,
-      bindings: { "tui.altScreen.lineUp": key, "app.thinking.save": "ctrl+x" } as KeybindingsConfig,
+      bindings: { "tui.altScreen.search": key, "app.thinking.save": "ctrl+x" } as KeybindingsConfig,
     });
     t.onTestFinished(() => fixture.stop());
     const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
@@ -164,7 +164,7 @@ for (const scenario of [
     const fixture = createRendererHost("fullscreen", rendererTheme(), {
       kitty: !scenario.modify,
       bindings: {
-        "tui.altScreen.lineUp": scenario.host,
+        "tui.altScreen.search": scenario.host,
         "app.thinking.save": [scenario.save, "ctrl+s"],
       } as KeybindingsConfig,
     });
@@ -183,8 +183,10 @@ for (const scenario of [
     };
     const before = fixture.scroll.scrollTop;
     fixture.send(scenario.input);
-    assert.ok(fixture.scroll.scrollTop < before);
+    assert.equal(fixture.scroll.scrollTop, before);
     assert.deepEqual(inputs, []);
+    assert.notEqual(fixture.host.getFocusedComponent(), fixture.component);
+    fixture.send("\x1b"); // Native search still owns this collision, even for a capturing list.
     fixture.send("\x1b[115;5u");
     assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
   });
@@ -203,8 +205,7 @@ for (const scenario of [
     const fixture = createRendererHost("fullscreen", rendererTheme(), {
       kitty: true,
       bindings: {
-        "tui.altScreen.search": [],
-        "tui.altScreen.lineUp": scenario.host,
+        "tui.altScreen.search": scenario.host,
         "app.thinking.save": scenario.save,
       } as KeybindingsConfig,
     });

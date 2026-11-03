@@ -104,6 +104,9 @@ export async function showImagegenSettings(
       }
 
       return {
+        get capturesViewportInput() {
+          return list.capturesViewportInput;
+        },
         render(availableWidth) {
           const content = list.render(Math.max(1, availableWidth));
           const focusedRow = Math.max(

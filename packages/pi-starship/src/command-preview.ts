@@ -48,6 +48,7 @@ export async function showPreviewActionMenu<Value extends string>(
       };
 
       return {
+        capturesViewportInput: true,
         render(width: number): string[] {
           const safeWidth = Math.max(1, width);
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;

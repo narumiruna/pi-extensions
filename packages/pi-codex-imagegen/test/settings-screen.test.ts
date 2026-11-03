@@ -98,6 +98,39 @@ it("frames exactly two native settings, sanitizes paths and retains focused rows
   expect(await running).toBe("close");
 });
 
+it.each([false, true])("outer list captures viewport input and pages (remapped: %s)", async (remapped) => {
+  const keys = new KeybindingsManager(
+    TUI_KEYBINDINGS,
+    remapped ? { "tui.select.pageUp": "ctrl+b", "tui.select.pageDown": "ctrl+v" } : {},
+  );
+  setKeybindings(keys);
+  const tui = createTuiHarness({ keybindings: keys });
+  const { owner, controller } = fixture();
+  let component: Component | undefined;
+  const custom: typeof tui.custom = (factory, options) =>
+    tui.custom(async (...args) => {
+      component = await factory(...args);
+      return component;
+    }, options);
+  const { ctx } = createMockContext({ mode: "tui", custom });
+  const running = showImagegenSettings(ctx, owner);
+  try {
+    await tui.waitForOpen();
+    expect(component?.capturesViewportInput).toBe(true);
+    tui.send(remapped ? "\u0016" : "\u001b[6~");
+    expect(plain(tui.render())).toContain("→ Transparent background");
+    tui.send(remapped ? "\u0002" : "\u001b[5~");
+    expect(plain(tui.render())).toContain("→ Tool access");
+    tui.press("ctrl+c");
+    expect(await running).toBe("close");
+    expect(owner.saveSettings).not.toHaveBeenCalled();
+  } finally {
+    controller.abort();
+    tui.dispose();
+    await running;
+  }
+});
+
 it("serializes immediate saves, rolls back failures without resetting cursor, and recovers the queue", async () => {
   const tui = createTuiHarness();
   const { owner, apply } = fixture();

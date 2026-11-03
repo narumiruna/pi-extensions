@@ -64,6 +64,7 @@ export function createRendererHost(
     {
       ...TUI_KEYBINDINGS,
       "app.message.copy": { defaultKeys: "ctrl+x", description: "Copy document" },
+      "app.clipboard.pasteImage": { defaultKeys: "ctrl+v", description: "Paste clipboard" },
       "app.models.save": { defaultKeys: "ctrl+s", description: "Save default model" },
       "app.thinking.save": { defaultKeys: "ctrl+s", description: "Save default thinking" },
       "app.thinking.cycle": { defaultKeys: "shift+tab", description: "Cycle thinking" },

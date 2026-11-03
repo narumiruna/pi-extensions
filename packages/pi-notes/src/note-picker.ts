@@ -123,6 +123,7 @@ interface MouseLayout {
 }
 
 export class NotePicker implements Component, Focusable {
+  readonly capturesViewportInput = true;
   private readonly searchInput = new Input();
   private readonly searchEnabled: boolean;
   private filteredNotes: MarkdownEntry[];

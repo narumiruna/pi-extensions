@@ -52,7 +52,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
   const detailSearch = options.screen.enableDetailSearch ? new DocumentSearchController() : undefined;
   const detailSearchActivationAvailable = Boolean(
     detailSearch &&
-      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY) &&
+      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY, true) &&
       documentSearchActivationAvailable(options.keybindings, false),
   );
   const allItems: SearchableItem[] = options.screen.items.map((item) => ({

@@ -57,6 +57,9 @@ export function showConfigurationMenu(
         tui.requestRender();
       };
       return {
+        get capturesViewportInput() {
+          return list.capturesViewportInput;
+        },
         render(width) {
           if (disposed) return [];
           lastWidth = width;

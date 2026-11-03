@@ -213,6 +213,9 @@ export async function showProgressSettings(
         () => complete("back"),
       );
       return {
+        get capturesViewportInput() {
+          return itemLimitInput ? false : list.capturesViewportInput;
+        },
         get focused() {
           return focused;
         },

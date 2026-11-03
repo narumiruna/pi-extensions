@@ -51,17 +51,27 @@ The audit inspected the installed native `handleViewportInput()` and `handleTerm
 1. Focus reports and mouse sequences are handled by the renderer. Existing renderer tests cover wheel input, component mouse routing, drag capture, links, and regular-mode mouse behavior.
 2. Native transcript search always has an earlier listener. Search-next, search-previous, and search-close are intercepted when the native search overlay has focus; the replacement component then does not own input.
 3. A focused non-search overlay receives viewport input instead of the transcript. Kit does not transfer overlay ownership. Existing overlay tests retain that behavior.
-4. Without that overlay focus, the transcript owns page, half-page, line, previous/next prompt, and top/bottom actions. Tests remap each of these actions and prove that the replacement handler receives no triggering bytes.
+4. A focused component declaring `capturesViewportInput` receives page, half-page, line, previous/next prompt, and top/bottom actions. Without capture or ordinary overlay focus, the transcript owns those actions. Tests remap every branch and verify the focused list receives the input; non-capturing custom components retain transcript scrolling.
 5. The public debug callback reserves its native debug key when present. Other extension-installed input listeners are not exposed by a public ownership API; Kit cannot infer them.
 6. Remaining input reaches the focused component. Pi filters key-release events unless that component opts in.
 
-Hint filtering uses public `getKeybindings()`, `tui.mode`, terminal-protocol capability, and Kit's matcher-overlap logic. Alias, modifier-order, legacy collision, and disambiguated-protocol tests remain in place. It does not deep-import renderer internals or change the host's configured actions. It conservatively omits transcript-owned keys for replacement screens, even when another overlay could temporarily receive those keys.
+Hint filtering uses public `getKeybindings()`, `tui.mode`, terminal-protocol capability, and Kit's matcher-overlap logic. Alias, modifier-order, legacy collision, and disambiguated-protocol tests remain in place. It does not deep-import renderer internals or change the host's configured actions. It omits transcript-owned keys for non-capturing replacement screens. Capturing list screens keep viewport keys available, but native search activation and debug remain reserved. Another extension's arbitrary input listeners remain outside this contract.
 
 `native-key-overlap.test.ts` adds native regressions for malformed host bindings, literal `+`, Kitty physical/logical shifted symbols, modifyOtherKeys, and printable base-layout alternatives. Invalid modifier syntax is rejected without repairing it into another key. Protocol probes use Pi's public matcher in both directions; they do not invent functional-key layout alternatives. Native authoritative Latin/symbol identities and the first usable fallback remain tested.
 
-Default PageUp/PageDown continue to scroll the fullscreen transcript. Regular mode leaves them available to Kit documents. Non-conflicting host remaps make document paging reachable in fullscreen. Standalone Space retains independent local document search unless a standard component action or an earlier host action owns it. A native search overlay is not a search of the Kit document.
+Default PageUp/PageDown move focused Kit lists in fullscreen and regular modes. Browse retains capture in its detail view. Standalone document reviews and arbitrary custom components do not opt in; their fullscreen transcript scrolling is unchanged. Non-conflicting host remaps make standalone document paging reachable in fullscreen. Standalone Space retains independent local document search unless a standard component action or an earlier host action owns it. A native search overlay is not a search of the Kit document.
 
 Kit emits no application-owned OSC program-status codes and does not claim native blocked-status reporting for custom screens. The selector and host-input corrections above add no public API, setting, persistence schema, coding-agent runtime import, or extension-specific branch.
+
+## Selective fullscreen list capture
+
+Issue #1786 extends the host-boundary audit to Pi's native capture contract. `runCustomInteraction()` forwards the current child value through a getter. Kit enables capture only for action, choice, settings, multi-select, browse, live-choice, and model/thinking list screens. It adds no setting or coding-agent runtime import.
+
+The consumer audit covers Progress, Ticker, Statusline, Usage, Subagents, Codex Imagegen, Notes, Recall, File Context, Starship, and Sync. Native-list wrappers forward capture; custom list hosts declare it. Progress excludes its item-limit text input. File Context excludes revision input and static help. Statusline reorder, File Context history, and Sync confirmation retain their existing navigation without adding page actions. Sync's review-before-approval proof is unchanged.
+
+`fullscreen-list-paging.test.ts` and `selector-host-boundary.test.ts` use real regular/fullscreen replacement-dialog routing. They cover every host viewport branch, default/configured paging, aliases, modifier order, legacy collisions, Kitty and modifyOtherKeys, invalid strings, usable fallbacks, Ctrl+V clipboard-key overlap, fragmented paste, hard cancellation, live capture transitions, and unrelated overlays. Consumer tests cover returned wrapper properties and mode transitions. BTW transcript scrolling and native search ownership remain unchanged.
+
+The packed-artifact smoke in `scripts/published-search-smoke.mjs` exercises public exports through real native renderers without a provider request or an interactive terminal. Physical keyboard negotiation, IME placement, and operating-system clipboard integration still require a maintainer with the target terminal; scripted bytes do not verify those paths. No publication or release dispatch is authorized by this change.
 
 ## Verification record
 

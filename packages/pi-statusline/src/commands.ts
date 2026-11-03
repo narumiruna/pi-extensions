@@ -477,6 +477,7 @@ async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineC
     updateThemedText();
 
     return {
+      capturesViewportInput: true,
       render: (width: number) => container.render(width),
       invalidate() {
         container.invalidate();

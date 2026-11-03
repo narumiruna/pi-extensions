@@ -59,7 +59,13 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
-  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
+  const capturesViewportInput =
+    options.screen.kind === "actions" ||
+    options.screen.kind === "choice" ||
+    options.screen.kind === "settings" ||
+    options.screen.kind === "multiSelect" ||
+    options.screen.kind === "browse";
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings, capturesViewportInput) };
   let component: MenuScreenComponent;
   switch (options.screen.kind) {
     case "actions":
@@ -87,6 +93,7 @@ export function createMenuScreenComponent<ScreenId extends string, ActionId exte
       component = createMultiSelectComponent(options as MultiSelectOptions<ScreenId, ActionId>);
       break;
   }
+  if (capturesViewportInput) component.capturesViewportInput = true;
   const render = component.render.bind(component);
   component.render = (width) => (Number.isFinite(width) && width > 0 ? render(Math.floor(width)) : []);
   Object.defineProperty(component, "__piTuiKitScreen", { value: true });
@@ -580,7 +587,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
           compactOverflowText:
             filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
           confirmAction: "change",
-          hint: settingsHint(options.keybindings, componentKeyAvailable(options.tui, "space")),
+          hint: settingsHint(options.keybindings, componentKeyAvailable(options.tui, "space", true)),
           pinnedContentRows: 1,
           priorityTailRows: settingsRows.priorityTailRows,
         },

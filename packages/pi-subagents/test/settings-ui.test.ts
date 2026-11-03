@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import {
+  type Component,
   getKeybindings,
   isKittyProtocolActive,
   KeybindingsManager,
@@ -157,6 +158,39 @@ test("frame, focused rows, callback theme, invalidation and clipped mouse coordi
   assert.ok(roles.includes("accent"));
   assert.ok(roles.includes("muted"));
   assert.ok(roles.includes("dim"));
+});
+
+test.each([false, true])("outer list captures viewport input and pages (remapped: %s)", async (remapped) => {
+  const original = getKeybindings();
+  const bindings = new KeybindingsManager(
+    TUI_KEYBINDINGS,
+    remapped ? { "tui.select.pageUp": "ctrl+b", "tui.select.pageDown": "ctrl+v" } : {},
+  );
+  setKeybindings(bindings);
+  const current = fixture({ keybindings: bindings });
+  let component: Component | undefined;
+  current.ctx.ui.custom = (factory, options) =>
+    current.tui.custom(async (...args) => {
+      component = await factory(...args);
+      return component;
+    }, options);
+  const command = showSubagentSettings(current.ctx, current.options);
+  try {
+    await current.tui.waitForOpen();
+    assert.equal(component?.capturesViewportInput, true);
+    current.tui.send(remapped ? "\u0016" : "\u001b[6~");
+    assert.match(plain(current.tui.render()).join("\n"), /→ Show timing/u);
+    current.tui.send(remapped ? "\u0002" : "\u001b[5~");
+    assert.match(plain(current.tui.render()).join("\n"), /→ Show widget/u);
+    current.tui.press("ctrl+c");
+    assert.equal(await command, "close");
+    assert.deepEqual(current.options.get(), DEFAULT_SUBAGENT_SETTINGS);
+  } finally {
+    current.controller.abort();
+    current.tui.dispose();
+    await command;
+    setKeybindings(original);
+  }
 });
 
 test("rapid saves serialize and keep the newest displayed choice", async () => {

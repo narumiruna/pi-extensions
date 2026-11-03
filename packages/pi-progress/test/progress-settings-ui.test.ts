@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import {
+  type Component,
   getKeybindings,
   KeybindingsManager,
   setKeybindings,
@@ -110,6 +111,49 @@ test("changes all five settings in one screen with bounded rendering", async () 
     showProgress: false,
   });
 });
+
+test.each([false, true])(
+  "outer viewport capture follows list and text-input state (remapped: %s)",
+  async (remapped) => {
+    const original = getKeybindings();
+    const bindings = new KeybindingsManager(
+      TUI_KEYBINDINGS,
+      remapped ? { "tui.select.pageUp": "ctrl+b", "tui.select.pageDown": "ctrl+v" } : {},
+    );
+    setKeybindings(bindings);
+    const current = fixture();
+    let component: Component | undefined;
+    current.ctx.ui.custom = (factory, options) =>
+      current.screen.custom(async (...args) => {
+        component = await factory(...args);
+        return component;
+      }, options);
+    const command = current.open();
+    try {
+      await current.screen.waitForOpen();
+      assert.equal(component?.capturesViewportInput, true);
+      current.screen.send(remapped ? "\u0016" : "\u001b[6~");
+      assert.match(stripVTControlCharacters(current.screen.render().join("\n")), /→ Show completion count/u);
+      current.screen.send(remapped ? "\u0002" : "\u001b[5~");
+      assert.match(stripVTControlCharacters(current.screen.render().join("\n")), /→ Show widget/u);
+      for (let index = 0; index < 3; index++) current.screen.press("tui.select.down");
+      for (const exit of ["tui.select.cancel", "tui.input.submit"] as const) {
+        current.screen.press("tui.select.confirm");
+        assert.equal(component?.capturesViewportInput, false);
+        current.screen.press(exit);
+        await current.screen.waitForPending();
+        assert.equal(component?.capturesViewportInput, true);
+      }
+      current.screen.press("ctrl+c");
+      assert.equal(await command, "close");
+    } finally {
+      current.controller.abort();
+      current.screen.dispose();
+      await command;
+      setKeybindings(original);
+    }
+  },
+);
 
 test("save failure restores the value and later saves still work", async () => {
   const current = fixture();

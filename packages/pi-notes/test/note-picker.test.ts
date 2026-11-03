@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import {
   CURSOR_MARKER,
+  getKeybindings,
   isKittyProtocolActive,
+  KeybindingsManager,
   type KeyId,
   matchesKey,
+  setKeybindings,
   setKittyProtocolActive,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+  TuiMainScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test, vi } from "vitest";
 import { NotePicker, resolveNoteDeleteKey } from "../src/note-picker.js";
 import type { MarkdownEntry } from "../src/storage.js";
@@ -572,3 +579,50 @@ test("paste-prefix routing rejects a split legacy delete encoding but retains it
   setKittyProtocolActive(true);
   assert.equal(resolveNoteDeleteKey(keys as never, false), "alt+ctrl+[");
 });
+
+for (const fullscreen of [false, true]) {
+  test.each([
+    { name: "PageDown", key: "pageDown" as const, data: "\u001b[6~" },
+    { name: "Ctrl+V", key: "ctrl+v" as const, data: "\u0016" },
+  ])(`native ${fullscreen ? "fullscreen" : "regular"} note paging: $name`, ({ key, data }) => {
+    const previous = getKeybindings();
+    setKeybindings(
+      new KeybindingsManager(TUI_KEYBINDINGS, {
+        "tui.altScreen.pageDown": key,
+        "tui.altScreen.search": "ctrl+q",
+      }),
+    );
+    const terminal = new FullscreenTerminal();
+    terminal.rows = 16;
+    const host = fullscreen ? new TuiAltScreen(terminal, false) : new TuiMainScreen(terminal, false);
+    const { picker, result } = createPicker(
+      Array.from({ length: 24 }, (_, index) => note(`note-${index}.md`)),
+      { rows: terminal.rows, bindings: { "tui.select.pageDown": [key] } },
+    );
+    try {
+      assert.equal(picker.capturesViewportInput, true);
+      host.addChild(picker);
+      host.setFocus(picker);
+      host.start();
+      host.renderNow(true);
+      terminal.input(data);
+      // The search Input remains editable, but bracketed paste must not execute paging bytes.
+      terminal.input("\u001b[200~note\u0016\u001b[201~");
+      assert.match(picker.render(80).join("\n"), /Search: .*note/u);
+      assert.ok(picker.render(80).join("\n").includes(CURSOR_MARKER));
+      if (fullscreen) {
+        terminal.input("\u0011");
+        host.renderNow(true);
+        assert.notEqual(host.getFocusedComponent(), picker);
+        terminal.input("\u001b");
+        assert.equal(host.getFocusedComponent(), picker);
+      }
+      terminal.input("\u0003");
+      assert.deepEqual(result(), { kind: "close", selectedPath: "note-7.md", query: "note" });
+    } finally {
+      picker.dispose();
+      host.stop({ preserveScreen: true });
+      setKeybindings(previous);
+    }
+  });
+}

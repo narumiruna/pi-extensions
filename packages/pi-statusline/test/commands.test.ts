@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { describe, test } from "vitest";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "../../../test/support.js";
@@ -58,6 +58,8 @@ function remappedStatuslineKeybindings(): Pick<KeybindingsManager, "matches" | "
       }
       if (binding === "tui.select.up") return data === "\u001b[A";
       if (binding === "tui.select.down") return data === "\u001b[B";
+      if (binding === "tui.select.pageUp") return data === "\u0002";
+      if (binding === "tui.select.pageDown") return data === "\u0016";
       return false;
     },
     getKeys(binding) {
@@ -65,6 +67,8 @@ function remappedStatuslineKeybindings(): Pick<KeybindingsManager, "matches" | "
       if (binding === "tui.select.confirm" || binding === "tui.input.submit") return ["enter"];
       if (binding === "tui.select.up") return ["up"];
       if (binding === "tui.select.down") return ["down"];
+      if (binding === "tui.select.pageUp") return ["ctrl+b"];
+      if (binding === "tui.select.pageDown") return ["ctrl+v"];
       return [];
     },
   };
@@ -696,7 +700,13 @@ test.each(["normal", "move"] as const)(
         rows: 20,
         keybindings: remappedStatuslineKeybindings(),
       });
-      const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+      let component: Component | undefined;
+      const custom: typeof tui.custom = (factory, options) =>
+        tui.custom(async (...args) => {
+          component = await factory(...args);
+          return component;
+        }, options);
+      const context = createMockContext({ mode: "tui", hasUI: true, custom });
       const running = mock.commands.get("statusline")?.handler("", context.ctx);
 
       await tui.waitForOpen();
@@ -710,6 +720,11 @@ test.each(["normal", "move"] as const)(
       await tui.waitForOpen();
 
       const initialFrame = tui.render();
+      assert.equal(component?.capturesViewportInput, true);
+      tui.send("\u0016");
+      assert.notDeepEqual(tui.render(), initialFrame);
+      tui.send("\u0002");
+      assert.deepEqual(tui.render(), initialFrame);
       for (const line of initialFrame) assert.ok(visibleWidth(line) <= 20);
       assert.match(initialFrame.join("\n"), /q\/Ctrl\+C close/u);
       assert.equal(initialFrame.join("\n").match(/Ctrl\+C/gu)?.length, 1);
@@ -719,6 +734,12 @@ test.each(["normal", "move"] as const)(
       } else {
         tui.send("m");
         const moveFrame = tui.render();
+        assert.equal(component?.capturesViewportInput, true);
+        // Move mode owns viewport input, but does not page or reorder on paging keys.
+        tui.send("\u0016");
+        tui.send("\u0002");
+        assert.deepEqual(tui.render(), moveFrame);
+        assert.deepEqual(appliedSegments, []);
         for (const line of moveFrame) assert.ok(visibleWidth(line) <= 20);
         assert.match(moveFrame.join("\n"), /q leave move mode/u);
         assert.match(moveFrame.join("\n"), /Ctrl\+C close/u);
