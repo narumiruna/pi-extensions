@@ -22,12 +22,18 @@ export interface Dependencies {
   start: typeof startServer;
   launch(pi: ExtensionAPI, url: string, signal: AbortSignal): Promise<boolean>;
 }
+// Browser launchers return no data; retain only a small diagnostic budget.
+const BROWSER_LAUNCH_MAX_BUFFER = 16 * 1024;
 const defaults: Dependencies = {
   start: startServer,
   async launch(pi, url, signal) {
     const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-    const result = await pi.exec(command, [url], { signal, timeout: 5000 });
-    return result.code === 0 && !result.killed;
+    const result = await pi.exec(command, [url], {
+      signal,
+      timeout: 5000,
+      maxBuffer: BROWSER_LAUNCH_MAX_BUFFER,
+    });
+    return !result.truncated && !result.killed && result.code === 0;
   },
 };
 

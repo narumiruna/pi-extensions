@@ -132,6 +132,7 @@ test("Git snapshot refresh degrades a failed status command to no repository", a
     stderr: "not a repository",
     code: 128,
     killed: false,
+    truncated: false,
   });
   assert.equal(
     await readGitSnapshot(mock.pi, "/not-a-repository", {
@@ -162,8 +163,8 @@ test("Git state parser detects operations and rebase progress", () => {
   }
 });
 
-type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
+type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean; truncated: boolean };
 
 function gitResult(stdout: string): ExecResult {
-  return { stdout, stderr: "", code: 0, killed: false };
+  return { stdout, stderr: "", code: 0, killed: false, truncated: false };
 }

@@ -5,6 +5,7 @@ export interface ZellijCommandResult {
   stderr: string;
   code: number;
   killed: boolean;
+  truncated?: boolean;
 }
 
 export type ZellijCommandExecutor = (
@@ -71,6 +72,7 @@ export class ZellijAdapter {
       if (signal?.aborted) throwIfAborted(signal, "Zellij availability check aborted");
       throw new ZellijLaunchError("Pi Fleet could not run Zellij to check its version");
     }
+    if (result.truncated) throw new ZellijLaunchError("Zellij version output exceeded the output limit");
     throwIfAborted(signal, "Zellij availability check aborted");
     if (result.code !== 0 || result.killed) {
       throw new ZellijLaunchError("Pi Fleet could not query the Zellij version");
@@ -112,6 +114,9 @@ export class ZellijAdapter {
       }
       throw new ZellijLaunchError("Zellij could not create the Pi Fleet pane");
     }
+    if (result.truncated) {
+      throw new ZellijLaunchError("Zellij pane output exceeded the output limit; a partial pane may remain open", true);
+    }
     const terminalId = /^terminal_\d{1,20}$/u.test(result.stdout.trim()) ? result.stdout.trim() : undefined;
     if (options.signal?.aborted) {
       throw new ZellijLaunchError("Zellij created the pane after Pi Fleet launch was cancelled", true, terminalId);
@@ -151,6 +156,13 @@ export class ZellijAdapter {
       if (signal?.aborted) throw placementCancellationError(terminalId);
       throw new ZellijLaunchError(
         `Zellij created the Pi Fleet pane, but ${direction} placement failed`,
+        true,
+        terminalId,
+      );
+    }
+    if (result.truncated) {
+      throw new ZellijLaunchError(
+        `Zellij created the Pi Fleet pane, but ${direction} placement output exceeded the output limit`,
         true,
         terminalId,
       );

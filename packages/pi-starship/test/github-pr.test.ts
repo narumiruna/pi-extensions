@@ -253,7 +253,7 @@ test("queryGithubPr executes one direct cancellable bounded gh query", async () 
       args,
       options: { ...options, environment: { ...options.environment } },
     });
-    return { stdout: JSON.stringify(rawPr()), stderr: "", code: 0, killed: false };
+    return { stdout: JSON.stringify(rawPr()), stderr: "", code: 0, killed: false, truncated: false };
   };
   const snapshot = await queryGithubPr(exec, "/work/repo", controller.signal, NOW, {
     platform: "linux",
@@ -277,36 +277,40 @@ test("queryGithubPr executes one direct cancellable bounded gh query", async () 
 
 test("no PR, missing gh or auth, timeout, malformed, and oversized output degrade empty", async () => {
   const results: unknown[] = [
-    { stdout: "", stderr: "no pull requests found", code: 1, killed: false },
-    { stdout: "", stderr: "run gh auth login", code: 1, killed: false },
-    { stdout: "", stderr: "", code: 1, killed: true },
-    { stdout: "{", stderr: "", code: 0, killed: false },
-    { stdout: JSON.stringify(rawPr({ number: -1 })), stderr: "", code: 0, killed: false },
+    { stdout: "", stderr: "no pull requests found", code: 1, killed: false, truncated: false },
+    { stdout: "", stderr: "run gh auth login", code: 1, killed: false, truncated: false },
+    { stdout: "", stderr: "", code: 1, killed: true, truncated: false },
+    { stdout: "{", stderr: "", code: 0, killed: false, truncated: false },
+    { stdout: JSON.stringify(rawPr({ number: -1 })), stderr: "", code: 0, killed: false, truncated: false },
     {
       stdout: JSON.stringify(rawPr({ url: `https://github.test/${"x".repeat(4_096)}` })),
       stderr: "",
       code: 0,
       killed: false,
+      truncated: false,
     },
     {
       stdout: JSON.stringify(rawPr({ statusCheckRollup: Array.from({ length: 1_001 }, () => ({})) })),
       stderr: "",
       code: 0,
       killed: false,
+      truncated: false,
     },
     {
       stdout: JSON.stringify(rawPr({ statusCheckRollup: [null] })),
       stderr: "",
       code: 0,
       killed: false,
+      truncated: false,
     },
     {
       stdout: JSON.stringify(rawPr({ statusCheckRollup: [{ status: "x".repeat(129), conclusion: null }] })),
       stderr: "",
       code: 0,
       killed: false,
+      truncated: false,
     },
-    { stdout: "x".repeat(256 * 1024), stderr: "", code: 0, killed: false },
+    { stdout: "x".repeat(256 * 1024), stderr: "", code: 0, killed: false, truncated: false },
     Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }),
   ];
   for (const result of results) {

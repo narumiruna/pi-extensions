@@ -45,6 +45,10 @@ export interface PullRequestStatus {
 const STATUS_KEY = "github-pr";
 const GH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
+// Bound combined stdout/stderr: PR reviews/checks need more space than two counts or one HEAD path.
+const GH_PR_MAX_BUFFER = 1024 * 1024;
+const GH_COUNTS_MAX_BUFFER = 64 * 1024;
+const GIT_HEAD_MAX_BUFFER = 16 * 1024;
 const BRANCH_REFRESH_DEBOUNCE_MS = 100;
 const PR_REFRESH_INTERVAL_MS = 60_000;
 const TERMINAL_PR_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -294,8 +298,9 @@ async function createBranchWatcher(
       cwd,
       signal,
       timeout: GIT_TIMEOUT_MS,
+      maxBuffer: GIT_HEAD_MAX_BUFFER,
     });
-    if (signal?.aborted || result.killed || result.code !== 0) return undefined;
+    if (result.truncated || signal?.aborted || result.killed || result.code !== 0) return undefined;
 
     const gitHead = result.stdout.trim();
     if (!gitHead) return undefined;
@@ -318,7 +323,7 @@ export async function runGhPrView(
   signal?: AbortSignal,
 ): Promise<PullRequestStatus> {
   const invocation = ghPrViewInvocation();
-  const result = await execGh(pi, invocation.command, invocation.args, cwd, signal, "gh pr view");
+  const result = await execGh(pi, invocation.command, invocation.args, cwd, signal, "gh pr view", GH_PR_MAX_BUFFER);
   if (result.killed) throw new Error("gh pr view timed out or was cancelled.");
   if (result.code !== 0) throw new Error(formatGhFailure("gh pr view", result));
   signal?.throwIfAborted();
@@ -652,6 +657,7 @@ async function runGhPrCountQuery(
     cwd,
     signal,
     "gh api graphql",
+    GH_COUNTS_MAX_BUFFER,
   );
 
   if (result.killed) throw new Error("gh api graphql timed out or was cancelled.");
@@ -692,9 +698,11 @@ async function execGh(
   cwd: string,
   signal: AbortSignal | undefined,
   command: string,
+  maxBuffer: number,
 ): Promise<ExecResult> {
+  let result: ExecResult;
   try {
-    return await pi.exec(executable, args, { cwd, signal, timeout: GH_TIMEOUT_MS });
+    result = await pi.exec(executable, args, { cwd, signal, timeout: GH_TIMEOUT_MS, maxBuffer });
   } catch (error) {
     const message = formatError(error);
     if (isGhExecutableMissingMessage(message.toLowerCase())) {
@@ -702,6 +710,10 @@ async function execGh(
     }
     throw new Error(`${command} could not start: ${message}`);
   }
+  if (result.truncated) {
+    throw new Error(`${command} output exceeded ${maxBuffer} bytes; incomplete output was discarded.`);
+  }
+  return result;
 }
 
 function formatGhFailure(command: string, result: ExecResult): string {

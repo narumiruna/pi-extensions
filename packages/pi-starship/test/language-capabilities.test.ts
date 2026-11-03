@@ -9,7 +9,7 @@ import type { WorkspaceExec, WorkspaceRefreshInput } from "../src/runtime/types.
 import { goRequirementSatisfied, nodeRequirementSatisfied } from "../src/runtime/version-requirements.js";
 import { collectWorkspaceSnapshot } from "../src/runtime/workspace.js";
 
-const success = (stdout: string) => ({ stdout, stderr: "", code: 0, killed: false });
+const success = (stdout: string) => ({ stdout, stderr: "", code: 0, killed: false, truncated: false });
 
 type Language = "python" | "nodejs" | "golang" | "rust" | "bun" | "deno";
 

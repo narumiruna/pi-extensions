@@ -276,7 +276,7 @@ test("workspace collectors forward refresh cancellation to commands", async () =
       signal: controller.signal,
       exec: async (_command, _args, options) => {
         received = options.signal;
-        return { stdout: "v22.1.0", stderr: "", code: 0, killed: false };
+        return { stdout: "v22.1.0", stderr: "", code: 0, killed: false, truncated: false };
       },
     });
     assert.equal(received, controller.signal);
@@ -300,7 +300,7 @@ test("language commands are required by active variables and parsed strictly", a
       username: "user",
       exec: async (command, args) => {
         calls.push([command, args]);
-        return { stdout: "v22.1.0\r\n", stderr: "", code: 0, killed: false };
+        return { stdout: "v22.1.0\r\n", stderr: "", code: 0, killed: false, truncated: false };
       },
     });
     assert.deepEqual(calls, [["node", ["--version"]]]);
@@ -317,7 +317,7 @@ test("language commands are required by active variables and parsed strictly", a
       username: "user",
       exec: async (command, args) => {
         calls.push([command, args]);
-        return { stdout: "v22.1.0", stderr: "", code: 0, killed: false };
+        return { stdout: "v22.1.0", stderr: "", code: 0, killed: false, truncated: false };
       },
     });
     assert.deepEqual(calls, []);
@@ -346,7 +346,7 @@ test("Rust numver runs the version probe without requiring version", async () =>
       fileExists: async (path) => path === compiler,
       exec: async (command, args) => {
         calls.push(`${command} ${args.join(" ")}`);
-        return { stdout: "rustc 1.88.0 (abc 2025-06-23)", stderr: "", code: 0, killed: false };
+        return { stdout: "rustc 1.88.0 (abc 2025-06-23)", stderr: "", code: 0, killed: false, truncated: false };
       },
     });
     assert.deepEqual(calls, [`${compiler} --version`]);
@@ -540,10 +540,12 @@ test("all language collectors use bounded exact commands and degrade independent
       username: "user",
       exec: async (command, args, options) => {
         calls.push(`${command} ${args.join(" ")} ${options.timeout}/${options.maxOutputBytes}`);
-        if (command === "python") return { stdout: outputs.python ?? "", stderr: "", code: 0, killed: false };
-        if (command === "go") return { stdout: outputs.go ?? "", stderr: "", code: 0, killed: false };
-        if (command === "bun") return { stdout: outputs.bun ?? "", stderr: "", code: 0, killed: false };
-        return { stdout: outputs.deno ?? "", stderr: "", code: 0, killed: false };
+        if (command === "python")
+          return { stdout: outputs.python ?? "", stderr: "", code: 0, killed: false, truncated: false };
+        if (command === "go") return { stdout: outputs.go ?? "", stderr: "", code: 0, killed: false, truncated: false };
+        if (command === "bun")
+          return { stdout: outputs.bun ?? "", stderr: "", code: 0, killed: false, truncated: false };
+        return { stdout: outputs.deno ?? "", stderr: "", code: 0, killed: false, truncated: false };
       },
     });
     assert.deepEqual(calls, [
@@ -611,7 +613,8 @@ test("development environment modules use allowlisted activation data and lazy c
       username: "user",
       exec: async (command, args) => {
         calls.push(`${command} ${args.join(" ")}`);
-        if (command === "mise") return { stdout: "all checks passed", stderr: "", code: 0, killed: false };
+        if (command === "mise")
+          return { stdout: "all checks passed", stderr: "", code: 0, killed: false, truncated: false };
         if (command === "direnv")
           return {
             stdout: JSON.stringify({
@@ -621,8 +624,9 @@ test("development environment modules use allowlisted activation data and lazy c
             stderr: "",
             code: 0,
             killed: false,
+            truncated: false,
           };
-        return { stdout: "pixi 0.41.0", stderr: "", code: 0, killed: false };
+        return { stdout: "pixi 0.41.0", stderr: "", code: 0, killed: false, truncated: false };
       },
     });
     assert.deepEqual(calls, ["mise doctor", "direnv status --json", "pixi --version"]);
@@ -692,7 +696,7 @@ test("kubeconfig and Terraform readers remain local, bounded, and command-lazy",
       username: "user",
       exec: async (command, args) => {
         calls.push(`${command} ${args.join(" ")}`);
-        return { stdout: "", stderr: "", code: 1, killed: false };
+        return { stdout: "", stderr: "", code: 1, killed: false, truncated: false };
       },
     });
     assert.deepEqual(snapshot.modules.kubernetes, {
@@ -726,7 +730,7 @@ test("Terraform applies version_format to Terraform and OpenTofu versions", asyn
     },
     exec: async (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
-      return { stdout: "Terraform v1.12.2\n", stderr: "", code: 0, killed: false };
+      return { stdout: "Terraform v1.12.2\n", stderr: "", code: 0, killed: false, truncated: false };
     },
   });
   assert.deepEqual(calls, ["terraform version"]);

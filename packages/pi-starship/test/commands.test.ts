@@ -30,6 +30,7 @@ function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
         cwd: options.cwd,
         signal: options.signal,
         timeout: options.timeout,
+        maxBuffer: options.maxOutputBytes,
       }),
   });
 }
@@ -960,9 +961,9 @@ async function emit(
   for (const handler of events.get(name) ?? []) await handler(...args);
 }
 
-type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
+type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean; truncated: boolean };
 function gitResult(): ExecResult {
-  return { stdout: "## main\n", stderr: "", code: 0, killed: false };
+  return { stdout: "## main\n", stderr: "", code: 0, killed: false, truncated: false };
 }
 
 async function flushAsyncWork() {

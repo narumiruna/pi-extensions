@@ -6,7 +6,7 @@ const FORCE_KILL_DELAY_MS = 250;
 export const execWorkspaceCommand: WorkspaceExec = async (command, args, options) =>
   new Promise((resolve) => {
     if (options.signal?.aborted) {
-      resolve({ stdout: "", stderr: "", code: 1, killed: true });
+      resolve({ stdout: "", stderr: "", code: 1, killed: true, truncated: false });
       return;
     }
 
@@ -21,13 +21,14 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
         windowsHide: true,
       });
     } catch {
-      resolve({ stdout: "", stderr: "", code: 1, killed: false });
+      resolve({ stdout: "", stderr: "", code: 1, killed: false, truncated: false });
       return;
     }
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let outputBytes = 0;
+    let truncated = false;
     let killed = false;
     let settled = false;
     let forceKillTimer: NodeJS.Timeout | undefined;
@@ -44,6 +45,7 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
         stderr: Buffer.concat(stderr).toString("utf8"),
         code,
         killed,
+        truncated,
       });
     };
 
@@ -88,7 +90,10 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
       const remaining = Math.max(0, options.maxOutputBytes - outputBytes);
       if (remaining > 0) target.push(chunk.subarray(0, remaining));
       outputBytes += chunk.byteLength;
-      if (outputBytes > options.maxOutputBytes) terminate();
+      if (outputBytes > options.maxOutputBytes) {
+        truncated = true;
+        terminate();
+      }
     };
 
     child.stdout?.on("data", collect(stdout));

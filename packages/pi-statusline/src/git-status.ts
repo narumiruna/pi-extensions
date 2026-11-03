@@ -2,6 +2,9 @@ import { isAbsolute } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const GIT_STATUS_TIMEOUT_MS = 3_000;
+// Bound combined stdout/stderr while allowing large worktree listings and one absolute root path.
+const GIT_STATUS_MAX_BUFFER = 1024 * 1024;
+const GIT_ROOT_MAX_BUFFER = 16 * 1024;
 
 export interface GitStatusSummary {
   root?: string;
@@ -22,19 +25,21 @@ export async function readGitStatus(
     pi.exec("git", ["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=normal"], {
       cwd,
       timeout: GIT_STATUS_TIMEOUT_MS,
+      maxBuffer: GIT_STATUS_MAX_BUFFER,
       signal,
     }),
     pi
       .exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel"], {
         cwd,
         timeout: GIT_STATUS_TIMEOUT_MS,
+        maxBuffer: GIT_ROOT_MAX_BUFFER,
         signal,
       })
       .catch(() => undefined),
   ]);
-  if (statusResult.code !== 0 || statusResult.killed) return undefined;
+  if (statusResult.truncated || statusResult.code !== 0 || statusResult.killed) return undefined;
   const summary = parseGitStatusPorcelain(statusResult.stdout);
-  if (rootResult && rootResult.code === 0 && !rootResult.killed) {
+  if (rootResult && !rootResult.truncated && rootResult.code === 0 && !rootResult.killed) {
     const root = parseGitRoot(rootResult.stdout);
     if (root) summary.root = root;
   }

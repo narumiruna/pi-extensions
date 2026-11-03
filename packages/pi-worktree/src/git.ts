@@ -5,6 +5,11 @@ import type { ExecResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const GIT_TIMEOUT_MS = 15_000;
 const GIT_MUTATION_TIMEOUT_MS = 60_000;
+// Metadata is a path, ref, OID, or boolean; record queries need room for large repositories.
+const GIT_METADATA_MAX_BUFFER = 64 * 1024;
+const GIT_RECORDS_MAX_BUFFER = 8 * 1024 * 1024;
+// Mutations can emit progress and hook diagnostics, but their output is not parsed as records.
+const GIT_MUTATION_MAX_BUFFER = 1024 * 1024;
 const LOCAL_BRANCH_PREFIX = "refs/heads/";
 
 export interface WorktreeRecord {
@@ -41,6 +46,7 @@ interface GitExecOptions {
   cwd?: string;
   signal?: AbortSignal;
   timeout?: number;
+  maxBuffer?: number;
 }
 
 export class GitWorktreeError extends Error {
@@ -190,7 +196,7 @@ export async function listWorktrees(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<WorktreeRecord[]> {
-  const result = await runGit(pi, ["worktree", "list", "--porcelain", "-z"], cwd, signal);
+  const result = await runGit(pi, ["worktree", "list", "--porcelain", "-z"], cwd, GIT_RECORDS_MAX_BUFFER, signal);
   return parseWorktreePorcelain(result.stdout);
 }
 
@@ -199,7 +205,7 @@ export async function currentWorktreePath(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runGit(pi, ["rev-parse", "--show-toplevel"], cwd, signal);
+  const result = await runGit(pi, ["rev-parse", "--show-toplevel"], cwd, GIT_METADATA_MAX_BUFFER, signal);
   const path = removeLineEnding(result.stdout);
   if (!path) throw new GitWorktreeError("Git did not return the current worktree path.");
   return pathIdentity(path);
@@ -210,7 +216,13 @@ export async function symbolicBranch(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const result = await runGitAllowFailure(pi, ["symbolic-ref", "--quiet", "--short", "HEAD"], cwd, signal);
+  const result = await runGitAllowFailure(
+    pi,
+    ["symbolic-ref", "--quiet", "--short", "HEAD"],
+    cwd,
+    GIT_METADATA_MAX_BUFFER,
+    signal,
+  );
   if (result.killed) throw killedError(["symbolic-ref", "--quiet", "--short", "HEAD"]);
   if (result.code !== 0) return undefined;
   return result.stdout.trim() || undefined;
@@ -222,7 +234,7 @@ export async function validateBranch(
   branch: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runGit(pi, ["check-ref-format", "--branch", branch], cwd, signal);
+  const result = await runGit(pi, ["check-ref-format", "--branch", branch], cwd, GIT_METADATA_MAX_BUFFER, signal);
   const normalized = result.stdout.trim();
   if (!normalized) throw new GitWorktreeError("Git returned an empty branch name.");
   return normalized;
@@ -238,6 +250,7 @@ export async function localBranchExists(
     pi,
     ["show-ref", "--verify", "--quiet", `${LOCAL_BRANCH_PREFIX}${branch}`],
     cwd,
+    GIT_METADATA_MAX_BUFFER,
     signal,
   );
   if (result.killed) throw killedError(["show-ref", "--verify", "--quiet"]);
@@ -252,7 +265,13 @@ export async function resolveCommit(
   startPoint: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runGit(pi, ["rev-parse", "--verify", "--end-of-options", `${startPoint}^{commit}`], cwd, signal);
+  const result = await runGit(
+    pi,
+    ["rev-parse", "--verify", "--end-of-options", `${startPoint}^{commit}`],
+    cwd,
+    GIT_METADATA_MAX_BUFFER,
+    signal,
+  );
   const oid = result.stdout.trim();
   if (!/^[0-9a-fA-F]{40,64}$/u.test(oid)) {
     throw new GitWorktreeError(`Git returned an invalid commit object for ${startPoint}.`);
@@ -266,7 +285,7 @@ export async function addWorktree(
   input: AddArguments,
   signal?: AbortSignal,
 ): Promise<void> {
-  await runGit(pi, buildAddArguments(input), cwd, signal, GIT_MUTATION_TIMEOUT_MS);
+  await runGit(pi, buildAddArguments(input), cwd, GIT_MUTATION_MAX_BUFFER, signal, GIT_MUTATION_TIMEOUT_MS);
 }
 
 export async function removeWorktree(
@@ -275,7 +294,7 @@ export async function removeWorktree(
   path: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  await runGit(pi, ["worktree", "remove", path], cwd, signal, GIT_MUTATION_TIMEOUT_MS);
+  await runGit(pi, ["worktree", "remove", path], cwd, GIT_MUTATION_MAX_BUFFER, signal, GIT_MUTATION_TIMEOUT_MS);
 }
 
 export async function worktreeInventory(
@@ -290,10 +309,16 @@ export async function worktreeInventory(
     "--ignored=matching",
     "--ignore-submodules=none",
   ];
-  const status = await runGit(pi, statusArgs, path, signal);
-  const indexFlags = await runGit(pi, ["ls-files", "-v", "-z"], path, signal);
+  const status = await runGit(pi, statusArgs, path, GIT_RECORDS_MAX_BUFFER, signal);
+  const indexFlags = await runGit(pi, ["ls-files", "-v", "-z"], path, GIT_RECORDS_MAX_BUFFER, signal);
   const indexInventory = await indexFlagInventory(pi, indexFlags.stdout, path, signal);
-  const submoduleStatus = await runGit(pi, ["submodule", "status", "--recursive"], path, signal);
+  const submoduleStatus = await runGit(
+    pi,
+    ["submodule", "status", "--recursive"],
+    path,
+    GIT_RECORDS_MAX_BUFFER,
+    signal,
+  );
   const initializedSubmodules = nonEmptyLines(submoduleStatus.stdout)
     .filter((line) => !line.startsWith("-"))
     .map((line) => `initialized submodule: ${line.slice(1).trimStart()}`);
@@ -307,6 +332,7 @@ export async function worktreeInventory(
       "git status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none",
     ],
     path,
+    GIT_RECORDS_MAX_BUFFER,
     signal,
   );
   return [
@@ -322,7 +348,13 @@ export async function worktreeAdministrativeDirectory(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runGit(pi, ["rev-parse", "--path-format=absolute", "--git-dir"], cwd, signal);
+  const result = await runGit(
+    pi,
+    ["rev-parse", "--path-format=absolute", "--git-dir"],
+    cwd,
+    GIT_METADATA_MAX_BUFFER,
+    signal,
+  );
   const value = removeLineEnding(result.stdout);
   if (!value) throw new GitWorktreeError("Git did not return its worktree administrative path.");
   return resolve(cwd, value);
@@ -341,6 +373,7 @@ export async function administrativeHistoryOids(
     pi,
     [gitDirArgument, "for-each-ref", "--format=%(objectname)", "refs/worktree", "refs/bisect"],
     cwd,
+    GIT_RECORDS_MAX_BUFFER,
     signal,
   );
   values.push(...splitAdministrativeOids(refs.stdout, "per-worktree refs"));
@@ -362,7 +395,13 @@ export async function administrativePruneCandidates(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<AdministrativePruneCandidate[]> {
-  const commonResult = await runGit(pi, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd, signal);
+  const commonResult = await runGit(
+    pi,
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    cwd,
+    GIT_METADATA_MAX_BUFFER,
+    signal,
+  );
   const commonValue = removeLineEnding(commonResult.stdout);
   if (!commonValue) throw new GitWorktreeError("Git did not return its common directory.");
   const commonDirectory = resolve(cwd, commonValue);
@@ -443,7 +482,7 @@ async function administrativeIndexIsDirty(
     "--ignore-submodules=none",
     "--",
   ];
-  const result = await runGitAllowFailure(pi, args, cwd, signal);
+  const result = await runGitAllowFailure(pi, args, cwd, GIT_METADATA_MAX_BUFFER, signal);
   if (result.killed) throw killedError(args);
   if (result.code === 0) return false;
   if (result.code === 1) return true;
@@ -459,7 +498,13 @@ export async function durableRefExists(
   if (!ref.startsWith("refs/") || ref.includes("\0")) {
     throw new GitWorktreeError("Git worktree administrative HEAD contains an invalid ref.");
   }
-  const result = await runGitAllowFailure(pi, ["show-ref", "--verify", "--quiet", ref], cwd, signal);
+  const result = await runGitAllowFailure(
+    pi,
+    ["show-ref", "--verify", "--quiet", ref],
+    cwd,
+    GIT_METADATA_MAX_BUFFER,
+    signal,
+  );
   if (result.killed) throw killedError(["show-ref", "--verify", "--quiet"]);
   if (result.code === 0) return true;
   if (result.code === 1) return false;
@@ -479,13 +524,14 @@ export async function durableRefsContaining(
     pi,
     ["for-each-ref", "--format=%(refname)", `--contains=${head}`, "refs/heads", "refs/tags", "refs/remotes"],
     cwd,
+    GIT_RECORDS_MAX_BUFFER,
     signal,
   );
   return nonEmptyLines(result.stdout);
 }
 
 export async function prunePreview(pi: Pick<ExtensionAPI, "exec">, cwd: string, signal?: AbortSignal): Promise<string> {
-  const result = await runGit(pi, ["worktree", "prune", "--dry-run", "--verbose"], cwd, signal);
+  const result = await runGit(pi, ["worktree", "prune", "--dry-run", "--verbose"], cwd, GIT_RECORDS_MAX_BUFFER, signal);
   return combineOutput(result);
 }
 
@@ -494,7 +540,14 @@ export async function pruneWorktrees(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runGit(pi, ["worktree", "prune", "--verbose"], cwd, signal, GIT_MUTATION_TIMEOUT_MS);
+  const result = await runGit(
+    pi,
+    ["worktree", "prune", "--verbose"],
+    cwd,
+    GIT_MUTATION_MAX_BUFFER,
+    signal,
+    GIT_MUTATION_TIMEOUT_MS,
+  );
   return combineOutput(result);
 }
 
@@ -526,10 +579,11 @@ async function runGit(
   pi: Pick<ExtensionAPI, "exec">,
   args: string[],
   cwd: string,
+  maxBuffer: number,
   signal?: AbortSignal,
   timeout = GIT_TIMEOUT_MS,
 ): Promise<ExecResult> {
-  const result = await runGitAllowFailure(pi, args, cwd, signal, timeout);
+  const result = await runGitAllowFailure(pi, args, cwd, maxBuffer, signal, timeout);
   if (result.killed) throw killedError(args);
   if (result.code !== 0) throw gitFailure(args, result);
   return result;
@@ -539,11 +593,13 @@ async function runGitAllowFailure(
   pi: Pick<ExtensionAPI, "exec">,
   args: string[],
   cwd: string,
+  maxBuffer: number,
   signal?: AbortSignal,
   timeout = GIT_TIMEOUT_MS,
 ): Promise<ExecResult> {
+  let result: ExecResult;
   try {
-    return await pi.exec("git", args, { cwd, signal, timeout });
+    result = await pi.exec("git", args, { cwd, signal, timeout, maxBuffer });
   } catch (error) {
     const message = formatError(error);
     if (/\bENOENT\b|not found/i.test(message)) {
@@ -551,6 +607,16 @@ async function runGitAllowFailure(
     }
     throw new GitWorktreeError(`Could not start git ${args.slice(0, 2).join(" ")}: ${message}`, args);
   }
+  // Even injected executors must not let incomplete data reach parsing or nonzero-exit fallbacks.
+  if (result.truncated) throw outputLimitError(args, maxBuffer);
+  return result;
+}
+
+function outputLimitError(args: string[], maxBuffer: number): GitWorktreeError {
+  return new GitWorktreeError(
+    `git ${args.slice(0, 2).join(" ")} output exceeded the ${maxBuffer}-byte limit. Partial output was not used; inspect Git state before retrying.`,
+    args,
+  );
 }
 
 function gitFailure(args: string[], result: ExecResult): GitWorktreeError {
@@ -624,13 +690,14 @@ async function sparseManagedSkipWorktreePaths(
 ): Promise<ReadonlySet<string>> {
   if (paths.length === 0) return new Set();
   const configArgs = ["config", "--bool", "--get", "core.sparseCheckout"];
-  const config = await runGitAllowFailure(pi, configArgs, cwd, signal);
+  const config = await runGitAllowFailure(pi, configArgs, cwd, GIT_METADATA_MAX_BUFFER, signal);
   if (config.killed) throw killedError(configArgs);
   if (config.code !== 0 || config.stdout.trim() !== "true") return new Set();
 
   const candidates = new Set(paths);
   const checkArgs = ["sparse-checkout", "check-rules", "-z"];
   const checked = await runGitWithInputAllowFailure(checkArgs, cwd, `${[...candidates].join("\0")}\0`, signal);
+  if (checked.truncated) throw outputLimitError(checkArgs, GIT_RECORDS_MAX_BUFFER);
   if (checked.killed) throw killedError(checkArgs);
   // Older Git versions lack check-rules; retain every flag rather than guessing.
   if (checked.code !== 0) return new Set();
@@ -658,6 +725,8 @@ function runGitWithInputAllowFailure(
     let stdout = "";
     let stderr = "";
     let killed = false;
+    let truncated = false;
+    let outputBytes = 0;
     let settled = false;
     const finish = (result: ExecResult) => {
       if (settled) return;
@@ -684,20 +753,36 @@ function runGitWithInputAllowFailure(
       child.kill();
     };
     const timeoutHandle = setTimeout(stop, timeout);
+    const acceptChunk = (chunk: string): boolean => {
+      if (truncated) return false;
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes <= GIT_RECORDS_MAX_BUFFER) return true;
+      truncated = true;
+      child.stdout.destroy();
+      child.stderr.destroy();
+      stop();
+      return false;
+    };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      if (acceptChunk(chunk)) stdout += chunk;
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      if (acceptChunk(chunk)) stderr += chunk;
     });
     child.stdin.on("error", (error) => {
       if (!isNodeError(error) || error.code !== "EPIPE") fail(error);
     });
     child.once("error", fail);
     child.once("close", (code, closeSignal) => {
-      finish({ stdout, stderr, code: code ?? 1, killed: killed || closeSignal !== null, truncated: false });
+      finish({
+        stdout,
+        stderr,
+        code: truncated && code === 0 ? 1 : (code ?? 1),
+        killed: killed || closeSignal !== null,
+        truncated,
+      });
     });
     signal?.addEventListener("abort", stop, { once: true });
     if (signal?.aborted) stop();

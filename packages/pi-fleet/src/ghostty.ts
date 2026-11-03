@@ -7,6 +7,7 @@ export interface GhosttyCommandResult {
   stderr: string;
   code: number;
   killed: boolean;
+  truncated?: boolean;
 }
 
 export type GhosttyCommandExecutor = (
@@ -102,6 +103,7 @@ export class GhosttyAdapter {
       ...(signal ? { signal } : {}),
       timeoutMs: this.timeoutMs,
     });
+    if (result.truncated) throw new GhosttyLaunchError("Ghostty version output exceeded the output limit");
     throwIfAborted(signal, "Ghostty availability check aborted");
     if (result.code !== 0 || result.killed) throw ghosttyCommandError(result, false);
     const version = result.stdout.trim();
@@ -140,6 +142,12 @@ export class GhosttyAdapter {
         );
       }
       throw error;
+    }
+    if (result.truncated) {
+      throw new GhosttyLaunchError(
+        "Ghostty split output exceeded the output limit; a partial split may remain open",
+        true,
+      );
     }
     if (result.code !== 0 || result.killed) {
       if (options.signal?.aborted) {

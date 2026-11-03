@@ -2,6 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { GitMetadata } from "./tracing.js";
 
 const GIT_LOOKUP_TIMEOUT_MS = 1_000;
+// A branch (at most 256 characters) or commit ID needs little output, including diagnostics.
+const GIT_LOOKUP_MAX_BUFFER = 4 * 1024;
 const MAX_GIT_BRANCH_LENGTH = 256;
 
 type GitExecutor = ExtensionAPI["exec"];
@@ -24,8 +26,9 @@ async function resolveGitBranch(exec: GitExecutor, cwd: string): Promise<{ resol
     const result = await exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
       cwd,
       timeout: GIT_LOOKUP_TIMEOUT_MS,
+      maxBuffer: GIT_LOOKUP_MAX_BUFFER,
     });
-    if (result.killed) return { resolved: false };
+    if (result.truncated || result.killed) return { resolved: false };
     if (result.code === 1) return { resolved: true };
     if (result.code !== 0) return { resolved: false };
     const branch = normalizeGitBranch(result.stdout);
@@ -40,8 +43,9 @@ async function resolveGitCommit(exec: GitExecutor, cwd: string): Promise<string 
     const result = await exec("git", ["rev-parse", "--verify", "--short=12", "HEAD"], {
       cwd,
       timeout: GIT_LOOKUP_TIMEOUT_MS,
+      maxBuffer: GIT_LOOKUP_MAX_BUFFER,
     });
-    if (result.code !== 0 || result.killed) return undefined;
+    if (result.truncated || result.killed || result.code !== 0) return undefined;
     const commit = result.stdout.trim();
     return /^[0-9a-f]{4,64}$/iu.test(commit) ? commit.toLowerCase() : undefined;
   } catch {

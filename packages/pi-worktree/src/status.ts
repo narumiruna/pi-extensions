@@ -3,6 +3,9 @@ import type { ExecResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { pathsEqual, stripTerminalControls, type WorktreeRecord } from "./git.js";
 
 const GIT_STATUS_TIMEOUT_MS = 15_000;
+// Status can contain every repository path; the last-commit query returns only a date and subject.
+const GIT_STATUS_MAX_BUFFER = 8 * 1024 * 1024;
+const GIT_LAST_COMMIT_MAX_BUFFER = 64 * 1024;
 const DEFAULT_STATUS_CONCURRENCY = 4;
 const OID_PATTERN = /^[0-9a-fA-F]{40,64}$/u;
 const STATUS_XY_PATTERN = /^[.MADRCUT]{2}$/u;
@@ -203,6 +206,7 @@ export async function loadWorktreeStatusCards(
           pi,
           ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignore-submodules=none"],
           record.path,
+          GIT_STATUS_MAX_BUFFER,
           signal,
         );
         const snapshot = parseWorktreeStatusPorcelain(status.stdout);
@@ -213,6 +217,7 @@ export async function loadWorktreeStatusCards(
                   pi,
                   ["show", "-s", "--format=%aI%x00%s", "--end-of-options", snapshot.headOid],
                   record.path,
+                  GIT_LAST_COMMIT_MAX_BUFFER,
                   signal,
                 )
               ).stdout,
@@ -314,10 +319,14 @@ async function runGit(
   pi: Pick<ExtensionAPI, "exec">,
   args: string[],
   cwd: string,
+  maxBuffer: number,
   signal?: AbortSignal,
 ): Promise<ExecResult> {
   throwIfAborted(signal);
-  const result = await pi.exec("git", args, { cwd, signal, timeout: GIT_STATUS_TIMEOUT_MS });
+  const result = await pi.exec("git", args, { cwd, signal, timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer });
+  if (result.truncated) {
+    throw new Error(`git ${args.slice(0, 2).join(" ")} output exceeded the ${maxBuffer}-byte limit.`);
+  }
   if (result.killed) {
     throwIfAborted(signal);
     throw new Error(`git ${args.slice(0, 2).join(" ")} timed out.`);

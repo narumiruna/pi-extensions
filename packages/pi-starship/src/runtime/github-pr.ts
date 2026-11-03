@@ -3,6 +3,7 @@ import type { GithubPrSnapshot, GithubPrState } from "../modules/types.js";
 import type { WorkspaceExec } from "./types.js";
 
 const GH_TIMEOUT_MS = 10_000;
+// One PR's selected fields and check summaries; omit larger replies instead of parsing partial JSON.
 const MAX_GH_OUTPUT_BYTES = 128 * 1024;
 const MAX_URL_LENGTH = 4_096;
 const MAX_CHECKS = 1_000;
@@ -69,6 +70,7 @@ export async function queryGithubPr(
   now = Date.now(),
   options: GithubPrQueryOptions = {},
 ): Promise<GithubPrSnapshot | undefined> {
+  if (signal?.aborted) return undefined;
   const invocation = ghPrViewInvocation(options.platform);
   try {
     const result = await exec(invocation.command, invocation.args, {
@@ -78,8 +80,9 @@ export async function queryGithubPr(
       maxOutputBytes: MAX_GH_OUTPUT_BYTES,
       environment: githubPrEnvironment(options.environment),
     });
-    if (result.killed || result.code !== 0) return undefined;
-    if (Buffer.byteLength(result.stdout) > MAX_GH_OUTPUT_BYTES) return undefined;
+    if (result.truncated) return undefined;
+    if (signal?.aborted || result.killed || result.code !== 0) return undefined;
+    if (Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > MAX_GH_OUTPUT_BYTES) return undefined;
     return buildGithubPrSnapshot(JSON.parse(result.stdout), now);
   } catch {
     return undefined;

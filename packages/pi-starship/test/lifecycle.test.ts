@@ -32,12 +32,18 @@ async function emit(
 function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
   return piStarshipRuntime(pi, {
     gitExec: (command, args, options) =>
-      pi.exec(command, args, { cwd: options.cwd, signal: options.signal, timeout: options.timeout }),
+      pi.exec(command, args, {
+        cwd: options.cwd,
+        signal: options.signal,
+        timeout: options.timeout,
+        maxBuffer: options.maxOutputBytes,
+      }),
     githubPrExec: (command, args, options) =>
       pi.exec(command, args, {
         cwd: options.cwd,
         signal: options.signal,
         timeout: options.timeout,
+        maxBuffer: options.maxOutputBytes,
       }),
   });
 }
@@ -390,6 +396,7 @@ test("session replacement cancels an awaited settings edit before saving or appl
       stderr: "no PR",
       code: 1,
       killed: false,
+      truncated: false,
     });
     piStarship(mock.pi);
     const edited = deferred<string | undefined>();
@@ -792,7 +799,7 @@ test("stale Git results from a replaced session cannot overwrite the new footer"
       exec: (_command: string, args: string[]) => Promise<ExecResult>;
     }
   ).exec = async (_command, args) => {
-    if (isGithubPrCall(args)) return { stdout: "", stderr: "no PR", code: 1, killed: false };
+    if (isGithubPrCall(args)) return { stdout: "", stderr: "no PR", code: 1, killed: false, truncated: false };
     if (args[0] === "rev-parse") {
       return gitResult("/work/main\n/work/main/.git\n/work/main/.git\n");
     }
@@ -961,7 +968,7 @@ test("Git worktree parser distinguishes linked and primary worktrees", () => {
   assert.equal(parseGitWorktree("malformed\n"), undefined);
 });
 
-type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
+type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean; truncated: boolean };
 
 function isGithubPrCall(args: readonly string[]): boolean {
   return args.includes("pr") && args.includes("view") && args.includes("--json");
@@ -983,11 +990,12 @@ function pullRequestResult(number: number, overrides: Record<string, unknown> = 
     stderr: "",
     code: 0,
     killed: false,
+    truncated: false,
   };
 }
 
 function gitResult(stdout = "## main\n"): ExecResult {
-  return { stdout, stderr: "", code: 0, killed: false };
+  return { stdout, stderr: "", code: 0, killed: false, truncated: false };
 }
 
 function stripAnsi(value: string): string {

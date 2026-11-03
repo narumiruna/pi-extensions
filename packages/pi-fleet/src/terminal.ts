@@ -7,6 +7,8 @@ export type FleetTerminal = "tmux" | "ghostty" | "zellij";
 export type FleetTerminalPreference = "auto" | FleetTerminal;
 export type TerminalSplitDirection = "right" | "down" | "left" | "up";
 
+// Version strings and pane identities are short; allow a bounded diagnostic budget.
+const TERMINAL_MAX_BUFFER = 16 * 1024;
 const TMUX_PANE_ID = /^%\d{1,20}$/u;
 const ZELLIJ_PANE_ID = /^\d{1,20}$/u;
 
@@ -70,6 +72,7 @@ export function createDefaultTerminalPort(pi: ExtensionAPI, terminal: FleetTermi
       pi.exec(command, args, {
         ...(execution.signal ? { signal: execution.signal } : {}),
         timeout: execution.timeoutMs,
+        maxBuffer: TERMINAL_MAX_BUFFER,
       }),
   };
   switch (terminal) {

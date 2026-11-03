@@ -7,6 +7,7 @@ export interface WorkspaceExecResult {
   stderr: string;
   code: number;
   killed: boolean;
+  truncated: boolean;
 }
 
 export type WorkspaceExec = (

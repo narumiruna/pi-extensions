@@ -7,6 +7,7 @@ export { formatVersion } from "../format/version.js";
 
 export const MAX_METADATA_FILE_BYTES = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 2_000;
+// Footer probes need only version, health, or local metadata; omit larger replies in full.
 export const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 const MAX_DIRECTORY_ENTRIES = 2_048;
 const MAX_LABEL_LENGTH = 160;
@@ -206,11 +207,11 @@ export async function runBounded(
       signal: context.input.signal,
       environment: context.input.environment,
     });
+    if (result.truncated) return undefined;
     if (context.input.signal?.aborted || result.code !== 0 || result.killed) return undefined;
-    const selectedOutput = result.stdout || result.stderr;
-    const output = Buffer.from(selectedOutput).subarray(0, MAX_COMMAND_OUTPUT_BYTES + 1);
-    if (output.byteLength > MAX_COMMAND_OUTPUT_BYTES) return undefined;
-    return output.toString("utf8");
+    if (Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > MAX_COMMAND_OUTPUT_BYTES)
+      return undefined;
+    return result.stdout || result.stderr;
   } catch {
     return undefined;
   }
