@@ -61,12 +61,15 @@ test("changes all five settings in one screen with bounded rendering", async () 
     return save(patch, signal);
   };
   const zeroWidth: string[] = [];
-  const custom: ExtensionCommandContext["ui"]["custom"] = (factory, options) =>
-    screen.custom(async (...args) => {
+  const capturedOptions: Parameters<ExtensionCommandContext["ui"]["custom"]>[1][] = [];
+  const custom: ExtensionCommandContext["ui"]["custom"] = (factory, options) => {
+    capturedOptions.push(options);
+    return screen.custom(async (...args) => {
       const component = await factory(...args);
       zeroWidth.push(...component.render(0));
       return component;
     }, options);
+  };
   Object.assign(current.ctx.ui, { custom });
   const command = current.open();
   await screen.waitForOpen();
@@ -92,6 +95,7 @@ test("changes all five settings in one screen with bounded rendering", async () 
   await screen.waitForPending();
   screen.press("ctrl+c");
   assert.equal(await command, "close");
+  assert.deepEqual(capturedOptions, [{ blocked: { kind: "question", message: "Edit Progress settings" } }]);
   assert.ok(zeroWidth.length > 0);
   assert.ok(zeroWidth.every((line) => visibleWidth(line) === 0));
   assert.match(initial, /Show widget/u);

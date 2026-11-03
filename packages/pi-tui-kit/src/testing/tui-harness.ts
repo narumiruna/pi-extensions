@@ -68,9 +68,12 @@ export function createTuiHarness(options: TuiHarnessOptions = {}): TuiHarness {
   const theme = testingTheme(options.theme);
   const keybindings = testingKeybindings(options.keybindings);
 
-  const custom = (async <Value>(factory: CustomFactory<Value>, customOptions?: unknown): Promise<Value> => {
-    if (customOptions !== undefined) {
-      throw new Error("TUI harness does not support custom UI options or overlays");
+  const custom = (async <Value>(
+    factory: CustomFactory<Value>,
+    customOptions?: Parameters<ExtensionContext["ui"]["custom"]>[1],
+  ): Promise<Value> => {
+    if (customOptions && Object.keys(customOptions).some((key) => key !== "blocked")) {
+      throw new Error("TUI harness does not support custom UI options or overlays, except inline blocked status");
     }
     if (active && !active.settled) {
       throw new Error("TUI harness already has an active custom component");

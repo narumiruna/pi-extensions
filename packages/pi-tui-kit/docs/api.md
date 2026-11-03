@@ -603,6 +603,9 @@ It retains asynchronous creation even when Pi closes the dialog before the facto
 Accepted completion aborts the interaction signal immediately, including when `complete()` is called inside the factory.
 A rejection during creation, disposal, or pending-work draining matching that signal's reason, directly or through an `AbortError` cause, preserves the accepted result after draining; unrelated initialization and cleanup errors remain reportable.
 The consumer still owns the component, its Back/Close value, and every domain side effect.
+Host-owned disposal settles the runner locally without calling Pi's completion callback: this preserves sibling cleanup and prevents an obsolete editor draft from being restored after reset.
+Disposal errors cannot interrupt host teardown; current-owner errors are reported after pending work drains, while stale-owner errors remain suppressed.
+Supply an owner signal that aborts on session replacement, reload, and shutdown, including while an asynchronous factory is still pending.
 Async factories and pending work must honor the supplied signal; the helper drains them but does not hide uncooperative work behind a timeout.
 
 Use `sanitizeTerminalText()` when a specialized component must place an untrusted model label, path, or other value on one terminal line.
@@ -638,6 +641,7 @@ import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
   signal: currentSessionSignal(),
   isCurrent: () => generation === currentGeneration(),
+  blocked: { kind: "question", message: "Choose a response" },
   create: ({ keybindings, signal, complete }) => ({
     render: () => [signal.aborted ? "Closing…" : "Specialized view"],
     invalidate() {},
@@ -1040,8 +1044,15 @@ Host-owned Space also suppresses the local document-search hint.
 Other extensions can install earlier input listeners that Pi does not expose through a public ownership API; Kit cannot predict those listeners.
 The [selector and host-input audit](./core-alignment-audit.md) records native dispatch evidence and retained cross-mode contracts.
 
-Custom Kit interactions do not currently receive the blocked program-status reporting provided by Pi's native dialogs.
-Kit does not emit terminal program-status codes on Pi's behalf.
+`runCustomInteraction()` and `runQuestionnaire()` accept optional `blocked: { kind, message }` metadata for inline components that wait for an answer.
+The consumer chooses `kind` (`question`, `permission`, or `auth`) and a short message; keep answers, editor contents, secrets, and other sensitive text out of it.
+Notes template editing, Progress settings, and Plan questions supply this same native descriptor through these adapters; their content and waiting policy remain extension-owned.
+Pi reports it only after the component mounts, restores the previous dialog or activity status on close, and clears it on host reset.
+Loaders, active generation, and interactions without this option remain unmarked. Menus and other adapters do not infer waiting policy.
+Pi 1.5 or later and a terminal with program-status support are required for reporting; older runtime hosts ignore the extra option and keep their prior UI behavior. TypeScript consumers need Pi typings that include `custom().blocked`.
+Pi ignores blocked metadata on overlays; Kit does not expose overlay options or emit terminal status codes itself.
+RPC questionnaires retain native dialog status; print and JSON behavior is unchanged.
+This option does not change footer prompt events or repair a host runner's unresolved custom-prompt span after dispose-only teardown.
 Review screens return no rows for non-positive or non-finite widths and rebuild their display caches on theme invalidation; raw document content remains unchanged.
 
 ### Fullscreen terminal handoff
@@ -1085,6 +1096,7 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 The same npm package exposes test-only drivers from `@narumitw/pi-tui-kit/testing`; there is no second package to install.
 Keep production imports on the main entrypoint and import harnesses only from test code.
 The testing entrypoint drives Kit behavior through Pi's public custom-factory and RPC dialog boundaries.
+The TUI harness accepts inline `blocked` metadata without simulating terminal status; capture custom options in a wrapper when testing forwarding. Overlay and other custom options remain unsupported.
 It neither returns a raw component nor creates a general `ExtensionContext` mock.
 
 Compose `createTuiHarness()` with the consumer's own context fixture:
@@ -1187,7 +1199,8 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `DocumentCopyAction`, `DocumentCopyContext`, `MenuCloseReason`, and result types; the `/document-review` subpath also exports the copy types.
 - Focused interaction subpaths — `confirmation`, `custom-interaction`, `document-review`, `live-choice`, `multi-select`, `questionnaire`, `selectors`, and `task` export the matching runtime functions and types without requiring the package root.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`22`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`23`).
+Version 23 adds consumer-owned inline blocked metadata to custom interactions and questionnaires; existing definitions and defaults remain valid.
 Version 22 adds opt-in in-place full-source document copy while version-21 definitions and completion results remain valid.
 Version 21 adds frame row metadata and configured-key canonicalization while version-20 definitions remain valid.
 Version 20 adds focused interaction subpaths plus standalone document-review and multi-select APIs while version-19 definitions remain valid.

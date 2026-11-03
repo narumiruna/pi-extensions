@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runCustomInteraction } from "./custom-interaction.js";
+import { type RunCustomInteractionOptions, runCustomInteraction } from "./custom-interaction.js";
 import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import { sanitizeTerminalText } from "./terminal-text.js";
 import type { MenuCloseReason, MenuContext } from "./types.js";
@@ -44,6 +44,8 @@ export interface RunQuestionnaireOptions<
   allowNotes?: boolean;
   maxTextLength?: number;
   labels?: Partial<QuestionnaireLabels>;
+  /** Forwarded only to the inline TUI adapter; RPC dialogs keep native status. */
+  blocked?: RunCustomInteractionOptions<unknown, Context>["blocked"];
   signal?: AbortSignal;
   isCurrent?(): boolean;
   onError?(ctx: Context, error: unknown): void | Promise<void>;
@@ -112,6 +114,7 @@ async function runTuiQuestionnaire<QuestionId extends string, Context extends Me
     { kind: "submitted"; answers: QuestionnaireAnswer<QuestionId>[] } | { kind: "closed"; reason: MenuCloseReason },
     Context
   >(ctx, {
+    blocked: options.blocked,
     signal: options.signal,
     isCurrent: options.isCurrent,
     onError: (currentCtx, error) => reportQuestionnaireError(currentCtx, options, error),

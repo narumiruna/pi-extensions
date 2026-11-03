@@ -94,6 +94,8 @@ Progress and Subagents use published frame row metadata; Notes and Ticker share 
 The [consumer consolidation audit](./docs/ui-consolidation-audit.md) records compatibility, registry evidence, verification, and the blocked BTW migration. Protocol-overlap, global shortcut availability, and a second paste parser remain deferred.
 The [native alignment audit](./docs/core-alignment-audit.md#shared-helper-alignment) records the original API decisions.
 
+Custom interactions and questionnaires accept opt-in, consumer-owned inline waiting metadata. Pi 1.5 or later reports it to supported terminals; older runtime hosts keep their prior UI behavior. Loaders stay unmarked, and overlays are not supported by this option.
+
 Kit screens follow Pi's fullscreen input ownership rather than replacing its transcript controls.
 See [Fullscreen input and custom UI limits](./docs/api.md#fullscreen-input-and-custom-ui-limits) for paging, overlay focus, and program-status constraints.
 The [selector and host-input audit](./docs/core-alignment-audit.md) records corrections, retained contracts, native-renderer tests, and unverified terminal paths.

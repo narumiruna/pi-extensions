@@ -61,7 +61,12 @@ test("normalizePlanModeQuestionParams validates question shape without changing 
 test("the Kit runner preserves domain fields, notes, raw answers, and duplicate domain ids", async () => {
   const duplicateIds = questions.map((question) => ({ ...question, id: "decision" }));
   const tui = createTuiHarness({ width: 60, rows: 30 });
-  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const capturedOptions: Parameters<typeof tui.custom>[1][] = [];
+  const custom: typeof tui.custom = (factory, options) => {
+    capturedOptions.push(options);
+    return tui.custom(factory, options);
+  };
+  const context = createMockContext({ mode: "tui", hasUI: true, custom });
   const running = askPlanModeQuestions(duplicateIds, context.ctx);
   await tui.waitForOpen();
   tui.setFocused(true);
@@ -96,6 +101,7 @@ test("the Kit runner preserves domain fields, notes, raw answers, and duplicate 
       wasCustom: true,
     },
   ]);
+  assert.deepEqual(capturedOptions, [{ blocked: { kind: "question", message: "Answer Plan mode questions" } }]);
 });
 
 test("the Kit RPC runner preserves limits, ordering, and answer metadata", async () => {

@@ -24,6 +24,8 @@ export interface RunCustomInteractionOptions<Value, Context extends MenuContext 
   create(
     context: CustomInteractionContext<Value, Context>,
   ): CustomInteractionComponent | Promise<CustomInteractionComponent>;
+  /** Consumer-owned inline waiting status; omitted for loaders and active work. */
+  blocked?: NonNullable<Parameters<ExtensionCommandContext["ui"]["custom"]>[1]>["blocked"];
   signal?: AbortSignal;
   isCurrent?(): boolean;
   onError?(ctx: Context, error: unknown): void | Promise<void>;
@@ -66,10 +68,15 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
   let completionRequested = false;
   let customResult: InternalInteractionResult<Value> | undefined;
   let uiError: unknown;
+  let disposalError: unknown;
   let cleanupError: unknown;
+  let resolveDisposal!: (result: InternalInteractionResult<Value>) => void;
+  const disposal = new Promise<InternalInteractionResult<Value>>((resolve) => {
+    resolveDisposal = resolve;
+  });
 
   try {
-    customResult = await uiFor(ctx).custom<InternalInteractionResult<Value> | undefined>(
+    const interaction = uiFor(ctx).custom<InternalInteractionResult<Value> | undefined>(
       async (tui, theme, keybindings, done) => {
         let finished = false;
         const finish = (result: InternalInteractionResult<Value>) => {
@@ -96,7 +103,9 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
             keybindings,
             signal,
             complete: (value) => {
-              if (externallyDisposed || signal.aborted || !isCurrent(options)) {
+              // A host-owned unmount must not restore an obsolete editor later.
+              if (externallyDisposed) return;
+              if (signal.aborted || !isCurrent(options)) {
                 finishStale();
                 return;
               }
@@ -108,14 +117,26 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
         );
         component = await creation;
         if (signal.aborted || !isCurrent(options)) finishStale();
-        wrappedComponent = wrapComponent(component, () => {
-          if (!completionRequested && !options.signal?.aborted) externallyDisposed = true;
-          controller.abort(new DOMException("Custom interaction disposed", "AbortError"));
-          removeAbortListener();
-        });
+        wrappedComponent = wrapComponent(
+          component,
+          () => {
+            if (!completionRequested) externallyDisposed = true;
+            controller.abort(new DOMException("Custom interaction disposed", "AbortError"));
+            removeAbortListener();
+            // Pi can dispose dialogs during reset without resolving custom(). Settle
+            // locally: calling done() here would mutate its live reset iteration
+            // and could restore an old editor draft after session replacement.
+            if (!completionRequested) resolveDisposal({ kind: "stale" });
+          },
+          (error) => {
+            disposalError ??= error;
+          },
+        );
         return wrappedComponent;
       },
+      options.blocked ? { blocked: options.blocked } : undefined,
     );
+    customResult = await Promise.race([interaction, disposal]);
   } catch (error) {
     uiError = error;
     controller.abort(new DOMException("Custom interaction failed", "AbortError"));
@@ -148,6 +169,7 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
   } catch (error) {
     if (!isCompletionAbort(error)) cleanupError ??= error;
   }
+  if (disposalError !== undefined && !isCompletionAbort(disposalError)) cleanupError ??= disposalError;
   try {
     await component?.waitForPending?.();
   } catch (error) {
@@ -165,7 +187,11 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
   return { kind: "stale" };
 }
 
-function wrapComponent(component: CustomInteractionComponent, onDispose: () => void): CustomInteractionComponent {
+function wrapComponent(
+  component: CustomInteractionComponent,
+  onDispose: () => void,
+  onDisposalError: (error: unknown) => void,
+): CustomInteractionComponent {
   let disposed = false;
   const wrapped: CustomInteractionComponent & Partial<Focusable> = {
     render: (width) => component.render(width),
@@ -181,7 +207,13 @@ function wrapComponent(component: CustomInteractionComponent, onDispose: () => v
       if (disposed) return;
       disposed = true;
       onDispose();
-      component.dispose?.();
+      try {
+        component.dispose?.();
+      } catch (error) {
+        // Do not interrupt Pi's reset loop before it clears inline blocked state.
+        // The runner reports current-owner failures after draining pending work.
+        onDisposalError(error);
+      }
     },
   };
   Object.defineProperty(wrapped, "wantsKeyRelease", {

@@ -186,6 +186,7 @@ export async function askPlanModeQuestions(
     })),
   }));
   const result = await runQuestionnaire(ctx, {
+    blocked: { kind: "question", message: "Answer Plan mode questions" },
     questions: runnerQuestions,
     allowNotes: true,
     maxTextLength: MAX_PLAN_MODE_RESPONSE_LENGTH,
