@@ -25,6 +25,10 @@ export interface ModelCount {
   count: number;
 }
 
+export interface ResponseModelCount extends ModelCount {
+  responseModel?: string;
+}
+
 export interface SkillStats {
   name: string;
   count: number;
@@ -59,6 +63,7 @@ export interface ResponseStats {
   p95: number;
   maximum: number;
   distribution: { one: number; twoToThree: number; fourToSix: number; sevenPlus: number };
+  models: ResponseModelCount[];
 }
 
 export interface AnalyticsSnapshot {
@@ -97,6 +102,7 @@ export async function querySnapshot(
 ): Promise<AnalyticsSnapshot> {
   const generationCounts: number[] = [];
   const seenRunIds = new Set<string>();
+  const models = new Map<string, ResponseModelCount>();
   const skills = new Map<string, SkillStats>();
   const tools = new Map<string, ToolStats & { totalDurationMs: number }>();
   const categories = Object.fromEntries(ERROR_CATEGORIES.map((category) => [category, 0])) as Record<
@@ -169,6 +175,15 @@ export async function querySnapshot(
       terminal += error.terminal ? 1 : 0;
     }
     for (const generation of run.generations) {
+      const identity = {
+        provider: generation.provider,
+        model: generation.model,
+        responseModel: generation.responseModel,
+      };
+      const key = responseModelKey(identity);
+      const item = models.get(key) ?? { ...identity, count: 0 };
+      item.count += 1;
+      models.set(key, item);
       for (const response of generation.responses) {
         if (response.status === 429) http429 += 1;
         if (response.status >= 500 && response.status < 600) http5xx += 1;
@@ -176,7 +191,7 @@ export async function querySnapshot(
     }
   }
 
-  const responses = responseStatistics(generationCounts);
+  const responses = responseStatistics(generationCounts, [...models.values()]);
   return {
     overview: {
       responseCycles: responses.count,
@@ -206,7 +221,7 @@ export async function querySnapshot(
   };
 }
 
-function responseStatistics(generationCounts: number[]): ResponseStats {
+function responseStatistics(generationCounts: number[], models: ResponseModelCount[]): ResponseStats {
   const sorted = [...generationCounts].sort((left, right) => left - right);
   const count = sorted.length;
   const llmCalls = sum(sorted);
@@ -231,7 +246,14 @@ function responseStatistics(generationCounts: number[]): ResponseStats {
       fourToSix: sorted.filter((value) => value >= 4 && value <= 6).length,
       sevenPlus: sorted.filter((value) => value >= 7).length,
     },
+    models: models.sort(
+      (left, right) => right.count - left.count || responseModelKey(left).localeCompare(responseModelKey(right)),
+    ),
   };
+}
+
+function responseModelKey(model: Omit<ResponseModelCount, "count">): string {
+  return JSON.stringify([model.provider, model.model, model.responseModel]);
 }
 
 function mergeModelCount(models: ModelCount[], next: ModelCount): void {

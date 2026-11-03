@@ -91,9 +91,11 @@ export function createAnalyticsMenu(
         hint: "back",
       }),
       responses: ({ state }) => ({
-        kind: "detail",
+        kind: "review",
         title: `Response cycles · ${RANGE_LABELS[state.rangeId]}`,
-        lines: responseLines(state.result),
+        content: responseLines(state.result).join("\n"),
+        format: { kind: "text" },
+        viewportSize: "adaptive",
         hint: "back",
       }),
       privacy: ({ state }) => ({
@@ -352,6 +354,12 @@ function responseLines(result: AnalyticsLoadResult): string[] {
     metric("2–3 calls", value.distribution.twoToThree),
     metric("4–6 calls", value.distribution.fourToSix),
     metric("7+ calls", value.distribution.sevenPlus),
+    "",
+    "LLM calls by requested / reported model",
+    ...value.models.flatMap((model) => [
+      `Requested: ${modelLabel(model)} · Calls: ${model.count}`,
+      `  Reported: ${model.responseModel === undefined ? "not reported" : safeDisplayText(model.responseModel)}`,
+    ]),
   ];
 }
 

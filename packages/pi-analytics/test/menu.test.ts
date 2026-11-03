@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runConfirmation, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
@@ -73,6 +73,12 @@ const snapshot: AnalyticsSnapshot = {
     p95: 6,
     maximum: 9,
     distribution: { one: 31, twoToThree: 34, fourToSix: 15, sevenPlus: 3 },
+    models: [
+      { provider: "router", model: "auto", responseModel: "concrete-a", count: 100 },
+      { provider: "router", model: "auto", responseModel: "concrete-b", count: 50 },
+      { provider: "router", model: "auto", responseModel: "auto", count: 20 },
+      { provider: "router", model: "auto", count: 22 },
+    ],
   },
 };
 
@@ -130,11 +136,34 @@ test("skill and tool browse details preserve attribution and model breakdowns", 
   assert.match(tools.items[0]?.details?.join("\n") ?? "", /Average duration: 12.5 ms/);
 });
 
+test("response details distinguish requested, identical, routed, and unreported model IDs", async () => {
+  const controller = createAnalyticsMenu(source());
+  const screen = resolveMenuScreen(controller.menu, "responses", await state(controller));
+  assert.equal(screen.kind, "review");
+  if (screen.kind !== "review") return;
+  const lines = screen.content;
+  assert.ok(lines.includes("Requested: router/auto · Calls: 100\n  Reported: concrete-a"));
+  assert.ok(lines.includes("Requested: router/auto · Calls: 50\n  Reported: concrete-b"));
+  assert.ok(lines.includes("Requested: router/auto · Calls: 20\n  Reported: auto"));
+  assert.ok(lines.includes("Requested: router/auto · Calls: 22\n  Reported: not reported"));
+});
+
 test("dashboard strips terminal controls from stored labels, models, and paths", async () => {
   const baseSkill = snapshot.skills[0];
   assert.ok(baseSkill);
   const unsafe = {
     ...snapshot,
+    responses: {
+      ...snapshot.responses,
+      models: [
+        {
+          provider: "provider\u001b[31m",
+          model: "requested\u009b31m\nmodel",
+          responseModel: "reported\u001b]8;;https://evil.example\u0007model\u000d\u009f",
+          count: 1,
+        },
+      ],
+    },
     skills: [
       {
         ...baseSkill,
@@ -154,9 +183,11 @@ test("dashboard strips terminal controls from stored labels, models, and paths",
   const current = await state(controller);
   const skills = resolveMenuScreen(controller.menu, "skills", current);
   const privacy = resolveMenuScreen(controller.menu, "privacy", current);
+  const responses = resolveMenuScreen(controller.menu, "responses", current);
+  assert.equal(responses.kind, "review");
   assert.equal(skills.kind, "browse");
   assert.equal(privacy.kind, "actions");
-  if (skills.kind !== "browse" || privacy.kind !== "actions") return;
+  if (skills.kind !== "browse" || privacy.kind !== "actions" || responses.kind !== "review") return;
   assert.equal((skills.items[0]?.id ?? "").includes("\u001b"), true);
   assert.doesNotMatch(
     JSON.stringify({
@@ -166,9 +197,13 @@ test("dashboard strips terminal controls from stored labels, models, and paths",
         details: skills.items[0]?.details,
       },
       lines: privacy.lines,
+      responses: responses.content,
     }),
-    /\\u00(?:1b|07|9b)/iu,
+    /\\u00(?:1b|07|9b|9f|0d)|\\nmodel/iu,
   );
+  assert.equal(unsafe.responses.models[0]?.responseModel.includes("\u001b"), true);
+  assert.match(responses.content, /Requested: provider\/requested model · Calls: 1/);
+  assert.match(responses.content, /Reported: reportedmodel/);
 });
 
 test("range selection updates the next state load without creating settings", async () => {
@@ -443,6 +478,110 @@ test("RPC adapts the same dashboard without opening custom TUI", async () => {
     isCurrent: () => !owner.signal.aborted,
   });
   rpc.assertConsumed();
+});
+
+test("RPC response details expose requested and reported models without custom TUI", async () => {
+  const rpc = createRpcHarness([
+    { kind: "select", response: "Response cycles" },
+    { kind: "select", response: "Next" },
+    { kind: "select", response: "Next" },
+    { kind: "select", response: "Back" },
+    { kind: "select", response: "Close" },
+  ]);
+  const context = createMockContext({ hasUI: true, mode: "rpc" });
+  await showAnalyticsMenu(withRpcUi(context, rpc), source(), {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  rpc.assertConsumed();
+  const pages = rpc.dialogs
+    .slice(1, -1)
+    .map(({ title }) => title)
+    .join("\n");
+  assert.match(pages, /Requested: router\/auto · Calls: 100/);
+  for (const reported of ["concrete-a", "concrete-b", "auto", "not reported"]) {
+    assert.ok(pages.includes(`Reported: ${reported}`));
+  }
+});
+
+test("TUI response details scroll to every model at normal and constrained heights", async () => {
+  const longModel = `concrete-long-${"x".repeat(180)}-tail`;
+  const controller = createAnalyticsMenu(
+    source({
+      async load() {
+        return {
+          kind: "ready",
+          snapshot: {
+            ...snapshot,
+            responses: {
+              ...snapshot.responses,
+              models: [
+                ...snapshot.responses.models,
+                {
+                  provider: "router",
+                  model: "auto",
+                  responseModel: longModel,
+                  count: 1,
+                },
+              ],
+            },
+          },
+        };
+      },
+    }),
+  );
+  const bindings: Record<string, KeyId> = {
+    "tui.select.up": "k",
+    "tui.select.down": "j",
+    "tui.select.pageUp": "u",
+    "tui.select.pageDown": "d",
+    "tui.select.cancel": "q",
+  };
+  const tui = createTuiHarness({
+    width: 80,
+    rows: 24,
+    keybindings: {
+      matches: (data, binding) => Boolean(bindings[binding] && matchesKey(data, bindings[binding])),
+      getKeys: (binding) => (bindings[binding] ? [bindings[binding]] : []),
+    },
+  });
+  const context = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+  const running = runMenu(
+    context.ctx,
+    { ...controller.menu, start: "responses" },
+    {
+      getState: controller.getState,
+    },
+  );
+  await tui.waitForOpen();
+  for (const rows of [24, 12, 5]) {
+    tui.resize({ width: 80, rows });
+    tui.press("home");
+    const frames: string[] = [];
+    for (let offset = 0; offset < 50; offset += 1) {
+      const lines = tui.render();
+      assert.ok(lines.length <= rows - 3);
+      frames.push(stripVTControlCharacters(lines.join("\n")));
+      tui.send("j");
+    }
+    const visible = frames.join("\n");
+    for (const reported of ["concrete-a", "concrete-b", "auto", "not reported", "concrete-long-"]) {
+      assert.ok(visible.includes(`Reported: ${reported}`), `${reported} at ${rows} rows`);
+    }
+    assert.ok(visible.includes("-tail"), `long ID tail at ${rows} rows`);
+    tui.press("end");
+    assert.match(stripVTControlCharacters(tui.render().join("\n")), /-tail/);
+  }
+  for (const width of [1, 8, 40, 100]) {
+    tui.resize({ width, rows: 24 });
+    tui.invalidate();
+    const lines = tui.render();
+    for (const line of lines) assert.ok(visibleWidth(line) <= width);
+    assert.equal(stripVTControlCharacters(lines[0] ?? ""), "─".repeat(width));
+    assert.equal(stripVTControlCharacters(lines.at(-1) ?? ""), "─".repeat(width));
+  }
+  tui.send("q");
+  assert.equal((await running).kind, "closed");
 });
 
 test("TUI shows a cancellable loader before opening the dashboard", async () => {

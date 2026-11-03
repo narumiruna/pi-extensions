@@ -43,6 +43,7 @@ const emptySnapshot: AnalyticsSnapshot = {
     p95: 0,
     maximum: 0,
     distribution: { one: 0, twoToThree: 0, fourToSix: 0, sevenPlus: 0 },
+    models: [],
   },
 };
 
@@ -186,6 +187,64 @@ test("a settled response is written once with the current session signal", async
   assert.equal(store.runs.length, 1);
   assert.equal(store.runs[0]?.outcome, "success");
   assert.equal(store.signals[0]?.aborted, false);
+});
+
+test("message completion captures only reported metadata without replacing requested models", async () => {
+  const store = new FakeStore();
+  const mock = createMockPi();
+  createAnalyticsExtension({ createStore: () => store })(mock.pi);
+  const started = lifecycleContext();
+  await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+  await emit(mock, "before_agent_start", { prompt: "run", systemPromptOptions: { skills: [] } }, started.ctx);
+  const reported = ["routed-a", "routed-b", "gpt-test", undefined];
+  const stopReasons = ["toolUse", "error", "stop", "aborted"];
+  for (const [index, responseModel] of reported.entries()) {
+    await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
+    await emit(
+      mock,
+      "message_start",
+      {
+        message: { role: "assistant", responseModel: "partial-only" },
+      },
+      started.ctx,
+    );
+    await emit(
+      mock,
+      "message_end",
+      {
+        message: { role: "toolResult", responseModel: "not-an-assistant" },
+      },
+      started.ctx,
+    );
+    await emit(
+      mock,
+      "message_end",
+      {
+        message: {
+          role: "assistant",
+          model: "not-the-requested-model",
+          responseModel,
+          stopReason: stopReasons[index],
+        },
+      },
+      started.ctx,
+    );
+  }
+  await emit(mock, "agent_settled", {}, started.ctx);
+  const run = store.runs[0];
+  assert.ok(run);
+  assert.equal(run.initialModel, "gpt-test");
+  assert.deepEqual(
+    run.generations.map(({ model }) => model),
+    Array(4).fill("gpt-test"),
+  );
+  assert.deepEqual(
+    run.generations.map(({ responseModel }) => responseModel),
+    reported,
+  );
+  assert.equal(run.providerErrors[0]?.model, "gpt-test");
+  assert.deepEqual(mock.entries, []);
+  await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
 });
 
 test("cache warming provider hooks never become ordinary generations", async () => {
