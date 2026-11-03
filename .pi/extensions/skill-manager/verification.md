@@ -1,6 +1,6 @@
-# pi-skills verification and terminal handoff
+# skill-manager verification and terminal handoff
 
-The implementation follows the approved pi-skills plan. It remains a project-local extension with no workspace, manifest, root test registration, Changeset, model tools, loader hook, or publication change.
+The implementation remains a project-local extension with no workspace, manifest, root test registration, Changeset, model tools, loader hook, or publication change.
 
 ## Deterministic and runtime evidence
 
@@ -137,7 +137,7 @@ Responsible role: maintainer with an interactive terminal. Prerequisite: install
 Run the documented interactive load command:
 
 ```sh
-pi --no-extensions -e ./.pi/extensions/skills/index.ts
+pi --no-extensions -e ./.pi/extensions/skill-manager/index.ts
 ```
 
 Verify per-skill action navigation and Back, native clipboard delivery, checkbox selection/search, exact path review, non-default keys, IME positioning, bracketed paste, mouse interaction, fullscreen and regular mode, narrow resize, hard cancellation, trusted-project auto-discovery, and `/reload`. For model invocation, inspect a linked target and a long path in the review before enabling settings, toggle both values, cancel before and during a pending save, and verify explicit reload. Confirm that Back follows settings → review → skill actions → Manage skills, that loaded-only/protected entries cannot Move/Remove bundles, and that source-file changes can affect other projects. Expected result: standard Pi/Kit interaction, no unintended mutation, and refreshed skill discovery only after explicit reload.

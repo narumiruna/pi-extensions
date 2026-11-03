@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { createSkillsExtension as Factory } from "../skills-extension.ts";
+import type { createSkillManagerExtension as Factory } from "../skill-manager-extension.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -16,7 +16,7 @@ async function setup(show: Parameters<typeof Factory>[0] = async () => false) {
   dirs.push(agent);
   vi.stubEnv("PI_CODING_AGENT_DIR", agent);
   vi.resetModules();
-  const { createSkillsExtension } = await import("../skills-extension.ts");
+  const { createSkillManagerExtension } = await import("../skill-manager-extension.ts");
   const hooks = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
   const api = {
@@ -27,7 +27,7 @@ async function setup(show: Parameters<typeof Factory>[0] = async () => false) {
       command = options;
     }),
   } as unknown as ExtensionAPI;
-  createSkillsExtension(show)(api);
+  createSkillManagerExtension(show)(api);
   const ui = { notify: vi.fn() };
   const context = (mode = "rpc", sessionManager = {}) =>
     ({
@@ -50,10 +50,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-describe("skills lifecycle", () => {
+describe("skill-manager lifecycle", () => {
   it("registers one command and only session hooks without action APIs at factory load", async () => {
     const fixture = await setup();
     expect(fixture.api.registerCommand).toHaveBeenCalledTimes(1);
+    expect(fixture.api.registerCommand).toHaveBeenCalledWith("skills", fixture.command);
     expect([...fixture.hooks.keys()]).toEqual(["session_start", "session_shutdown"]);
     expect(fixture.command.getArgumentCompletions?.("re")).toEqual([{ value: "remove", label: "remove" }]);
   });

@@ -1,4 +1,4 @@
-# pi-skills
+# skill-manager
 
 Manage local skill bundles and model invocation from `/skills`. This project-local extension uses Pi TUI Kit for menus, settings, selection, previews, tasks, and TUI/RPC adaptation. Pi still owns skill discovery, project trust, filtering, and name-collision precedence.
 
@@ -11,10 +11,10 @@ npm install
 npm --workspace @narumitw/pi-tui-kit run build
 ```
 
-Pi discovers `.pi/extensions/skills/index.ts` after project trust is granted. In an existing session, run `/reload`. To load only this extension explicitly in an interactive terminal:
+Pi discovers `.pi/extensions/skill-manager/index.ts` after project trust is granted. In an existing session, run `/reload`. To load only this extension explicitly in an interactive terminal:
 
 ```sh
-pi --no-extensions -e ./.pi/extensions/skills/index.ts
+pi --no-extensions -e ./.pi/extensions/skill-manager/index.ts
 ```
 
 This is not a separately published package. It needs the repository's installed dependencies and built Kit workspace. It does not depend on another extension.
@@ -119,11 +119,11 @@ Each completed batch reports installed, removed, moved, skipped, failed, and sou
 Run the extension-local checks from the repository root after building Kit:
 
 ```sh
-npm exec -- tsc -p .pi/extensions/skills/tsconfig.json
-npm exec -- biome check .pi/extensions/skills --error-on-warnings
-npm exec -- vitest run --config .pi/extensions/skills/vitest.config.ts
-node .pi/extensions/skills/test/runtime-smoke.mjs
-node .pi/extensions/skills/test/headless-smoke.mjs
+npm exec -- tsc -p .pi/extensions/skill-manager/tsconfig.json
+npm exec -- biome check .pi/extensions/skill-manager --error-on-warnings
+npm exec -- vitest run --config .pi/extensions/skill-manager/vitest.config.ts
+node .pi/extensions/skill-manager/test/runtime-smoke.mjs
+node .pi/extensions/skill-manager/test/headless-smoke.mjs
 npm run check
 npm test
 ```
@@ -134,4 +134,4 @@ See [verification and terminal handoff](./verification.md) for completed evidenc
 
 ## Files
 
-`index.ts` forwards registration to `skills-extension.ts`. `command.ts` owns argument grammar. `menu.ts` owns Kit screens and operation drafts. `github.ts` owns remote snapshots and bounded downloads. `metadata.ts` delegates validation to Pi. `locations.ts` owns targets and native path registration. `filesystem.ts` owns inventory, snapshots, and safe per-skill bundle operations. `managed-skills.ts` joins disk and loaded entries without granting bundle permissions. `invocation.ts` owns loaded-skill settings snapshots and atomic saves; `frontmatter.ts` changes only the native invocation field. `mutation-queue.ts` serializes tree operations and metadata edits. `types.ts` defines contracts; `invariant.ts` checks required operation data. Tests, isolated runtime smokes, and their local configuration stay inside this directory.
+`index.ts` forwards registration to `skill-manager-extension.ts`. `command.ts` owns argument grammar. `menu.ts` owns Kit screens and operation drafts. `github.ts` owns remote snapshots and bounded downloads. `metadata.ts` delegates validation to Pi. `locations.ts` owns targets and native path registration. `filesystem.ts` owns inventory, snapshots, and safe per-skill bundle operations. `managed-skills.ts` joins disk and loaded entries without granting bundle permissions. `invocation.ts` owns loaded-skill settings snapshots and atomic saves; `frontmatter.ts` changes only the native invocation field. `mutation-queue.ts` serializes tree operations and metadata edits. `types.ts` defines contracts; `invariant.ts` checks required operation data. Tests, isolated runtime smokes, and their local configuration stay inside this directory.
