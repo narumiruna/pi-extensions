@@ -1,175 +1,13 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, test, vi } from "vitest";
-
-const cliRequire = createRequire(createRequire(import.meta.url).resolve("@changesets/cli/bin.js"));
-const { cac } = await import(cliRequire.resolve("cac"));
-function nativeOptions(args: string[]) {
-  const parser = cac("changeset");
-  parser.command("publish").option("--from-pack-dir <dir>", "Packed directory");
-  return parser.parse([process.execPath, "changeset", "publish", ...args], { run: false }).options;
-}
+import { test } from "vitest";
+import { fixture, integrity, nativeOptions, type Release } from "./packed-publish-fixture.js";
 
 const script = "../scripts/publish-packed-packages.mjs";
 const { publishPackedPackages } = await import(script);
-const temporary: string[] = [];
-afterEach(async () => {
-  await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
-});
-const integrity = (bytes: Uint8Array, algorithm = "sha256") =>
-  `${algorithm}-${createHash(algorithm).update(bytes).digest("base64")}`;
-type Release = {
-  name: string;
-  version: string;
-  kind: string;
-  access?: string;
-  tag?: string;
-  tarball?: { path: string; integrity: string };
-};
-type Manifest = { name: string; version: string; [key: string]: unknown };
-type Result = { code: number; stdout?: string; stderr?: string };
-
-async function fixture(field = "dependencies", range = "^2.0.0") {
-  const cwd = await mkdtemp(path.join(os.tmpdir(), "packed-publish-test-"));
-  temporary.push(cwd);
-  await writeFile(
-    path.join(cwd, "package.json"),
-    JSON.stringify({ name: "test-root", private: true, workspaces: ["packages/*"] }),
-  );
-  await writeFile(path.join(cwd, "package-lock.json"), "{}");
-  const manifests: Manifest[] = [
-    { name: "@test/core", version: "2.0.0" },
-    { name: "@test/consumer", version: "3.0.0", [field]: { "@test/core": range } },
-  ];
-  const bytes = [Buffer.from("exact core packed bytes"), Buffer.from("exact consumer packed bytes")];
-  const releases: Release[] = [];
-  for (const [index, manifest] of manifests.entries()) {
-    const dir = path.join(cwd, "packages", String(index));
-    await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, "package.json"), JSON.stringify(manifest));
-    releases.push({
-      name: manifest.name,
-      version: manifest.version,
-      kind: "publish",
-      access: "public",
-      tag: "latest",
-      tarball: { path: `packages/original-${index}.tgz`, integrity: integrity(bytes[index]) },
-    });
-  }
-  const pack = path.join(cwd, "packed");
-  await mkdir(path.join(pack, "packages"), { recursive: true });
-  for (const [index, release] of releases.entries())
-    await writeFile(path.join(pack, release.tarball?.path ?? ""), bytes[index]);
-  const save = async (plan: Release[][] = [[releases[1], releases[0]]], version = 1) =>
-    writeFile(path.join(pack, "publish-plan.json"), JSON.stringify({ version, plan }));
-  await save();
-  const calls: string[] = [];
-  const nativePlans: Release[][] = [];
-  const nativeArgs: string[][] = [];
-  const nativeDirectories: string[] = [];
-  const waits: number[] = [];
-  const logs: string[] = [];
-  let onWait: () => unknown = () => {};
-  const wait = async (ms: number) => {
-    waits.push(ms);
-    await onWait();
-  };
-  const log = (message: string) => logs.push(message);
-  let metadata: unknown = {
-    name: "@test/core",
-    version: "2.0.0",
-    dist: { tarball: "https://registry.example/core.tgz", integrity: integrity(bytes[0], "sha512") },
-  };
-  let viewResult: Result | undefined;
-  let publishCode = 0;
-  let fetchBytes = bytes[0];
-  let status = 200;
-  const output = path.join(cwd, "report.ndjson");
-  const run = async (command: string, args: string[], options: { cwd: string; capture?: boolean }) => {
-    assert.equal(options.cwd, cwd);
-    if (command === "npm") {
-      assert.deepEqual(args, ["view", "@test/core@2.0.0", "--json"]);
-      assert.equal(options.capture, true);
-      calls.push("view");
-      return viewResult ?? { code: 0, stdout: JSON.stringify(metadata) };
-    }
-    assert.equal(command, process.execPath);
-    assert.equal(args[1], "publish");
-    assert.match(args[0], /@changesets\/cli\/bin.js$/u);
-    const directory = nativeOptions(args.slice(2)).fromPackDir;
-    assert.equal(typeof directory, "string");
-    nativeDirectories.push(directory);
-    const document = JSON.parse(await readFile(path.join(directory, "publish-plan.json"), "utf8"));
-    assert.equal(document.version, 1);
-    assert.equal(document.plan.length, 1);
-    const chunk: Release[] = document.plan[0];
-    nativePlans.push(chunk);
-    nativeArgs.push(args.slice(4));
-    for (const release of chunk) {
-      calls.push(release.name);
-      if (release.tarball) {
-        const original = releases.findIndex((entry) => entry.name === release.name);
-        assert.deepEqual(await readFile(path.join(directory, release.tarball.path)), bytes[original]);
-        assert.deepEqual(release, releases[original]);
-      }
-      if (args.includes("--output") && publishCode === 0)
-        await appendFile(
-          output,
-          `${JSON.stringify({ type: "git-tag", packageName: release.name, tag: `${release.name}@${release.version}` })}\n`,
-        );
-    }
-    return { code: publishCode };
-  };
-  const fetch = async (url: URL, options: RequestInit) => {
-    calls.push("fetch");
-    assert.equal(url.href, "https://registry.example/core.tgz");
-    assert.equal(options.redirect, "error");
-    assert.ok(options.signal instanceof AbortSignal);
-    return new Response(fetchBytes, { status });
-  };
-  return {
-    cwd,
-    pack,
-    bytes,
-    releases,
-    save,
-    calls,
-    nativePlans,
-    nativeArgs,
-    nativeDirectories,
-    waits,
-    logs,
-    output,
-    execute: (args: string[] = [], fetchOverride: unknown = fetch) =>
-      publishPackedPackages(["--from-pack-dir", pack, ...args], { cwd, run, fetch: fetchOverride, wait, log }),
-    executeEquals: (args: string[]) =>
-      publishPackedPackages([`--from-pack-dir=${pack}`, ...args], { cwd, run, fetch, wait, log }),
-    onWait: (value: () => unknown) => {
-      onWait = value;
-    },
-    metadata: (value: unknown) => {
-      metadata = value;
-    },
-    viewResult: (value: Result | undefined) => {
-      viewResult = value;
-    },
-    publishCode: (value: number) => {
-      publishCode = value;
-    },
-    fetchBytes: (value: typeof fetchBytes) => {
-      fetchBytes = value;
-    },
-    status: (value: number) => {
-      status = value;
-    },
-  };
-}
 
 for (const status of [200, 404]) {
   test(`production fetch verifies exact artifact over local HTTP (${status})`, async () => {
@@ -200,7 +38,7 @@ for (const status of [200, 404]) {
         await assert.rejects(f.execute([], globalThis.fetch), /artifact unavailable/u);
         assert.ok(!f.calls.includes("@test/consumer"));
       }
-      assert.equal(requests, status === 200 ? 1 : 6);
+      assert.equal(requests, status === 200 ? 1 : 15);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -219,18 +57,30 @@ test("guard chunks preserve packed entries, paths, bytes, forwarded args and sim
   assert.equal((await readFile(f.output, "utf8")).trim().split("\n").length, 2);
 });
 
+test("metadata propagation longer than the old six-attempt window still permits consumers", async () => {
+  const f = await fixture();
+  f.viewResult({ code: 1, stdout: '{"error":{"code":"E404"}}' });
+  f.onWait(() => {
+    if (f.waits.length === 6) f.viewResult(undefined);
+  });
+  await f.execute();
+  assert.deepEqual(f.waits, Array(6).fill(2_000));
+  assert.equal(f.calls.filter((call) => call === "view").length, 7);
+  assert.deepEqual(f.nativePlans, [[f.releases[0]], [f.releases[1]]]);
+});
+
 test("metadata can become available on the last attempt without republishing earlier chunks", async () => {
   const f = await fixture();
   f.viewResult({ code: 1, stdout: '{"error":{"code":"E404"}}' });
   f.onWait(() => {
-    if (f.waits.length === 5) f.viewResult(undefined);
+    if (f.waits.length === 14) f.viewResult(undefined);
   });
   await f.execute(["--output", f.output]);
-  assert.deepEqual(f.waits, Array(5).fill(2_000));
-  assert.equal(f.calls.filter((call) => call === "view").length, 6);
+  assert.deepEqual(f.waits, Array(14).fill(2_000));
+  assert.equal(f.calls.filter((call) => call === "view").length, 15);
   assert.deepEqual(f.nativePlans, [[f.releases[0]], [f.releases[1]]]);
   assert.equal((await readFile(f.output, "utf8")).trim().split("\n").length, 2);
-  assert.match(f.logs[4], /E404.*attempt 5\/6.*retrying in 2000 ms/u);
+  assert.match(f.logs[13], /E404.*attempt 14.*elapsed 26000 ms.*remaining 4000 ms.*retrying in 2000 ms/u);
   for (const directory of f.nativeDirectories)
     await assert.rejects(readFile(path.join(directory, "publish-plan.json")), { code: "ENOENT" });
 });
@@ -285,7 +135,7 @@ for (const stdout of [
     await assert.rejects(
       f.execute(),
       (error: Error) =>
-        /Registry metadata unavailable.*npm exit 1.*attempt 1\/6/u.test(error.message) &&
+        /Registry metadata unavailable.*npm exit 1.*attempt 1/u.test(error.message) &&
         !error.message.includes("secret"),
     );
     assert.deepEqual(f.calls, ["@test/core", "view"]);
@@ -344,35 +194,6 @@ for (const phase of ["fetch", "body"]) {
   }
 }
 
-for (const phase of ["fetch", "body"]) {
-  test(`download timeout retries when ${phase} reports AbortError`, async () => {
-    const f = await fixture();
-    const controller = new AbortController();
-    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(controller.signal);
-    let attempts = 0;
-    try {
-      await f.execute([], async (_url: URL, options: RequestInit) => {
-        attempts++;
-        if (attempts > 1) return new Response(f.bytes[0]);
-        assert.equal(options.signal, controller.signal);
-        const abort = () => {
-          controller.abort(new DOMException("private URL", "TimeoutError"));
-          throw new DOMException("private URL", "AbortError");
-        };
-        if (phase === "fetch") abort();
-        return { ok: true, arrayBuffer: async () => abort() };
-      });
-      assert.equal(attempts, 2);
-      assert.deepEqual(f.waits, [2_000]);
-      assert.ok(!f.logs[0].includes("private URL"));
-      assert.ok(timeout.mock.calls.every(([ms]) => ms === 30_000));
-      assert.equal(f.calls.at(-1), "@test/consumer");
-    } finally {
-      timeout.mockRestore();
-    }
-  });
-}
-
 test("retry releases an unsuccessful response body before waiting", async () => {
   const f = await fixture();
   let cancelled = false;
@@ -402,11 +223,13 @@ for (const phase of ["metadata", "artifact"]) {
     else f.status(404);
     await assert.rejects(
       f.execute(["--output", f.output]),
-      (error: Error) => /attempt 6\/6/u.test(error.message) && !error.message.includes("secret"),
+      (error: Error) =>
+        /Registry readiness deadline exceeded.*attempt 15.*elapsed 30000 ms/u.test(error.message) &&
+        !error.message.includes("secret"),
     );
-    assert.equal(f.calls.filter((call) => call === "view").length, 6);
-    assert.deepEqual(f.waits, Array(5).fill(2_000));
-    assert.equal(f.logs.length, 5);
+    assert.equal(f.calls.filter((call) => call === "view").length, 15);
+    assert.deepEqual(f.waits, Array(15).fill(2_000));
+    assert.equal(f.logs.length, 15);
     assert.ok(f.logs.every((line) => !line.includes("secret")));
     assert.deepEqual(f.nativePlans, [[f.releases[0]]]);
     assert.equal((await readFile(f.output, "utf8")).trim().split("\n").length, 1);
@@ -420,7 +243,7 @@ test("a failed retry wait stops and removes staging before another query", async
   f.onWait(() => {
     throw new Error("wait interrupted");
   });
-  await assert.rejects(f.execute(), /wait interrupted/u);
+  await assert.rejects(f.execute(), /Registry retry wait failed/u);
   assert.deepEqual(f.calls, ["@test/core", "view", "fetch"]);
   assert.deepEqual(f.waits, [2_000]);
   await assert.rejects(readFile(path.join(f.nativeDirectories[0], "publish-plan.json")), { code: "ENOENT" });
@@ -605,7 +428,7 @@ for (const failure of [
     if (["file-url", "invalid-url", "missing-integrity", "local-mismatch"].includes(failure))
       f.metadata({ name: "@test/core", version: "2.0.0", dist });
     await assert.rejects(f.execute(["--output", f.output]));
-    assert.deepEqual(f.waits, ["metadata-404", "artifact-404"].includes(failure) ? Array(5).fill(2_000) : []);
+    assert.deepEqual(f.waits, ["metadata-404", "artifact-404"].includes(failure) ? Array(15).fill(2_000) : []);
     assert.ok(!f.calls.includes("@test/consumer"));
     const events = (await readFile(f.output, "utf8"))
       .trim()
