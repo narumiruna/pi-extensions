@@ -17,6 +17,7 @@
     "src",
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "pi": {

@@ -220,8 +220,10 @@ Use the same frame for direct command routes and their main-menu actions.
   **Verification:** `Test` of version propagation, publish ordering, failure, and retry fixtures;
   `Review` of the release plan and consumer dependency floors.
 - **MUST:** Keep package contents aligned with the manifest's `files` list and include required
-  notices and licenses. **Verification:** `Smoke` with `npm pack --workspace <name> --dry-run --json`
-  for package or publishing changes.
+  notices and licenses. Every active extension must include its package-root `CHANGELOG.md` in `files`
+  for Pi's native update notices, with version headings maintained by Changesets.
+  **Verification:** `Test` through `test/package-changelogs.test.ts` via `npm test`, plus `Smoke` with
+  `npm pack --workspace <name> --dry-run --json` for package or publishing changes.
 
 Use lowercase `pi-*` package directories and `@narumitw/pi-*` npm names.
 Keep packages small and self-contained, add dependencies only for current runtime needs, and review source files over 1,000 lines for responsibility-based decomposition rather than mechanical splitting.
