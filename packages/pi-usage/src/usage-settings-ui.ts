@@ -145,6 +145,9 @@ export async function showUsageSettings(
       );
 
       return {
+        get capturesViewportInput() {
+          return settingsList.capturesViewportInput;
+        },
         render(width: number) {
           // Compatibility: Kit puts the title directly below the top rule and keeps compact
           // rules when at least five rows fit; both replace the legacy wrapper layout.

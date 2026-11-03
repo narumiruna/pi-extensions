@@ -127,6 +127,9 @@ export async function showSubagentSettings(
         () => complete("back"),
       );
       return {
+        get capturesViewportInput() {
+          return list.capturesViewportInput;
+        },
         render(width: number) {
           if (!current()) complete("stale");
           renderedWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;

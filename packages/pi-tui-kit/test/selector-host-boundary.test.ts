@@ -28,7 +28,7 @@ const hostActions = [
 ] as const;
 
 for (const action of hostActions) {
-  test(`native fullscreen ${action} is not advertised as a selector save key`, async (t) => {
+  test(`native fullscreen ${action} respects selector viewport capture`, async (t) => {
     const fixture = createRendererHost("fullscreen", rendererTheme(), {
       bindings: { [action]: "ctrl+x", "app.thinking.save": ["ctrl+x", "ctrl+s"] },
     });
@@ -36,18 +36,24 @@ for (const action of hostActions) {
     const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
     await fixture.waitForOpen();
     const frame = stripVTControlCharacters(fixture.frame().join("\n"));
-    assert.match(frame, /ctrl\+s set as default/u);
-    assert.doesNotMatch(frame, /ctrl\+x/u);
+    const reserved = action === "tui.altScreen.search";
+    assert.match(frame, reserved ? /ctrl\+s set as default/u : /ctrl\+x\/ctrl\+s set as default/u);
+    assert.equal(fixture.component.capturesViewportInput, true);
     const inputs: string[] = [];
     const handleInput = fixture.component.handleInput?.bind(fixture.component);
     fixture.component.handleInput = (data) => {
       inputs.push(data);
       handleInput?.(data);
     };
+    const before = fixture.scroll.scrollTop;
     fixture.send("\x18");
-    assert.deepEqual(inputs, []); // Proves dispatch through the earlier native listener.
-    if (fixture.host.hasOverlay()) fixture.send("\x1b");
-    fixture.send("\x13");
+    assert.deepEqual(inputs, reserved ? [] : ["\x18"]);
+    if (reserved) {
+      assert.equal(fixture.scroll.scrollTop, before);
+      assert.equal(fixture.host.hasOverlay(), true);
+      fixture.send("\x1b");
+      fixture.send("\x13");
+    }
     assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
   });
 }
@@ -74,7 +80,7 @@ for (const scenario of [
   test(`native host collision uses ${scenario.name} and the first usable fallback`, async (t) => {
     const fixture = createRendererHost("fullscreen", rendererTheme(), {
       kitty: scenario.kitty,
-      bindings: { "tui.altScreen.lineUp": scenario.host, "app.thinking.save": [...scenario.save] } as KeybindingsConfig,
+      bindings: { "tui.altScreen.search": scenario.host, "app.thinking.save": [...scenario.save] } as KeybindingsConfig,
     });
     t.onTestFinished(() => fixture.stop());
     const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
@@ -84,7 +90,9 @@ for (const scenario of [
     assert.match(text, /ctrl\+s set as default/u);
     const before = fixture.scroll.scrollTop;
     fixture.send(scenario.data);
-    assert.ok(fixture.scroll.scrollTop < before);
+    assert.equal(fixture.scroll.scrollTop, before);
+    assert.notEqual(fixture.host.getFocusedComponent(), fixture.component);
+    fixture.send("\x1b"); // Close native search before selecting the usable fallback.
     fixture.send("\x13");
     assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
   });
@@ -121,17 +129,15 @@ for (const mode of ["regular", "fullscreen"] as const) {
     fixture.send("\r");
     let text = stripVTControlCharacters(fixture.frame().join("\n"));
     assert.match(text, /document-0/u);
-    assert.equal(text.includes("pageup/pagedown page"), mode === "regular");
+    assert.ok(text.includes("pageup/pagedown page"));
+    assert.equal(fixture.component.capturesViewportInput, true);
     const before = fixture.scroll.scrollTop;
     fixture.send("\x1b[6~");
     text = stripVTControlCharacters(fixture.frame().join("\n"));
-    assert.equal(text.includes("document-0 "), mode === "fullscreen");
-    if (mode === "fullscreen") {
-      // PageDown at the bottom is still consumed by the native transcript.
-      assert.equal(fixture.scroll.scrollTop, before);
-      fixture.send("\x1b[5~");
-      assert.ok(fixture.scroll.scrollTop < before);
-    }
+    assert.equal(text.includes("document-0 "), false);
+    assert.equal(fixture.scroll.scrollTop, before);
+    fixture.send("\x1b[5~");
+    assert.match(stripVTControlCharacters(fixture.frame().join("\n")), /document-0/u);
     fixture.send(" ");
     fixture.send("\x1b[200~document-40\x1b[201~");
     assert.match(stripVTControlCharacters(fixture.frame().join("\n")), /document-40/u);
@@ -291,8 +297,10 @@ for (const mode of ["regular", "fullscreen"] as const) {
                 });
       await fixture.waitForOpen();
       const text = stripVTControlCharacters(fixture.frame().join("\n"));
-      assert.equal(text.includes("ctrl+x"), mode === "regular");
-      if (mode === "fullscreen") {
+      const capturesViewportInput = flow === "live choice";
+      assert.equal(text.includes("ctrl+x"), mode === "regular" || capturesViewportInput);
+      assert.equal(fixture.component.capturesViewportInput === true, capturesViewportInput);
+      if (mode === "fullscreen" && !capturesViewportInput) {
         const before = fixture.scroll.scrollTop;
         fixture.send("\x18");
         assert.ok(fixture.scroll.scrollTop < before);
@@ -425,7 +433,7 @@ test("native fullscreen search owns its shortcuts before custom overlay and view
 });
 
 for (const claimByHost of [false, true]) {
-  test(`native fullscreen listener ${claimByHost ? "precedes" : "defers to"} debug priority before focused dispatch`, async (t) => {
+  test(`native fullscreen captured viewport preserves debug priority with host collision ${claimByHost}`, async (t) => {
     const fixture = createRendererHost("fullscreen", rendererTheme(), {
       kitty: true,
       bindings: {
@@ -445,8 +453,8 @@ for (const claimByHost of [false, true]) {
     assert.doesNotMatch(frame, /shift\+ctrl\+d set as default/u);
     const before = fixture.scroll.scrollTop;
     fixture.send("\x1b[100;6u");
-    assert.equal(debugCount, claimByHost ? 0 : 1);
-    assert.equal(fixture.scroll.scrollTop < before, claimByHost);
+    assert.equal(debugCount, 1);
+    assert.equal(fixture.scroll.scrollTop, before);
     fixture.send("\x13");
     assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
   });

@@ -1029,8 +1029,9 @@ The Kit does not create lifecycle ownership for the extension.
 ### Fullscreen input and custom UI limits
 
 Kit screens replace Pi's editor area; they do not own the fullscreen transcript or its layout root.
-Pi processes fullscreen transcript actions before replacement-component input, including default PageUp/PageDown, Ctrl+Home/Ctrl+End, and transcript search.
-Use arrows for Kit document navigation, or configure non-conflicting host viewport bindings when document paging is required.
+Action, choice, settings, multi-select, browse, live-choice, and model/thinking list screens capture viewport input through Pi's `Component.capturesViewportInput` contract. Default PageUp/PageDown and configured selection paging keys reach these lists instead of scrolling the transcript. Browse keeps capture while displaying an item's detail.
+`runCustomInteraction()` forwards the component's current capture value; it does not enable capture for arbitrary components. Standalone document reviews, text inputs, questionnaires, and task screens retain their existing transcript routing. Use arrows or non-conflicting host viewport bindings for standalone document paging.
+Pi still handles native transcript search before viewport capture. Key hints exclude native search and debug conflicts, and exclude transcript viewport bindings when the screen does not capture them.
 Plain Home/End remain available to the focused component, including its search input.
 A focused Pi overlay can own viewport input until its owner explicitly transfers focus.
 Kit does not override these host decisions or expose overlay options through `runCustomInteraction()`.

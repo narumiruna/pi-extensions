@@ -276,6 +276,7 @@ export async function showTickerTuiMenu(ctx: ExtensionCommandContext, options: T
         };
 
         return {
+          capturesViewportInput: true,
           render(width: number) {
             const safeWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
             if (safeWidth === 0) return [""];

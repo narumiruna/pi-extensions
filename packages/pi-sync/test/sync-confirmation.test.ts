@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
+  getKeybindings,
   isKittyProtocolActive,
   matchesKey,
+  setKeybindings,
   setKittyProtocolActive,
   type TUI,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+  KeybindingsManager as TuiKeybindingsManager,
+  TuiMainScreen,
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createCustomSelectorHarness } from "../../../test/support.js";
 import { createSyncConfirmation, type SyncConfirmationChoice } from "../src/ui/sync-confirmation.js";
@@ -191,3 +198,71 @@ for (const scenario of [
     }
   });
 }
+
+for (const fullscreen of [false, true]) {
+  test(`native ${fullscreen ? "fullscreen" : "regular"} confirmation keeps remapped navigation and review proof`, () => {
+    const previous = getKeybindings();
+    const keys = new TuiKeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.up": "pageUp",
+      "tui.select.down": "pageDown",
+    });
+    setKeybindings(keys);
+    const terminal = new FullscreenTerminal();
+    terminal.rows = 16;
+    const host = fullscreen ? new TuiAltScreen(terminal, false) : new TuiMainScreen(terminal, false);
+    let result: SyncConfirmationChoice | undefined;
+    const component = createSyncConfirmation({
+      title: "Apply changes?",
+      lines: Array.from({ length: 30 }, (_, index) => `Fact ${index}`),
+      confirmationLabel: "apply changes",
+      tui: host,
+      theme: { fg: (_role: string, text: string) => text, bold: (text: string) => text } as Theme,
+      keybindings: keys as never,
+      complete: (value) => {
+        result = value;
+      },
+    });
+    try {
+      assert.equal(component.capturesViewportInput, true);
+      host.addChild(component);
+      host.setFocus(component);
+      host.start();
+      host.renderNow(true);
+      terminal.input("\u001b[6~");
+      assert.match(component.render(80).join("\n"), /Summary 2-/u);
+      assert.match(component.render(80).join("\n"), /→ No, cancel/u);
+      assert.match(component.render(80).join("\n"), /review before Yes/u);
+      terminal.input("\u001b[5~");
+      assert.match(component.render(80).join("\n"), /Summary 1-/u);
+      for (let index = 0; index < 30 && component.render(80).join("\n").includes("review before Yes"); index++) {
+        terminal.input("\u001b[6~");
+      }
+      assert.doesNotMatch(component.render(80).join("\n"), /review before Yes/u);
+      terminal.input("\u001b[6~");
+      assert.match(component.render(80).join("\n"), /→ Yes,/u);
+      terminal.input("\r");
+      assert.equal(result, "approve");
+    } finally {
+      component.dispose();
+      host.stop({ preserveScreen: true });
+      setKeybindings(previous);
+    }
+  });
+}
+
+test("confirmation capture does not add a paging action", () => {
+  const { harness, component } = componentHarness(
+    Array.from({ length: 30 }, (_, index) => `Fact ${index}`),
+    16,
+  );
+  try {
+    assert.equal(component.capturesViewportInput, true);
+    const before = harness.render();
+    harness.handleInput("\u001b[6~");
+    assert.deepEqual(harness.render(), before);
+    harness.handleInput("\u0003");
+    assert.equal(harness.result, "cancel");
+  } finally {
+    harness.dispose();
+  }
+});

@@ -69,6 +69,7 @@ interface ScopedRecallPickerOptions {
 }
 
 export class ScopedRecallPicker implements Component, Focusable {
+  readonly capturesViewportInput = true;
   private readonly searchInput = new Input();
   private scope: RecallScope;
   private view: RecallView;

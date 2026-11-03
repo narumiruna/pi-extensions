@@ -62,6 +62,9 @@ export function createSyncConfirmation(options: {
     if (item.value === choice && (choice !== "approve" || reviewed)) finish(choice);
   };
   const component = {
+    get capturesViewportInput() {
+      return list.capturesViewportInput;
+    },
     render(width: number, expose = true): string[] {
       if (!Number.isFinite(width) || width <= 0) {
         reviewed = false;

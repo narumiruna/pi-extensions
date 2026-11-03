@@ -116,7 +116,10 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
       const shortcuts = options.enableSearch
         ? []
         : availableShortcuts(options.shortcuts, keybindings)
-            .map((shortcut) => ({ ...shortcut, keys: shortcut.keys.filter((key) => componentKeyAvailable(tui, key)) }))
+            .map((shortcut) => ({
+              ...shortcut,
+              keys: shortcut.keys.filter((key) => componentKeyAvailable(tui, key, true)),
+            }))
             .filter((shortcut) => shortcut.keys.length > 0);
       const previews = createPreviewQueue(ctx, options, signal, () => complete({ kind: "previewFailed" }));
       const component = createMenuScreenComponent<"liveChoice", "select">({
@@ -135,7 +138,7 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
         tui,
         theme,
         keybindings,
-        interactionHint: liveChoiceHint(componentKeybindings(tui, keybindings), options, shortcuts),
+        interactionHint: liveChoiceHint(componentKeybindings(tui, keybindings, true), options, shortcuts),
         onSelectionChange: (itemId) => {
           focusedItemId = itemId as Item["id"];
           const item = findItem(options.items, focusedItemId);
@@ -156,6 +159,9 @@ async function runTuiLiveChoice<Item extends LiveChoiceItem, ShortcutId extends 
 
       const focusable = component as typeof component & Partial<Focusable>;
       return {
+        get capturesViewportInput() {
+          return component.capturesViewportInput;
+        },
         get focused() {
           return focusable.focused ?? false;
         },

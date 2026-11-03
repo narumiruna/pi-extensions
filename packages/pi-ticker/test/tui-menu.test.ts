@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+  type Component,
   Key,
   KeybindingsManager,
   matchesKey,
@@ -74,6 +75,69 @@ function context(
   } as unknown as ExtensionCommandContext;
   return { ctx, notifications };
 }
+
+test.each([false, true])("outer list captures viewport input and pages (remapped: %s)", async (remapped) => {
+  const keys = new KeybindingsManager(
+    TUI_KEYBINDINGS,
+    remapped ? { "tui.select.pageUp": "ctrl+b", "tui.select.pageDown": "ctrl+v" } : {},
+  );
+  const tui = createTuiHarness({ rows: 12, keybindings: keys });
+  const { ctx } = context(tui);
+  let component: Component | undefined;
+  ctx.ui.custom = (factory, options) =>
+    tui.custom(async (...args) => {
+      component = await factory(...args);
+      return component;
+    }, options);
+  const state = createOptions(["AAPL", "NVDA", "NET", "MSFT", "AMD", "GOOG", "META"]);
+  const running = showTickerTuiMenu(ctx, state.options);
+  try {
+    await tui.waitForOpen();
+    assert.equal(component?.capturesViewportInput, true);
+    tui.send(remapped ? "\u0016" : "\u001b[6~");
+    assert.match(tui.render().join("\n"), /› \[x\] MSFT/u);
+    tui.send(remapped ? "\u0002" : "\u001b[5~");
+    assert.match(tui.render().join("\n"), /› \[x\] AAPL/u);
+    tui.press("ctrl+c");
+    await running;
+    assert.deepEqual(state.applied, []);
+  } finally {
+    state.controller.abort();
+    tui.dispose();
+    await running;
+  }
+});
+
+test("fragmented search paste precedes configured paging and hard-cancel shortcuts", async () => {
+  const keys = new KeybindingsManager(TUI_KEYBINDINGS, {
+    "tui.select.pageDown": "ctrl+v",
+    "tui.select.cancel": "ctrl+x",
+  });
+  const tui = createTuiHarness({ rows: 12, keybindings: keys });
+  const { ctx } = context(tui);
+  const state = createOptions(["AAPL", "NVDA", "NET", "MSFT"]);
+  const running = showTickerTuiMenu(ctx, state.options);
+  try {
+    await tui.waitForOpen();
+    tui.setFocused(true);
+    tui.send("\u001b[200~AA");
+    tui.send("\u0003");
+    tui.send("\u0016");
+    tui.send("PL\u001b[201~");
+    assert.equal(tui.isOpen, true);
+    assert.equal(tui.focused, true);
+    assert.match(tui.render().join("\n"), /› \[x\] AAPL/u);
+    assert.doesNotMatch(tui.render().join("\n"), /NVDA|NET|MSFT/u);
+    assert.deepEqual(state.applied, []);
+    tui.press("ctrl+c");
+    await running;
+    assert.equal(tui.isOpen, false);
+  } finally {
+    state.controller.abort();
+    tui.dispose();
+    await running;
+  }
+});
 
 test("rolls back widget visibility when persistence fails", async () => {
   const tui = createTuiHarness({ width: 72, rows: 22 });

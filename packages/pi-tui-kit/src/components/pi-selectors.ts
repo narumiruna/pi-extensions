@@ -63,7 +63,7 @@ export interface PiSelectorOptions<Value> {
 
 /** Shared public-primitive implementation for searchable default-aware selectors. */
 export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
-  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings, true) };
   const input = new Input();
   if (options.initialSearchInput) input.setValue(safe(options.initialSearchInput));
   let filtered = filterRows(options.rows, input.getValue(), options.prioritizeDefaultPrefix ?? false);
@@ -239,6 +239,7 @@ export function createPiSelector<Value>(options: PiSelectorOptions<Value>) {
   }
 
   return {
+    capturesViewportInput: true,
     get focused() {
       return input.focused;
     },

@@ -63,7 +63,8 @@ test("makes the no-argument command a menu and advertises compatibility routes",
     tui.press("tui.select.down");
     const laterRows = tui.render().join("\n");
     assert.match(laterRows, /Settings/u);
-    assert.match(laterRows, /Status/u);
+    tui.press("tui.select.down");
+    assert.match(tui.render().join("\n"), /→ Status/u);
     tui.press("ctrl+c");
     await running;
   });

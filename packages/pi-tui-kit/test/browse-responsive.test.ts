@@ -315,7 +315,7 @@ test("browse responsive rows keep press/click raw identity when selection moves 
 });
 
 for (const mode of ["regular", "fullscreen"] as const) {
-  test(`native ${mode} browse recovers a compact query without taking host input`, async (t) => {
+  test(`native ${mode} browse recovers a compact query while retaining list input`, async (t) => {
     const fixture = createRendererHost(mode, rendererTheme(), {
       width: 32,
       rows: 14,
@@ -356,8 +356,8 @@ for (const mode of ["regular", "fullscreen"] as const) {
     };
     const before = fixture.scroll.scrollTop;
     fixture.send("\u0018");
-    assert.equal(received.includes("\u0018"), mode === "regular");
-    if (mode === "fullscreen") assert.ok(fixture.scroll.scrollTop < before);
+    assert.equal(received.includes("\u0018"), true);
+    assert.equal(fixture.scroll.scrollTop, before);
     fixture.send("\r");
     assert.deepEqual(fixture.frame().map(plainTuiText), ["Beta exact body"]);
     fixture.send("\u0011");

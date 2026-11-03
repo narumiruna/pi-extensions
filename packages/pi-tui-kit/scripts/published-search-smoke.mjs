@@ -161,6 +161,75 @@ for (const mode of ["regular", "fullscreen"]) {
   }
 }
 
+for (const mode of ["regular", "fullscreen"]) {
+  for (const remapped of [false, true]) {
+    await check(`${mode} ${remapped ? "Ctrl+V" : "default"} list paging and host ownership`, async () => {
+      const fixture = renderer(mode, false, {
+        "tui.altScreen.search": "ctrl+q",
+        ...(remapped
+          ? {
+              "tui.select.pageUp": "ctrl+u",
+              "tui.select.pageDown": "ctrl+v",
+              "tui.altScreen.pageUp": "ctrl+u",
+              "tui.altScreen.pageDown": "ctrl+v",
+            }
+          : {}),
+      });
+      const running = kit.runLiveChoice(fixture.ctx, {
+        title: "Paging smoke",
+        items: Array.from({ length: 24 }, (_, index) => ({ id: `item-${index}`, label: `Item ${index}` })),
+        viewportSize: 6,
+      });
+      try {
+        await fixture.waitForOpen();
+        fixture.resize(100, 30);
+        assert.equal(fixture.component.capturesViewportInput, true);
+        assert.match(
+          fixture.frame(),
+          remapped ? /pageup\/ctrl\+v page|ctrl\+u\/ctrl\+v page/u : /pageup\/pagedown page/u,
+        );
+        const before = fixture.scroll.scrollTop;
+        const down = remapped ? "\u0016" : "\u001b[6~";
+        const up = remapped ? "\u0015" : "\u001b[5~";
+        fixture.send(down);
+        assert.match(fixture.frame(), /→ Item 6/u);
+        fixture.send(up);
+        assert.match(fixture.frame(), /→ Item 0/u);
+        assert.equal(fixture.scroll.scrollTop, before);
+        if (mode === "fullscreen") {
+          const replacement = fixture.component;
+          fixture.send("\u0011");
+          assert.notEqual(fixture.host.getFocusedComponent(), replacement);
+          fixture.send("\u001b");
+          assert.equal(fixture.host.getFocusedComponent(), replacement);
+          const received = [];
+          const overlay = fixture.host.showOverlay({
+            render: () => ["Unrelated owner"],
+            invalidate() {},
+            handleInput: (data) => received.push(data),
+          });
+          fixture.send(down);
+          assert.deepEqual(received, [down]);
+          assert.match(fixture.frame(), /→ Item 0/u);
+          overlay.hide();
+        }
+        fixture.send(down);
+        fixture.send("\r");
+        assert.deepEqual(await running, { kind: "selected", itemId: "item-6" });
+        assert.equal(fixture.editor.getValue(), "main draft");
+        if (mode === "fullscreen") {
+          const restored = fixture.scroll.scrollTop;
+          fixture.send(up);
+          assert.ok(fixture.scroll.scrollTop < restored);
+        }
+      } finally {
+        fixture.stop();
+        await running;
+      }
+    });
+  }
+}
+
 for (const kind of ["review", "browse"]) {
   await check(`${kind} RPC pagination and raw content`, async () => {
     const pages = [];
@@ -258,19 +327,19 @@ function plain(lines) {
       .replaceAll("\u001b_pi:/fc\u0007", ""),
   );
 }
-function renderer(mode, remapped) {
+function renderer(mode, remapped, bindings = {}) {
   const previous = getKeybindings();
-  const keys = new KeybindingsManager(
-    TUI_KEYBINDINGS,
-    remapped
+  const keys = new KeybindingsManager(TUI_KEYBINDINGS, {
+    ...(remapped
       ? {
           "tui.altScreen.searchClose": "f2",
           "tui.select.cancel": "f3",
           "tui.altScreen.searchNext": "f4",
           "tui.altScreen.searchPrevious": "f5",
         }
-      : {},
-  );
+      : {}),
+    ...bindings,
+  });
   setKeybindings(keys);
   let input;
   let columns = 24;
@@ -377,6 +446,8 @@ function renderer(mode, remapped) {
       },
     },
     editor,
+    host,
+    scroll,
     get component() {
       return component;
     },

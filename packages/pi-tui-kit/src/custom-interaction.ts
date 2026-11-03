@@ -187,6 +187,9 @@ function wrapComponent(component: CustomInteractionComponent, onDispose: () => v
   Object.defineProperty(wrapped, "wantsKeyRelease", {
     get: () => component.wantsKeyRelease,
   });
+  Object.defineProperty(wrapped, "capturesViewportInput", {
+    get: () => component.capturesViewportInput,
+  });
   if ("focused" in component) {
     Object.defineProperty(wrapped, "focused", {
       get: () => (component as CustomInteractionComponent & Focusable).focused,

@@ -1,7 +1,6 @@
 import { isKeyRelease, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import type { DocumentCopyAction } from "../types.js";
 import type { MenuKeybindings, RenderHost } from "./contracts.js";
-import { componentKeyAvailable } from "./host-input.js";
 import { canonicalKeyId, keysOverlap, usesDisambiguatedKeyProtocol } from "./key-matching.js";
 import { safeMenuText } from "./rendering.js";
 
@@ -78,11 +77,8 @@ export function createDocumentCopy(options: DocumentCopyOptions) {
     const enhanced = usesDisambiguatedKeyProtocol(options.tui);
     return options.keybindings.getKeys("app.message.copy").flatMap((key) => {
       const canonical = canonicalKeyId(key);
-      return canonical &&
-        componentKeyAvailable(options.tui, key) &&
-        !claimed.some((other) => keysOverlap(canonical, other, enhanced))
-        ? [canonical]
-        : [];
+      // The owning screen filters getKeys() for its viewport-capture policy.
+      return canonical && !claimed.some((other) => keysOverlap(canonical, other, enhanced)) ? [canonical] : [];
     });
   };
   const abort = () => cancel();

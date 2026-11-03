@@ -121,6 +121,11 @@ export class FileQuoteExplorer implements Component, Focusable {
     });
   }
 
+  get capturesViewportInput(): boolean {
+    // Revision entry and static help do not own list or preview navigation.
+    return this.mode !== "revision" && this.mode !== "preview-help";
+  }
+
   get focused(): boolean {
     return this.isFocused;
   }

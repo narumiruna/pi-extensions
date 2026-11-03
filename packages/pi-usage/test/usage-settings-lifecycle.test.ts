@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { getKeybindings } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  getKeybindings,
+  KeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+} from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
@@ -87,6 +94,51 @@ for (const outcome of ["cancel", "abort", "dispose", "replacement", "stale-owner
     );
   });
 }
+
+test.each([false, true])("Usage outer list captures viewport input and pages (remapped: %s)", async (remapped) => {
+  const root = await mkdtemp(join(tmpdir(), "usage-ui-paging-"));
+  const runtime = createUsageSettingsRuntime({ path: join(root, "pi-usage.json") });
+  await runtime.reload();
+  const original = getKeybindings();
+  const keys = new KeybindingsManager(
+    TUI_KEYBINDINGS,
+    remapped ? { "tui.select.pageUp": "ctrl+b", "tui.select.pageDown": "ctrl+v" } : {},
+  );
+  setKeybindings(keys);
+  const owner = new AbortController();
+  const tui = createTuiHarness({ keybindings: keys });
+  let component: Component | undefined;
+  const custom: typeof tui.custom = (factory, options) =>
+    tui.custom(async (...args) => {
+      component = await factory(...args);
+      return component;
+    }, options);
+  const { ctx } = createMockContext({ mode: "tui", custom });
+  const running = showUsageSettings(
+    ctx,
+    runtime,
+    owner.signal,
+    () => true,
+    () => {},
+  );
+  try {
+    await tui.waitForOpen();
+    assert.equal(component?.capturesViewportInput, true);
+    tui.send(remapped ? "\u0016" : "\u001b[6~");
+    assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ Claude extra usage/u);
+    tui.send(remapped ? "\u0002" : "\u001b[5~");
+    assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ Codex Fast mode/u);
+    tui.press("ctrl+c");
+    assert.equal(await running, false);
+  } finally {
+    owner.abort();
+    tui.dispose();
+    await running;
+    setKeybindings(original);
+    await runtime.flush();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("Usage save failure does not poison the next queued change", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "usage-ui-recovery-"));

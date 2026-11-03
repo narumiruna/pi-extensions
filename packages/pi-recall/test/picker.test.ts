@@ -1,5 +1,18 @@
 import assert from "node:assert/strict";
-import { CURSOR_MARKER, type Focusable, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  type Focusable,
+  getKeybindings,
+  KeybindingsManager,
+  type KeyId,
+  matchesKey,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+  TuiMainScreen,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { stripTuiCursorMarkers, plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import type { RecallMessageRecord } from "../src/messages.js";
@@ -30,6 +43,7 @@ function createPicker(
     initialSelectedId?: string;
     initialQuery?: string;
     rows?: number;
+    pageDownKey?: KeyId;
   } = {},
 ) {
   let result: unknown;
@@ -51,6 +65,7 @@ function createPicker(
     keybindings: {
       matches(data: string, key: string) {
         return (
+          (key === "tui.select.pageDown" && matchesKey(data, options.pageDownKey ?? "pageDown")) ||
           (data === "up" && key === "tui.select.up") ||
           (data === "down" && key === "tui.select.down") ||
           (data === "enter" && key === "tui.select.confirm") ||
@@ -422,3 +437,37 @@ test("restores selection after broadening and carries query through scope and co
     query: "alpha",
   });
 });
+
+for (const fullscreen of [false, true]) {
+  test.each([
+    { name: "PageDown", key: "pageDown" as const, data: "\u001b[6~" },
+    { name: "Ctrl+V", key: "ctrl+v" as const, data: "\u0016" },
+  ])(`native ${fullscreen ? "fullscreen" : "regular"} recall paging: $name`, ({ key, data }) => {
+    const previous = getKeybindings();
+    setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.altScreen.pageDown": key }));
+    const terminal = new FullscreenTerminal();
+    terminal.rows = 16;
+    const host = fullscreen ? new TuiAltScreen(terminal, false) : new TuiMainScreen(terminal, false);
+    const { picker, result } = createPicker(
+      Array.from({ length: 24 }, (_, index) => saved(`${index}`, "current", "/work/project", `note ${index}`)),
+      { rows: terminal.rows, pageDownKey: key },
+    );
+    try {
+      assert.equal(picker.capturesViewportInput, true);
+      host.addChild(picker);
+      host.setFocus(picker);
+      host.start();
+      host.renderNow(true);
+      terminal.input(data);
+      terminal.input("\u001b[200~note\u001b[201~");
+      assert.match(picker.render(80).join("\n"), /Search: .*note/u);
+      assert.ok(picker.render(80).join("\n").includes(CURSOR_MARKER));
+      terminal.input("\u0003");
+      assert.deepEqual(result(), { kind: "close", selectedId: "15", scope: "cwd", view: "all", query: "note" });
+    } finally {
+      picker.dispose();
+      host.stop({ preserveScreen: true });
+      setKeybindings(previous);
+    }
+  });
+}
