@@ -20,6 +20,7 @@
     "browser-dist",
     "docs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "pi": {
