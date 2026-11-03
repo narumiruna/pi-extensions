@@ -40,7 +40,7 @@ The pack job completes `npm run build` before packing. Only the **Pack packages*
 
 ## Publication and failures
 
-`publish-packages` invokes `changeset publish`. Native Changesets uses the packed dependency chunks. There is no custom Kit-first ordering, registry-readiness polling, or post-publication tarball verification.
+`publish-packages` validates the packed plan and invokes native `changeset publish` for dependency-ordered chunks. Before a dependent chunk, the guard requires exact registry metadata and verifies its dependency tarballs against registry integrity and any packed hashes. Each dependency has one 30-second readiness budget shared by metadata queries, tarball fetches, body reads, and retry waits. Temporary failures wait up to two seconds within the remaining budget. Expiry cancels registry I/O and blocks consumers; registry subprocess termination has a separate one-second escalation grace before closure. Native publication remains outside this budget. Authentication, metadata validation, and integrity failures stop immediately. There is no package-specific Kit-first rule; the installed Changesets runtime dependency graph determines ordering. See [coordinated releases](coordinated-releases.md) and [registry diagnostics](publish-registry-diagnostics.md) for verification and retry limits.
 
 Publication is not atomic. A failed run can leave some packages published. The Action processes reported publication events, but tag or GitHub release operations can also fail. The summary step runs even after a failure and writes a table only when the Action returns published packages; an empty summary does not prove that nothing was published.
 

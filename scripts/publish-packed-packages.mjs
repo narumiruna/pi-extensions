@@ -1,11 +1,12 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import semver from "semver";
+import { runPublishCommand as runChild } from "./publish-command.mjs";
 
 const require = createRequire(import.meta.url);
 const cli = require.resolve("@changesets/cli/bin.js");
@@ -14,21 +15,43 @@ const cliRequire = createRequire(cli);
 const { getPackages } = await import(cliRequire.resolve("@manypkg/get-packages"));
 const { getDependentsGraph } = await import(cliRequire.resolve("@changesets/get-dependents-graph"));
 const digest = (bytes, algorithm) => createHash(algorithm).update(bytes).digest("base64");
+const readinessTimeout = 30_000;
+const availabilityDelay = 2_000;
+const networkCodes = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ECONNECTIONTIMEOUT",
+  "EIDLETIMEOUT",
+  "ERESPONSETIMEOUT",
+  "ETRANSFERTIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 
-function runChild(command, args, { cwd, capture = false }) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit" });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (data) => {
-      stdout += data;
-    });
-    child.stderr?.on("data", (data) => {
-      stderr += data;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
+class RegistryUnavailableError extends Error {
+  constructor(message, retryable) {
+    super(message);
+    this.retryable = retryable;
+  }
+}
+
+class RegistryShutdownError extends Error {
+  constructor(message, signal) {
+    super(message);
+    this.signal = signal;
+  }
+}
+
+const retryableStatus = (status) => [404, 408, 429].includes(status) || (status >= 500 && status < 600);
+function networkFailure(message, error) {
+  const code =
+    [error?.code, error?.cause?.code].find((value) => networkCodes.has(value)) ??
+    (error?.name === "TimeoutError" ? "TimeoutError" : undefined);
+  return new RegistryUnavailableError(`${message}${code ? ` (${code})` : ""}`, code !== undefined);
 }
 
 function parseArgs(args) {
@@ -81,7 +104,14 @@ function verifyRegistryIntegrity(bytes, integrity) {
 
 export async function publishPackedPackages(
   args,
-  { cwd = process.cwd(), run = runChild, fetch: fetchArtifact = globalThis.fetch } = {},
+  {
+    cwd = process.cwd(),
+    run = runChild,
+    fetch: fetchArtifact = globalThis.fetch,
+    wait = delay,
+    log = console.error,
+    now = () => performance.now(),
+  } = {},
 ) {
   const { packDir, forwarded } = parseArgs(args);
   const artifactDir = await realpath(path.resolve(cwd, packDir));
@@ -156,11 +186,34 @@ export async function publishPackedPackages(
     chunks.push(chunk);
     for (const release of chunk) remaining.delete(release.name);
   }
-  async function verifyAvailable(name) {
+  async function verifyArtifact(name, readiness) {
     const manifest = manifests.get(name);
     const exact = `${name}@${manifest.version}`;
-    const result = await run("npm", ["view", exact, "--json"], { cwd, capture: true });
-    if (result.code !== 0) throw new Error(`Registry metadata unavailable: ${exact}`);
+    const { signal, check } = readiness;
+    readiness.operation = "query metadata";
+    check();
+    let result;
+    try {
+      result = await run("npm", ["view", exact, "--json"], { cwd, capture: true, signal });
+    } catch (error) {
+      throw networkFailure(`Registry metadata unavailable: ${exact} (subprocess failed)`, error);
+    }
+    if (result.code !== 0) {
+      let code;
+      try {
+        code = JSON.parse(result.stdout)?.error?.code;
+      } catch {
+        // Unknown npm failures stop without printing potentially credential-bearing output.
+      }
+      const status = typeof code === "string" && /^E\d{3}$/u.test(code) ? Number(code.slice(1)) : undefined;
+      const retryable = retryableStatus(status) || networkCodes.has(code);
+      const knownCode = retryable || ["E401", "E403", "ENEEDAUTH"].includes(code) ? `, ${code}` : "";
+      throw new RegistryUnavailableError(
+        `Registry metadata unavailable: ${exact} (npm exit ${result.code}${knownCode})`,
+        retryable,
+      );
+    }
+    check();
     let metadata;
     try {
       metadata = JSON.parse(result.stdout);
@@ -175,25 +228,117 @@ export async function publishPackedPackages(
     ) {
       throw new Error(`Invalid registry metadata: ${exact}`);
     }
+    let url;
+    try {
+      url = new URL(metadata.dist.tarball);
+      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Invalid protocol");
+    } catch {
+      throw new Error(`Invalid registry artifact URL: ${exact}`);
+    }
     let response;
     try {
-      const url = new URL(metadata.dist.tarball);
-      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Invalid protocol");
-      response = await fetchArtifact(url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
-    } catch {
-      throw new Error(`Registry artifact unavailable: ${exact}`);
+      readiness.operation = "download tarball";
+      check();
+      try {
+        response = await fetchArtifact(url, { redirect: "error", signal });
+      } catch (error) {
+        throw networkFailure(`Registry artifact unavailable: ${exact}`, error);
+      }
+      if (!response.ok) {
+        throw new RegistryUnavailableError(
+          `Registry artifact unavailable: ${exact} (${response.status})`,
+          retryableStatus(response.status),
+        );
+      }
+      check();
+      readiness.operation = "read tarball body";
+      let bytes;
+      try {
+        bytes = Buffer.from(await response.arrayBuffer());
+      } catch (error) {
+        throw networkFailure(`Registry artifact unavailable: ${exact}`, error);
+      }
+      check();
+      verifyRegistryIntegrity(bytes, metadata.dist.integrity);
+      const release = releases.get(name);
+      if (artifacts.has(name) && release.tarball.integrity !== `sha256-${digest(bytes, "sha256")}`) {
+        throw new Error(`Registry artifact differs from packed artifact: ${exact}`);
+      }
+    } finally {
+      // Release unused bodies, including responses that arrived after the deadline.
+      if (response && !response.bodyUsed) await response.body?.cancel().catch(() => {});
     }
-    if (!response.ok) throw new Error(`Registry artifact unavailable: ${exact} (${response.status})`);
-    let bytes;
+  }
+  async function verifyAvailable(name) {
+    const exact = `${name}@${manifests.get(name).version}`;
+    const started = now();
+    const controller = new AbortController();
+    const timeoutReason = new DOMException("Registry readiness deadline exceeded", "TimeoutError");
+    const timer = setTimeout(() => controller.abort(timeoutReason), readinessTimeout);
+    let attempt = 0;
+    let lastFailure;
+    let shutdownSignal;
+    const interrupt = (signal) => {
+      shutdownSignal ??= signal;
+      controller.abort(new DOMException("Registry readiness cancelled", "AbortError"));
+    };
+    const onInterrupt = () => interrupt("SIGINT");
+    const onTerminate = () => interrupt("SIGTERM");
+    const remaining = () => Math.max(0, readinessTimeout - (now() - started));
+    const context = () =>
+      `operation ${readiness.operation}; attempt ${attempt}; elapsed ${Math.ceil(now() - started)} ms; remaining ${Math.ceil(remaining())} ms`;
+    const readiness = {
+      signal: controller.signal,
+      operation: "query metadata",
+      check() {
+        if (shutdownSignal) {
+          throw new RegistryShutdownError(
+            `Registry readiness cancelled: ${exact}; signal ${shutdownSignal}; ${context()}`,
+            shutdownSignal,
+          );
+        }
+        if (!controller.signal.aborted && remaining() > 0) return;
+        controller.abort(timeoutReason);
+        throw new Error(
+          `Registry readiness deadline exceeded: ${exact}; ${context()}${lastFailure ? `; last failure: ${lastFailure.message}` : ""}`,
+        );
+      },
+    };
+    // Only registry verification owns detached children; native publication keeps normal signal handling.
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onTerminate);
     try {
-      bytes = Buffer.from(await response.arrayBuffer());
-    } catch {
-      throw new Error(`Registry artifact unavailable: ${exact}`);
-    }
-    verifyRegistryIntegrity(bytes, metadata.dist.integrity);
-    const release = releases.get(name);
-    if (artifacts.has(name) && release.tarball.integrity !== `sha256-${digest(bytes, "sha256")}`) {
-      throw new Error(`Registry artifact differs from packed artifact: ${exact}`);
+      while (true) {
+        readiness.check();
+        attempt++;
+        try {
+          await verifyArtifact(name, readiness);
+          readiness.check();
+          return;
+        } catch (error) {
+          if (error instanceof RegistryUnavailableError) lastFailure = error;
+          readiness.check();
+          if (!(error instanceof RegistryUnavailableError)) throw error;
+          const message = `${error.message}; ${context()}`;
+          if (!error.retryable) throw new Error(message);
+          const ms = Math.min(availabilityDelay, remaining());
+          log(`[registry] ${message}; retrying in ${Math.ceil(ms)} ms`);
+          readiness.operation = "retry wait";
+          readiness.check();
+          try {
+            await wait(Math.min(ms, remaining()), undefined, { signal: controller.signal });
+          } catch {
+            readiness.check();
+            throw new Error(`Registry retry wait failed: ${exact}; ${context()}`);
+          }
+          readiness.check();
+        }
+      }
+    } finally {
+      process.removeListener("SIGINT", onInterrupt);
+      process.removeListener("SIGTERM", onTerminate);
+      clearTimeout(timer);
+      controller.abort();
     }
   }
   const staging = await mkdtemp(path.join(os.tmpdir(), "changeset-guard-"));
@@ -223,6 +368,8 @@ export async function publishPackedPackages(
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   publishPackedPackages(process.argv.slice(2)).catch((error) => {
     console.error(error.message);
-    process.exitCode = 1;
+    // Re-raise only after query closure and staging cleanup, preserving shell signal status.
+    if (error instanceof RegistryShutdownError) process.kill(process.pid, error.signal);
+    else process.exitCode = 1;
   });
 }

@@ -6,6 +6,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "vitest";
 
 const guard = new URL("../scripts/publish-packed-packages.mjs", import.meta.url).href;
@@ -15,7 +16,7 @@ afterEach(async () => {
 });
 const integrity = (bytes: Uint8Array, algorithm = "sha256") =>
   `${algorithm}-${createHash(algorithm).update(bytes).digest("base64")}`;
-type Call = { tool: string; args: string[]; name?: string; result?: string; integrity?: string };
+type Call = { tool: string; args: string[]; name?: string; result?: string; integrity?: string; staging?: string };
 type Release = {
   name: string;
   version: string;
@@ -72,9 +73,21 @@ async function fixture() {
     );
   await save();
   let available = false;
+  let unavailableRequests = Number.POSITIVE_INFINITY;
   const requests: string[] = [];
+  let registryPid: number | undefined;
+  const metadataReady = Promise.withResolvers<{ pid: number; closed: Promise<void> }>();
   const server = createServer((request, response) => {
+    if (request.url?.startsWith("/metadata-ready?")) {
+      registryPid = Number(new URL(request.url, "http://localhost").searchParams.get("pid"));
+      metadataReady.resolve({
+        pid: registryPid,
+        closed: new Promise<void>((resolve) => response.once("close", resolve)),
+      });
+      return;
+    }
     requests.push(request.url ?? "");
+    if (requests.length > unavailableRequests) available = true;
     response.writeHead(available && request.url === "/core.tgz" ? 200 : 404);
     response.end(available ? bytes[0] : "not yet available");
   });
@@ -104,8 +117,20 @@ try {
   if (tool === 'npm' && args[0] === 'view') {
     assert.deepEqual(args, ['view', '@test/core@2.0.0', '--json']);
     assert.equal(process.cwd(), root);
-    log({ result: 'metadata' });
-    console.log(JSON.stringify(${JSON.stringify(metadata)}));
+    const pendingPath = path.join(root, 'metadata-pending');
+    const pending = fs.existsSync(pendingPath) ? Number(fs.readFileSync(pendingPath, 'utf8')) : 0;
+    if (fs.existsSync(path.join(root, 'metadata-stall'))) {
+      process.on('SIGTERM', () => log({ result: 'metadata-term' }));
+      require('node:http').get(${JSON.stringify(new URL("/metadata-ready", metadata.dist.tarball).href)} + '?pid=' + process.pid).on('error', () => {});
+    } else if (pending > 0) {
+      fs.writeFileSync(pendingPath, String(pending - 1));
+      log({ result: 'metadata-pending' });
+      console.log(JSON.stringify({ error: { code: 'E404' } }));
+      process.exitCode = 1;
+    } else {
+      log({ result: 'metadata' });
+      console.log(JSON.stringify(${JSON.stringify(metadata)}));
+    }
   } else if (tool === 'npm' && args[0] === 'publish') {
     const index = ['0', '1'].indexOf(path.basename(process.cwd()));
     assert.notEqual(index, -1);
@@ -118,7 +143,7 @@ try {
     assert.equal(integrity, ${JSON.stringify(bytes.map((value) => integrity(value)))}[index]);
     const marker = path.join(root, 'published-' + index);
     const already = fs.existsSync(marker);
-    log({ name: names[index], result: already ? 'already-published' : 'published', integrity });
+    log({ name: names[index], result: already ? 'already-published' : 'published', integrity, staging: path.dirname(path.resolve(process.cwd(), args[1])) });
     if (already) {
       console.log(JSON.stringify({ error: { code: 'EPUBLISHCONFLICT', summary: 'cannot publish over the previously published versions' } }));
       process.exitCode = 1;
@@ -158,7 +183,8 @@ try {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-  const execute = async () => {
+  const execute = async (shutdownSignal?: "SIGINT" | "SIGTERM") => {
+    if (shutdownSignal) await writeFile(path.join(cwd, "metadata-stall"), "stall");
     const child = spawn(
       process.execPath,
       [
@@ -168,9 +194,15 @@ try {
       process.send('ready');
       await new Promise(resolve => process.once('message', resolve));
       process.disconnect();
-      const { publishPackedPackages } = await import(${JSON.stringify(guard)});
-      try { await publishPackedPackages(${JSON.stringify(["--from-pack-dir", pack])}); }
-      catch (error) { console.error(error.message); process.exitCode = 1; }
+      if (${Boolean(shutdownSignal)}) {
+        process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(guard))}, ...${JSON.stringify(["--from-pack-dir", pack])}];
+        await import(${JSON.stringify(guard)});
+      } else {
+        const { publishPackedPackages } = await import(${JSON.stringify(guard)});
+        let clock = 0;
+        try { await publishPackedPackages(${JSON.stringify(["--from-pack-dir", pack])}, { now: () => clock, wait: async (ms) => { clock += ms; } }); }
+        catch (error) { console.error(error.message); process.exitCode = 1; }
+      }
     `,
       ],
       {
@@ -198,14 +230,45 @@ try {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
     };
+    const terminateRegistry = () => {
+      if (!registryPid) return;
+      try {
+        process.kill(-registryPid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    };
     try {
       assert.deepEqual(await once(child, "message"), ["ready", undefined]);
       // The server is listening and the child has acknowledged readiness.
-      const deadline = setTimeout(terminate, 3_500);
+      let watchdogFired = false;
+      const deadline = setTimeout(() => {
+        watchdogFired = true;
+        terminate();
+        terminateRegistry();
+      }, 3_500);
       try {
         child.send("start");
+        let interruptedStage: string | undefined;
+        if (shutdownSignal) {
+          const ready = await Promise.race([
+            metadataReady.promise,
+            closed.then(() => {
+              throw new Error(output);
+            }),
+          ]);
+          interruptedStage = (await calls()).find((call) => call.staging)?.staging;
+          assert.ok(interruptedStage);
+          await readFile(path.join(interruptedStage, "publish-plan.json"));
+          assert.ok(child.pid);
+          process.kill(-child.pid, shutdownSignal);
+          await ready.closed;
+        }
         const [code, signal] = await closed;
-        assert.equal(signal, null, output);
+        assert.equal(watchdogFired, false, `Publish child exceeded its readiness safety deadline: ${output}`);
+        assert.equal(signal, shutdownSignal ?? null, output);
+        if (interruptedStage)
+          await assert.rejects(readFile(path.join(interruptedStage, "publish-plan.json")), { code: "ENOENT" });
         assert.ok(!(await calls()).some((call) => call.result === "DENIED"), output);
         return { code, output };
       } finally {
@@ -213,6 +276,7 @@ try {
       }
     } finally {
       terminate();
+      terminateRegistry();
       await closed;
     }
   };
@@ -224,6 +288,10 @@ try {
     calls,
     events,
     requests,
+    delayMetadata: (attempts: number) => writeFile(path.join(cwd, "metadata-pending"), String(attempts)),
+    availableAfterRequests: (count: number) => {
+      unavailableRequests = count;
+    },
     available: () => {
       available = true;
     },
@@ -237,6 +305,33 @@ try {
   };
 }
 
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  test.skipIf(process.platform === "win32")(
+    `CLI ${signal} cancels detached metadata work before staging cleanup and preserves signal status`,
+    async () => {
+      const f = await fixture();
+      try {
+        const result = await f.execute(signal);
+        assert.equal(result.code, null, result.output);
+        assert.match(result.output, /Registry readiness cancelled/u);
+        assert.ok(!result.output.includes("Registry readiness deadline exceeded"));
+        const calls = await f.calls();
+        assert.equal(calls.filter((call) => call.result === "metadata-term").length, 1);
+        assert.deepEqual(
+          calls.filter((call) => call.args[0] === "publish").map((call) => call.name),
+          ["@test/core"],
+        );
+        assert.deepEqual(
+          (await f.events()).map((event) => event.packageName),
+          ["@test/core"],
+        );
+      } finally {
+        await f.close();
+      }
+    },
+  );
+}
+
 test("actual native publish reports core, blocks on missing bytes, and retries the same plan", async () => {
   const f = await fixture();
   try {
@@ -248,7 +343,7 @@ test("actual native publish reports core, blocks on missing bytes, and retries t
       (await f.calls()).filter((call) => call.args[0] === "publish").map((call) => [call.name, call.result]),
       [["@test/core", "published"]],
     );
-    assert.deepEqual(f.requests, ["/core.tgz"]);
+    assert.deepEqual(f.requests, Array(15).fill("/core.tgz"));
     f.available();
     const retry = await f.execute();
     assert.equal(retry.code, 0, retry.output);
@@ -266,7 +361,32 @@ test("actual native publish reports core, blocks on missing bytes, and retries t
       ],
     );
     assert.equal(calls.filter((call) => call.result === "tag-acknowledged").length, 2);
-    assert.deepEqual(f.requests, ["/core.tgz", "/core.tgz"]);
+    assert.deepEqual(f.requests, Array(16).fill("/core.tgz"));
+  } finally {
+    await f.close();
+  }
+});
+
+test("actual native publish waits for metadata and tarball propagation within one run", async () => {
+  const f = await fixture();
+  try {
+    await f.delayMetadata(2);
+    f.availableAfterRequests(2);
+    const result = await f.execute();
+    assert.equal(result.code, 0, result.output);
+    assert.deepEqual(
+      (await f.events()).map((event) => event.packageName),
+      ["@test/core", "@test/consumer"],
+    );
+    const calls = await f.calls();
+    assert.deepEqual(
+      calls.filter((call) => call.args[0] === "publish").map((call) => call.name),
+      ["@test/core", "@test/consumer"],
+    );
+    assert.equal(calls.filter((call) => call.result === "metadata-pending").length, 2);
+    assert.equal(calls.filter((call) => call.result === "metadata").length, 3);
+    assert.equal(result.output.match(/retrying in 2000 ms/gu)?.length, 4);
+    assert.deepEqual(f.requests, Array(3).fill("/core.tgz"));
   } finally {
     await f.close();
   }
