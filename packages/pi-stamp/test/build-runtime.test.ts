@@ -10,6 +10,7 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-stamp",
@@ -204,7 +205,7 @@ test("generated lazy boundary resolves Pi peers through Jiti aliases", async () 
     }
     const renderer = extension.entryRenderers?.get("pi-stamp");
     assert.ok(renderer);
-    const component = renderer(stamp, { expanded: false }, {
+    const component = renderer(stamp, entryRenderOptions(false), {
       fg: (_role: string, text: string) => text,
     } as never) as Component | undefined;
     assert.ok(component);

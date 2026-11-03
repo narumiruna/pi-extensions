@@ -71,7 +71,10 @@ export const ProgressParameters = Type.Object(
       Type.Object(
         {
           text: progressTextSchema,
-          status: StringEnum(PROGRESS_STATUSES, { description: "The step's current status" }),
+          // Keep TypeBox inference in direct imports as well as Pi's Jiti compatibility view.
+          status: Type.Unsafe<ProgressStatus>(
+            StringEnum(PROGRESS_STATUSES, { description: "The step's current status" }),
+          ),
         },
         { additionalProperties: false },
       ),

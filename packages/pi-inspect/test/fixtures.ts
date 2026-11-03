@@ -1,3 +1,4 @@
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, type Tool } from "@earendil-works/pi-ai";
 import {
   createBashTool,
@@ -76,7 +77,9 @@ export function runtimeToolDeclarations(): Tool[] {
   createCodemodeExtension({ mode: "on", models: false, inlineBudget: 3000 })(api);
   const codemode = registered.find((tool) => tool.name === "codemode");
   const edit = createEditTool("/fixture");
-  const declared = [
+  // The loadout is heterogeneous; this fixture reads declarations and never calls executors.
+  // biome-ignore lint/suspicious/noExplicitAny: erase individual parameter types only at the test loadout boundary.
+  const declared: AgentTool<any>[] = [
     createReadTool("/fixture"),
     createBashTool("/fixture"),
     edit,

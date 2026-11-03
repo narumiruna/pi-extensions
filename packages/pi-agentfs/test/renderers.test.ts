@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { stripVTControlCharacters } from "node:util";
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { keyText, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
@@ -14,6 +14,8 @@ const theme = { fg: (_role: string, text: string) => text, bold: (text: string) 
 function context(args: unknown): ToolRenderContext {
   return {
     args,
+    keyText,
+    keyHint: (keybinding, description) => `${keyText(keybinding)} ${description}`,
     toolCallId: "id",
     invalidate: () => {},
     lastComponent: undefined,

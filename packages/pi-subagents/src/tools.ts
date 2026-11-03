@@ -60,9 +60,11 @@ const SpawnParameters = Type.Object(
     ),
     tools: Type.Optional(
       Type.Array(
-        StringEnum(CHILD_CORE_TOOL_NAMES, {
-          description: "Available Pi core child work tool name.",
-        }),
+        Type.Unsafe<(typeof CHILD_CORE_TOOL_NAMES)[number]>(
+          StringEnum(CHILD_CORE_TOOL_NAMES, {
+            description: "Available Pi core child work tool name.",
+          }),
+        ),
         {
           description: "Child work tools. Defaults to read, grep, find, and ls. Communication tools are always added.",
           maxItems: MAX_TOOLS,
@@ -114,9 +116,11 @@ const SpawnParameters = Type.Object(
       ),
     ),
     thinkingLevel: Type.Optional(
-      StringEnum(SUBAGENT_THINKING_LEVELS, {
-        description: "Child thinking level. Defaults to the main agent's effective level.",
-      }),
+      Type.Unsafe<SubagentThinkingLevel>(
+        StringEnum(SUBAGENT_THINKING_LEVELS, {
+          description: "Child thinking level. Defaults to the main agent's effective level.",
+        }),
+      ),
     ),
     timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
   },

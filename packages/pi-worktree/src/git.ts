@@ -650,7 +650,7 @@ function runGitWithInputAllowFailure(
   timeout = GIT_TIMEOUT_MS,
 ): Promise<ExecResult> {
   if (signal?.aborted) {
-    return Promise.resolve({ stdout: "", stderr: "", code: 1, killed: true });
+    return Promise.resolve({ stdout: "", stderr: "", code: 1, killed: true, truncated: false });
   }
   return new Promise((resolveResult, reject) => {
     // ExtensionAPI.exec has no stdin channel, so this read-only check uses an argv-only child.
@@ -697,7 +697,7 @@ function runGitWithInputAllowFailure(
     });
     child.once("error", fail);
     child.once("close", (code, closeSignal) => {
-      finish({ stdout, stderr, code: code ?? 1, killed: killed || closeSignal !== null });
+      finish({ stdout, stderr, code: code ?? 1, killed: killed || closeSignal !== null, truncated: false });
     });
     signal?.addEventListener("abort", stop, { once: true });
     if (signal?.aborted) stop();

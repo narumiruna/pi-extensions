@@ -14,6 +14,7 @@ import {
   type StampMetadataPreset,
 } from "../src/metadata-settings.js";
 import type { StampSettingsRuntime, StampSettingsState } from "../src/settings.js";
+import { entryRenderOptions } from "./render-options.js";
 
 const BASE = Date.UTC(2026, 6, 30);
 const directory = mkdtempSync(join(tmpdir(), "pi-stamp-metadata-runtime-"));
@@ -88,7 +89,7 @@ function harness(overrides: Partial<StampSettings> = {}, mode: "tui" | "rpc" | "
     return mock.entries.at(-1)?.data;
   };
   const render = (data: unknown, expanded: boolean) =>
-    extension.createStampEntryRenderer(() => settings)({ data } as never, { expanded }, {
+    extension.createStampEntryRenderer(() => settings)({ data } as never, entryRenderOptions(expanded), {
       fg: (_color: string, text: string) => text,
     } as never);
   return { mock, settings, response, render };

@@ -3,7 +3,7 @@ import type { ExecResult } from "@earendil-works/pi-coding-agent";
 export const oid = "0123456789abcdef0123456789abcdef01234567";
 
 export function result(stdout = "", code = 0, stderr = ""): ExecResult {
-  return { stdout, stderr, code, killed: false };
+  return { stdout, stderr, code, killed: false, truncated: false };
 }
 
 export function porcelain(

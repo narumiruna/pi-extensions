@@ -1,7 +1,7 @@
 import type { Dir } from "node:fs";
 import { lstat, mkdir, opendir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { type Api, type Model, Type } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   type CreateAgentSessionOptions,
@@ -13,6 +13,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
+import { Type } from "typebox";
 import { CHILD_TOOL_NAMES, MAX_SCAN_DEPTH, MAX_SESSION_FILES_PER_NOTE, NOTES_SYSTEM_PROMPT } from "./constants.js";
 import { type NoteSnapshot, type NotesStorage, noteSessionKey } from "./storage.js";
 

@@ -56,14 +56,15 @@ registerHooks({ resolve(specifier, context, next) {
     `
 import assert from "node:assert/strict";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels, fauxProvider, fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
+import { createModels, fauxProvider, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { Harness, MemoryStorage, createRegistry, defineExtension, defineTool, hook, ToolTask } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { createLangfuseRuntime, createLangfuseRuntimeFromBackend, createPiLangfuseDurableConversation, type TraceBackend, type ObservationAttributes } from "@narumitw/pi-langfuse/durable";
 const context = BACKGROUND_CONTEXT;
-const records: Array<{ name: string; updates: ObservationAttributes[]; ended: boolean }> = [];
+const records: Array<{ name: string; initial: ObservationAttributes; updates: ObservationAttributes[]; ended: boolean }> = [];
 const backend: TraceBackend = {
-  start(name) {
-    const record = { name, updates: [] as ObservationAttributes[], ended: false };
+  start(name, initial) {
+    const record = { name, initial, updates: [] as ObservationAttributes[], ended: false };
     records.push(record);
     return { update(attrs) { record.updates.push(attrs); return this; }, end() { record.ended = true; return this; } };
   }, async forceFlush() {}, async shutdown() {},
@@ -76,8 +77,16 @@ process.disconnect?.();
 const runtime = createLangfuseRuntimeFromBackend(backend);
 const faux = fauxProvider();
 const models = createModels(); models.setProvider(faux.provider);
-faux.setResponses([fauxAssistantMessage("packed committed answer")]);
-const harness = await Harness.open(new MemoryStorage(), { models, registry: createRegistry() }, context);
+faux.setResponses([
+  fauxAssistantMessage(fauxToolCall("echo", { value: "model input" }, { id: "packed-call" }), { stopReason: "toolUse" }),
+  fauxAssistantMessage("packed committed answer"),
+]);
+const registry = createRegistry();
+registry.install(defineExtension({ name: "packed", tools: [defineTool({
+  name: "echo", description: "Echo", parameters: Type.Object({ value: Type.String() }),
+  execute: async ({ value }) => ({ output: [fauxText(value)] }),
+})], hooks: [hook(ToolTask, { beforeTool: () => ({ arguments: { value: "actual packed input" } }) })] }));
+const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
 const conversation = await harness.root(context, { agent: { model: { provider: faux.provider.id, modelId: faux.getModel().id } } });
 const tracing = await createPiLangfuseDurableConversation(runtime, { harness, conversationId: conversation.id, context, sessionId: "packed-session" });
 const submission = await conversation.submit({ type: "input", content: "packed prompt", requestId: "packed-request" }, context);
@@ -85,6 +94,12 @@ await submission.wait(context);
 await tracing.observeSubmission(submission.id);
 assert.equal(records.filter((r) => r.name === "pi.durable.submission").length, 1);
 assert.ok(JSON.stringify(records).includes("packed committed answer"));
+assert.deepEqual(records.find((r) => r.name === "pi.durable.tool")?.initial.input, { value: "actual packed input" });
+assert.equal(records.filter((r) => r.name === "pi.durable.llm").length, 2);
+const continued = await conversation.submit({ type: "continue" }, context);
+assert.equal((await continued.wait(context)).status, "unanswered");
+await tracing.observeSubmission(continued.id);
+assert.ok(JSON.stringify(records).includes("nothing_to_answer"));
 await tracing.dispose(); await harness.close(context); await runtime.shutdown();
 assert.ok(records.every((r) => r.ended));
 console.log("packed durable consumer passed");

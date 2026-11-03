@@ -43,7 +43,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "26.6.5",
     "esbuild": "0.28.2",

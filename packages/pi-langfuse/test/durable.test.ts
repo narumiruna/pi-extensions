@@ -2,20 +2,21 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { awaitWithContext, BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import {
-  type AgentEvent,
+  type CommitPublication,
   createRegistry,
   defineExtension,
   defineTool,
   Harness,
   MemoryStorage,
-  watchEvents,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLangfuseRuntimeFromBackend, createPiLangfuseDurableConversation } from "../src/durable.js";
 import { DurableRecorder } from "../src/durable-recorder.js";
+import { durableCommit, durableSnapshot } from "../src/durable-state.js";
 import { MAX_CAPTURE_BYTES } from "../src/sanitizer.js";
 import { FakeBackend, type FakeObservation, serializedBytes } from "./support.js";
 
@@ -269,12 +270,16 @@ describe("public durable conversation tracing", () => {
     await a.dispose();
   });
 
-  it("deduplicates identifiable real event observations without inventing additional runs or spans", async () => {
+  it("deduplicates identifiable stored publications without inventing additional runs or spans", async () => {
     const f = await fixture();
-    const events: AgentEvent[] = [];
-    const watched = await watchEvents(f.harness, f.root.id, context);
-    watched.start(async (batch) => {
-      events.push(...batch);
+    const publications: CommitPublication[] = [];
+    const watched = await f.harness.observeConversation(f.root.id, { advance() {}, end() {} }, context);
+    const baseline = durableSnapshot(watched.value);
+    const stored = f.harness.observeCommits({
+      advance: (publication) => {
+        publications.push(publication);
+      },
+      end() {},
     });
     f.registry.install(
       defineExtension({
@@ -295,17 +300,20 @@ describe("public durable conversation tracing", () => {
     ]);
     await (await f.root.submit({ type: "input", content: "duplicate" }, context)).wait(context);
     await vi.waitFor(() =>
-      expect(events.some((event) => event.type === "submission" && event.record.status === "done")).toBe(true),
+      expect(
+        publications.some((publication) =>
+          publication.changes.some((change) => change.type === "submission" && change.value.status === "done"),
+        ),
+      ).toBe(true),
     );
-    await watched.stop();
+    watched.detach();
+    stored.detach();
     const recorder = new DurableRecorder(f.backend, { conversationId: f.root.id });
-    recorder.snapshot(watched.snapshot, true);
-    for (const event of events) {
-      for (let repeat = 0; repeat < 2; repeat++) {
-        if (event.type === "submission")
-          await recorder.submission(event.record, (id) => f.root.commit((tx) => tx.entry(id), context));
-        else recorder.event(event);
-      }
+    recorder.snapshot(baseline, true);
+    for (const publication of publications) {
+      const commit = durableCommit(publication, f.root.id);
+      await recorder.commit(commit, (id) => f.root.commit((tx) => tx.entry(id), context));
+      await recorder.commit(commit, (id) => f.root.commit((tx) => tx.entry(id), context));
     }
     recorder.dispose();
     expect(f.backend.observations.filter((span) => span.name === "pi.durable.run")).toHaveLength(1);
@@ -465,7 +473,7 @@ describe("public durable conversation tracing", () => {
     await tracing.dispose();
   });
 
-  it("resynchronizes after actual watch overflow, preserving known submission identity and marking missed history", async () => {
+  it("resynchronizes after owned delivery overflow, preserving known submission identity and marking missed history", async () => {
     const f = await fixture();
     f.faux.setResponses([fauxAssistantMessage("complete answer")]);
     const tracing = await createPiLangfuseDurableConversation(f.runtime, {
@@ -474,7 +482,7 @@ describe("public durable conversation tracing", () => {
       context,
     });
     // Queue real commits ahead of the observer's read-only transaction. The Session stays real,
-    // while the serialized event consumer accumulates more than its 100-frame capacity.
+    // while the adapter's ordered delivery queue accumulates more than its 100-publication capacity.
     const submitting = f.root.submit({ type: "input", content: "overflow input" }, context);
     const writes = Array.from({ length: 150 }, (_, i) =>
       f.root.commit((tx) => tx.appendEntry(f.root.id, { kind: "app.note", data: i }), context),
@@ -777,13 +785,13 @@ describe("public durable conversation tracing", () => {
     const release = deferred();
     class SlowStorage extends MemoryStorage {
       block = false;
-      override async scanTasks(...args: Parameters<MemoryStorage["scanTasks"]>) {
+      override async scanEntries(...args: Parameters<MemoryStorage["scanEntries"]>) {
         if (this.block) {
           this.block = false;
           entered.resolve();
           await awaitWithContext(release.promise, args[3]);
         }
-        return super.scanTasks(...args);
+        return super.scanEntries(...args);
       }
     }
     const storage = new SlowStorage();

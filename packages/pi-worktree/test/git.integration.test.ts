@@ -34,6 +34,7 @@ const pi = {
       stderr: result.stderr ?? "",
       code: result.status ?? 1,
       killed: Boolean(result.signal),
+      truncated: false,
     };
   },
 };
@@ -170,7 +171,7 @@ describe("initialized submodule inventory", () => {
         if (args.join("\0") === "submodule\0status\0--recursive") {
           return pi.exec(command, args, options);
         }
-        return { stdout: "", stderr: "", code: 0, killed: false };
+        return { stdout: "", stderr: "", code: 0, killed: false, truncated: false };
       },
     };
     const inventory = await worktreeInventory(submoduleStatusPi, main);

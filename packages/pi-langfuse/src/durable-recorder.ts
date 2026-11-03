@@ -1,12 +1,6 @@
-import type {
-  AgentEvent,
-  EntryId,
-  EntryRecord,
-  SnapshotEvent,
-  SubmissionId,
-  SubmissionRecord,
-} from "@earendil-works/pi-durable";
+import type { EntryId, EntryRecord, SubmissionId, SubmissionRecord } from "@earendil-works/pi-durable";
 import { durableAttributes, durableContent, durableDiagnosticCount, durableUsage } from "./durable-projection.js";
+import type { DurableCommit, DurableLive, DurableSnapshot, DurableTask } from "./durable-state.js";
 import { sanitizeTraceValue } from "./sanitizer.js";
 import type { Observation, ObservationAttributes, ObservationType, TraceBackend } from "./tracing.js";
 
@@ -37,6 +31,12 @@ const SAFE_UNANSWERED_REASONS = new Set([
   "missing_task",
   "task_too_old",
   "migration_failed",
+  "orphaned",
+  "interrupted",
+  "restart_limit",
+  "nothing_to_answer",
+  "turn_limit",
+  "run_failed",
 ]);
 
 interface Span {
@@ -50,11 +50,13 @@ interface SubmissionSpan {
 }
 interface RunSpan {
   span: Span;
-  primary: SubmissionId;
+  primary?: SubmissionId;
+  identity: string;
   inputs: readonly SubmissionId[];
   correlation: DurableCorrelation;
   round: number;
   generation?: Span;
+  generationKey?: string;
   tools: Map<string, Span>;
   completedTools: Set<string>;
 }
@@ -66,7 +68,10 @@ export class DurableRecorder {
   private readonly submissions = new Map<SubmissionId, SubmissionSpan>();
   private readonly pendingSubmissions = new Set<SubmissionId>();
   private readonly entries = new Set<number>();
-  private readonly completedRuns = new Set<SubmissionId>();
+  private readonly completedRuns = new Set<string>();
+  private readonly completedGenerations = new Set<string>();
+  private live: DurableLive = { tools: [] };
+  private baselineEntry = 0;
   private disposed = false;
   private gaps = 0;
 
@@ -237,11 +242,6 @@ export class DurableRecorder {
       this.pendingSubmissions.add(record.id);
     }
     if (state.terminal) return;
-    // Status reads can be newer than the run snapshot. Only ordered placement events extend membership.
-    if (!snapshot && record.status === "placed" && this.run && !this.run.inputs.includes(record.id)) {
-      this.run.inputs = [...this.run.inputs, record.id];
-      this.update(this.run.span, { metadata: { "pi.durable.inputs": this.run.inputs } });
-    }
     if (correlation) {
       state.correlation = sanitizeTraceValue({ ...state.correlation, ...correlation }, true) as DurableCorrelation;
       this.update(state.span, this.correlationAttributes(state.correlation));
@@ -262,7 +262,7 @@ export class DurableRecorder {
     }
     if (record.status === "done" || record.status === "unanswered") {
       let output: unknown;
-      if (record.status === "done" && record.type === "input") {
+      if (record.status === "done" && record.type !== "write") {
         const entry = await readEntry(record.answer);
         if (this.disposed || state.terminal) return;
         // The answer ID is authoritative; no streamed fragments or last intermediate assistant inference.
@@ -290,9 +290,9 @@ export class DurableRecorder {
     }
   }
 
-  snapshot(snapshot: SnapshotEvent, initial = false): void {
+  snapshot(snapshot: DurableSnapshot, initial = false): void {
     if (this.disposed) return;
-    for (const entry of snapshot.entries) this.entries.add(entry.id);
+    for (const entry of snapshot.entries) this.baselineEntry = Math.max(this.baselineEntry, entry.id);
     if (!initial) {
       this.gaps += 1;
       this.update(this.root, {
@@ -302,39 +302,52 @@ export class DurableRecorder {
       this.update(this.root, {
         metadata: { "pi.durable.history_complete": false, "pi.durable.attachment": "snapshot" },
       });
-    const primary = snapshot.run?.inputs[0];
-    if (this.run && this.run.primary !== primary)
+    if (this.run && !this.sameRun(snapshot.live.run))
       this.closeRun("Run boundary not observed; snapshot replaced the observation.");
     if (this.run) this.closeRound("Snapshot replaced generation/tool observation; activity may have been missed.");
-    if (snapshot.run) {
-      this.beginRun(snapshot.run.inputs, true);
-      // Do not turn snapshot transcript/partials/tools into historical starts or completions.
+    this.live = snapshot.live;
+    if (snapshot.live.run) {
+      this.beginRun(snapshot.live.run, true);
+      // A snapshot never turns transcript, partial messages or running slots into historical starts.
       if (this.run) this.update(this.run.span, { metadata: { "pi.durable.observation_incomplete": true } });
     }
   }
 
-  private beginRun(inputs: readonly SubmissionId[], snapshot = false): void {
-    const primary = inputs[0];
-    if (primary === undefined || this.completedRuns.has(primary)) return;
-    if (this.run?.primary === primary) {
-      this.run.inputs = [...inputs];
+  private sameRun(run: DurableLive["run"]): boolean {
+    if (!run || !this.run) return false;
+    // afterRun settles the inputs before its tasks finish; an empty inputs list is not a run boundary.
+    return (
+      (this.run.primary !== undefined && run.inputs[0] === this.run.primary) ||
+      (run.afterRun && this.live.run?.taskId === run.taskId)
+    );
+  }
+
+  private beginRun(live: NonNullable<DurableLive["run"]>, snapshot = false): void {
+    if (this.disposed) return;
+    const primary = live.inputs[0];
+    if (this.sameRun(live)) {
+      if (!this.run) return;
+      this.run.inputs = [...live.inputs];
       this.update(this.run.span, { metadata: { "pi.durable.inputs": this.run.inputs } });
       return;
     }
+    const identity = primary === undefined ? `task:${live.taskId}` : `submission:${primary}`;
+    if (this.completedRuns.has(identity)) return;
     if (this.run) this.closeRun("Unexpected run replacement.");
-    const correlation = this.submissions.get(primary)?.correlation ?? {};
+    const correlation = (primary === undefined ? undefined : this.submissions.get(primary)?.correlation) ?? {};
     this.run = {
       span: this.start("pi.durable.run", "agent", this.root, {
         ...this.correlationAttributes(correlation),
         metadata: {
           ...this.correlationAttributes(correlation).metadata,
-          "pi.durable.primary_submission_id": primary,
-          "pi.durable.inputs": [...inputs],
+          ...(primary === undefined ? {} : { "pi.durable.primary_submission_id": primary }),
+          "pi.durable.inputs": [...live.inputs],
           "pi.durable.snapshot_observation": snapshot,
         },
       }),
       primary,
-      inputs: [...inputs],
+      identity,
+      inputs: [...live.inputs],
       correlation,
       round: 0,
       tools: new Map(),
@@ -361,15 +374,20 @@ export class DurableRecorder {
         ? { level: "WARNING", statusMessage: reason, metadata: { "pi.durable.observation_incomplete": true } }
         : {},
     );
-    this.completedRuns.add(run.primary);
+    this.completedRuns.add(run.identity);
     this.run = undefined;
   }
 
-  private generation(): Span | undefined {
+  private generation(key?: string): Span | undefined {
     const run = this.run;
-    if (!run) return undefined;
+    if (this.disposed || !run || (key && this.completedGenerations.has(key))) return undefined;
+    if (run.generation && key && run.generationKey !== key) {
+      this.interrupted(run.generation, "Generation boundary was not observed.");
+      run.generation = undefined;
+    }
     if (!run.generation) {
       run.round += 1;
+      run.generationKey = key;
       run.generation = this.start("pi.durable.llm", "generation", run.span, {
         metadata: { "pi.durable.observed_generation_index": run.round },
       });
@@ -377,105 +395,125 @@ export class DurableRecorder {
     return run.generation;
   }
 
-  event(event: AgentEvent): void {
-    if (this.disposed) return;
-    switch (event.type) {
-      case "run_start":
-        this.beginRun(event.inputs);
-        break;
-      case "run_end":
-        if (this.run?.primary === event.inputs[0]) this.closeRun();
-        break;
-      case "message_start":
-        if (event.message.role === "assistant") this.generation();
-        break;
-      case "message_end": {
-        const entry = event.entry;
-        if (this.entries.has(entry.id)) break;
-        this.entries.add(entry.id);
-        const message = entry.model?.[0];
-        if (message?.role !== "assistant") break;
-        const generation = this.generation();
-        if (!generation) break;
-        this.end(generation, {
-          output: durableContent(entry.model, this.options.captureContent ?? true),
-          model: message.model,
-          ...durableUsage(message),
-          level: message.stopReason === "error" ? "ERROR" : message.stopReason === "aborted" ? "WARNING" : "DEFAULT",
-          metadata: {
-            "pi.durable.entry_id": entry.id,
-            "pi.durable.task_id": entry.byTaskId,
-            "pi.durable.stop_reason": message.stopReason,
-            "pi.durable.provider": message.provider,
-          },
-        });
-        if (this.run) this.run.generation = undefined;
-        break;
-      }
-      case "tool_execution_start": {
-        if (
-          !this.run ||
-          this.run.tools.has(event.toolCallId) ||
-          this.run.completedTools.has(`${this.run.round}:${event.toolCallId}`)
-        )
-          break;
-        this.run.tools.set(
-          event.toolCallId,
-          this.start("pi.durable.tool", "tool", this.run.span, {
-            input:
-              this.options.captureContent === false
-                ? "[content capture disabled]"
-                : sanitizeTraceValue(event.args, true),
-            metadata: {
-              "pi.durable.tool_call_id": event.toolCallId,
-              "pi.durable.tool_name": sanitizeTraceValue(event.toolName),
-              "pi.durable.observed_generation_index": this.run.round,
-            },
-          }),
-        );
-        break;
-      }
-      case "tool_execution_end": {
-        const run = this.run;
-        if (!run) break;
-        const key = `${run.round}:${event.toolCallId}`;
-        if (run.completedTools.has(key) || (event.entry && this.entries.has(event.entry.id))) break;
-        run.completedTools.add(key);
-        if (event.entry) this.entries.add(event.entry.id);
-        const tool =
-          run.tools.get(event.toolCallId) ??
-          this.start("pi.durable.tool", "tool", run.span, {
-            metadata: { "pi.durable.start_not_observed": true, "pi.durable.tool_call_id": event.toolCallId },
-          });
-        const message = event.entry?.model?.[0];
-        this.end(tool, {
-          output: durableContent(
-            event.entry?.model,
-            this.options.captureContent ?? true,
-            durableDiagnosticCount(event.entry),
-          ),
-          ...(message ? durableUsage(message) : {}),
-          level: message?.role === "toolResult" && message.isError ? "ERROR" : event.entry ? "DEFAULT" : "WARNING",
-          metadata: { "pi.durable.result_entry_id": event.entry?.id, "pi.durable.result_missing": !event.entry },
-        });
-        run.tools.delete(event.toolCallId);
-        break;
-      }
-      case "auto_retry_start":
-        this.end(this.run?.generation, {
+  private entry(entry: EntryRecord, retryAttempt?: number): void {
+    if (this.disposed || entry.id <= this.baselineEntry || this.entries.has(entry.id)) return;
+    this.entries.add(entry.id);
+    const message = entry.model?.[0];
+    const run = this.run;
+    if (!run) return;
+    if (message?.role === "assistant") {
+      const generation = this.generation();
+      if (!generation) return;
+      this.end(generation, {
+        output: durableContent(entry.model, this.options.captureContent ?? true),
+        model: message.model,
+        ...durableUsage(message),
+        level: message.stopReason === "error" ? "ERROR" : message.stopReason === "aborted" ? "WARNING" : "DEFAULT",
+        metadata: {
+          "pi.durable.entry_id": entry.id,
+          "pi.durable.task_id": entry.byTaskId,
+          "pi.durable.stop_reason": message.stopReason,
+          "pi.durable.provider": message.provider,
+          ...(retryAttempt === undefined ? {} : { "pi.durable.retry_attempt": retryAttempt }),
+        },
+      });
+      if (run.generationKey) this.completedGenerations.add(run.generationKey);
+      run.generation = undefined;
+    } else if (message?.role === "toolResult") {
+      const key = entry.byTaskId === undefined ? `entry:${entry.id}` : `task:${entry.byTaskId}`;
+      this.finishTool(key, message.toolCallId, entry);
+    }
+  }
+
+  private finishTool(key: string, callId: string, entry?: EntryRecord): void {
+    const run = this.run;
+    if (!run || run.completedTools.has(key)) return;
+    run.completedTools.add(key);
+    const tool =
+      run.tools.get(key) ??
+      this.start("pi.durable.tool", "tool", run.span, {
+        metadata: { "pi.durable.start_not_observed": true, "pi.durable.tool_call_id": callId },
+      });
+    const message = entry?.model?.[0];
+    this.end(tool, {
+      ...(entry
+        ? { output: durableContent(entry.model, this.options.captureContent ?? true, durableDiagnosticCount(entry)) }
+        : {}),
+      ...(message ? durableUsage(message) : {}),
+      level: message?.role === "toolResult" && message.isError ? "ERROR" : entry ? "DEFAULT" : "WARNING",
+      metadata: { "pi.durable.result_entry_id": entry?.id, "pi.durable.result_missing": !entry },
+    });
+    run.tools.delete(key);
+  }
+
+  private task(task: DurableTask, live: DurableLive): void {
+    const run = this.run;
+    if (this.disposed || !run) return;
+    if (task.failed) this.update(run.span, { level: "ERROR", metadata: { "pi.durable.failed_task_id": task.id } });
+    if (task.kind === "pi.generation") {
+      if (task.phase === "request" || task.phase === "poll")
+        // Overflow compaction can repeat an attempt with a newer context cutoff; repeated polls keep that cutoff.
+        this.generation(`${task.id}:${task.attempt ?? 0}:${task.cutoff ?? "unknown"}`);
+      else if (task.phase === "retry") {
+        this.end(run.generation, {
           level: "ERROR",
           statusMessage: "Provider attempt will retry.",
-          metadata: { "pi.durable.retry_attempt": event.attempt },
+          metadata: { "pi.durable.retry_attempt": task.attempt },
         });
-        if (this.run) this.run.generation = undefined;
-        break;
-      case "task_failed":
-        if (this.run)
-          this.update(this.run.span, { level: "ERROR", metadata: { "pi.durable.failed_task_id": event.taskId } });
-        break;
-      // turn_end is a round boundary, never a submission boundary. Deltas and arbitrary diagnostics are not captured.
-      default:
-        break;
+        if (run.generationKey) this.completedGenerations.add(run.generationKey);
+        run.generation = undefined;
+      }
+      return;
+    }
+    if (task.kind !== "pi.tool" || task.callId === undefined) return;
+    const key = `task:${task.id}`;
+    if (run.completedTools.has(key)) return;
+    if (task.arguments !== undefined && !run.tools.has(key)) {
+      const slot = live.tools.find((slot) => slot.taskId === task.id);
+      run.tools.set(
+        key,
+        this.start("pi.durable.tool", "tool", run.span, {
+          input:
+            this.options.captureContent === false
+              ? "[content capture disabled]"
+              : sanitizeTraceValue(task.arguments, true),
+          metadata: {
+            "pi.durable.tool_call_id": task.callId,
+            "pi.durable.tool_name": slot?.name ?? task.name,
+            "pi.durable.task_id": task.id,
+            "pi.durable.observed_generation_index": run.round,
+          },
+        }),
+      );
+    }
+    if (task.terminal) this.finishTool(key, task.callId);
+  }
+
+  async commit(commit: DurableCommit, readEntry: (id: EntryId) => Promise<EntryRecord | undefined>): Promise<void> {
+    if (this.disposed) return;
+    // Resolve correlation before creating run children. One failed read cannot discard the rest of a publication.
+    for (const record of [...commit.submissions].sort((a, b) => a.id - b.id)) {
+      try {
+        await this.submission(record, readEntry);
+      } catch {
+        if (!this.disposed) this.report("observer delivery");
+      }
+      if (this.disposed) return;
+    }
+    const next = commit.live ?? this.live;
+    if (!this.run && next.run) this.beginRun(next.run);
+    // Starts precede completions, but a terminal task cannot hide its result entry in the same publication.
+    for (const task of commit.tasks) if (!task.terminal && task.phase !== "retry") this.task(task, next);
+    for (const entry of [...commit.entries].sort((a, b) => a.id - b.id)) {
+      const retry = commit.tasks.find((task) => task.id === entry.byTaskId && task.phase === "retry");
+      this.entry(entry, retry?.attempt);
+    }
+    for (const task of commit.tasks) if (task.terminal || task.phase === "retry") this.task(task, next);
+    if (this.disposed) return;
+    if (commit.live) {
+      if (this.run && !this.sameRun(next.run)) this.closeRun();
+      if (next.run) this.beginRun(next.run);
+      this.live = next;
     }
   }
 
@@ -489,5 +527,6 @@ export class DurableRecorder {
     this.pendingSubmissions.clear();
     this.entries.clear();
     this.completedRuns.clear();
+    this.completedGenerations.clear();
   }
 }

@@ -35,6 +35,7 @@ const okResult = (stdout: unknown): ExecResult => ({
   stderr: "",
   code: 0,
   killed: false,
+  truncated: false,
 });
 
 const textResult = (stdout: string, code = 0, stderr = ""): ExecResult => ({
@@ -42,6 +43,7 @@ const textResult = (stdout: string, code = 0, stderr = ""): ExecResult => ({
   stderr,
   code,
   killed: false,
+  truncated: false,
 });
 
 const sampleCounts = {
@@ -314,7 +316,7 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
   await assert.rejects(
     runGhPrView(
       {
-        exec: async () => ({ stdout: "", stderr: "not logged in", code: 1, killed: false }),
+        exec: async () => ({ stdout: "", stderr: "not logged in", code: 1, killed: false, truncated: false }),
       },
       "/repo",
     ),
@@ -328,6 +330,7 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
           stderr: "not a GitHub repository",
           code: 1,
           killed: false,
+          truncated: false,
         }),
       },
       "/repo",
@@ -342,6 +345,7 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
           stderr: "no pull requests found",
           code: 1,
           killed: false,
+          truncated: false,
         }),
       },
       "/repo",
@@ -356,6 +360,7 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
           stderr: "HTTP 404: Not Found",
           code: 1,
           killed: false,
+          truncated: false,
         }),
       },
       "/repo",
@@ -608,7 +613,7 @@ test("an aborted agent-end preserves the current status and periodic refresh sch
     if (args[0] === "pr") {
       prViews += 1;
       if (options?.signal?.aborted) {
-        return { stdout: "", stderr: "", code: 1, killed: true };
+        return { stdout: "", stderr: "", code: 1, killed: true, truncated: false };
       }
       return okResult(
         prViews === 1
@@ -689,12 +694,12 @@ test("a refresh aborted during agent-end preserves the current status", async ()
     assert.equal(prViews, 2);
 
     controller.abort();
-    abortedPrView.resolve({ stdout: "", stderr: "", code: 1, killed: true });
+    abortedPrView.resolve({ stdout: "", stderr: "", code: 1, killed: true, truncated: false });
     await agentEndPromise;
 
     assert.equal(context.statuses.get("github-pr"), visibleStatus);
   } finally {
-    abortedPrView.resolve({ stdout: "", stderr: "", code: 1, killed: true });
+    abortedPrView.resolve({ stdout: "", stderr: "", code: 1, killed: true, truncated: false });
     await sessionShutdown({}, context.ctx);
   }
 });
@@ -1256,18 +1261,21 @@ test("ambient failures stay non-intrusive", async () => {
     stderr: "env: ‘gh’: No such file or directory",
     code: 127,
     killed: false,
+    truncated: false,
   }));
   const missingGhViaCmd = await lifecycleStatusFor(async () => ({
     stdout: "",
     stderr: "'gh' is not recognized as an internal or external command",
     code: 1,
     killed: false,
+    truncated: false,
   }));
   const unauthenticated = await lifecycleStatusFor(async () => ({
     stdout: "",
     stderr: "not logged in",
     code: 1,
     killed: false,
+    truncated: false,
   }));
   const execFailure = await lifecycleStatusFor(async () => {
     throw new Error("operation aborted");
@@ -1280,12 +1288,14 @@ test("ambient failures stay non-intrusive", async () => {
     stderr: "no pull requests found",
     code: 1,
     killed: false,
+    truncated: false,
   }));
   const notFound = await lifecycleStatusFor(async () => ({
     stdout: "",
     stderr: "HTTP 404: Not Found",
     code: 1,
     killed: false,
+    truncated: false,
   }));
 
   assert.equal(missingGh.statuses.get("github-pr"), "PR gh missing");

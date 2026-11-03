@@ -17,6 +17,7 @@ import {
   type StampSettingsState,
 } from "../src/settings.js";
 import { createStampEntryRenderer, STAMP_ENTRY_TYPE, type StampEntryData } from "../src/stamp.js";
+import { entryRenderOptions } from "./render-options.js";
 
 export const PRESET_DESCRIPTIONS = [
   "Model, thinking, total tokens, cost, and abnormal stops.",
@@ -244,8 +245,8 @@ export async function mountedPreviewFixture(
         const id = sessionManager.appendCustomEntry(STAMP_ENTRY_TYPE, structuredClone(data));
         const entry = sessionManager.getEntry(id);
         assert.ok(entry?.type === "custom");
-        const collapsed = renderer(entry as never, { expanded: false }, theme);
-        const expanded = renderer(entry as never, { expanded: true }, theme);
+        const collapsed = renderer(entry as never, entryRenderOptions(false), theme);
+        const expanded = renderer(entry as never, entryRenderOptions(true), theme);
         assert.ok(collapsed);
         assert.ok(expanded);
         return [

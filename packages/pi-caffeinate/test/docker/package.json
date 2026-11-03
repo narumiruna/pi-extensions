@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "@narumitw/pi-tui-kit": "0.67.0",
     "@types/node": "26.6.5",
     "dbus-native": "0.16.2",
