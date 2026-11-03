@@ -117,6 +117,15 @@ interface GenerationInput {
   thinkingLevel?: string;
 }
 
+interface UsageCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  totalFromProvider?: boolean;
+}
+
 interface AssistantMessage {
   role: string;
   content?: unknown;
@@ -133,13 +142,7 @@ interface AssistantMessage {
     cacheWrite1h?: number;
     reasoning?: number;
     totalTokens?: number;
-    cost?: {
-      input?: number;
-      output?: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      total?: number;
-    };
+    cost?: UsageCost;
   };
   stopReason?: string;
   errorMessage?: string;
@@ -178,13 +181,7 @@ interface CompactionFinish {
     cacheRead?: number;
     cacheWrite?: number;
     totalTokens?: number;
-    cost?: {
-      input?: number;
-      output?: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      total?: number;
-    };
+    cost?: UsageCost;
   };
 }
 
@@ -452,13 +449,7 @@ export class TraceRecorder {
       cache_creation_input_tokens: message.usage?.cacheWrite,
       total: message.usage?.totalTokens,
     });
-    const costDetails = positiveNumericRecord({
-      input: message.usage?.cost?.input,
-      output: message.usage?.cost?.output,
-      cache_read: message.usage?.cost?.cacheRead,
-      cache_write: message.usage?.cost?.cacheWrite,
-      total: message.usage?.cost?.total,
-    });
+    const costDetails = knownCostDetails(message.usage?.cost);
     const outcome = classifyOutcome(message);
     const responseModel = message.responseModel ?? message.model;
     const httpMetadata = generationHttpMetadata(state);
@@ -483,6 +474,9 @@ export class TraceRecorder {
           ? { "pi.requested_model": message.model }
           : {}),
         ...(message.stopReason ? { "pi.stop_reason": message.stopReason } : {}),
+        ...(typeof message.usage?.cost?.totalFromProvider === "boolean"
+          ? { "pi.usage.cost.total_from_provider": message.usage.cost.totalFromProvider }
+          : {}),
         ...(finiteNumber(message.usage?.reasoning) ? { "pi.usage.reasoning_tokens": message.usage.reasoning } : {}),
         ...(finiteNumber(message.usage?.cacheWrite1h)
           ? { "pi.usage.cache_write_1h_tokens": message.usage.cacheWrite1h }
@@ -604,13 +598,7 @@ export class TraceRecorder {
       cache_write: input.usage?.cacheWrite,
       total: input.usage?.totalTokens,
     });
-    const cost = positiveNumericRecord({
-      input: input.usage?.cost?.input,
-      output: input.usage?.cost?.output,
-      cache_read: input.usage?.cost?.cacheRead,
-      cache_write: input.usage?.cost?.cacheWrite,
-      total: input.usage?.cost?.total,
-    });
+    const cost = knownCostDetails(input.usage?.cost);
     this.compaction.observation.update({
       metadata: {
         "pi.compaction.reason": input.reason,
@@ -620,6 +608,9 @@ export class TraceRecorder {
         ...details,
         ...prefixRecord("pi.compaction.usage", usage),
         ...prefixRecord("pi.compaction.cost", cost),
+        ...(typeof input.usage?.cost?.totalFromProvider === "boolean"
+          ? { "pi.compaction.cost.total_from_provider": input.usage.cost.totalFromProvider }
+          : {}),
       },
     });
     this.compaction.observation.end();
@@ -910,9 +901,20 @@ function numericRecord(values: Record<string, number | undefined>): Record<strin
   );
 }
 
-function positiveNumericRecord(values: Record<string, number | undefined>): Record<string, number> {
+function knownCostDetails(cost: UsageCost | undefined): Record<string, number> {
+  const values = {
+    input: cost?.input,
+    output: cost?.output,
+    cache_read: cost?.cacheRead,
+    cache_write: cost?.cacheWrite,
+    total: cost?.total,
+  };
   return Object.fromEntries(
-    Object.entries(values).filter((entry): entry is [string, number] => finiteNumber(entry[1]) && entry[1] > 0),
+    Object.entries(values).filter(
+      (entry): entry is [string, number] =>
+        finiteNumber(entry[1]) &&
+        (entry[1] > 0 || (entry[0] === "total" && entry[1] === 0 && cost?.totalFromProvider === true)),
+    ),
   );
 }
 
