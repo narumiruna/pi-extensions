@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.66.0
+
+### Minor Changes
+
+- 50292b9: Add an opt-in `tokens_per_second` footer module that shows the latest completed assistant response's average output rate on the active branch using Pi's recorded token usage and response duration. Hide unavailable or unsuccessful measurements without changing existing layouts or usage totals.
+
 ## 0.65.2
 
 ### Patch Changes
