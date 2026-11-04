@@ -102,5 +102,11 @@ export function durableUsage(message: Message): ObservationAttributes {
     const value = message.usage.cost[key];
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) costDetails[field] = value;
   }
-  return { usageDetails, costDetails };
+  return {
+    usageDetails,
+    costDetails,
+    ...(typeof message.usage.cost.totalFromProvider === "boolean"
+      ? { metadata: { "pi.usage.cost.total_from_provider": message.usage.cost.totalFromProvider } }
+      : {}),
+  };
 }

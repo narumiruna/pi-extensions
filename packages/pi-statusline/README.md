@@ -90,7 +90,7 @@ The `tools` segment takes no space while idle.
 | --- | --- |
 | `/statusline` | Customize footer appearance, information density, and layout. |
 | `/statusline settings` | Edit the settings JSON. |
-| `/statusline status` | Show effective settings and diagnostics. |
+| `/statusline status` | Show effective settings, session cost source, and diagnostics. |
 | `/statusline help` | Show command and schema guidance. |
 
 The menu and editor require TUI; RPC receives notifications instead, including the manual settings path for `settings`.
@@ -137,6 +137,11 @@ If the last remaining segment is itself wider than the row, that row renders emp
   This includes assistant messages, nested-LLM tool results, compactions, branch summaries, and persisted cache-warming usage, including abandoned branches retained in the session.
 - Cache tokens are `R<read>`, `W<write>`, and `CH<rate>`.
   `R` and `W` are cumulative; `CH` uses only the latest assistant prompt: `cacheRead / (input + cacheRead + cacheWrite) * 100`.
+- `/statusline status` labels session cost as `provider-reported` only for a nonempty, finite total when every included usage record has a finite nonnegative `cost.total` and `cost.totalFromProvider === true`.
+  Catalog estimates, mixed provenance, older sessions, empty sessions, and missing totals are `unconfirmed`; records without usage do not contribute.
+- The footer keeps its current cost format and sums Pi's best available `cost.total`, not catalog-estimated components.
+  Components can differ from a provider total and do not establish exact prompt-cache savings.
+  Session-response costs are separate from account/key quotas and balances.
 - Subscription-backed OAuth models and `kimi-coding` append `(sub)` to cost.
   The dollar value is usage cost, not proof of an amount billed under a subscription.
 - Pi's public extension API does not expose the current auto-compaction toggle, so this footer cannot reliably show the native `(auto)` marker.

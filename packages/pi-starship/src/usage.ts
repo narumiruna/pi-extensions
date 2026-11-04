@@ -5,7 +5,7 @@ interface UsageLike {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
-  cost?: { total?: number };
+  cost?: { total?: number; totalFromProvider?: boolean };
 }
 
 export interface FooterUsageSummary {
@@ -14,6 +14,7 @@ export interface FooterUsageSummary {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  costTotalFromProvider: boolean;
   latestCacheHitRate?: number;
 }
 
@@ -24,15 +25,18 @@ export function summarizeFooterUsage(entries: readonly SessionEntry[]): FooterUs
     cacheRead: 0,
     cacheWrite: 0,
     cost: 0,
+    costTotalFromProvider: false,
   };
+  let hasUsage = false;
+  let allTotalsFromProvider = true;
 
   for (const entry of entries) {
     let usage: UsageLike | undefined;
     if (entry.type === "message" && entry.message.role === "assistant") {
       usage = entry.message.usage;
-      const input = usage.input ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
+      const input = usage?.input ?? 0;
+      const cacheRead = usage?.cacheRead ?? 0;
+      const cacheWrite = usage?.cacheWrite ?? 0;
       const promptTokens = input + cacheRead + cacheWrite;
       totals.latestCacheHitRate = promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined;
     } else if (entry.type === "message" && entry.message.role === "toolResult") {
@@ -47,7 +51,16 @@ export function summarizeFooterUsage(entries: readonly SessionEntry[]): FooterUs
     totals.cacheRead += usage.cacheRead ?? 0;
     totals.cacheWrite += usage.cacheWrite ?? 0;
     totals.cost += usage.cost?.total ?? 0;
+    hasUsage = true;
+    const cost = usage.cost;
+    allTotalsFromProvider &&=
+      cost?.totalFromProvider === true &&
+      typeof cost.total === "number" &&
+      Number.isFinite(cost.total) &&
+      cost.total >= 0;
   }
 
+  // Empty or incomplete accounting cannot establish a provider-reported total.
+  totals.costTotalFromProvider = hasUsage && allTotalsFromProvider && Number.isFinite(totals.cost);
   return totals;
 }

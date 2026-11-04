@@ -52,6 +52,7 @@ test("footer usage includes every usage-bearing session entry and uses the lates
       cacheRead: 61,
       cacheWrite: 9,
       cost: undefined,
+      costTotalFromProvider: false,
       latestCacheHitRate: 20,
     },
   );
@@ -89,6 +90,7 @@ test("sessions without cache activity retain zero cache totals and a zero latest
       cacheRead: 0,
       cacheWrite: 0,
       cost: 0.01,
+      costTotalFromProvider: false,
       latestCacheHitRate: 0,
     },
   );

@@ -117,6 +117,9 @@ The built-in Starship example remains an editing seed; saving it enables a Stars
 Module references cover bounded regex substitutions/context rules, component version formats, Git templates/controls, clock zones/ranges, Python argv alternatives, environment detectors, requirement styling, and private-package visibility.
 The six Jujutsu/system modules require explicit `disabled = false` plus a root reference or `$all`; see [module behavior](./skills/configure-pi-starship/references/modules.md#jujutsu-modules).
 
+The cost module preserves its numeric format and can show provider-total provenance through the optional `$source` variable.
+See [usage semantics](./skills/configure-pi-starship/references/modules.md#usage-semantics) for `provider` versus `unconfirmed`, mixed and older sessions, and the separation from account quotas and balances.
+
 ## 🧠 Configuration chat
 
 Open `/starship` → **Configure with agent** to adjust the footer in a separate, temporary conversation.
