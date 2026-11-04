@@ -1,5 +1,16 @@
 # @narumitw/pi-worktree
 
+## 0.51.9
+
+### Patch Changes
+
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- 5120d4d: Preserve TypeBox enum inference for direct imports and Pi's extension loader without changing provider-visible schemas or validation rules. Import Notes schemas from TypeBox, declare its host-provided peer, and complete Worktree's command result contract for the updated Pi APIs.
+- 0339567: Bound Git command output by operation and report output overflow separately from timeouts. Reject incomplete results before parsing or sparse-checkout fallbacks, and do not use them to approve removal, pruning, or successful creation.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.51.8
 
 ### Patch Changes

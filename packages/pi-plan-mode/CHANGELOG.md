@@ -1,5 +1,15 @@
 # @narumitw/pi-plan-mode
 
+## 0.59.6
+
+### Patch Changes
+
+- 6c76ef1: Report inline Plan questions, Notes template editing, and Progress settings as waiting for user input on supported Pi hosts and terminals. Add optional consumer-owned blocked metadata to Kit custom interactions and questionnaires without marking loaders or changing RPC and print behavior. Settle host-disposed interactions and drain their work without interrupting native reset or restoring stale editor drafts.
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.59.5
 
 ### Patch Changes

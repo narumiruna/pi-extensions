@@ -1,5 +1,16 @@
 # @narumitw/pi-fleet
 
+## 0.3.9
+
+### Patch Changes
+
+- 0339567: Bound terminal command output and reject truncated versions and pane identities. Report output overflow without misclassifying it as a timeout, and retain partial-launch cleanup information.
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- 5120d4d: Preserve TypeBox enum inference for direct imports and Pi's extension loader without changing provider-visible schemas or validation rules. Import Notes schemas from TypeBox, declare its host-provided peer, and complete Worktree's command result contract for the updated Pi APIs.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.3.8
 
 ### Patch Changes
