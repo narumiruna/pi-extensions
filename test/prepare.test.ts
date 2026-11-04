@@ -5,33 +5,35 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 
-for (const fails of [false, true]) {
-  test(`root prepare ${fails ? "propagates asset-build failure" : "builds assets before hook setup in production"}`, () => {
+for (const failure of [undefined, "kit", "assets", "hooks"]) {
+  test(`root production prepare ${failure ? `stops at ${failure} failure` : "orders Kit, assets, then hooks"}`, () => {
     const directory = mkdtempSync(path.join(tmpdir(), "pi-prepare-"));
     try {
       for (const subdir of ["scripts", "packages/pi-inspect/scripts", ".husky"])
         mkdirSync(path.join(directory, subdir), { recursive: true });
       copyFileSync(path.resolve("scripts/prepare.mjs"), path.join(directory, "scripts/prepare.mjs"));
-      writeFileSync(
-        path.join(directory, "packages/pi-inspect/scripts/build.mjs"),
-        `import { appendFileSync } from "node:fs";
-appendFileSync("order.txt", "build\\n");
-${fails ? 'throw new Error("asset build failed");' : ""}
-`,
-      );
-      writeFileSync(
-        path.join(directory, ".husky/install.mjs"),
-        'import { appendFileSync } from "node:fs"; appendFileSync("order.txt", "hooks\\n");',
-      );
+      for (const [file, stage] of [
+        ["scripts/prepare-kit-runtime.mjs", "kit"],
+        ["packages/pi-inspect/scripts/build.mjs", "assets"],
+        [".husky/install.mjs", "hooks"],
+      ]) {
+        const operation = `appendFileSync("order.txt", ${JSON.stringify(`${stage}\n`)}); ${stage === failure ? `throw new Error("${stage} failed");` : ""}`;
+        writeFileSync(
+          path.join(directory, file),
+          `import { appendFileSync } from "node:fs"; ${stage === "kit" ? `export async function prepareKitRuntime() { ${operation} }` : operation}`,
+        );
+      }
       const result = spawnSync(process.execPath, ["scripts/prepare.mjs"], {
         cwd: directory,
         encoding: "utf8",
         env: { ...process.env, NODE_ENV: "production" },
       });
-      assert.equal(readFileSync(path.join(directory, "order.txt"), "utf8"), fails ? "build\n" : "build\nhooks\n");
-      if (fails) {
+      const stages = ["kit", "assets", "hooks"];
+      const completed = failure ? stages.slice(0, stages.indexOf(failure) + 1) : stages;
+      assert.equal(readFileSync(path.join(directory, "order.txt"), "utf8"), `${completed.join("\n")}\n`);
+      if (failure) {
         assert.notEqual(result.status, 0);
-        assert.match(result.stderr, /asset build failed/u);
+        assert.match(result.stderr, new RegExp(`${failure} failed`, "u"));
       } else assert.equal(result.status, 0, result.stderr);
     } finally {
       rmSync(directory, { recursive: true, force: true });

@@ -21,6 +21,7 @@
       "./packages/pi-codex-imagegen/src/index.ts",
       "./packages/pi-context-management/src/index.ts",
       "./packages/pi-dotenv/src/index.ts",
+      "./packages/pi-edit-scope/src/index.ts",
       "./packages/pi-file-context/src/index.ts",
       "./packages/pi-fleet/src/index.ts",
       "./packages/pi-github-pr/src/index.ts",
@@ -86,6 +87,9 @@
     "publish-packages": "node ./scripts/publish-packed-packages.mjs",
     "publish-packages:sequential": "node ./scripts/publish-packages-sequentially.mjs"
   },
+  "dependencies": {
+    "esbuild": "0.28.2"
+  },
   "devDependencies": {
     "@biomejs/biome": "2.6.3",
     "@changesets/cli": "3.0.3",
@@ -98,7 +102,6 @@
     "@types/node": "^26.6.5",
     "@types/semver": "^7.8.0",
     "concurrently": "^10.0.6",
-    "esbuild": "0.28.2",
     "husky": "9.1.7",
     "npm-check-updates": "23.1.1",
     "semver": "7.8.5",

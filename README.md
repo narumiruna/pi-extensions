@@ -58,6 +58,7 @@ These extensions are part of my daily Pi setup:
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Use OpenAI Codex Remote Compaction V2 to persist and replay bounded opaque checkpoints, with `/codex-compact` manual controls and safe Pi-native fallback. | `pi install npm:@narumitw/pi-codex-compact` |
 | [`pi-codex-imagegen`](./packages/pi-codex-imagegen) | Generate images through `/codex-imagegen` and a default-enabled Codex tool, without starting a Codex agent. | [Install from source](./packages/pi-codex-imagegen#-install) |
 | [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
+| [`pi-edit-scope`](./packages/pi-edit-scope) | Restrict file edits to selected targets while keeping other files readable, with `/edit-scope`. | [Install from source](./packages/pi-edit-scope#-install) |
 | [`pi-file-context`](./packages/pi-file-context) | Browse project files, preview text, select exact lines or Git diff hunks, and attach immutable snapshots with Git provenance to the next prompt. Open it with configurable `Ctrl+Shift+X` or `/file-context`. | `pi install npm:@narumitw/pi-file-context` |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
 | [`pi-plan-mode`](./packages/pi-plan-mode) | Codex-like, read-only `/plan` collaboration before implementation begins. | `pi install npm:@narumitw/pi-plan-mode` |
@@ -144,7 +145,7 @@ Install the repository as one Pi package:
 pi install git:github.com/narumiruna/pi-extensions
 ```
 
-The repository root Pi manifest explicitly lists every extension under `packages/`, so this enables all of them. Its install prepare step builds Inspector browser assets even when Pi omits development dependencies.
+The repository root Pi manifest explicitly lists every extension under `packages/`, so this enables all of them. Its install prepare step generates Kit runtime JavaScript and builds Inspector browser assets before hook setup, even when Pi omits development dependencies.
 
 To load only selected extensions, replace the installed package entry in `~/.pi/agent/settings.json` with a resource filter:
 
