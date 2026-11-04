@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-agentfs",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "AgentFS virtual file workspace and restricted just-bash tools for Pi.",
   "type": "module",
   "license": "MIT",
@@ -40,7 +40,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.68.0",
+    "@narumitw/pi-tui-kit": "^0.69.0",
     "@tursodatabase/database": "0.8.3",
     "agentfs-sdk": "0.6.4",
     "just-bash": "3.6.0"

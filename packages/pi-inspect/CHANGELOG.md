@@ -1,5 +1,12 @@
 # @narumitw/pi-inspect
 
+## 0.4.2
+
+### Patch Changes
+
+- 0339567: Bound browser launcher output and use the private URL fallback when launcher output is truncated.
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+
 ## 0.4.1
 
 ### Patch Changes

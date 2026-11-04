@@ -1,5 +1,14 @@
 # @narumitw/pi-tool
 
+## 0.4.2
+
+### Patch Changes
+
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.4.1
 
 ### Patch Changes

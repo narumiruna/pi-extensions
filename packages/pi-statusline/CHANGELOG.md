@@ -1,5 +1,19 @@
 # @narumitw/pi-statusline
 
+## 0.50.4
+
+### Patch Changes
+
+- bed3e2b: Retain provider-total provenance across all session usage entries without changing numeric costs. Show the source in `/statusline status` and the optional Starship cost `$source` variable; mixed, legacy, empty, and incomplete totals remain unconfirmed.
+- 54f2700: Preserve fullscreen viewport capture through custom list wrappers so default and configured paging keys reach the focused list. Keep native transcript search, unrelated overlays, free-text modes, paste, and hard cancellation unchanged. Filter Kit key hints according to each screen's capture policy.
+  
+  Update Recall and File Context to the current Kit dependency range. The selected consumer releases require the fixed Kit patch through Changesets dependency-floor updates.
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- 0339567: Bound Git status and repository-root output, discard incomplete results, and clear stale status counts after output overflow.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.50.3
 
 ### Patch Changes

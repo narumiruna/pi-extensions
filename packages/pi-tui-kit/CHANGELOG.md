@@ -1,5 +1,17 @@
 # @narumitw/pi-tui-kit
 
+## 0.69.0
+
+### Minor Changes
+
+- 6c76ef1: Report inline Plan questions, Notes template editing, and Progress settings as waiting for user input on supported Pi hosts and terminals. Add optional consumer-owned blocked metadata to Kit custom interactions and questionnaires without marking loaders or changing RPC and print behavior. Settle host-disposed interactions and drain their work without interrupting native reset or restoring stale editor drafts.
+
+### Patch Changes
+
+- 54f2700: Preserve fullscreen viewport capture through custom list wrappers so default and configured paging keys reach the focused list. Keep native transcript search, unrelated overlays, free-text modes, paste, and hard cancellation unchanged. Filter Kit key hints according to each screen's capture policy.
+  
+  Update Recall and File Context to the current Kit dependency range. The selected consumer releases require the fixed Kit patch through Changesets dependency-floor updates.
+
 ## 0.68.1
 
 ### Patch Changes

@@ -1,5 +1,21 @@
 # @narumitw/pi-langfuse
 
+## 0.54.0
+
+### Minor Changes
+
+- 5120d4d: Support Pi durable and Chord 1.5 through their public synchronous observers. Replace the removed event stream with ordered, bounded committed delivery, retain final tool arguments and submission correlation, and join observation cancellation and shutdown without controlling execution. Preserve committed-only privacy filtering, snapshot recovery, and continue/afterRun boundaries. Raise the experimental durable and Chord peer floors to the supported runtime contract.
+
+### Patch Changes
+
+- 0339567: Bound Git metadata queries and omit incomplete branch or commit output from traces.
+- 811b195: Retain provider-confirmed zero totals in live generation costs and compaction metadata without replacing them with estimated component sums. Export cost provenance as metadata and preserve the unknown-zero fallback.
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- bed3e2b: Preserve boolean cost-total provenance in durable assistant and nested-tool trace metadata without changing numeric costs or zero-cost rules.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.53.3
 
 ### Patch Changes

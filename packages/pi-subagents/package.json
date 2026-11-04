@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-subagents",
-  "version": "3.4.1",
+  "version": "3.4.2",
   "description": "Subagent jobs with asynchronous main-agent messaging for Pi.",
   "type": "module",
   "license": "MIT",
@@ -54,7 +54,7 @@
     "directory": "packages/pi-subagents"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.68.0",
+    "@narumitw/pi-tui-kit": "^0.69.0",
     "ignore": "^7.0.14"
   }
 }

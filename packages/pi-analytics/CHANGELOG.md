@@ -1,5 +1,18 @@
 # @narumitw/pi-analytics
 
+## 0.50.0
+
+### Minor Changes
+
+- e29a6a8: Retain optional provider-reported response models separately from requested model IDs and show their call counts in Response cycles. Keep historical records readable without migration and sanitize model IDs only for display. Missing metadata is not inferred; token and cost reporting remain out of scope.
+
+### Patch Changes
+
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- Updated dependencies [54f2700]
+- Updated dependencies [6c76ef1]
+  - @narumitw/pi-tui-kit@0.69.0
+
 ## 0.49.11
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @narumitw/pi-typesafe
 
+## 0.1.3
+
+### Patch Changes
+
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+- 5120d4d: Preserve TypeBox enum inference for direct imports and Pi's extension loader without changing provider-visible schemas or validation rules. Import Notes schemas from TypeBox, declare its host-provided peer, and complete Worktree's command result contract for the updated Pi APIs.
+
 ## 0.1.2
 
 ### Patch Changes

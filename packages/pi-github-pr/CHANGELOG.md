@@ -1,5 +1,12 @@
 # @narumitw/pi-github-pr
 
+## 0.49.10
+
+### Patch Changes
+
+- 0339567: Bound Git HEAD and GitHub CLI query output, reject incomplete paths and JSON, and report query output overflow without misclassifying it as a timeout.
+- e484010: Include the existing package-root CHANGELOG.md in extension tarballs so Pi can show native update notices. Keep Changesets version headings and Pi's first-observation and collapseChangelog behavior unchanged.
+
 ## 0.49.9
 
 ### Patch Changes

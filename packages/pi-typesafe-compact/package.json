@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-typesafe-compact",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "TypeSafe JEV-guided selective history compaction for Pi.",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.65.0",
+    "@narumitw/pi-tui-kit": "^0.69.0",
     "@typesafe-ai/sdk": "^0.7.0"
   },
   "peerDependencies": {
