@@ -26,6 +26,7 @@ import { systemModules } from "./system.js";
 import { thinkingModule } from "./thinking.js";
 import { timeModule } from "./time.js";
 import { tokensModule } from "./tokens.js";
+import { tokensPerSecondModule } from "./tokens-per-second.js";
 import { turnModule } from "./turn.js";
 import type { ModuleDefinition } from "./types.js";
 
@@ -53,6 +54,7 @@ const MODULE_IMPLEMENTATIONS = [
   activityModule,
   contextModule,
   tokensModule,
+  tokensPerSecondModule,
   cacheModule,
   costModule,
   timeModule,
@@ -114,6 +116,8 @@ const MODULE_DESCRIPTIONS = {
   thinking: "Current Pi thinking level or streaming state.",
   time: "Current local time.",
   tokens: "Session input and output token totals.",
+  tokens_per_second:
+    "Average output tokens per second for the latest completed assistant response on the active branch.",
   turn: "Current user-turn count.",
   username: "Current user identity when configured to display.",
 } as const satisfies Record<ModuleName, string>;

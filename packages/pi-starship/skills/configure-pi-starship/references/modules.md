@@ -27,6 +27,7 @@ Use this authoritative public reference whenever a question or change involves a
 | `activity` | `$symbol`, `$state`, `$tool`, `$count`, `$kind`, `$title`, `$text` | Extension UI waits, active tools, streaming, completion, or idle |
 | `context` | `$symbol`, `$percentage`, `$tokens`, `$window` | Context-window use |
 | `tokens` | `$symbol`, `$input`, `$output`, `$total` | Token totals |
+| `tokens_per_second` | `$symbol`, `$rate` | Latest completed assistant response's average output rate on the active branch; disabled by default |
 | `cache` | `$symbol`, `$rate`, `$read`, `$write` | Prompt-cache reads, writes, and latest hit rate; disabled by default |
 | `cost` | `$symbol`, `$cost`, `$subscription`, `$source` | Session cost, provider-total provenance, and optional `(sub)` marker |
 | `time` | `$symbol`, `$time` | Formatted clock; local `HH:mm` by default |
@@ -228,6 +229,32 @@ These are inert labels, not evidence of cluster access or valid credentials.
   To show provenance, set `[cost].format` to `'$cost $source( $subscription)'`.
 - Subscription-backed OAuth models and `kimi-coding` set cost `$subscription` to `(sub)`.
   The dollar value is usage cost, not proof of an amount billed under a subscription.
+
+### Tokens per second
+
+`tokens_per_second` shows the latest completed assistant response on the active branch, not cumulative session throughput.
+Enable it explicitly and include it in the root format, or use `$all` after enabling it:
+
+```toml
+format = "$model$tokens$tokens_per_second"
+
+[tokens_per_second]
+disabled = false
+format = "[$rate tok/s ]($style)"
+style = "bold cyan"
+```
+
+`$rate` is `usage.output / (durationMs / 1000)`, formatted to one decimal place; 85 output tokens over 2 seconds displays `42.5 tok/s`.
+The duration is Pi's recorded full-response duration, including request latency and thinking time, but not subsequent tool execution or time between responses.
+Output tokens use the provider's accounting, which can include reasoning tokens; this is not a visible-text estimate or a decode-only speed measurement.
+Responses ending with `stop`, `length`, or `toolUse` can supply a rate, including tool-calling responses before their tools finish.
+
+The latest completed response remains visible while a new response is streaming; partial usage is not estimated.
+A latest failed, aborted, pending, deferred, or untimed response hides the module instead of showing an older response's rate.
+Missing, nonfinite, or negative output counts, nonpositive or nonfinite durations, and nonfinite calculated rates also hide the module; valid zero output shows `0.0 tok/s`.
+Older sessions and some deferred results have no recorded duration.
+Resume, reload, fork, and tree navigation derive the value from the active branch, so abandoned-branch responses, tool results, compactions, branch summaries, and cache-warming usage do not supply the rate.
+This module does not change the cumulative accounting used by `tokens`, `cache`, or `cost`.
 
 ### Directory, Git, and environment contraction
 

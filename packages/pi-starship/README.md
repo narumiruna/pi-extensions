@@ -14,6 +14,7 @@ The extension parses and renders the footer itself, so it does not need the `sta
 - Supports root and module formats, conditional groups, `$all`, styles, palettes, and width-aware `$fill` alignment.
 - Selects provider, model, and thinking styles from exact runtime values with ordered module rules.
 - Provides Pi, model, usage, Git, pull request, package, language, environment, deployment, cloud, and execution modules, with usage totals including persisted cache warming.
+- Offers an opt-in `tokens_per_second` module for the latest completed response's average output rate.
 - Offers opt-in Jujutsu, native RAM/optional Linux swap, and Linux sysfs battery modules, all disabled by default.
 - Wraps native multiline layouts to terminal width, with an ellipsis fallback for a grapheme wider than the terminal.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
@@ -116,6 +117,10 @@ Manual file edits load at the next `session_start`, including `/reload`.
 The built-in Starship example remains an editing seed; saving it enables a Starship footer, not Pi's native footer.
 Module references cover bounded regex substitutions/context rules, component version formats, Git templates/controls, clock zones/ranges, Python argv alternatives, environment detectors, requirement styling, and private-package visibility.
 The six Jujutsu/system modules require explicit `disabled = false` plus a root reference or `$all`; see [module behavior](./skills/configure-pi-starship/references/modules.md#jujutsu-modules).
+
+To show response-average output throughput, add `$tokens_per_second` to the root `format` and set `[tokens_per_second].disabled = false`.
+It is disabled by default and uses Pi's recorded output tokens and response duration, including request latency rather than only token generation.
+See [tokens per second](./skills/configure-pi-starship/references/modules.md#tokens-per-second) for an example and missing-data behavior.
 
 The cost module preserves its numeric format and can show provider-total provenance through the optional `$source` variable.
 See [usage semantics](./skills/configure-pi-starship/references/modules.md#usage-semantics) for `provider` versus `unconfirmed`, mixed and older sessions, and the separation from account quotas and balances.
