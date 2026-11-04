@@ -15,7 +15,11 @@ build  coverage  dist  target  .next
 
 It does not read `.gitignore`. Scan errors and work limits fail the scan instead of showing a partial inventory. Current targets appear first and remain available even when hidden, excluded, outside cwd, or not yet created. Filtering and checkboxes change only the picker draft until completion.
 
-To add an existing file outside the inventory, enter a path in the same field, then confirm **Add file**:
+The list contains only files. The fzf-inspired interaction uses Pi's native fuzzy search, including whitespace and directory fragments; it never adds a path. By default, Tab toggles and moves down, Shift+Tab toggles and moves up, arrows only move, and Enter applies the checked set. An empty checked set stays open with an explanation; it neither selects the highlighted file nor ends an existing restriction.
+
+Project labels use paths relative to cwd, not the Git root. Ordinary names are unquoted; ambiguous whitespace and escaped identities stay quoted. External paths remain absolute and are marked `(outside)`. The **Full paths** button uses Pi's `app.session.togglePath` binding (default Ctrl+P) and supports fullscreen clicks. Switching views preserves raw absolute IDs, checks, query, cursor, and canonical validation. It changes no setting and resets when the picker closes. An exact Path preview appears only when the selected row is clipped; canonical redirects keep their own detail.
+
+To add an existing file outside the inventory, open **Add file…** and enter its path in the separate field. The default shortcut is Ctrl+O; Alt+O is used if native selection, editing, or host input reserves Ctrl+O. If both are reserved, no key is advertised; the fullscreen button remains available. Examples:
 
 ```text
 ~/src/another_project/AGENTS.md
@@ -24,9 +28,11 @@ To add an existing file outside the inventory, enter a path in the same field, t
 ~/.config/atuin/config.toml
 ```
 
-Path input containing `/` (or `\` on Windows) puts **Add file** first instead of treating confirmation as Apply. Absolute, home, file-URL, and cwd-relative forms are accepted; use `./` for a relative filename. The lookup runs only when that action is confirmed, not while typing.
+The separate field accepts absolute, home, file-URL, and cwd-relative forms, including a bare relative filename. Its configured Input submit key (default Enter) starts lookup; typing does not. This does not reuse or reinterpret the search query.
 
-A successful add checks and focuses the resolved path, shows outside-cwd and canonical details, and clears the field for the next path. Earlier checks remain selected. Repeat for more files, then confirm **Start restriction** or **Apply changes**. Clear the field to return to ordinary search without adding it. Missing paths, directories, hard links, and invalid input retain the draft and show an error. These actions create no file or parent directory; existing-file and canonical checks run again before apply.
+A successful add checks the resolved path, clears only the path field, and returns to the file list with the search and earlier checks intact. It focuses the added file if it matches the query; otherwise it retains the matching highlight and shows an Added status. Repeat for more files, then apply with the configured selection-confirm key (default Enter) or the visible **Start restriction** / **Apply changes** button. There is no function-key completion accelerator or completion row.
+
+Missing paths, directories, hard links, and invalid input keep the path field and its draft open with an error. Back (default Escape) returns to search without changing checks; during lookup it aborts only that lookup and blocks new work until it drains. Cancelling from the file list abandons the draft, not the applied restriction. These actions create no file or parent directory; existing-file and canonical checks run again before apply.
 
 Manually added paths must still exist at selection completion and final commit. Duplicate normalized paths are idempotent. Canonical aliases are deduplicated, but that does not remove the existing-file requirement. Previously approved missing reservations remain valid.
 
@@ -110,11 +116,17 @@ All interactive flows use Pi's public full-width bottom overlays through `src/ui
 
 Ordinary frames retain their existing conservative height. If a fixed Kit task loader is taller than the terminal, the adapter removes frame spacing and uses the public bounded-frame helper to retain the task label and normal-height borders. Component focus, input, disposal, and pending-work methods still reach their original receivers. Pi's completion callback removes only the owned overlay, even when an unrelated overlay has focus above it. Widgets and footers remain mounted and return to view after the overlay closes.
 
-The standalone Kit selector does not expose the required in-place validation, live count, exact path preview, and paste-safe completion behavior. The local adapter retains the checked draft and query after validation failure. It treats literal Space as text, uses configured selection confirmation, preserves a pressed raw file ID when scrolling recenters the viewport, and discards pasted controls during pending validation.
+The standalone Kit selector does not expose the required in-place validation, live count, exact path preview, separate add field, and paste-safe completion behavior. The local adapter uses native fuzzy matching and a file-only SelectList. It retains the checked draft and search after validation failure and preserves a pressed raw file ID when scrolling recenters the viewport. Apply, Add, and path-mode buttons stay outside the list; Enter never toggles a file under the default keys.
 
-Path-shaped input focuses Add file ahead of substring matches and hides completion until the path is added or the field is cleared. Delayed lookup tests include Back, Ctrl+C, disposal, ownership changes, and paste during validation; frame tests include both the Add action and redirected target previews.
+The footer retains the count and reachable primary keys without scrolling. Scanning, lookup, and selection validation disable new work; an empty draft disables Apply without returning to the manager. At constrained heights, the focused file and search field take priority over button rows. Add lookup has its own abort controller: Back returns to files immediately, aborts lookup, and prevents another operation until it drains. Every result rechecks ownership and cancellation after await. Tests cover all scan/lookup/apply stages with Back, Ctrl+C, disposal, owner abort, and ownership changes.
 
-Custom selector/input screens intentionally show no key hints or additive shortcuts. Pi's configured matchers remain authoritative; host listeners can consume keys before component dispatch. Table-driven tests include aliases, modifier order, legacy collisions, Kitty/legacy differences, invalid strings, and remapped confirmation/submission. No fallback shortcut is selected or advertised. Ctrl+C remains a hard-cancel path outside paste while Scope owns input. Native search, global debug, and earlier input listeners retain priority; Scope does not steal keys from another focused overlay. Unhandled wheel input follows Pi's native routing.
+The picker uses Kit's public hint formatter and bounded-frame hint rows. `picker-keys.ts` advertises only keys whose tested native input families reach the intended action under selection, editing, debug, and regular/fullscreen host priority. It chooses the first proven configured alternative, not the first raw string. Unusual remaps still dispatch through Pi's matcher; unproved literal hints are omitted while visible buttons remain. The proof set covers ASCII letters/digits and Space, arrows, page keys, Enter/Return (including LF and numpad Enter), Escape/Esc, Tab/Ctrl+I, Shift+Tab, Ctrl+P, Ctrl+O/Alt+O, and unmodified function keys. Invalid strings are not repaired. Tests retain modifier-order and Kitty/legacy dispatch outside this proof set.
+
+Selection and native Input editing/submission take priority over marking and additive shortcuts. The add field uses native Input undo-before-submit ordering; the search field uses configured selection confirmation only. Under default bindings Space is text. Ctrl+C remains a hard-cancel path outside paste while Scope owns input; the ordinary footer shows Cancel rather than a duplicate Close hint. Native transcript search, global debug, earlier consuming or transforming listeners, and another focused overlay retain priority. Unknown extension listeners cannot be predicted through a public ownership API; hints do not override them. Regular/fullscreen tests cover paging, search interception, configured alternatives, debug, consumed input, and overlay ownership. Unhandled wheel input follows Pi's native routing.
+
+Whole or fragmented bracketed paste cannot toggle, apply, add, switch views, or cancel. Pending validation discards pasted input. A paste keeps its original Input owner even if lookup completion returns to the file panel. The edited query is published before bytes after the end marker dispatch through the current screen. Pointer actions are blocked during paste. Regression tests cover both cross-panel cases so pasted controls cannot become shortcuts after an await. The new-file input keeps its existing native editing/submission behavior.
+
+File clicks keep the original pressed ID when viewport centering or canonical details move the rows. Query, panel, and resize changes cancel unfinished gestures; their later click is consumed rather than reused for another file or button. Input uses native press-only caret placement, and activatable presses request native overlay focus. Component tests and a real fullscreen SGR press/release case cover these boundaries.
 
 Input rendering and mouse hit-testing use the same equal-UTF-16-length mask. Only the display value is replaced; the raw draft is restored synchronously after rendering or a click. Tests combine control/format characters, emoji joiners, horizontal scrolling, native pointer placement, remapped submission/confirmation, and both actual input callers.
 
@@ -122,7 +134,39 @@ All new-file targets receive one exact review; ordinary in-cwd file selection ha
 
 Final apply receives the task's operation signal and rechecks idle state, scope revision, ownership, canonical targets, and usable loadout before committing. Session resources are keyed by `sessionManager`, not a shared headless UI object. Shutdown aborts and drains tracked tool checks, UI work, and preference writes. Component disposal also cancels owned work. Filesystem operations already in progress are awaited rather than left detached.
 
+## Search-first picker audit
+
+This change replaces the earlier Enter-toggle/function-key workflow with the interaction in [File selection](#file-selection). It changes only picker UI, display labels, Help, and related tests/documentation. Authorization, canonical pins, state schemas, settings, command routes, model notices, and prefix epochs remain unchanged. No Kit API, package dependency, release, visibility, or publication change is included.
+
+| Touched area | Applicable MUST rules and named verification methods |
+| --- | --- |
+| Search, selection, and separate path field | Preserve native editing, paste, cancellation, theme, focus, and bounded rendering; `Review`, picker/input/menu and real regular/fullscreen host `Test`. |
+| Async lookup and apply | Abort and drain owned work; revalidate ownership, mutable state, and cancellation after await; `Review`, the complete stage/ending matrix and cross-panel paste `Test`. |
+| Labels and key hints | Keep raw payloads unchanged, escape unsafe display identities, prove each advertised key under native priority, use the first usable configured alternative; `Review`, table-driven matcher, clipped preview, pointer, and host `Test`. |
+| Runtime and compatibility | Preserve loader behavior, persisted state, exact notices, tools, and settings; lifecycle/contracts/native Jiti `Test`, package-directory and CLI `Smoke`. |
+| Package documentation | Keep README headings, warnings, scope ownership, and resolvable links; `Review`, heading/link audit, root `Validator`, pack inspection, and `Smoke`. |
+
+The final semantic audit reproduced stale post-paste list actions and clicks lost after canonical-detail reflow, then derived and tested the wider gesture class, including lookup completion between Back press and release. The regression cases verify fresh search results, directional marking, native focus, original raw IDs, and cancellation of stale gestures.
+
+The applicable guides are root `AGENTS.md`, `docs/extension-conventions.md`, and `docs/readme-conventions.md`; the unchanged persistence boundary is audited against `docs/extension-settings.md`. Physical terminal, IME, subjective UX, and interactive `/reload` remain the maintainer's [external handoff](#physical-terminal-handoff).
+
+### Completed search-first checks
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | Passed: builds, Biome, package boundaries, and workspace typechecks. |
+| `npm test` | Passed: 19,180 tests in 893 files; 16 platform/conditional tests and one file skipped; no unhandled errors. |
+| Package tests and root test compilation | Passed: 431 tests in 14 files, one Windows-only skip, and `tsc -p tsconfig.test.json`. |
+| Native CLI smoke | Passed: explicit package loading, trusted discovery, trust denial, print, and JSON; no model request. |
+| Isolated packed production install | Passed with local Edit Scope/Kit tarballs, offline installation, and development/automatic peer installation disabled; native Jiti loads the factory, lazy manager, picker, and key helper, then verifies Tab, Add/Back, retained drafts, and cancellation. |
+| Pack dry run and tarball inspection | Passed: 19 files including all 14 source modules, documentation, metadata, changelog, and license; no tests or repository configuration; private/source-entry metadata retained. |
+| README audit | Passed: fenced-code-aware headings in 38 active READMEs and all 18 owned relative links/anchors; title, badges, and essential warnings retained. |
+
+One full-suite attempt reached the tool's 300-second command limit without a reported test failure. A supervised rerun of the same canonical `npm test` completed; no per-test timeout or runtime policy was changed. The physical-terminal and interactive `/reload` handoff remains unverified. The package remains private; no release or publication action was taken.
+
 ## Review fixes
+
+This section records the earlier package-loading and rendering fixes, before the search-first picker change.
 
 | Finding | Resolution and regression evidence |
 | --- | --- |
@@ -239,11 +283,11 @@ pi --no-extensions -e "$repo/packages/pi-edit-scope"
 ```
 
 1. Open `/edit-scope`; confirm **Edit Scope** branding, the full-width bottom overlay, the first selected action, cwd, and inactive state. Check that `/scope` opens the same manager. Repeat with active widgets, a custom footer, and a short terminal in regular and fullscreen modes.
-2. Select `a.txt`, filter and toggle it, then finish with **Start restriction**. Confirm return to the prompt and the active widget.
-3. Reopen the selector and add several existing home and absolute paths outside cwd. Confirm Add file is first, resolved/canonical previews are clear, earlier checks remain, and each successful addition clears the field. Test a missing file and confirm the input is retained without creating content. Cancel once and confirm the live set is still only `a.txt`; repeat and Apply to approve the larger set, then restore the one-file set for the remaining steps.
+2. Check that only files appear in the list, ordinary names are unquoted, and outside-cwd targets keep full labels and markers. Type spaces and directory fragments; they must only search. Test Enter with zero checks, Tab toggle/down, Shift+Tab toggle/up, and arrow-only movement. Toggle full paths with Ctrl+P or its button without changing query, cursor, or checks. In a long list, check `a.txt`, inspect the count and keys without scrolling, and press Enter to apply. Confirm return to the prompt and the active widget.
+3. Reopen the selector, keep a query and checked draft, and use Ctrl+O or **Add file…** for several existing home/absolute paths. Confirm the separate field, preserved search/checks, and outside/canonical details. A query that hides the added file must remain intact with an Added status. Test a missing path, correct the retained draft, and test Back without creating content. Cancel the file list and confirm the live set is still only `a.txt`; repeat and apply the larger set, then restore the one-file set.
 4. Try **Use only a new file…** with `a.txt`; confirm the draft survives rejection. Correct it to a new nested path, review it, then cancel. Confirm that no file or parent directory was created.
 5. Repeat new-file reservation and complete it. Confirm that the set has one deferred target, not the earlier file plus the new path.
-6. Exercise literal and bracketed-pasted spaces, long and Unicode text, masked controls/joiners, Backspace, cursor movement, resize, pointer selection, and IME. Repeat with non-default submit, confirm, and cancel bindings; use Ctrl+C as the hard-cancel path.
+6. Exercise literal and bracketed-pasted spaces, long and Unicode text, masked controls/joiners, Backspace, cursor movement, resize, pointer selection, and IME in both fields. Repeat with non-default Tab, submit, confirm, cancel, and path-toggle bindings. Reserve Ctrl+O through native editing and check Alt+O; reserve both and use the fullscreen Add button without a false key hint. Test Enter/apply and fullscreen button clicks, transcript-search priority, and Ctrl+C hard cancellation. Confirm no default function-key completion or action row remains.
 7. Change the hidden-file preference. Confirm immediate persistence and that Back does not undo the save. Restore the preference if required.
 8. Run interactive `/reload` while restricted. Confirm the widget, complete Status list, both command names, and restriction survive.
 9. Check a new session, resume, and tree navigation before and after activation. Expect the state of each active branch, not the last state from another branch.

@@ -36,8 +36,14 @@ pi install ./packages/pi-edit-scope
 ## 🚀 Quick start
 
 1. Run `/edit-scope` to open **Edit Scope**, then choose **Select files…**.
-2. Type to filter. Confirm a file row to toggle it, then confirm **Start restriction**.
+2. Type to search. **Tab** toggles a file and moves down; **Shift+Tab** toggles and moves up. **↑/↓** only move. **Enter** applies the checked files; an empty selection stays open. **Escape** cancels without changing an applied restriction.
 3. Edit the selected files. Run `/edit-scope off` before work that needs unrestricted tools, such as a test command or formatter.
+
+Typing always searches, including spaces and directory fragments. Use **Add file…** (default **Ctrl+O**) to enter an existing external or excluded path in a separate field. **Enter** adds it to the checked draft, not the active restriction; the search and earlier checks remain. **Escape** returns from that field to the list.
+
+Project files use readable cwd-relative labels. **Ctrl+P** or **Full paths** switches the view without changing the query or checks. External files keep full paths and an outside-cwd marker; unusual names retain escaped, quoted identities. This view choice resets when the picker closes.
+
+These are default keys. The footer follows configured selection and editing keys. Add file uses **Alt+O** if Ctrl+O is reserved; conflicting hints are omitted. Action buttons support fullscreen clicks and stay outside the file list. Very short screens prioritize the focused file, search field, and primary key hints.
 
 The widget shows the selected-file count, a short path summary, and the exit command. **Status** lists every target, including reserved paths, and explains deferred creation.
 
@@ -54,7 +60,7 @@ Interactive screens use full-width bottom overlays in regular and fullscreen TUI
 
 Successful activation, replacement, or exit returns to the prompt. Closing the manager, cancelling a selection, pressing Escape or Ctrl+C, interrupting work, or ending an agent run does **not** end an applied restriction. An empty selection leaves it unchanged. Reapplying the same lexical paths and canonical targets is a no-op.
 
-The picker can add existing external files by path. **New file…** replaces the entire allowed-file set with one reviewed target; selection only reserves it. The first normal `write` creates the file and required parent directories. Opening or cancelling this flow creates no target content. See the [file-selection reference](./docs/verification.md#file-selection) for accepted path forms, discovery rules, validation, and draft behavior.
+**New file…** replaces the entire allowed-file set with one reviewed target; selection only reserves it. The first normal `write` creates the file and required parent directories. Opening or cancelling this flow creates no target content. See the [file-selection reference](./docs/verification.md#file-selection) for accepted path forms, discovery rules, validation, and draft behavior.
 
 ## ⚙️ Settings
 
