@@ -92,6 +92,8 @@ The manager rescans notes and templates when each screen opens. Its first level 
 
 **Manage templates…** opens an existing template in a Pi-style multiline editor. The editor preserves leading and trailing whitespace and hides terminal controls as spaces without changing their raw values. It rejects pasted text containing an ambiguous bracketed-paste terminator rather than silently reordering it. Because terminal paste framing cannot represent a literal terminator unambiguously, the first save after a paste asks you to review the content and press save again. Cancelling or submitting unchanged content returns to the manager without writing. A changed template is published atomically only if its revision is still current; if another process changed it, Pi Notes preserves that external content, reports the conflict, and refreshes the manager.
 
+On Pi 1.5 or later, the inline template editor reports `question` waiting status to supported terminals until it closes. Older hosts keep the same editor without this terminal status. The embedded assistant and its generation state are unchanged.
+
 Creating a note copies the selected template exactly once and does not ask for a path. Pi Notes tries `untitled.md`, `untitled-2.md`, and further numbered variants before using a generated fallback, without overwriting an existing note or reusing a temporary path that has child-session history. Later template changes do not classify or alter the created note.
 
 ## Embedded assistant

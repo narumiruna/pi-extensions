@@ -160,6 +160,11 @@ for (const scenario of [
 }
 
 for (const { label, packageNames, minorConsumers } of [
+  {
+    label: "inline blocked status",
+    packageNames: ["pi-tui-kit", "pi-plan-mode", "pi-notes", "pi-progress"],
+    minorConsumers: [],
+  },
   { label: "fullscreen handoff", packageNames: ["pi-tui-kit", "pi-starship", "pi-btw"], minorConsumers: [] },
   {
     label: "editor status presentation",

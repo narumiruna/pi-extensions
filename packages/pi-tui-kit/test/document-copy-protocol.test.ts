@@ -143,7 +143,7 @@ test("real Pi RPC and Jiti keep all three document-copy callbacks out of protoco
       );
       const summary = JSON.parse(record.message ?? "{}");
       assert.equal(summary.copies, 0);
-      assert.equal(summary.api, 22);
+      assert.equal(summary.api, 23);
       assert.deepEqual(
         summary.result,
         route === "standalone" ? { kind: "confirmed" } : { kind: "closed", reason: "close" },

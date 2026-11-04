@@ -25,7 +25,12 @@ function snapshot(content: string, relativePath = "draft.md"): TemplateSnapshot 
 }
 
 function editorContext(tui: ReturnType<typeof createTuiHarness>) {
-  return createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const customOptions: Parameters<typeof tui.custom>[1][] = [];
+  const custom: typeof tui.custom = (factory, options) => {
+    customOptions.push(options);
+    return tui.custom(factory, options);
+  };
+  return { ...createMockContext({ mode: "tui", hasUI: true, custom }), customOptions };
 }
 
 async function confirmPasteAndSubmit(tui: ReturnType<typeof createTuiHarness>): Promise<void> {
@@ -60,6 +65,7 @@ test("template editor hides terminal controls and submits exact boundary whitesp
 
   tui.press("tui.input.submit");
   assert.equal(await editing, content);
+  assert.deepEqual(context.customOptions, [{ blocked: { kind: "question", message: "Edit Notes template" } }]);
   assert.equal(tui.isOpen, false);
 });
 

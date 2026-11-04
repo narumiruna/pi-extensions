@@ -657,7 +657,7 @@ for (const boundary of ["normal", "cancel-after-publication", "dispose-after-pub
     let activeHarness: SettingsHarness | undefined;
     let delayed = false;
     let disabled = false;
-    let cleared = false;
+    let publicationBoundary = -1;
     const publications = vi.spyOn(state.context.ctx.ui, "setStatus");
     const lateFetch = vi.fn(async (_url: string, init: RequestInit) => {
       observedSignal = init.signal ?? undefined;
@@ -676,6 +676,7 @@ for (const boundary of ["normal", "cancel-after-publication", "dispose-after-pub
       const saved = await originalUpdate(patch, signal);
       if (patch.openaiUseCodexUsage === false) {
         disabled = true;
+        publicationBoundary = publications.mock.calls.length;
         if (boundary === "cancel-after-publication") activeHarness?.handleInput("\u0003");
         if (boundary === "dispose-after-publication") activeHarness?.dispose();
       }
@@ -686,7 +687,6 @@ for (const boundary of ["normal", "cancel-after-publication", "dispose-after-pub
         activeHarness = harness;
         harness.handleInput("\r");
         await vi.waitFor(() => assert.equal(observedSignal?.aborted, true));
-        cleared = state.context.statuses.get("usage") === undefined;
         if (boundary === "off-on-cycle") {
           await originalUpdate({ openaiUseCodexUsage: true });
         }
@@ -695,7 +695,10 @@ for (const boundary of ["normal", "cancel-after-publication", "dispose-after-pub
       release();
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(disabled, true);
-      assert.equal(cleared, true);
+      assert.ok(publicationBoundary >= 0);
+      // Capture the clear event: the valid web-only status can already be restored
+      // before an asynchronous mock host resumes after cancellation or disposal.
+      assert.ok(publications.mock.calls.slice(publicationBoundary).some(([, text]) => text === undefined));
       assert.equal(observedSignal?.aborted, true);
       assert.equal(lateFetch.mock.calls.length, 1);
       assert.doesNotMatch(state.context.statuses.get("usage") ?? "", /80%|90%/);

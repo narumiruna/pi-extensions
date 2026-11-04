@@ -240,6 +240,7 @@ Use `/progress settings` in TUI mode to edit these user settings. Enter or Space
 The screen uses the shared Kit frame with full-width top and bottom rules. When fewer than five rows remain for the screen, it omits the rules to retain the active setting or input field.
 Each successful save applies immediately. Closing the screen cancels pending work, but a save already publishing can still finish and apply to the current session; completed saves are not undone. Ctrl+C always closes the screen.
 A failed save reports an error and restores the displayed value. Invalid existing files must be repaired before saving.
+On Pi 1.5 or later, the inline settings screen reports `question` waiting status to supported terminals until it closes. This does not change step statuses or notifications. Older hosts keep the same settings UI without this terminal status.
 
 Manual file changes take effect at the next session start, including `/reload`.
 Reads and saves are ordered within one Pi process. Each save reads the latest valid document, preserves unknown fields, and publishes through a temporary file and rename; separate Pi processes are not coordinated.

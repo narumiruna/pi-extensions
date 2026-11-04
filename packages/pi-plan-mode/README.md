@@ -176,6 +176,7 @@ While that editor is active, it controls Escape and submission keys; Ctrl+C stil
 The editor's submitted value is retained, including any whitespace normalization it intentionally applies.
 Without a custom editor, existing editing and cancellation behavior is unchanged.
 The TUI rejects either field above 4,000 characters instead of truncating it.
+On Pi 1.5 or later, the inline question prompt reports `question` waiting status to supported terminals until it closes. Older hosts keep the same question UI without this terminal status.
 RPC keeps the existing sequential `select` and `editor` dialogs because Pi RPC cannot render custom TUI components.
 If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 

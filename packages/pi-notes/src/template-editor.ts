@@ -85,6 +85,7 @@ export async function showTemplateEditor(
   ownership: TemplateEditorOwnership,
 ): Promise<string | undefined> {
   const result = await runCustomInteraction<string | undefined>(ctx, {
+    blocked: { kind: "question", message: "Edit Notes template" },
     signal: ownership.signal,
     isCurrent: ownership.isCurrent,
     create: ({ tui, theme, keybindings, complete }) =>

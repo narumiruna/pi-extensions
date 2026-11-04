@@ -29,6 +29,7 @@ export async function showProgressSettings(
     "@narumitw/pi-tui-kit"
   );
   const result = await runCustomInteraction<"back" | "close" | "stale">(ctx, {
+    blocked: { kind: "question", message: "Edit Progress settings" },
     signal: options.signal,
     isCurrent: options.isCurrent,
     // The command owner reports interaction failures after pending saves drain.
