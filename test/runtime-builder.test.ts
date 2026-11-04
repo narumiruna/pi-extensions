@@ -37,10 +37,12 @@ const { createRuntimeBuilder } = (await import(builderUrl)) as {
 test("root tooling declares its esbuild dependency without relying on workspace hoisting", async () => {
   const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
   const lockfile = JSON.parse(await readFile(resolve("package-lock.json"), "utf8"));
-  const version = manifest.devDependencies.esbuild;
-  assert.equal(typeof version, "string", "the shared builder must own a root esbuild devDependency");
+  const version = manifest.dependencies.esbuild;
+  assert.equal(typeof version, "string", "root preparation must own a production esbuild dependency");
+  assert.equal(manifest.devDependencies.esbuild, undefined);
   assert.match(version, /^\d+\.\d+\.\d+$/u, "pin the builder to an exact esbuild version");
-  assert.equal(lockfile.packages[""].devDependencies.esbuild, version);
+  assert.equal(lockfile.packages[""].dependencies.esbuild, version);
+  assert.equal(lockfile.packages[""].devDependencies.esbuild, undefined);
   assert.equal(lockfile.packages["node_modules/esbuild"].version, version);
 });
 

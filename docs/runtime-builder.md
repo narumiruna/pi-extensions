@@ -2,7 +2,7 @@
 
 `scripts/runtime-builder.mjs` owns repository build policy; package wrappers own entrypoints, banners, temporary-directory prefixes, eager boundaries, and focused validators. It is not a published runtime dependency. Generated packages continue to load without this repository tooling.
 
-The root manifest declares the shared builder's exact `esbuild` devDependency and the lockfile records it at the root. Workspace declarations alone are insufficient: Node resolves the root module's imports from `scripts/`, so builds and prepack must not depend on npm hoisting workspace dependencies.
+The root manifest declares the shared builder's exact `esbuild` production dependency and the lockfile records it at the root. Workspace declarations alone are insufficient: Node resolves the root module's imports from `scripts/`, so builds and prepack must not depend on npm hoisting workspace dependencies.
 
 ## Scope and verification
 
@@ -15,7 +15,13 @@ The applicable guide is `docs/extension-conventions.md`, especially **Build-back
 | Package loading | Preserve standalone entrypoints, registration, lazy activation and lifecycle | Existing package-local generated-entry tests and package-directory Pi smokes |
 | Repository tooling | Keep package-specific policy local; no published builder dependency | Diff and manifest review; root builds, boundaries, typechecks and tests |
 
-No runtime source, settings, commands, UI, model-visible prefix, published dependency, or publication metadata changes are intended; the shared build tool requires a root devDependency. Existing lifecycle and cancellation tests remain local. No Changeset is needed for output-equivalent repository tooling.
+The shared build tool does not change runtime source, settings, commands, UI, model-visible prefixes, or published package dependencies. Its root production dependency also supports Git installation preparation. Existing lifecycle and cancellation tests remain local. No Changeset is needed for output-equivalent repository tooling.
+
+## Production Git preparation
+
+`scripts/prepare.mjs` runs `scripts/prepare-kit-runtime.mjs` before Inspector assets and development hooks. Pi Git installs omit development dependencies and link the Kit workspace, so preparation emits its source modules as ESM JavaScript without TypeScript tooling. It does not bundle package imports or collapse lazy boundaries. Exact relative targets and source maps are validated before staged output replaces `dist`; failed publication restores the previous directory, and failed restoration retains a named backup. Concurrent preparers and crash recovery are not supported.
+
+This runtime-only preparation does not replace Kit's package build or prepack: those still generate declarations for library consumers. Root checks rebuild the complete library before typechecks and tests. `test/prepare-kit-runtime.test.ts` verifies output, failure recovery, and a clean production layout through Pi's Jiti loader, including Edit Scope's lazy menu and Kit's lazy questionnaire.
 
 ## Variation audit
 
