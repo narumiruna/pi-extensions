@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { access, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
@@ -48,13 +50,18 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   }
 });
 
-test("managed package layouts load the settings menu without physical Pi peers", async () => {
+test.each([
+  {
+    layout: "installed",
+    tuiKitRoot: resolve(fileURLToPath(import.meta.resolve("@narumitw/pi-tui-kit")), "../.."),
+  },
+  { layout: "workspace", tuiKitRoot: resolve("packages/pi-tui-kit") },
+])("managed package layouts load the settings menu without physical Pi peers ($layout Kit)", async ({ tuiKitRoot }) => {
   const builder = await loadBuilder();
   const buildRoot = await mkdtemp(join(packageRoot, ".pi-codex-compact-build-test-"));
   const isolatedRoot = await mkdtemp(join(tmpdir(), "pi-codex-compact-isolated-"));
   const agentDir = join(isolatedRoot, "agent");
   const output = join(buildRoot, "dist");
-  const tuiKitRoot = resolve(fileURLToPath(import.meta.resolve("@narumitw/pi-tui-kit")), "../..");
   const isolatedTuiKitRoot = join(isolatedRoot, "node_modules", "@narumitw", "pi-tui-kit");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
@@ -62,9 +69,25 @@ test("managed package layouts load the settings menu without physical Pi peers",
     await cp(output, join(isolatedRoot, "dist"), { recursive: true });
     await cp(join(packageRoot, "package.json"), join(isolatedRoot, "package.json"));
     await mkdir(isolatedTuiKitRoot, { recursive: true });
-    await cp(join(tuiKitRoot, "package.json"), join(isolatedTuiKitRoot, "package.json"));
+    const kitManifestPath = join(tuiKitRoot, "package.json");
+    await cp(kitManifestPath, join(isolatedTuiKitRoot, "package.json"));
     await cp(join(tuiKitRoot, "dist"), join(isolatedTuiKitRoot, "dist"), { recursive: true });
-    await assert.rejects(access(join(isolatedRoot, "node_modules", "@earendil-works", "pi-tui")));
+    const kitManifest = JSON.parse(await readFile(kitManifestPath, "utf8"));
+    const kitRequire = createRequire(kitManifestPath);
+    // Copy declared runtime dependencies from Kit's own install scope, not its Pi peers.
+    for (const dependency of Object.keys(kitManifest.dependencies ?? {})) {
+      const dependencyRoot = kitRequire.resolve
+        .paths(dependency)
+        ?.map((modulesRoot) => join(modulesRoot, dependency))
+        .find((candidate) => existsSync(join(candidate, "package.json")));
+      assert.ok(dependencyRoot, `Missing installed Kit dependency: ${dependency}`);
+      const destination = join(isolatedRoot, "node_modules", dependency);
+      await mkdir(dirname(destination), { recursive: true });
+      await cp(dependencyRoot, destination, { recursive: true });
+    }
+    for (const peer of Object.keys(kitManifest.peerDependencies ?? {})) {
+      await assert.rejects(access(join(isolatedRoot, "node_modules", peer)));
+    }
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
