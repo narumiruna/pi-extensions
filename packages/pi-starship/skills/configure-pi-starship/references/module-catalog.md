@@ -27,7 +27,7 @@ All enum values are case-sensitive.
 
 ## Catalog order
 
-`brand` → `provider` → `model` → `thinking` → `directory` → `git_worktree` → `git_branch` → `github_pr` → `git_commit` → `git_state` → `git_metrics` → `git_status` → `jj_bookmark` → `jj_change` → `jj_metrics` → `jj_status` → `package` → `nodejs` → `python` → `rust` → `golang` → `bun` → `deno` → `mise` → `direnv` → `conda` → `pixi` → `nix_shell` → `guix_shell` → `docker_context` → `kubernetes` → `terraform` → `aws` → `gcloud` → `azure` → `openstack` → `os` → `container` → `hostname` → `username` → `memory_usage` → `battery` → `activity` → `context` → `tokens` → `cache` → `cost` → `time` → `turn` → `fill` → `extension_status`
+`brand` → `provider` → `model` → `thinking` → `directory` → `git_worktree` → `git_branch` → `github_pr` → `git_commit` → `git_state` → `git_metrics` → `git_status` → `jj_bookmark` → `jj_change` → `jj_metrics` → `jj_status` → `package` → `nodejs` → `python` → `rust` → `golang` → `bun` → `deno` → `mise` → `direnv` → `conda` → `pixi` → `nix_shell` → `guix_shell` → `docker_context` → `kubernetes` → `terraform` → `aws` → `gcloud` → `azure` → `openstack` → `os` → `container` → `hostname` → `username` → `memory_usage` → `battery` → `activity` → `context` → `tokens` → `tokens_per_second` → `cache` → `cost` → `time` → `turn` → `fill` → `extension_status`
 
 ## Module schemas
 
@@ -1132,6 +1132,22 @@ Session input and output token totals.
 - Default `format`: `"[$symbol ↑$input ↓$output ]($style)"`.
 - Default `symbol`: `"🔢"`.
 - Default `disabled`: `false`.
+
+Accepted style fields:
+
+| Field | Default |
+| --- | --- |
+| `style` | `"bold cyan"` |
+
+### `tokens_per_second`
+
+Average output tokens per second for the latest completed assistant response on the active branch.
+
+- Format variables: `$symbol`, `$rate`.
+- Style variables in `format`: `$style`.
+- Default `format`: `"[$rate tok/s ]($style)"`.
+- Default `symbol`: `""`.
+- Default `disabled`: `true`.
 
 Accepted style fields:
 

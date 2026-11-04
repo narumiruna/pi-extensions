@@ -112,6 +112,7 @@ export interface StarshipRuntimeSnapshot {
     costTotalFromProvider?: boolean;
     latestCacheHitRate?: number;
   };
+  tokensPerSecond?: number;
   usingSubscription: boolean;
   gitBranch: string | null;
   gitBranchDetails?: GitBranchSnapshot;

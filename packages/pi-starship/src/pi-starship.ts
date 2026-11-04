@@ -29,7 +29,7 @@ import {
   type WorkspaceRefreshInput,
   workspaceSnapshotEqual,
 } from "./runtime/workspace.js";
-import { summarizeFooterUsage } from "./usage.js";
+import { latestTokensPerSecond, summarizeFooterUsage } from "./usage.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const GITHUB_PR_REFRESH_INTERVAL_MS = 60_000;
@@ -711,19 +711,21 @@ function runtimeSnapshot(
   footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "getExtensionStatuses">,
   runtime: RuntimeState,
 ): StarshipRuntimeSnapshot {
+  const branch = ctx.sessionManager.getBranch();
   return {
     cwd: ctx.cwd,
     homeDir: homedir(),
     gitRoot: runtime.git?.root,
     model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
     thinkingLevel: runtime.thinkingLevel,
-    turnCount: userTurnCount(ctx),
+    turnCount: branch.filter((entry) => entry.type === "message" && entry.message.role === "user").length,
     activeTools: runtime.activeTools,
     isStreaming: runtime.isStreaming,
     uiPrompt: runtime.uiPrompt,
     lastCompletedTool: runtime.lastCompletedTool,
     contextUsage: ctx.getContextUsage() ?? undefined,
     tokenTotals: summarizeFooterUsage(ctx.sessionManager.getEntries()),
+    tokensPerSecond: latestTokensPerSecond(branch),
     usingSubscription: isSubscriptionBacked(ctx),
     gitBranch: runtime.git?.branch?.name ?? footerData.getGitBranch(),
     gitBranchDetails: runtime.git?.branch,
@@ -737,11 +739,6 @@ function runtimeSnapshot(
     extensionStatuses: footerData.getExtensionStatuses(),
     now: new Date(),
   };
-}
-
-function userTurnCount(ctx: ExtensionContext): number {
-  return ctx.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user")
-    .length;
 }
 
 function isSubscriptionBacked(ctx: ExtensionContext): boolean {

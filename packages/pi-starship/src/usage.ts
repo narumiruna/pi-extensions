@@ -18,6 +18,31 @@ export interface FooterUsageSummary {
   latestCacheHitRate?: number;
 }
 
+/** Use the latest assistant only: an untimed or incomplete response must not expose an older rate. */
+export function latestTokensPerSecond(branch: readonly SessionEntry[]): number | undefined {
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
+    const { stopReason, durationMs, usage } = entry.message;
+    if (stopReason !== "stop" && stopReason !== "length" && stopReason !== "toolUse") return undefined;
+    const output = usage?.output;
+    if (
+      typeof durationMs !== "number" ||
+      !Number.isFinite(durationMs) ||
+      durationMs <= 0 ||
+      typeof output !== "number" ||
+      !Number.isFinite(output) ||
+      output < 0
+    ) {
+      return undefined;
+    }
+    // Pi times the complete response, including request latency, not just streamed text.
+    const rate = output / (durationMs / 1000);
+    return Number.isFinite(rate) ? rate : undefined;
+  }
+  return undefined;
+}
+
 export function summarizeFooterUsage(entries: readonly SessionEntry[]): FooterUsageSummary {
   const totals: FooterUsageSummary = {
     input: 0,
