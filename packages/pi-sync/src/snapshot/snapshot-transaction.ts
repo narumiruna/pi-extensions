@@ -18,6 +18,7 @@ import {
   type SessionRootTransition,
   validateSessionRootTransition,
 } from "./snapshot-root-transition.js";
+import { pendingTransactionEntries, transactionRoot } from "./snapshot-transaction-directory.js";
 import { fileImage, indexTransactionPlan } from "./snapshot-transaction-plan.js";
 import type { SnapshotApplyPlan } from "./snapshot-types.js";
 
@@ -287,15 +288,6 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
     await withTargetQueues(journal.entries.map((entry) => entry.target).sort(), () =>
       restoreTransaction(directory, journal, { ...options, sessionDir }),
     );
-  }
-}
-
-async function pendingTransactionEntries() {
-  try {
-    return await fs.readdir(transactionRoot(), { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
   }
 }
 
@@ -942,7 +934,4 @@ async function removeTransaction(directory: string) {
   // A failed cleanup fsync may leave obsolete evidence after power loss; live file durability
   // was established before cleanup; a surviving completed journal allows only cleanup.
   await syncDirectory(transactionRoot()).catch(() => {});
-}
-function transactionRoot() {
-  return path.join(stateDir(), "transactions");
 }

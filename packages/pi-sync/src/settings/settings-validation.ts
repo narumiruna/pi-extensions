@@ -12,7 +12,7 @@ import {
   normalizeWebDavUrl,
   validateWebDavCredentials,
 } from "../backends/webdav/webdav-config.js";
-import { normalizeLocalFields } from "../sync/local-fields.js";
+import { normalizeLocalFields } from "../sync/local-field-policy.js";
 import { normalizeSyncInclude } from "../sync/sync-policy.js";
 import { localConfigPath } from "./config-file.js";
 import type {

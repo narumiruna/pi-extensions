@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import { normalizeGitBranch, normalizeGitDirectory, normalizeGitRemote } from "../backends/git/git-config.js";
 import { normalizeWebDavPath, normalizeWebDavUrl } from "../backends/webdav/webdav-config.js";
-import { normalizeLocalFields } from "../sync/local-fields.js";
+import { normalizeLocalFields } from "../sync/local-field-policy.js";
 import { normalizeSyncInclude } from "../sync/sync-policy.js";
 import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "./config-file.js";
 import { requireSettings } from "./settings-store.js";

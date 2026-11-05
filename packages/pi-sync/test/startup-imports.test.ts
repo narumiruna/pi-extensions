@@ -4,6 +4,7 @@ import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, { type SyncDependencies } from "../src/sync-extension.js";
 import { withTempHome } from "./helpers.js";
+import { deferred } from "./startup-check-helpers.js";
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 1_000;
@@ -22,11 +23,16 @@ test("Sync setup switching loads only for the use route and caches the module", 
     await mkdir(agentDir, { recursive: true });
     const mock = createMockPi();
     let loads = 0;
+    let commandLoads = 0;
     let uses = 0;
     let snapshotLoads = 0;
     let stateLoads = 0;
     let operationLoads = 0;
     sync(mock.pi, {
+      loadCommandHandler: async () => {
+        commandLoads += 1;
+        return import("../src/commands/command-handler.js");
+      },
       loadSetupSwitch: async () => {
         loads += 1;
         return {
@@ -51,6 +57,7 @@ test("Sync setup switching loads only for the use route and caches the module", 
     });
     const context = createMockContext({ hasUI: true, mode: "rpc" });
     await emit(mock, "session_start", { reason: "startup" }, context.ctx);
+    assert.equal(commandLoads, 0);
     assert.equal(loads, 0);
     assert.equal(snapshotLoads, 0);
     assert.equal(stateLoads, 0);
@@ -67,6 +74,7 @@ test("Sync setup switching loads only for the use route and caches the module", 
     await command.handler("use home", context.ctx);
     assert.equal(loads, 1);
     assert.equal(uses, 2);
+    assert.equal(commandLoads, 1);
     assert.equal(snapshotLoads, 0);
     assert.equal(stateLoads, 0);
     assert.equal(operationLoads, 0);
@@ -135,5 +143,80 @@ test("Sync setup-switch loader failure is observable and can retry", async () =>
     await command.handler("use work", context.ctx);
     assert.equal(loads, 2);
     assert.equal(uses, 1);
+  });
+});
+
+for (const boundary of ["session_start", "session_shutdown"] as const) {
+  for (const fail of [false, true]) {
+    test(`command loading ${fail ? "failure" : "completion"} after ${boundary} cannot use the old session`, async () => {
+      await withTempHome(async () => {
+        const mock = createMockPi();
+        const entered = deferred();
+        const release = deferred();
+        let calls = 0;
+        sync(mock.pi, {
+          loadCommandHandler: async () => {
+            entered.resolve();
+            await release.promise;
+            if (fail) throw new Error("stale command loader failure");
+            return {
+              handleCommand: async () => {
+                calls++;
+              },
+            };
+          },
+        });
+        const context = createMockContext({ hasUI: true, mode: "rpc" });
+        await emit(mock, "session_start", { reason: "startup" }, context.ctx);
+        const command = mock.commands.get("sync");
+        assert.ok(command);
+        const pending = command.handler("help", context.ctx);
+        try {
+          await entered.promise;
+          await emit(
+            mock,
+            boundary,
+            { reason: boundary === "session_start" ? "new" : "reload" },
+            boundary === "session_start" ? createMockContext({ mode: "rpc" }).ctx : context.ctx,
+          );
+          release.resolve();
+          await pending;
+          assert.equal(calls, 0);
+          assert.deepEqual(context.notifications, []);
+        } finally {
+          release.resolve();
+          await pending;
+        }
+      });
+    });
+  }
+}
+
+test("command loader failures are observable and do not prevent retry", async () => {
+  await withTempHome(async () => {
+    const mock = createMockPi();
+    let loads = 0;
+    let calls = 0;
+    sync(mock.pi, {
+      loadCommandHandler: async () => {
+        loads++;
+        if (loads === 1) throw new Error("temporary command loader failure");
+        return {
+          handleCommand: async () => {
+            calls++;
+          },
+        };
+      },
+    });
+    const context = createMockContext({ hasUI: true, mode: "rpc" });
+    await emit(mock, "session_start", { reason: "startup" }, context.ctx);
+    assert.equal(loads, 0);
+    const command = mock.commands.get("sync");
+    assert.ok(command);
+    await command.handler("help", context.ctx);
+    assert.match(context.notifications.at(-1)?.message ?? "", /command unavailable: temporary command loader failure/u);
+    await command.handler("help", context.ctx);
+    assert.equal(loads, 2);
+    assert.equal(calls, 1);
   });
 });

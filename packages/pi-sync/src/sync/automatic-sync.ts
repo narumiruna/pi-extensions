@@ -7,17 +7,17 @@ import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { sessionDirFromContext, snapshotOptionsForContext } from "../snapshot/session-paths.js";
-import { recoverSnapshotTransactionsOnStartup } from "../snapshot/snapshot-transaction.js";
+import { pendingTransactionEntries } from "../snapshot/snapshot-transaction-directory.js";
 import { withLock } from "../state/lock.js";
 import { stateDirectoryMigrationNotice } from "../state/state-directory.js";
 import { ensureStateDir, readStateForConfig } from "../state/sync-state-store.js";
 import { configureSyncStatus, setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
+import { captureMutationOwner } from "./mutation-owner.js";
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
-import { captureMutationOwner } from "./sync-local.js";
 
 const AUTO_SYNC_OPTIONS: CommandOptions = {
   yes: true,
@@ -45,14 +45,20 @@ export async function startSession(
     // Unlike remote inspection, it must never be detached behind startup.
     const validateMutation = captureMutationOwner(ctx, signal);
     const currentFile = ctx.sessionManager.getSessionFile?.();
-    await timings.measure("transaction recovery", () =>
-      recoverSnapshotTransactionsOnStartup({
+    await timings.measure("transaction recovery", async () => {
+      const pending = await pendingTransactionEntries();
+      validateMutation();
+      if (!pending.some((entry) => entry.isDirectory())) return;
+      // Normal startup needs only the directory probe, not the recovery/snapshot graph.
+      const { recoverSnapshotTransactionsOnStartup } = await import("../snapshot/snapshot-transaction.js");
+      validateMutation();
+      await recoverSnapshotTransactionsOnStartup({
         signal,
         sessionDir: sessionDirFromContext(ctx),
         protectedTargets: currentFile ? [currentFile] : [],
         validateMutation,
-      }),
-    );
+      });
+    });
     throwIfAborted(signal);
     try {
       const settings = await timings.measure("settings read", () => readLocalConfigObject());
