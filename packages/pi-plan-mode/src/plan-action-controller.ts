@@ -29,6 +29,7 @@ interface PlanActionControllerOptions {
   getExportDestination(ctx: ExtensionContext): PlanExportDestination;
   show(ctx: ExtensionContext): void;
   finalize(ctx: ExtensionContext): void;
+  toggleInteraction?(ctx: ExtensionContext): void;
   implementHere(ctx: ExtensionContext): void | Promise<void>;
   implementFresh(
     ctx: ExtensionContext,
@@ -117,6 +118,8 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         planThinkingLevel: options.getThinkingLevel(),
         implementationDefaults: configuredDefaults(),
         hasReadyPlan: options.getState().latestPlan !== undefined,
+        interactionMode: options.getState().interactionMode,
+        ...(options.toggleInteraction ? { toggleInteraction: () => options.toggleInteraction?.(ctx) } : {}),
         implementationOutcome: options.implementationOutcome,
         getExportDestination: () => options.getExportDestination(ctx),
         ...lifecycle,
@@ -130,8 +133,14 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         exit: () => options.exitReady(ctx),
       });
     },
-    async showReady(ctx: ExtensionContext) {
-      const lifecycle = options.captureLifecycle();
+    async showReady(ctx: ExtensionContext, presentation?: MenuLifecycle) {
+      const workflow = options.captureLifecycle();
+      const lifecycle: MenuLifecycle = presentation
+        ? {
+            signal: AbortSignal.any([workflow.signal, presentation.signal]),
+            isCurrent: () => workflow.isCurrent() && presentation.isCurrent() && !presentation.signal.aborted,
+          }
+        : workflow;
       if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
       const ui = await options.loadInteractiveUi();
       if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;

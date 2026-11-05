@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createModeContractMessage } from "../src/mode-contract.js";
+import { INTERACTION_CONTRACT_MESSAGE_TYPE } from "../src/interaction-contract.js";
+import { createModeContractMessage, MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
 import planMode from "../src/plan-mode.js";
 import { builtinTool, createMockContext, createMockPi } from "./support.js";
 
@@ -181,9 +182,14 @@ test("failed inline kickoff publishes a Normal rollback contract and restores in
   await mock.commands.get("plan")?.handler("plan a rollback", context.ctx);
 
   assert.equal(context.statuses.get("plan-mode"), undefined);
-  assert.equal(mock.sentMessages.length, 2);
+  assert.deepEqual(
+    mock.sentMessages.map(({ message }) => (message as { customType?: string }).customType),
+    [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE, MODE_CONTRACT_MESSAGE_TYPE],
+  );
   assert.match(JSON.stringify(mock.sentMessages[0]?.message), /CONTRACT v1: PLAN/u);
-  assert.match(JSON.stringify(mock.sentMessages[1]?.message), /CONTRACT v1: NORMAL/u);
+  assert.match(JSON.stringify(mock.sentMessages[1]?.message), /INTERACTION CONTRACT v1: QUESTIONS/u);
+  assert.match(JSON.stringify(mock.sentMessages[2]?.message), /CONTRACT v1: NORMAL/u);
+  assert.ok(mock.sentMessages.every(({ options }) => (options as { triggerTurn?: boolean }).triggerTurn === false));
   assert.equal((mock.entries.at(-1)?.data as { enabled?: boolean } | undefined)?.enabled, false);
   assert.match(context.notifications.at(-1)?.message ?? "", /kickoff failed/u);
 });

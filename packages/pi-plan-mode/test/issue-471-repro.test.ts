@@ -683,7 +683,10 @@ test("starting a new Plan-mode workflow supersedes the active implementation", a
     context.ctx,
   )) as { messages: Record<string, unknown>[] };
   assert.match(String(transformed.messages[0]?.content), /CONTRACT v1: PLAN/u);
-  assert.deepEqual(transformed.messages.slice(1), [{ role: "user", content: "design a replacement" }]);
+  assert.deepEqual(transformed.messages.slice(1, -1), [{ role: "user", content: "design a replacement" }]);
+  assert.equal(transformed.messages.length, 3);
+  assert.equal(transformed.messages.at(-1)?.customType, "plan-mode-interaction");
+  assert.match(String(transformed.messages.at(-1)?.content), /INTERACTION CONTRACT v1: QUESTIONS/);
 });
 
 test("a superseded session start cannot publish stale settings or UI state", async () => {

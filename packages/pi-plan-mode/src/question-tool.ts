@@ -26,7 +26,13 @@ export type PlanModeQuestionAnswer = {
   note?: string;
 };
 
-type PlanModeQuestionReason = "cancelled" | "ui_unavailable" | "plan_mode_inactive" | "invalid_input";
+type PlanModeQuestionReason =
+  | "cancelled"
+  | "ui_unavailable"
+  | "plan_mode_inactive"
+  | "invalid_input"
+  | "discussion_requested"
+  | "questions_paused";
 
 type PlanModeQuestionDetails = {
   cancelled: boolean;
@@ -146,9 +152,19 @@ export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanMo
 export async function answerPlanModeQuestions(
   questions: PlanModeQuestion[],
   ctx: ExtensionContext,
-  lifecycle: { isCurrent(): boolean; isEnabled(): boolean },
+  lifecycle: {
+    isCurrent(): boolean;
+    isEnabled(): boolean;
+    signal?: AbortSignal;
+    discussionRequested?(): boolean;
+  },
 ) {
-  const answers = await askPlanModeQuestions(questions, ctx, () => lifecycle.isCurrent() && lifecycle.isEnabled());
+  const answers = await askPlanModeQuestions(
+    questions,
+    ctx,
+    () => lifecycle.isCurrent() && lifecycle.isEnabled(),
+    lifecycle.signal,
+  );
   if (!lifecycle.isCurrent()) {
     return planModeQuestionCancelled(
       questions,
@@ -163,6 +179,16 @@ export async function answerPlanModeQuestions(
       "Plan-mode question cancelled because Plan mode is no longer active.",
     );
   }
+  if (lifecycle.discussionRequested?.()) {
+    return {
+      ...planModeQuestionCancelled(
+        questions,
+        "discussion_requested",
+        "The user switched to free discussion without submitting answers. Wait for the user to speak; do not reopen the questionnaire.",
+      ),
+      terminate: true,
+    };
+  }
   if (!answers) {
     return planModeQuestionCancelled(questions, "cancelled", "User cancelled the Plan-mode question prompt.");
   }
@@ -173,6 +199,7 @@ export async function askPlanModeQuestions(
   questions: PlanModeQuestion[],
   ctx: ExtensionContext,
   shouldContinue: () => boolean = () => true,
+  signal: AbortSignal | undefined = ctx.signal,
 ): Promise<PlanModeQuestionAnswer[] | undefined> {
   const { runQuestionnaire, sanitizeTerminalText } = await import("@narumitw/pi-tui-kit");
   if (!shouldContinue()) return undefined;
@@ -190,7 +217,7 @@ export async function askPlanModeQuestions(
     questions: runnerQuestions,
     allowNotes: true,
     maxTextLength: MAX_PLAN_MODE_RESPONSE_LENGTH,
-    signal: ctx.signal,
+    signal,
     isCurrent: shouldContinue,
   });
   if (!shouldContinue()) return undefined;

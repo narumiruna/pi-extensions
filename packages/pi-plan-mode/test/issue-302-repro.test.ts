@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { interactionContractFromMessage } from "../src/interaction-contract.js";
 import planMode from "../src/plan-mode.js";
 import { createMockContext, createMockPi } from "./support.js";
 
@@ -48,6 +49,8 @@ test("issue 302: history-only implementation stays ordinary context when Plan Mo
   };
 
   assert.match(JSON.stringify(activeContext.messages[0]), /CONTRACT v1: PLAN/u);
-  assert.deepEqual(activeContext.messages.slice(1), activeMessages);
+  assert.deepEqual(activeContext.messages.slice(1, -1), activeMessages);
+  assert.equal(interactionContractFromMessage(activeContext.messages.at(-1)), "questions");
+  assert.equal(activeContext.messages.length, activeMessages.length + 2);
   assert.match(JSON.stringify(activeContext.messages), /Implement the plan\./);
 });
