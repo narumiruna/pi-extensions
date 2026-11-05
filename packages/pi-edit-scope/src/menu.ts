@@ -145,8 +145,9 @@ export async function showScopeMenu(context: ExtensionCommandContext, options: S
         title: "Edit Scope Help",
         lines: [
           "Select files to start a restriction or replace the complete allowed-file set.",
-          "Search does not change checked files. Confirm file rows to toggle, then confirm Start restriction or Apply changes.",
-          "Enter a full or ~/ path and confirm Add file to check an existing file, including files outside cwd. Adding a path changes only the draft.",
+          "Typing searches files, including spaces and directory fragments. By default, Tab toggles and moves down, Shift+Tab toggles and moves up, and Enter applies the checked files. The footer follows your configured keys.",
+          "Project paths are relative to cwd by default. Use Full paths to switch views without changing the search or selected files.",
+          "Use Add file for an existing full, ~/ or relative path, including files outside cwd. This separate field preserves the search and checked draft; adding does not apply the restriction.",
           "New file reserves one target; it replaces all allowed files and creates no content here.",
           "Cancelling a draft, closing this menu, and run completion do not release the restriction.",
           "Use End restriction or /edit-scope off to release it explicitly.",

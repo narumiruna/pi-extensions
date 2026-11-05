@@ -16,6 +16,12 @@ export function displayPath(path: string): string {
   );
 }
 
+/** Keep ordinary picker labels readable without hiding ambiguous or unsafe bytes. */
+export function displayFilePath(path: string): string {
+  const quoted = displayPath(path);
+  return quoted === `"${path}"` && !/^\s|\s$| {2}/u.test(path) ? path : quoted;
+}
+
 function escapeCharacter(character: string): string {
   return Array.from(character, (part) => {
     const point = part.codePointAt(0) ?? 0;
@@ -36,6 +42,7 @@ export function scopeFrame(
   content: readonly string[],
   priorityRows: readonly number[],
   focusedRow?: number,
+  hints: readonly string[] = [],
 ) {
   // The owned overlay uses terminal bounds; three spare rows are presentation
   // space, not a prediction of the native editor dock or another widget's height.
@@ -48,6 +55,8 @@ export function scopeFrame(
     title: [theme.fg("accent", theme.bold(title))],
     context: context.flatMap((line) => hardWrapTerminalDocument(line, width).map((part) => theme.fg("muted", part))),
     content,
+    hints: hints.flatMap((line) => exactRows(line, width).map((part) => theme.fg("dim", part))),
+    compactHint: hints[0] ? theme.fg("dim", hints[0]) : "",
     priorityRows,
     focusedRow,
   });

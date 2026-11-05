@@ -9,12 +9,25 @@ const PASTE_END = "\u001b[201~";
 
 /** Public Input editing with paste-aware screen dispatch and display-only control masking. */
 export class ScopeInput {
-  readonly input = new Input();
+  readonly input: Input;
   private pasting = false;
   private pasteTail = "";
   private discardPaste = false;
 
-  handleInput(data: string, action: (key: string) => boolean, editable = true): void {
+  constructor(placeholder = "", placeholderStyle?: (text: string) => string) {
+    this.input = new Input({ placeholder, placeholderStyle });
+  }
+
+  get isPasting(): boolean {
+    return this.pasting;
+  }
+
+  handleInput(
+    data: string,
+    action: (key: string) => boolean,
+    editable = true,
+    afterPaste?: (remaining: string) => void,
+  ): void {
     if (this.pasting || data.includes(PASTE_START)) {
       if (!this.pasting) this.discardPaste = !editable;
       const combined = this.pasteTail + data;
@@ -32,7 +45,10 @@ export class ScopeInput {
       this.discardPaste = false;
       this.pasteTail = "";
       const remaining = data.slice(consumed);
-      if (remaining) this.handleInput(remaining, action, editable);
+      if (remaining) {
+        if (afterPaste) afterPaste(remaining);
+        else this.handleInput(remaining, action, editable);
+      }
       return;
     }
     if (!action(data) && editable) this.input.handleInput(data);

@@ -1,10 +1,18 @@
 import { isAbsolute, relative, sep } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, type SelectItem, SelectList, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  fuzzyFilter,
+  type SelectItem,
+  SelectList,
+  stripTerminalSequences,
+  type TuiMouseEvent,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
-import { displayError, displayPath, exactRows, scopeFrame } from "./display.js";
+import { displayError, displayFilePath, displayPath, exactRows, scopeFrame } from "./display.js";
 import { ScopeInput } from "./input.js";
 import type { ScopeTarget } from "./paths.js";
+import { type PickerAction, type PickerPanel, pickerKeys } from "./picker-keys.js";
 import { MAX_TARGETS } from "./state.js";
 
 type PickerValue =
@@ -27,14 +35,14 @@ export interface ScopePickerOptions {
   ): Promise<readonly ScopeTarget[]>;
 }
 
-function isPathInput(raw: string): boolean {
-  return raw.includes("/") || (process.platform === "win32" && raw.includes("\\"));
-}
-
+const LIST_ROWS = 10;
 function outsideCwd(cwd: string, path: string): boolean {
   const fromCwd = relative(cwd, path);
   return isAbsolute(fromCwd) || fromCwd === ".." || fromCwd.startsWith(`..${sep}`);
 }
+
+type Button = { action: PickerAction; label: string; enabled: boolean };
+type Pressed = { kind: "file"; id: string } | { kind: "button"; action: PickerAction } | { kind: "cancelled" };
 
 export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePickerOptions) {
   return runCustomInteraction<PickerValue>(ctx, {
@@ -43,28 +51,50 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
     create: ({ tui, theme, keybindings, signal: ownerSignal, complete }) => {
       const controller = new AbortController();
       const signal = AbortSignal.any([ownerSignal, controller.signal]);
-      const search = new ScopeInput();
+      const placeholder = (text: string) => theme.fg("dim", text);
+      const search = new ScopeInput("Search files…", placeholder);
+      const pathInput = new ScopeInput("Existing file path…", placeholder);
+      const keys = pickerKeys(tui, keybindings);
       const checked = new Set(options.targets.map((target) => target.path));
       const added = new Map<string, ScopeTarget>();
+      let panel: PickerPanel = "files";
+      let focused = false;
+      let fullPaths = false;
       let paths: string[] = [];
       let rows: SelectItem[] = [];
       let list: SelectList;
       let loading = true;
       let validating: "path" | "selection" | undefined;
+      let operation: AbortController | undefined;
       let pending = Promise.resolve();
       let disposed = false;
       let closing = false;
       let error = "";
-      let doneId = "__scope_apply__";
-      let addId = "__scope_add_path__";
-      let mousePressedId: string | undefined;
-      let mouseLayout: { width: number; input?: number; rows: Map<number, number> } | undefined;
+      let notice = "";
+      let pressed: Pressed | undefined;
+      let mouseLayout:
+        | {
+            width: number;
+            input?: number;
+            rows: Map<number, string>;
+            buttons: Array<{ row: number; start: number; end: number; action: PickerAction }>;
+          }
+        | undefined;
+      // Absorb the later native click instead of reusing it as a fresh gesture.
+      const cancelPress = () => {
+        if (pressed) pressed = { kind: "cancelled" };
+      };
+      const relativePath = (path: string) =>
+        outsideCwd(options.cwd, path) ? path : relative(options.cwd, path) || ".";
+      const pathLabel = (path: string) => displayFilePath(fullPaths ? path : relativePath(path));
+      const syncFocus = () => {
+        search.input.focused = focused && panel === "files";
+        pathInput.input.focused = focused && panel === "path";
+      };
       const current = () => {
         if (disposed || closing || signal.aborted) return false;
         if (options.isCurrent()) return true;
         closing = true;
-        // Calling the public completion boundary with stale ownership makes
-        // runCustomInteraction settle as stale and drain this component.
         complete({ kind: "cancelled", reason: "close" });
         controller.abort();
         return false;
@@ -76,24 +106,14 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
         controller.abort();
       };
       const rebuild = (selectedId = list?.getSelectedItem()?.value) => {
-        mousePressedId = undefined;
-        const raw = search.input.getValue();
-        const query = displayPath(raw).slice(1, -1).toLowerCase();
-        const matching = paths.filter((path) => displayPath(path).toLowerCase().includes(query));
-        const pathInput = isPathInput(raw);
-        // Resolve path-shaped input explicitly before exposing completion. The
-        // Add action precedes substring matches so an external absolute path
-        // cannot accidentally check a similarly named cwd file instead.
-        rows = [
-          ...(pathInput ? [{ value: addId, label: `Add file: ${displayPath(raw)}` }] : []),
-          ...matching.map((path) => ({
-            value: path,
-            label: `${checked.has(path) ? "[x]" : "[ ]"} ${displayPath(path)}`,
-          })),
-        ];
-        // Ordinary unmatched search (especially a literal Space) cannot apply.
-        if (!pathInput && (!query || matching.length > 0)) rows.push({ value: doneId, label: options.completionLabel });
-        list = new SelectList(rows, 8, {
+        cancelPress();
+        // Escape display identities before fuzzy matching; raw absolute IDs stay payloads.
+        const query = displayPath(search.input.getValue()).slice(1, -1);
+        rows = fuzzyFilter(paths, query, (path) => displayPath(relativePath(path)).slice(1, -1)).map((path) => ({
+          value: path,
+          label: `${checked.has(path) ? "[x]" : "[ ]"} ${outsideCwd(options.cwd, path) ? "(outside) " : ""}${pathLabel(path)}`,
+        }));
+        list = new SelectList(rows, LIST_ROWS, {
           selectedPrefix: (text) => theme.fg("accent", text),
           selectedText: (text) => theme.fg("accent", text),
           description: (text) => theme.fg("muted", text),
@@ -106,56 +126,154 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
             rows.findIndex((row) => row.value === selectedId),
           ),
         );
-        list.onSelect = (item) => activate(item.value);
       };
-      const runValidation = (kind: "path" | "selection", work: () => Promise<void>) => {
+      const runValidation = (kind: "path" | "selection", work: (operationSignal: AbortSignal) => Promise<void>) => {
+        const owned = new AbortController();
+        const operationSignal = AbortSignal.any([signal, owned.signal]);
+        operation = owned;
         validating = kind;
         error = "";
         pending = (async () => {
           try {
-            await work();
+            await work(operationSignal);
           } catch (failure) {
-            if (current()) error = displayError(failure);
+            if (current() && !operationSignal.aborted) error = displayError(failure);
           } finally {
-            validating = undefined;
+            if (operation === owned) {
+              operation = undefined;
+              validating = undefined;
+            }
             if (current()) tui.requestRender();
           }
         })();
       };
-      const activate = (id: string) => {
+      const apply = () => {
         if (!current() || loading || validating) return;
-        if (id === addId) {
-          const draft = search.input.getValue();
-          runValidation("path", async () => {
-            const target = await options.resolvePath(draft, signal);
-            if (!current()) return;
-            if (!added.has(target.path) && added.size >= MAX_TARGETS) {
-              throw new Error(`Add no more than ${MAX_TARGETS} distinct paths in one picker.`);
-            }
-            added.set(target.path, { path: target.path, canonical: target.canonical });
-            if (!paths.includes(target.path)) paths.push(target.path);
-            checked.add(target.path);
-            search.input.setValue("");
-            rebuild(target.path);
-          });
-          return;
-        }
-        if (id !== doneId) {
-          if (checked.has(id)) checked.delete(id);
-          else checked.add(id);
-          error = "";
-          rebuild(id);
-          return;
-        }
         const selectedPaths = paths.filter((path) => checked.has(path));
-        if (selectedPaths.length === 0) {
-          close({ kind: "selected", targets: [] });
+        if (!selectedPaths.length) {
+          error = "Select at least one file first.";
           return;
         }
-        runValidation("selection", async () => {
-          const targets = await options.validate(selectedPaths, signal, [...added.values()]);
-          if (current()) close({ kind: "selected", targets });
+        runValidation("selection", async (operationSignal) => {
+          const targets = await options.validate(selectedPaths, operationSignal, [...added.values()]);
+          if (current() && !operationSignal.aborted) close({ kind: "selected", targets });
         });
+      };
+      const addPath = () => {
+        if (!current() || loading || validating) return;
+        const raw = pathInput.input.getValue();
+        if (!raw.length) {
+          error = "Enter an existing file path.";
+          return;
+        }
+        runValidation("path", async (operationSignal) => {
+          const target = await options.resolvePath(raw, operationSignal);
+          if (!current() || operationSignal.aborted) return;
+          if (!added.has(target.path) && added.size >= MAX_TARGETS) {
+            throw new Error(`Add no more than ${MAX_TARGETS} distinct paths in one picker.`);
+          }
+          const previous = list.getSelectedItem()?.value;
+          added.set(target.path, { path: target.path, canonical: target.canonical });
+          if (!paths.includes(target.path)) paths.push(target.path);
+          checked.add(target.path);
+          pathInput.input.setValue("");
+          panel = "files";
+          syncFocus();
+          rebuild(target.path);
+          if (!rows.some((row) => row.value === target.path))
+            list.setSelectedIndex(
+              Math.max(
+                0,
+                rows.findIndex((row) => row.value === previous),
+              ),
+            );
+          notice = `Added ${pathLabel(target.path)}`;
+        });
+      };
+      const mark = (id: string, move = 0) => {
+        if (!current() || loading || validating) return;
+        const index = rows.findIndex((row) => row.value === id);
+        if (index < 0) return;
+        if (checked.has(id)) checked.delete(id);
+        else checked.add(id);
+        error = "";
+        notice = "";
+        const next = rows[(index + move + rows.length) % rows.length]?.value;
+        rebuild(next);
+      };
+      const perform = (command: PickerAction) => {
+        if (command === "close") close({ kind: "cancelled", reason: "close" });
+        else if (command === "cancel") {
+          if (panel === "files") close({ kind: "cancelled", reason: "back" });
+          else {
+            operation?.abort();
+            panel = "files";
+            error = "";
+            syncFocus();
+          }
+        } else if (loading || validating) return;
+        else if (command === "apply") apply();
+        else if (command === "submit") addPath();
+        else if (command === "add") {
+          panel = "path";
+          error = "";
+          notice = "";
+          cancelPress();
+          syncFocus();
+        } else if (command === "paths") {
+          fullPaths = !fullPaths;
+          rebuild();
+        } else if (command === "mark" || command === "markUp") {
+          const id = list.getSelectedItem()?.value;
+          if (id) mark(id, command === "mark" ? 1 : -1);
+        } else if (command === "up" || command === "down" || command === "pageUp" || command === "pageDown") {
+          const index = rows.findIndex((row) => row.value === list.getSelectedItem()?.value);
+          if (index < 0) return;
+          if (command === "pageUp" || command === "pageDown")
+            list.setSelectedIndex(index + (command === "pageUp" ? -LIST_ROWS : LIST_ROWS));
+          else list.setSelectedIndex((index + (command === "up" ? -1 : 1) + rows.length) % rows.length);
+        }
+      };
+      const handleInput = (data: string): void => {
+        if (!current()) return;
+        cancelPress();
+        // A fragmented paste keeps its original input owner across async panel changes.
+        const activeInput = search.isPasting
+          ? search
+          : pathInput.isPasting
+            ? pathInput
+            : panel === "files"
+              ? search
+              : pathInput;
+        const previous = activeInput.input.getValue();
+        let remaining: string | undefined;
+        activeInput.handleInput(
+          data,
+          (data) => {
+            const command = keys.action(data, panel);
+            if (command === "cancel" || command === "close") {
+              perform(command);
+              return true;
+            }
+            if (validating) return true;
+            if (!command || command === "input") return false;
+            perform(command);
+            return true;
+          },
+          !validating,
+          (tail) => {
+            remaining = tail;
+          },
+        );
+        if (!current()) return;
+        if (activeInput.input.getValue() !== previous) {
+          error = "";
+          notice = "";
+          if (activeInput === search && !loading) rebuild("");
+        }
+        // Publish the pasted query before dispatching list actions from its tail.
+        if (remaining) handleInput(remaining);
+        if (current()) tui.requestRender();
       };
       rebuild();
       pending = (async () => {
@@ -163,10 +281,8 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
           const discovered = await options.discover(signal);
           if (!current()) return;
           paths = [...new Set([...options.targets.map((target) => target.path), ...discovered])];
-          while (paths.includes(doneId)) doneId = `_${doneId}`;
-          while (paths.includes(addId) || addId === doneId) addId = `_${addId}`;
           loading = false;
-          rebuild(isPathInput(search.input.getValue()) ? addId : paths[0]);
+          rebuild();
           tui.requestRender();
         } catch (failure) {
           if (current()) close({ kind: "error", error: failure });
@@ -174,141 +290,190 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
       })();
       return {
         get focused() {
-          return search.input.focused;
+          return focused;
         },
         set focused(value: boolean) {
-          search.input.focused = value;
+          focused = value;
+          syncFocus();
         },
         render(width: number) {
           const safeWidth = Math.max(1, width);
-          const listRows = loading
-            ? [theme.fg("dim", "Scanning files…")]
-            : rows.length
-              ? list.render(safeWidth)
-              : [theme.fg("dim", "No matching files; edit search.")];
-          const activeId = list.getSelectedItem()?.value;
-          const selectedIndex = rows.findIndex((row) => row.value === activeId);
-          // SelectList centers an eight-row viewport. Map clipped frame rows
-          // back to those native rows for pointer input.
-          const start = Math.max(0, Math.min(selectedIndex - 4, rows.length - 8));
-          const focusedRow = 2 + Math.max(0, selectedIndex - start);
-          const target = added.get(activeId ?? "") ?? options.targets.find((item) => item.path === activeId);
-          const previewLines =
-            activeId === addId
-              ? [`Existing file path: ${displayPath(search.input.getValue())}`]
-              : activeId && activeId !== doneId
-                ? [
-                    `Path: ${displayPath(activeId)}`,
-                    ...(target && (outsideCwd(options.cwd, target.path) || outsideCwd(options.cwd, target.canonical))
-                      ? ["Outside the current directory."]
-                      : []),
-                    ...(target && target.path !== target.canonical
-                      ? [`Canonical target: ${displayPath(target.canonical)}`]
-                      : []),
-                  ]
-                : [];
-          const preview = previewLines.flatMap((line) =>
-            exactRows(line, safeWidth).map((part) => theme.fg("muted", part)),
-          );
-          const content = [
-            ...search.render(safeWidth),
-            "",
-            ...listRows,
-            ...preview,
-            ...(error ? exactRows(error, safeWidth).map((line) => theme.fg("error", line)) : []),
-            ...(validating
-              ? [theme.fg("dim", validating === "path" ? "Checking file path…" : "Checking selected files…")]
-              : []),
-          ];
+          const activeInput = panel === "files" ? search : pathInput;
+          const pasting = search.isPasting || pathInput.isPasting;
+          const busy = loading || validating !== undefined || pasting;
+          const selectedIndex = rows.findIndex((row) => row.value === list.getSelectedItem()?.value);
+          const start = Math.max(0, Math.min(selectedIndex - Math.floor(LIST_ROWS / 2), rows.length - LIST_ROWS));
+          const activeRow = rows[selectedIndex];
+          const content = [...activeInput.render(safeWidth)];
+          const filesStart = content.length + 1;
+          let focusedRow = 0;
+          if (panel === "files") {
+            const listRows = loading
+              ? [theme.fg("dim", "Scanning files…")]
+              : rows.length
+                ? list.render(safeWidth)
+                : [theme.fg("dim", "No matching files")];
+            content.push("", ...listRows);
+            focusedRow = rows.length && !loading ? filesStart + selectedIndex - start : 0;
+            const target =
+              added.get(activeRow?.value ?? "") ?? options.targets.find((target) => target.path === activeRow?.value);
+            const preview = [
+              ...(activeRow && !stripTerminalSequences(listRows[selectedIndex - start] ?? "").includes(activeRow.label)
+                ? [`Path: ${pathLabel(activeRow.value)}`]
+                : []),
+              ...(target && (outsideCwd(options.cwd, target.path) || outsideCwd(options.cwd, target.canonical))
+                ? ["Outside the current directory."]
+                : []),
+              ...(target && target.path !== target.canonical
+                ? [`Canonical target: ${pathLabel(target.canonical)}`]
+                : []),
+            ];
+            content.push(
+              ...preview.flatMap((line) => exactRows(line, safeWidth).map((part) => theme.fg("muted", part))),
+            );
+          } else if (pathInput.input.getValue()) {
+            content.push(
+              ...exactRows(`Path: ${displayPath(pathInput.input.getValue())}`, safeWidth).map((line) =>
+                theme.fg("muted", line),
+              ),
+            );
+          }
+          if (notice) content.push(...exactRows(notice, safeWidth).map((line) => theme.fg("muted", line)));
+          if (error) content.push(...exactRows(error, safeWidth).map((line) => theme.fg("error", line)));
+          if (validating)
+            content.push(
+              theme.fg(
+                "dim",
+                operation?.signal.aborted
+                  ? "Finishing file check…"
+                  : validating === "path"
+                    ? "Checking file…"
+                    : "Checking selected files…",
+              ),
+            );
+          const pathModeLabel = fullPaths ? "Relative paths" : "Full paths";
+          const buttons: Button[] =
+            panel === "files"
+              ? [
+                  { action: "apply", label: options.completionLabel, enabled: !busy && checked.size > 0 },
+                  { action: "add", label: pasting ? "Add file…" : keys.label("add", "Add file…"), enabled: !busy },
+                  {
+                    action: "paths",
+                    label: pasting ? pathModeLabel : keys.label("paths", pathModeLabel),
+                    enabled: !busy,
+                  },
+                ]
+              : [
+                  { action: "cancel", label: "Back", enabled: !pasting },
+                  { action: "submit", label: "Add file", enabled: !busy && pathInput.input.getValue().length > 0 },
+                ];
+          let column = 0;
+          const spans = buttons.map((button) => {
+            const text = `[ ${button.label} ]`;
+            const span = {
+              start: column,
+              end: column + visibleWidth(text),
+              action: button.action,
+              enabled: button.enabled,
+            };
+            column = span.end + 2;
+            return { ...span, text: theme.fg(button.enabled ? "muted" : "dim", text) };
+          });
+          const buttonRow = content.length;
+          content.push(spans.map((span) => span.text).join("  "));
           const frame = scopeFrame(
             tui,
             theme,
             width,
-            "Select allowed files",
-            [
-              `Cwd: ${displayPath(options.cwd)}`,
-              `${checked.size} selected. Confirm a file to toggle; confirm the completion row to finish.`,
-              "Search, or enter a full or ~/ path and confirm Add file to check an existing file.",
-            ],
+            panel === "files" ? "Select files" : "Add existing file",
+            [`Cwd: ${displayFilePath(options.cwd)}`],
             content,
-            loading || rows.length === 0 ? [0] : [focusedRow, 0],
+            [focusedRow, 0, buttonRow],
             focusedRow,
+            [pasting ? `${checked.size} selected • Pasting…` : keys.hints(panel, checked.size, busy)],
           );
+          const buttonFrameRow = frame.contentRows.find((row) => row.contentIndex === buttonRow)?.frameIndex;
           mouseLayout = {
             width,
             input: frame.contentRows.find((row) => row.contentIndex === 0)?.frameIndex,
             rows: new Map(
-              frame.contentRows.flatMap((row) => {
-                const native = row.contentIndex - 2;
-                return native >= 0 && native < Math.min(8, rows.length) ? [[row.frameIndex, start + native]] : [];
-              }),
+              panel === "files"
+                ? frame.contentRows.flatMap((row) => {
+                    const native = row.contentIndex - filesStart;
+                    const id = rows[start + native]?.value;
+                    return native >= 0 && native < Math.min(LIST_ROWS, rows.length) && id ? [[row.frameIndex, id]] : [];
+                  })
+                : [],
             ),
+            buttons:
+              buttonFrameRow === undefined
+                ? []
+                : spans
+                    .filter((span) => span.enabled && span.end <= width)
+                    .map((span) => ({ row: buttonFrameRow, start: span.start, end: span.end, action: span.action })),
           };
           return frame.lines;
         },
-        handleInput(data: string) {
-          if (!current()) return;
-          mousePressedId = undefined;
-          const previous = search.input.getValue();
-          const action = (key: string) => {
-            if (matchesKey(key, "ctrl+c")) close({ kind: "cancelled", reason: "close" });
-            else if (keybindings.matches(key, "tui.select.cancel")) close({ kind: "cancelled", reason: "back" });
-            else if (validating) return true;
-            else if (keybindings.matches(key, "tui.select.up") || keybindings.matches(key, "tui.select.down")) {
-              if (!loading) list.handleInput(key);
-            } else if (
-              keybindings.matches(key, "tui.select.pageUp") ||
-              keybindings.matches(key, "tui.select.pageDown")
-            ) {
-              if (!loading) {
-                const index = rows.findIndex((row) => row.value === list.getSelectedItem()?.value);
-                list.setSelectedIndex(index + (keybindings.matches(key, "tui.select.pageUp") ? -8 : 8));
-              }
-            } else if (keybindings.matches(key, "tui.select.confirm")) {
-              if (!loading) list.handleInput(key);
-            } else return false;
-            return true;
-          };
-          search.handleInput(data, action, !validating);
-          if (search.input.getValue() !== previous && !loading)
-            rebuild(isPathInput(search.input.getValue()) ? addId : undefined);
-          tui.requestRender();
-        },
+        handleInput,
         handleMouse(event: TuiMouseEvent) {
-          if (!current() || loading || validating || !mouseLayout || event.width !== mouseLayout.width) return;
-          if (event.y === mouseLayout.input) return search.handleMouse({ ...event, y: 0, height: 1 });
-          const index = mouseLayout.rows.get(event.y);
-          if (index === undefined) return;
+          if (
+            !current() ||
+            !mouseLayout ||
+            event.width !== mouseLayout.width ||
+            search.isPasting ||
+            pathInput.isPasting
+          )
+            return;
+          // Native click follows the original press even if a render moves the rows.
+          if (event.type === "click" && event.button === "left" && pressed) {
+            const target = pressed;
+            pressed = undefined;
+            if (target.kind === "file") mark(target.id);
+            else if (target.kind === "button") perform(target.action);
+            return { handled: true, render: target.kind !== "cancelled" };
+          }
+          if (event.type === "press" && event.button === "left") pressed = undefined;
+          const button = mouseLayout.buttons.find(
+            (button) => button.row === event.y && event.x >= button.start && event.x < button.end,
+          );
+          if (button && event.button === "left") {
+            if (event.type === "press") pressed = { kind: "button", action: button.action };
+            else if (event.type === "click") perform(button.action);
+            else return;
+            return { handled: true, render: true, focus: event.type === "press" };
+          }
+          if (loading || validating) return;
+          if (event.y === mouseLayout.input) {
+            const result = (panel === "files" ? search : pathInput).handleMouse({ ...event, y: 0, height: 1 });
+            // Input edits the caret on press only; its later click must not hit a moved button.
+            if (event.type === "press" && result?.handled) pressed = { kind: "cancelled" };
+            return result;
+          }
+          const id = mouseLayout.rows.get(event.y);
+          if (!id) return;
           if (event.type === "wheel" && event.wheelDelta) {
-            mousePressedId = undefined;
+            cancelPress();
             const selected = rows.findIndex((row) => row.value === list.getSelectedItem()?.value);
             list.setSelectedIndex(Math.max(0, Math.min(rows.length - 1, selected + (event.wheelDelta < 0 ? -1 : 1))));
-          } else if (event.button === "left" && event.type === "press") {
-            mousePressedId = rows[index]?.value;
-            list.setSelectedIndex(index);
-          } else if (event.button === "left" && event.type === "click") {
-            // Press can recenter SelectList before click reaches the same screen row.
-            // Activate the pressed raw ID, not the row that moved under the pointer.
-            const id = mousePressedId ?? rows[index]?.value;
-            mousePressedId = undefined;
-            const selected = rows.findIndex((row) => row.value === id);
-            if (selected < 0 || !id) return;
-            list.setSelectedIndex(selected);
-            activate(id);
-          } else return;
-          return { handled: true, render: true };
+          } else if (event.type === "press" && event.button === "left") {
+            pressed = { kind: "file", id };
+            list.setSelectedIndex(rows.findIndex((row) => row.value === id));
+          } else if (event.type === "click" && event.button === "left") mark(id);
+          else return;
+          return { handled: true, render: true, focus: event.type === "press" };
         },
         invalidate() {
-          mousePressedId = undefined;
+          cancelPress();
           mouseLayout = undefined;
           search.input.invalidate();
+          pathInput.input.invalidate();
           list.invalidate();
         },
         waitForPending: () => pending,
         dispose() {
           if (disposed) return;
           disposed = true;
-          mousePressedId = undefined;
+          pressed = undefined;
           controller.abort();
         },
       };

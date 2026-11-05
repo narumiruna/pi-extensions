@@ -12,13 +12,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { displayPath } from "../src/display.js";
+import { displayFilePath, displayPath } from "../src/display.js";
 import type { ScopeMenuOptions, ScopeView } from "../src/menu.js";
 
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -154,9 +154,10 @@ async function fixtureFile(base: string, name: string) {
 }
 
 async function submitPath(h: MenuHarness, raw: string) {
+  h.tui.send("\x0f");
   h.tui.send("\x15");
   h.tui.type(raw);
-  h.tui.press("tui.select.confirm");
+  h.tui.press("tui.input.submit");
   await h.tui.waitForPending();
 }
 
@@ -170,8 +171,7 @@ describe("scope current-state manager", () => {
     await h.next();
     await h.tui.waitForPending();
     h.tui.type("a.ts");
-    h.tui.press("tui.select.confirm");
-    h.down(1);
+    h.tui.press("tui.input.tab");
     h.tui.press("tui.select.confirm");
     await h.running;
     expect(h.options.apply).toHaveBeenCalledWith(
@@ -190,8 +190,8 @@ describe("scope current-state manager", () => {
     expect(h.text()).toContain("End restriction");
     await h.next();
     await h.tui.waitForPending();
-    expect(h.text()).toContain(`[x] ${JSON.stringify(h.first)}`);
-    h.tui.press("tui.select.confirm");
+    expect(h.text()).toContain(`[x] ${displayFilePath(relative(h.cwd, h.first))}`);
+    h.tui.press("tui.input.tab");
     await h.back();
     expect(h.text()).toContain("Editing limited to 1 file");
     expect(h.options.apply).not.toHaveBeenCalled();
@@ -200,17 +200,17 @@ describe("scope current-state manager", () => {
     await h.running;
     expect(h.options.off).not.toHaveBeenCalled();
   });
-  it("returns an empty selection to the manager without applying or releasing it", async () => {
+  it("keeps an empty checked draft open without applying or releasing the restriction", async () => {
     const h = await setup();
     await h.next();
     await h.tui.waitForPending();
-    h.tui.press("tui.select.up");
     h.tui.press("tui.select.confirm");
-    await h.tui.waitForOpen();
+    expect(h.text()).toContain("Select at least one file first.");
     expect(h.options.apply).not.toHaveBeenCalled();
     expect(h.options.off).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(h.text()).toContain("Select files…"));
-    expect(h.notify).toHaveBeenCalledWith("No files selected. The restriction is unchanged.", "info");
+    expect(h.notify).not.toHaveBeenCalled();
+    await h.back();
+    expect(h.text()).toContain("Select files…");
     h.tui.press("tui.select.cancel");
     await h.running;
   });
@@ -355,8 +355,7 @@ describe("scope current-state manager", () => {
     try {
       await h.next();
       await h.tui.waitForPending();
-      h.tui.press("tui.select.confirm");
-      h.tui.press("tui.select.up");
+      h.tui.press("tui.input.tab");
       h.tui.press("tui.select.confirm");
       await entered.promise;
       await h.tui.waitForOpen();
@@ -410,7 +409,7 @@ describe("manual existing-file selection", () => {
       (root: string): string => pathToFileURL(join(root, "config/a\u202fb.json")).href,
     ],
     ["@ absolute config", "config/editor.json", (root: string): string => `@${join(root, "config/editor.json")}`],
-  ] as const)("adds %s only to the checked draft until Apply", async (_name, name, input) => {
+  ] as const)("adds %s only to the checked draft until Enter applies", async (_name, name, input) => {
     const h = await setup(true);
     const target = await fixtureFile(h.root, name);
     const raw = input(h.root);
@@ -419,29 +418,27 @@ describe("manual existing-file selection", () => {
     await h.next();
     await h.tui.waitForPending();
     h.tui.type("b.ts");
-    h.tui.press("tui.select.confirm");
+    h.tui.press("tui.input.tab");
     h.tui.send("\x15");
+    h.tui.send("\x0f");
     h.tui.type(raw);
-    expect(h.text()).toContain(`→ Add file: ${displayPath(raw)}`);
-    expect(h.text()).not.toContain("Apply changes");
+    expect(h.text()).toContain("Add existing file");
+    expect(h.text()).toContain(`Path: ${displayPath(raw)}`);
     expect(h.options.apply).not.toHaveBeenCalled();
-    h.tui.press("tui.select.confirm");
+    h.tui.press("tui.input.submit");
     await h.tui.waitForPending();
-    const added = h.text();
-    expect(added).toContain(`→ [x] ${displayPath(target.path)}`);
-    expect(added).toContain(`Path: ${displayPath(target.path)}`);
-    expect(added).toContain("Outside the current directory");
-    expect(added).toContain(`[x] ${displayPath(h.first)}`);
-    expect(added).toContain(`[x] ${displayPath(h.second)}`);
-    expect(added).not.toContain(`> ${raw}`);
-    expect(added).not.toContain("Add file:");
+    const draft = h.text();
+    expect(draft).toContain(`→ [x] (outside) ${displayFilePath(target.path)}`);
+    expect(draft).toContain("Outside the current directory");
+    expect(draft).toContain(`[x] ${displayFilePath(relative(h.cwd, h.first))}`);
+    expect(draft).toContain(`[x] ${displayFilePath(relative(h.cwd, h.second))}`);
+    expect(draft).not.toContain(`> ${raw}`);
     expect(h.options.getView()).toEqual(live);
     expect(h.options.apply).not.toHaveBeenCalled();
     expect(h.options.off).not.toHaveBeenCalled();
     expect(h.options.saveShowHiddenFiles).not.toHaveBeenCalled();
     expect(h.settings.showHiddenFiles).toBe(false);
     expect(await readFile(target.path, "utf8")).toBe("fixture original\n");
-    h.down(1); // The appended, focused path is directly before normal completion.
     h.tui.press("tui.select.confirm");
     await h.running;
     expect(h.options.apply).toHaveBeenCalledOnce();
@@ -460,20 +457,21 @@ describe("manual existing-file selection", () => {
     h.tui.resize({ width: 240, rows: 44 });
     await h.next();
     await h.tui.waitForPending();
-    for (const target of targets) expect(h.text()).not.toContain(displayPath(target.path));
+    for (const target of targets) expect(h.text()).not.toContain(displayFilePath(relative(h.cwd, target.path)));
     for (const [index, name] of names.entries()) {
       await submitPath(h, `./${name}`);
-      expect(h.text()).toContain(`→ [x] ${displayPath(targets[index].path)}`);
+      expect(h.text()).toContain(`→ [x] ${displayFilePath(relative(h.cwd, targets[index].path))}`);
       expect(h.options.apply).not.toHaveBeenCalled();
     }
-    expect(h.text()).toContain(`[x] ${displayPath(h.first)}`);
+    expect(h.text()).toContain(`[x] ${displayFilePath(relative(h.cwd, h.first))}`);
     expect(h.settings.showHiddenFiles).toBe(false);
     expect(h.options.saveShowHiddenFiles).not.toHaveBeenCalled();
-    h.down(1);
     h.tui.press("tui.select.confirm");
     await h.running;
-    const applied = vi.mocked(h.options.apply).mock.calls[0]?.[0];
-    expect(applied).toMatchObject([{ path: h.first, canonical: h.first }, ...targets]);
+    expect(vi.mocked(h.options.apply).mock.calls[0]?.[0]).toMatchObject([
+      { path: h.first, canonical: h.first },
+      ...targets,
+    ]);
     expect(h.notify).not.toHaveBeenCalled();
   });
 
@@ -483,15 +481,14 @@ describe("manual existing-file selection", () => {
     ["hard link", /hard-linked/u],
     ["dangling link", /ENOENT/u],
     ["malformed URL", /URI malformed/u],
-  ] as const)("rejects a %s without creating files or losing the query and old checks", async (kind, error) => {
+  ] as const)("rejects a %s without creating files or losing the independent drafts", async (kind, error) => {
     const h = await setup(true);
     let raw = join(h.root, "missing", "nested", "target.json");
     if (kind === "directory") {
       raw = join(h.root, "directory");
       await mkdir(raw);
     } else if (kind === "hard link") {
-      const target = await fixtureFile(h.root, "hard-linked.json");
-      raw = target.path;
+      raw = (await fixtureFile(h.root, "hard-linked.json")).path;
       await link(raw, join(h.root, "hard-alias.json"));
     } else if (kind === "dangling link") {
       raw = join(h.root, "dangling.json");
@@ -503,23 +500,22 @@ describe("manual existing-file selection", () => {
     await h.next();
     await h.tui.waitForPending();
     h.tui.type("b.ts");
-    h.tui.press("tui.select.confirm");
+    h.tui.press("tui.input.tab");
     await submitPath(h, raw);
-    const rejected = h.text();
-    expect(rejected).toMatch(error);
-    expect(rejected).toContain(`> ${raw}`);
-    expect(rejected).toContain(`→ Add file: ${displayPath(raw)}`);
-    expect(rejected).toContain("2 selected");
-    expect(rejected).not.toContain("Apply changes");
+    expect(h.text()).toMatch(error);
+    expect(h.text()).toContain(`> ${raw}`);
+    expect(h.text()).toContain("Add existing file");
     expect(h.options.getView()).toEqual(live);
     expect(h.options.apply).not.toHaveBeenCalled();
     expect(h.options.off).not.toHaveBeenCalled();
     expect((await readdir(h.root, { recursive: true })).sort()).toEqual(inventory);
     await expect(access(join(h.root, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
+    h.tui.press("tui.select.cancel");
+    expect(h.text()).toContain("> b.ts");
+    expect(h.text()).toContain("2 selected");
     h.tui.send("\x15");
-    expect(h.text()).toContain(`[x] ${displayPath(h.first)}`);
-    expect(h.text()).toContain(`[x] ${displayPath(h.second)}`);
-    h.tui.press("tui.select.up");
+    expect(h.text()).toContain(`[x] ${displayFilePath(relative(h.cwd, h.first))}`);
+    expect(h.text()).toContain(`[x] ${displayFilePath(relative(h.cwd, h.second))}`);
     h.tui.press("tui.select.confirm");
     await h.running;
     expect(vi.mocked(h.options.apply).mock.calls[0]?.[0].map((target) => target.path)).toEqual([h.first, h.second]);
@@ -527,14 +523,14 @@ describe("manual existing-file selection", () => {
     expect(await readFile(h.second, "utf8")).toBe("b");
   });
 
-  it("checks and focuses normalized duplicates without adding a second row or toggling the old check", async () => {
+  it("checks normalized duplicates once without toggling an existing check", async () => {
     const h = await setup(true);
     const target = await fixtureFile(h.home, "src/another_project/AGENTS.md");
     h.tui.resize({ width: 240, rows: 40 });
     await h.next();
     await h.tui.waitForPending();
     await submitPath(h, "./b.ts");
-    expect(h.text()).toContain(`→ [x] ${displayPath(h.second)}`);
+    expect(h.text()).toContain(`→ [x] ${displayFilePath(relative(h.cwd, h.second))}`);
     await submitPath(h, "~/src/another_project/AGENTS.md");
     for (const raw of [
       target.path,
@@ -542,22 +538,15 @@ describe("manual existing-file selection", () => {
       pathToFileURL(target.path).href,
       `@${target.path}`,
     ]) {
-      h.tui.type(raw);
+      await submitPath(h, raw);
       const draft = h.text();
-      expect(draft).toContain(`→ Add file: ${displayPath(raw)}`);
-      if (raw === target.path) {
-        expect(draft.indexOf("Add file:")).toBeLessThan(draft.indexOf(`[x] ${displayPath(target.path)}`));
-      }
-      expect(draft).not.toContain("Apply changes");
-      h.tui.press("tui.select.confirm");
-      await h.tui.waitForPending();
-      const added = h.text();
-      expect(added).toContain(`→ [x] ${displayPath(target.path)}`);
-      expect(added).toContain("3 selected");
-      expect(added.split("\n").filter((line) => line.includes(`[x] ${displayPath(target.path)}`))).toHaveLength(1);
+      expect(draft).toContain(`→ [x] (outside) ${displayFilePath(target.path)}`);
+      expect(draft).toContain("3 selected");
+      expect(
+        draft.split("\n").filter((line) => line.includes(`[x] (outside) ${displayFilePath(target.path)}`)),
+      ).toHaveLength(1);
       expect(h.options.apply).not.toHaveBeenCalled();
     }
-    h.down(1);
     h.tui.press("tui.select.confirm");
     await h.running;
     expect(vi.mocked(h.options.apply).mock.calls[0]?.[0].map((entry) => entry.path)).toEqual([
@@ -585,14 +574,13 @@ describe("manual existing-file selection", () => {
     if (kind === "directory replacement") await mkdir(target.path);
     else if (kind === "symlink redirect") await symlink(other.path, target.path, "file");
     h.tui.type("external-target");
-    h.down(1);
     h.tui.press("tui.select.confirm");
     await h.tui.waitForPending();
-    expect(h.tui.isOpen, "A stale manual target must retain the picker and checked draft").toBe(true);
     const rejected = h.text();
+    expect(h.tui.isOpen).toBe(true);
     expect(rejected).toMatch(error);
     expect(rejected).toContain("> external-target");
-    expect(rejected).toContain(`[x] ${displayPath(target.path)}`);
+    expect(rejected).toContain(`[x] (outside) ${displayFilePath(target.path)}`);
     expect(rejected).toContain("2 selected");
     expect(h.options.apply).not.toHaveBeenCalled();
     expect(h.options.getView()).toEqual(live);
@@ -619,12 +607,8 @@ describe("manual existing-file selection", () => {
     await h.next();
     await h.tui.waitForPending();
     await submitPath(h, alias);
-    const preview = h.text();
-    expect(preview).toContain(`→ [x] ${displayPath(alias)}`);
-    expect(preview).toContain(`Path: ${displayPath(alias)}`);
-    expect(preview).toContain(`Canonical target: ${displayPath(original.canonical)}`);
-    expect(preview).toContain("Outside the current directory");
-    // A canonical duplicate must not let snapshot deduplication hide a stale alias.
+    expect(h.text()).toContain(`→ [x] (outside) ${displayFilePath(alias)}`);
+    expect(h.text()).toContain(`Canonical target: ${displayFilePath(original.canonical)}`);
     await submitPath(h, original.path);
     if (kind === "retargeted alias") {
       await unlink(alias);
@@ -632,20 +616,19 @@ describe("manual existing-file selection", () => {
     } else if (kind === "removed canonical file") await unlink(original.path);
     else await link(original.path, join(h.root, "external/hard-alias.txt"));
     h.tui.type("selected-link");
-    h.down(1);
     h.tui.press("tui.select.confirm");
     await h.tui.waitForPending();
     const rejected = h.text();
     expect(rejected).toMatch(error);
     expect(rejected).toContain("> selected-link");
-    expect(rejected).toContain(`[x] ${displayPath(alias)}`);
+    expect(rejected).toContain(`[x] (outside) ${displayFilePath(alias)}`);
     expect(rejected).toContain("3 selected");
     expect(h.options.apply).not.toHaveBeenCalled();
     expect(h.options.getView()).toEqual(live);
     expect(await readFile(other.path, "utf8")).toBe("fixture original\n");
     h.tui.send("\x15");
-    expect(h.text()).toContain(`[x] ${displayPath(h.first)}`);
-    expect(h.text()).toContain(`[x] ${displayPath(original.path)}`);
+    expect(h.text()).toContain(`[x] ${displayFilePath(relative(h.cwd, h.first))}`);
+    expect(h.text()).toContain(`[x] (outside) ${displayFilePath(original.path)}`);
     await h.back();
     h.tui.press("tui.select.cancel");
     await h.running;

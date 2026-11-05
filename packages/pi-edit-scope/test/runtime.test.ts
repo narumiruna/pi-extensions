@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, getCurrentSystemMessage } from "@earendil-works/pi-ai";
@@ -21,6 +21,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { displayFilePath } from "../src/display.js";
 import {
   assistant,
   callTool,
@@ -358,7 +359,7 @@ describe("native Jiti runtime", () => {
       await managerClosed;
       await tui.waitForOpen();
       await tui.waitForPending();
-      expect(tui.render().join("\n")).toContain("Select allowed files");
+      expect(tui.render().join("\n")).toContain("Select files");
       const pickerClosed = tui.resultPromise;
       tui.press("tui.select.cancel");
       await pickerClosed;
@@ -396,8 +397,7 @@ describe("native Jiti runtime", () => {
         await tui.waitForOpen();
         await tui.waitForPending();
         tui.type("allowed.txt");
-        tui.press("tui.select.confirm");
-        tui.press("tui.select.down");
+        tui.press("tui.input.tab");
         tui.press("tui.select.confirm");
         await command;
         expect(errors).toEqual([]);
@@ -467,14 +467,14 @@ describe("native Jiti runtime", () => {
       await tui.waitForOpen();
       await tui.waitForPending();
       for (const [raw, path] of selections) {
+        tui.send("\x0f");
         tui.type(raw);
-        expect(text()).toContain(`→ Add file: ${JSON.stringify(raw)}`);
-        expect(text()).not.toContain("Apply changes");
-        tui.press("tui.select.confirm");
+        expect(text()).toContain("Add existing file");
+        expect(text()).toContain(`Path: ${JSON.stringify(raw)}`);
+        tui.press("tui.input.submit");
         await tui.waitForPending();
         const draft = text();
-        expect(draft).toContain(`→ [x] ${JSON.stringify(path)}`);
-        expect(draft).toContain(`Path: ${JSON.stringify(path)}`);
+        expect(draft).toContain(`→ [x] (outside) ${displayFilePath(path)}`);
         expect(draft).toContain("Outside the current directory");
         expect(draft).not.toContain(`> ${raw}`);
         expect(stateEntries()).toHaveLength(1);
@@ -484,10 +484,10 @@ describe("native Jiti runtime", () => {
         expect(readFileSync(path, "utf8")).toBe("external original\n");
         expect(loadout(session)).toBe(initial);
       }
-      expect(text()).toContain(`[x] ${JSON.stringify(fixture.allowed)}`);
-      expect(text()).toContain(`[x] ${JSON.stringify(fixture.reserved)}`);
+      tui.press("tui.select.pageUp");
+      expect(text()).toContain(`[x] ${displayFilePath(relative(fixture.cwd, fixture.allowed))}`);
+      expect(text()).toContain(`[x] ${displayFilePath(relative(fixture.cwd, fixture.reserved))}`);
       expect(text()).toContain("5 selected");
-      tui.press("tui.select.down");
       tui.press("tui.select.confirm");
       await command;
       expect(tui.isOpen).toBe(false);
