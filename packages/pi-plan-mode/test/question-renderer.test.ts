@@ -114,6 +114,128 @@ test("expanded multiline answers and notes preserve whitespace at wrap boundarie
   assert.ok(lines.every((line) => visibleWidth(line) <= 12));
 });
 
+test.each([2, 3, 4, 5, 6])("expanded fields retain CJK and emoji after resize at width %s", (width) => {
+  for (const wasCustom of [false, true]) {
+    const narrow = planModeQuestionAnswered(
+      [],
+      [{ ...answers[0], header: "題", question: "中文", answer: "🙂🚀", note: "👩‍💻👨‍👩‍👧‍👦", wasCustom }],
+    );
+    const before = structuredClone(narrow);
+    const component = renderPlanModeQuestionResult(narrow, expanded, theme);
+    for (const currentWidth of [80, width, 80, width]) {
+      component.invalidate();
+      const lines = component.render(currentWidth).map(stripTerminalSequences);
+      const text = lines.join("");
+      for (const glyph of ["題", "中", "文", "🙂", "🚀", "👩‍💻", "👨‍👩‍👧‍👦"]) {
+        assert.equal(text.split(glyph).length - 1, 1, `${glyph} must remain visible at width ${currentWidth}`);
+      }
+      assert.ok(!text.includes("?"));
+      assert.ok(lines.every((line) => visibleWidth(line) <= currentWidth));
+    }
+    assert.deepEqual(narrow, before);
+  }
+});
+
+test.each([
+  { name: "combining Latin", glyph: "e\u0301", cells: 1 },
+  { name: "CJK", glyph: "界", cells: 2 },
+  { name: "emoji", glyph: "🙂", cells: 2 },
+  { name: "ZWJ emoji", glyph: "👩‍💻", cells: 2 },
+  { name: "flag", glyph: "🇨🇳", cells: 2 },
+  { name: "Indic conjunct", glyph: "क्ष्ण", cells: 3 },
+  { name: "spacing marks", glyph: "ााा", cells: 3 },
+  { name: "long Indic conjunct", glyph: "क्ष्ण्य", cells: 4 },
+  { name: "zero-width mark", glyph: "\u0301", cells: 0 },
+])("expanded prefixes leave enough cells for $name graphemes", ({ glyph, cells }) => {
+  assert.equal(visibleWidth(glyph), cells);
+  const value = planModeQuestionAnswered(
+    [],
+    [{ ...answers[0], header: glyph, question: glyph, answer: glyph, note: glyph }],
+  );
+  const component = renderPlanModeQuestionResult(value, expanded, theme);
+  for (let width = Math.max(1, cells); width <= cells + 4; width++) {
+    const lines = component.render(width).map(stripTerminalSequences);
+    assert.equal(lines.join("").split(glyph).length - 1, 4, `${glyph} must remain intact at width ${width}`);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  }
+});
+
+test.each([2, 3, 4, 5, 6])("cancelled, failed, and fallback text retains wide graphemes at width %s", (width) => {
+  const message = "原因🙂";
+  const results = [
+    ...(["cancelled", "ui_unavailable", "plan_mode_inactive", "invalid_input"] as const).map((reason) => ({
+      result: planModeQuestionCancelled([], reason, message),
+      context: {},
+    })),
+    { result: { content: [{ type: "text", text: message }] }, context: { isError: true } },
+    { result: { content: [{ type: "text", text: message }] }, context: {} },
+  ];
+  for (const { result, context } of results) {
+    const before = structuredClone(result);
+    const lines = renderPlanModeQuestionResult(result, expanded, theme, context)
+      .render(width)
+      .map(stripTerminalSequences);
+    for (const glyph of ["原", "因", "🙂"]) assert.equal(lines.join("").split(glyph).length - 1, 1);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    assert.deepEqual(result, before);
+  }
+});
+
+test.each([1, 2, 3, 4, 5, 6, 7, 8])(
+  "composed prefixes stay bounded around leading mixed marks at width %s",
+  (width) => {
+    for (const marks of ["\u0301\u093e", "\u0301\u093e\u093e\u093e"]) {
+      const value = `${marks}x`;
+      const results = [
+        {
+          result: planModeQuestionAnswered(
+            [],
+            [{ ...answers[0], header: value, question: value, answer: value, note: value }],
+          ),
+          context: {},
+          count: 4,
+        },
+        ...(["cancelled", "ui_unavailable", "plan_mode_inactive", "invalid_input"] as const).map((reason) => ({
+          result: planModeQuestionCancelled([], reason, value),
+          context: {},
+          count: 1,
+        })),
+        { result: { content: [{ type: "text", text: value }] }, context: { isError: true }, count: 1 },
+        { result: { content: [{ type: "text", text: value }] }, context: {}, count: 1 },
+      ];
+      for (const { result, context, count } of results) {
+        const before = structuredClone(result);
+        const lines = renderPlanModeQuestionResult(result, expanded, theme, context)
+          .render(width)
+          .map(stripTerminalSequences);
+        assert.ok(lines.every((line) => visibleWidth(line) <= width));
+        assert.equal(lines.join("").split(marks).length - 1, count);
+        assert.equal(lines.join("").split("x").length - 1, count);
+        assert.deepEqual(result, before);
+      }
+    }
+  },
+);
+
+test.each([
+  { glyph: "界", width: 1, fitting: "e\u0301" },
+  { glyph: "क्ष्ण", width: 2, fitting: "界" },
+  { glyph: "क्ष्ण्य", width: 3, fitting: "🙂" },
+])(
+  "unavoidable fallback for $glyph at width $width keeps fitting text and raw payloads",
+  ({ glyph, width, fitting }) => {
+    const value = fitting + glyph;
+    const narrow = planModeQuestionAnswered([], [{ ...answers[0], question: value, answer: value, note: value }]);
+    const before = structuredClone(narrow);
+    const lines = renderPlanModeQuestionResult(narrow, expanded, theme).render(width).map(stripTerminalSequences);
+    assert.ok(lines.some((line) => line === "?".repeat(width)));
+    assert.equal(lines.join("").split(fitting).length - 1, 3);
+    assert.ok(!lines.join("").includes(glyph));
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    assert.deepEqual(narrow, before);
+  },
+);
+
 test.each([
   { reason: "cancelled", status: "Question cancelled", role: "warning" },
   { reason: "ui_unavailable", status: "Interactive UI unavailable", role: "warning" },

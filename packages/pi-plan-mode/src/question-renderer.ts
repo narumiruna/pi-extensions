@@ -1,6 +1,6 @@
 import type { KeybindingHints, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { hardWrapTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
+import { hardWrapTerminalDocument, sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { PlanModeQuestionAnswer } from "./question-tool.js";
 
@@ -12,6 +12,8 @@ type QuestionResult = {
 type RenderContext = Partial<KeybindingHints> & { isError?: boolean };
 type Answer = Pick<PlanModeQuestionAnswer, "header" | "question" | "answer" | "wasCustom" | "note">;
 type Style = (text: string) => string;
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export function renderPlanModeQuestionCall(args: unknown, theme: Theme): Component {
   const questions = isRecord(args) && Array.isArray(args.questions) ? args.questions : [];
@@ -147,11 +149,20 @@ function displayLine(value: unknown): string {
 }
 
 function documentLines(value: string, width: number, style: Style, prefix = "", prefixStyle = style): string[] {
-  const visiblePrefix = truncateToWidth(prefix, Math.max(0, width - 1), "");
+  const text = sanitizeTerminalDocument(value);
+  let contentWidth = 1;
+  for (const { segment } of graphemeSegmenter.segment(text)) {
+    contentWidth = Math.min(width, Math.max(contentWidth, visibleWidth(segment)));
+  }
+  // Reduce decoration before it forces a grapheme that fits the viewport into Kit's fallback.
+  const visiblePrefix = truncateToWidth(prefix, width - contentWidth, "");
   const prefixWidth = visibleWidth(visiblePrefix);
-  return hardWrapTerminalDocument(value, width - prefixWidth).map(
-    (line, index) => prefixStyle(index === 0 ? visiblePrefix : " ".repeat(prefixWidth)) + style(line),
-  );
+  return hardWrapTerminalDocument(text, width - prefixWidth).map((line, index) => {
+    const decoration = index === 0 ? visiblePrefix : " ".repeat(prefixWidth);
+    // Leading marks can change width when they join the decoration's final grapheme.
+    const safePrefix = visibleWidth(decoration + line) <= width ? decoration : "";
+    return prefixStyle(safePrefix) + style(line);
+  });
 }
 
 function boundedComponent(render: (width: number) => string[]): Component {
