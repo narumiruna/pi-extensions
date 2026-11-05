@@ -170,6 +170,7 @@ Use up and down to choose an option, Enter to record it and advance, or `n` to r
 Press `n` again on an answered item to edit or clear its note.
 Revisit a question to replace its answer; changing the chosen option clears its prior note.
 Review lists every answer and note, blocks incomplete submission, and requires returning to a question to edit its answer or note.
+The transcript shows a compact summary of each answer instead of raw tool JSON. Expand the tool output to read the full questions, answers, and notes.
 Custom answers and notes retain their raw submitted text in the tool result, while terminal rendering is sanitized.
 In TUI mode, a custom editor registered through Pi's `ctx.ui.setEditorComponent()` also handles answer and note editing in a separate instance, without changing the main prompt draft.
 While that editor is active, it controls Escape and submission keys; Ctrl+C still cancels the question.

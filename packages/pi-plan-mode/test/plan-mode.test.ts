@@ -27,6 +27,8 @@ test("plan-mode registers question tools, command, and safety hooks without a CL
     mock.tools.map((tool) => tool.name),
     ["plan_mode_question", "plan_mode_complete"],
   );
+  assert.equal(typeof mock.tools[0]?.renderCall, "function");
+  assert.equal(typeof mock.tools[0]?.renderResult, "function");
   assert.ok(mock.commands.has("plan"));
   assert.equal(typeof mock.commands.get("plan")?.getArgumentCompletions, "function");
   assert.ok(mock.events.has("tool_call"));
