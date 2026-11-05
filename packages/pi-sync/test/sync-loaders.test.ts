@@ -3,6 +3,7 @@ import { test } from "vitest";
 import { createSyncLoaders, type SyncDependencies } from "../src/sync/sync-loaders.js";
 
 const loaderCases = [
+  ["commands", "loadCommandHandler"],
   ["setupSwitch", "loadSetupSwitch"],
   ["snapshot", "loadSnapshot"],
   ["syncState", "loadSyncState"],

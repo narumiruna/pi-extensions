@@ -172,6 +172,8 @@ See [Debug startup timings](./skills/configure-pi-sync/references/configuration.
 
 ### Background startup checks
 
+Startup loads command and transfer implementations only when needed. When no transaction directory is pending, a local directory check skips loading the file-recovery implementation. Pending transactions still complete recovery before Pi accepts user edits; this safety barrier is not deferred.
+
 With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
 
 Checks run once per session start, including `/reload`, new, resumed, and forked sessions, in TUI and RPC only. Print/JSON skip startup checks. This one-shot policy has no polling or automatic retry loop; separately enabled Continuous sync owns recurring work. The overall deadline is 30 seconds, followed by underlying cleanup where needed; Git process termination and temporary-ref cleanup can take additional time. Git checks can still fetch objects and update the extension's private bare cache, but never push, apply managed files, update the sync baseline, or reload Pi.

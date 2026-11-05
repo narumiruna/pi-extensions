@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -15,6 +16,15 @@ import { deferred } from "./startup-check-helpers.js";
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-sync",
   forbiddenEagerInputs: [
+    "src/commands/command-handler.ts",
+    "src/commands/command-execution.ts",
+    "src/snapshot/snapshot.ts",
+    "src/snapshot/snapshot-codec.ts",
+    "src/snapshot/snapshot-transaction.ts",
+    "src/sync/sync-local.ts",
+    "src/sync/local-fields.ts",
+    "src/sync/json-document.ts",
+    "src/sync/agent-sync.ts",
     "src/sync/continuous-sync.ts",
     "src/sync/continuous-record.ts",
     "src/sync/continuous-lease.ts",
@@ -53,6 +63,15 @@ test("generated runtime preserves every first-use import boundary", async () => 
     const { eagerInputs } = builder.validateEagerGraph(metadata);
     assertSourceBoundaries(metadata);
     for (const lazyInput of [
+      "src/commands/command-handler.ts",
+      "src/commands/command-execution.ts",
+      "src/snapshot/snapshot.ts",
+      "src/snapshot/snapshot-codec.ts",
+      "src/snapshot/snapshot-transaction.ts",
+      "src/sync/sync-local.ts",
+      "src/sync/local-fields.ts",
+      "src/sync/json-document.ts",
+      "src/sync/agent-sync.ts",
       "src/sync/setup-switch.ts",
       "src/sync/sync-operations.ts",
       "src/sync/sync-queries.ts",
@@ -153,11 +172,35 @@ test("generated runtime is mapped, external, self-contained, and loadable by Pi"
       assert.equal(starts?.length, 1);
       assert.equal(shutdowns?.length, 1);
       statuses.set("unrelated", "keep");
+      const transaction = join(agentDir, "pi-sync/transactions/interrupted");
+      const target = join(agentDir, "AGENTS.md");
+      await mkdir(join(transaction, "before"), { recursive: true });
+      await writeFile(join(transaction, "before/0"), "original instructions");
+      await writeFile(target, "interrupted instructions");
+      await writeFile(
+        join(transaction, "journal.json"),
+        JSON.stringify({
+          version: 2,
+          root: agentDir,
+          entries: [
+            {
+              target,
+              backupName: "0",
+              kind: "file",
+              beforeImage: `file:${createHash("sha256").update("original instructions").digest("hex")}`,
+              afterImage: `file:${createHash("sha256").update("interrupted instructions").digest("hex")}`,
+              postFiles: [],
+            },
+          ],
+        }),
+      );
       for (const reason of ["startup", "new"]) {
         statuses.set("sync", "stale");
         for (const handler of starts ?? []) await handler({ type: "session_start", reason }, ctx);
         assert.equal(statuses.get("sync"), undefined);
       }
+      assert.equal(await readFile(target, "utf8"), "original instructions");
+      await assert.rejects(readFile(join(transaction, "journal.json")), { code: "ENOENT" });
       await command.handler("init", ctx);
       assert.ok(
         titles.some(

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { agentDir, sessionDirFromContext } from "../snapshot/session-paths.js";
+import { sessionDirFromContext } from "../snapshot/session-paths.js";
 import { createSnapshot, sessionSnapshotPathFromAbsolute } from "../snapshot/snapshot.js";
 import { encodeSnapshot } from "../snapshot/snapshot-codec.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
@@ -20,24 +20,7 @@ export function protectedSessionPaths(
   return snapshotPath ? new Set([snapshotPath]) : new Set<string>();
 }
 
-export function captureMutationOwner(ctx: ExtensionContext | ExtensionCommandContext, signal?: AbortSignal) {
-  const manager = ctx.sessionManager;
-  const file = manager.getSessionFile?.();
-  const id = manager.getSessionId?.();
-  const cwd = manager.getCwd?.();
-  const root = agentDir();
-  return () => {
-    throwIfAborted(signal);
-    if (
-      ctx.sessionManager !== manager ||
-      manager.getSessionFile?.() !== file ||
-      manager.getSessionId?.() !== id ||
-      manager.getCwd?.() !== cwd ||
-      agentDir() !== root
-    )
-      throw new Error("Session changed during file mutation; evidence retained for review.");
-  };
-}
+export { captureMutationOwner } from "./mutation-owner.js";
 
 export async function backupLocal(profile: string, options: SnapshotOptions = {}, signal?: AbortSignal) {
   throwIfAborted(signal);

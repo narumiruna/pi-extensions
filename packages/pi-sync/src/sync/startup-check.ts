@@ -10,7 +10,6 @@ import type { SyncAttentionController } from "../ui/sync-attention.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { startupTransferEnabled } from "./agent-policy.js";
-import { withAgentSyncLock } from "./agent-sync.js";
 import { combineSignals, throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
@@ -122,7 +121,9 @@ export function createStartupCheck(
               inspection.head &&
               inspection.selectionState?.kind === "same"
             ) {
-              const operations = await timings.measure("operations import", () => loaders.operations());
+              const [operations, { withAgentSyncLock }] = await timings.measure("operations import", () =>
+                Promise.all([loaders.operations(), import("./agent-sync.js")]),
+              );
               throwIfAborted(signal);
               if (!isCurrent()) return;
               if (!ctx.isIdle()) {

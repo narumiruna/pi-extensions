@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { completeSyncArguments, splitArgs } from "./commands/command.js";
-import { handleCommand } from "./commands/command-handler.js";
 import type { AnySyncConfig } from "./settings/settings-types.js";
 import { withStateDirectoryAccess } from "./state/state-directory.js";
 import { startupTransferEnabled } from "./sync/agent-policy.js";
@@ -82,8 +81,14 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
           );
           return;
         }
+        const commands = await loaders.commands().catch((error) => {
+          if (!signal.aborted) {
+            ctx.ui.notify(`pi-sync command unavailable: ${safeTerminalText(errorMessage(error))}`, "error");
+          }
+        });
+        if (signal.aborted || !commands) return;
         const run = () =>
-          handleCommand(args, ctx, signal, loaders, attention, (setup) => {
+          commands.handleCommand(args, ctx, signal, loaders, attention, (setup) => {
             retry = { setup };
           });
         // Drain background children before foreground guards. Help remains reachable during repair.
