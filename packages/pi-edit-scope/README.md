@@ -36,7 +36,7 @@ pi install ./packages/pi-edit-scope
 ## 🚀 Quick start
 
 1. Run `/edit-scope` to open **Edit Scope**, then choose **Select files…**.
-2. Type to search. **Tab** toggles a file and moves down; **Shift+Tab** toggles and moves up. **↑/↓** only move. **Enter** applies the checked files; an empty selection stays open. **Escape** cancels without changing an applied restriction.
+2. Type to search. **Tab** toggles a file and moves down; **Shift+Tab** toggles and moves up. Marking stops at the first or last match. **↑/↓** only move. **Enter** applies the checked files; an empty selection stays open. **Escape** cancels without changing an applied restriction.
 3. Edit the selected files. Run `/edit-scope off` before work that needs unrestricted tools, such as a test command or formatter.
 
 Typing always searches, including spaces and directory fragments. Use **Add file…** (default **Ctrl+O**) to enter an existing external or excluded path in a separate field. **Enter** adds it to the checked draft, not the active restriction; the search and earlier checks remain. **Escape** returns from that field to the list.

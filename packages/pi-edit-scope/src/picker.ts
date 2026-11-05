@@ -198,7 +198,8 @@ export function showScopePicker(ctx: ExtensionCommandContext, options: ScopePick
         else checked.add(id);
         error = "";
         notice = "";
-        const next = rows[(index + move + rows.length) % rows.length]?.value;
+        // Marking stops at the result boundaries; ordinary arrow navigation still wraps.
+        const next = rows[Math.max(0, Math.min(rows.length - 1, index + move))]?.value;
         rebuild(next);
       };
       const perform = (command: PickerAction) => {

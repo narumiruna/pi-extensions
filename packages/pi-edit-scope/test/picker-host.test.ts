@@ -106,12 +106,14 @@ test("fullscreen search keeps priority over Tab; reverse marking remains usable 
     host.send("\x1b");
     expect(render()).toContain("1 selected");
     host.send("\x1b[Z");
+    expect(render()).toContain("→ [ ] a");
     expect(render()).toContain("0 selected");
     host.send("\x1b[Z");
+    expect(render()).toContain("→ [x] a");
     expect(render()).toContain("1 selected");
     host.send("\r");
     await running;
-    expect(validate.mock.calls[0]?.[0]).toEqual(["/cwd/file-19"]);
+    expect(validate.mock.calls[0]?.[0]).toEqual(["/cwd/a"]);
   } finally {
     host.send("\x1b");
     host.send("\x03");

@@ -37,6 +37,22 @@ function apply(tui: PickerHarness) {
   tui.press("tui.select.confirm");
 }
 
+test.each([0, 6])("Shift+Tab keeps upward marking within a long list (index=%s)", async (index) => {
+  const files = Array.from({ length: 18 }, (_, index) => `/cwd/file-${String(index).padStart(2, "0")}`);
+  const { tui, running, validate } = setup({ discover: async () => files });
+  await tui.waitForOpen();
+  await tui.waitForPending();
+  for (let step = 0; step < index; step++) tui.press("tui.select.down");
+  tui.send("\x1b[Z");
+  const text = plain(tui.render());
+  apply(tui);
+  await running;
+  const next = Math.max(0, index - 1);
+  expect(text).toContain(`→ [${next === index ? "x" : " "}] file-${String(next).padStart(2, "0")}`);
+  expect(text).toContain("1 selected");
+  expect(validate).toHaveBeenCalledExactlyOnceWith([files[index]], expect.any(AbortSignal), []);
+});
+
 test("Add panel mouse placement uses masked input geometry and retains raw path input", async () => {
   const { tui, running, resolvePath } = setup({}, { "tui.input.submit": "f3" });
   await tui.waitForOpen();
