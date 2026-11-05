@@ -9,11 +9,12 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
-import { displayError, displayFilePath, displayPath, exactRows, scopeFrame } from "./display.js";
+import { displayError, displayFilePath, displayPath } from "./display.js";
 import { ScopeInput } from "./input.js";
 import type { ScopeTarget } from "./paths.js";
 import { type PickerAction, type PickerPanel, pickerKeys } from "./picker-keys.js";
 import { MAX_TARGETS } from "./state.js";
+import { exactRows, scopeFrame } from "./ui.js";
 
 type PickerValue =
   | { kind: "selected"; targets: readonly ScopeTarget[] }

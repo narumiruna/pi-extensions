@@ -23,6 +23,7 @@ import {
   type ExtensionContext,
   type ExtensionError,
   type ExtensionUIContext,
+  initTheme,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -584,6 +585,34 @@ it.each(["abort-error", "late-success"] as const)(
     }
   },
 );
+
+it("opens the default lazy menu through Pi's Jiti package loader without changing tool metadata or model context", async () => {
+  const f = await fixture({ packageEntry: true, mode: "tui" });
+  initTheme("dark", false);
+  const { createTuiHarness } = await import("@narumitw/pi-tui-kit/testing");
+  const tui = createTuiHarness();
+  f.ui.custom = tui.custom;
+  const definitions = JSON.parse(JSON.stringify(f.session.getAllTools()));
+  const active = f.session.getActiveToolNames();
+  const running = f.session.prompt("/codex-imagegen");
+  try {
+    await tui.waitForOpen();
+    expect(tui.render().join("\n")).toMatch(/Codex Image Generation[\s\S]*Generate Image[\s\S]*Settings/);
+    tui.press("ctrl+c");
+    await running;
+    expect(f.errors).toEqual([]);
+    expect(f.notify).not.toHaveBeenCalled();
+    expect(JSON.parse(JSON.stringify(f.session.getAllTools()))).toEqual(definitions);
+    expect(f.session.getActiveToolNames()).toEqual(active);
+    expect(f.captured).toEqual([]);
+    expect(f.session.messages).toEqual([]);
+    await expect(access(join(directory, "pi-codex-imagegen.json"))).rejects.toThrow();
+  } finally {
+    await f.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    await running;
+    tui.dispose();
+  }
+});
 
 it("loads the declared source package through DefaultResourceLoader and runs registration, startup, command rejection, and shutdown", async () => {
   let shutdowns = 0;
