@@ -145,7 +145,7 @@ export async function showScopeMenu(context: ExtensionCommandContext, options: S
         title: "Edit Scope Help",
         lines: [
           "Select files to start a restriction or replace the complete allowed-file set.",
-          "Typing searches files, including spaces and directory fragments. By default, Tab toggles and moves down, Shift+Tab toggles and moves up, and Enter applies the checked files. The footer follows your configured keys.",
+          "Typing searches files, including spaces and directory fragments. By default, Tab toggles and moves down, Shift+Tab toggles and moves up, and Enter applies the checked files. Marking stops at the first or last match. The footer follows your configured keys.",
           "Project paths are relative to cwd by default. Use Full paths to switch views without changing the search or selected files.",
           "Use Add file for an existing full, ~/ or relative path, including files outside cwd. This separate field preserves the search and checked draft; adding does not apply the restriction.",
           "New file reserves one target; it replaces all allowed files and creates no content here.",

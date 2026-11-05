@@ -153,6 +153,75 @@ it.each(["regular", "fullscreen"] as const)(
 );
 
 it.each(["regular", "fullscreen"] as const)(
+  "%s native marking retains boundary and interior highlights across resize without committing the draft",
+  async (mode) => {
+    const keys = nativeKeys({ "tui.select.confirm": "f2", "tui.select.cancel": "f4" });
+    setKeybindings(keys);
+    const host = createScopeUIHost(mode, keys, theme);
+    const fixture = createFixture();
+    for (let index = 0; index < 18; index++)
+      writeFileSync(join(fixture.cwd, `file-${String(index).padStart(2, "0")}`), "fixture");
+    const originalScope = fixture.manager
+      .getBranch()
+      .filter((entry) => entry.type === "custom" && entry.customType === "scope-state");
+    const { session, errors } = await createNativeSession(fixture, { mode: "tui", uiContext: host.ui });
+    host.attach(session, 4);
+    const command = session.prompt("/edit-scope");
+    try {
+      await host.waitForOpen();
+      host.send("\x1bOQ");
+      const picker = await host.waitForOpen();
+      await host.pending();
+      host.send("file-");
+      const evidence: Array<{ rows: number; expected: string; screen: string[]; overlay: string[] }> = [];
+      const capture = (rows: number, expected: string) => {
+        const screen = host.screen().map(stripVTControlCharacters);
+        const bounds = picker?.handle?.getBounds();
+        evidence.push({
+          rows,
+          expected,
+          screen,
+          overlay: bounds ? screen.slice(bounds.row, bounds.row + bounds.height) : [],
+        });
+      };
+      for (const rows of [32, 8, 3, 12]) {
+        host.resize(80, rows);
+        host.send("\x1b[5~");
+        host.send("\x1b[5~");
+        host.send("\x1b[Z");
+        capture(rows, "→ [x] file-00");
+        host.send("\x1b[Z");
+        capture(rows, "→ [ ] file-00");
+        host.send("\x1b[A"); // Ordinary up still wraps to the last match.
+        host.send("\t");
+        capture(rows, "→ [x] file-17");
+        host.send("\t");
+        capture(rows, "→ [ ] file-17");
+        host.send("\x1b[5~"); // Page up moves from index 17 to 7.
+        host.send("\x1b[Z");
+        capture(rows, "→ [ ] file-06");
+      }
+      host.send("\x03"); // Hard cancellation remains usable with Escape remapped.
+      await command;
+      expect(errors).toEqual([]);
+      expect(
+        fixture.manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "scope-state"),
+      ).toEqual(originalScope);
+      for (const item of evidence) {
+        expect(item.screen.length).toBeLessThanOrEqual(item.rows);
+        expect(item.screen.every((line) => visibleWidth(line) <= 80)).toBe(true);
+        expect(item.overlay.join("\n")).toContain(item.expected);
+      }
+      expect((await callTool(session, "write", { path: fixture.outside, content: "blocked" })).isError).toBe(true);
+    } finally {
+      await disposeNativeSession(session);
+      await command;
+      host.dispose();
+    }
+  },
+);
+
+it.each(["regular", "fullscreen"] as const)(
   "%s task overlays retain their label on tiny terminals and drain cancellation",
   async (mode) => {
     const keys = nativeKeys({ "tui.select.cancel": "f4" });

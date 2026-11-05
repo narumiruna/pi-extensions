@@ -31,7 +31,7 @@ test("opens a clean file-only list with readable labels, a search placeholder, a
   await running;
 });
 
-test("Tab toggles and moves down; Shift+Tab toggles and moves up with wraparound", async () => {
+test("Tab toggles and moves down; Shift+Tab toggles and moves up without wrapping", async () => {
   const { tui, running, validate } = setup();
   await tui.waitForOpen();
   await tui.waitForPending();
@@ -42,8 +42,7 @@ test("Tab toggles and moves down; Shift+Tab toggles and moves up with wraparound
   expect(plain(tui.render())).toContain("→ [x] a file");
   expect(plain(tui.render())).toContain("[x] b");
   tui.send("\x1b[Z");
-  expect(plain(tui.render())).toContain("→ [ ] other");
-  expect(plain(tui.render())).toContain("[ ] a file");
+  expect(plain(tui.render())).toContain("→ [ ] a file");
   tui.press("tui.select.confirm");
   await running;
   expect(validate).toHaveBeenCalledWith(["/cwd/b"], expect.any(AbortSignal), []);
@@ -449,7 +448,7 @@ test.each([false, true])(
   async (fragmented) => {
     for (const [tail, next, selected] of [
       ["\t", "b1", "b0"],
-      ["\x1b[Z", "b2", "b0"],
+      ["\x1b[Z", "b0", "b0"],
       ["\x1b[B", "b1", undefined],
       ["\x1b[6~", "b2", undefined],
     ] as const) {
@@ -461,7 +460,7 @@ test.each([false, true])(
         tui.send(`\x1b[201~${tail}`);
       } else tui.send(`\x1b[200~b\x1b[201~${tail}`);
       const text = plain(tui.render());
-      expect(text, `tail=${JSON.stringify(tail)}`).toContain(`→ [ ] ${next}`);
+      expect(text, `tail=${JSON.stringify(tail)}`).toContain(`→ [${selected === next ? "x" : " "}] ${next}`);
       expect(text).toContain("> b");
       if (selected) expect(text).toContain(`[x] ${selected}`);
       else mark(tui);
