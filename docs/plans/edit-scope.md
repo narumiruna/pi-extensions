@@ -12,7 +12,7 @@ Before the fix, `packages/pi-edit-scope/src/picker-keys.ts` mapped `Shift+Tab` t
 
 The same expression made Tab wrap from the last result to the first. Mouse marking uses movement zero. Search order depends on paths and the query, not checkbox labels.
 
-The installed Pi `SelectList` implementation in `node_modules/@earendil-works/pi-tui/dist/components/select-list.js` clamps `setSelectedIndex()`, but its arrow actions wrap. The picker calculates the wrapped file ID before calling that setter. Keep the correction in the extension; do not change Pi or Kit.
+The installed Pi `SelectList` implementation in `node_modules/@earendil-works/pi-tui/dist/components/select-list.js` clamps `setSelectedIndex()`, but its arrow actions wrap. The old picker calculated the wrapped file ID before calling that setter. Keep the correction in the extension; do not change Pi or Kit.
 
 Existing test support is in `packages/pi-edit-scope/test/picker-fixture.ts`, `test/picker.test.ts`, `test/ui-host.ts`, and `test/ui.test.ts` under the same package. It supports raw key input, rendered highlights, checked-file validation, and real regular/fullscreen hosts.
 
@@ -70,6 +70,8 @@ Apply root `AGENTS.md`, `docs/extension-conventions.md`, and `docs/readme-conven
 - Final root test compilation passed. The final focused run passed 130 picker/marking/usability/host/UI tests plus the Help assertion test. All changed tests remain below the standard 5,000 ms timeout.
 - Full native `npm test` completed: 19,194 passed, four failed, and 34 skipped across 895 files. The failures are two new-file review assertions split by long macOS temporary paths, the filename-fallback test's assumption that NFC/NFD names are distinct on disk, and the Fleet background-exit fixture exceeding the Unix socket path limit.
 - An isolated worktree at base `5c2cdf2b` reproduced the same four failures (129 passed, four failed, one Windows-only skip). The affected path/Fleet implementations and background-exit test are unchanged. No unrelated behavior, skip, timeout, or test policy was changed.
+- Full Linux [CI run 41978897333](https://github.com/narumiruna/pi-extensions/actions/runs/41978897333) passed at implementation commit `57359372`: `npm run check`, root test compilation, and full `npm test` with no affected-test base. Results: 19,215 passed, 16 skipped, 894 passing files, one skipped file, and no unhandled errors.
+- Pull-request [CI run 41978898033](https://github.com/narumiruna/pi-extensions/actions/runs/41978898033) passed checks and 973 affected/root tests (two tests and one file skipped). CodeQL actions, JavaScript/TypeScript, and Python checks passed for the implementation commit.
 - Native CLI smoke passed all five paths: explicit package loading, trusted discovery, trust denial, print, and JSON. It made no provider request.
 - Complete diff review covered correctness, empty/single/multiple filtered results, raw identities, native input priority, mouse identity, cancellation, disposal, session ownership, shutdown, command compatibility, and scope. No new task, authority path, settings write, prompt change, or external request was added.
 - The package remains private. No Changeset is required for this unpublished package; no dependencies, entrypoints, metadata, visibility, versions, tags, or release workflows are changed.
@@ -80,7 +82,8 @@ Apply root `AGENTS.md`, `docs/extension-conventions.md`, and `docs/readme-conven
 - [x] Both marking directions stop at filtered-list boundaries, toggle only the intended file, and retain query, checks, and raw IDs; existing arrow, mouse, paste, Apply, and cancellation behavior passes in the 130-test focused run.
 - [x] Regular/fullscreen host tests retain the expected highlighted file through constrained heights and resize; custom-keybinding and terminal-protocol cases pass.
 - [x] README, Help, and the behavior reference agree with the tested contract; the final diff satisfies the touched-area rules without unrelated runtime or policy changes.
-- [ ] Root gates and the deterministic CLI smoke have passing evidence. Physical-terminal checks have evidence or an explicit maintainer-accepted limitation; unavailable checks remain open.
-- [ ] The handoff names applicable guides, semantic audits, checks, smokes, intentional deviations, release intent, and all unverified paths.
+- [x] Root gates and the deterministic CLI smoke have passing evidence: complete Linux CI and native CLI smoke, with the unchanged macOS failures disclosed above.
+- [ ] Physical-terminal checks have evidence or an explicit maintainer-accepted limitation. This remains open; headless tests are not a substitute. Use the manual handoff in the package behavior reference.
+- [x] The handoff in [draft PR #1810](https://github.com/narumiruna/pi-extensions/pull/1810) names applicable guides, semantic audits, checks, smokes, intentional deviations, release intent, and all unverified paths. The remaining terminal criterion prevents plan completion and deletion.
 
 Delete this plan only after every task and completion check has evidence and deletion is within the user-approved edit scope.
