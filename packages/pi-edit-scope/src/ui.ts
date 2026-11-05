@@ -1,7 +1,40 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { HorizontalRule, renderBoundedFrameLayout } from "@narumitw/pi-tui-kit";
+import { HorizontalRule, hardWrapTerminalDocument, renderBoundedFrameLayout } from "@narumitw/pi-tui-kit";
+
+export function scopeFrame(
+  tui: TUI,
+  theme: Theme,
+  width: number,
+  title: string,
+  context: readonly string[],
+  content: readonly string[],
+  priorityRows: readonly number[],
+  focusedRow?: number,
+  hints: readonly string[] = [],
+) {
+  // The owned overlay uses terminal bounds; three spare rows are presentation
+  // space, not a prediction of the native editor dock or another widget's height.
+  const rows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
+  const rule = new HorizontalRule({ ruleStyle: (line) => theme.fg("border", line) });
+  return renderBoundedFrameLayout({
+    width,
+    maxRows: Math.max(1, rows - 3),
+    rule: rule.render(width)[0] ?? "",
+    title: [theme.fg("accent", theme.bold(title))],
+    context: context.flatMap((line) => hardWrapTerminalDocument(line, width).map((part) => theme.fg("muted", part))),
+    content,
+    hints: hints.flatMap((line) => exactRows(line, width).map((part) => theme.fg("dim", part))),
+    compactHint: hints[0] ? theme.fg("dim", hints[0]) : "",
+    priorityRows,
+    focusedRow,
+  });
+}
+
+export function exactRows(value: string, width: number): string[] {
+  return hardWrapTerminalDocument(value, width);
+}
 
 /**
  * Pi does not expose the editor dock's allocated height to custom components.

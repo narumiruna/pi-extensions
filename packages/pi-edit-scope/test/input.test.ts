@@ -16,9 +16,10 @@ import {
 } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { displayPath, exactRows } from "../src/display.js";
+import { displayPath } from "../src/display.js";
 import { ScopeInput, showScopePathInput } from "../src/input.js";
 import * as paths from "../src/paths.js";
+import { exactRows } from "../src/ui.js";
 
 const originalKeys = getKeybindings();
 beforeEach(() => setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS)));

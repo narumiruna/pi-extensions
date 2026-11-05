@@ -14,7 +14,7 @@ import { Container, Image, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { decodeImage, preflightOutput, publishImage } from "./artifacts.js";
 import { generateImageRequest, getImageAuthStatus, MAX_PROMPT_CHARS } from "./image-client.js";
-import { showImagegenMenu } from "./menu.js";
+import type { showImagegenMenu } from "./menu.js";
 import { type ImagegenSettings, SettingsStore } from "./settings.js";
 
 const TOOL_NAME = "codex_imagegen";
@@ -82,7 +82,11 @@ export function createImagegenExtension(overrides: Partial<Dependencies> = {}) {
   const dependencies: Dependencies = {
     request: generateImageRequest,
     publish: publishImage,
-    menu: showImagegenMenu,
+    menu: async (ctx, owner) => {
+      const { showImagegenMenu } = await import("./menu.js");
+      if (owner.signal.aborted || !owner.isCurrent()) return;
+      await showImagegenMenu(ctx, owner);
+    },
     ...overrides,
   };
   return (pi: ExtensionAPI) => {

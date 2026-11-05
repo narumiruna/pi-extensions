@@ -55,6 +55,7 @@ The side thread stays separate until you explicitly bring context to the main ed
 
 Both routes require TUI mode and a model with usable credentials; see [Settings](#-settings).
 Only one BTW flow can be open per session; close it before running `/btw` again.
+Menus, the context picker, and conversation UI load on first use instead of during Pi startup.
 Side questions and selected conversation context are sent to that model's provider.
 Bringing context back fills the main editor without submitting; replacing an existing draft requires confirmation.
 Ctrl+C cancels the response and discards the current draft and queued questions, but completed exchanges remain resumable in memory.

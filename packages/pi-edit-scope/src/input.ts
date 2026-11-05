@@ -1,8 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Input, matchesKey, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
-import { displayError, displayPath, exactRows, scopeFrame } from "./display.js";
+import { displayError, displayPath } from "./display.js";
 import { resolveScopeTarget, type ScopeTarget } from "./paths.js";
+import { exactRows, scopeFrame } from "./ui.js";
 
 const PASTE_START = "\u001b[200~";
 const PASTE_END = "\u001b[201~";

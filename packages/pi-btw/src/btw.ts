@@ -1,30 +1,19 @@
 import { type Api, clampThinkingLevel, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { MenuContext, RunMenuResult } from "@narumitw/pi-tui-kit";
-import {
-  type BtwBringToMainSegment,
-  type BtwBringToMainSummary,
+import type {
+  BtwBringToMainSegment,
+  BtwBringToMainSummary,
   BtwTextRangeSelector,
-  type BtwTextRangeSelectorState,
-  buildQuickBringToMainSegments,
-  estimateBringToMainTokens,
-  formatBtwBringToMain,
-  getAnsweredTurns,
-  summarizeBringToMain,
+  BtwTextRangeSelectorState,
 } from "./bring-to-main.js";
 import type { BtwDisplayModel } from "./conversation-chrome.js";
-import { type RunBtwFullscreen, runBtwFullscreen } from "./fullscreen-ui.js";
-import { importMainUpdates } from "./import-main-updates.js";
+import type { RunBtwFullscreen } from "./fullscreen-ui.js";
+import type { importMainUpdates } from "./import-main-updates.js";
 import { buildMainContextSnapshot, captureMainContextSource } from "./main-context-snapshot.js";
 import { registerBtwMainThreadUpdates } from "./main-thread-updates.js";
-import { pickMainEntry } from "./main-tree-picker.js";
-import {
-  type BtwCommandMenuResult,
-  type BtwResumeThreadSummary,
-  runBtwMenuPreservingEditor,
-  showBtwCommandMenu,
-  showBtwCustomPreservingEditor,
-} from "./menu.js";
+import type { pickMainEntry } from "./main-tree-picker.js";
+import type { BtwCommandMenuResult, BtwResumeThreadSummary } from "./menu.js";
 import { type BtwSessionLifetime, registerBtwSessionLifetimes } from "./session-lifetime.js";
 import {
   type BtwSettings,
@@ -48,12 +37,7 @@ import {
 } from "./side-thread.js";
 import { sanitizeSingleLine } from "./text.js";
 import { type BtwMarkdownTransformers, prepareBtwTranscriptMarkdown } from "./transcript-markdown.js";
-import {
-  BtwAnsweringView,
-  type BtwThinkingControl,
-  BtwTranscriptPager,
-  type TranscriptPagerAction,
-} from "./transcript-pager.js";
+import type { BtwThinkingControl, TranscriptPagerAction } from "./transcript-pager.js";
 
 export { buildConversationContext } from "./conversation-context.js";
 export {
@@ -206,13 +190,27 @@ export interface BtwExtensionDependencies {
   runFullscreen?: RunBtwFullscreen;
 }
 
+const runFullscreenOnFirstUse: RunBtwFullscreen = async (ctx, run, options) => {
+  const { runBtwFullscreen } = await import("./fullscreen-ui.js");
+  if (ctx.signal?.aborted || options?.signal?.aborted || options?.canRestoreParent?.() === false) {
+    throw new DOMException("Pi BTW session ended", "AbortError");
+  }
+  return runBtwFullscreen(ctx, run, options);
+};
+
+const pickEntryOnFirstUse: typeof pickMainEntry = async (pi, ctx) => {
+  const { pickMainEntry } = await import("./main-tree-picker.js");
+  if (ctx.signal?.aborted) return { kind: "closed" };
+  return pickMainEntry(pi, ctx);
+};
+
 export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependencies = {}) {
   const showCommandMenu = dependencies.showCommandMenu ?? showCommandMenuForBtw;
-  const pickEntry = dependencies.pickMainEntry ?? pickMainEntry;
+  const pickEntry = dependencies.pickMainEntry ?? pickEntryOnFirstUse;
   const loadSettings = dependencies.loadSettings ?? loadSettingsForCommand;
   const resolveModel = dependencies.resolveModel ?? resolveBtwModelForCommand;
   const runThread = dependencies.runThread ?? runBtwThread;
-  const runFullscreen = dependencies.runFullscreen ?? runBtwFullscreen;
+  const runFullscreen = dependencies.runFullscreen ?? runFullscreenOnFirstUse;
   const subscribeMainThreadUpdates = registerBtwMainThreadUpdates(pi);
   const getLifetime = registerBtwSessionLifetimes(pi);
   const sessionThreads = new WeakMap<BtwSessionLifetime, Map<string, BtwThreadState>>();
@@ -391,6 +389,8 @@ async function showCommandMenuForBtw(
   ctx: ExtensionCommandContext,
   resumeThreads: readonly BtwResumeThreadSummary[],
 ): Promise<BtwCommandMenuResult> {
+  const { showBtwCommandMenu } = await import("./menu.js");
+  if (ctx.signal?.aborted) return "closed";
   return showBtwCommandMenu(ctx, {
     currentThinkingLevel: pi.getThinkingLevel(),
     resumeThreads,
@@ -530,7 +530,10 @@ export async function runBtwThread({
         if (ctx.signal?.aborted || action.kind === "close") return { kind: "closed" };
         if (action.kind === "importMainUpdates") {
           composerDraft = action.questionDraft;
-          const result = await (dependencies.importUpdates ?? importMainUpdates)(thread, ctx);
+          const importUpdates =
+            dependencies.importUpdates ?? (await import("./import-main-updates.js")).importMainUpdates;
+          if (ctx.signal?.aborted) return { kind: "closed" };
+          const result = await importUpdates(thread, ctx);
           if (ctx.signal?.aborted || result === "close") return { kind: "closed" };
           continue;
         }
@@ -592,6 +595,18 @@ export async function chooseBringToMain(
   ctx: ExtensionCommandContext,
   dependencies: ChooseBringToMainDependencies = {},
 ): Promise<BtwBringToMainChoice> {
+  if (ctx.signal?.aborted) return { kind: "closed" };
+  const [
+    {
+      getAnsweredTurns,
+      buildQuickBringToMainSegments,
+      estimateBringToMainTokens,
+      formatBtwBringToMain,
+      summarizeBringToMain,
+      BtwTextRangeSelector,
+    },
+    { showBtwCustomPreservingEditor },
+  ] = await Promise.all([import("./bring-to-main.js"), import("./menu.js")]);
   if (ctx.signal?.aborted) return { kind: "closed" };
   const answered = getAnsweredTurns(thread.turns);
   if (answered.length === 0) return { kind: "back" };
@@ -701,7 +716,10 @@ async function showBringToMainPreview(
   draft: string,
   summary: BtwBringToMainSummary,
 ): Promise<BtwBringToMainPreviewAction> {
-  const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+  const [{ defineMenu, runMenu }, { runBtwMenuPreservingEditor }] = await Promise.all([
+    import("@narumitw/pi-tui-kit"),
+    import("./menu.js"),
+  ]);
   if (ctx.signal?.aborted) return { kind: "close" };
   let confirmed = false;
   const count = summary.messages === 1 ? "1 message" : `${summary.messages} messages`;
@@ -741,7 +759,10 @@ async function showBtwMenu(
   options: readonly string[],
   initialValue?: string,
 ): Promise<BtwMenuSelectorAction> {
-  const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+  const [{ defineMenu, runMenu }, { runBtwMenuPreservingEditor }] = await Promise.all([
+    import("@narumitw/pi-tui-kit"),
+    import("./menu.js"),
+  ]);
   if (ctx.signal?.aborted) return { kind: "close" };
   const items = options.map((label, index) => ({ id: `option-${index}`, label }));
   const initialIndex = initialValue === undefined ? -1 : options.indexOf(initialValue);
@@ -867,6 +888,8 @@ async function askThreadQuestion(
   ctx: ExtensionCommandContext,
   steering: BtwThreadSteeringControl,
 ) {
+  const { BtwAnsweringView } = await import("./transcript-pager.js");
+  if (ctx.signal?.aborted) return { kind: "aborted" as const };
   const createMarkdownTransformers = await prepareCurrentTranscriptMarkdown(thread, question, ctx);
   if (!createMarkdownTransformers || ctx.signal?.aborted) return { kind: "aborted" as const };
   return ctx.ui.custom<Awaited<ReturnType<typeof completeSideThreadTurn>>>((tui, theme, keybindings, done) => {
@@ -918,6 +941,8 @@ async function showThreadComposer(
   thinking: BtwThreadThinkingControl,
   model?: BtwDisplayModel,
 ): Promise<TranscriptPagerAction> {
+  const { BtwTranscriptPager } = await import("./transcript-pager.js");
+  if (ctx.signal?.aborted) return { kind: "close" };
   const createMarkdownTransformers = await prepareCurrentTranscriptMarkdown(thread, initialQuestion, ctx);
   if (!createMarkdownTransformers || ctx.signal?.aborted) return { kind: "close" };
   let statusLeaf: string | null | undefined;
