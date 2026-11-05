@@ -8,7 +8,8 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 
 - Starts and manages Plan mode through `/plan`, `/plan start`, or `/plan <prompt>`.
 - Blocks mutations, inactive helpers, and unsafe shell forms while keeping helper schemas stable.
-- Uses structured questions for important ambiguity and explicit completion for a decision-ready plan.
+- Switches between structured questionnaires and free discussion without leaving read-only planning.
+- Uses explicit completion for a decision-ready plan.
 - Reviews the complete plan before implementation, export, save, further planning, or discard.
 - Implements in the planning session or a fresh linked session with the approved plan.
 - Configures persistent or one-shot destination model and thinking choices for fresh implementation.
@@ -55,7 +56,7 @@ flowchart LR
     start["Start: /plan or /plan with a prompt"]
     start --> explore["Explore safely: inspect and clarify"]
     explore --> complete["Complete the plan with plan_mode_complete"]
-    complete --> review["Review the ready plan"]
+    complete --> review["Review the ready plan: use /plan in discussion"]
     review -->|Revise| explore
     review -->|Implement here| current["Current session: planning context retained"]
     review -->|Start fresh| fresh["Fresh session: approved plan transferred"]
@@ -77,7 +78,12 @@ sequenceDiagram
     Plan->>User: Ask material questions when needed
     User-->>Plan: Answer or refine the request
     Plan->>Pi: Submit the complete plan
-    Pi-->>User: Show the ready-plan review
+    alt Questionnaires enabled
+        Pi-->>User: Show the ready-plan action menu
+    else Free discussion
+        Pi-->>User: Display and store the ready plan without a menu
+        User->>Pi: Open /plan when ready
+    end
     alt Implement here
         Pi->>Work: Restore Normal mode in the current session
     else Start fresh and implement
@@ -89,7 +95,7 @@ sequenceDiagram
 
 | Command | Purpose |
 | --- | --- |
-| `/plan` | Start or manage planning, review a plan, or choose same-session or fresh-session implementation. |
+| `/plan` | Start or manage planning, switch questionnaire/discussion mode, review a plan, or choose same-session or fresh-session implementation. |
 | `/plan start` | Enter Plan mode without sending a model message. |
 | `/plan <prompt>` | Start planning with a prompt, or send a follow-up while already active. |
 | `/plan tools` | Choose a session-specific tool policy, then start; cancellation changes nothing. |
@@ -114,7 +120,7 @@ See [command workflows](./docs/command-workflows.md) for tool selection, busy-st
 ## 🔒 Security and privacy
 
 While Plan mode is active, the policy blocks built-in editing tools and instructs the agent not to edit files or implement the change.
-It should explore first and ask structured questions when a preference or tradeoff materially changes the plan.
+It should explore first and ask structured questions when a preference or tradeoff materially changes the plan, or ask in plain text during free discussion.
 Configure persistent defaults or a one-workflow tool override before activation; active and ready workflows lock those controls.
 
 Plan mode registers `plan_mode_question` and `plan_mode_complete` during extension load and never changes their active status itself.
@@ -161,6 +167,19 @@ Trusted commands can still mutate data or execute code with Pi's permissions; se
 
 ## 🧭 Planning and implementation
 
+Each new Plan workflow starts with questionnaires enabled.
+In TUI, F2 switches between questionnaires and free discussion only when the main editor is idle or the current workflow's questionnaire is open; it does not toggle Plan mode itself.
+If an effective native Pi keybinding uses F2, this shortcut is not registered or shown; use the active `/plan` menu instead.
+Other running work does not accept the toggle.
+Switching from a questionnaire discards all unfinished answers and notes, leaves the main prompt draft unchanged, and stops the questionnaire run without sending a message.
+Enabling questionnaires again does not call the model or reopen old questions.
+
+Free discussion keeps the same read-only restrictions and allows plain-text questions without questionnaire dialogs.
+Completed plans are still displayed, stored, and marked `plan ready`, but no automatic action menu opens; use `/plan` manually to implement, save, export, revise, exit, or enable questionnaires.
+The editor widget shows the interaction mode and the available F2 or `/plan` entry point, including when a plan is ready.
+The interaction mode restores with the active workflow on reload or resume; a new workflow starts with questionnaires enabled.
+See [interaction switching](./docs/command-workflows.md#questionnaires-and-free-discussion) for RPC behavior and recovery.
+
 `plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path.
 In TUI mode, a single question shows its header as plain muted text, submits as soon as its preset or custom answer is confirmed, and does not show tabs, Review, or question-navigation controls.
 Add an optional note with `n` before confirming a single preset answer.
@@ -198,7 +217,8 @@ Termination is best effort: if a model puts it in a parallel tool batch, Pi term
 The prompt therefore requires the completion call to be standalone and last.
 The extension deliberately does not infer completion from phrases such as “I will present the plan,” and ordinary research or clarification turns never trigger automatic retries.
 `/plan finalize` and its exact canonical finalization prompt are explicit recovery requests.
-If one of those requests ends normally without a valid structured question or completed plan, Plan mode waits for `agent_settled` and retries once with stronger tool guidance.
+With questionnaires enabled, if one of those requests ends normally without a valid structured question or completed plan, Plan mode waits for `agent_settled` and retries once with stronger tool guidance.
+In free discussion, `/plan finalize` can finish the plan or ask a remaining material question in plain text; it does not start this structured-tool retry.
 A valid question, accepted completion, user cancellation, explicit exit, workflow supersession, reload, session replacement, or shutdown cancels the retry.
 A second prose-only failure leaves Plan mode active, warns in interactive modes, and requires another explicit `/plan finalize` request.
 
@@ -278,14 +298,16 @@ The extension deliberately does not infer completion from assistant prose or age
 Under **Off — conversation history only**, implementation messages remain ordinary conversation history and there is no active plan for `/plan exit` to remove.
 Choosing Stay before implementation keeps the plan ready.
 Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives.
-For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable.
+With questionnaires enabled, for clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable.
+Free discussion can continue in plain text and uses the same revision flow when the user sends a follow-up.
 Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines.
 With `@narumitw/pi-statusline`, this appears in the extension status area:
 
-- `plan active`: Plan mode is enabled and still gathering context or drafting a plan.
-- `plan ready`: A completed plan is stored until you implement it, export it, save it, continue planning, or exit Plan mode.
+- `plan active`: Plan mode is enabled with questionnaires available and is gathering context or drafting a plan.
+- `plan discussion`: Free discussion is active with questionnaires paused; file edits remain blocked.
+- `plan ready`: A completed plan is stored until you implement it, export it, save it, continue planning, or exit Plan mode; the widget still shows free discussion when active.
 - `plan saved`: One completed plan is stored outside model context in the current session until you implement or clear it.
 - `plan implementing`: The exact accepted plan is guaranteed under **Through first implementation run** or **Until manually cleared**.
 
@@ -302,6 +324,7 @@ During a guaranteed-plan implementation, it removes both the original implementa
 Plan and Normal requests share one append-only conversation.
 The extension appends one hidden, model-visible, versioned Plan contract before the first Plan prompt and one Normal contract before the first post-Plan Normal or implementation prompt.
 Ordinary linear turns do not rewrite or duplicate these contracts.
+A separate versioned interaction contract is appended when a workflow starts or the user switches between questionnaires and discussion; existing Plan contracts and conversation history are not rewritten.
 The Plan contract explains native-tool opt-in and per-call nested enforcement; this wording changes future Plan transitions without rewriting existing transition messages.
 **Implement here** retains the Plan dialogue, structured questions, tool calls, completion evidence, and `Implement the plan.` kickoff in order.
 **Start fresh and implement** is the isolation path and transfers only the approved plan plus the Normal contract to a linked session.
@@ -376,8 +399,9 @@ The optional file is read at session start and watched for changes; only an expl
 ```
 
 By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
-The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
-Until then, the current shortcut binding stays unchanged.
+The existing Plan-mode toggle shortcut (`toggleShortcut`) is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
+Until then, that shortcut binding stays unchanged.
+This setting is unrelated to the conditional F2 questionnaire/discussion toggle and does not configure it.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
 Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
@@ -398,7 +422,8 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 
 - Plan mode is conversational collaboration, not TODO or progress tracking.
 - `/plan <prompt>` enters Plan mode before submitting the prompt.
-- The agent uses `plan_mode_question` for material preferences and completes with a standalone `plan_mode_complete` call instead of prose detection.
+- With questionnaires enabled, the agent uses `plan_mode_question` for material preferences; free discussion permits plain-text questions.
+- The agent completes with a standalone `plan_mode_complete` call instead of prose detection.
 - `update_plan` is blocked until the explicit implementation boundary restores Normal mode.
 - The default `clear-on-start` policy uses conversation history; `clear-after-first-run` and `keep` add exact-plan guarantees.
 - Append-only Plan and Normal contracts keep helper schemas stable, but Pi's tool policy is risk reduction rather than Codex sandbox enforcement.

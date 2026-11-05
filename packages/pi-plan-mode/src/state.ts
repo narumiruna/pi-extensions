@@ -4,6 +4,7 @@ import {
   planFromCompletionDetails,
 } from "./completion-tool.js";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
+import type { PlanInteractionMode } from "./interaction-contract.js";
 import {
   IMPLEMENTATION_PLAN_RETENTIONS,
   type ImplementationPlanRetention,
@@ -48,8 +49,18 @@ export interface PlanModeWorkflowToolPolicy {
   resolved: boolean;
 }
 
+export interface PlanInteractionRestoration {
+  version: 1;
+  mode: PlanInteractionMode;
+  boundary: { length: number; hash: string };
+}
+
 export interface PlanModeState {
   enabled: boolean;
+  /** An absent value in an enabled legacy workflow means questions. */
+  interactionMode?: PlanInteractionMode;
+  /** Historical model-visible anchors survive toggles and exits, not as active interaction state. */
+  interactionRestorations?: PlanInteractionRestoration[];
   latestPlan?: string;
   latestPlanSource?: PlanCompletionSource;
   awaitingAction: boolean;
@@ -89,6 +100,12 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
   if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false };
 
   const enabled = entry.data.enabled === true;
+  const interactionMode = entry.data.interactionMode === "discussion" ? "discussion" : "questions";
+  const interactionRestorations = Array.isArray(entry.data.interactionRestorations)
+    ? entry.data.interactionRestorations
+        .map(normalizeInteractionRestoration)
+        .filter((value): value is PlanInteractionRestoration => value !== undefined)
+    : [];
   const persistedSource = enabled ? planCompletionSource(entry.data.latestPlanSource) : undefined;
   const persistedPlan = enabled ? normalizePersistedPlan(entry.data.latestPlan) : undefined;
   const recoveredPlan = enabled && !persistedPlan ? latestCompletionPlan(branch.slice(stateEntryIndex + 1)) : undefined;
@@ -100,6 +117,8 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     : normalizePendingImplementationRuntime(entry.data.pendingImplementationRuntime);
   return {
     enabled,
+    ...(enabled && entry.data.interactionMode !== undefined ? { interactionMode } : {}),
+    ...(interactionRestorations.length ? { interactionRestorations } : {}),
     latestPlan,
     latestPlanSource: enabled
       ? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
@@ -115,6 +134,27 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
   };
+}
+
+function normalizeInteractionRestoration(value: unknown): PlanInteractionRestoration | undefined {
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    (value.mode !== "questions" && value.mode !== "discussion") ||
+    !isRecord(value.boundary)
+  )
+    return undefined;
+  const mode = value.mode;
+  const { length, hash } = value.boundary;
+  if (
+    typeof length !== "number" ||
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    typeof hash !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(hash)
+  )
+    return undefined;
+  return { version: 1, mode, boundary: { length, hash } };
 }
 
 function normalizeWorkflowToolPolicy(value: unknown): PlanModeWorkflowToolPolicy | undefined {

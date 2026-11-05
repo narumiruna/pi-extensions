@@ -25,10 +25,40 @@ Reopen the selector to refresh newly registered tools.
 Active and ready workflows lock tools and settings; exit and start a new workflow to change the allowlist.
 See [Planning and implementation](../README.md#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
 
+## Questionnaires and free discussion
+
+Every new Plan workflow starts with questionnaires enabled.
+In TUI, F2 switches the active workflow between questionnaires and free discussion only while the main editor is idle or that workflow's questionnaire is open.
+It does not leave Plan mode or change its tool policy: file edits and unsafe shell forms remain blocked.
+If any effective native Pi keybinding uses F2, Plan mode does not register or display F2 and does not choose a replacement key.
+Use **Switch to free discussion** or **Enable questionnaires** in the active `/plan` menu instead, including when a completed plan is ready.
+The widget shows F2 only when available, otherwise the `/plan` entry point.
+The existing `toggleShortcut` setting still controls entry to and exit from Plan mode, not this interaction switch.
+
+Switching from an open questionnaire closes it, discards every unfinished answer, custom answer, and note, and stops its run's automatic continuation.
+The main prompt draft stays unchanged; no questionnaire content is copied into it and no message is sent.
+Free discussion permits plain-text follow-up questions and ordinary text responses without opening questionnaires.
+The agent cannot enable questionnaires itself.
+Enabling them again changes only the interaction mode: it does not call the model, reopen old questions, or open a previously suppressed ready menu.
+After the next user message, the agent decides whether new questions are needed from the latest discussion.
+
+A completed plan in discussion is displayed and stored with `plan ready`, while the widget continues to show free discussion.
+No automatic action menu takes focus; open `/plan` manually to implement, save, export, revise, or exit.
+Further discussion uses the existing plan revision flow.
+`/plan finalize` can complete the plan or ask a material question in plain text without the structured-tool retry used when questionnaires are enabled.
+The interaction mode restores with its active workflow after reload, resume, branch navigation, and compaction; old sessions without this state use questionnaires.
+Leaving, saving, or handing off the plan does not carry discussion mode into the next workflow.
+
+RPC uses the same active `/plan` menu while idle; it does not receive the TUI F2 shortcut.
+RPC questionnaire cancellation keeps its existing behavior and does not switch interaction mode.
+Other running work and unrelated dialogs do not accept the toggle.
+Print and JSON modes do not add interactive UI or an interaction-switch route.
+
 ## Busy transitions and recovery
 
 Wait for Pi's run to settle before starting, exiting, saving, exporting a ready plan, implementing, or using another state-changing menu action or configured shortcut.
 Busy transitions leave state unchanged and report a warning in TUI/RPC or an error in print/JSON mode.
+The scoped F2 switch inside the current questionnaire is the only interaction-switch exception described above.
 An ordinary follow-up or `/plan finalize` can still run while Plan mode is active because neither changes its mode contract.
 
 `show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.

@@ -35,6 +35,8 @@ interface PlanMenuOptions extends MenuLifecycle {
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
   implementationDefaults?: ImplementationRuntimeSelection;
   hasReadyPlan: boolean;
+  interactionMode?: "questions" | "discussion";
+  toggleInteraction?(): void;
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
   show(): void;
@@ -51,6 +53,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
   type Screen = "main" | "fresh" | "models" | "thinking" | "export";
   type Action =
     | "show"
+    | "toggle-interaction"
     | "finalize"
     | "implement-here"
     | "select-model"
@@ -66,6 +69,15 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     options.implementationDefaults,
     options.implementFresh,
   );
+  const interactionItems = options.toggleInteraction
+    ? [
+        {
+          id: "toggle-interaction",
+          label: options.interactionMode === "discussion" ? "Enable questionnaires" : "Switch to free discussion",
+          action: "toggle-interaction" as const,
+        },
+      ]
+    : [];
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start: "main",
     screens: {
@@ -93,11 +105,13 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
               },
               { id: "export", label: "Export plan…", to: "export" },
               { id: "save", label: "Save for later", action: "save" },
+              ...interactionItems,
               { id: "stay", label: "Stay in Plan mode", action: "stay" },
               { id: "exit", label: "Discard plan and exit", action: "exit" },
             ]
           : [
               { id: "finalize", label: "Request final plan", action: "finalize" },
+              ...interactionItems,
               { id: "stay", label: "Stay in Plan mode", action: "stay" },
               { id: "exit", label: "Exit Plan mode", action: "exit" },
             ],
@@ -111,6 +125,10 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     actions: {
       show: async () => {
         options.show();
+        return { kind: "close" };
+      },
+      "toggle-interaction": async () => {
+        options.toggleInteraction?.();
         return { kind: "close" };
       },
       finalize: async () => {

@@ -159,31 +159,11 @@ test("automatic and manual ready menus expose Save for later", async () => {
   for (const automatic of [true, false]) {
     const mock = createMockPi({ activeTools: ["read", "edit"] });
     planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+    const selections: Array<{ title: string; options: string[] }> = [];
     const context = createMockContext({
       hasUI: true,
       select: async (title: string, options: string[]) => {
-        assert.match(title, /Plan reinjection: Off; use conversation history only/i);
-        assert.deepEqual(
-          options.filter((option) => option !== "Close"),
-          automatic
-            ? [
-                "Implement here",
-                "Start fresh and implement",
-                "Export plan…",
-                "Save for later",
-                "Stay in Plan mode",
-                "Discard plan and exit",
-              ]
-            : [
-                "Show latest proposed plan",
-                "Implement here",
-                "Start fresh and implement",
-                "Export plan…",
-                "Save for later",
-                "Stay in Plan mode",
-                "Discard plan and exit",
-              ],
-        );
+        selections.push({ title, options });
         return "Save for later";
       },
     });
@@ -192,6 +172,30 @@ test("automatic and manual ready menus expose Save for later", async () => {
     if (automatic) await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
     else await mock.commands.get("plan")?.handler("", context.ctx);
 
+    assert.equal(selections.length, 1);
+    assert.match(selections[0]?.title ?? "", /Plan reinjection: Off; use conversation history only/i);
+    assert.deepEqual(
+      selections[0]?.options.filter((option) => option !== "Close"),
+      automatic
+        ? [
+            "Implement here",
+            "Start fresh and implement",
+            "Export plan…",
+            "Save for later",
+            "Stay in Plan mode",
+            "Discard plan and exit",
+          ]
+        : [
+            "Show latest proposed plan",
+            "Implement here",
+            "Start fresh and implement",
+            "Export plan…",
+            "Save for later",
+            "Switch to free discussion",
+            "Stay in Plan mode",
+            "Discard plan and exit",
+          ],
+    );
     assert.equal(context.statuses.get("plan-mode"), "plan saved");
     assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
   }

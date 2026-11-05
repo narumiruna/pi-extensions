@@ -20,6 +20,7 @@ import {
 import { isStaleExtensionContextError } from "./extension-runtime.js";
 import {
   createFinalizationRequestCoordinator,
+  DISCUSSION_FINALIZE_PLAN_PROMPT,
   FINALIZE_PLAN_PROMPT,
   type FinalizationRunOutcome,
   RETRY_FINALIZE_PLAN_PROMPT,
@@ -35,6 +36,8 @@ import {
   createImplementationRetentionCoordinator,
   implementationRetentionPreview,
 } from "./implementation-retention.js";
+import { INTERACTION_CONTRACT_MESSAGE_TYPE } from "./interaction-contract.js";
+import { createInteractionCoordinator } from "./interaction-coordinator.js";
 import {
   invalidPlanMessage,
   latestAssistantStopReason,
@@ -60,7 +63,6 @@ import {
 } from "./presentation.js";
 import { renderPlanModeQuestionCall, renderPlanModeQuestionResult } from "./question-renderer.js";
 import {
-  answerPlanModeQuestions,
   normalizePlanModeQuestionParams,
   PLAN_MODE_QUESTION_PARAMS,
   PLAN_MODE_QUESTION_TOOL_NAME,
@@ -113,6 +115,7 @@ interface ReadyPresentationIntent {
   nonce: number;
   plan: string;
   source: PlanCompletionSource;
+  showMenu: boolean;
 }
 interface DeferredFreshImplementation {
   ctx: ExtensionContext;
@@ -185,6 +188,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let publishedContractMode: PlanModeContract | undefined;
   let modeContractsRelevant = false;
   let readyPresentationIntent: ReadyPresentationIntent | undefined;
+  let readyMenuController = new AbortController();
   let latestCommandContext: ExtensionCommandContext | undefined;
   let stagedFreshImplementation: DeferredFreshImplementation | undefined;
   const deferredFreshHandoff = createDeferredFreshHandoffCoordinator();
@@ -201,6 +205,34 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
   const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
+  const interaction = createInteractionCoordinator(pi, {
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    persistState,
+    captureCurrent: (ctx) => {
+      const session = ctx.sessionManager;
+      const generation = workflowGeneration;
+      const sessionGeneration = menuGeneration;
+      const owner = workflowOwner;
+      return () =>
+        currentSession === session &&
+        generation === workflowGeneration &&
+        sessionGeneration === menuGeneration &&
+        !menuController.signal.aborted &&
+        workflowMutex.isOwner(owner);
+    },
+    clearReadyIntent: () => {
+      invalidateReadyMenu();
+      readyPresentationIntent =
+        readyPresentationIntent?.source === "legacy_proposed_plan"
+          ? { ...readyPresentationIntent, showMenu: false }
+          : undefined;
+    },
+    resetFinalization: () => finalizationRequest.reset(),
+    updateUi,
+  });
   const planExports = createPlanExportController({
     getState: () => state,
     getSettings: () => settings,
@@ -227,6 +259,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     settings: showSettings,
     save: savePlanForLater,
     stay: updateUi,
+    toggleInteraction: (ctx) => {
+      interaction.toggle(ctx);
+    },
     exitReady: (ctx) => {
       if (exitPlanMode(ctx)) {
         ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
@@ -245,7 +280,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     parameters: PLAN_MODE_QUESTION_PARAMS,
     renderCall: renderPlanModeQuestionCall,
     renderResult: renderPlanModeQuestionResult,
-    async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
+    async execute(toolCallId, params: unknown, signal, _onUpdate, ctx) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
         return planModeQuestionCancelled(
           [],
@@ -260,6 +295,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
       finalizationRequest.satisfy();
 
+      if (interaction.questionsPaused()) return interaction.answer(toolCallId, parsed.questions, ctx, signal);
       if (!ctx.hasUI) {
         return planModeQuestionCancelled(
           parsed.questions,
@@ -268,16 +304,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         );
       }
 
-      const sessionGeneration = menuGeneration;
-      const questionWorkflowGeneration = workflowGeneration;
-      const questionOwner = workflowOwner;
-      return answerPlanModeQuestions(parsed.questions, ctx, {
-        isCurrent: () =>
-          sessionGeneration === menuGeneration &&
-          questionWorkflowGeneration === workflowGeneration &&
-          workflowMutex.isOwner(questionOwner),
-        isEnabled: () => state.enabled,
-      });
+      return interaction.answer(toolCallId, parsed.questions, ctx, signal);
     },
   });
 
@@ -483,6 +510,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   };
 
   pi.on("session_start", async (event, ctx) => {
+    interaction.disposeSession();
+    invalidateReadyMenu();
     cancelDeferredFreshImplementation();
     const generation = ++menuGeneration;
     finalizationRequest.reset();
@@ -508,6 +537,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     await applyPlanModeSettings(generation, ctx, true);
     if (generation !== menuGeneration || menuController.signal.aborted) return;
     initializePlanModeShortcut();
+    interaction.startSession(ctx, startupToggleShortcut);
     startPlanModeSettingsWatch(generation);
     if (!installRestoredState(restoredState, ctx)) return;
     implementationRetention.restore(state.activeImplementation);
@@ -529,7 +559,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return { cancel: true };
     }
     const target = ctx.sessionManager.getEntry(event.preparation.targetId);
-    if (target?.type !== "custom_message" || target.customType !== MODE_CONTRACT_MESSAGE_TYPE) {
+    if (
+      target?.type !== "custom_message" ||
+      (target.customType !== MODE_CONTRACT_MESSAGE_TYPE && target.customType !== INTERACTION_CONTRACT_MESSAGE_TYPE)
+    ) {
       return;
     }
     if (ctx.hasUI) {
@@ -576,6 +609,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    if (currentSession !== undefined && currentSession !== ctx.sessionManager) {
+      workflowMutex.unbindSession(ctx.sessionManager);
+      return;
+    }
+    interaction.disposeSession();
+    invalidateReadyMenu();
     cancelDeferredFreshImplementation();
     const shutdownSession = ctx.sessionManager;
     const runtimeApplication =
@@ -725,9 +764,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   });
 
+  pi.on("tool_execution_end", (event, ctx) => {
+    interaction.toolExecutionEnd(event.toolCallId, ctx);
+  });
+
+  pi.on("ui_prompt_start", (_event, ctx) => {
+    interaction.promptChanged(true, ctx);
+  });
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    interaction.promptChanged(false, ctx);
+  });
+
   pi.on("message_start", (event) => {
     if (
       state.enabled &&
+      interaction.mode() === "questions" &&
       event.message.role === "user" &&
       messageTextContent(event.message).trim() === FINALIZE_PLAN_PROMPT
     ) {
@@ -745,7 +796,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       state.enabled || modeContractsRelevant
         ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal")
         : result.messages;
-    return { messages: messages as typeof event.messages };
+    return { messages: interaction.transformContext(messages, ctx) as typeof event.messages };
   });
 
   pi.on("input", async (event, ctx) => {
@@ -789,6 +840,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     refreshStateForFirstPrompt(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
+      invalidateReadyMenu();
       cancelDeferredFreshImplementation();
       readyPresentationIntent = undefined;
       state = {
@@ -808,7 +860,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const text = latestAssistantText(event.messages);
     const parsedPlan = parseProposedPlan(text);
     if (parsedPlan.kind !== "valid") {
-      finalizationRequest.observeRunEnd(workflowGeneration, finalizationRunOutcome(event.messages));
+      if (interaction.mode() === "questions") {
+        finalizationRequest.observeRunEnd(workflowGeneration, finalizationRunOutcome(event.messages));
+      }
       if (parsedPlan.kind !== "absent") {
         ctx.ui.notify(invalidPlanMessage(parsedPlan.kind), "warning");
       }
@@ -823,7 +877,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const settledImplementationId = implementationRetention.implementationSettled(state.activeImplementation);
     if (settledImplementationId) clearActiveImplementation(settledImplementationId, ctx);
 
-    if (finalizationRequest.hasPendingRequest() && state.enabled && workflowMutex.isOwner(workflowOwner)) {
+    if (
+      interaction.mode() === "questions" &&
+      finalizationRequest.hasPendingRequest() &&
+      state.enabled &&
+      workflowMutex.isOwner(workflowOwner)
+    ) {
       if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
       const action = finalizationRequest.settle(workflowGeneration);
       if (action === "retry") {
@@ -855,8 +914,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
           { triggerTurn: false },
         );
       }
-      if (ctx.hasUI && completedPlanIsCurrent(intent)) {
-        await planActions.showReady(latestCommandContext ?? ctx);
+      if (intent.showMenu && ctx.hasUI && completedPlanIsCurrent(intent)) {
+        const controller = readyMenuController;
+        await planActions.showReady(latestCommandContext ?? ctx, {
+          signal: controller.signal,
+          isCurrent: () => completedPlanIsCurrent(intent) && interaction.mode() === "questions",
+        });
       }
       const request = stagedFreshImplementation;
       stagedFreshImplementation = undefined;
@@ -895,6 +958,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       state = {
         ...state,
         enabled: true,
+        interactionMode: "questions",
         awaitingAction: false,
         savedPlan: undefined,
         activeImplementation: undefined,
@@ -905,6 +969,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       beginWorkflowToolPolicy();
       applyPlanThinkingLevel();
       persistState();
+      interaction.publish("questions");
       updateUi(ctx);
       return true;
     } catch (error: unknown) {
@@ -938,6 +1003,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     state = {
       ...state,
       enabled: false,
+      interactionMode: undefined,
       latestPlan: undefined,
       latestPlanSource: undefined,
       awaitingAction: false,
@@ -1013,19 +1079,30 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     ) {
       return;
     }
+    invalidateReadyMenu();
     state = {
       ...state,
       latestPlan: normalized.plan,
       latestPlanSource: source,
       awaitingAction: true,
     };
-    readyPresentationIntent = {
-      nonce: ++nextReadyPresentationNonce,
-      plan: normalized.plan,
-      source,
-    };
+    const showMenu = interaction.mode() === "questions";
+    readyPresentationIntent =
+      showMenu || source === "legacy_proposed_plan"
+        ? {
+            nonce: ++nextReadyPresentationNonce,
+            plan: normalized.plan,
+            source,
+            showMenu,
+          }
+        : undefined;
     persistState();
     updateUi(ctx);
+  }
+
+  function invalidateReadyMenu() {
+    readyMenuController.abort(new DOMException("Plan presentation superseded", "AbortError"));
+    readyMenuController = new AbortController();
   }
 
   function completedPlanIsCurrent(intent: ReadyPresentationIntent) {
@@ -1069,6 +1146,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       ctx.ui.notify("Plan mode is not active. Use /plan first.", "warning");
       return;
     }
+    if (interaction.mode() === "discussion") {
+      finalizationRequest.reset();
+      sendPlanModeUserMessage(DISCUSSION_FINALIZE_PLAN_PROMPT, ctx);
+      return;
+    }
     finalizationRequest.request(workflowGeneration);
     if (!sendPlanModeUserMessage(FINALIZE_PLAN_PROMPT, ctx)) finalizationRequest.reset();
   }
@@ -1091,6 +1173,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     state = {
       ...state,
       enabled: false,
+      interactionMode: undefined,
       latestPlan: undefined,
       latestPlanSource: undefined,
       awaitingAction: false,
@@ -1238,6 +1321,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     state = {
       ...state,
       enabled: false,
+      interactionMode: undefined,
       latestPlan: undefined,
       latestPlanSource: undefined,
       awaitingAction: false,
@@ -1274,6 +1358,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       if (wasEnabled) {
         restoreWorkflowToolPolicy(state.workflowToolPolicy);
         publishModeContract("plan", ctx);
+        interaction.publish(interaction.mode());
         applyPlanThinkingLevel();
       }
       persistState();
@@ -1447,6 +1532,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function advanceWorkflowGeneration() {
+    interaction.reset();
+    invalidateReadyMenu();
     cancelDeferredFreshImplementation();
     workflowGeneration += 1;
     pendingWorkflowToolPolicy = undefined;
@@ -1953,6 +2040,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     previousOwner?: WorkflowMutexOwner,
   ) {
     const activatedOwner = workflowOwner;
+    interaction.reset();
     readyPresentationIntent = undefined;
     try {
       if (state.enabled) {
@@ -2020,7 +2108,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function updateUi(ctx: ExtensionContext) {
-    updatePlanModeUi(ctx, state, formatToolSummary);
+    updatePlanModeUi(ctx, state, formatToolSummary, interaction.shortcutLabel(ctx));
   }
 
   function clearUi(ctx: ExtensionContext) {

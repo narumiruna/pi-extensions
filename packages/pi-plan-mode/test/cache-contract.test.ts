@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { INTERACTION_CONTRACT_MESSAGE_TYPE } from "../src/interaction-contract.js";
+import { MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
 import planMode from "../src/plan-mode.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
@@ -19,6 +22,17 @@ interface CapturedRequest {
     tools: Array<{ name: string; description: unknown; parameters: unknown; constrainedSampling: unknown }>;
     messages: unknown[];
   };
+}
+
+function normalizedMessages(messages: unknown[]) {
+  return convertToLlm(messages as Parameters<typeof convertToLlm>[0]).map(({ role, content }) => ({
+    role,
+    content,
+  }));
+}
+
+function sentCustomMessages(mock: ReturnType<typeof createMockPi>): Record<string, unknown>[] {
+  return mock.sentMessages.map(({ message }) => ({ role: "custom", ...(message as Record<string, unknown>) }));
 }
 
 async function captureRequest(
@@ -66,7 +80,7 @@ async function captureRequest(
     providerPayload: {
       instructions: systemPrompt,
       tools: orderedDefinitions,
-      messages: visibleMessages,
+      messages: normalizedMessages(visibleMessages),
     },
   };
 }
@@ -147,12 +161,15 @@ test("native callable admission preserves normalized request definitions and ret
     ];
     const normal = await captureRequest("normal", mock, context.ctx, prefix);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    const contract = mock.sentMessages.at(-1)?.message;
-    const first = await captureRequest("plan", mock, context.ctx, [
-      ...prefix,
-      contract,
-      { role: "user", content: "Inspect" },
-    ]);
+    const transitions = sentCustomMessages(mock);
+    assert.deepEqual(
+      transitions.map((message) => message.customType),
+      [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE],
+    );
+    const contract = transitions.find((message) => message.customType === MODE_CONTRACT_MESSAGE_TYPE);
+    const firstMessages = [...prefix, ...transitions, { role: "user", content: "Inspect" }];
+    const first = await captureRequest("plan", mock, context.ctx, firstMessages);
+    assert.deepEqual(first.providerPayload.messages, normalizedMessages(firstMessages));
     const second = await captureRequest("plan", mock, context.ctx, [
       ...first.messages,
       { role: "assistant", content: "Inspection" },
@@ -162,9 +179,12 @@ test("native callable admission preserves normalized request definitions and ret
       assert.equal(request.systemPrompt, normal.systemPrompt);
       assert.deepEqual(request.providerPayload.tools, normal.providerPayload.tools);
       assert.deepEqual(request.activePromptMetadata, normal.activePromptMetadata);
-      assert.deepEqual(request.messages.slice(0, prefix.length), prefix);
+      assert.deepEqual(request.providerPayload.messages.slice(0, prefix.length), normal.providerPayload.messages);
     }
-    assert.deepEqual(second.messages.slice(0, first.messages.length), first.messages);
+    assert.deepEqual(
+      second.providerPayload.messages.slice(0, first.providerPayload.messages.length),
+      first.providerPayload.messages,
+    );
     assert.match(JSON.stringify(contract), /registered codemode or deferred tools/);
     assert.match(JSON.stringify(contract), /nested call/);
     assert.deepEqual(writes, []);
@@ -187,22 +207,36 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
 
   const normal = await captureRequest("normal", mock, context.ctx, [{ role: "user", content: "A" }]);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const planContract = mock.sentMessages.at(-1)?.message;
-  const plan = await captureRequest("plan", mock, context.ctx, [
-    { role: "user", content: "A" },
-    planContract,
-    { role: "user", content: "B" },
-  ]);
+  const activation = sentCustomMessages(mock);
+  assert.deepEqual(
+    activation.map((message) => message.customType),
+    [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE],
+  );
+  const planMessages = [...normal.messages, ...activation, { role: "user", content: "B" }];
+  const plan = await captureRequest("plan", mock, context.ctx, planMessages);
+  assert.deepEqual(plan.providerPayload.messages, normalizedMessages(planMessages));
+  assert.deepEqual(
+    plan.providerPayload.messages.slice(0, normal.providerPayload.messages.length),
+    normal.providerPayload.messages,
+  );
   await completePlan(mock, context.ctx);
   await mock.commands.get("plan")?.handler("implement", context.ctx);
-  const normalContract = mock.sentMessages.at(-1)?.message;
-  const implementation = await captureRequest("implementation", mock, context.ctx, [
-    { role: "user", content: "A" },
-    planContract,
-    { role: "user", content: "B" },
-    normalContract,
-    { role: "user", content: "Implement the plan." },
-  ]);
+  const transitions = sentCustomMessages(mock);
+  assert.deepEqual(
+    transitions.map((message) => message.customType),
+    [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE, MODE_CONTRACT_MESSAGE_TYPE],
+  );
+  const implementationMessages = [
+    ...plan.messages,
+    ...transitions.slice(activation.length),
+    ...mock.sentUserMessages.map(({ text }) => ({ role: "user", content: text })),
+  ];
+  const implementation = await captureRequest("implementation", mock, context.ctx, implementationMessages);
+  assert.deepEqual(implementation.providerPayload.messages, normalizedMessages(implementationMessages));
+  assert.deepEqual(
+    implementation.providerPayload.messages.slice(0, plan.providerPayload.messages.length),
+    plan.providerPayload.messages,
+  );
 
   assert.deepEqual(plan.activeTools, normal.activeTools);
   assert.deepEqual(implementation.activeTools, normal.activeTools);

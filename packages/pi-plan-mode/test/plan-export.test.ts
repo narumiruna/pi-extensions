@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { INTERACTION_CONTRACT_MESSAGE_TYPE } from "../src/interaction-contract.js";
+import { MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
 import planMode, { completePlanArguments } from "../src/plan-mode.js";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
 
@@ -74,7 +76,12 @@ test("ready plan export ends Plan mode without triggering a model turn", async (
     assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
     assert.equal(mock.thinkingLevel, "low");
     assert.equal(mock.sentUserMessages.length, 0);
-    assert.equal(mock.sentMessages.length, 2, "Plan and Normal contracts do not trigger turns");
+    assert.deepEqual(
+      mock.sentMessages.map(({ message }) => (message as { customType?: string }).customType),
+      [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE, MODE_CONTRACT_MESSAGE_TYPE],
+    );
+    assert.match(JSON.stringify(mock.sentMessages[2]?.message), /CONTRACT v1: NORMAL/u);
+    assert.ok(mock.sentMessages.every(({ options }) => (options as { triggerTurn?: boolean }).triggerTurn === false));
     assert.match(context.notifications.at(-1)?.message ?? "", /exported.*PLAN\.md.*Plan mode disabled/i);
   });
 });

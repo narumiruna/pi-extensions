@@ -187,6 +187,7 @@ for (const [name, initial, next] of [
   test(`watched shortcut ${name} stays pending until runtime reload`, async () => {
     await withShortcut(initial, async (f) => {
       const startup = f.registrations();
+      assert.deepEqual([...startup.keys()], initial ? [initial, "f2"] : ["f2"]);
       await f.change(next);
       assert.deepEqual(f.registrations(), startup, "settings reload must not change Pi's registered shortcuts");
       f.press(INPUT);
@@ -202,7 +203,7 @@ for (const [name, initial, next] of [
       await f.runner.emit({ type: "session_start", reason: "new" });
       assert.deepEqual(f.registrations(), startup);
       await f.reload();
-      assert.deepEqual([...f.registrations().keys()], next ? [next] : []);
+      assert.deepEqual([...f.registrations().keys()], next ? [next, "f2"] : ["f2"]);
       f.press(next === NEXT_KEY ? NEXT_INPUT : INPUT);
       assert.equal(f.active(), next !== undefined);
     });
@@ -237,7 +238,7 @@ for (const boundary of ["shutdown", "replacement"] as const) {
     else await shutdown({ reason: "quit" }, oldContext.ctx);
     resolveRead({ kind: "loaded", settings: { thinkingLevel: "inherit", toggleShortcut: KEY } });
     await pendingStart;
-    assert.deepEqual([...mock.shortcuts.keys()], boundary === "replacement" ? [NEXT_KEY] : []);
+    assert.deepEqual([...mock.shortcuts.keys()], boundary === "replacement" ? [NEXT_KEY, "f2"] : []);
     if (boundary === "replacement") await shutdown({ reason: "quit" }, nextContext.ctx);
   });
 }

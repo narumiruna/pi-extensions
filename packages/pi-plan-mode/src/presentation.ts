@@ -7,13 +7,32 @@ const STATUS_KEY = "plan-mode";
 const PLAN_WIDGET_KEY = "plan-mode-plan";
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
-export function updatePlanModeUi(ctx: ExtensionContext, state: PlanModeState, toolSummary: () => string) {
+export function updatePlanModeUi(
+  ctx: ExtensionContext,
+  state: PlanModeState,
+  toolSummary: () => string,
+  interactionShortcut?: string,
+) {
   ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
+  const discussion = state.interactionMode === "discussion";
+  const interactionHint = formatInteractionHint(state, ctx.mode === "tui" ? interactionShortcut : undefined);
   let lines: string[] | undefined;
   if (state.enabled && state.latestPlan) {
-    lines = ["Proposed plan ready", "Use /plan to implement, save, revise, or exit Plan mode."];
+    lines = [
+      "Proposed plan ready",
+      ...(discussion ? ["Plan mode: free discussion"] : []),
+      "Use /plan to implement, save, revise, or exit Plan mode.",
+      interactionHint,
+    ];
   } else if (state.enabled) {
-    lines = ["Plan mode: planning", toolSummary(), "Finish with plan_mode_complete when decision-ready."];
+    lines = [
+      discussion ? "Plan mode: free discussion" : "Plan mode: planning",
+      toolSummary(),
+      discussion
+        ? "Plain-text questions are allowed; questionnaires are paused."
+        : "Finish with plan_mode_complete when decision-ready.",
+      interactionHint,
+    ];
   } else if (state.savedPlan) {
     lines = ["Plan saved for later", "Use /plan to show, implement, or clear it."];
   } else if (state.activeImplementation) {
@@ -29,7 +48,14 @@ export function renderPlanModeWidget(lines: readonly string[], theme: Theme, wid
 
 function createPlanModeWidget(lines: readonly string[], theme: Theme): EditorStatusWidget {
   // Kit normalizes fractional and invalid widths before clipping sanitized body rows.
-  return new EditorStatusWidget({ theme, renderBody: () => lines.map(sanitizePlanModeWidgetLine) });
+  return new EditorStatusWidget({
+    theme,
+    renderBody: () =>
+      lines.map((line, index) => {
+        const text = sanitizePlanModeWidgetLine(line);
+        return index === 0 ? text : theme.fg("muted", text);
+      }),
+  });
 }
 
 export function sanitizePlanModeWidgetLine(value: string): string {
@@ -81,10 +107,12 @@ export function showPlanModePlan(pi: ExtensionAPI, ctx: ExtensionContext, title:
 
 export function planModeStatusText(state: PlanModeState, toolSummary: () => string) {
   if (state.enabled) {
-    if (state.latestPlan) {
-      return `Plan mode is active and a proposed plan is ready. ${toolSummary()}`;
-    }
-    return `Plan mode is active. ${toolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
+    const ready = state.latestPlan ? " A proposed plan is ready." : "";
+    const interaction =
+      state.interactionMode === "discussion"
+        ? "Free discussion is active; questionnaires are paused and plain-text questions are allowed."
+        : "Explore, ask, and finish with plan_mode_complete when decision-ready.";
+    return `Plan mode is active.${ready} ${interaction} File edits remain blocked. ${toolSummary()}`;
   }
   if (state.savedPlan) return "A plan is saved for later.";
   if (state.activeImplementation) return "An implementation plan is active.";
@@ -105,10 +133,15 @@ function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] |
   ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => createPlanModeWidget(snapshot, theme));
 }
 
+function formatInteractionHint(state: PlanModeState, interactionShortcut?: string) {
+  const action = state.interactionMode === "discussion" ? "enable questionnaires" : "switch to free discussion";
+  return interactionShortcut ? `${interactionShortcut}: ${action}.` : `Use /plan to ${action}.`;
+}
+
 function formatStatus(state: PlanModeState) {
   if (state.enabled) {
     if (state.awaitingAction || state.latestPlan) return "plan ready";
-    return "plan active";
+    return state.interactionMode === "discussion" ? "plan discussion" : "plan active";
   }
   if (state.savedPlan) return "plan saved";
   if (state.activeImplementation) return "plan implementing";

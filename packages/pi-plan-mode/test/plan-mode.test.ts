@@ -6,6 +6,8 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { planModeCompleted } from "../src/completion-tool.js";
 import { FINALIZE_PLAN_PROMPT, RETRY_FINALIZE_PLAN_PROMPT } from "../src/finalization-request.js";
+import { INTERACTION_CONTRACT_MESSAGE_TYPE, interactionContractFromMessage } from "../src/interaction-contract.js";
+import { createModeContractMessage, MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
 import planMode, {
   buildPlanModePrompt,
   completePlanArguments,
@@ -17,6 +19,16 @@ import planMode, {
 } from "../src/plan-mode.js";
 import { createMockContext, createMockPi } from "./support.js";
 import { renderMockWidget } from "./widget-support.js";
+
+function assertPlanMessages(mock: ReturnType<typeof createMockPi>, presentationTypes: string[] = []) {
+  assert.deepEqual(
+    mock.sentMessages.map(({ message }) => (message as { customType?: string }).customType),
+    [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE, ...presentationTypes],
+  );
+  assert.match(JSON.stringify(mock.sentMessages[0]?.message), /CONTRACT v1: PLAN/u);
+  assert.match(JSON.stringify(mock.sentMessages[1]?.message), /INTERACTION CONTRACT v1: QUESTIONS/u);
+  assert.ok(mock.sentMessages.every(({ options }) => (options as { triggerTurn?: boolean }).triggerTurn === false));
+}
 
 test("plan-mode registers question tools, command, and safety hooks without a CLI flag", () => {
   const mock = createMockPi({ activeTools: ["read", "bash"] });
@@ -580,7 +592,7 @@ test("plan show displays only a stored plan without triggering a model turn", as
   const context = createMockContext();
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await mock.commands.get("plan")?.handler("show", context.ctx);
-  assert.equal(mock.sentMessages.length, 1, "the hidden Plan contract is the only message");
+  assertPlanMessages(mock);
   assert.equal(mock.sentUserMessages.length, 0);
   assert.match(context.notifications.at(-1)?.message ?? "", /No completed plan/i);
 
@@ -590,7 +602,7 @@ test("plan show displays only a stored plan without triggering a model turn", as
   assert.ok(execute);
   await execute("complete", { plan: "# Show me" }, undefined, undefined, context.ctx);
   await mock.commands.get("plan")?.handler("show", context.ctx);
-  assert.equal(mock.sentMessages.length, 2);
+  assertPlanMessages(mock, ["proposed-plan"]);
   assert.equal(mock.sentUserMessages.length, 0);
   assert.match((mock.sentMessages.at(-1)?.message as { content?: string })?.content ?? "", /# Show me/);
 });
@@ -1000,7 +1012,7 @@ test("prose-only promise to present a plan remains active without false readines
   );
 
   assert.equal(context.statuses.get("plan-mode"), "plan active");
-  assert.equal(mock.sentMessages.length, 1, "only the hidden Plan contract is published");
+  assertPlanMessages(mock);
 });
 
 test("plan_mode_complete stores a visible terminating plan contract", async () => {
@@ -1059,7 +1071,7 @@ test("plan completion dispatches the ready menu once after agent_settled", async
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(selectCalls, 1);
-  assert.equal(mock.sentMessages.length, 1, "only the hidden Plan contract is published");
+  assertPlanMessages(mock);
   assert.equal(context.statuses.get("plan-mode"), "plan ready");
 });
 
@@ -1080,12 +1092,12 @@ test("legacy plan completion is presented once only after settlement", async () 
     context.ctx,
   );
   assert.equal(selectCalls, 0);
-  assert.equal(mock.sentMessages.length, 1, "only the hidden Plan contract is published");
+  assertPlanMessages(mock);
 
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(selectCalls, 1);
-  assert.equal(mock.sentMessages.length, 2);
+  assertPlanMessages(mock, ["proposed-plan"]);
   assert.match((mock.sentMessages.at(-1)?.message as { content?: string })?.content ?? "", /# Legacy/);
 });
 
@@ -1167,7 +1179,7 @@ test("repeated legacy agent_end events produce one settled presentation", async 
   await mock.events.get("agent_end")?.[0]?.(event, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(selectCalls, 1);
-  assert.equal(mock.sentMessages.length, 2);
+  assertPlanMessages(mock, ["proposed-plan"]);
 });
 
 test("no-UI completion remains ready without opening or duplicating presentation", async () => {
@@ -1182,7 +1194,7 @@ test("no-UI completion remains ready without opening or duplicating presentation
   await execute("complete", { plan: "# Headless" }, undefined, undefined, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(context.statuses.get("plan-mode"), "plan ready");
-  assert.equal(mock.sentMessages.length, 1, "only the hidden Plan contract is published");
+  assertPlanMessages(mock);
 });
 
 test("stale settled legacy presentation is ignored without losing ready state", async () => {
@@ -1377,9 +1389,10 @@ test("inactive context discards completed-plan tool results", async () => {
   const active = (await contextHook({ messages: allMessages }, context.ctx)) as {
     messages: unknown[];
   };
-  assert.equal((active.messages[0] as { customType?: string }).customType, "plan-mode-transition");
-  assert.match(JSON.stringify(active.messages[0]), /CONTRACT v1: PLAN/u);
-  assert.deepEqual(active.messages.slice(1), allMessages);
+  assert.deepEqual(active.messages.slice(0, -1), [createModeContractMessage("plan", 0), ...allMessages]);
+  assert.equal(interactionContractFromMessage(active.messages.at(-1)), "questions");
+  const repeated = (await contextHook({ messages: active.messages }, context.ctx)) as { messages: unknown[] };
+  assert.deepEqual(repeated.messages, active.messages);
 });
 
 test("Plan prompt requires the standalone completion contract", () => {

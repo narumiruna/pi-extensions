@@ -116,6 +116,8 @@ test("expanded multiline answers and notes preserve whitespace at wrap boundarie
 
 test.each([
   { reason: "cancelled", status: "Question cancelled", role: "warning" },
+  { reason: "discussion_requested", status: "Question cancelled", role: "warning" },
+  { reason: "questions_paused", status: "Question cancelled", role: "warning" },
   { reason: "ui_unavailable", status: "Interactive UI unavailable", role: "warning" },
   { reason: "plan_mode_inactive", status: "Plan mode inactive", role: "warning" },
   { reason: "invalid_input", status: "Invalid question", role: "error" },
