@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { checkpointGoalActiveTime, formatDuration, formatTokenCount, updateGoalUsage } from "./accounting.js";
-import { formatError, isStaleContextError, notifyTerminal, safeGoalMenuText, truncateNotification } from "./errors.js";
+import {
+  formatError,
+  isStaleContextError,
+  isUsageLimitedGoalInterruption,
+  notifyTerminal,
+  safeGoalMenuText,
+  truncateNotification,
+} from "./errors.js";
 import {
   createGoalContextContract,
   createInactiveGoalContextContract,
@@ -76,7 +83,12 @@ export type GoalStopRequest =
       abortTurn: boolean;
       reason: string;
     }
-  | { kind: "retry_exhausted"; expectedGoalId: string; reason: string }
+  | {
+      kind: "recovery_ended";
+      expectedGoalId: string;
+      status: "paused" | "blocked" | "usage_limited";
+      reason: string;
+    }
   | {
       kind: "tools_unavailable";
       expectedGoalId: string;
@@ -622,12 +634,12 @@ export class GoalRuntime {
         status = "paused";
         terminalReason = request.reason;
         break;
-      case "retry_exhausted":
+      case "recovery_ended":
         this.clearGoalRecoveryForGoal(goal.id);
         this.cancelContinuationWork();
         this.clearBudgetWrapUp();
         this.blockStaleGoalToolCalls();
-        status = "blocked";
+        status = request.status;
         terminalReason = request.reason;
         break;
       case "tools_unavailable":
@@ -857,16 +869,21 @@ export class GoalRuntime {
     return true;
   }
 
-  finalizeSettledRecovery(ctx: StatusContext) {
+  finalizeSettledRecovery(ctx: StatusContext, aborted: boolean, settledGoalId: string | undefined) {
     const recovery = this.goalRecovery;
-    if (!recovery) return false;
+    if (!recovery && !aborted) return false;
     this.goalRecovery = undefined;
     const goal = this.activeGoal;
-    if (goal?.id !== recovery.goalId || goal.status !== "active" || !this.ownsWorkflow(goal)) {
+    if (!goal || goal.id !== (recovery?.goalId ?? settledGoalId) || !this.ownsWorkflow(goal)) {
       return false;
     }
-    const details = recovery.errorMessage ? `: ${truncateNotification(recovery.errorMessage)}` : "";
-    if (recovery.kind === "provider_retry") {
+    const details = recovery?.errorMessage ? `: ${truncateNotification(recovery.errorMessage)}` : "";
+    const usageLimited = isUsageLimitedGoalInterruption({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: recovery?.errorMessage,
+    });
+    if (!aborted && !usageLimited && recovery?.kind === "provider_retry") {
       const waitingGoal = this.enterGoalWait(ctx, goal.id, {
         reason: `Provider retries exhausted${details}`,
       });
@@ -878,17 +895,22 @@ export class GoalRuntime {
       );
       return true;
     }
+    // Cancellation during backoff or after agent_end need not produce another
+    // assistant or compaction event. Keep the ended Goal identity as a fallback.
+    const status = aborted ? "paused" : usageLimited ? "usage_limited" : "blocked";
     const stoppedGoal = this.stopActiveGoal(ctx, {
-      kind: "retry_exhausted",
+      kind: "recovery_ended",
       expectedGoalId: goal.id,
-      reason: `agent error after retries${details}`,
+      status,
+      reason: aborted ? "goal paused after agent interruption" : `agent error after retries${details}`,
     });
     if (!stoppedGoal) return false;
-    notifyTerminal(
-      ctx.ui,
-      `Goal blocked after agent error retries were exhausted${details}. Resolve the blocker or run /goal resume to retry.`,
-      "warning",
-    );
+    const message = aborted
+      ? "Goal paused after interruption. Run /goal resume to continue."
+      : usageLimited
+        ? `Goal stopped after provider usage limit${details}. Run /goal resume when usage is available.`
+        : `Goal blocked after agent error retries were exhausted${details}. Resolve the blocker or run /goal resume to retry.`;
+    notifyTerminal(ctx.ui, message, "warning");
     return true;
   }
 

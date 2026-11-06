@@ -14,6 +14,7 @@ import {
   abortCurrentTurn,
   blocksStaleGoalToolCalls,
   findFinalAssistantMessage,
+  type GoalRecovery,
   type GoalRuntime,
   incrementGoal,
   isGoalContextOverflow,
@@ -50,8 +51,14 @@ export function registerGoalLifecycle(
   // starts true so handlers keep working on runners where session_start was
   // never emitted (for example late extension loading).
   let sessionActive = true;
+  // A length response can trigger native compaction after agent_end. Retain its
+  // origin, but let Pi's compaction events decide whether recovery is attempted.
+  let pendingLengthRecovery: GoalRecovery | undefined;
+  let endedGoalRun: { goalId: string; aborted: boolean } | undefined;
   pi.on("session_start", async (_event, ctx) => {
     sessionActive = true;
+    pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     runtime.bindWorkflowSession(ctx.sessionManager);
     runtime.replaceMenuSession();
     runtime.clearCompletionStatusTimer();
@@ -145,6 +152,8 @@ export function registerGoalLifecycle(
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
+    pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     const shutdownSession = ctx.sessionManager;
     runController.unbindSession();
     runtime.closeMenuSession();
@@ -182,10 +191,20 @@ export function registerGoalLifecycle(
       return;
     }
     if (!runtime.recordGoalUsage(runtime.activeGoal, ctx)) return;
+    if (event.willRetry === true) claimLengthRecovery(runtime.activeGoal.id);
     runtime.cancelContinuationWork();
     runtime.persistGoal(runtime.activeGoal);
     runtime.updateStatus(ctx, runtime.activeGoal);
     if (runtime.limitActiveGoalForBudget(ctx, false)) return { cancel: true as const };
+  });
+
+  pi.on("session_compact_failed", (event) => {
+    if (!sessionActive || !runtime.ownsWorkflow() || !runtime.activeGoal) return;
+    // A repeated length failure ends recovery without another before_compact.
+    if (event.reason === "overflow") claimLengthRecovery(runtime.activeGoal.id);
+    // Native compaction-only cancellation does not set agent_settled.aborted.
+    // An independent manual compaction has no ended run and cannot pause a Goal.
+    if (event.aborted && endedGoalRun?.goalId === runtime.activeGoal.id) endedGoalRun.aborted = true;
   });
 
   pi.on("session_compact", async (event, ctx) => {
@@ -247,6 +266,7 @@ export function registerGoalLifecycle(
       if (event.streamingBehavior === "steer" || event.streamingBehavior === "followUp") {
         runtime.noteQueuedNonGoalInput(event.text, event.streamingBehavior);
       }
+      pendingLengthRecovery = undefined;
       runtime.clearGoalRecovery();
       return;
     }
@@ -259,6 +279,7 @@ export function registerGoalLifecycle(
     if (event.streamingBehavior === "steer") {
       runtime.noteQueuedNonGoalInput(event.text, "steer");
     }
+    pendingLengthRecovery = undefined;
     runtime.clearGoalRecovery();
     runtime.clearBudgetWrapUp();
     runtime.clearStaleGoalToolCallBlock();
@@ -397,6 +418,8 @@ export function registerGoalLifecycle(
   pi.on("before_agent_start", (event, ctx) => {
     // Custom runs use message_start to establish non-goal ownership.
     if (!sessionActive || event.messageType === "custom") return;
+    pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     runtime.clearAgentRun();
     // Pi-owned retries emit agent_start directly. Reaching a normal prompt
     // boundary means cleanup no longer owns the next run, so the hard-cap guard
@@ -463,6 +486,8 @@ export function registerGoalLifecycle(
 
   pi.on("agent_start", (_event, _ctx) => {
     if (!sessionActive) return;
+    pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     const activeGoal = runtime.activeGoal;
     if (activeGoal && runtime.guardAbortGoalId === activeGoal.id && activeGoal.status === "paused") {
       if (runtime.consumeQueuedNonGoalFollowUpForAgentStart()) {
@@ -489,6 +514,8 @@ export function registerGoalLifecycle(
 
   pi.on("agent_end", (event, ctx) => {
     if (!sessionActive) return;
+    pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     const run = runtime.finishAgentRun();
     if (run.goalId === null) return;
     if (!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp()) return;
@@ -506,6 +533,7 @@ export function registerGoalLifecycle(
     }
 
     const goalId = runtime.activeGoal.id;
+    endedGoalRun = { goalId, aborted: false };
     const alreadyAwaitingContinuation = runtime.hasContinuationWorkForGoal(goalId);
     const finalAssistant = findFinalAssistantMessage(event.messages);
 
@@ -571,22 +599,41 @@ export function registerGoalLifecycle(
 
     const currentGoal = runtime.activeGoal;
     if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
+    if (finalAssistant?.stopReason === "length" && !currentGoal.waiting) {
+      pendingLengthRecovery = {
+        goalId,
+        kind: "compaction_retry",
+        automaticOwner: run.origin === "automatic",
+      };
+    }
     runtime.requestContinuation(currentGoal);
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", (event, ctx) => {
     if (!sessionActive) return;
+    pendingLengthRecovery = undefined;
+    const settledRun = endedGoalRun;
+    endedGoalRun = undefined;
     if (runtime.activeGoal?.status === "active" && !runtime.ownsWorkflow(runtime.activeGoal)) {
       runtime.cancelContinuationWork();
       runtime.clearGoalRecovery();
       runtime.clearSettledSafetyTracking();
       return;
     }
-    runtime.finalizeSettledRecovery(ctx);
+    runtime.finalizeSettledRecovery(ctx, event.aborted === true || settledRun?.aborted === true, settledRun?.goalId);
     const resumedWait = runtime.dispatchDueGoalWait(ctx);
     if (!resumedWait) runtime.dispatchContinuationIfSettled(ctx);
     runtime.clearSettledSafetyTracking();
   });
+
+  function claimLengthRecovery(goalId: string) {
+    if (pendingLengthRecovery?.goalId !== goalId) return;
+    const recovery = pendingLengthRecovery;
+    pendingLengthRecovery = undefined;
+    if (runtime.activeGoal?.waiting) return;
+    runtime.goalRecovery = recovery;
+    runtime.cancelContinuationWork();
+  }
 
   function goalContractBoundaryResult(ctx: StatusContext, goal?: ActiveGoal) {
     const message = runtime.goalContextContractForPrompt(ctx, goal);
@@ -594,6 +641,7 @@ export function registerGoalLifecycle(
   }
 
   function beginNonGoalFollowUp(ctx: StatusContext, resetSafetyEpoch: boolean) {
+    pendingLengthRecovery = undefined;
     runtime.clearGoalRecovery();
     runtime.clearStaleGoalToolCallBlock();
     if (resetSafetyEpoch) runtime.clearBudgetWrapUp();

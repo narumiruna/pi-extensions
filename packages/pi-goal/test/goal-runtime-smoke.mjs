@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import {
+  createFauxCore,
+  fauxAssistantMessage,
+  fauxToolCall,
+  InMemoryCredentialStore,
+  isRetryableAssistantError,
+} from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -39,6 +44,7 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
   process.env.PI_CODING_AGENT_DIR = agentDir;
   const cleanupResources = async () => {
     try {
+      await createdSession?.abort();
       createdSession?.dispose();
     } finally {
       try {
@@ -80,6 +86,7 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
     assert.ok(model, "expected registered faux model");
     faux.setResponses(responses);
     const managedRunEvents = [];
+    let cancelManagedRun;
 
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
@@ -87,6 +94,7 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
       ...piSettings,
     });
     const lifecycleEvents = [];
+    const compactionEvents = [];
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -97,6 +105,7 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
           name: "runtime-smoke-observer",
           factory: (pi) => {
             if (managedRun) {
+              cancelManagedRun = (reason) => pi.events.emit("pi-goal:cancel", { runId: managedRun.runId, reason });
               pi.events.on(`pi-goal:event:${managedRun.runId}`, (event) => {
                 managedRunEvents.push(event);
               });
@@ -120,12 +129,17 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
               if (event.message.role === "assistant") lifecycleEvents.push("assistant_message_end");
             });
             pi.on("tool_execution_end", () => lifecycleEvents.push("tool_execution_end"));
-            pi.on("session_before_compact", () => lifecycleEvents.push("session_before_compact"));
-            pi.on("session_compact", (event, ctx) =>
+            pi.on("session_before_compact", (event) => {
+              lifecycleEvents.push("session_before_compact");
+              compactionEvents.push(event);
+            });
+            pi.on("session_compact", (event, ctx) => {
               lifecycleEvents.push(
                 `session_compact:idle=${ctx.isIdle()}:pending=${ctx.hasPendingMessages()}:reason=${event.reason}:willRetry=${event.willRetry}`,
-              ),
-            );
+              );
+              compactionEvents.push(event);
+            });
+            pi.on("session_compact_failed", (event) => compactionEvents.push(event));
             pi.on("agent_settled", () => lifecycleEvents.push("agent_settled"));
           },
         },
@@ -146,9 +160,21 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
     });
     assert.deepEqual(result.extensionsResult.errors, []);
     createdSession = result.session;
+    // SDK retry events are observations only; they are not extension events.
+    const sdkEvents = [];
+    result.session.subscribe((event) => {
+      sdkEvents.push({
+        ...event,
+        providerCalls: faux.state.callCount,
+        continuationCount: continuationMessages(result.session).length,
+        goal: structuredClone(persistedGoalState(result.session)?.goal),
+      });
+    });
     await result.session.bindExtensions({});
     return {
       agentDir,
+      cancelManagedRun,
+      compactionEvents,
       extensions: result.extensionsResult.extensions.map((extension) => ({
         path: extension.path,
         handlers: [...extension.handlers.keys()],
@@ -156,6 +182,7 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
       faux,
       lifecycleEvents,
       managedRunEvents,
+      sdkEvents,
       session: result.session,
       cleanup: cleanupResources,
     };
@@ -188,6 +215,48 @@ function modelMessageText(message) {
 
 function userMessageText(message) {
   return message.role === "user" ? modelMessageText(message) : "";
+}
+
+function continuationMessages(session) {
+  // Raw history also includes continuation prompts omitted by native compaction.
+  return session.sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => userMessageText(entry.message))
+    .filter((text) => text.includes("pi-goal-continuation:"));
+}
+
+function providerError(errorMessage) {
+  return fauxAssistantMessage("", { stopReason: "error", errorMessage });
+}
+
+function assertNativeRetries(harness, attempts, success, continuationCount = 0) {
+  const starts = harness.sdkEvents.filter((event) => event.type === "auto_retry_start");
+  const ends = harness.sdkEvents.filter((event) => event.type === "auto_retry_end");
+  assert.deepEqual(
+    starts.map((event) => event.attempt),
+    attempts,
+    "native retry attempts",
+  );
+  assert.deepEqual(
+    ends.map(({ attempt, success }) => ({ attempt, success })),
+    attempts.length ? [{ attempt: attempts.at(-1), success }] : [],
+    "native retry terminal event",
+  );
+  for (const event of starts) {
+    assert.equal(event.goal?.status, "active", "Goal must not veto a native retry");
+    assert.equal(event.goal.waiting, undefined, "Goal must not wait before native recovery settles");
+    assert.equal(event.continuationCount, continuationCount, "no extra Goal continuation during native recovery");
+  }
+}
+
+function managedRunStatuses(harness) {
+  return harness.managedRunEvents.map((event) => event.status);
+}
+
+async function waitForSettlement(harness, description) {
+  await waitFor(() => harness.sdkEvents.some((event) => event.type === "agent_settled"), description);
+  await harness.session.waitForIdle();
 }
 
 async function agentDirectoryIsolationScenario() {
@@ -376,16 +445,186 @@ async function automaticRetryOwnershipScenario() {
   try {
     await harness.session.prompt("/goal runtime retry ownership smoke");
     await waitFor(() => harness.faux.state.callCount === 4, "provider retry and continuation");
-    await harness.session.agent.waitForIdle();
+    await harness.session.waitForIdle();
     assert.equal(persistedGoalStatus(harness.session), null);
     assert.ok(
       persistedGoalHistory(harness.session).some((goal) => goal.automaticModelTurns === 2 && goal.status === "active"),
       "retry response must retain automatic ownership",
     );
-    assert.ok(
-      harness.lifecycleEvents.filter((event) => event === "agent_start").length >= 3,
-      "expected retry to emit agent_start",
+    assertNativeRetries(harness, [1], true, 1);
+    assert.deepEqual(
+      harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.providerCalls),
+      [1, 3, 4],
+      "Goal continuation must wait for the native recovery run to settle",
     );
+    assert.equal(continuationMessages(harness.session).length, 2, "native retry must not add a continuation");
+    assert.equal(harness.lifecycleEvents.filter((event) => event === "agent_start").length, 4);
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+async function nativeRetryExhaustionScenario() {
+  for (const [name, enabled, maxRetries, attempts] of [
+    ["exhausted", true, 2, [1, 2]],
+    ["disabled", false, 2, []],
+    ["zero retries", true, 0, []],
+  ]) {
+    const expectedCalls = attempts.length + 1;
+    const harness = await createHarness(
+      [...Array.from({ length: expectedCalls }, () => providerError("HTTP 524: upstream timeout")), completionResponse],
+      {},
+      undefined,
+      undefined,
+      { retry: { enabled, maxRetries, baseDelayMs: 0 } },
+    );
+    try {
+      await harness.session.prompt(`/goal native retry ${name} smoke`);
+      await waitForSettlement(harness, `${name} retry settlement`);
+      assertNativeRetries(harness, attempts, false);
+      assert.equal(harness.faux.state.callCount, expectedCalls, `${name}: no Goal-owned retry loop`);
+      assert.equal(harness.faux.getPendingResponseCount(), 1);
+      assert.equal(continuationMessages(harness.session).length, 0);
+      assert.equal(harness.session.pendingMessageCount, 0);
+      assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
+      const waitingGoal = persistedGoalState(harness.session)?.goal;
+      assert.equal(waitingGoal?.status, "active", name);
+      assert.match(waitingGoal.waiting?.reason ?? "", /provider retries exhausted/i);
+      assert.equal(waitingGoal.waiting.resumeAt, undefined, "provider wait has no timer");
+      await harness.session.prompt("Check the provider again and finish the same Goal.");
+      await harness.session.waitForIdle();
+      assert.equal(harness.faux.state.callCount, expectedCalls + 1);
+      assert.equal(persistedGoalStatus(harness.session), null, "a follow-up must wake the waiting Goal");
+      assert.deepEqual(
+        new Set(persistedGoalHistory(harness.session).map((goal) => goal.id)),
+        new Set([waitingGoal.id]),
+      );
+      assert.equal(continuationMessages(harness.session).length, 0);
+      assertNativeRetries(harness, attempts, false);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
+async function nativeRetryClassificationScenario() {
+  const quota = "HTTP 503: insufficient credits";
+  const auth = "HTTP 503: Unauthorized: invalid API key";
+  const terminalAuth = "Unauthorized: invalid API key";
+  const terminalQuota = "HTTP 429: insufficient_quota";
+  const prematureClose = "Connection prematurely closed BEFORE response";
+  for (const error of [quota, auth]) assert.equal(isRetryableAssistantError(providerError(error)), true, error);
+  for (const error of [terminalAuth, terminalQuota, prematureClose]) {
+    assert.equal(isRetryableAssistantError(providerError(error)), false, error);
+  }
+
+  for (const [name, responses, attempts, status] of [
+    ["quota recovery", [providerError(quota), completionResponse], [1], null],
+    ["auth recovery", [providerError(auth), completionResponse], [1], null],
+    ["quota exhaustion", [providerError(quota), providerError(quota)], [1], "usage_limited"],
+    ["final quota", [providerError(auth), providerError(terminalQuota)], [1], "usage_limited"],
+    ["final auth", [providerError(auth), providerError(terminalAuth)], [1], "blocked"],
+    ["native quota exclusion", [providerError(terminalQuota)], [], "usage_limited"],
+    ["unsupported premature close", [providerError(prematureClose)], [], "blocked"],
+  ]) {
+    const harness = await createHarness([...responses, completionResponse], {}, undefined, undefined, {
+      retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+    });
+    try {
+      await harness.session.prompt(`/goal native classification ${name} smoke`);
+      await waitForSettlement(harness, `${name} settlement`);
+      assertNativeRetries(harness, attempts, status === null);
+      assert.equal(harness.faux.state.callCount, responses.length, `${name}: exact native provider attempts`);
+      assert.equal(harness.faux.getPendingResponseCount(), 1, `${name}: no extra Goal retry`);
+      assert.equal(persistedGoalStatus(harness.session), status, name);
+      assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined, name);
+      assert.equal(continuationMessages(harness.session).length, 0, name);
+      assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
+async function nativeBackoffAbortScenario() {
+  const harness = await createHarness(
+    [
+      fauxAssistantMessage("Initial unfinished result."),
+      providerError("HTTP 524: upstream timeout"),
+      completionResponse,
+    ],
+    {},
+    undefined,
+    { rpc: { enabled: true }, continuationLimits: { automaticTurns: 4, noProgressTurns: null } },
+    { retry: { enabled: true, maxRetries: 2, baseDelayMs: 60_000 } },
+    { runId: crypto.randomUUID(), objective: "cancel native backoff without another assistant" },
+  );
+  try {
+    // auto_retry_start precedes the native sleep controller; wait for the public backoff state.
+    await waitFor(() => harness.session.isRetrying, "native backoff ready");
+    assert.equal(harness.faux.state.callCount, 2);
+    assert.equal(persistedGoalStatus(harness.session), "active");
+    assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
+    await harness.session.abort();
+    assertNativeRetries(harness, [1], false, 1);
+    assert.equal(harness.faux.state.callCount, 2, "cancellation must not start a retry or Goal continuation");
+    assert.equal(harness.faux.getPendingResponseCount(), 1);
+    assert.equal(persistedGoalStatus(harness.session), "paused", "settlement abort overrides the last provider error");
+    assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined);
+    assert.equal(persistedGoalState(harness.session)?.goal?.automaticModelTurns, 1);
+    assert.deepEqual(
+      harness.sdkEvents
+        .filter((event) => event.type === "message_end" && event.message.role === "assistant")
+        .map((event) => event.message.stopReason),
+      ["stop", "error"],
+      "backoff abort must be handled without a new aborted assistant message",
+    );
+    assert.deepEqual(
+      harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.aborted),
+      [false, true],
+    );
+    assert.equal(continuationMessages(harness.session).length, 1);
+    assert.deepEqual(managedRunStatuses(harness), ["active", "paused"]);
+    assert.equal(harness.session.isRetrying, false);
+    assert.equal(harness.session.pendingMessageCount, 0);
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+async function managedNativeRetryWaitScenario() {
+  const harness = await createHarness(
+    [
+      fauxAssistantMessage("Initial unfinished result."),
+      ...Array.from({ length: 3 }, () => providerError("HTTP 524: upstream timeout")),
+      completionResponse,
+    ],
+    {},
+    undefined,
+    { rpc: { enabled: true }, continuationLimits: { automaticTurns: 5, noProgressTurns: null } },
+    { retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 } },
+    { runId: crypto.randomUUID(), objective: "retain managed ownership through native exhaustion" },
+  );
+  try {
+    await waitFor(() => persistedGoalState(harness.session)?.goal?.waiting, "managed provider exhaustion wait");
+    await harness.session.waitForIdle();
+    assertNativeRetries(harness, [1, 2], false, 1);
+    const waitingGoal = persistedGoalState(harness.session)?.goal;
+    assert.equal(waitingGoal?.status, "active");
+    assert.equal(waitingGoal.automaticModelTurns, 3, "every native attempt retains automatic ownership");
+    assert.equal(waitingGoal.waiting.resumeAt, undefined);
+    assert.equal(harness.faux.state.callCount, 4);
+    assert.equal(continuationMessages(harness.session).length, 1);
+    assert.deepEqual(managedRunStatuses(harness), ["active"]);
+    harness.cancelManagedRun("Cancel the waiting managed run.");
+    await waitFor(() => harness.managedRunEvents.length === 2, "one managed cancellation terminal");
+    await harness.session.waitForIdle();
+    assert.equal(persistedGoalStatus(harness.session), "paused");
+    assert.deepEqual(managedRunStatuses(harness), ["active", "paused"]);
+    assert.ok(harness.managedRunEvents.every((event) => event.goalId === waitingGoal.id));
+    assert.equal(harness.faux.state.callCount, 4, "managed cancellation must not wake provider work");
+    assert.equal(harness.faux.getPendingResponseCount(), 1);
+    assert.equal(continuationMessages(harness.session).length, 1);
   } finally {
     await harness.cleanup();
   }
@@ -600,24 +839,100 @@ async function managedRunDisabledScenario() {
   }
 }
 
+function seedCompactionHistory(sessionManager, now = Date.now()) {
+  sessionManager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: `Old request ${"x".repeat(100_000)}` }],
+    timestamp: now - 4_000,
+  });
+  sessionManager.appendMessage(fauxAssistantMessage(`Old result ${"y".repeat(100_000)}`));
+  sessionManager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "Recent request" }],
+    timestamp: now - 2_000,
+  });
+  sessionManager.appendMessage(fauxAssistantMessage("Recent result"));
+}
+
+async function nativeLengthCompactionScenario() {
+  for (const outcome of ["success", "failure", "abort"]) {
+    const succeeded = outcome === "success";
+    let summaryStarted = false;
+    const summaryResponse = async (_context, options) => {
+      summaryStarted = true;
+      if (outcome === "abort" && !options.signal.aborted) {
+        await new Promise((resolve) => options.signal.addEventListener("abort", resolve, { once: true }));
+      }
+      if (outcome === "failure") return providerError("Invalid summary request");
+      return fauxAssistantMessage("Compacted prior work.");
+    };
+    const harness = await createHarness(
+      [
+        fauxAssistantMessage("Initial unfinished result."),
+        fauxAssistantMessage("Partial automatic response.", { stopReason: "length" }),
+        summaryResponse,
+        fauxAssistantMessage("Recovered automatic response."),
+        completionResponse,
+      ],
+      {},
+      seedCompactionHistory,
+      { continuationLimits: { automaticTurns: 4, noProgressTurns: null } },
+      { compaction: { enabled: true } },
+    );
+    try {
+      await harness.session.prompt(`/goal native length compaction ${outcome} smoke`);
+      await waitFor(() => summaryStarted, `native length ${outcome} summary request`);
+      if (outcome === "abort") harness.session.abortCompaction();
+      await waitFor(
+        () => harness.sdkEvents.filter((event) => event.type === "agent_settled").length >= (succeeded ? 3 : 2),
+        `native length ${outcome} settlement`,
+      );
+      await harness.session.waitForIdle();
+      assert.equal(harness.faux.state.callCount, succeeded ? 5 : 3, `${outcome}: native compaction owns the retry`);
+      assert.equal(harness.faux.getPendingResponseCount(), succeeded ? 0 : 2);
+      assert.equal(persistedGoalStatus(harness.session), succeeded ? null : outcome === "abort" ? "paused" : "blocked");
+      assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined);
+      assertNativeRetries(harness, [], false);
+      const starts = harness.sdkEvents.filter((event) => event.type === "compaction_start");
+      const ends = harness.sdkEvents.filter((event) => event.type === "compaction_end");
+      assert.equal(starts.length, 1);
+      assert.equal(starts[0].continuationCount, 1, "no continuation before native compaction");
+      assert.equal(starts[0].goal?.automaticModelTurns, 1);
+      assert.equal(ends.length, 1);
+      assert.equal(ends[0].reason, "overflow");
+      assert.equal(ends[0].aborted, outcome === "abort");
+      assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").at(-1)?.aborted, false);
+      assert.equal(ends[0].willRetry, succeeded);
+      assert.equal(ends[0].continuationCount, 1, "compaction must not queue a duplicate continuation");
+      assert.deepEqual(
+        harness.compactionEvents.map((event) => [event.type, event.reason, event.willRetry]),
+        [
+          ["session_before_compact", "overflow", true],
+          [succeeded ? "session_compact" : "session_compact_failed", "overflow", succeeded],
+        ],
+      );
+      assert.equal(continuationMessages(harness.session).length, succeeded ? 2 : 1);
+      assert.deepEqual(
+        harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.providerCalls),
+        succeeded ? [1, 4, 5] : [1, 3],
+      );
+      assert.ok(
+        persistedGoalHistory(harness.session).some((goal) => goal.automaticModelTurns === (succeeded ? 2 : 1)),
+        "length compaction recovery must retain automatic accounting",
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
 async function manualCompactionScenario() {
   const now = Date.now();
   const harness = await createHarness(
     [fauxAssistantMessage("Compacted prior work."), completionResponse],
     {},
     (sessionManager) => {
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: `Old request ${"x".repeat(100_000)}` }],
-        timestamp: now - 4_000,
-      });
-      sessionManager.appendMessage(fauxAssistantMessage(`Old result ${"y".repeat(100_000)}`));
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: "Recent request" }],
-        timestamp: now - 2_000,
-      });
-      sessionManager.appendMessage(fauxAssistantMessage("Recent result"));
+      seedCompactionHistory(sessionManager, now);
       sessionManager.appendCustomEntry("goal-state", {
         goal: {
           id: crypto.randomUUID(),
@@ -663,6 +978,10 @@ await runawayNoProgressScenario();
 await automaticToolLoopLimitScenario();
 await retryAtHardLimitScenario();
 await automaticRetryOwnershipScenario();
+await nativeRetryExhaustionScenario();
+await nativeRetryClassificationScenario();
+await nativeBackoffAbortScenario();
+await managedNativeRetryWaitScenario();
 await queuedInputScenario();
 await busyEditOwnershipScenario();
 await pauseScenario();
@@ -672,7 +991,8 @@ await budgetViolationScenario();
 await budgetAgentEndFallbackScenario();
 await managedRunRpcScenario();
 await managedRunDisabledScenario();
+await nativeLengthCompactionScenario();
 await manualCompactionScenario();
 console.log(
-  "pi-goal runtime smoke: normal, runaway guards, retry and busy-edit ownership, queued input, pause, stale blocked-tool aborts, managed-run RPC, terminal budget stops, and manual compaction passed",
+  "pi-goal runtime smoke: normal, runaway guards, native retry classification/exhaustion/backoff abort, retry and busy-edit ownership, queued input, pause, stale blocked-tool aborts, managed-run RPC/wait cancellation, terminal budget stops, native length compaction recovery/failure/abort, and manual compaction passed",
 );

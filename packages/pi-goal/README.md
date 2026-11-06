@@ -277,7 +277,8 @@ An accepted call keeps the canonical Goal status active, checkpoints active elap
 It persists the reason and optional absolute deadline and terminates the normal single-tool run.
 Call `goal_wait` alone because Pi only guarantees early termination when every finalized result in a parallel tool batch terminates.
 
-When Pi exhausts retries for a transient provider error such as HTTP 429, pi-goal enters the same active waiting state without a deadline instead of marking the Goal blocked.
+When Pi has no further retry for a native-classified transient provider error such as HTTP 429, pi-goal enters the same active waiting state without a deadline instead of marking the Goal blocked.
+This also applies when Pi retries are disabled or set to zero; Goal does not make its own retry attempts.
 The warning reports bounded provider status and explains that a follow-up or `/goal resume` retries the Goal.
 Context-overflow compaction exhaustion remains blocked because another model turn can repeat the same oversized request without corrective compaction.
 
@@ -322,12 +323,24 @@ A user pause or aborted turn produces `paused`; a terminal provider/account quot
 Each stopped transition cancels pending continuation intent or delivery and aborts stale work when applicable.
 Stale tool calls remain blocked until the next non-goal user prompt, successful reactivation or replacement, or `/goal clear`.
 On `/goal clear`, the extension clears goal state, continuation markers, and any stale tool-call block without aborting an unrelated in-flight turn.
-Retryable provider interruptions and overflow compaction retries stay `active` while Pi retries.
+Pi decides provider retry and context-overflow eligibility through its native classifiers.
+Its retry settings control provider retry attempts; native compact-and-retry recovery uses Pi's compaction settings and separate recovery limit.
+Goal adds no retry patterns or retry loop. Its usage-limit policy selects the final status without preventing recovery that Pi permits.
+Unsupported wording such as `Connection prematurely closed BEFORE response` now follows Pi's classification: when Pi treats it as terminal, the Goal becomes `blocked` and requires `/goal resume`, rather than waiting automatically.
+
+Native provider retries and overflow or truncated-response compaction retries stay `active` while Pi recovers.
 No extra continuation is queued, and automatic ownership remains charged through retry `agent_start` events.
-If matching provider recovery still exists at `agent_settled`, retries are exhausted and the Goal enters a deadline-free active wait before any continuation dispatches.
+At `agent_settled`, reported cancellation takes precedence, including a full session abort during retry backoff without another assistant response.
+An aborted automatic compaction also pauses its matching Goal through Pi's compaction failure event.
+A final explicit usage limit selects `usage_limited`; otherwise remaining provider recovery enters a deadline-free active wait before any continuation dispatches.
 A later non-Goal input wakes the same Goal without rotating its stale-turn guard, so the model can continue, complete, or enter another wait with the current `goal_id`.
 If matching compaction recovery still exists at `agent_settled`, the Goal becomes `blocked` because recovery did not produce usable context.
 Stale recovery cannot wait or block a replacement goal.
+
+The current Pi runtime does not report native retry-only cancellation (Escape during backoff or RPC `abort_retry`) to extensions.
+Goal cannot distinguish that cancellation from exhausted retries, so it remains waiting.
+Use `/goal pause` or a full session abort to pause the Goal.
+
 User and extension work that starts before settlement supersedes the older continuation intent, and pending messages always take priority.
 
 ## 🤝 Managed run RPC
