@@ -369,10 +369,10 @@ test("an aborted automatic response does not consume the final hard-cap turn", a
   assert.equal(requireLastGoal(interrupted.mock).safetyPauseCause, undefined);
 });
 
-test("terminal errors take precedence when an automatic response reaches the hard cap", async () => {
+test("recognized usage errors stop while unknown errors respect the automatic response cap", async () => {
   for (const [errorMessage, expectedStatus] of [
     ["usage limit reached for this account", "usage_limited"],
-    ["invalid request payload", "blocked"],
+    ["invalid request payload", "paused"],
   ] as const) {
     const capped = await startGoalForTest({}, "finish", ONE_TURN_LIMIT_SETTINGS_PATH);
     await capped.mock.events.get("agent_end")?.[0]?.(
@@ -388,6 +388,13 @@ test("terminal errors take precedence when an automatic response reaches the har
     await capped.mock.events.get("agent_end")?.[0]?.({ messages: [error] }, capped.ctx);
     assert.equal(lastGoalStatus(capped.mock), expectedStatus);
     assert.equal(requireLastGoal(capped.mock).automaticModelTurns, 1);
+    assert.equal(
+      requireLastGoal(capped.mock).safetyPauseCause,
+      expectedStatus === "paused" ? "continuation_limit" : undefined,
+    );
+    await capped.mock.events.get("agent_settled")?.[0]?.({}, capped.ctx);
+    assert.equal(requireLastGoal(capped.mock).waiting, undefined);
+    assert.equal(capped.mock.sentUserMessages.length, 2);
   }
 });
 

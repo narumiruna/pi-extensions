@@ -83,23 +83,31 @@ test("usage-limit classification recognizes quota failures without swallowing un
   );
 });
 
-test("unsupported premature-close wording blocks until explicit resume", async () => {
+test("native-ineligible premature-close wording waits until a same-ID follow-up", async () => {
   const fixture = await startGoalForTest();
-  await fixture.mock.events.get("agent_end")?.[0]?.(
-    { messages: [{ role: "assistant", stopReason: "error", errorMessage: PREMATURE_CONNECTION_CLOSE_ERROR }] },
-    fixture.ctx,
-  );
-  await fixture.mock.events.get("agent_settled")?.[0]?.({ aborted: false }, fixture.ctx);
-  assert.equal(lastGoalStatus(fixture.mock), "blocked");
+  const originalId = requireLastGoal(fixture.mock).id;
+  const assistant = {
+    role: "assistant" as const,
+    stopReason: "error" as const,
+    errorMessage: PREMATURE_CONNECTION_CLOSE_ERROR,
+  };
+  assert.equal(isRetryableGoalInterruption(assistant), false);
+  await fixture.mock.events.get("agent_end")?.[0]?.({ messages: [assistant] }, fixture.ctx);
+  assert.equal(lastGoalStatus(fixture.mock), "active");
   assert.equal(requireLastGoal(fixture.mock).waiting, undefined);
+  await fixture.mock.events.get("agent_settled")?.[0]?.({ aborted: false }, fixture.ctx);
+  assert.equal(lastGoalStatus(fixture.mock), "active");
+  assert.equal(requireLastGoal(fixture.mock).id, originalId);
+  assert.ok(requireLastGoal(fixture.mock).waiting);
+  assert.equal(requireLastGoal(fixture.mock).waiting?.resumeAt, undefined);
   assert.equal(fixture.mock.sentUserMessages.length, 1);
   startInteractiveFollowUp(fixture);
-  assert.equal(lastGoalStatus(fixture.mock), "blocked");
-  await fixture.mock.commands.get("goal")?.handler("resume", fixture.ctx);
+  assert.equal(requireLastGoal(fixture.mock).id, originalId);
   assert.equal(lastGoalStatus(fixture.mock), "active");
+  assert.equal(requireLastGoal(fixture.mock).waiting, undefined);
 });
 
-test("agent_end maps abort, quota failure, and terminal error to distinct stopped states", async () => {
+test("agent_end maps abort and recognized quota failure to distinct stopped states", async () => {
   for (const [assistant, status, notification] of [
     [{ role: "assistant", stopReason: "aborted" }, "paused", /paused after interruption/i],
     [
@@ -110,15 +118,6 @@ test("agent_end maps abort, quota failure, and terminal error to distinct stoppe
       },
       "usage_limited",
       /usage limit/i,
-    ],
-    [
-      {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: "Permission denied by remote service",
-      },
-      "blocked",
-      /blocked after agent error/i,
     ],
   ] as const) {
     let aborts = 0;
@@ -149,7 +148,7 @@ test("agent_end maps abort, quota failure, and terminal error to distinct stoppe
   }
 });
 
-test("provider error notifications strip terminal controls without changing classification", async () => {
+test("unknown provider error wait notifications strip terminal controls", async () => {
   const stopped = await startGoalForTest();
   await stopped.mock.events.get("agent_end")?.[0]?.(
     {
@@ -164,8 +163,10 @@ test("provider error notifications strip terminal controls without changing clas
     stopped.ctx,
   );
 
+  await stopped.mock.events.get("agent_settled")?.[0]?.({ aborted: false }, stopped.ctx);
   const notification = stopped.notifications.at(-1)?.message ?? "";
-  assert.equal(lastGoalStatus(stopped.mock), "blocked");
+  assert.equal(lastGoalStatus(stopped.mock), "active");
+  assert.ok(requireLastGoal(stopped.mock).waiting);
   assertNoTerminalControls(notification);
   assert.doesNotMatch(notification, /clipboard|\[2J/u);
   assert.match(notification, /Permission\s+denied remotely\s+now/u);
@@ -191,10 +192,10 @@ test("provider retry wait bounds and escapes untrusted error text", async () => 
   assert.match(resumePrompt, /&lt;retry_instructions&gt;/u);
 });
 
-test("terminal agent errors take precedence over missing goal tools", async () => {
+test("usage limits stop while unknown errors pause when goal tools are missing", async () => {
   for (const [errorMessage, expectedStatus] of [
     ["You have hit your ChatGPT usage limit.", "usage_limited"],
-    ["Permission denied by remote service", "blocked"],
+    ["Permission denied by remote service", "paused"],
   ] as const) {
     const stopped = await startGoalForTest();
     stopped.mock.rawPi.setActiveTools(["read", "bash"]);
@@ -209,7 +210,7 @@ test("terminal agent errors take precedence over missing goal tools", async () =
   }
 });
 
-test("agent_end keeps retryable interruptions recoverable and stops on non-retryable errors", async () => {
+test("agent_end keeps native-retryable interruptions recoverable and stops on recognized usage limits", async () => {
   assert.equal(
     isRetryableGoalInterruption({
       role: "assistant",

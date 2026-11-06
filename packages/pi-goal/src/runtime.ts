@@ -54,7 +54,7 @@ export interface BudgetWrapUp {
   delivered: boolean;
 }
 
-export type GoalRecoveryKind = "provider_retry" | "compaction_retry";
+export type GoalRecoveryKind = "provider_retry" | "provider_error" | "compaction_retry";
 
 export type GoalRunOrigin = "manual" | "automatic";
 
@@ -170,6 +170,7 @@ export interface GoalSettingsRuntimeSnapshot {
   continuationDelivery?: ContinuationTicket;
   goalRecovery?: GoalRecovery;
   budgetWrapUp?: BudgetWrapUp;
+  pendingLengthRecovery?: GoalRecovery;
   guardAbortGoalId?: string;
   staleGoalToolCallsBlocked: boolean;
   cancelledContinuationMarkers: [string, string][];
@@ -238,6 +239,9 @@ export class GoalRuntime {
   continuationIntent?: ContinuationTicket;
   continuationDelivery?: ContinuationTicket;
   goalRecovery?: GoalRecovery;
+  // Unconfirmed length recovery is invalidated by the same runtime transitions
+  // as provider errors, including a later accepted goal_wait.
+  pendingLengthRecovery?: GoalRecovery;
   budgetWrapUp?: BudgetWrapUp;
   /** `null` marks a run that must not be charged to the active goal. */
   agentRunGoalId?: string | null;
@@ -702,6 +706,7 @@ export class GoalRuntime {
 
   clearGoalRecovery() {
     this.goalRecovery = undefined;
+    this.pendingLengthRecovery = undefined;
   }
 
   clearBudgetWrapUp() {
@@ -809,9 +814,11 @@ export class GoalRuntime {
     goal.toolFreeRepeatCount = next.toolFreeRepeatCount;
     goal.lastToolFreeOutputFingerprint = next.lastToolFreeOutputFingerprint;
     this.persistGoal(goal);
-    this.updateStatus(ctx, goal);
+    const currentGoal = this.activeGoal;
+    if (currentGoal?.id !== goalId || !this.ownsWorkflow(currentGoal)) return true;
+    this.updateStatus(ctx, currentGoal);
     const limit = this.settings.continuationLimits.noProgressTurns;
-    if (limit === null || goal.toolFreeRepeatCount < limit) return false;
+    if (limit === null || currentGoal.toolFreeRepeatCount < limit) return false;
     return this.pauseGoalForSafety(ctx, "no_progress", false);
   }
 
@@ -883,14 +890,29 @@ export class GoalRuntime {
       stopReason: "error",
       errorMessage: recovery?.errorMessage,
     });
-    if (!aborted && !usageLimited && recovery?.kind === "provider_retry") {
+    if (!aborted && !usageLimited && recovery && recovery.kind !== "compaction_retry") {
+      // Native post-run work can change limits or tool availability after agent_end.
+      if (
+        this.enforceAutomaticTurnLimit(ctx, false) ||
+        this.enforceNoProgressLimit(ctx) ||
+        this.limitActiveGoalForBudget(ctx, false)
+      ) {
+        return true;
+      }
+      if (!this.goalToolsAvailable()) return this.pauseGoalForUnavailableTools(ctx, false);
+      // A parallel tool batch can continue after accepting goal_wait. Preserve
+      // its arranged wake source and deadline instead of replacing that wait.
+      if (goal.waiting) return true;
+      const nativeRetry = recovery.kind === "provider_retry";
       const waitingGoal = this.enterGoalWait(ctx, goal.id, {
-        reason: `Provider retries exhausted${details}`,
+        reason: `${nativeRetry ? "Provider retries exhausted" : "Provider error"}${details}`,
       });
       if (!waitingGoal) return false;
       notifyTerminal(
         ctx.ui,
-        `Goal waiting after provider retries were exhausted${details}. Send a follow-up or run /goal resume to retry.`,
+        nativeRetry
+          ? `Goal waiting after provider retries were exhausted${details}. Send a follow-up or run /goal resume to retry.`
+          : `Goal waiting after a provider error${details}. No automatic retry was added. Send a follow-up or run /goal resume to continue.`,
         "warning",
       );
       return true;
@@ -924,6 +946,7 @@ export class GoalRuntime {
 
   clearGoalRecoveryForGoal(goalId: string) {
     if (this.goalRecovery?.goalId === goalId) this.goalRecovery = undefined;
+    if (this.pendingLengthRecovery?.goalId === goalId) this.pendingLengthRecovery = undefined;
   }
 
   isPiOwnedCompactionRetry(event: unknown, goalId: string) {
@@ -1274,6 +1297,7 @@ export class GoalRuntime {
       continuationIntent: this.continuationIntent ? structuredClone(this.continuationIntent) : undefined,
       continuationDelivery: this.continuationDelivery ? structuredClone(this.continuationDelivery) : undefined,
       goalRecovery: this.goalRecovery ? structuredClone(this.goalRecovery) : undefined,
+      pendingLengthRecovery: this.pendingLengthRecovery ? structuredClone(this.pendingLengthRecovery) : undefined,
       budgetWrapUp: this.budgetWrapUp ? structuredClone(this.budgetWrapUp) : undefined,
       guardAbortGoalId: this.guardAbortGoalId,
       staleGoalToolCallsBlocked: this.staleGoalToolCallsBlocked,
@@ -1295,6 +1319,9 @@ export class GoalRuntime {
       ? structuredClone(snapshot.continuationDelivery)
       : undefined;
     this.goalRecovery = snapshot.goalRecovery ? structuredClone(snapshot.goalRecovery) : undefined;
+    this.pendingLengthRecovery = snapshot.pendingLengthRecovery
+      ? structuredClone(snapshot.pendingLengthRecovery)
+      : undefined;
     this.budgetWrapUp = snapshot.budgetWrapUp ? structuredClone(snapshot.budgetWrapUp) : undefined;
     this.guardAbortGoalId = snapshot.guardAbortGoalId;
     this.staleGoalToolCallsBlocked = snapshot.staleGoalToolCallsBlocked;
