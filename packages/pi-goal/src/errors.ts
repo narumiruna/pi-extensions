@@ -32,7 +32,7 @@ const RETRYABLE_GOAL_ERROR_PATTERNS = [
   /overloaded|rate.?limit|too many requests|\b(?:429|500|502|503|504)\b|service.?unavailable|server.?error|internal.?error/i,
   /provider.?returned.?error|you can retry your request|try your request again|please retry your request/i,
   /network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up/i,
-  /timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream (?:ended|closed|terminated) before|premature (?:close|end)|incomplete (?:stream|response)|unexpected end of (?:stream|response)|http2 request did not get a response|retry delay/i,
+  /timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream (?:ended|closed|terminated) before|premature(?:ly)? (?:close|end)|incomplete (?:stream|response)|unexpected end of (?:stream|response)|http2 request did not get a response|retry delay/i,
   /context[_\s-]*length[_\s-]*exceeded|input exceeds the context window/i,
 ] as const;
 
