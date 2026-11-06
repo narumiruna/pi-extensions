@@ -47,7 +47,7 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
 Run `/plan <prompt>` when the first planning request is already known.
 
-## 🗺️ How it works
+## 🧭 How it works
 
 Plan mode keeps exploration and implementation on opposite sides of an explicit review boundary:
 
