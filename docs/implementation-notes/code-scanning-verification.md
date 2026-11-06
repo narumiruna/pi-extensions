@@ -18,7 +18,9 @@ The cookie review does not establish protection against hostile local services o
 
 PR [1820](https://github.com/narumiruna/pi-extensions/pull/1820) verifies source revision `7b576828`. Its JavaScript CodeQL analysis `2109313907` completed without errors and reported zero results. Its CI run `42158884424` passed checks and 18,246 affected tests, but did not run the full root inventory.
 
-A separate Linux clone verified the same source revision with the Node version from `.node-version`, its own dependencies, a non-root user, and a read-only Git input. Git supported `sparse-checkout check-rules`. No source file changed during verification, and the owned container was removed after its successful exit.
+Completion PR [1822](https://github.com/narumiruna/pi-extensions/pull/1822) verified revision `76bceb4d` with successful CI run `42170003950` and zero-result CodeQL analyses for JavaScript/TypeScript, Python, and Actions. JavaScript analysis `2109756121` completed without errors. The implementation is unchanged from `7b576828`; completion changes retain this evidence and remove the completed plan.
+
+A separate Linux clone verified source revision `7b576828` with the Node version from `.node-version`, its own dependencies, a non-root user, and a read-only Git input. Git supported `sparse-checkout check-rules`. No source file changed during verification, and the owned container was removed after its successful exit.
 
 | Check | Result |
 | --- | --- |
