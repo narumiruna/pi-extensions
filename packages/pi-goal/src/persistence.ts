@@ -62,7 +62,8 @@ interface SessionContext {
 }
 
 export function serializeGoalState(goal: ActiveGoal | undefined): GoalStateEntryData {
-  return { goal: goal ?? null };
+  // Pi retains custom-entry data by reference, so detach the full append-time snapshot.
+  return { goal: goal ? structuredClone(goal) : null };
 }
 
 export function loadGoalStateFromSession(ctx: SessionContext): LoadedGoalState {
