@@ -1,8 +1,8 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type ExtensionCommandContext, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import { readJsonIfExists } from "../state/json-file.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import type { Snapshot, SnapshotOptions } from "./snapshot-types.js";
 
@@ -19,7 +19,20 @@ export function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionCo
 }
 
 export async function configuredSessionDir() {
-  const settings = await readJsonIfExists<{ sessionDir?: string }>(path.join(agentDir(), "settings.json"));
+  let content: string;
+  try {
+    content = await fs.readFile(path.join(agentDir(), "settings.json"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  let settings: { sessionDir?: string } | null;
+  try {
+    // Pi accepts a leading UTF-8 BOM in its settings file; snapshot bytes stay unchanged.
+    settings = JSON.parse(content.replace(/^\uFEFF/u, "")) as typeof settings;
+  } catch {
+    throw new SyntaxError("Pi settings.json cannot be parsed; repair the file before syncing.");
+  }
   return settings?.sessionDir ? expandSessionDir(settings.sessionDir) : undefined;
 }
 

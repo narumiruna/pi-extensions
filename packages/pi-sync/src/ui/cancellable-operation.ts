@@ -28,6 +28,7 @@ interface CancellableOperationOptions {
   cancelledMessage?: string | null;
   target?: string;
   signal?: AbortSignal;
+  isCurrent?: () => boolean;
 }
 
 export async function runCancellableOperation(
@@ -37,21 +38,45 @@ export async function runCancellableOperation(
   runRoute: RunRoute,
   options: CancellableOperationOptions = {},
 ): Promise<CancellableOperationResult> {
+  const result = await runCancellableTask(
+    ctx,
+    message,
+    (signal, onCommit, onDialog) => runRoute(route, signal, onCommit, options.target, onDialog),
+    options,
+  );
+  return result.kind === "completed" ? (result.value ?? { kind: "failed" }) : result;
+}
+
+export type CancellableTaskResult<Value> =
+  | { kind: "completed"; value: Value }
+  | { kind: "closed" }
+  | { kind: "cancelled" };
+
+/** Keep non-route work under the same cancellation and drain owner as transfers. */
+export async function runCancellableTask<Value>(
+  ctx: ExtensionContext,
+  message: string,
+  task: (
+    signal: AbortSignal | undefined,
+    onCommit?: () => void,
+    onDialog?: (active: boolean) => void,
+  ) => Promise<Value>,
+  options: Omit<CancellableOperationOptions, "target"> = {},
+): Promise<CancellableTaskResult<Value>> {
   const {
     commitAware = false,
     cancelAcrossDialogs = false,
     cancelledMessage = "Check cancelled; no settings or files were changed.",
-    target,
     signal,
+    isCurrent = () => true,
   } = options;
-  if (ctx.mode !== "tui") {
-    return (await runRoute(route, signal, undefined, target)) ?? { kind: "failed" };
-  }
+  if (signal?.aborted || !isCurrent()) return { kind: "closed" };
+  if (ctx.mode !== "tui") return { kind: "completed", value: await task(signal) };
   let commitStarted = false;
-  let routeResult: RunRouteResult | undefined;
+  let taskResult!: Value;
   const interaction = await runCustomInteraction<{ cancelled?: boolean; error?: unknown }, ExtensionContext>(ctx, {
     signal,
-    isCurrent: () => !signal?.aborted,
+    isCurrent: () => !signal?.aborted && isCurrent(),
     create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {
       const loader = new BorderedLoader(tui, theme, message, { cancellable: false });
       const cancelHint = formatInteractionHints(keybindings, [
@@ -80,13 +105,11 @@ export async function runCancellableOperation(
             return cancel(data) ? { consume: true } : undefined;
           })
         : undefined;
-      let pendingRoute: ReturnType<RunRoute>;
+      let pendingTask: Promise<Value>;
       try {
-        pendingRoute = runRoute(
-          route,
+        pendingTask = task(
           interactionSignal,
           commitAware ? () => (commitStarted = true) : undefined,
-          target,
           cancelAcrossDialogs
             ? (active) => {
                 activeDialogs += active ? 1 : -1;
@@ -98,9 +121,9 @@ export async function runCancellableOperation(
         loader.dispose();
         throw error;
       }
-      const operation = pendingRoute.then(
+      const operation = pendingTask.then(
         (result) => {
-          routeResult = result;
+          taskResult = result;
           complete({});
         },
         (error: unknown) => complete({ error }),
@@ -134,7 +157,7 @@ export async function runCancellableOperation(
     return { kind: "cancelled" };
   }
   if (interaction.value.error) throw interaction.value.error;
-  return routeResult ?? { kind: "failed" };
+  return { kind: "completed", value: taskResult };
 }
 
 function hasControlCharacter(value: string) {

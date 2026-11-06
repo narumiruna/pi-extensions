@@ -210,13 +210,12 @@ for (const mode of ["one-changed", "both-changed", "missing", "deleted", "symlin
 test("an alias introduced during journal publication is refused before the backend attempt", async () =>
   withTempHome(async (agentDir) => {
     await fs.mkdir(agentDir, { recursive: true });
-    const physicalSessions = path.join(path.dirname(agentDir), "physical-sessions");
-    const sessionRoot = path.join(path.dirname(agentDir), "linked-sessions");
-    await fs.mkdir(physicalSessions);
-    await fs.symlink(physicalSessions, sessionRoot, "dir");
+    const sessionRoot = path.join(path.dirname(agentDir), "sessions");
+    const retainedSessions = path.join(path.dirname(agentDir), "retained-sessions");
+    await fs.mkdir(sessionRoot);
     const target = path.join(agentDir, "foo.jsonl");
     await fs.writeFile(target, "before conversation");
-    await fs.writeFile(path.join(physicalSessions, "foo.jsonl"), "before conversation");
+    await fs.writeFile(path.join(sessionRoot, "foo.jsonl"), "before conversation");
     const f = await fixture(agentDir, sessionRoot, ["settings.json", "AGENTS.md", "foo.jsonl", "sessions"]);
     await f.remoteEdit("sessions/foo.jsonl", "remote conversation");
     await fs.writeFile(path.join(agentDir, "AGENTS.md"), "independent local change");
@@ -228,7 +227,7 @@ test("an alias introduced during journal publication is refused before the backe
       await rename(from, to);
       if (!changedRoot && to === mergeJournalPath(f.config)) {
         changedRoot = true;
-        await fs.rm(sessionRoot);
+        await fs.rename(sessionRoot, retainedSessions);
         await fs.symlink(agentDir, sessionRoot, "dir");
       }
     });

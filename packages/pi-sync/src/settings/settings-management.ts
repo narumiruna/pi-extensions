@@ -1,6 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeSyncInclude } from "../sync/sync-policy.js";
-import { type SyncSetupStorageReview, syncSetupStorageReview } from "./config.js";
+import {
+  configFromSettings,
+  type SyncSetupStorageReview,
+  syncCheckConfigFingerprint,
+  syncSetupStorageReview,
+} from "./config.js";
 import { localConfigPath } from "./config-file.js";
 import { updateLocalConfig } from "./settings-store.js";
 import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
@@ -119,6 +124,7 @@ export async function updateSyncSetup(
     expectedStorage?: SyncSetupStorageReview;
     expectedInclude?: readonly string[];
     expectedConnection?: StorageConnectionSettings;
+    expectedConfigFingerprint?: string;
     signal?: AbortSignal;
   } = {},
 ) {
@@ -126,6 +132,14 @@ export async function updateSyncSetup(
   await updateSettings((settings) => {
     const setup = settings.syncSetups[name];
     if (!setup) throw new Error(`Sync setup not found: ${name}`);
+    if (
+      options.expectedConfigFingerprint !== undefined &&
+      syncCheckConfigFingerprint(configFromSettings(settings, name)) !== options.expectedConfigFingerprint
+    ) {
+      throw new SyncSetupReviewChangedError(
+        `Sync setup “${name}” changed while it was open; reopen it and review the current configuration.`,
+      );
+    }
     if (options.expectedInclude && !sameNames(normalizeSyncInclude(setup.sync.include), options.expectedInclude)) {
       throw new SyncSetupReviewChangedError(
         `Sync setup “${name}” included content changed while it was open; reopen it and review the current selection.`,

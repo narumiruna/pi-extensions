@@ -33,6 +33,7 @@ export async function showSyncSettings(
   ctx: ExtensionCommandContext,
   runRoute: SyncSettingsRoute,
   signal?: AbortSignal,
+  reviewedSetup?: string,
 ): Promise<"back" | "exit"> {
   let disposition: "back" | "exit" = "back";
   const exitSettings = () => {
@@ -71,7 +72,7 @@ export async function showSyncSettings(
     }
     return disposition;
   }
-  const initial = await loadConfig();
+  const initial = await loadConfig(reviewedSetup);
   if (signal?.aborted) return "back";
   const setupName = initial.setupName;
   type Action =

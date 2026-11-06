@@ -26,11 +26,16 @@ Missing settings load as unconfigured without creating an agent directory, file,
 An explicit setup creates the file atomically.
 On POSIX, pi-sync creates and replaces it with mode `0600`.
 Pi-sync processes coordinate settings access through `pi-sync.json.mutation-lock`; lock-unaware editors are outside that serialization boundary and should not save the file while a pi-sync settings operation is running.
+Within one process, settings reads wait for earlier writes, including writes that have not acquired the lock yet.
+Replacement writes and flushes a private temporary file before renaming it over the canonical file; the active file is not moved away first.
 Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
 
 A private `pi-sync.local.json` containing a valid version 3 document is copied byte-for-byte to `pi-sync.json`.
 The old file remains as a recovery copy.
 If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
+If an older interrupted replacement left `pi-sync.json` missing and a hidden `.pi-sync.json.*.schema-migration-source` or `.pi-sync.json.*.migration-retired` file remains, settings access stops instead of loading the legacy copy.
+Close every Pi process, preserve all recovery files, and review the retained settings before restoring the correct document to `pi-sync.json` with private permissions.
+Do not delete recovery evidence or accept defaults to bypass this check.
 
 ### Settings ownership and required fields
 
@@ -291,7 +296,9 @@ RPC remains a read-only summary with the manual `sync.include` path.
 Every new snapshot stores the normalized included-content selection separately from the files that happened to exist.
 This preserves selected-but-missing paths without syncing `pi-sync.json`, storage credentials, automatic-sync preferences, or setup names.
 **Settings → Sync content → Compare included paths** opens the same review-first flow as a manager operation when local and remote lists differ.
-Adoption revalidates the remote head, immutable snapshot, reviewed storage coordinates, and local include list before one atomic settings update.
+Adoption revalidates the remote head, immutable snapshot, and complete reviewed setup configuration, including the shared connection and credentials, before one atomic settings update.
+Cancelling the network check leaves the content list unchanged.
+A settings save that has started its atomic replacement can still finish; later cancellation does not undo it.
 The saved state changes only `sync.include`, preserves unknown settings fields, and never pulls files or writes sync state.
 Its explicit Continue action starts a fresh **Sync now** route, while **Done** leaves the reviewed settings change saved without implying a file operation.
 Keeping this device's list opens the reviewed force-push path and explicitly replaces the remote policy while preserving eligible unmanaged remote files.

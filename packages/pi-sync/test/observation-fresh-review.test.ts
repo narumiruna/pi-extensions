@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
-import { createMockContext } from "../../../test/support.js";
+import { createMockContext as createBaseContext } from "../../../test/support.js";
 import * as backendFactory from "../src/backends/backend-factory.js";
 import { handleCommand } from "../src/commands/command-handler.js";
 import { loadConfig, syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../src/settings/config.js";
@@ -14,6 +16,51 @@ import { createSyncAttentionController } from "../src/ui/sync-attention.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
 import { inspectionFixture } from "./startup-check-helpers.js";
+
+initTheme("dark", false);
+
+// Run asynchronous work owners once; the general selector mock accepts only
+// synchronous menu factories and cannot dispose or drain a work component.
+function createMockContext(overrides: {
+  mode: "tui" | "rpc";
+  select?: (title: string) => Promise<string | undefined>;
+}) {
+  const context = createBaseContext(overrides);
+  if (overrides.mode !== "tui") return context;
+  (context.ctx as ExtensionCommandContext).ui.custom = async (factory, options) => {
+    const tui = createTuiHarness({ width: 100, rows: 24 });
+    try {
+      const pending = tui.custom(factory, options);
+      try {
+        await tui.waitForOpen();
+      } catch (error) {
+        if (error instanceof Error && error.message === "TUI custom component settled before opening")
+          return await pending;
+        throw error;
+      }
+      const frame = tui.render().join("\n");
+      if (
+        /Checking remote content list|Checking and saving remote content list|Refreshing remote content list/u.test(
+          frame,
+        )
+      )
+        return await pending;
+      const choice = await overrides.select?.(frame);
+      if (choice === undefined) tui.press("tui.select.cancel");
+      else {
+        for (let index = 0; index < 30; index += 1) {
+          if (tui.render().some((line) => line.startsWith(`→ ${choice}`))) break;
+          tui.press("tui.select.down");
+        }
+        tui.press("tui.select.confirm");
+      }
+      return await pending;
+    } finally {
+      tui.dispose();
+    }
+  };
+  return context;
+}
 
 for (const remote of [
   "same",

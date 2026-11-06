@@ -31,6 +31,15 @@ export async function showSyncManager(
     await runRoute("help");
     return;
   }
+  const validateOwner = captureMutationOwner(ctx, sessionSignal);
+  const isCurrent = () => {
+    try {
+      validateOwner();
+      return true;
+    } catch {
+      return false;
+    }
+  };
   type Screen = "main";
   type Action =
     | "review-attention"
@@ -77,10 +86,11 @@ export async function showSyncManager(
       },
     },
     actions: {
-      "review-attention": async () => {
-        const attention = options.getAttention?.();
+      "review-attention": async ({ state }) => {
+        const attention = state.manager.attention;
+        if (attention && options.getAttention?.() !== attention) return { kind: "stay" };
         if (!attention) {
-          const observation = options.getObservation?.();
+          const observation = state.manager.observation;
           if (!observation) return { kind: "stay" };
           // A head-only observation is not an authoritative decision. Load a fresh
           // snapshot only after the user activates the existing review flow.
@@ -113,24 +123,21 @@ export async function showSyncManager(
         );
         return { kind: disposition };
       },
-      sync: async () => {
+      sync: async ({ state }) => {
         const pendingAttention = options.getAttention?.();
-        if (pendingAttention) {
-          const activeConfig = await loadConfig();
-          if (sessionSignal?.aborted) return { kind: "close" };
-          if (pendingAttention.decision.setupName === activeConfig.setupName) {
-            ctx.ui.notify("Review synced content before starting Sync now.", "warning");
-            return { kind: "stay" };
-          }
+        if (pendingAttention?.decision.setupName === state.manager.configReview?.setupName) {
+          ctx.ui.notify("Review synced content before starting Sync now.", "warning");
+          return { kind: "stay" };
         }
         const result = await runCancellableOperation(ctx, "Checking current sync setup…", "sync", runRoute, {
           commitAware: true,
           signal: sessionSignal,
+          target: state.manager.configReview?.setupName,
         });
         const disposition = await dispatchManagerResult(ctx, result, "sync", runRoute, sessionSignal);
         return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
       },
-      "retry-refusal": async ({ signal: actionSignal }) => {
+      "retry-refusal": async ({ state, signal: actionSignal }) => {
         const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
         const validate = captureMutationOwner(ctx, signal);
         validate();
@@ -140,6 +147,7 @@ export async function showSyncManager(
           commitAware: true,
           cancelAcrossDialogs: true,
           signal,
+          target: state.manager.configReview?.setupName,
           cancelledMessage: "Model retry cancelled. Submitted requests and committed writes cannot be undone.",
         });
         if (signal.aborted) return { kind: "close" };
@@ -155,23 +163,25 @@ export async function showSyncManager(
         const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
         return result === "pull-attempted" || result === "closed" ? { kind: "close" } : { kind: "stay" };
       },
-      settings: async () => {
-        const result = await showSyncSettings(ctx, runRoute, sessionSignal);
+      settings: async ({ state }) => {
+        const result = await showSyncSettings(ctx, runRoute, sessionSignal, state.manager.configReview?.setupName);
         return { kind: result === "exit" ? "close" : "stay" };
       },
-      pull: async () => {
+      pull: async ({ state }) => {
         const result = await runCancellableOperation(ctx, "Checking remote changes…", "pull", runRoute, {
           commitAware: true,
           cancelledMessage: "Pull check cancelled; no local files were changed.",
+          target: state.manager.configReview?.setupName,
           signal: sessionSignal,
         });
         const disposition = await dispatchManagerResult(ctx, result, "pull", runRoute, sessionSignal);
         return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
       },
-      push: async () => {
+      push: async ({ state }) => {
         const result = await runCancellableOperation(ctx, "Preparing push preview…", "push", runRoute, {
           commitAware: true,
           cancelledMessage: "Push preparation cancelled; no remote files were changed.",
+          target: state.manager.configReview?.setupName,
           signal: sessionSignal,
         });
         const disposition = await dispatchManagerResult(ctx, result, "push", runRoute, sessionSignal);
@@ -185,31 +195,34 @@ export async function showSyncManager(
         await showStorageConnections(ctx, sessionSignal);
         return { kind: "stay" };
       },
-      history: async () => {
+      history: async ({ state }) => {
         const result = await runCancellableOperation(ctx, "Loading sync history…", "history", runRoute, {
           signal: sessionSignal,
           commitAware: true,
           cancelAcrossDialogs: true,
+          target: state.manager.configReview?.setupName,
           cancelledMessage: "History review cancelled; no files were changed.",
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
-      diff: async () => {
+      diff: async ({ state }) => {
         const result = await runCancellableOperation(ctx, "Comparing local and remote…", "diff", runRoute, {
+          target: state.manager.configReview?.setupName,
           signal: sessionSignal,
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
-      status: async () => {
+      status: async ({ state }) => {
         const result = await runCancellableOperation(ctx, "Checking remote status…", "status", runRoute, {
+          target: state.manager.configReview?.setupName,
           signal: sessionSignal,
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
-      doctor: async ({ signal: actionSignal }) => {
+      doctor: async ({ state, signal: actionSignal }) => {
         const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
         const validate = captureMutationOwner(ctx, signal);
-        const config = await loadConfig();
+        const config = await loadConfig(state.manager.configReview?.setupName);
         validate();
         const confirmed = await ctx.ui.confirm(
           "Run diagnostics?",
@@ -241,11 +254,12 @@ export async function showSyncManager(
         return { kind: "close" };
       },
       init: async () => {
-        await runRoute("init");
+        await runRoute("init", sessionSignal);
         return { kind: "stay" };
       },
-      conflicts: async () => {
+      conflicts: async ({ state }) => {
         const result = await runCancellableOperation(ctx, "Reviewing private conflicts…", "conflicts", runRoute, {
+          target: state.manager.configReview?.setupName,
           commitAware: true,
           signal: sessionSignal,
         });
@@ -254,6 +268,44 @@ export async function showSyncManager(
       },
     },
   });
+  // Setup-specific actions must use the configuration shown by this screen, not
+  // an active setup selected by another process while the menu was open.
+  for (const action of [
+    "review-attention",
+    "sync",
+    "retry-refusal",
+    "settings",
+    "pull",
+    "push",
+    "history",
+    "diff",
+    "status",
+    "doctor",
+    "conflicts",
+  ] as const) {
+    const activate = menu.actions[action];
+    menu.actions[action] = async (invocation) => {
+      validateOwner();
+      const review = invocation.state.manager.configReview;
+      let current = false;
+      try {
+        const config = await loadConfig();
+        validateOwner();
+        invocation.signal.throwIfAborted();
+        current = review?.fingerprint === syncCheckConfigFingerprint(config);
+      } catch {
+        if (!isCurrent() || invocation.signal.aborted) return { kind: "close" };
+      }
+      if (!current) {
+        ctx.ui.notify(
+          "Sync setup changed while the manager was open. Review the refreshed setup before continuing.",
+          "warning",
+        );
+        return { kind: "stay" };
+      }
+      return activate(invocation);
+    };
+  }
   const menuContext: ExtensionCommandContext = {
     ...ctx,
     ui: {
@@ -293,7 +345,7 @@ export async function showSyncManager(
       return { manager };
     },
     signal: sessionSignal,
-    isCurrent: () => !sessionSignal?.aborted,
+    isCurrent,
   });
 }
 

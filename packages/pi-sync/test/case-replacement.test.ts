@@ -11,45 +11,12 @@ import {
   recoverPendingSnapshotTransactions,
   recoverSnapshotTransactionsOnStartup,
 } from "../src/snapshot/snapshot-transaction.js";
-import { withTempHome } from "./helpers.js";
+import { caseInsensitiveLookup, withSnapshotQueueRoot } from "./snapshot-queue-fixture.js";
 import { deferred } from "./startup-check-helpers.js";
 
-const image = (value: string) => `file:${createHash("sha256").update(value).digest("hex")}`;
+const withTempHome = <T>(action: (root: string) => Promise<T>) => withSnapshotQueueRoot(false, action);
 
-/** Emulate only top-level case-insensitive lookup; names and durable I/O remain real. */
-function caseInsensitiveLookup(root: string, onRename?: (source: unknown, destination: unknown) => void) {
-  const readdir = fs.readdir.bind(fs);
-  const spies: { mockRestore(): void }[] = [];
-  async function resolve(target: unknown) {
-    if (typeof target !== "string" || path.dirname(target) !== root) return target;
-    const name = (await readdir(root)).find((item) => item.toLowerCase() === path.basename(target).toLowerCase());
-    return name ? path.join(root, name) : target;
-  }
-  for (const method of ["lstat", "realpath", "readFile", "writeFile", "copyFile", "chmod", "open", "rm"] as const) {
-    const original = fs[method];
-    const spy = vi.spyOn(fs, method);
-    const implementation = async (...args: unknown[]) => {
-      args[0] = await resolve(args[0]);
-      return Reflect.apply(original, fs, args);
-    };
-    // Vitest's union of overloaded fs signatures cannot express this forwarding wrapper.
-    spy.mockImplementation(implementation as never);
-    spies.push(spy);
-  }
-  const rename = fs.rename.bind(fs);
-  spies.push(
-    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      await rename((await resolve(source)) as string, (await resolve(destination)) as string);
-      onRename?.(source, destination);
-    }),
-  );
-  // Pi imports named built-in functions; keep its actual queue lookup on this fixture.
-  syncBuiltinESMExports();
-  return () => {
-    for (const spy of spies.reverse()) spy.mockRestore();
-    syncBuiltinESMExports();
-  };
-}
+const image = (value: string) => `file:${createHash("sha256").update(value).digest("hex")}`;
 
 for (const phase of ["prepared", "session", "settings"])
   test(`case-coalesced settings authorize root-transition recovery after ${phase}`, async () =>
@@ -67,7 +34,7 @@ for (const phase of ["prepared", "session", "settings"])
       await fs.writeFile(target, "before-session");
       const controller = new AbortController();
       let injecting = true;
-      const restoreLookup = caseInsensitiveLookup(root, (_from, to) => {
+      const restoreLookup = await caseInsensitiveLookup(root, (_from, to) => {
         if (
           injecting &&
           ((phase === "prepared" && String(to).endsWith("journal.json")) ||
@@ -158,7 +125,7 @@ for (const content of ["after", "before"])
       const before = path.join(root, "append_system.md");
       const after = path.join(root, "APPEND_SYSTEM.md");
       await fs.writeFile(before, "before");
-      const restore = caseInsensitiveLookup(root);
+      const restore = await caseInsensitiveLookup(root);
       try {
         await applySnapshotTransaction({
           deletes: [before],
@@ -215,7 +182,7 @@ for (const phase of [
           ],
         }),
       );
-      const restore = caseInsensitiveLookup(root);
+      const restore = await caseInsensitiveLookup(root);
       try {
         if (["armed-missing", "newer", "deleted"].includes(phase)) {
           await assert.rejects(recoverPendingSnapshotTransactions(), /unrecognized or newer/);
@@ -248,7 +215,7 @@ for (const newer of [false, true])
       const after = path.join(root, "APPEND_SYSTEM.md");
       await fs.writeFile(before, "before");
       const rename = fs.rename.bind(fs);
-      const restore = caseInsensitiveLookup(root);
+      const restore = await caseInsensitiveLookup(root);
       const controller = new AbortController();
       const spy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
         await rename(source, destination);
@@ -326,11 +293,11 @@ for (const malformed of ["old-version", "non-file", "other-name", "other-root"] 
       await fs.access(directory);
     }));
 
-async function caseQueueFixture(root: string, recovery: boolean) {
+async function caseQueueFixture(root: string, recovery: boolean, removed = false) {
   const before = path.join(root, "append_system.md");
   const after = path.join(root, "APPEND_SYSTEM.md");
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(recovery ? after : before, recovery ? "after" : "before");
+  if (!removed) await fs.writeFile(recovery ? after : before, recovery ? "after" : "before");
   if (recovery) {
     const directory = path.join(root, "pi-sync/transactions/interrupted");
     await fs.mkdir(path.join(directory, "before"), { recursive: true });
@@ -349,7 +316,8 @@ async function caseQueueFixture(root: string, recovery: boolean) {
             beforeImage: image("before"),
             afterImage: image("after"),
             postFiles: [],
-            replacementStarted: true,
+            removalPending: removed,
+            replacementStarted: !removed,
           },
         ],
       }),
@@ -368,22 +336,37 @@ async function caseQueueFixture(root: string, recovery: boolean) {
   };
 }
 
-for (const recovery of [false, true])
-  test(`case ${recovery ? "recovery" : "apply"} holds both spelling queues through installation`, async () =>
+for (const [recovery, removed, boundary] of [
+  [false, false, "rename"],
+  [true, false, "rename"],
+  [true, true, "rename"],
+  [true, true, "stage"],
+] as const)
+  test(`case ${recovery ? "recovery" : "apply"}${removed ? " after interrupted removal" : ""} holds both spelling queues at ${boundary}`, async () =>
     withTempHome(async (root) => {
-      const f = await caseQueueFixture(root, recovery);
-      const restore = caseInsensitiveLookup(root);
+      const f = await caseQueueFixture(root, recovery, removed);
+      const restore = await caseInsensitiveLookup(root);
       const entered = deferred();
       const release = deferred();
       const registered = deferred();
       const events: string[] = [];
       const rename = vi.mocked(fs.rename).getMockImplementation();
       const realpath = vi.mocked(fs.realpath).getMockImplementation();
-      assert.ok(rename && realpath);
-      const installer = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-        if (String(source).endsWith(recovery ? ".restore" : ".apply")) {
+      const copyFile = vi.mocked(fs.copyFile).getMockImplementation();
+      assert.ok(rename && realpath && copyFile);
+      const stage = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        await copyFile(...args);
+        if (boundary === "stage" && String(args[1]).endsWith(".restore")) {
           entered.resolve();
           await release.promise;
+        }
+      });
+      const installer = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (String(source).endsWith(recovery ? ".restore" : ".apply")) {
+          if (boundary === "rename") {
+            entered.resolve();
+            await release.promise;
+          }
           await rename(source, destination);
           events.push("installed");
           return;
@@ -405,6 +388,7 @@ for (const recovery of [false, true])
       let writers: Promise<unknown>[] = [];
       try {
         task = f.run();
+        void task.catch(entered.reject);
         await entered.promise;
         events.push("registering");
         writers = [f.before, f.after].map((target) =>
@@ -426,6 +410,7 @@ for (const recovery of [false, true])
         await Promise.allSettled([...(task ? [task] : []), ...writers]);
         installer.mockRestore();
         observer.mockRestore();
+        stage.mockRestore();
         restore();
       }
     }));
@@ -435,7 +420,7 @@ for (const recovery of [false, true])
     test(`case ${recovery ? "recovery" : "apply"} preserves pre-reservation writer content: ${content}`, async () =>
       withTempHome(async (root) => {
         const f = await caseQueueFixture(root, recovery);
-        const restore = caseInsensitiveLookup(root);
+        const restore = await caseInsensitiveLookup(root);
         const rm = vi.mocked(fs.rm).getMockImplementation();
         assert.ok(rm);
         const destination = recovery ? f.before : f.after;
@@ -467,7 +452,7 @@ for (const recovery of [false, true])
     test(`case ${recovery ? "recovery" : "apply"} releases destination reservation after ${invalidation}`, async () =>
       withTempHome(async (root) => {
         const f = await caseQueueFixture(root, recovery);
-        const restore = caseInsensitiveLookup(root);
+        const restore = await caseInsensitiveLookup(root);
         const destination = recovery ? f.before : f.after;
         const rm = vi.mocked(fs.rm).getMockImplementation();
         const realpath = vi.mocked(fs.realpath).getMockImplementation();
@@ -495,7 +480,7 @@ for (const recovery of [false, true])
           try {
             return await realpath(...args);
           } finally {
-            if (entered && String(args[0]) === destination && ++lookups === 2) waiting.resolve();
+            if (entered && String(args[0]) === destination && ++lookups === 1) waiting.resolve();
           }
         });
         syncBuiltinESMExports();
@@ -558,7 +543,7 @@ for (const kind of ["symlink", "hardlink", "multiple-writes"] as const)
       if (kind === "symlink") await fs.symlink(other, before);
       else if (kind === "hardlink") await fs.link(other, before);
       else await fs.writeFile(before, "before");
-      const restore = caseInsensitiveLookup(root);
+      const restore = await caseInsensitiveLookup(root);
       try {
         const writes = [{ target: after, content: Buffer.from("after") }];
         if (kind === "multiple-writes") writes.push({ target: after, content: Buffer.from("different") });
