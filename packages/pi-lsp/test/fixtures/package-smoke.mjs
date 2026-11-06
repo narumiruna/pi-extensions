@@ -64,8 +64,9 @@ const server = createServer(async (request, response) => {
     response.write(`data: ${JSON.stringify(chunk)}\n\n`);
     response.end("data: [DONE]\n\n");
   } catch (error) {
+    console.error(error);
     response.writeHead(500);
-    response.end(String(error));
+    response.end("Scripted provider failed.");
   }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

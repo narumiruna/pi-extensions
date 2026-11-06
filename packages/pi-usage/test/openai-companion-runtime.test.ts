@@ -168,7 +168,9 @@ function mockFetch() {
   const calls: string[] = [];
   vi.stubGlobal("fetch", async (url: string) => {
     calls.push(url);
-    return new Response(JSON.stringify(url.endsWith("/apps") ? apps : plan));
+    return new Response(
+      JSON.stringify(url === "https://chatgpt.com/backend-api/wham/usage/chatpass/apps" ? apps : plan),
+    );
   });
   return calls;
 }
@@ -232,14 +234,14 @@ for (const action of ["another", "all"] as const) {
       }),
     });
     vi.stubGlobal("fetch", async (url: string) => {
-      if (url.includes("deepseek.com"))
+      if (url === "https://api.deepseek.com/user/balance")
         return new Response(
           JSON.stringify({
             is_available: true,
             balance_infos: [{ currency: "USD", total_balance: "1", granted_balance: "0", topped_up_balance: "1" }],
           }),
         );
-      if (url.endsWith("/apps")) return new Response(JSON.stringify(apps));
+      if (url === "https://chatgpt.com/backend-api/wham/usage/chatpass/apps") return new Response(JSON.stringify(apps));
       planRead = true;
       return new Response(JSON.stringify(plan));
     });
@@ -436,7 +438,13 @@ for (const reset of ["missing", "expired", "future"] as const) {
         limit_window_seconds: 18000,
         ...(reset === "missing" ? {} : { reset_at: now / 1000 + (reset === "future" ? 90 : -60) }),
       };
-      return new Response(JSON.stringify(url.endsWith("/apps") ? apps : { rate_limit: { primary_window: window } }));
+      return new Response(
+        JSON.stringify(
+          url === "https://chatgpt.com/backend-api/wham/usage/chatpass/apps"
+            ? apps
+            : { rate_limit: { primary_window: window } },
+        ),
+      );
     });
     vi.stubGlobal("fetch", fetch);
     try {
@@ -578,7 +586,7 @@ for (const action of ["current", "another", "all"] as const) {
     try {
       await state.run();
       assert.match(state.titles.join("\n"), /Codex companion usage is disabled/);
-      assert.ok(!requests.some((url) => url.endsWith("/apps")));
+      assert.ok(!requests.some((url) => url === "https://chatgpt.com/backend-api/wham/usage/chatpass/apps"));
       if (action !== "all") assert.deepEqual(requests, []);
       else assert.ok(requests.length > 0);
     } finally {

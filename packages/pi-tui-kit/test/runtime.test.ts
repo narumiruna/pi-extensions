@@ -391,8 +391,9 @@ test("RPC review keeps Markdown, LaTeX, and Mermaid as bounded sanitized source"
       assert.match(title, /\$x\^2\$/u);
       assert.match(title, /```mermaid[\s\S]*flowchart LR/u);
       assert.doesNotMatch(title, /[┌╭].*[┐╮]/u);
-      assert.doesNotMatch(title, /https:\/\/unsafe\.example/u);
+      assert.equal(title.includes("https:"), false);
       assert.equal(title.includes("\u001b"), false);
+      assert.equal(title.includes("\u0007"), false);
       assert.match(title, /unsafetext/u);
       assert.ok(title.split("\n").every((line) => line.length <= 120));
       return choices.find((choice) => choice.startsWith("Back"));
@@ -539,9 +540,10 @@ test("RPC browse exact details preserve documents, bounds, identity, and Back be
         return "Same [Ready] [2]";
       }
       if (call === 2) {
-        assert.match(title, /\n {2}two spaces\n {4}four spaces\n {4}tabbed\n/u);
+        assert.match(title, /\n {2}two spaces\n {4}four spaces\n {4}tabbed\nunsafetext\n/u);
         assert.equal(title.includes("\u001b"), false);
-        assert.equal(title.includes("https://unsafe.example"), false);
+        assert.equal(title.includes("\u0007"), false);
+        assert.equal(title.includes("https:"), false);
         assert.match(title, new RegExp(`\\n${"x".repeat(120)}\\ny\\n`, "u"));
         assert.doesNotMatch(title, /Status: Ready|Legacy description|legacy detail must not render/u);
         return choices.find((choice) => choice.startsWith("Next"));

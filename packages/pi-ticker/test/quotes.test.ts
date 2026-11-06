@@ -44,23 +44,24 @@ test("preserves Yahoo's case-sensitive pence currency unit", () => {
 });
 
 test("fetches symbols independently and retains partial failures", async () => {
-  const fetchImplementation = vi.fn<typeof fetch>(async (input) => {
-    const url = String(input);
-    return url.includes("AAPL") ? response({}, 503) : response(quotePayload("NVDA"));
-  });
+  const fetchImplementation = vi.fn<typeof fetch>(async (input) =>
+    input === `${QUOTE_ENDPOINT}/AAPL?interval=1m&range=1d` ? response({}, 503) : response(quotePayload("NVDA")),
+  );
   const controller = new AbortController();
   const results = await fetchQuotes(["NVDA", "AAPL"], controller.signal, fetchImplementation);
 
-  assert.equal(fetchImplementation.mock.calls.length, 2);
-  assert.match(String(fetchImplementation.mock.calls[0]?.[0]), new RegExp(`^${QUOTE_ENDPOINT}`));
+  assert.deepEqual(
+    fetchImplementation.mock.calls.map(([input]) => input),
+    [`${QUOTE_ENDPOINT}/NVDA?interval=1m&range=1d`, `${QUOTE_ENDPOINT}/AAPL?interval=1m&range=1d`],
+  );
   assert.equal(results[0]?.quote?.symbol, "NVDA");
-  assert.match(results[1]?.error ?? "", /HTTP 503/);
+  assert.equal(results[1]?.error, "Quote request failed with HTTP 503.");
 });
 
 test("retains settled quotes when another request reaches the shared timeout", async () => {
   const controller = new AbortController();
   const fetchImplementation = vi.fn<typeof fetch>(async (input, init) => {
-    if (String(input).includes("NVDA")) return response(quotePayload("NVDA"));
+    if (input === `${QUOTE_ENDPOINT}/NVDA?interval=1m&range=1d`) return response(quotePayload("NVDA"));
     return new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
     });
@@ -74,7 +75,10 @@ test("retains settled quotes when another request reaches the shared timeout", a
 });
 
 test("rejects malformed quote payloads", () => {
-  assert.throws(() => parseQuote("NVDA", { chart: { result: [] } }), /usable price/);
+  assert.throws(
+    () => parseQuote("NVDA", { chart: { result: [] } }),
+    new Error("Quote response did not include a usable price and previous close."),
+  );
 });
 
 test("propagates cancellation instead of converting it into quote errors", async () => {
@@ -87,5 +91,5 @@ test("propagates cancellation instead of converting it into quote errors", async
   );
   const pending = fetchQuotes(["NVDA"], controller.signal, fetchImplementation);
   controller.abort();
-  await assert.rejects(pending, /aborted/);
+  await assert.rejects(pending, new Error("aborted"));
 });

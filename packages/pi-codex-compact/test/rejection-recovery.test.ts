@@ -283,8 +283,8 @@ test("default recovery carries encrypted history but not the retained tail, and 
   assert.match(recovery, /opaque-assistant-only-fact/);
   assert.match(recovery, /prefix/);
   assert.doesNotMatch(recovery, /"text":"tail"/);
-  assert.equal(h.payloads[0].url.endsWith("/responses/compact"), true);
-  assert.equal(h.payloads[1].url.endsWith("/responses"), true);
+  assert.equal(h.payloads[0].url, "https://api.openai.com/v1/responses/compact");
+  assert.equal(h.payloads[1].url, "https://api.openai.com/v1/responses");
   await h.run();
   assert.equal(h.payloads.length, 3, "subsequent compaction skips remote compact, not summary recovery");
   h.entries.push({
@@ -727,15 +727,15 @@ test("actual Azure adapter endpoint and API version changes remain eligible desp
   await h.run();
   await h.run();
   assert.equal(h.payloads.length, 1);
-  assert.match(h.payloads[0].url, /first.openai.azure.com/);
+  assert.equal(new URL(h.payloads[0].url).origin, "https://first.openai.azure.com");
   h.setEnv({ AZURE_OPENAI_BASE_URL: "https://second.openai.azure.com", AZURE_OPENAI_API_VERSION: "v1" });
   await h.run();
   assert.equal(h.payloads.length, 2);
-  assert.match(h.payloads[1].url, /second.openai.azure.com/);
+  assert.equal(new URL(h.payloads[1].url).origin, "https://second.openai.azure.com");
   h.setEnv({ AZURE_OPENAI_BASE_URL: "https://second.openai.azure.com", AZURE_OPENAI_API_VERSION: "next" });
   await h.run();
   assert.equal(h.payloads.length, 3);
-  assert.match(h.payloads[2].url, /api-version=next/);
+  assert.equal(new URL(h.payloads[2].url).searchParams.get("api-version"), "next");
   h.setEnv({ AZURE_OPENAI_BASE_URL: "https://first.openai.azure.com", AZURE_OPENAI_API_VERSION: "v1" });
   await h.run();
   assert.equal(h.payloads.length, 3);
