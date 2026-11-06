@@ -10,6 +10,8 @@ Resolve all open CodeQL findings with targeted code fixes or evidence-based fals
 - Alerts #24–#28 flag `JSON.stringify` in generated Node-only test source; the query's HTML `<script>` concern does not apply to those literal contexts.
 - Alerts #21–#23 duplicate earlier dismissed findings #10, #9, and #6 after repository path migrations.
 - The worktree starts clean at `ce8a19ce`; the latest scan on that commit added alert #44 for an error response in the loopback-only LSP smoke provider, bringing the total to 22.
+- Completion work uses the new branch `narumi/fix/complete-code-scanning-plan` from `origin/main`, reusing the reviewed fixes in `7b576828` without changing the original PR branch.
+- PR #1820 passed CI and CodeQL; its JavaScript analysis `2109313907` reports zero results. CI ran affected workspaces, so it does not yet establish a passing full repository test gate.
 
 ## Applicable rules and verification
 
@@ -18,6 +20,8 @@ Resolve all open CodeQL findings with targeted code fixes or evidence-based fals
 - Security triage: verify random-token generation, loopback binding, cookie attributes, timing-safe comparisons, process-keyed HMAC use, and non-persistence; verify Node-only source contexts against the CodeQL query before dismissing false positives (`Review`, existing `Test`).
 - LSP smoke-provider errors: keep diagnostics local and return a fixed response; preserve subprocess readiness deadlines and cleanup (`Review`, package-directory fixture `Smoke`).
 - Extension conventions: apply the documentation-and-verification MUST rules; run both `npm run check` (`Validator`) and `npm test` (`Test`).
+- Verification environment: run the full unchanged suite without an affected-test base in a separate Linux clone with the Node version from `.node-version`; preserve host files and capture evidence before removing owned container resources (`Test`, `Review`).
+- Completion documentation: retain exact gate results, false-positive evidence, semantic audit, and the remaining default-branch merge handoff before deleting this completed plan (`Review`).
 - Scope: no metadata, settings, loading, command, lifecycle, UI implementation, or published behavior changes are intended; pack smokes, runtime-loading smokes, and Changesets are not applicable unless that scope changes.
 
 ## Plan
@@ -28,16 +32,19 @@ Resolve all open CodeQL findings with targeted code fixes or evidence-based fals
 - [x] Fix #44 with local stderr diagnostics and a fixed HTTP error body; the package-directory smoke passed diagnostics, preview, write, reload, shutdown, four child-server exits, and eight loopback provider requests. A deterministic error-path probe confirmed that private diagnostic text stays out of the response.
 - [x] Dismiss #21–#28 as false positives with per-alert evidence; GitHub confirmed all eight dismissals.
 - [x] Run `npm run format`, 368 focused tests across 12 files, and `npm run check`; all passed. The first direct focused run required the canonical temporary-directory environment used by the root test runner; its canonical-path rerun passed.
-- [ ] Complete the `npm test` gate: the full run had 19,444 passing tests, 34 skipped tests, and four failures outside the diff. All four reproduced at unchanged `ce8a19ce` in a detached external worktree; no exception is approved.
+- [x] Complete the full Linux verification gate: `npm run format` and `npm run check` passed; 501 focused tests passed with one existing platform skip; unfiltered `npm test` selected all 909 files and passed 19,465 tests with 16 existing platform skips, zero failures, and zero unhandled errors. Both LSP smoke paths passed, and the clone stayed unchanged. Initial setup errors and the older-image Git failure remain recorded in the retained verification note.
 - [x] Audit the final diff against `docs/extension-conventions.md`, the Kit/LSP scoped rules, all alert locations, URL semantics, terminal-control preservation, and fixture resource cleanup; `git diff --check` passed.
-- [x] Re-query GitHub: only #29–#41 and #44 remain open, with local fixes awaiting CodeQL re-analysis. Keep this plan because the required test gate remains incomplete.
+- [x] Re-query GitHub: #21–#28 remain dismissed; analysis `2109313907` verifies zero JavaScript results for `7b576828`. The 14 fixed alerts remain open on `main` until merge and default-branch re-analysis.
+- [ ] Write the retained verification note, complete the semantic audit, and remove this plan only after all agent checks pass.
+- [ ] Commit and push the focused completion branch, open its pull request, and verify the final CI/CodeQL results without merging or dispatching a release workflow.
 
 ## Completion Checklist
 
 - [x] All 22 identified findings have an evidence-backed disposition: 14 local fixes and eight verified false-positive dismissals.
-- [ ] Focused tests and both root verification gates pass; blocked only on the four reproduced baseline failures below.
-- [x] The diff contains only intended test changes, without source-level scan suppression, settings changes, metadata changes, or published runtime weakening; no Changeset or pack/load smoke is required.
-- [x] GitHub dismissals are confirmed; the 14 code-fixed alerts are not claimed closed before re-analysis.
+- [x] Focused tests and both full root verification gates passed in the isolated Linux environment; macOS baseline failure evidence remains recorded below and in the retained verification note.
+- [x] The diff contains only intended test fixes and completion documentation, without source-level scan suppression, settings changes, metadata changes, or published runtime weakening; no Changeset or pack/load smoke is required.
+- [x] GitHub dismissals and zero-result PR re-analysis are confirmed; the 14 code-fixed alerts are not claimed closed on `main` before merge and default-branch re-analysis.
+- [ ] Final pull-request checks pass, completion evidence and external handoff are retained, and this completed plan is removed.
 
 ## Verification blockers
 
@@ -51,6 +58,6 @@ The detached baseline worktree was outside the repository and was removed after 
 
 ## External Handoff
 
-The user authorized committing, pushing, and opening a pull request. A successful CodeQL analysis must verify that revision; the expected result is closure of #29–#41 and #44 without new alerts after merge to the default branch. GitHub analysis of the patch remains unverified, and the remaining alerts must not be reported closed yet.
+The maintainer owns merge and the resulting default-branch CodeQL run. The PR analysis verifies the patch with zero results, but the 14 alerts must not be reported closed on `main` until that run confirms their closure. No merge, release, or publication is authorized by this plan.
 
-The maintainer must resolve the four baseline test failures, obtain a passing full run in a suitable environment, or explicitly approve an exception before the required test gate can be marked complete. No exception, release, or publication is authorized by this plan.
+The four macOS-specific baseline failures remain documented. The passing unfiltered Linux run satisfies the plan's suitable-environment test requirement without a waiver or unrelated test changes. Verification evidence and the remaining merge handoff are retained in `docs/implementation-notes/code-scanning-verification.md`.
