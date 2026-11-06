@@ -109,8 +109,10 @@ style = "bold blue"
 
 Use `fg:pi:accent` to follow Pi's active theme; see [Pi theme colors](./skills/configure-pi-starship/references/configuration.md#pi-theme-colors).
 Provider, model, and thinking modules also accept ordered exact-match `style_rules`.
-For per-extension status colors, add `[extension_status.styles]` entries using raw Pi status keys (or `namespace:*`); unmatched statuses keep the module style.
-See [Configuration and format](./skills/configure-pi-starship/references/configuration.md) for examples and matching rules.
+Place an exact Pi status key in the root `format` with `${extension_status.usage}`; `$extension_status` (including through `$all`) keeps the remaining statuses.
+Use `[extension_status.styles]` for raw-key colors in both forms; quote dotted keys such as `"example.worker"` and keep `namespace:*` for colon wildcards.
+Unmatched statuses keep the module style.
+See [Individual extension statuses](./skills/configure-pi-starship/references/configuration.md#individual-extension-statuses) for layout examples, limits, and icon/style rules.
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 

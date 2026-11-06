@@ -63,7 +63,10 @@ For exact default formats, symbols, enabled state, accepted style fields, displa
 ## Reachability and collection rules
 
 A module contributes work only when it is enabled and reachable from the root `format` directly or through `$all`.
-Reachability activates that module's collector at module scope, even when its module format references only `$symbol`.
+A valid root `${extension_status.<raw-key>}` also makes `extension_status` reachable without the aggregate variable; it reads Pi's existing status map, not a producer or collector.
+For that module, inspection uses the status expansions that participate in the layout, including individual-only layouts.
+See [individual extension statuses](configuration.md#individual-extension-statuses) for exact-key selection, aggregate exclusions, limits, and shared formatting.
+For modules with a collector, reachability activates it at module scope, even when the module format references only `$symbol`.
 Omitting a data variable does not prevent the package, deployment, cloud, or execution collectors from reading that reachable module's allowlisted files and environment metadata.
 Language project detection also runs at module scope. Version commands, requirement-file reads, and optional Python/Rust values are variable-gated, except for explicitly enabled Node.js/Go requirement styling as described below.
 The mise health, direnv status, Pixi version, and Terraform/OpenTofu version commands are likewise variable-gated, but their module-level detection and non-command metadata reads still occur when reachable.

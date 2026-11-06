@@ -286,18 +286,7 @@ Module-specific options are catalog-owned and type-checked; unknown options warn
 [Version formats](#version-formats) support raw and numeric component variables.
 Detection arrays inspect one bounded listing of the current directory; replacement and fallback rules are [module-specific](modules.md#reachability-and-collection-rules).
 Language and Kubernetes file detectors support leading `!` rejection rules; [environment detectors](modules.md#environment-detection-and-messages) have separate presence rules.
-`[extension_status].icons` accepts arbitrary exact Pi status keys and explicit colon namespace wildcards such as `foo:*`; `fallback` controls unmatched statuses.
-Icon matching uses the exact key, the longest `:*` wildcard, a leading status emoji, then `fallback`/`🔌`.
-An empty configured icon suppresses only the icon.
-`foo:*` matches `foo:server` but not `foo`, `foobar`, or `foo/server`.
-`[extension_status].styles` applies a Starship style to each complete status (icon and text) by exact raw key, then longest `:*` wildcard, then optional `fallback`; unmatched statuses inherit the module's `style`.
-Separators retain the module style. An explicit `none` style removes the inherited module style for that status.
-
-Pi does not expose status ownership, so exact raw keys are the reliable third-party contract.
-pi-starship does not inspect installed packages, infer aliases, assign known-extension icons, or bridge compatibility keys.
-Extension authors may use `<extension-id>` or `<extension-id>:<stable-slot>` for interoperability, but pi-starship does not require it.
-
-**Icon migration:** configurations that relied on package-ID aliases, built-in known-extension icons, or compatibility mappings must use an exact raw status key, an explicit namespace wildcard, a leading emoji in the status value, or `fallback`.
+See [individual extension statuses](#individual-extension-statuses) for exact-key placement, aggregate selection, and `[extension_status]` icon/style matching.
 
 ## Configuration schema and validation
 
@@ -307,7 +296,7 @@ A settings document is one TOML table with these accepted root keys:
 
 | Key | Type | Behavior |
 | --- | --- | --- |
-| `format` | string | Root layout whose variables are module names or `$all`. |
+| `format` | string | Root layout whose variables are module names, `$all`, or exact `${extension_status.<raw-key>}` references. |
 | `palette` | string | Selects one exact table name from `[palettes.<name>]`. |
 | `palettes` | table of tables | Defines direct color names used by style expressions. |
 | `<module>` | table | Configures one module listed in [the complete module catalog](module-catalog.md). |
@@ -456,10 +445,88 @@ Unknown fields and comments remain in the settings document even though they are
 - Styled groups: `[format string](style string)`.
 - Conditional groups: `(format string)` render only when a nested variable has a non-empty value.
 - Nested groups are supported.
-- `$all` expands enabled modules in the default order and omits modules already referenced explicitly.
+- `$all` expands enabled modules in the default order and omits modules already referenced explicitly; individual extension-status references exclude only their selected keys, not the aggregate module.
 
 Module formats can use `$style` in a style expression.
 Module output keeps its own style when embedded in an outer styled group.
+
+### Individual extension statuses
+
+Use `${extension_status.<raw-key>}` in the root `format` to place one exact key from Pi's public status map.
+Keep the braces and a non-empty suffix; the complete suffix is the raw key, including case, dots, colons, or slashes.
+These references are not module-local variables or style variables, and root references do not support wildcard matching or per-status configuration tables.
+A `*` in a reference is literal raw-key text, not a wildcard.
+Invalid references produce configuration diagnostics; a valid reference to an absent key renders empty without a warning.
+Keys that cannot fit the existing braced-variable grammar remain available through `$extension_status`.
+
+This example places `usage` beside Provider/Model, remaining statuses on an optional line, and `sync` on the final optional line:
+
+```toml
+format = """
+$provider$model( ${extension_status.usage})
+$directory$git_branch$git_status(
+$extension_status)(
+${extension_status.sync})"""
+
+[extension_status.styles]
+usage = "bold cyan"
+sync = "yellow"
+lsp = "green"
+```
+
+All explicit status keys are collected from the complete root format, including nested conditional and styled groups, before rendering.
+Every `$extension_status` excludes those keys regardless of their position or whether their containing group is visible.
+When `$all` reaches `extension_status`, it uses the same remaining-status group.
+An individual reference does not remove that aggregate module from `$all`; an explicit `$extension_status` does.
+Repeated individual or aggregate references render at every written occurrence; they do not consume statuses or share an allowance.
+
+Empty or whitespace-only values, including values left empty after terminal-control removal, and pi-starship's own `starship` key are filtered before selection and limiting.
+Statuses whose formatted content is empty, such as a prefix-only value with its icon suppressed, are also omitted before the limit and module format are applied.
+Each expansion selects its requested key or the remaining group in public-map order, then applies `[extension_status].max_statuses` independently.
+The default limit is `5`, with an accepted range of `0` through `100`.
+An individual reference selects at most one status and does not use the aggregate's allowance; its position in the original map does not prevent selection.
+`max_statuses = 0` or `[extension_status].disabled = true` hides all individual and aggregate expansions.
+
+Every non-empty expansion reuses `[extension_status].format`, `symbol`, `style`, `separator`, `icons`, `styles`, and the selected palette.
+For an individual reference, `$statuses` contains that one formatted status and `$count` is `1`.
+For the aggregate, `$statuses` joins the selected statuses and `$count` is their number after exclusion and limiting.
+An expansion with no visible status is empty before its module format runs, so static labels, symbols, counts, and separators do not remain.
+Put associated whitespace or a newline inside a conditional group, as above, to hide it with the expansion; literals outside the group remain.
+
+Both expansion forms use the same raw-key icon and style maps.
+Quote dotted raw keys in TOML maps: an unquoted `example.worker` defines a nested table rather than one exact key.
+For a hypothetical publisher that emits `example.worker`, use `${extension_status.example.worker}` for placement and quote the key in both maps:
+
+```toml
+[extension_status.icons]
+"example.worker" = "◆"
+"foo:*" = "🧪"
+fallback = "•"
+
+[extension_status.styles]
+"example.worker" = "bold green"
+"foo:*" = "bold yellow"
+"foo:error" = "bold red"
+fallback = "dimmed white"
+```
+
+Icon matching uses the exact raw key, the longest `:*` namespace wildcard, a leading status emoji, then configured `fallback` or `🔌`.
+An empty configured icon suppresses only the icon.
+`foo:*` matches `foo:server` but not `foo`, `foobar`, `foo/server`, or `foo.server`.
+There is no `.*` wildcard; use quoted exact dotted keys.
+`styles` applies a Starship style to each complete status (icon and text) by exact raw key, then longest `:*` wildcard, then optional `fallback`.
+Unmatched statuses inherit the module's `style`; explicit `none` removes that inherited style for the status.
+Separators retain the module style, and a raw key keeps the same configured icon/style rules in both forms.
+
+Pi does not expose status ownership, so exact raw keys are the reliable third-party contract.
+pi-starship does not normalize, split, or rewrite keys, convert `:` to `.`, inspect installed packages, infer aliases, assign known-extension icons, or bridge compatibility keys.
+Repository-owned publishers currently use only bare aggregate keys; `pi-lsp` publishes only `lsp`, not per-language statuses.
+Authors may use `<extension-id>` for one aggregate status or `<extension-id>.<stable-slot>` for independent channels, but pi-starship neither requires this convention nor creates channels from references.
+Status values and configured display text are sanitized at the display boundary before text transforms or layout; raw keys retain their identity for matching.
+
+**Icon migration:** configurations that relied on package-ID aliases, built-in known-extension icons, or compatibility mappings must use an exact raw status key, an explicit `:*` namespace wildcard, a leading emoji in the status value, or `fallback`.
+Existing settings, profiles, presets, and history are not rewritten automatically.
+Before downgrading to a release without individual references, remove those references or restore an earlier TOML document.
 
 ## 🎨 Styles and palettes
 

@@ -1247,6 +1247,8 @@ Accepted style fields:
 ### `extension_status`
 
 Statuses published through Pi's extension-neutral status map.
+Use root `$extension_status` for the remaining group or `${extension_status.<raw-key>}` for one exact status; both use this module's settings and format.
+See [individual extension statuses](configuration.md#individual-extension-statuses) for selection, `$all` exclusions, counts, empty output, and icon/style matching.
 
 - Format variables: `$symbol`, `$statuses`, `$count`.
 - Style variables in `format`: `$style`.
@@ -1265,6 +1267,6 @@ Additional options:
 | Option | Type | Default | Constraints and meaning |
 | --- | --- | --- | --- |
 | `separator` | string | `" • "` | Text inserted between rendered extension statuses. |
-| `max_statuses` | integer | `5` | Inclusive range 0 through 100. Zero hides all status values. |
-| `icons` | string-to-string table | `{}` | Exact raw status keys, explicit namespace wildcards, and optional fallback. |
-| `styles` | string-to-style table | `{}` | Valid Starship styles by exact raw key, namespace wildcard, or fallback. |
+| `max_statuses` | integer | `5` | Inclusive range 0 through 100. Limit per expansion after selection and exclusion; zero hides all expansions. |
+| `icons` | string-to-string table | `{}` | Exact raw status keys, `:*` namespace wildcards, and optional `fallback`; quote dotted keys. |
+| `styles` | string-to-style table | `{}` | Valid Starship styles by exact raw key, `:*` namespace wildcard, or `fallback`; quote dotted keys. |

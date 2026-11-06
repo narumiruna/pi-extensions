@@ -13,8 +13,9 @@ export const extensionStatusModule = defineModule({
   values: ({ runtime, extensionStatus, palette }) => {
     const statuses = [...runtime.extensionStatuses.entries()]
       .filter(([key, value]) => key !== "starship" && value.trim())
-      .slice(0, extensionStatus.maxStatuses)
-      .map(([key, value]) => ({ key, text: formatExtensionStatus(key, value, extensionStatus.icons) }));
+      .map(([key, value]) => ({ key, text: formatExtensionStatus(key, value, extensionStatus.icons) }))
+      .filter(({ text }) => text.trim())
+      .slice(0, extensionStatus.maxStatuses);
     if (statuses.length === 0) return undefined;
     const { separator, styles } = extensionStatus;
     const content =

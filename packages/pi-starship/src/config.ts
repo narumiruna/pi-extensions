@@ -19,6 +19,7 @@ import { type FormatNode, formatVariables, parseFormat, styleVariables } from ".
 import { type ColorPalette, isValidStyle, parseColor } from "./format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
 import type { ModuleDisplayConfig, ModuleOptionSchema, ModuleOptionValue, ModuleStyleRule } from "./modules/types.js";
+import { extensionStatusKey } from "./root-references.js";
 
 export const CONFIG_FILE_NAME = "pi-starship.toml";
 export { MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
@@ -641,7 +642,7 @@ function validateFormatVariables(
   diagnostics: ConfigDiagnostic[],
 ) {
   for (const variable of formatVariables(ast)) {
-    if (allowed.has(variable)) continue;
+    if (allowed.has(variable) || (path === "format" && extensionStatusKey(variable) !== undefined)) continue;
     diagnostics.push(
       diagnostic("warning", path, `Unknown variable ${JSON.stringify(variable)} in ${path} was ignored`),
     );

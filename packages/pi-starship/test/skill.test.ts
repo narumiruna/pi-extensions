@@ -207,6 +207,17 @@ test("skill references own the detailed public configuration guidance", () => {
   }
 });
 
+test("individual status reference examples validate without semantic warnings", () => {
+  const configuration = readFileSync(path.join(referencesDirectory, "configuration.md"), "utf8");
+  const section = configuration.split("### Individual extension statuses\n")[1]?.split("\n## ")[0];
+  assert.ok(section);
+  const examples = [...section.matchAll(/```toml\n([\s\S]*?)\n```/gu)];
+  assert.equal(examples.length, 2);
+  for (const example of examples) {
+    assert.deepEqual(validateConfigDocument("/reference/pi-starship.toml", example[1] ?? "").diagnostics, []);
+  }
+});
+
 test("complete module catalog covers every public module schema", () => {
   const catalog = readFileSync(path.join(referencesDirectory, "module-catalog.md"), "utf8");
   assert.deepEqual(

@@ -91,7 +91,9 @@ Do not redirect this workflow to `starship.toml`, `pi-statusline.json`, project-
 
 Preserve comments, ordering, unknown fields, and unrelated custom settings unless the user explicitly requests a complete replacement.
 
-Keep the root `format` limited to module names and `$all`.
+Keep the root `format` limited to module names, `$all`, and exact `${extension_status.<raw-key>}` references as defined in [individual extension statuses](references/configuration.md#individual-extension-statuses).
+
+Do not infer status-key aliases or convert `:` to `.` in raw keys.
 
 Keep each module's `format` limited to that module's documented variables and style variables.
 
