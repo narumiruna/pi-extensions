@@ -363,6 +363,14 @@ for (const { model: childModel, provider: selectedProvider, caseCollision, start
     let rpc: ReturnType<typeof rpcHarness> | undefined;
     try {
       await mkdir(agentDir);
+      if (startup === "default") {
+        // Stored auth makes the saved default selectable while provider auth refreshes overlap.
+        await writeFile(
+          join(agentDir, "auth.json"),
+          JSON.stringify({ [parentProvider]: { type: "api_key", key: "synthetic-parent-key" } }),
+          { mode: 0o600 },
+        );
+      }
       await writeFile(
         join(agentDir, "settings.json"),
         JSON.stringify({
