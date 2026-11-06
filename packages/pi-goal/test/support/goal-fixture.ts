@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll } from "vitest";
 import { createMockContext, createMockPi } from "../../../../test/support.js";
 import goal from "../../src/goal.js";
+import { createGoal } from "../../src/runtime.js";
 
 export const STALE_GOAL_TOOL_REASON = "Blocked stale /goal tool call after the goal stopped or was interrupted.";
 export const GOAL_SETTINGS_DIRECTORY = mkdtempSync(join(tmpdir(), "pi-goal-test-settings-"));
@@ -161,6 +162,19 @@ export function restoreGoalForTest(
   return restoreStoredGoalForTest(sessionGoal, [], contextOverrides);
 }
 
+export function restoreActiveGoalForTest(
+  overrides: Partial<StoredGoal> = {},
+  contextOverrides: Record<string, unknown> = {},
+  settingsPath = DEFAULT_SETTINGS_PATH,
+) {
+  return restoreStoredGoalForTest(
+    { ...createGoal("finish", undefined, 0), ...overrides },
+    [],
+    contextOverrides,
+    settingsPath,
+  );
+}
+
 export function restoreStoredGoalForTest(
   sessionGoal: StoredGoal,
   extraEntries: Record<string, unknown>[] = [],
@@ -183,7 +197,7 @@ export function restoreStoredGoalForTest(
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
   });
   mock.events.get("session_start")?.[0]?.({}, context.ctx);
-  return { mock, ...context, sessionGoal };
+  return { mock, ...context, sessionGoal, branch };
 }
 
 export async function startGoalForTest(

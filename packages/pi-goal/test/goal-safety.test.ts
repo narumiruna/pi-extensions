@@ -11,8 +11,44 @@ import {
   lastGoalStatus,
   ONE_TURN_LIMIT_SETTINGS_PATH,
   requireLastGoal,
+  restoreActiveGoalForTest,
   startGoalForTest,
 } from "./support/goal-fixture.js";
+
+function restoreSafetyGoalForTest(fingerprint: string) {
+  const active = restoreActiveGoalForTest(
+    {
+      automaticModelTurns: 2,
+      toolFreeRepeatCount: 2,
+      lastToolFreeOutputFingerprint: fingerprint.repeat(64),
+    },
+    {},
+    LOW_LIMITS_SETTINGS_PATH,
+  );
+  assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+  assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
+  return active;
+}
+
+async function startOwnedGoalWithSafetyForTest(fingerprint: string) {
+  const active = restoreSafetyGoalForTest(fingerprint);
+  await active.mock.commands.get("goal")?.handler("edit finish", active.ctx);
+  assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+  assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
+  return active;
+}
+
+async function startContinuationWithSafetyForTest(fingerprint: string) {
+  const active = restoreSafetyGoalForTest(fingerprint);
+  await active.mock.events.get("agent_end")?.[0]?.(
+    { messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+    active.ctx,
+  );
+  await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+  assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+  assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
+  return active;
+}
 
 test("no-progress classifier normalizes visible output conservatively", () => {
   const blank = [{ role: "assistant", content: [{ type: "text", text: "  ...\u0000 " }] }];
@@ -201,13 +237,9 @@ test("a following prefix transform preserves automatic continuation ownership", 
 });
 
 test("a preceding input transform preserves Goal prompt ownership", async () => {
-  const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+  const active = await startOwnedGoalWithSafetyForTest("5");
   const kickoff = active.mock.sentUserMessages.at(-1)?.text ?? "";
   const transformed = `Respond briefly:\n\n${kickoff}`;
-  const safety = requireLastGoal(active.mock);
-  safety.automaticModelTurns = 2;
-  safety.toolFreeRepeatCount = 2;
-  safety.lastToolFreeOutputFingerprint = "5".repeat(64);
 
   active.mock.events.get("input")?.[0]?.({ source: "extension", text: transformed }, active.ctx);
   active.mock.events.get("before_agent_start")?.[0]?.({ prompt: transformed, systemPrompt: "base" }, active.ctx);
@@ -217,13 +249,9 @@ test("a preceding input transform preserves Goal prompt ownership", async () => 
 });
 
 test("a following prefix transform preserves Goal prompt ownership", async () => {
-  const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+  const active = await startOwnedGoalWithSafetyForTest("4");
   const kickoff = active.mock.sentUserMessages.at(-1)?.text ?? "";
   const transformed = `Respond briefly:\n\n${kickoff}`;
-  const safety = requireLastGoal(active.mock);
-  safety.automaticModelTurns = 2;
-  safety.toolFreeRepeatCount = 2;
-  safety.lastToolFreeOutputFingerprint = "4".repeat(64);
 
   active.mock.events.get("input")?.[0]?.({ source: "extension", text: kickoff }, active.ctx);
   active.mock.events.get("before_agent_start")?.[0]?.({ prompt: transformed, systemPrompt: "base" }, active.ctx);
@@ -234,14 +262,10 @@ test("a following prefix transform preserves Goal prompt ownership", async () =>
 
 test("a following marker quote or appended text cannot claim a Goal prompt", async () => {
   for (const variant of ["quoted-marker", "appended-text"] as const) {
-    const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+    const active = await startOwnedGoalWithSafetyForTest("3");
     const kickoff = active.mock.sentUserMessages.at(-1)?.text ?? "";
     const marker = kickoff.match(/<!-- pi-goal-prompt:[^>]+-->/u)?.[0] ?? "";
     assert.notEqual(marker, "");
-    const safety = requireLastGoal(active.mock);
-    safety.automaticModelTurns = 2;
-    safety.toolFreeRepeatCount = 2;
-    safety.lastToolFreeOutputFingerprint = "3".repeat(64);
     const external =
       variant === "quoted-marker"
         ? `External monitor quoted ${marker}`
@@ -506,18 +530,9 @@ test("mid-stream steer does not suppress hard-cap cleanup abort", async () => {
 });
 
 test("queued user follow-up resets safety only when its message starts", async () => {
-  const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
-  await active.mock.events.get("agent_end")?.[0]?.(
-    { messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
-    active.ctx,
-  );
-  await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+  const active = await startContinuationWithSafetyForTest("f");
   const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
   active.mock.events.get("before_agent_start")?.[0]?.({ prompt: continuation, systemPrompt: "base" }, active.ctx);
-  const safety = requireLastGoal(active.mock);
-  safety.automaticModelTurns = 2;
-  safety.toolFreeRepeatCount = 2;
-  safety.lastToolFreeOutputFingerprint = "f".repeat(64);
   active.mock.events.get("input")?.[0]?.(
     { source: "interactive", text: "user follow-up", streamingBehavior: "followUp" },
     active.ctx,
@@ -540,18 +555,11 @@ test("queued user follow-up resets safety only when its message starts", async (
 });
 
 test("expanded queued follow-up claims manual ownership at its delivery boundary", async () => {
-  const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
-  await active.mock.events.get("agent_end")?.[0]?.(
-    { messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
-    active.ctx,
-  );
-  await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+  const active = await startContinuationWithSafetyForTest("9");
   const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
   active.mock.events.get("before_agent_start")?.[0]?.({ prompt: continuation, systemPrompt: "base" }, active.ctx);
-  const safety = requireLastGoal(active.mock);
-  safety.automaticModelTurns = 2;
-  safety.toolFreeRepeatCount = 2;
-  safety.lastToolFreeOutputFingerprint = "9".repeat(64);
+  assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+  assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
   active.mock.events.get("input")?.[0]?.(
     { source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
     active.ctx,
@@ -578,12 +586,8 @@ test("expanded queued follow-up claims manual ownership at its delivery boundary
 describe("owned goal lifecycle boundaries do not consume a transformed follow-up", () => {
   for (const order of ["message-before-agent", "agent-before-message"] as const) {
     test(order, async () => {
-      const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
+      const active = await startOwnedGoalWithSafetyForTest("7");
       const ownedPrompt = active.mock.sentUserMessages.at(-1)?.text ?? "";
-      const safety = requireLastGoal(active.mock);
-      safety.automaticModelTurns = 2;
-      safety.toolFreeRepeatCount = 2;
-      safety.lastToolFreeOutputFingerprint = "7".repeat(64);
       active.mock.events.get("input")?.[0]?.(
         { source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
         active.ctx,
@@ -606,10 +610,24 @@ describe("owned goal lifecycle boundaries do not consume a transformed follow-up
 
       assert.equal(requireLastGoal(active.mock).automaticModelTurns, 0);
       assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 0);
-      const afterOwnedPrompt = requireLastGoal(active.mock);
-      afterOwnedPrompt.automaticModelTurns = 2;
-      afterOwnedPrompt.toolFreeRepeatCount = 2;
-      afterOwnedPrompt.lastToolFreeOutputFingerprint = "6".repeat(64);
+      // Restore nonzero counters through Pi's compaction retry boundary. Settlement
+      // would discard the pending follow-up that this test must keep queued.
+      active.branch.push({
+        type: "custom",
+        customType: "goal-state",
+        data: {
+          goal: {
+            ...requireLastGoal(active.mock),
+            automaticModelTurns: 2,
+            toolFreeRepeatCount: 2,
+            lastToolFreeOutputFingerprint: "6".repeat(64),
+          },
+        },
+      });
+      await active.mock.events.get("session_compact")?.[0]?.({ reason: "overflow", willRetry: true }, active.ctx);
+      assert.equal(active.mock.sentUserMessages.length, 1);
+      assert.equal(requireLastGoal(active.mock).automaticModelTurns, 2);
+      assert.equal(requireLastGoal(active.mock).toolFreeRepeatCount, 2);
 
       active.mock.events.get("message_start")?.[0]?.(
         {
@@ -629,17 +647,8 @@ describe("owned goal lifecycle boundaries do not consume a transformed follow-up
 describe("owned continuation lifecycle boundaries do not consume a transformed follow-up", () => {
   for (const order of ["message-before-agent", "agent-before-message"] as const) {
     test(order, async () => {
-      const active = await startGoalForTest({}, "finish", LOW_LIMITS_SETTINGS_PATH);
-      await active.mock.events.get("agent_end")?.[0]?.(
-        { messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
-        active.ctx,
-      );
-      await active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+      const active = await startContinuationWithSafetyForTest("8");
       const continuation = active.mock.sentUserMessages.at(-1)?.text ?? "";
-      const safety = requireLastGoal(active.mock);
-      safety.automaticModelTurns = 2;
-      safety.toolFreeRepeatCount = 2;
-      safety.lastToolFreeOutputFingerprint = "8".repeat(64);
       active.mock.events.get("input")?.[0]?.(
         { source: "interactive", text: "/skill:review", streamingBehavior: "followUp" },
         active.ctx,

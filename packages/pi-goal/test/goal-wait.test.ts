@@ -7,6 +7,7 @@ import {
   lastGoal,
   requireGoalTool,
   requireLastGoal,
+  restoreActiveGoalForTest,
   restoreStoredGoalForTest,
   settingsPath,
   startGoalForTest,
@@ -223,10 +224,11 @@ test("RPC input and custom follow-up boundaries wake waiting goals", async () =>
 });
 
 test("user resume clears waiting without rotating the goal or resetting safety", async () => {
-  const waiting = await startGoalForTest();
+  const waiting = restoreActiveGoalForTest({ automaticModelTurns: 4, toolFreeRepeatCount: 2 });
   const goal = requireLastGoal(waiting.mock);
-  goal.automaticModelTurns = 4;
-  goal.toolFreeRepeatCount = 2;
+  assert.equal(goal.automaticModelTurns, 4);
+  assert.equal(goal.toolFreeRepeatCount, 2);
+  assert.equal(waiting.mock.sentUserMessages.length, 0);
   await requireGoalTool(waiting.mock, "goal_wait").execute(
     "wait-resume",
     { goal_id: goal.id, reason: "Waiting for approval" },
@@ -237,6 +239,8 @@ test("user resume clears waiting without rotating the goal or resetting safety",
 
   await waiting.mock.commands.get("goal")?.handler("status", waiting.ctx);
   assert.ok((lastGoal(waiting.mock) as { waiting?: unknown } | null)?.waiting);
+  assert.equal(requireLastGoal(waiting.mock).automaticModelTurns, 4);
+  assert.equal(requireLastGoal(waiting.mock).toolFreeRepeatCount, 2);
   await waiting.mock.commands.get("goal")?.handler("resume", waiting.ctx);
 
   const resumed = requireLastGoal(waiting.mock);
@@ -244,7 +248,7 @@ test("user resume clears waiting without rotating the goal or resetting safety",
   assert.equal(resumed.waiting, undefined);
   assert.equal(resumed.automaticModelTurns, 4);
   assert.equal(resumed.toolFreeRepeatCount, 2);
-  assert.equal(waiting.mock.sentUserMessages.length, 2);
+  assert.equal(waiting.mock.sentUserMessages.length, 1);
   assert.match(waiting.mock.sentUserMessages.at(-1)?.text ?? "", /resumed.*waiting/is);
 });
 

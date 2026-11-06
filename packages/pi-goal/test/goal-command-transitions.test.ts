@@ -10,6 +10,7 @@ import {
   registerGoal,
   registerGoalWithSettingsPath,
   requireLastGoal,
+  restoreActiveGoalForTest,
   restoreGoalForTest,
   restoreStoredGoalForTest,
   STALE_GOAL_TOOL_REASON,
@@ -224,12 +225,14 @@ test("safety epochs reset on successful resume and active edit", async () => {
     safetyPauseCause: undefined,
   });
 
-  const edited = await startGoalForTest();
-  const activeGoal = requireLastGoal(edited.mock);
-  activeGoal.automaticModelTurns = 8;
-  activeGoal.toolFreeRepeatCount = 2;
-  activeGoal.lastToolFreeOutputFingerprint = "b".repeat(64);
-  edited.mock.entries.push({ customType: "goal-state", data: { goal: activeGoal } });
+  const editSafety = {
+    automaticModelTurns: 8,
+    toolFreeRepeatCount: 2,
+    lastToolFreeOutputFingerprint: "b".repeat(64),
+    safetyPauseCause: undefined,
+  };
+  const edited = restoreActiveGoalForTest(editSafety);
+  assert.deepEqual(pickSafetyState(requireLastGoal(edited.mock)), editSafety);
   await edited.mock.commands.get("goal")?.handler("edit revised objective", edited.ctx);
   assert.deepEqual(pickSafetyState(requireLastGoal(edited.mock)), {
     automaticModelTurns: 8,
@@ -345,18 +348,28 @@ test("direct active input resets safety and reclassifies an in-flight automatic 
 });
 
 test("busy active edit claims ownership and resets safety only when its queued run starts", async () => {
-  const branch = [assistantUsageEntry({ totalTokens: 100 })];
-  const edited = await startGoalForTest(
-    { sessionManager: { getBranch: () => branch, getEntries: () => branch } },
-    "finish",
+  const edited = restoreActiveGoalForTest(
+    {
+      automaticModelTurns: 2,
+      toolFreeRepeatCount: 2,
+      lastToolFreeOutputFingerprint: "e".repeat(64),
+      baselineTokens: 100,
+    },
+    {},
     LOW_LIMITS_SETTINGS_PATH,
   );
-  const kickoff = edited.mock.sentUserMessages.at(-1)?.text ?? "";
-  edited.mock.events.get("before_agent_start")?.[0]?.({ prompt: kickoff, systemPrompt: "base" }, edited.ctx);
+  const branch = edited.branch;
+  branch.push(assistantUsageEntry({ totalTokens: 100 }));
+  await edited.mock.events.get("agent_end")?.[0]?.(
+    { messages: [{ role: "assistant", stopReason: "stop", content: [] }] },
+    edited.ctx,
+  );
+  await edited.mock.events.get("agent_settled")?.[0]?.({}, edited.ctx);
+  const continuation = edited.mock.sentUserMessages.at(-1)?.text ?? "";
+  edited.mock.events.get("before_agent_start")?.[0]?.({ prompt: continuation, systemPrompt: "base" }, edited.ctx);
   const previous = requireLastGoal(edited.mock);
-  previous.automaticModelTurns = 2;
-  previous.toolFreeRepeatCount = 2;
-  previous.lastToolFreeOutputFingerprint = "e".repeat(64);
+  assert.equal(previous.automaticModelTurns, 2);
+  assert.equal(previous.toolFreeRepeatCount, 2);
 
   await edited.mock.commands.get("goal")?.handler("edit busy replacement", edited.ctx);
   const candidate = requireLastGoal(edited.mock);
