@@ -10,7 +10,9 @@ flowchart TD
     CI -->|Success| Select["Select Changesets mode"]
     CI -->|Failure| Stop["Stop release jobs"]
     Select --> Mode{"Selected mode"}
-    Mode -->|version| Version["Run npm run version-packages"]
+    Mode -->|version| VersionPlan{"CLI release plan changes a package version?"}
+    VersionPlan -->|Yes| Version["Run npm run version-packages"]
+    VersionPlan -->|No| SkipPR["Skip version pull request"]
     Version --> PR["Create or update version pull request"]
     PR -. "Merge produces a new push to main" .-> Trigger
     Mode -->|publish| Plan["Publish-plan artifact"]
@@ -30,11 +32,13 @@ flowchart TD
 | --- | --- |
 | `checks` | Call `ci.yml` to build, check, and run affected tests; test selection can fall back to the full suite. |
 | `select-mode` | Select version, publish, or neither with the Changesets Action. |
-| `version` | Update versions and the lockfile, then create or update the version pull request. |
+| `version` | Check the effective release plan; if a package version would change, update versions and the lockfile, then create or update the version pull request. |
 | `pack` | Build packages and pack the selected publish plan into an artifact. |
 | `publish` | Download the artifact and invoke native Changesets artifact publication with npm provenance enabled. |
 
 Each non-CI job checks out the repository, sets up Node.js, and runs `npm ci`. The publish job does not repeat CI checks or tests.
+
+Before the version action, `scripts/check-version-plan.mjs` reads the CLI's `changeset status --output` plan. The action runs only when at least one planned `newVersion` differs from its `oldVersion`. This prevents empty release PRs when pending changesets target only private or ignored packages that Changesets will not version. Plan errors fail the job. A skipped plan leaves changesets pending and does not enable publishing.
 
 The pack job completes `npm run build` before packing. Only the **Pack packages** step sets `NPM_CONFIG_IGNORE_SCRIPTS=true`, so native Changesets packs the existing output without running `prepack`, `prepare`, or `postpack` hooks. Changesets can pack dependencies and consumers concurrently; a second Kit build can delete `dist` while a consumer compiles against it. Dependency installation and the explicit build keep their normal script behavior. Package-level hooks remain available for direct `npm pack` commands.
 
