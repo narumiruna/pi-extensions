@@ -110,6 +110,70 @@ test("R2 retries a rejected session token once without the token", async () => {
   );
 });
 
+test.each(["GET", "PUT", "DELETE"] as const)(
+  "R2 %s token fallback preserves the request and remembers successful static-key authentication",
+  async (method) => {
+    const seen: RequestInit[] = [];
+    await withFetch(
+      async (_input, init) => {
+        seen.push(init ?? {});
+        return new Headers(init?.headers).has("x-amz-security-token")
+          ? new Response("<Error><Code>InvalidArgument</Code><Message>X-Amz-Security-Token</Message></Error>", {
+              status: 400,
+            })
+          : Response.json({ snapshot: "ok" });
+      },
+      async () => {
+        const client = new S3Client(s3Config());
+        for (let operation = 0; operation < 2; operation += 1) {
+          if (method === "GET") await client.getJson("latest.json");
+          else if (method === "DELETE") await client.delete("probe");
+          else {
+            await client.putBuffer("snapshot", Buffer.from("private-snapshot"), "application/gzip", {
+              ifMatch: '"revision"',
+            });
+          }
+        }
+      },
+    );
+    assert.deepEqual(
+      seen.map((request) => new Headers(request.headers).get("x-amz-security-token")),
+      ["session-token", null, null],
+    );
+    for (const request of seen) {
+      assert.equal(request.method, method);
+      assert.equal(request.redirect, "error");
+      const headers = new Headers(request.headers);
+      if (method === "PUT") {
+        assert.equal(headers.get("if-match"), '"revision"');
+        assert.equal(headers.get("content-type"), "application/gzip");
+        assert.match(headers.get("authorization") ?? "", /SignedHeaders=[^ ]*if-match/u);
+        assert.equal(Buffer.from(request.body as Uint8Array).toString(), "private-snapshot");
+      } else {
+        assert.equal(request.body, undefined);
+      }
+    }
+  },
+);
+
+test("R2 keeps a valid temporary token on later requests", async () => {
+  const tokens: Array<string | null> = [];
+  await withFetch(
+    async (_input, init) => {
+      tokens.push(new Headers(init?.headers).get("x-amz-security-token"));
+      assert.equal(init?.redirect, "error");
+      return Response.json({ snapshot: "ok" });
+    },
+    async () => {
+      const client = new S3Client(s3Config());
+      await client.getJson("latest.json");
+      await client.putJson("latest.json", { snapshot: "new" }, { ifMatch: '"revision"' });
+      await client.delete("probe");
+    },
+  );
+  assert.deepEqual(tokens, ["session-token", "session-token", "session-token"]);
+});
+
 test("S3 operations forward an already-aborted signal to transport", async () => {
   let calls = 0;
   const controller = new AbortController();

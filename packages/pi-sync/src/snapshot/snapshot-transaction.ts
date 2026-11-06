@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { assertWithinRoot, isDeniedPath, isPathInside } from "../paths.js";
 import { syncDirectory, writeJson } from "../state/json-file.js";
 import { withLock } from "../state/lock.js";
@@ -11,6 +10,7 @@ import { stateDir } from "../state/state-directory.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
 import { caseReplacementSpelling, coalesceCaseReplacements, isCaseReplacement } from "./snapshot-case-replacement.js";
+import { withMissingTargetQueues, withTargetQueues } from "./snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import {
   prepareSessionRootTransition,
@@ -69,7 +69,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
   const targets = [...new Set([...coalesced.plan.deletes, ...coalesced.plan.writes.map((item) => item.target)])].sort();
   if (targets.length > 16_384)
     throw new Error("Snapshot transaction exceeds its target bound; review a smaller transfer.");
-  return withTargetQueues(targets, async () => {
+  return withTargetQueues(targets, options, async (heldKeys) => {
     options.signal?.throwIfAborted();
     if (
       targets.some((target) =>
@@ -134,6 +134,10 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         ...(entry.afterTarget ? [[entry.afterTarget, entry] as const] : []),
       ]),
     );
+    // A released additional key cannot authorize rollback, even for recognized raced bytes.
+    const changesQueueKey = transaction.journal.entries.some(
+      (entry) => !heldKeys.has(entry.target) || (entry.afterTarget && !heldKeys.has(entry.afterTarget)),
+    );
     try {
       for (const target of transaction.deletes.sort((a, b) => a.length - b.length)) {
         options.signal?.throwIfAborted();
@@ -142,75 +146,81 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         await removeOwnedTarget(transaction.directory, entry, transaction.journal, options);
         await syncDirectory(path.dirname(target));
       }
-      await withCaseDestinationQueues([...coalesced.replacements], options, async () => {
-        await retireRemovalIntent(
-          transaction.directory,
-          transaction.journal,
-          transaction.journal.entries.filter(
-            (entry) => entry.removalPending && (entry.afterImage !== "missing" || (entry.postFiles?.length ?? 0) > 0),
-          ),
-          options,
-        );
-        // Only this uninterrupted call knows which deleted writes have not attempted installation yet.
-        const uninstalledWrites = new Set(transaction.deletedWrites);
-        for (const item of plan.writes) {
-          options.signal?.throwIfAborted();
-          const entry = entriesByTarget.get(item.target);
-          if (!entry) throw new Error("Unowned transaction target.");
-          const deletedByThisCall = uninstalledWrites.delete(entry.target);
-          await verifyTarget(transaction.directory, entry, transaction.journal, deletedByThisCall);
-          options.validateMutation?.();
-          options.signal?.throwIfAborted();
-          await fs.mkdir(path.dirname(item.target), { recursive: true });
-          options.validateMutation?.();
-          options.signal?.throwIfAborted();
-          const temp = path.join(path.dirname(item.target), `.pi-sync.json.${randomUUID()}.apply`);
-          try {
-            let mode = 0o600;
-            try {
-              const stat = await fs.lstat(item.target);
-              if (stat.isFile()) mode = stat.mode & 0o777;
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            }
-            const handle = await fs.open(temp, "wx", mode);
-            try {
-              await handle.writeFile(item.content);
-              await handle.sync();
-            } finally {
-              await handle.close();
-            }
-            await verifyTarget(transaction.directory, entry, transaction.journal, deletedByThisCall);
+      await withMissingTargetQueues(
+        transaction.journal.entries
+          .filter((entry) => entry.removalPending)
+          .flatMap((entry) => [entry.target, ...(entry.afterTarget ? [entry.afterTarget] : [])]),
+        heldKeys,
+        options,
+        async () => {
+          await retireRemovalIntent(
+            transaction.directory,
+            transaction.journal,
+            transaction.journal.entries.filter(
+              (entry) => entry.removalPending && (entry.afterImage !== "missing" || (entry.postFiles?.length ?? 0) > 0),
+            ),
+            options,
+          );
+          // Only this uninterrupted call knows which deleted writes have not attempted installation yet.
+          const uninstalledWrites = new Set(transaction.deletedWrites);
+          for (const item of plan.writes) {
             options.signal?.throwIfAborted();
+            const entry = entriesByTarget.get(item.target);
+            if (!entry) throw new Error("Unowned transaction target.");
+            const deletedByThisCall = uninstalledWrites.delete(entry.target);
+            await verifyTarget(transaction.directory, entry, transaction.journal, deletedByThisCall);
             options.validateMutation?.();
-            await fs.rename(temp, item.target);
-            await syncDirectory(path.dirname(item.target));
-          } finally {
-            await fs.rm(temp, { force: true });
+            options.signal?.throwIfAborted();
+            await fs.mkdir(path.dirname(item.target), { recursive: true });
+            options.validateMutation?.();
+            options.signal?.throwIfAborted();
+            const temp = path.join(path.dirname(item.target), `.pi-sync.json.${randomUUID()}.apply`);
+            try {
+              let mode = 0o600;
+              try {
+                const stat = await fs.lstat(item.target);
+                if (stat.isFile()) mode = stat.mode & 0o777;
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+              }
+              const handle = await fs.open(temp, "wx", mode);
+              try {
+                await handle.writeFile(item.content);
+                await handle.sync();
+              } finally {
+                await handle.close();
+              }
+              await verifyTarget(transaction.directory, entry, transaction.journal, deletedByThisCall);
+              options.signal?.throwIfAborted();
+              options.validateMutation?.();
+              await fs.rename(temp, item.target);
+              await syncDirectory(path.dirname(item.target));
+            } finally {
+              await fs.rm(temp, { force: true });
+            }
           }
-        }
-        options.validateMutation?.();
-        options.signal?.throwIfAborted();
-        await syncMutationParents(
-          targets,
-          [transaction.journal.root, ...(transaction.journal.sessionRoot ? [transaction.journal.sessionRoot] : [])],
-          options,
-        );
-        options.validateMutation?.();
-        options.signal?.throwIfAborted();
-      });
+          options.validateMutation?.();
+          options.signal?.throwIfAborted();
+          await syncMutationParents(
+            targets,
+            [transaction.journal.root, ...(transaction.journal.sessionRoot ? [transaction.journal.sessionRoot] : [])],
+            options,
+          );
+          options.validateMutation?.();
+          options.signal?.throwIfAborted();
+        },
+      );
     } catch (error) {
       // Aborted owners cannot roll back files after another session has replaced them.
       if (options.signal?.aborted)
         throw new Error("Snapshot apply cancelled; guarded transaction evidence retained for review.");
-      // Additional spelling queues have been released: do not start a case rollback
-      // under only the original key. Startup recovery reserves its own destination key.
-      if (coalesced.replacements.size)
-        throw new Error("Case replacement apply failed; guarded transaction evidence retained for review.", {
+      // Additional queues have been released. Recovery must reserve missing keys afresh.
+      if (changesQueueKey)
+        throw new Error("Snapshot apply failed; guarded transaction evidence retained for review.", {
           cause: error,
         });
       try {
-        await restoreTransaction(transaction.directory, transaction.journal, options);
+        await restoreTransaction(transaction.directory, transaction.journal, options, heldKeys);
       } catch (recoveryError) {
         throw new AggregateError(
           [error, recoveryError],
@@ -285,8 +295,8 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
       await removeTransaction(directory);
       continue;
     }
-    await withTargetQueues(journal.entries.map((entry) => entry.target).sort(), () =>
-      restoreTransaction(directory, journal, { ...options, sessionDir }),
+    await withTargetQueues(journal.entries.map((entry) => entry.target).sort(), options, (heldKeys) =>
+      restoreTransaction(directory, journal, { ...options, sessionDir }, heldKeys),
     );
   }
 }
@@ -388,7 +398,36 @@ async function prepareTransaction(
   return { directory, journal, deletes: indexed.deletes, deletedWrites: indexed.deletedWrites };
 }
 
-async function restoreTransaction(directory: string, journal: TransactionJournal, options: TransactionOptions) {
+async function restoreTransaction(
+  directory: string,
+  journal: TransactionJournal,
+  options: TransactionOptions,
+  heldKeys: ReadonlySet<string>,
+) {
+  validateJournal(directory, journal, options.sessionDir);
+  const missingSpellings: string[] = [];
+  for (const entry of journal.entries) {
+    if (!entry.afterTarget) continue;
+    options.validateMutation?.();
+    options.signal?.throwIfAborted();
+    const spelling = await caseReplacementSpelling(entry.target, entry.afterTarget);
+    options.validateMutation?.();
+    options.signal?.throwIfAborted();
+    if (spelling === undefined) missingSpellings.push(entry.target, entry.afterTarget);
+  }
+  // Reserve an interrupted removal's other spelling before staging or image checks:
+  // recognizable bytes installed by a writer in that gap are not our postimage.
+  return withMissingTargetQueues(missingSpellings, heldKeys, options, (reservedKeys) =>
+    restoreQueuedTransaction(directory, journal, options, reservedKeys),
+  );
+}
+
+async function restoreQueuedTransaction(
+  directory: string,
+  journal: TransactionJournal,
+  options: TransactionOptions,
+  heldKeys: ReadonlySet<string>,
+) {
   validateJournal(directory, journal, options.sessionDir);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
@@ -453,8 +492,13 @@ async function restoreTransaction(directory: string, journal: TransactionJournal
           !(await removeOwnedTarget(directory, entry, journal, options, before))
         )
           continue;
-        await withCaseDestinationQueues(
-          needsCaseQueue && entry.afterTarget ? [[entry.afterTarget, entry.target]] : [],
+        await withMissingTargetQueues(
+          entry.afterTarget && (needsCaseQueue || verified === "missing")
+            ? [entry.target, entry.afterTarget]
+            : verified.startsWith("directory:")
+              ? [entry.target]
+              : [],
+          heldKeys,
           options,
           async () => {
             const atRename = await verifyTarget(directory, entry, journal);
@@ -501,17 +545,19 @@ async function restoreTransaction(directory: string, journal: TransactionJournal
       options.validateMutation?.();
       options.signal?.throwIfAborted();
       if (!(await removeOwnedTarget(directory, entry, journal, options, before))) continue;
-      const atRename = await verifyTarget(directory, entry, journal);
-      options.validateMutation?.();
-      options.signal?.throwIfAborted();
-      if (atRename === before) continue;
-      await retireRestorationIntent(directory, journal, entry, options);
-      const atInstall = await verifyTarget(directory, entry, journal, atRename === "missing");
-      options.validateMutation?.();
-      options.signal?.throwIfAborted();
-      if (atInstall === before) continue;
-      await fs.rename(temporary, entry.target);
-      await syncDirectory(path.dirname(entry.target));
+      await withMissingTargetQueues([entry.target], heldKeys, options, async () => {
+        const atRename = await verifyTarget(directory, entry, journal);
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
+        if (atRename === before) return;
+        await retireRestorationIntent(directory, journal, entry, options);
+        const atInstall = await verifyTarget(directory, entry, journal, atRename === "missing");
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
+        if (atInstall === before) return;
+        await fs.rename(temporary, entry.target);
+        await syncDirectory(path.dirname(entry.target));
+      });
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
     }
@@ -866,55 +912,6 @@ async function assertSafeParents(root: string, sessionRoot: string | undefined, 
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
     }
   }
-}
-async function withTargetQueues<T>(targets: string[], action: () => Promise<T>) {
-  const keys = new Set<string>();
-  for (const target of targets) {
-    let key = path.resolve(target);
-    try {
-      key = await fs.realpath(target);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-    }
-    if (keys.has(key)) throw new Error("Transaction targets alias the same file.");
-    keys.add(key);
-  }
-  async function acquire(index: number): Promise<T> {
-    const target = targets[index];
-    return target ? withFileMutationQueue(target, () => acquire(index + 1)) : action();
-  }
-  return acquire(0);
-}
-async function withCaseDestinationQueues<T>(
-  spellings: readonly (readonly [string, string])[],
-  options: TransactionOptions,
-  action: () => Promise<T>,
-): Promise<T> {
-  if (!spellings.length) return action();
-  const requireAbsent = async () => {
-    for (const [before, after] of spellings) {
-      options.validateMutation?.();
-      options.signal?.throwIfAborted();
-      const spelling = await caseReplacementSpelling(before, after);
-      options.validateMutation?.();
-      options.signal?.throwIfAborted();
-      if (spelling !== undefined)
-        throw new Error("Case replacement changed before destination queue reservation; evidence retained.");
-    }
-  };
-  // Existing aliases share one non-reentrant realpath queue. Only after removal can
-  // we reserve the distinct missing spelling while retaining the original queue.
-  // Pi writers that registered in the gap finish before this callback; refuse their
-  // bytes, including recognizable pre/postimages, rather than treating them as ours.
-  await requireAbsent();
-  return withTargetQueues(
-    spellings.map(([, after]) => after),
-    async () => {
-      await requireAbsent();
-      return action();
-    },
-  );
 }
 async function completeTransaction(directory: string, journal: TransactionJournal) {
   // Publish completion before deleting any backup. A surviving journal after power loss

@@ -1,5 +1,5 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { loadConfig } from "../settings/config.js";
+import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { activeLocalConfigPath } from "../settings/config-file.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
@@ -39,6 +39,7 @@ export const MAIN_MENU_ACTIONS = [
 export interface ManagerDescription {
   title: string;
   actions: string[];
+  configReview?: { setupName: string; fingerprint: string };
   operation?: OperationAvailability;
   attention?: SyncAttentionState;
   observation?: StartupObservation;
@@ -176,6 +177,7 @@ export async function describeManagerState(
     return {
       title: (changesBlocked ? ["Manage sync", ...operationStatusLines(operation)] : ordinaryTitle).join("\n"),
       actions: operationActions(operation, noSyncedContent, canSwitch, mainActions),
+      configReview: { setupName: config.setupName, fingerprint: syncCheckConfigFingerprint(config) },
       operation,
       ...(currentObservation ? { observation: currentObservation } : {}),
       ...(currentAttention

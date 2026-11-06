@@ -5,6 +5,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { agentDir } from "../snapshot/session-paths.js";
 import { createSnapshot, snapshotTarget } from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
+import { assertCanonicalMutationTargets } from "../snapshot/snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "../snapshot/snapshot-paths.js";
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
@@ -34,6 +35,10 @@ export async function preflightMergedTargets(
   for (const relative of paths) {
     if (changed.has(relative)) await assertFilesystemTarget(root, relative, options, removedTargets, beforeHashes);
   }
+  await assertCanonicalMutationTargets(
+    [...changed].map((relative) => snapshotTarget(root, relative, options.sessionDir)),
+    options,
+  );
 }
 
 function replacementPaths(removed: Set<string>, afterHashes: Readonly<Record<string, string>>) {
@@ -244,6 +249,7 @@ export async function applyMergedSnapshot(
     protectedTarget,
     new Set(Object.keys(afterHashes)),
   );
+  await assertCanonicalMutationTargets(targets, options);
   // Existing case aliases share Pi's non-reentrant realpath queue. Reserve the
   // missing destination separately only after deleting its reviewed preimage.
   const targetsByQueue = new Map<string, string[]>();

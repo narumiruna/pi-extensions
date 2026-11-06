@@ -35,8 +35,14 @@ const LOCKFILE_FS_ADAPTER = {
   utimesSync,
 };
 
-type PublishFile = (source: string, destination: string) => Promise<void>;
-let publishConfigFile: PublishFile = publishFileWithoutReplacement;
+type PublishFile = (
+  source: string,
+  destination: string,
+  expected?: LocalConfigDocument,
+  signal?: AbortSignal,
+) => Promise<void>;
+let configUpdateQueue: Promise<void> = Promise.resolve();
+let publishConfigFile: PublishFile = publishFileWithGuard;
 let beforeConfigPublicationHook: () => Promise<void> = async () => undefined;
 let afterMissingConfigReadProbeHook: () => Promise<void> = async () => undefined;
 let afterReplacementInstalledHook: () => Promise<void> = async () => undefined;
@@ -125,10 +131,12 @@ export function legacyLocalConfigPath() {
 export async function activeLocalConfigPath() {
   const canonicalPath = localConfigPath();
   const legacyPath = legacyLocalConfigPath();
-  return withLocalConfigReadLockIfNeeded(async () => {
-    if (await pathExists(canonicalPath)) return canonicalPath;
-    return (await pathExists(legacyPath)) ? legacyPath : canonicalPath;
-  });
+  return queueConfigOperation(() =>
+    withLocalConfigReadLockIfNeeded(async () => {
+      if (await pathExists(canonicalPath)) return canonicalPath;
+      return (await pathExists(legacyPath)) ? legacyPath : canonicalPath;
+    }),
+  );
 }
 
 export function consumeLocalConfigMigrationNotice() {
@@ -141,21 +149,25 @@ export function consumeLocalConfigMigrationNotice() {
 export async function readActiveLocalConfigDocumentForRepair(): Promise<LocalConfigDocument | undefined> {
   const canonicalPath = localConfigPath();
   const legacyPath = legacyLocalConfigPath();
-  return withLocalConfigReadLockIfNeeded(async () => {
-    const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyPath;
-    const snapshot = await readConfigSnapshotIfExists(filePath);
-    return snapshot ? { path: filePath, ...snapshot } : undefined;
-  });
+  return queueConfigOperation(() =>
+    withLocalConfigReadLockIfNeeded(async () => {
+      const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyPath;
+      const snapshot = await readConfigSnapshotIfExists(filePath);
+      return snapshot ? { path: filePath, ...snapshot } : undefined;
+    }),
+  );
 }
 
 export async function readMigratingLocalConfigDocument(
   validateForMigration: (settings: Record<string, unknown>) => void,
 ): Promise<LocalConfigDocument | undefined> {
-  return withLocalConfigReadLockIfNeeded(async () => {
-    const configPath = await prepareLocalConfigPath(validateForMigration);
-    const snapshot = await readConfigSnapshotIfExists(configPath);
-    return snapshot ? { path: configPath, ...snapshot } : undefined;
-  });
+  return queueConfigOperation(() =>
+    withLocalConfigReadLockIfNeeded(async () => {
+      const configPath = await prepareLocalConfigPath(validateForMigration);
+      const snapshot = await readConfigSnapshotIfExists(configPath);
+      return snapshot ? { path: configPath, ...snapshot } : undefined;
+    }),
+  );
 }
 
 async function withLocalConfigReadLockIfNeeded<T>(read: () => Promise<T>): Promise<T> {
@@ -164,7 +176,18 @@ async function withLocalConfigReadLockIfNeeded<T>(read: () => Promise<T>): Promi
   }
   await afterMissingConfigReadProbeHook();
   if (await pathExists(configMutationLockPath())) return withLocalConfigFileLock(read);
+  await assertNoInterruptedConfigReplacement();
   return read();
+}
+
+function queueConfigOperation<T>(run: () => Promise<T>): Promise<T> {
+  // Mutation callbacks use the unlocked helpers below, never a queued public read.
+  const operation = configUpdateQueue.then(run);
+  configUpdateQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
 }
 
 export function updateLocalConfigDocument<T extends Record<string, unknown>>(
@@ -173,48 +196,61 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
   validate: (value: Record<string, unknown>) => void,
   signal?: AbortSignal,
 ): Promise<T> {
-  return withLocalConfigFileLock(async () => {
+  return queueConfigOperation(() => {
     signal?.throwIfAborted();
-    const configPath = await prepareLocalConfigPath(validate);
-    const snapshot = await readConfigSnapshotIfExists(configPath);
-    const document = snapshot ? { path: configPath, ...snapshot } : undefined;
-    const current = document ? (structuredClone(document.parsed) as T) : structuredClone(defaultValue);
-    const next = update(current);
-    validate(next);
-    signal?.throwIfAborted();
-    if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
-    if (document) await replaceLocalConfigDocumentUnlocked(document, next);
-    else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next));
-    return next;
+    return withLocalConfigFileLock(async () => {
+      signal?.throwIfAborted();
+      const configPath = await prepareLocalConfigPath(validate);
+      signal?.throwIfAborted();
+      const snapshot = await readConfigSnapshotIfExists(configPath);
+      signal?.throwIfAborted();
+      const document = snapshot ? { path: configPath, ...snapshot } : undefined;
+      const current = document ? (structuredClone(document.parsed) as T) : structuredClone(defaultValue);
+      const next = update(current);
+      validate(next);
+      signal?.throwIfAborted();
+      if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
+      if (document) await replaceLocalConfigDocumentUnlocked(document, next, signal);
+      else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), signal);
+      return next;
+    });
   });
 }
 
-export function createLocalConfigDocument(value: Record<string, unknown>) {
-  return withLocalConfigFileLock(async () => {
-    const bytes = serializedConfig(value);
-    try {
-      await installPrivateConfigExclusively(localConfigPath(), bytes);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error("Pi-sync settings were created concurrently; reopen settings and retry.");
+export function createLocalConfigDocument(value: Record<string, unknown>, signal?: AbortSignal) {
+  return queueConfigOperation(() => {
+    signal?.throwIfAborted();
+    return withLocalConfigFileLock(async () => {
+      signal?.throwIfAborted();
+      const bytes = serializedConfig(value);
+      try {
+        await installPrivateConfigExclusively(localConfigPath(), bytes, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error("Pi-sync settings were created concurrently; reopen settings and retry.");
+        }
+        throw error;
       }
-      throw error;
-    }
+    });
   });
 }
 
 export function replaceLocalConfigDocument(document: LocalConfigDocument, value: Record<string, unknown>) {
-  return withLocalConfigFileLock(() => replaceLocalConfigDocumentUnlocked(document, value));
+  return queueConfigOperation(() => withLocalConfigFileLock(() => replaceLocalConfigDocumentUnlocked(document, value)));
 }
 
-async function replaceLocalConfigDocumentUnlocked(document: LocalConfigDocument, value: Record<string, unknown>) {
+async function replaceLocalConfigDocumentUnlocked(
+  document: LocalConfigDocument,
+  value: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
   const nextBytes = serializedConfig(value);
   const canonicalPath = localConfigPath();
   if (document.path !== canonicalPath) {
     if (!(await configDocumentStillMatches(document))) throw settingsChangedError();
     let installed: FileIdentity;
     try {
-      installed = await installPrivateConfigExclusively(canonicalPath, nextBytes);
+      installed = await installPrivateConfigExclusively(canonicalPath, nextBytes, signal);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new Error("Canonical settings were created concurrently; no settings were replaced.");
@@ -228,30 +264,62 @@ async function replaceLocalConfigDocumentUnlocked(document: LocalConfigDocument,
     return;
   }
 
-  const quarantinePath = await claimCanonicalConfigDocument(document);
-  let installed: FileIdentity;
+  const recoveryPath = path.join(
+    path.dirname(canonicalPath),
+    `.${path.basename(canonicalPath)}.${randomUUID()}.schema-migration-source`,
+  );
+  const previousHandle = await fs.open(canonicalPath, "r");
   try {
-    installed = await installPrivateConfigExclusively(canonicalPath, nextBytes);
-  } catch (error) {
-    await restoreQuarantinedConfig(canonicalPath, quarantinePath);
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error("Canonical settings changed concurrently; no settings were replaced.");
-    }
-    throw error;
-  }
-  try {
-    await afterReplacementInstalledHook();
-    if (!(await fileIdentityAndContentsMatch(quarantinePath, document.identity, document.bytes))) {
+    const previous = await previousHandle.stat();
+    if (previous.dev !== document.identity.dev || previous.ino !== document.identity.ino) {
       throw settingsChangedError();
     }
-    if (process.platform !== "win32") await fs.chmod(quarantinePath, 0o600);
+    await writePrivateConfigBytes(recoveryPath, document.bytes, "wx");
+    await syncParentDirectory(canonicalPath);
+    await withPrivateConfigTemporary(canonicalPath, nextBytes, async (temporaryPath, installed) => {
+      let published = false;
+      let previousBytesRead: Promise<Buffer> | undefined;
+      const readPreviousBytes = () => (previousBytesRead ??= previousHandle.readFile());
+      try {
+        signal?.throwIfAborted();
+        await publishConfigFile(temporaryPath, canonicalPath, document, signal);
+        published = true;
+        await syncParentDirectory(canonicalPath);
+        await afterReplacementInstalledHook();
+        if (!(await readPreviousBytes()).equals(document.bytes)) throw settingsChangedError();
+        if (!(await fileIdentityAndContentsMatch(canonicalPath, installed, nextBytes))) {
+          throw settingsChangedError();
+        }
+      } catch (error) {
+        if (published || (await fileIdentityAndContentsMatch(canonicalPath, installed, nextBytes))) {
+          const previousBytes = await readPreviousBytes().catch(() => document.bytes);
+          if (!previousBytes.equals(document.bytes)) {
+            await writePrivateConfigBytes(recoveryPath, previousBytes, "w");
+          }
+          // Rollback also replaces atomically; never remove the active settings first.
+          if (await fileIdentityAndContentsMatch(canonicalPath, installed, nextBytes)) {
+            await fs.rename(recoveryPath, canonicalPath);
+            await syncParentDirectory(canonicalPath);
+          }
+        } else if (await configDocumentStillMatches(document)) {
+          await fs.rm(recoveryPath);
+        }
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error("Canonical settings changed concurrently; no settings were replaced.");
+        }
+        throw error;
+      }
+    });
+    await fs.rm(recoveryPath).catch(() => undefined);
+    await syncParentDirectory(canonicalPath).catch(() => undefined);
   } catch (error) {
-    await quarantineAndRemoveConfigIfMatchesUnlocked(canonicalPath, installed, nextBytes);
-    await restoreQuarantinedConfig(canonicalPath, quarantinePath);
+    if (await configDocumentStillMatches(document)) {
+      await fs.rm(recoveryPath, { force: true }).catch(() => undefined);
+    }
     throw error;
+  } finally {
+    await previousHandle.close().catch(() => undefined);
   }
-  await fs.rm(quarantinePath).catch(() => undefined);
-  await syncParentDirectory(canonicalPath).catch(() => undefined);
 }
 
 async function prepareLocalConfigPath(validateForMigration: (settings: Record<string, unknown>) => void) {
@@ -390,77 +458,56 @@ function parseConfigObject(bytes: Buffer, filePath: string) {
   return parsed as Record<string, unknown>;
 }
 
-async function installPrivateConfigExclusively(filePath: string, bytes: Buffer) {
+async function installPrivateConfigExclusively(filePath: string, bytes: Buffer, signal?: AbortSignal) {
+  return withPrivateConfigTemporary(filePath, bytes, async (temporaryPath, installed) => {
+    signal?.throwIfAborted();
+    await publishConfigFile(temporaryPath, filePath, undefined, signal);
+    try {
+      if (!(await fileIdentityAndContentsMatch(filePath, installed, bytes))) {
+        throw new Error(`Published pi-sync settings changed concurrently: ${filePath}`);
+      }
+      await syncParentDirectory(filePath);
+    } catch (error) {
+      await quarantineAndRemoveConfigIfMatchesUnlocked(filePath, installed, bytes);
+      throw error;
+    }
+    return installed;
+  });
+}
+
+async function withPrivateConfigTemporary<T>(
+  filePath: string,
+  bytes: Buffer,
+  publish: (temporaryPath: string, identity: FileIdentity) => Promise<T>,
+): Promise<T> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const temporaryPath = path.join(
     path.dirname(filePath),
     `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.migrate`,
   );
-  let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(temporaryPath, "wx", 0o600);
+    const identity = await writePrivateConfigBytes(temporaryPath, bytes, "wx");
+    return await publish(temporaryPath, identity);
+  } finally {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function writePrivateConfigBytes(filePath: string, bytes: Buffer, flags: "w" | "wx") {
+  const handle = await fs.open(filePath, flags, 0o600);
+  try {
     await handle.writeFile(bytes);
     if (process.platform !== "win32") await handle.chmod(0o600);
     await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await publishConfigFile(temporaryPath, filePath);
-    const installed = await fs.lstat(filePath);
-    let publishedHandle: fs.FileHandle | undefined;
-    let publicationError: unknown;
-    try {
-      if (installed.isSymbolicLink() || !installed.isFile()) {
-        throw new Error(`Published pi-sync settings are not a regular file: ${filePath}`);
-      }
-      publishedHandle = await fs.open(filePath, "r+");
-      const published = await publishedHandle.stat();
-      if (published.dev !== installed.dev || published.ino !== installed.ino) {
-        throw new Error(`Published pi-sync settings changed while opening: ${filePath}`);
-      }
-      if (process.platform !== "win32") await publishedHandle.chmod(0o600);
-      await publishedHandle.sync();
-      await syncParentDirectory(filePath);
-    } catch (error) {
-      publicationError = error;
-    } finally {
-      await publishedHandle?.close().catch(() => undefined);
-    }
-    if (publicationError) {
-      await quarantineAndRemoveConfigIfMatchesUnlocked(filePath, { dev: installed.dev, ino: installed.ino }, bytes);
-      throw publicationError;
-    }
+    const installed = await handle.stat();
     return { dev: installed.dev, ino: installed.ino };
   } finally {
-    await handle?.close().catch(() => undefined);
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    await handle.close();
   }
 }
 
 async function configDocumentStillMatches(document: LocalConfigDocument) {
   return fileIdentityAndContentsMatch(document.path, document.identity, document.bytes);
-}
-
-async function claimCanonicalConfigDocument(document: LocalConfigDocument) {
-  const quarantinePath = path.join(
-    path.dirname(document.path),
-    `.${path.basename(document.path)}.${randomUUID()}.schema-migration-source`,
-  );
-  try {
-    await fs.rename(document.path, quarantinePath);
-    await syncParentDirectory(document.path);
-  } catch (error) {
-    await restoreQuarantinedConfig(document.path, quarantinePath);
-    throw error;
-  }
-  if (!(await fileIdentityAndContentsMatch(quarantinePath, document.identity, document.bytes))) {
-    await restoreQuarantinedConfig(document.path, quarantinePath);
-    throw settingsChangedError();
-  }
-  if (await pathExists(document.path)) {
-    await restoreQuarantinedConfig(document.path, quarantinePath);
-    throw new Error("Canonical settings changed concurrently; no settings were replaced.");
-  }
-  return quarantinePath;
 }
 
 function settingsChangedError() {
@@ -472,7 +519,9 @@ async function configSnapshotStillMatches(filePath: string, snapshot: ConfigSnap
 }
 
 export function quarantineAndRemoveConfigIfMatches(filePath: string, identity: FileIdentity, expectedBytes: Buffer) {
-  return withLocalConfigFileLock(() => quarantineAndRemoveConfigIfMatchesUnlocked(filePath, identity, expectedBytes));
+  return queueConfigOperation(() =>
+    withLocalConfigFileLock(() => quarantineAndRemoveConfigIfMatchesUnlocked(filePath, identity, expectedBytes)),
+  );
 }
 
 async function quarantineAndRemoveConfigIfMatchesUnlocked(
@@ -560,6 +609,7 @@ export async function withLocalConfigFileLock<T>(run: () => Promise<T>): Promise
     },
   });
   try {
+    await assertNoInterruptedConfigReplacement();
     const result = await run();
     if (compromisedError) throw compromisedError;
     return result;
@@ -579,16 +629,53 @@ async function syncParentDirectory(filePath: string) {
   }
 }
 
-async function publishFileWithoutReplacement(source: string, destination: string) {
+async function publishFileWithGuard(
+  source: string,
+  destination: string,
+  expected?: LocalConfigDocument,
+  signal?: AbortSignal,
+) {
   await beforeConfigPublicationHook();
-  await renameFileWithoutReplacement(source, destination);
+  signal?.throwIfAborted();
+  if (expected) {
+    // The shared lock orders Pi Sync writers; rename has no CAS for noncooperating writers.
+    if (!(await configDocumentStillMatches(expected))) throw settingsChangedError();
+    signal?.throwIfAborted();
+    await fs.rename(source, destination);
+  } else {
+    await renameFileWithoutReplacement(source, destination, signal);
+  }
 }
 
-async function renameFileWithoutReplacement(source: string, destination: string) {
+async function renameFileWithoutReplacement(source: string, destination: string, signal?: AbortSignal) {
   if (await pathExists(destination)) {
     throw Object.assign(new Error(`Settings already exist: ${destination}`), { code: "EEXIST" });
   }
+  signal?.throwIfAborted();
   await fs.rename(source, destination);
+}
+
+async function assertNoInterruptedConfigReplacement() {
+  const configPath = localConfigPath();
+  if (await pathExists(configPath)) return;
+  let names: string[];
+  try {
+    names = await fs.readdir(path.dirname(configPath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const prefix = `.${path.basename(configPath)}.`;
+  if (
+    names.some(
+      (name) =>
+        name.startsWith(prefix) && (name.endsWith(".schema-migration-source") || name.endsWith(".migration-retired")),
+    )
+  ) {
+    throw new Error(
+      "Interrupted pi-sync settings replacement: restore the retained recovery file to pi-sync.json before retrying; legacy settings were not loaded.",
+    );
+  }
 }
 
 async function pathExists(filePath: string) {

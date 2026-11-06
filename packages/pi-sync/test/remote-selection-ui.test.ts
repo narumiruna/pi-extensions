@@ -26,27 +26,24 @@ test("remote selection difference is review-first, sanitized, and bounded", asyn
     const backend = new MemorySyncBackend();
     await publishSelection(backend, ["pi-starship.toml", "settings.json"]);
     const rendered = new Map<number, string[]>();
-    const { ctx } = createMockContext({
-      hasUI: true,
-      mode: "tui",
-      custom: async (factory: unknown) => {
-        const harness = createCustomSelectorHarness(factory, 60);
-        for (const width of [32, 60, 100]) rendered.set(width, harness.render(width));
-        assert.match(harness.render().join("\n"), /Review all paths \(recommended\)/u);
-        harness.handleInput("tui.select.confirm");
-        await harness.waitForPending();
-        const review = harness.render().join("\n");
-        assert.match(review, /Remote-only.*pi-starship\.toml/is);
-        assert.match(review, /Device-only.*AGENTS\.md/is);
-        assert.equal(review.includes("\u001b]8"), false);
-        harness.handleInput("tui.select.cancel");
-        harness.handleInput("tui.select.cancel");
-        return harness.result;
-      },
-    });
+    const tui = createTuiHarness({ width: 60, rows: 24 });
+    const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+    const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
+    await waitForSelectionScreen(tui);
+    for (const width of [32, 60, 100]) rendered.set(width, [...tui.render(width)]);
+    assert.match(tui.render().join("\n"), /Review all paths \(recommended\)/u);
+    tui.press("tui.select.confirm");
+    await waitForSelectionScreen(tui);
+    const review = tui.render().join("\n");
+    tui.press("tui.select.cancel");
+    await waitForSelectionScreen(tui);
+    tui.press("tui.select.cancel");
+    await running;
 
-    await showRemoteSelectionReview(ctx, "home", undefined, () => backend);
-
+    assert.match(review, /Remote-only.*pi-starship\.toml/is);
+    assert.match(review, /Device-only.*AGENTS\.md/is);
+    assert.equal(review.includes("\u001b]8"), false);
+    assert.equal(rendered.size, 3);
     for (const [width, lines] of rendered) {
       assert.ok(lines.every((line) => visibleWidth(line) <= width));
       assert.match(lines.join("\n"), /Synced content differs/u);
@@ -95,10 +92,10 @@ test("order-only selection difference is explicit in summary and exact review", 
     const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
     const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.match(tui.render().join("\n"), /Only the ordering differs/u);
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     const reviewTop = tui.render().join("\n");
     tui.press("end");
     const reviewBottom = tui.render().join("\n");
@@ -148,10 +145,10 @@ test("remote selection adoption saves settings only after session acknowledgemen
       },
     });
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.match(tui.render().join("\n"), /Remote content list saved/u);
     assert.match(tui.render().join("\n"), /No files were pulled/u);
     assert.match(tui.render().join("\n"), /Continue Sync now/u);
@@ -189,10 +186,10 @@ test("refusing session acknowledgement keeps the comparison open and settings un
     });
     const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.match(tui.render().join("\n"), /Synced content differs/u);
     tui.press("tui.select.cancel");
     assert.deepEqual(await running, { kind: "back" });
@@ -222,10 +219,10 @@ test("saved remote list can continue the captured route or stop without file mut
       },
     });
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.match(tui.render().join("\n"), /Continue Pull now/u);
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
@@ -305,7 +302,7 @@ test("local-wins action refreshes when the reviewed setup identity changes", asy
       },
     });
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     await updateLocalConfig((settings) => ({
       ...settings,
       syncSetups: {
@@ -319,7 +316,7 @@ test("local-wins action refreshes when the reviewed setup identity changes", asy
     tui.press("tui.select.down");
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.equal(routeCalls, 0);
     assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
     tui.press("tui.select.cancel");
@@ -333,12 +330,13 @@ test("same and empty remote selections close with clear notices", async () => {
     writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
     const emptyBackend = new MemorySyncBackend();
     let customCalls = 0;
+    const tui = createTuiHarness();
     const { ctx, notifications } = createMockContext({
       hasUI: true,
       mode: "tui",
-      custom: async () => {
+      custom: async (factory: unknown) => {
         customCalls += 1;
-        return undefined;
+        return tui.custom(factory as never);
       },
     });
 
@@ -349,7 +347,7 @@ test("same and empty remote selections close with clear notices", async () => {
     await publishSelection(sameBackend, ["settings.json"]);
     await showRemoteSelectionReview(ctx, "home", undefined, () => sameBackend);
     assert.match(notifications.at(-1)?.message ?? "", /already matches/u);
-    assert.equal(customCalls, 0);
+    assert.equal(customCalls, 2); // One owned network loader per inspection, no chooser.
   });
 });
 
@@ -369,23 +367,17 @@ test("legacy remote selection offers read-only partial discovery", async () => {
       },
       { kind: "missing" },
     );
-    const rendered: string[] = [];
-    const { ctx } = createMockContext({
-      hasUI: true,
-      mode: "tui",
-      custom: async (factory: unknown) => {
-        const harness = createCustomSelectorHarness(factory, 80);
-        harness.handleInput("tui.select.confirm");
-        await harness.waitForPending();
-        rendered.push(harness.render().join("\n"));
-        harness.dispose();
-        return harness.result;
-      },
-    });
+    const tui = createTuiHarness({ width: 80, rows: 24 });
+    const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+    const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
+    await waitForSelectionScreen(tui);
+    tui.press("tui.select.confirm");
+    await waitForSelectionScreen(tui);
+    const rendered = tui.render().join("\n");
+    tui.dispose();
+    await running;
 
-    await showRemoteSelectionReview(ctx, "home", undefined, () => backend);
-
-    assert.match(rendered.join("\n"), /partial.*pi-starship\.toml/is);
+    assert.match(rendered, /partial.*pi-starship\.toml/is);
     assert.deepEqual(readFileSync(localConfigPath()), before);
   });
 });
@@ -409,10 +401,10 @@ test("remote selection adoption refreshes a changed remote head and preserves se
     });
     const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.match(tui.render().join("\n"), /Synced content differs/u);
     assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
     tui.press("tui.select.cancel");
@@ -446,10 +438,10 @@ test("remote selection adoption refreshes a concurrent local include change", as
     });
     const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
-    await tui.waitForOpen();
+    await waitForSelectionScreen(tui);
     assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, ["models.json"]);
     assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
     tui.press("tui.select.cancel");
@@ -481,23 +473,32 @@ test("remote selection review disposes on session replacement without side effec
     const backend = new MemorySyncBackend();
     await publishSelection(backend, ["settings.json", "pi-starship.toml"]);
     const controller = new AbortController();
-    const { ctx, notifications } = createMockContext({
-      hasUI: true,
-      mode: "tui",
-      custom: async (factory: unknown) => {
-        const harness = createCustomSelectorHarness(factory, 80);
-        controller.abort(new DOMException("Session replaced", "AbortError"));
-        harness.dispose();
-        return harness.result;
-      },
-    });
-
-    await showRemoteSelectionReview(ctx, "home", controller.signal, () => backend);
+    const tui = createTuiHarness({ width: 80, rows: 24 });
+    const { ctx, notifications } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+    const running = showRemoteSelectionReview(ctx, "home", controller.signal, () => backend);
+    await waitForSelectionScreen(tui);
+    controller.abort(new DOMException("Session replaced", "AbortError"));
+    tui.dispose();
+    await running;
 
     assert.deepEqual(readFileSync(localConfigPath()), before);
     assert.deepEqual(notifications, []);
   });
 });
+
+async function waitForSelectionScreen(tui: ReturnType<typeof createTuiHarness>) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await tui.waitForOpen();
+    if (
+      !/Checking remote content list|Checking and saving remote content list|Refreshing remote content list/u.test(
+        tui.render().join("\n"),
+      )
+    )
+      return;
+    await tui.waitForPending();
+  }
+  assert.fail("Remote content-list inspection did not finish");
+}
 
 class MutatingReadBackend extends MemorySyncBackend {
   private snapshotReads = 0;

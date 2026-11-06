@@ -2,8 +2,6 @@ import { localConfigPath, readMigratingLocalConfigDocument, updateLocalConfigDoc
 import type { OnSwitchAction, PiSyncSettingsV3 } from "./settings-types.js";
 import { DEFAULT_ON_SWITCH, validateSettingsDocument } from "./settings-validation.js";
 
-let configUpdateQueue: Promise<void> = Promise.resolve();
-
 export async function requireSettings() {
   const settings = await readLocalConfigObject();
   if (!settings) {
@@ -46,17 +44,5 @@ export async function readLocalConfigObject(): Promise<PiSyncSettingsV3 | undefi
 }
 
 export function updateLocalConfig(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3, signal?: AbortSignal) {
-  const operation = configUpdateQueue.then(() => {
-    signal?.throwIfAborted();
-    return performLocalConfigUpdate(update, signal);
-  });
-  configUpdateQueue = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  return operation;
-}
-
-async function performLocalConfigUpdate(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3, signal?: AbortSignal) {
   return updateLocalConfigDocument(localConfigTemplate(), update, validateSettingsDocument, signal);
 }

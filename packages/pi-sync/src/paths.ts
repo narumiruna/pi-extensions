@@ -45,7 +45,12 @@ export function assertWithinRoot(root: string, target: string, label = target) {
 }
 
 export function encodeKey(key: string) {
-  return key.split("/").map(encodeURIComponent).join("/");
+  // SigV4 permits only RFC 3986 unreserved characters and key separators.
+  return key
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")
+    .replace(/[!'()*]/gu, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 export function posixJoin(...parts: string[]) {

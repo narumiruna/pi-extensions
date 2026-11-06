@@ -193,7 +193,12 @@ export class S3Client {
     extraHeaders: Record<string, string> = {},
   ) {
     const url = new URL(this.endpoint.toString());
-    url.pathname = posixJoin(url.pathname, this.config.destination.bucket, encodeKey(key));
+    // Preserve escaped endpoint bytes without decoding or double-encoding them.
+    // SigV4 requires uppercase escape hex, including existing endpoint escapes.
+    const endpointPath = url.pathname
+      .replace(/%(?![0-9A-Fa-f]{2})|[^A-Za-z0-9._~/%-]/gu, encodeKey)
+      .replace(/%[0-9A-Fa-f]{2}/gu, (escaped) => escaped.toUpperCase());
+    url.pathname = posixJoin(endpointPath, encodeKey(this.config.destination.bucket), encodeKey(key));
     const send = async (sessionToken: string | undefined) => {
       const transportSignal = this.transportSignal();
       const headers = await signedHeaders({
@@ -213,6 +218,8 @@ export class S3Client {
           method,
           headers,
           body: body ? new Uint8Array(body) : undefined,
+          // Never forward signed headers or snapshot bodies to an unreviewed URL.
+          redirect: "error",
           signal: transportSignal,
         });
       } catch (error) {

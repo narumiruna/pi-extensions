@@ -62,6 +62,6 @@ test("Sync now in the manager uses the same explicit retry boundary", async () =
       createSyncAttentionController(),
       (setup) => retried.push(setup),
     );
-    assert.deepEqual(retried, [undefined]);
+    assert.deepEqual(retried, ["home"]);
     assert.equal(mock.requests.length, 0);
   }));

@@ -231,8 +231,12 @@ async function migrateStateDirectory(ctx: ExtensionCommandContext, options: Comm
 
 async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
   const configPath = localConfigPath();
-  if (await readLocalConfigObject()) {
-    ctx.ui.notify(`Config already exists: ${await activeLocalConfigPath()}`, "info");
+  const existing = await readLocalConfigObject();
+  throwIfAborted(signal);
+  if (existing) {
+    const activePath = await activeLocalConfigPath();
+    throwIfAborted(signal);
+    ctx.ui.notify(`Config already exists: ${activePath}`, "info");
     return;
   }
 
@@ -242,7 +246,8 @@ async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
     await showSetupWizard(ctx, signal);
     return;
   }
-  await createLocalConfigDocument(localConfigTemplate());
+  await createLocalConfigDocument(localConfigTemplate(), signal);
+  throwIfAborted(signal);
   ctx.ui.notify(`Created ${configPath}. Add a storage connection and sync setup before syncing.`, "info");
 }
 

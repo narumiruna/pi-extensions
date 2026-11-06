@@ -39,7 +39,7 @@ export async function loadConfigForCheck(): Promise<AnySyncConfig> {
   return configFromSettings(document.parsed as PiSyncSettingsV3);
 }
 
-function configFromSettings(settings: PiSyncSettingsV3, setupName?: string): AnySyncConfig {
+export function configFromSettings(settings: PiSyncSettingsV3, setupName?: string): AnySyncConfig {
   const selectedName = setupName ?? settings.activeSyncSetup;
   if (!selectedName) throw new Error("No sync setups are configured.");
   validateConfigName(selectedName, "sync setup");
