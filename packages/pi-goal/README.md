@@ -337,9 +337,9 @@ A later non-Goal input wakes the same Goal without rotating its stale-turn guard
 If matching compaction recovery still exists at `agent_settled`, the Goal becomes `blocked` because recovery did not produce usable context.
 Stale recovery cannot wait or block a replacement goal.
 
-The current Pi runtime does not report native retry-only cancellation (Escape during backoff or RPC `abort_retry`) to extensions.
-Goal cannot distinguish that cancellation from exhausted retries, so it remains waiting.
-Use `/goal pause` or a full session abort to pause the Goal.
+Native retry-only cancellation (Escape during backoff or RPC `abort_retry`) stops further retries but does not itself pause the Goal.
+For a transient non-usage failure, it preserves the same deadline-free active wait as exhausted retries: no extra request is sent, and a later follow-up or `/goal resume` can wake the same Goal.
+Use `/goal pause` or a full session abort to pause the Goal instead.
 
 User and extension work that starts before settlement supersedes the older continuation intent, and pending messages always take priority.
 

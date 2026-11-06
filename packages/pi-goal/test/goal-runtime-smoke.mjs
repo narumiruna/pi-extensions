@@ -546,7 +546,8 @@ async function nativeRetryClassificationScenario() {
   }
 }
 
-async function nativeBackoffAbortScenario() {
+async function nativeBackoffAbortScenario(cancellation) {
+  const retryOnly = cancellation === "retry";
   const harness = await createHarness(
     [
       fauxAssistantMessage("Initial unfinished result."),
@@ -557,7 +558,7 @@ async function nativeBackoffAbortScenario() {
     undefined,
     { rpc: { enabled: true }, continuationLimits: { automaticTurns: 4, noProgressTurns: null } },
     { retry: { enabled: true, maxRetries: 2, baseDelayMs: 60_000 } },
-    { runId: crypto.randomUUID(), objective: "cancel native backoff without another assistant" },
+    { runId: crypto.randomUUID(), objective: `cancel ${cancellation} during native backoff without another assistant` },
   );
   try {
     // auto_retry_start precedes the native sleep controller; wait for the public backoff state.
@@ -565,13 +566,24 @@ async function nativeBackoffAbortScenario() {
     assert.equal(harness.faux.state.callCount, 2);
     assert.equal(persistedGoalStatus(harness.session), "active");
     assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
-    await harness.session.abort();
+    if (retryOnly) {
+      harness.session.abortRetry();
+      await harness.session.waitForIdle();
+    } else {
+      await harness.session.abort();
+    }
     assertNativeRetries(harness, [1], false, 1);
     assert.equal(harness.faux.state.callCount, 2, "cancellation must not start a retry or Goal continuation");
     assert.equal(harness.faux.getPendingResponseCount(), 1);
-    assert.equal(persistedGoalStatus(harness.session), "paused", "settlement abort overrides the last provider error");
-    assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined);
-    assert.equal(persistedGoalState(harness.session)?.goal?.automaticModelTurns, 1);
+    const goal = persistedGoalState(harness.session)?.goal;
+    assert.equal(
+      goal?.status,
+      retryOnly ? "active" : "paused",
+      "retry-only cancellation preserves waiting; full abort pauses",
+    );
+    assert.equal(Boolean(goal.waiting), retryOnly);
+    assert.equal(goal.waiting?.resumeAt, undefined);
+    assert.equal(goal.automaticModelTurns, 1);
     assert.deepEqual(
       harness.sdkEvents
         .filter((event) => event.type === "message_end" && event.message.role === "assistant")
@@ -581,10 +593,10 @@ async function nativeBackoffAbortScenario() {
     );
     assert.deepEqual(
       harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.aborted),
-      [false, true],
+      [false, !retryOnly],
     );
     assert.equal(continuationMessages(harness.session).length, 1);
-    assert.deepEqual(managedRunStatuses(harness), ["active", "paused"]);
+    assert.deepEqual(managedRunStatuses(harness), retryOnly ? ["active"] : ["active", "paused"]);
     assert.equal(harness.session.isRetrying, false);
     assert.equal(harness.session.pendingMessageCount, 0);
   } finally {
@@ -980,7 +992,8 @@ await retryAtHardLimitScenario();
 await automaticRetryOwnershipScenario();
 await nativeRetryExhaustionScenario();
 await nativeRetryClassificationScenario();
-await nativeBackoffAbortScenario();
+await nativeBackoffAbortScenario("session");
+await nativeBackoffAbortScenario("retry");
 await managedNativeRetryWaitScenario();
 await queuedInputScenario();
 await busyEditOwnershipScenario();

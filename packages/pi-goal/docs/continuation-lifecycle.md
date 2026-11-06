@@ -108,10 +108,10 @@ SDK `auto_retry_start` and `auto_retry_end` notifications are not extension even
 - A non-Goal follow-up wakes the same Goal and preserves its stale-turn guard so the next model run can continue, complete, or wait again.
 - Remaining compaction recovery becomes `blocked` because no usable recovery response followed. Terminal non-usage errors also remain `blocked` and require explicit resume.
 
-Pi's current retry-only cancellation has no public extension signal: `abortRetry()` emits an SDK retry-end notification but leaves `agent_settled.aborted` false.
-The native TUI Escape handler and RPC `abort_retry` use that method.
-No extension retry event or backoff abort signal is available, so Goal cannot distinguish this cancellation from exhausted retries and remains waiting.
-Full session abort and `/goal pause` are observable alternatives; universal retry-only cancellation support requires a Pi public-API change.
+Native retry-only cancellation preserves existing active waiting behavior for transient non-usage failures.
+The native TUI Escape handler during backoff and RPC `abort_retry` call `abortRetry()`, which emits an SDK retry-end notification but leaves `agent_settled.aborted` false.
+Final usage-limit policy still applies; otherwise Goal uses the same deadline-free wait as provider retry exhaustion, retains Goal identity and managed-run ownership, and sends no extra request.
+This is distinct from a full session abort or `/goal pause`, which selects `paused`; no Pi public-API change or private retry event is required.
 
 Native classification intentionally replaces Goal's former text fallbacks.
 For example, unsupported `Connection prematurely closed BEFORE response` wording now blocks when Pi classifies it as terminal, rather than entering provider waiting.
