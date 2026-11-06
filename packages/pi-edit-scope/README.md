@@ -13,11 +13,21 @@ Limit Pi's native `write` and `edit` calls to files selected by the user. Other 
 
 ## 📦 Install
 
-This source-loaded package is not published to npm. Use a local checkout; the npm badge identifies the package name, not an available registry installation.
-
 **This is an in-process guard, not an OS sandbox.** Extensions run with Pi's operating-system permissions. Load only trusted code, and read the [protection boundary](#-security-and-privacy) before use.
 
-From the repository root, install dependencies, build the workspace libraries, and try the package:
+Install for later sessions:
+
+```sh
+pi install npm:@narumitw/pi-edit-scope
+```
+
+Try without installing:
+
+```sh
+pi -e npm:@narumitw/pi-edit-scope
+```
+
+For a local checkout, run from the repository root:
 
 ```sh
 npm install
