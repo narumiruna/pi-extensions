@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "vitest";
@@ -118,7 +118,11 @@ process.disconnect();
 for (const kind of ["starship", "tool", "sync", "fleet", "herdr", "goal-wakeup"]) {
   const run = process.platform === "win32" && (kind === "fleet" || kind === "herdr") ? test.skip : test;
   run(`${kind}: background work permits natural exit; accepted wakeups still finish`, async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-background-timer-exit-"));
+    // These probes test handle ownership, not the Unix socket path limit.
+    const shortPath = process.platform !== "win32" && (kind === "fleet" || kind === "herdr");
+    const directory = await mkdtemp(
+      join(shortPath ? await realpath("/tmp") : tmpdir(), shortPath ? "pi-bg-" : "pi-background-timer-exit-"),
+    );
     const child = spawn(process.execPath, ["--input-type=module", "-e", probe, kind, compiledRoot], {
       cwd: directory,
       env: { ...process.env, PI_CODING_AGENT_DIR: directory },

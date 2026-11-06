@@ -27,10 +27,6 @@ export async function preflightMergedTargets(
   const changed = new Set(paths.filter((item) => beforeHashes[item] !== afterHashes[item]));
   await assertCanonicalMergedTargets(root, changed, options);
   await assertDistinctMergedTargets(root, paths, changed, options, protectedTarget, new Set(Object.keys(afterHashes)));
-  await assertCanonicalMutationTargets(
-    [...changed].map((relative) => snapshotTarget(root, relative, options.sessionDir)),
-    options,
-  );
   const removed = replacementPaths(
     new Set(paths.filter((item) => changed.has(item) && !afterHashes[item])),
     afterHashes,
@@ -39,6 +35,10 @@ export async function preflightMergedTargets(
   for (const relative of paths) {
     if (changed.has(relative)) await assertFilesystemTarget(root, relative, options, removedTargets, beforeHashes);
   }
+  await assertCanonicalMutationTargets(
+    [...changed].map((relative) => snapshotTarget(root, relative, options.sessionDir)),
+    options,
+  );
 }
 
 function replacementPaths(removed: Set<string>, afterHashes: Readonly<Record<string, string>>) {
