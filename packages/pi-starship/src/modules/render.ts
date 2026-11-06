@@ -11,10 +11,12 @@ import {
 } from "../format/style.js";
 import { sanitizeFormatText } from "../format/terminal-safety.js";
 import type { ThemeColors } from "../format/theme-colors.js";
+import { extensionStatusKey, referencesModule } from "../root-references.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./catalog.js";
 import { directoryAlternateFormat } from "./directory.js";
 import { resolveStyleRule } from "./style-rules.js";
 import type {
+  ModuleDefinition,
   ModuleOptionValue,
   ModuleStyleContext,
   ModuleValueContext,
@@ -30,6 +32,15 @@ export function renderStatusline(
   themeColors?: ThemeColors,
 ): RenderedStatusline<ModuleName> {
   const palette = activePalette(config);
+  const explicitModules = formatVariables(config.formatAst);
+  const statusReferences = new Map(
+    [...explicitModules].flatMap((reference) => {
+      const key = extensionStatusKey(reference);
+      return key === undefined ? [] : [[reference, key] as const];
+    }),
+  );
+  const selectedKeys = new Set(statusReferences.values());
+  const statusChunks = new Map<string, StyledChunk[]>();
   const modules = {} as Record<ModuleName, StyledChunk[]>;
   const layoutModules = {} as Record<ModuleName, LayoutChunk[]>;
   for (const name of MODULE_NAMES) {
@@ -40,46 +51,47 @@ export function renderStatusline(
     const name = definition.name;
     const module = config.modules[name];
     const context = valueContext(config, name, runtime, palette);
-    const values = definition.values(context);
-    if (!values) continue;
-    const styleContext: ModuleStyleContext = {
-      runtime,
-      style: module.style,
-      styles: module.styles,
-      display: module.display,
-      options: context.options,
-    };
-    const baseStyleVariables = definition.resolveStyleVariables
-      ? definition.resolveStyleVariables(styleContext)
-      : { style: module.style };
-    if (!baseStyleVariables) continue;
-    const ruleStyle = definition.styleRuleSelectors
-      ? resolveStyleRule(module.styleRules, definition.styleRuleSelectors, styleContext)
-      : undefined;
-    const styleVariables = ruleStyle === undefined ? baseStyleVariables : { ...baseStyleVariables, style: ruleStyle };
-    const contentValues: Record<string, FormatValue> = Object.fromEntries(
-      definition.variables.flatMap((variable) =>
-        Object.hasOwn(values, variable) ? [[variable, values[variable]]] : [],
-      ),
-    );
-    const alternate = definition.resolveFormat?.(context, values);
-    const rendered = renderModule(
-      alternate === undefined ? module : { ...module, formatAst: parseFormat(alternate) },
-      contentValues,
-      styleVariables,
-      palette,
-    );
+    if (name === "extension_status" && statusReferences.size > 0) {
+      const statuses = context.runtime.extensionStatuses;
+      for (const [reference, key] of statusReferences) {
+        const value = statuses.get(key);
+        const selected = new Map(value === undefined ? [] : [[key, value]]);
+        statusChunks.set(
+          reference,
+          renderDefinition(
+            definition,
+            module,
+            { ...context, runtime: { ...context.runtime, extensionStatuses: selected } },
+            runtime,
+          ) ?? [],
+        );
+      }
+      context.runtime = {
+        ...context.runtime,
+        extensionStatuses: new Map([...statuses].filter(([key]) => !selectedKeys.has(key))),
+      };
+    }
+    const rendered = renderDefinition(definition, module, context, runtime);
+    if (!rendered) continue;
     modules[name] = rendered;
     layoutModules[name] =
       definition.layout === "fill" && !module.disabled ? [{ type: "fill", pattern: rendered }] : rendered;
   }
 
-  const explicitModules = formatVariables(config.formatAst);
   const all = MODULE_NAMES.flatMap((name) =>
     explicitModules.has(name) || config.modules[name].disabled ? [] : layoutModules[name],
   );
   const rootVariables: Record<string, FormatValue> = { all };
   for (const name of MODULE_NAMES) rootVariables[name] = layoutModules[name];
+  for (const [reference, rendered] of statusChunks) rootVariables[reference] = rendered;
+  if (statusReferences.size > 0) {
+    // Inspection shows participating expansions once, not statuses absent from the layout.
+    modules.extension_status = [...explicitModules].flatMap((reference) =>
+      reference === "extension_status" || (reference === "all" && !explicitModules.has("extension_status"))
+        ? modules.extension_status
+        : (statusChunks.get(reference) ?? []),
+    );
+  }
   const layout = renderFormat(config.formatAst, { variables: rootVariables, palette });
   const chunks = resolveFillLayout(layout, width);
   return {
@@ -87,6 +99,41 @@ export function renderStatusline(
     chunks,
     modules,
   };
+}
+
+function renderDefinition(
+  definition: ModuleDefinition<ModuleName>,
+  module: ModuleConfig,
+  context: ModuleValueContext,
+  runtime: StarshipRuntimeSnapshot,
+): StyledChunk[] | undefined {
+  const values = definition.values(context);
+  if (!values) return undefined;
+  const styleContext: ModuleStyleContext = {
+    runtime,
+    style: module.style,
+    styles: module.styles,
+    display: module.display,
+    options: context.options,
+  };
+  const baseStyleVariables = definition.resolveStyleVariables
+    ? definition.resolveStyleVariables(styleContext)
+    : { style: module.style };
+  if (!baseStyleVariables) return undefined;
+  const ruleStyle = definition.styleRuleSelectors
+    ? resolveStyleRule(module.styleRules, definition.styleRuleSelectors, styleContext)
+    : undefined;
+  const styleVariables = ruleStyle === undefined ? baseStyleVariables : { ...baseStyleVariables, style: ruleStyle };
+  const contentValues: Record<string, FormatValue> = Object.fromEntries(
+    definition.variables.flatMap((variable) => (Object.hasOwn(values, variable) ? [[variable, values[variable]]] : [])),
+  );
+  const alternate = definition.resolveFormat?.(context, values);
+  return renderModule(
+    alternate === undefined ? module : { ...module, formatAst: parseFormat(alternate) },
+    contentValues,
+    styleVariables,
+    context.palette,
+  );
 }
 
 function valueContext(
@@ -194,7 +241,7 @@ export function reachableModuleRequirements(config: StarshipConfig): ReadonlyMap
   const requirements = new Map<ModuleName, ReadonlySet<string>>();
   for (const definition of MODULE_DEFINITIONS) {
     if (config.modules[definition.name].disabled) continue;
-    if (!includeAll && !rootVariables.has(definition.name)) continue;
+    if (!includeAll && !referencesModule(rootVariables, definition.name)) continue;
     const variables = formatVariables(config.modules[definition.name].formatAst);
     if (definition.name === "directory") {
       const alternate = directoryAlternateFormat(config.modules.directory.options, config.modules.directory.styles);

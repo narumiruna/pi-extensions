@@ -330,11 +330,15 @@ standalone dividers instead of repeating the drawing logic.
   **Verification:** `Test` of lifecycle cleanup and `Review` of key ownership.
 
 A repository-owned status key **SHOULD** use `<extension-id>` for one aggregated status or
-`<extension-id>:<stable-slot>` when independently owned statuses must coexist. Derive the lowercase
+`<extension-id>.<stable-slot>` when independently owned statuses must coexist. Derive the lowercase
 kebab-case extension id from the unscoped package basename by removing `pi-`; for example,
 `@narumitw/pi-sync` uses `sync`. Keep transient state, tool-call ids, and other changing values in the
-status text rather than the key. A stable slot identifies a long-lived channel such as
-`lsp:typescript`, not an activity such as `sync:pushing`.
+status text rather than the key. A stable slot identifies a long-lived channel such as a hypothetical
+`lsp.typescript`, not an activity such as `sync.pushing`.
+
+Current repository publishers use only bare aggregate keys; `pi-lsp` publishes only `lsp`, not
+per-language statuses. This convention does not create channels, rename existing keys, or authorize
+`:`/`.` alias conversion.
 
 This grammar is an author convention, not Pi enforcement: `ctx.ui.setStatus()` accepts any string,
 Pi exposes no package owner for a status, and two extensions using the same key overwrite each other

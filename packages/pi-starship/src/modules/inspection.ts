@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import type { StarshipConfig } from "../config.js";
 import { formatVariables } from "../format/formatter.js";
+import { referencesModule } from "../root-references.js";
 import { MODULE_DEFINITIONS, type ModuleName } from "./catalog.js";
 import { reachableModuleRequirements, renderStatusline } from "./render.js";
 import type { StarshipRuntimeSnapshot } from "./types.js";
@@ -52,7 +53,7 @@ export function inspectStatuslineModules(
       definition,
       state,
       preview,
-      includeAll || rootVariables.has(definition.name),
+      includeAll || referencesModule(rootVariables, definition.name),
       reachable,
     );
   });
@@ -76,7 +77,7 @@ export function inspectUnavailableModules(config: StarshipConfig): StatuslineIns
         definition,
         state,
         "",
-        includeAll || rootVariables.has(definition.name),
+        includeAll || referencesModule(rootVariables, definition.name),
         reachable,
       );
     }),

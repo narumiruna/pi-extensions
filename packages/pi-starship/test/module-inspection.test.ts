@@ -40,6 +40,17 @@ function configWithFormat(format: string) {
   return config;
 }
 
+function extensionStatusConfig(format: string, maxStatuses = 5) {
+  const config = configWithFormat(format);
+  config.modules.extension_status.format = "$statuses";
+  config.modules.extension_status.formatAst = parseFormat("$statuses");
+  config.modules.extension_status.style = "none";
+  config.extensionStatus.icons = { fallback: "" };
+  config.extensionStatus.separator = " / ";
+  config.extensionStatus.maxStatuses = maxStatuses;
+  return config;
+}
+
 test("the module catalog exposes one concise description for every registered module", () => {
   const names = new Set<string>();
   for (const definition of MODULE_DEFINITIONS) {
@@ -114,4 +125,198 @@ test("module inspection exposes read-only detail metadata", () => {
   assert.equal(username?.styleRuleCount, 0);
   assert.ok((context?.displayRules.length ?? 0) > 0);
   assert.equal(inspection.modules.length, MODULE_DEFINITIONS.length);
+});
+
+test.each([
+  ["child only", `\${extension_status.a}`, "Showing", ["alpha"], ["beta", "gamma"]],
+  ["absent child only", `\${extension_status.absent}`, "Empty", [], ["alpha", "beta", "gamma"]],
+  ["several children", `\${extension_status.c}|\${extension_status.a}`, "Showing", ["gamma", "alpha"], ["beta"]],
+  ["nested child", `([\${extension_status.a}](blue))`, "Showing", ["alpha"], ["beta", "gamma"]],
+  ["aggregate only", "$extension_status", "Showing", ["alpha", "beta", "gamma"], []],
+  ["aggregate plus child", `$extension_status|\${extension_status.a}`, "Showing", ["alpha", "beta", "gamma"], []],
+  ["all plus child", `$all|\${extension_status.a}`, "Showing", ["alpha", "beta", "gamma"], []],
+  [
+    "all plus explicit aggregate and child",
+    `$all$extension_status|\${extension_status.a}`,
+    "Showing",
+    ["alpha", "beta", "gamma"],
+    [],
+  ],
+  [
+    "all children leave an empty aggregate",
+    `\${extension_status.a}\${extension_status.b}\${extension_status.c}($extension_status)`,
+    "Showing",
+    ["alpha", "beta", "gamma"],
+    [],
+  ],
+  ["unreferenced", "$model", "Not in format", [], []],
+  ["invalid empty suffix", `\${extension_status.}`, "Not in format", [], []],
+] satisfies [string, string, string, string[], string[]][])(
+  "extension-status inspection recognizes the parent for %s",
+  (_name, format, state, included, excluded) => {
+    const inspection = inspectStatuslineModules(
+      extensionStatusConfig(format),
+      fixture({
+        extensionStatuses: new Map([
+          ["a", "alpha"],
+          ["b", "beta"],
+          ["c", "gamma"],
+        ]),
+      }),
+      80,
+    );
+    const parent = inspection.modules.find((module) => module.name === "extension_status");
+    assert.ok(parent);
+    assert.equal(parent.state, state);
+    assert.equal(parent.rootReferenced, state !== "Not in format");
+    assert.equal(parent.reachable, state !== "Not in format");
+    assert.equal(
+      inspection.showing.some((module) => module.name === "extension_status"),
+      state === "Showing",
+    );
+    assert.equal(parent.preview.includes("\u001b"), false);
+    for (const text of included) assert.ok(parent.preview.includes(text), parent.preview);
+    for (const text of excluded) assert.equal(parent.preview.includes(text), false, parent.preview);
+  },
+);
+
+test.each([
+  ["empty snapshot", `\${extension_status.a}`, [], 5, false, "Empty"],
+  [
+    "empty child with an active unselected status",
+    `\${extension_status.a}`,
+    [
+      ["a", " \t"],
+      ["b", "beta"],
+    ],
+    5,
+    false,
+    "Empty",
+  ],
+  [
+    "self child with an active unselected status",
+    `\${extension_status.starship}`,
+    [
+      ["starship", "internal"],
+      ["b", "beta"],
+    ],
+    5,
+    false,
+    "Empty",
+  ],
+  [
+    "prefix-only child with an active unselected status",
+    `\${extension_status.a}`,
+    [
+      ["a", "a: "],
+      ["b", "beta"],
+    ],
+    5,
+    false,
+    "Empty",
+  ],
+  [
+    "suppressed emoji-only child with an active unselected status",
+    `\${extension_status.a}`,
+    [
+      ["a", "⚡"],
+      ["b", "beta"],
+    ],
+    5,
+    false,
+    "Empty",
+  ],
+  ["disabled child", `\${extension_status.a}`, [["a", "alpha"]], 5, true, "Disabled"],
+  [
+    "disabled mixed layout",
+    `$extension_status\${extension_status.a}`,
+    [
+      ["a", "alpha"],
+      ["b", "beta"],
+    ],
+    5,
+    true,
+    "Disabled",
+  ],
+  ["zero-cap child", `\${extension_status.a}`, [["a", "alpha"]], 0, false, "Empty"],
+  [
+    "zero-cap mixed layout",
+    `$extension_status\${extension_status.a}`,
+    [
+      ["a", "alpha"],
+      ["b", "beta"],
+    ],
+    0,
+    false,
+    "Empty",
+  ],
+] satisfies [string, string, [string, string][], number, boolean, string][])(
+  "extension-status inspection classifies %s without an unrelated preview",
+  (_name, format, statuses, cap, disabled, state) => {
+    const config = extensionStatusConfig(format, cap);
+    config.modules.extension_status.disabled = disabled;
+    config.extensionStatus.icons.a = "";
+    const inspection = inspectStatuslineModules(config, fixture({ extensionStatuses: new Map(statuses) }), 80);
+    const parent = inspection.modules.find((module) => module.name === "extension_status");
+    assert.ok(parent);
+    assert.equal(parent.state, state);
+    assert.equal(parent.rootReferenced, true);
+    assert.equal(parent.reachable, !disabled);
+    assert.equal(parent.preview, "");
+    assert.equal(
+      inspection.showing.some((module) => module.name === "extension_status"),
+      false,
+    );
+  },
+);
+
+test.each([
+  ["child beyond the aggregate cap", `ROOT(\${extension_status.d})TAIL`, ["delta"], ["alpha", "beta", "gamma"]],
+  ["mixed capped selections", `$extension_status|\${extension_status.d}`, ["alpha", "delta"], ["beta", "gamma"]],
+  ["all capped selections", `$all|\${extension_status.d}`, ["alpha", "delta"], ["beta", "gamma"]],
+  [
+    "several independent child selections",
+    `$extension_status|\${extension_status.b}|\${extension_status.d}`,
+    ["alpha", "beta", "delta"],
+    ["gamma"],
+  ],
+  ["repeated child selections", `\${extension_status.d}|\${extension_status.d}`, ["delta"], ["alpha", "beta", "gamma"]],
+] satisfies [string, string, string[], string[]][])(
+  "extension-status previews include only reachable expansions for %s",
+  (_name, format, included, excluded) => {
+    const inspection = inspectStatuslineModules(
+      extensionStatusConfig(format, 1),
+      fixture({
+        extensionStatuses: new Map([
+          ["a", "alpha"],
+          ["b", "beta"],
+          ["c", "gamma"],
+          ["d", "delta"],
+        ]),
+      }),
+      80,
+    );
+    const parent = inspection.modules.find((module) => module.name === "extension_status");
+    assert.ok(parent);
+    assert.equal(parent.state, "Showing");
+    assert.equal(parent.rootReferenced, true);
+    assert.equal(parent.reachable, true);
+    for (const text of included) assert.ok(parent.preview.includes(text), parent.preview);
+    for (const text of [...excluded, "ROOT", "TAIL"])
+      assert.equal(parent.preview.includes(text), false, parent.preview);
+  },
+);
+
+test("unavailable inspection derives child-only reachability without a runtime snapshot", () => {
+  for (const disabled of [false, true]) {
+    const config = extensionStatusConfig(`([\${extension_status.usage.slot}](blue))`);
+    config.modules.extension_status.disabled = disabled;
+    const inspection = inspectUnavailableModules(config);
+    const parent = inspection.modules.find((module) => module.name === "extension_status");
+    assert.equal(parent?.state, disabled ? "Disabled" : "Unavailable");
+    assert.equal(parent?.rootReferenced, true);
+    assert.equal(parent?.reachable, !disabled);
+    assert.equal(parent?.preview, "");
+    assert.equal(inspection.showing.length, 0);
+  }
 });

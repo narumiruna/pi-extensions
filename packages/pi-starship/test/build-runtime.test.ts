@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import {
   DefaultResourceLoader,
   type ExtensionCommandContext,
   type ExtensionContext,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { rgbColor } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
@@ -116,7 +118,14 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     // thing the runtime needs an external package for.
     await writeFile(
       join(agentDir, "pi-starship.toml"),
-      'format = "[theme](pi:accent)$directory"\n[directory]\nstyle = "fg:pi:selectedBg bg:pi:accent"\n',
+      `format = "[theme](pi:accent)$directory( \${extension_status.fixture.usage})(\\n\${extension_status.fixture.sync})"
+[directory]
+style = "fg:pi:selectedBg bg:pi:accent"
+[extension_status.icons]
+fallback = ""
+[extension_status.styles]
+"fixture.usage" = "green"
+`,
       "utf8",
     );
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -151,6 +160,28 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     };
     await emit("session_start");
     try {
+      const footer = context.footer as NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]>;
+      assert.equal(typeof footer, "function");
+      const statuses = new Map([
+        ["fixture.usage", "quota"],
+        ["fixture.sync", "pushing"],
+        ["unplaced", "hidden"],
+      ]);
+      const component = footer(
+        { requestRender() {} } as never,
+        { colors: { accent: rgbColor(1, 2, 3), selectedBg: rgbColor(4, 5, 6) } } as never,
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => statuses,
+          onBranchChange: () => () => {},
+        } as never,
+      );
+      const text = () => component.render(80).map(stripVTControlCharacters).join("\n");
+      assert.match(text(), /theme.*quota\npushing$/u);
+      assert.doesNotMatch(text(), /hidden/u);
+      statuses.clear();
+      assert.doesNotMatch(text(), /quota|pushing|\n$/u);
+
       const command = extension.commands.get("starship");
       assert.ok(command);
       await command.handler("status", { ...(context.ctx as ExtensionCommandContext), mode: "rpc" });
