@@ -1,5 +1,13 @@
 # @narumitw/pi-codex-imagegen
 
+## 0.2.2
+
+### Patch Changes
+
+- e46b610: Reduce Pi startup work by loading unused BTW and Codex Imagegen UI on first use. Preserve command registration, settings, tool exposure, and session cleanup.
+- Updated dependencies [4f79c28]
+  - @narumitw/pi-tui-kit@0.69.1
+
 ## 0.2.1
 
 ### Patch Changes

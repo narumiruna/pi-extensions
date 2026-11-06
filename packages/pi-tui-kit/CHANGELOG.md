@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.69.1
+
+### Patch Changes
+
+- 4f79c28: Prevent exponential regular-expression backtracking when building search metadata for Markdown documents with long whitespace or list-marker prefixes.
+
 ## 0.69.0
 
 ### Minor Changes
