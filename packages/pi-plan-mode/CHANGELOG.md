@@ -1,5 +1,18 @@
 # @narumitw/pi-plan-mode
 
+## 0.60.0
+
+### Minor Changes
+
+- 522796b: Add free discussion within Plan mode. Switch with F2 when no native Pi binding uses it, or use the active `/plan` menu. Switching discards unfinished questionnaire answers without changing the main prompt draft. Discussion keeps read-only restrictions and stores completed plans without opening an automatic action menu. Restore the interaction mode with the workflow; new workflows start with questionnaires enabled.
+
+### Patch Changes
+
+- 227aedc: Preserve wide graphemes in expanded question details and prevent leading combining marks from making decorative prefixes exceed the viewport. Apply the same bounds to questions, answers, notes, cancellations, and errors.
+- b6da988: Show compact, themed question-and-answer summaries in the transcript, with full questions and notes available when tool output is expanded.
+- Updated dependencies [4f79c28]
+  - @narumitw/pi-tui-kit@0.69.1
+
 ## 0.59.6
 
 ### Patch Changes

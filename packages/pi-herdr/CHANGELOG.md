@@ -1,5 +1,16 @@
 # @narumitw/pi-herdr
 
+## 0.4.0
+
+### Minor Changes
+
+- e2e724f: Add an hc bootstrap skill that loads version-matched Herdr Core guidance through `hc --skill` after an explicit request, without requiring a Herdr-managed pane. Preserve the existing herdr skill and legacy integration.
+
+### Patch Changes
+
+- Updated dependencies [4f79c28]
+  - @narumitw/pi-tui-kit@0.69.1
+
 ## 0.3.5
 
 ### Patch Changes

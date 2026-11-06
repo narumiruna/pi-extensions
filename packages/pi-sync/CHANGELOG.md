@@ -1,5 +1,13 @@
 # @narumitw/pi-sync
 
+## 0.57.10
+
+### Patch Changes
+
+- a6582dc: Reduce Pi startup loading by deferring command, transfer, and recovery implementations until needed. Preserve awaited recovery for pending file transactions and all existing sync settings.
+- Updated dependencies [4f79c28]
+  - @narumitw/pi-tui-kit@0.69.1
+
 ## 0.57.9
 
 ### Patch Changes

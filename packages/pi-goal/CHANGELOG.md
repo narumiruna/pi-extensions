@@ -1,5 +1,14 @@
 # @narumitw/pi-goal
 
+## 0.54.16
+
+### Patch Changes
+
+- 5c09977: Treat prematurely closed connections and prematurely ended streams as retryable Goal interruptions, including proxy-wrapped HTTP 400 errors. Keep the Goal active through the existing provider-recovery wait instead of marking it blocked.
+- 6c843a2: Store independent Goal state snapshots in session history so later accounting and waiting-state updates do not change earlier entries. Keep in-memory history aligned with JSONL records and preserve append-time state during deferred writes and branch restoration.
+- Updated dependencies [4f79c28]
+  - @narumitw/pi-tui-kit@0.69.1
+
 ## 0.54.15
 
 ### Patch Changes
