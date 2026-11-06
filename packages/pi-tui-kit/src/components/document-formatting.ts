@@ -430,8 +430,9 @@ function markdownSearchLines(lines: readonly string[]) {
 }
 
 function normalizeMarkdownContainerPrefix(line: string) {
+  // Keep whitespace outside repeated alternatives so it cannot be split across matches.
   return line.replace(
-    /^((?:(?:\s+|(?:[-+*]|\d+[.)])\s+))*)((?:│ )+)/u,
+    /^(\s*(?:(?:[-+*]|\d+[.)])\s+)*)((?:│ )+)/u,
     (_match, prefix: string, quoteBorders: string) => prefix + " ".repeat(PiTui.visibleWidth(quoteBorders)),
   );
 }
