@@ -1,194 +1,28 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
-
-import { Type } from "typebox";
-
-const extensionPath = resolve(import.meta.dirname, "../src/goal.ts");
-
-async function createHarness(responses, fauxOptions = {}, prepareSession, goalSettings, piSettings = {}, managedRun) {
-  const root = await mkdtemp(join(tmpdir(), "pi-goal-runtime-"));
-  const agentDir = join(root, "agent");
-  const cwd = join(root, "workspace");
-  await mkdir(cwd, { recursive: true });
-  if (goalSettings) {
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "pi-goal.json"), `${JSON.stringify(goalSettings)}\n`, "utf8");
-  }
-
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  let createdSession;
-  let agentDirRestored = false;
-  const restoreAgentDir = () => {
-    if (agentDirRestored) return;
-    agentDirRestored = true;
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-  };
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  const cleanupResources = async () => {
-    try {
-      createdSession?.dispose();
-    } finally {
-      try {
-        await rm(root, { recursive: true, force: true });
-      } finally {
-        restoreAgentDir();
-      }
-    }
-  };
-
-  try {
-    const credentials = new InMemoryCredentialStore();
-    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
-    const modelRegistry = new ModelRegistry(modelRuntime);
-    const faux = createFauxCore({
-      api: `pi-goal-faux-${crypto.randomUUID()}`,
-      provider: `pi-goal-faux-${crypto.randomUUID()}`,
-      ...fauxOptions,
-    });
-    const provider = faux.getModel().provider;
-    modelRegistry.registerProvider(provider, {
-      api: faux.api,
-      apiKey: "runtime-smoke",
-      baseUrl: "http://localhost",
-      streamSimple: faux.streamSimple,
-      models: faux.models.map((model) => ({
-        id: model.id,
-        name: model.name,
-        api: model.api,
-        baseUrl: model.baseUrl,
-        reasoning: model.reasoning,
-        input: model.input,
-        cost: model.cost,
-        contextWindow: model.contextWindow,
-        maxTokens: model.maxTokens,
-      })),
-    });
-    const model = modelRegistry.find(provider, faux.getModel().id);
-    assert.ok(model, "expected registered faux model");
-    faux.setResponses(responses);
-    const managedRunEvents = [];
-
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: false },
-      retry: { enabled: false },
-      ...piSettings,
-    });
-    const lifecycleEvents = [];
-    const resourceLoader = new DefaultResourceLoader({
-      cwd,
-      agentDir,
-      settingsManager,
-      additionalExtensionPaths: [extensionPath],
-      extensionFactories: [
-        {
-          name: "runtime-smoke-observer",
-          factory: (pi) => {
-            if (managedRun) {
-              pi.events.on(`pi-goal:event:${managedRun.runId}`, (event) => {
-                managedRunEvents.push(event);
-              });
-              pi.on("session_start", () => {
-                pi.events.emit("pi-goal:start", managedRun);
-              });
-            }
-            pi.registerTool({
-              name: "budget_probe",
-              label: "Budget Probe",
-              description: "No-op tool for lifecycle smoke coverage",
-              parameters: Type.Object({}),
-              async execute() {
-                lifecycleEvents.push("budget_probe_execute");
-                return { content: [{ type: "text", text: "probe complete" }] };
-              },
-            });
-            pi.on("session_start", () => lifecycleEvents.push("session_start"));
-            pi.on("agent_start", () => lifecycleEvents.push("agent_start"));
-            pi.on("message_end", (event) => {
-              if (event.message.role === "assistant") lifecycleEvents.push("assistant_message_end");
-            });
-            pi.on("tool_execution_end", () => lifecycleEvents.push("tool_execution_end"));
-            pi.on("session_before_compact", () => lifecycleEvents.push("session_before_compact"));
-            pi.on("session_compact", (event, ctx) =>
-              lifecycleEvents.push(
-                `session_compact:idle=${ctx.isIdle()}:pending=${ctx.hasPendingMessages()}:reason=${event.reason}:willRetry=${event.willRetry}`,
-              ),
-            );
-            pi.on("agent_settled", () => lifecycleEvents.push("agent_settled"));
-          },
-        },
-      ],
-    });
-    await resourceLoader.reload();
-    const sessionManager = SessionManager.inMemory(cwd);
-    prepareSession?.(sessionManager);
-    const result = await createAgentSession({
-      cwd,
-      agentDir,
-      modelRuntime,
-      model,
-      resourceLoader,
-      sessionManager,
-      settingsManager,
-      noTools: "builtin",
-    });
-    assert.deepEqual(result.extensionsResult.errors, []);
-    createdSession = result.session;
-    await result.session.bindExtensions({});
-    return {
-      agentDir,
-      extensions: result.extensionsResult.extensions.map((extension) => ({
-        path: extension.path,
-        handlers: [...extension.handlers.keys()],
-      })),
-      faux,
-      lifecycleEvents,
-      managedRunEvents,
-      session: result.session,
-      cleanup: cleanupResources,
-    };
-  } catch (error) {
-    await cleanupResources();
-    throw error;
-  }
-}
-
-function completionResponse(context) {
-  const modelContext = [context.systemPrompt ?? "", ...context.messages.map(modelMessageText)].join("\n");
-  const goalId = [...modelContext.matchAll(/<goal_id>\s*([^<\s]+)\s*<\/goal_id>/g)].at(-1)?.[1];
-  assert.ok(goalId, "expected goal id in appended Goal context");
-  return fauxAssistantMessage(
-    fauxToolCall("goal_complete", {
-      goal_id: goalId,
-      summary: "Runtime smoke completed and verified.",
-    }),
-  );
-}
-
-function modelMessageText(message) {
-  if (typeof message.content === "string") return message.content;
-  if (!Array.isArray(message.content)) return "";
-  return message.content
-    .filter((part) => part?.type === "text")
-    .map((part) => part.text)
-    .join("\n");
-}
-
-function userMessageText(message) {
-  return message.role === "user" ? modelMessageText(message) : "";
-}
+  fauxAssistantMessage,
+  fauxToolCall,
+  isContextOverflow,
+  isRetryableAssistantError,
+} from "@earendil-works/pi-ai";
+import { explicitWaitErrorScenario } from "./support/goal-explicit-wait-runtime.mjs";
+import {
+  assertNativeRetries,
+  assertQuietErrorWait,
+  completionResponse,
+  continuationMessages,
+  createHarness,
+  goalIdFromContext,
+  managedRunStatuses,
+  persistedGoalHistory,
+  persistedGoalState,
+  persistedGoalStatus,
+  providerError,
+  seedCompactionHistory,
+  userMessageText,
+  waitFor,
+  waitForSettlement,
+} from "./support/goal-runtime-harness.mjs";
 
 async function agentDirectoryIsolationScenario() {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -199,33 +33,6 @@ async function agentDirectoryIsolationScenario() {
     await harness.cleanup();
   }
   assert.equal(process.env.PI_CODING_AGENT_DIR, previousAgentDir);
-}
-
-function persistedGoalState(session) {
-  return session.sessionManager
-    .getBranch()
-    .filter((candidate) => candidate.type === "custom" && candidate.customType === "goal-state")
-    .at(-1)?.data;
-}
-
-function persistedGoalStatus(session) {
-  return persistedGoalState(session)?.goal?.status ?? null;
-}
-
-function persistedGoalHistory(session) {
-  return session.sessionManager
-    .getBranch()
-    .filter((candidate) => candidate.type === "custom" && candidate.customType === "goal-state")
-    .map((candidate) => candidate.data?.goal)
-    .filter(Boolean);
-}
-
-async function waitFor(predicate, description, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
 }
 
 async function normalContinuationScenario() {
@@ -376,16 +183,445 @@ async function automaticRetryOwnershipScenario() {
   try {
     await harness.session.prompt("/goal runtime retry ownership smoke");
     await waitFor(() => harness.faux.state.callCount === 4, "provider retry and continuation");
-    await harness.session.agent.waitForIdle();
+    await harness.session.waitForIdle();
     assert.equal(persistedGoalStatus(harness.session), null);
     assert.ok(
       persistedGoalHistory(harness.session).some((goal) => goal.automaticModelTurns === 2 && goal.status === "active"),
       "retry response must retain automatic ownership",
     );
-    assert.ok(
-      harness.lifecycleEvents.filter((event) => event === "agent_start").length >= 3,
-      "expected retry to emit agent_start",
+    assertNativeRetries(harness, [1], true, 1);
+    assert.deepEqual(
+      harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.providerCalls),
+      [1, 3, 4],
+      "Goal continuation must wait for the native recovery run to settle",
     );
+    assert.equal(continuationMessages(harness.session).length, 2, "native retry must not add a continuation");
+    assert.equal(harness.lifecycleEvents.filter((event) => event === "agent_start").length, 4);
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+async function nativeRetryExhaustionScenario() {
+  for (const [name, enabled, maxRetries, attempts] of [
+    ["exhausted", true, 2, [1, 2]],
+    ["disabled", false, 2, []],
+    ["zero retries", true, 0, []],
+  ]) {
+    const expectedCalls = attempts.length + 1;
+    const harness = await createHarness(
+      [...Array.from({ length: expectedCalls }, () => providerError("HTTP 524: upstream timeout")), completionResponse],
+      {},
+      undefined,
+      undefined,
+      { retry: { enabled, maxRetries, baseDelayMs: 0 } },
+    );
+    try {
+      await harness.session.prompt(`/goal native retry ${name} smoke`);
+      await waitForSettlement(harness, `${name} retry settlement`);
+      assertNativeRetries(harness, attempts, false);
+      assert.equal(harness.faux.state.callCount, expectedCalls, `${name}: no Goal-owned retry loop`);
+      assert.equal(harness.faux.getPendingResponseCount(), 1);
+      assert.equal(continuationMessages(harness.session).length, 0);
+      assert.equal(harness.session.pendingMessageCount, 0);
+      assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
+      const waitingGoal = persistedGoalState(harness.session)?.goal;
+      assert.equal(waitingGoal?.status, "active", name);
+      assert.match(waitingGoal.waiting?.reason ?? "", /provider retries exhausted/i);
+      assert.equal(waitingGoal.waiting.resumeAt, undefined, "provider wait has no timer");
+      await harness.session.prompt("Check the provider again and finish the same Goal.");
+      await harness.session.waitForIdle();
+      assert.equal(harness.faux.state.callCount, expectedCalls + 1);
+      assert.equal(persistedGoalStatus(harness.session), null, "a follow-up must wake the waiting Goal");
+      assert.deepEqual(
+        new Set(persistedGoalHistory(harness.session).map((goal) => goal.id)),
+        new Set([waitingGoal.id]),
+      );
+      assert.equal(continuationMessages(harness.session).length, 0);
+      assertNativeRetries(harness, attempts, false);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
+async function nativeRetryClassificationScenario() {
+  const quota = "HTTP 503: insufficient credits";
+  const auth = "HTTP 503: Unauthorized: invalid API key";
+  const terminalAuth = "Unauthorized: invalid API key";
+  const terminalQuota = "HTTP 429: insufficient_quota";
+  const prematureClose = "Connection prematurely closed BEFORE response";
+  for (const error of [quota, auth]) assert.equal(isRetryableAssistantError(providerError(error)), true, error);
+  for (const error of [terminalAuth, terminalQuota, prematureClose]) {
+    assert.equal(isRetryableAssistantError(providerError(error)), false, error);
+  }
+
+  for (const [name, responses, attempts, status] of [
+    ["quota recovery", [providerError(quota), completionResponse], [1], null],
+    ["auth recovery", [providerError(auth), completionResponse], [1], null],
+    ["quota exhaustion", [providerError(quota), providerError(quota)], [1], "usage_limited"],
+    ["final quota", [providerError(auth), providerError(terminalQuota)], [1], "usage_limited"],
+    ["final auth", [providerError(auth), providerError(terminalAuth)], [1], "active"],
+    ["native quota exclusion", [providerError(terminalQuota)], [], "usage_limited"],
+    ["unknown premature close", [providerError(prematureClose)], [], "active"],
+  ]) {
+    const harness = await createHarness([...responses, completionResponse], {}, undefined, undefined, {
+      retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+    });
+    try {
+      await harness.session.prompt(`/goal native classification ${name} smoke`);
+      await waitForSettlement(harness, `${name} settlement`);
+      assertNativeRetries(harness, attempts, status === null);
+      assert.equal(harness.faux.state.callCount, responses.length, `${name}: exact native provider attempts`);
+      assert.equal(harness.faux.getPendingResponseCount(), 1, `${name}: no extra Goal retry`);
+      assert.equal(persistedGoalStatus(harness.session), status, name);
+      assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
+      if (status === "active") {
+        const waitingGoal = assertQuietErrorWait(harness, responses.length, /\S/u);
+        assert.doesNotMatch(waitingGoal.waiting.reason, /retries exhausted/i, name);
+        await harness.session.prompt("Complete the same Goal after the final unknown error.");
+        await harness.session.waitForIdle();
+        assert.equal(harness.faux.state.callCount, responses.length + 1);
+        assert.equal(persistedGoalStatus(harness.session), null);
+        assert.ok(persistedGoalHistory(harness.session).every((goal) => goal.id === waitingGoal.id));
+        assertNativeRetries(harness, attempts, false);
+      } else {
+        assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined, name);
+      }
+      assert.equal(continuationMessages(harness.session).length, 0, name);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
+// Published #1821 error: preserve the nested raw escapes, not only its inner text.
+const PREMATURE_CONNECTION_CLOSE_ERROR =
+  '400: {"message":"data:{\\"error\\":{\\"code\\":\\"400\\",\\"message\\":\\"Request failed\\",' +
+  '\\"param\\":\\"Connection prematurely closed BEFORE response\\",\\"type\\":\\"\\"},' +
+  '\\"request_id\\":\\"0ddb…\\"}}","type":"invalid_request_error"}';
+
+async function unknownAssistantErrorWaitScenario() {
+  const errors = [
+    PREMATURE_CONNECTION_CLOSE_ERROR,
+    "Connection prematurely closed BEFORE response",
+    "CONNECTION PREMATURELY CLOSED BEFORE RESPONSE",
+    '400: {"message":"Connection prematurely closed BEFORE response"}',
+    "Stream prematurely ended",
+    "Premature end",
+    // Historical PR #1324 classes that Pi does not classify as native retryable errors.
+    "Upstream stream ended before terminal chunk",
+    "stream closed before the response completed",
+    "Premature close",
+    "Incomplete response received from application",
+    "Unexpected end of response body",
+    "400: invalid_request_error: unsupported parameter",
+    "Unauthorized: invalid API key",
+    "Permission denied by remote service",
+    "multi-auth rotation failed: 2 credentials tried",
+    'HTTP 429: {"code":1308}',
+    "",
+    "   ",
+    undefined,
+  ];
+  for (const [index, errorMessage] of errors.entries()) {
+    const message = providerError(errorMessage);
+    assert.equal(isRetryableAssistantError(message), false, errorMessage);
+    assert.equal(isContextOverflow(message), false, errorMessage);
+    const harness = await createHarness([message, completionResponse], {}, undefined, undefined, {
+      retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 },
+    });
+    try {
+      await harness.session.prompt(`/goal unknown assistant error ${index} smoke`);
+      await waitForSettlement(harness, `unknown assistant error ${index} settlement`);
+      assertNativeRetries(harness, [], false);
+      const waitingGoal = assertQuietErrorWait(harness, 1, /\S/u);
+      assert.doesNotMatch(waitingGoal.waiting.reason, /retries exhausted/i);
+      assert.equal(
+        harness.sdkEvents.find((event) => event.type === "message_end" && event.message.role === "assistant")?.message
+          .errorMessage,
+        errorMessage,
+        "provider error text must remain unchanged",
+      );
+      await harness.session.prompt("Check again and complete the same Goal.");
+      await harness.session.waitForIdle();
+      assert.equal(harness.faux.state.callCount, 2, "external input alone must wake the provider wait");
+      assert.equal(persistedGoalStatus(harness.session), null);
+      assert.deepEqual(
+        new Set(persistedGoalHistory(harness.session).map((goal) => goal.id)),
+        new Set([waitingGoal.id]),
+      );
+      assert.deepEqual(
+        harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.providerCalls),
+        [1, 2],
+      );
+      assert.equal(continuationMessages(harness.session).length, 0);
+      assertNativeRetries(harness, [], false);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+  console.log(
+    `unknown assistant waits: ${errors.length} cases, each requests=1 settlements=[1] retries=0; same-ID completion requests=2 settlements=[1,2]`,
+  );
+}
+
+async function managedUnknownErrorWaitScenario() {
+  for (const outcome of ["complete", "cancel"]) {
+    const harness = await createHarness(
+      [providerError("Unauthorized: invalid API key"), completionResponse],
+      {},
+      undefined,
+      { rpc: { enabled: true } },
+      { retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 } },
+      { runId: crypto.randomUUID(), objective: `retain managed unknown-error ownership until ${outcome}` },
+    );
+    try {
+      await waitForSettlement(harness, `managed unknown-error ${outcome} wait`);
+      const waitingGoal = assertQuietErrorWait(harness, 1, /\S/u);
+      assertNativeRetries(harness, [], false);
+      assert.deepEqual(managedRunStatuses(harness), ["active"], "waiting must retain managed ownership");
+      if (outcome === "complete") await harness.session.prompt("Complete the managed Goal now.");
+      else harness.cancelManagedRun("Cancel the unknown-error wait.");
+      await waitFor(() => harness.managedRunEvents.length === 2, `managed unknown-error ${outcome} terminal`);
+      await harness.session.waitForIdle();
+      assert.deepEqual(managedRunStatuses(harness), ["active", outcome === "complete" ? "complete" : "paused"]);
+      assert.equal(
+        harness.managedRunEvents.filter((event) => event.type === "state" && event.status !== "active").length,
+        1,
+      );
+      assert.ok(harness.managedRunEvents.every((event) => event.goalId === waitingGoal.id));
+      assert.equal(harness.faux.state.callCount, outcome === "complete" ? 2 : 1);
+      assert.equal(harness.faux.getPendingResponseCount(), outcome === "complete" ? 0 : 1);
+      assert.equal(persistedGoalStatus(harness.session), outcome === "complete" ? null : "paused");
+      assert.equal(continuationMessages(harness.session).length, 0);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+  console.log(
+    "managed unknown waits: active ownership retained; completion requests=2, cancellation requests=1; one terminal each",
+  );
+}
+
+async function unknownErrorFullAbortScenario() {
+  const harness = await createHarness([providerError("Invalid request"), completionResponse]);
+  let abort;
+  const unsubscribe = harness.session.subscribe((event) => {
+    if (event.type === "agent_end") abort = harness.session.abort();
+  });
+  try {
+    await harness.session.prompt("/goal cancel unknown error before settlement");
+    await waitForSettlement(harness, "unknown-error full abort settlement");
+    await abort;
+    assert.equal(persistedGoalStatus(harness.session), "paused");
+    assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined);
+    assert.equal(harness.faux.state.callCount, 1);
+    assert.equal(harness.faux.getPendingResponseCount(), 1);
+    assert.equal(continuationMessages(harness.session).length, 0);
+    assertNativeRetries(harness, [], false);
+    assert.deepEqual(
+      harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.aborted),
+      [true],
+    );
+  } finally {
+    unsubscribe();
+    await harness.cleanup();
+  }
+}
+
+async function unknownErrorSafetyScenario() {
+  for (const hardCap of [true, false]) {
+    const harness = await createHarness(
+      [
+        ...(hardCap ? [fauxAssistantMessage("Initial unfinished result.")] : []),
+        providerError("Invalid request"),
+        completionResponse,
+      ],
+      {},
+      undefined,
+      { continuationLimits: { automaticTurns: 1, noProgressTurns: null } },
+      { retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 } },
+    );
+    try {
+      await harness.session.prompt(
+        hardCap ? "/goal bound unknown automatic errors" : "/goal --tokens 1 bound unknown error usage",
+      );
+      await waitFor(
+        () => persistedGoalStatus(harness.session) === (hardCap ? "paused" : "budget_limited"),
+        "unknown-error safety stop",
+      );
+      await harness.session.waitForIdle();
+      const goal = persistedGoalState(harness.session)?.goal;
+      assert.equal(goal.waiting, undefined, "unknown-error waiting must not bypass safety stops");
+      assert.equal(harness.faux.state.callCount, hardCap ? 2 : 1);
+      assert.equal(harness.faux.getPendingResponseCount(), 1);
+      assert.equal(continuationMessages(harness.session).length, hardCap ? 1 : 0);
+      assertNativeRetries(harness, [], false);
+      if (hardCap) {
+        assert.equal(goal.safetyPauseCause, "continuation_limit");
+        assert.equal(goal.automaticModelTurns, 1);
+      } else assert.ok(goal.tokensUsed >= goal.tokenBudget);
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
+async function unknownErrorThresholdCompactionScenario() {
+  for (const outcome of ["success", "failure", "abort"]) {
+    let summaryStarted = false;
+    const harness = await createHarness(
+      [
+        () => {
+          harness.session.setAutoCompactionEnabled(true);
+          return providerError("Invalid request");
+        },
+        async (_context, options) => {
+          summaryStarted = true;
+          if (outcome === "abort" && !options.signal.aborted) {
+            await new Promise((resolve) => options.signal.addEventListener("abort", resolve, { once: true }));
+          }
+          return outcome === "failure"
+            ? providerError("Invalid summary request")
+            : fauxAssistantMessage("Compacted prior work.");
+        },
+        completionResponse,
+      ],
+      {},
+      seedCompactionHistory,
+      undefined,
+      {
+        compaction: { enabled: false, reserveTokens: 100_000 },
+        retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+      },
+    );
+    try {
+      await harness.session.prompt(`/goal unknown-error threshold compaction ${outcome}`);
+      await waitFor(() => summaryStarted, `unknown-error threshold ${outcome} summary`);
+      if (outcome === "abort") harness.session.abortCompaction();
+      await waitForSettlement(harness, `unknown-error threshold ${outcome} settlement`);
+      assertNativeRetries(harness, [], false);
+      const goal = persistedGoalState(harness.session)?.goal;
+      if (outcome === "abort") {
+        assert.equal(goal?.status, "paused");
+        assert.equal(goal.waiting, undefined);
+      } else assertQuietErrorWait(harness, 2, /\S/u);
+      assert.equal(harness.faux.state.callCount, 2, "threshold compaction must not trigger another provider turn");
+      assert.deepEqual(
+        harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.providerCalls),
+        [2],
+      );
+      assert.equal(harness.faux.getPendingResponseCount(), 1);
+      assert.equal(continuationMessages(harness.session).length, 0);
+      assert.deepEqual(new Set(persistedGoalHistory(harness.session).map((entry) => entry.id)), new Set([goal.id]));
+      assert.deepEqual(
+        harness.compactionEvents.map((event) => [event.type, event.reason, event.willRetry]),
+        [
+          ["session_before_compact", "threshold", false],
+          [outcome === "success" ? "session_compact" : "session_compact_failed", "threshold", false],
+        ],
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  }
+  console.log(
+    "unknown-error threshold compaction: success/failure wait, abort pauses; each requests=2 settlements=[2] retries=0 continuations=0",
+  );
+}
+
+async function nativeBackoffAbortScenario(cancellation) {
+  const retryOnly = cancellation === "retry";
+  const harness = await createHarness(
+    [
+      fauxAssistantMessage("Initial unfinished result."),
+      providerError("HTTP 524: upstream timeout"),
+      completionResponse,
+    ],
+    {},
+    undefined,
+    { rpc: { enabled: true }, continuationLimits: { automaticTurns: 4, noProgressTurns: null } },
+    { retry: { enabled: true, maxRetries: 2, baseDelayMs: 60_000 } },
+    { runId: crypto.randomUUID(), objective: `cancel ${cancellation} during native backoff without another assistant` },
+  );
+  try {
+    // auto_retry_start precedes the native sleep controller; wait for the public backoff state.
+    await waitFor(() => harness.session.isRetrying, "native backoff ready");
+    assert.equal(harness.faux.state.callCount, 2);
+    assert.equal(persistedGoalStatus(harness.session), "active");
+    assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").length, 1);
+    if (retryOnly) {
+      harness.session.abortRetry();
+      await harness.session.waitForIdle();
+    } else {
+      await harness.session.abort();
+    }
+    assertNativeRetries(harness, [1], false, 1);
+    assert.equal(harness.faux.state.callCount, 2, "cancellation must not start a retry or Goal continuation");
+    assert.equal(harness.faux.getPendingResponseCount(), 1);
+    const goal = persistedGoalState(harness.session)?.goal;
+    assert.equal(
+      goal?.status,
+      retryOnly ? "active" : "paused",
+      "retry-only cancellation preserves waiting; full abort pauses",
+    );
+    assert.equal(Boolean(goal.waiting), retryOnly);
+    assert.equal(goal.waiting?.resumeAt, undefined);
+    assert.equal(goal.automaticModelTurns, 1);
+    assert.deepEqual(
+      harness.sdkEvents
+        .filter((event) => event.type === "message_end" && event.message.role === "assistant")
+        .map((event) => event.message.stopReason),
+      ["stop", "error"],
+      "backoff abort must be handled without a new aborted assistant message",
+    );
+    assert.deepEqual(
+      harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.aborted),
+      [false, !retryOnly],
+    );
+    assert.equal(continuationMessages(harness.session).length, 1);
+    assert.deepEqual(managedRunStatuses(harness), retryOnly ? ["active"] : ["active", "paused"]);
+    assert.equal(harness.session.isRetrying, false);
+    assert.equal(harness.session.pendingMessageCount, 0);
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+async function managedNativeRetryWaitScenario() {
+  const harness = await createHarness(
+    [
+      fauxAssistantMessage("Initial unfinished result."),
+      ...Array.from({ length: 3 }, () => providerError("HTTP 524: upstream timeout")),
+      completionResponse,
+    ],
+    {},
+    undefined,
+    { rpc: { enabled: true }, continuationLimits: { automaticTurns: 5, noProgressTurns: null } },
+    { retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 } },
+    { runId: crypto.randomUUID(), objective: "retain managed ownership through native exhaustion" },
+  );
+  try {
+    await waitFor(() => persistedGoalState(harness.session)?.goal?.waiting, "managed provider exhaustion wait");
+    await harness.session.waitForIdle();
+    assertNativeRetries(harness, [1, 2], false, 1);
+    const waitingGoal = persistedGoalState(harness.session)?.goal;
+    assert.equal(waitingGoal?.status, "active");
+    assert.equal(waitingGoal.automaticModelTurns, 3, "every native attempt retains automatic ownership");
+    assert.equal(waitingGoal.waiting.resumeAt, undefined);
+    assert.equal(harness.faux.state.callCount, 4);
+    assert.equal(continuationMessages(harness.session).length, 1);
+    assert.deepEqual(managedRunStatuses(harness), ["active"]);
+    harness.cancelManagedRun("Cancel the waiting managed run.");
+    await waitFor(() => harness.managedRunEvents.length === 2, "one managed cancellation terminal");
+    await harness.session.waitForIdle();
+    assert.equal(persistedGoalStatus(harness.session), "paused");
+    assert.deepEqual(managedRunStatuses(harness), ["active", "paused"]);
+    assert.ok(harness.managedRunEvents.every((event) => event.goalId === waitingGoal.id));
+    assert.equal(harness.faux.state.callCount, 4, "managed cancellation must not wake provider work");
+    assert.equal(harness.faux.getPendingResponseCount(), 1);
+    assert.equal(continuationMessages(harness.session).length, 1);
   } finally {
     await harness.cleanup();
   }
@@ -477,10 +713,15 @@ async function pauseScenario() {
 async function staleBlockedToolAbortScenario() {
   const observedSignals = [];
   const harness = await createHarness([
-    fauxAssistantMessage("", {
-      stopReason: "error",
-      errorMessage: "Unauthorized: invalid API key",
-    }),
+    (context) =>
+      fauxAssistantMessage(
+        fauxToolCall("goal_blocked", {
+          goal_id: goalIdFromContext(context),
+          reason: "External permission is required.",
+          evidence: "The same external permission was denied on three separate Goal turns.",
+          repeated_turns: 3,
+        }),
+      ),
     fauxAssistantMessage(fauxToolCall("budget_probe", {})),
     (_context, options) => {
       observedSignals.push(options?.signal?.aborted === true);
@@ -600,24 +841,85 @@ async function managedRunDisabledScenario() {
   }
 }
 
+async function nativeLengthCompactionScenario() {
+  for (const outcome of ["success", "failure", "abort"]) {
+    const succeeded = outcome === "success";
+    let summaryStarted = false;
+    const summaryResponse = async (_context, options) => {
+      summaryStarted = true;
+      if (outcome === "abort" && !options.signal.aborted) {
+        await new Promise((resolve) => options.signal.addEventListener("abort", resolve, { once: true }));
+      }
+      if (outcome === "failure") return providerError("Invalid summary request");
+      return fauxAssistantMessage("Compacted prior work.");
+    };
+    const harness = await createHarness(
+      [
+        fauxAssistantMessage("Initial unfinished result."),
+        fauxAssistantMessage("Partial automatic response.", { stopReason: "length" }),
+        summaryResponse,
+        fauxAssistantMessage("Recovered automatic response."),
+        completionResponse,
+      ],
+      {},
+      seedCompactionHistory,
+      { continuationLimits: { automaticTurns: 4, noProgressTurns: null } },
+      { compaction: { enabled: true } },
+    );
+    try {
+      await harness.session.prompt(`/goal native length compaction ${outcome} smoke`);
+      await waitFor(() => summaryStarted, `native length ${outcome} summary request`);
+      if (outcome === "abort") harness.session.abortCompaction();
+      await waitFor(
+        () => harness.sdkEvents.filter((event) => event.type === "agent_settled").length >= (succeeded ? 3 : 2),
+        `native length ${outcome} settlement`,
+      );
+      await harness.session.waitForIdle();
+      assert.equal(harness.faux.state.callCount, succeeded ? 5 : 3, `${outcome}: native compaction owns the retry`);
+      assert.equal(harness.faux.getPendingResponseCount(), succeeded ? 0 : 2);
+      assert.equal(persistedGoalStatus(harness.session), succeeded ? null : outcome === "abort" ? "paused" : "blocked");
+      assert.equal(persistedGoalState(harness.session)?.goal?.waiting, undefined);
+      assertNativeRetries(harness, [], false);
+      const starts = harness.sdkEvents.filter((event) => event.type === "compaction_start");
+      const ends = harness.sdkEvents.filter((event) => event.type === "compaction_end");
+      assert.equal(starts.length, 1);
+      assert.equal(starts[0].continuationCount, 1, "no continuation before native compaction");
+      assert.equal(starts[0].goal?.automaticModelTurns, 1);
+      assert.equal(ends.length, 1);
+      assert.equal(ends[0].reason, "overflow");
+      assert.equal(ends[0].aborted, outcome === "abort");
+      assert.equal(harness.sdkEvents.filter((event) => event.type === "agent_settled").at(-1)?.aborted, false);
+      assert.equal(ends[0].willRetry, succeeded);
+      assert.equal(ends[0].continuationCount, 1, "compaction must not queue a duplicate continuation");
+      assert.deepEqual(
+        harness.compactionEvents.map((event) => [event.type, event.reason, event.willRetry]),
+        [
+          ["session_before_compact", "overflow", true],
+          [succeeded ? "session_compact" : "session_compact_failed", "overflow", succeeded],
+        ],
+      );
+      assert.equal(continuationMessages(harness.session).length, succeeded ? 2 : 1);
+      assert.deepEqual(
+        harness.sdkEvents.filter((event) => event.type === "agent_settled").map((event) => event.providerCalls),
+        succeeded ? [1, 4, 5] : [1, 3],
+      );
+      assert.ok(
+        persistedGoalHistory(harness.session).some((goal) => goal.automaticModelTurns === (succeeded ? 2 : 1)),
+        "length compaction recovery must retain automatic accounting",
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  }
+}
+
 async function manualCompactionScenario() {
   const now = Date.now();
   const harness = await createHarness(
     [fauxAssistantMessage("Compacted prior work."), completionResponse],
     {},
     (sessionManager) => {
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: `Old request ${"x".repeat(100_000)}` }],
-        timestamp: now - 4_000,
-      });
-      sessionManager.appendMessage(fauxAssistantMessage(`Old result ${"y".repeat(100_000)}`));
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: "Recent request" }],
-        timestamp: now - 2_000,
-      });
-      sessionManager.appendMessage(fauxAssistantMessage("Recent result"));
+      seedCompactionHistory(sessionManager, now);
       sessionManager.appendCustomEntry("goal-state", {
         goal: {
           id: crypto.randomUUID(),
@@ -663,6 +965,17 @@ await runawayNoProgressScenario();
 await automaticToolLoopLimitScenario();
 await retryAtHardLimitScenario();
 await automaticRetryOwnershipScenario();
+await nativeRetryExhaustionScenario();
+await nativeRetryClassificationScenario();
+await unknownAssistantErrorWaitScenario();
+await managedUnknownErrorWaitScenario();
+await unknownErrorFullAbortScenario();
+await unknownErrorSafetyScenario();
+await unknownErrorThresholdCompactionScenario();
+await explicitWaitErrorScenario();
+await nativeBackoffAbortScenario("session");
+await nativeBackoffAbortScenario("retry");
+await managedNativeRetryWaitScenario();
 await queuedInputScenario();
 await busyEditOwnershipScenario();
 await pauseScenario();
@@ -672,7 +985,8 @@ await budgetViolationScenario();
 await budgetAgentEndFallbackScenario();
 await managedRunRpcScenario();
 await managedRunDisabledScenario();
+await nativeLengthCompactionScenario();
 await manualCompactionScenario();
 console.log(
-  "pi-goal runtime smoke: normal, runaway guards, retry and busy-edit ownership, queued input, pause, stale blocked-tool aborts, managed-run RPC, terminal budget stops, and manual compaction passed",
+  "pi-goal runtime smoke: existing lifecycle, native retry/compaction, ownership, explicit blocked-tool, and budget scenarios; unknown assistant quiet waiting, same-ID completion, managed cancellation, hard-cap/budget protection, and threshold compaction passed",
 );

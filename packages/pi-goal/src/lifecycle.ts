@@ -50,8 +50,11 @@ export function registerGoalLifecycle(
   // starts true so handlers keep working on runners where session_start was
   // never emitted (for example late extension loading).
   let sessionActive = true;
+  let endedGoalRun: { goalId: string; aborted: boolean } | undefined;
   pi.on("session_start", async (_event, ctx) => {
     sessionActive = true;
+    runtime.pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     runtime.bindWorkflowSession(ctx.sessionManager);
     runtime.replaceMenuSession();
     runtime.clearCompletionStatusTimer();
@@ -145,6 +148,8 @@ export function registerGoalLifecycle(
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
+    runtime.pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     const shutdownSession = ctx.sessionManager;
     runController.unbindSession();
     runtime.closeMenuSession();
@@ -182,10 +187,20 @@ export function registerGoalLifecycle(
       return;
     }
     if (!runtime.recordGoalUsage(runtime.activeGoal, ctx)) return;
+    if (event.willRetry === true) claimCompactionRecovery(runtime.activeGoal.id);
     runtime.cancelContinuationWork();
     runtime.persistGoal(runtime.activeGoal);
     runtime.updateStatus(ctx, runtime.activeGoal);
     if (runtime.limitActiveGoalForBudget(ctx, false)) return { cancel: true as const };
+  });
+
+  pi.on("session_compact_failed", (event) => {
+    if (!sessionActive || !runtime.ownsWorkflow() || !runtime.activeGoal) return;
+    // A repeated length failure ends recovery without another before_compact.
+    if (event.reason === "overflow") claimCompactionRecovery(runtime.activeGoal.id);
+    // Native compaction-only cancellation does not set agent_settled.aborted.
+    // An independent manual compaction has no ended run and cannot pause a Goal.
+    if (event.aborted && endedGoalRun?.goalId === runtime.activeGoal.id) endedGoalRun.aborted = true;
   });
 
   pi.on("session_compact", async (event, ctx) => {
@@ -218,7 +233,9 @@ export function registerGoalLifecycle(
     if (!usageRecorded) return;
 
     const wasPiRetry = runtime.isPiOwnedCompactionRetry(event, runtime.activeGoal.id);
-    if (wasPiRetry) return;
+    // Threshold compaction can follow a provider error without retrying it.
+    // Keep that error pending so settlement waits instead of sending a new turn.
+    if (wasPiRetry || runtime.hasActiveGoalRecovery()) return;
     runtime.clearGoalRecoveryForGoal(runtime.activeGoal.id);
     runtime.requestContinuation(runtime.activeGoal);
     // Pi emits session_compact before it clears its manual-compaction controller,
@@ -247,6 +264,7 @@ export function registerGoalLifecycle(
       if (event.streamingBehavior === "steer" || event.streamingBehavior === "followUp") {
         runtime.noteQueuedNonGoalInput(event.text, event.streamingBehavior);
       }
+      runtime.pendingLengthRecovery = undefined;
       runtime.clearGoalRecovery();
       return;
     }
@@ -259,6 +277,7 @@ export function registerGoalLifecycle(
     if (event.streamingBehavior === "steer") {
       runtime.noteQueuedNonGoalInput(event.text, "steer");
     }
+    runtime.pendingLengthRecovery = undefined;
     runtime.clearGoalRecovery();
     runtime.clearBudgetWrapUp();
     runtime.clearStaleGoalToolCallBlock();
@@ -397,6 +416,8 @@ export function registerGoalLifecycle(
   pi.on("before_agent_start", (event, ctx) => {
     // Custom runs use message_start to establish non-goal ownership.
     if (!sessionActive || event.messageType === "custom") return;
+    runtime.pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     runtime.clearAgentRun();
     // Pi-owned retries emit agent_start directly. Reaching a normal prompt
     // boundary means cleanup no longer owns the next run, so the hard-cap guard
@@ -463,6 +484,8 @@ export function registerGoalLifecycle(
 
   pi.on("agent_start", (_event, _ctx) => {
     if (!sessionActive) return;
+    runtime.pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     const activeGoal = runtime.activeGoal;
     if (activeGoal && runtime.guardAbortGoalId === activeGoal.id && activeGoal.status === "paused") {
       if (runtime.consumeQueuedNonGoalFollowUpForAgentStart()) {
@@ -489,6 +512,8 @@ export function registerGoalLifecycle(
 
   pi.on("agent_end", (event, ctx) => {
     if (!sessionActive) return;
+    runtime.pendingLengthRecovery = undefined;
+    endedGoalRun = undefined;
     const run = runtime.finishAgentRun();
     if (run.goalId === null) return;
     if (!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp()) return;
@@ -506,6 +531,7 @@ export function registerGoalLifecycle(
     }
 
     const goalId = runtime.activeGoal.id;
+    endedGoalRun = { goalId, aborted: false };
     const alreadyAwaitingContinuation = runtime.hasContinuationWorkForGoal(goalId);
     const finalAssistant = findFinalAssistantMessage(event.messages);
 
@@ -519,31 +545,39 @@ export function registerGoalLifecycle(
     }
 
     if (finalAssistant?.stopReason === "error") {
-      if (isRetryableGoalInterruption(finalAssistant)) {
-        if (run.origin === "automatic" && runtime.enforceAutomaticTurnLimit(ctx, true)) return;
-        if (runtime.limitActiveGoalForBudget(ctx, false)) return;
-        if (!runtime.goalToolsAvailable()) {
-          runtime.pauseGoalForUnavailableTools(ctx);
-          return;
-        }
-        runtime.goalRecovery = {
-          goalId,
-          kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
-          automaticOwner: run.origin === "automatic",
-          errorMessage: finalAssistant.errorMessage,
-        };
-        runtime.cancelContinuationWork();
-        runtime.persistGoal(runtime.activeGoal);
-        runtime.updateStatus(ctx, runtime.activeGoal);
+      const nativeRecovery = isRetryableGoalInterruption(finalAssistant);
+      if (!nativeRecovery && isUsageLimitedGoalInterruption(finalAssistant)) {
+        runtime.clearGoalRecoveryForGoal(goalId);
+        stopGoalAfterAgentEnd(ctx, runtime.activeGoal, finalAssistant, "usage_limited");
         return;
       }
-      runtime.clearGoalRecoveryForGoal(goalId);
-      stopGoalAfterAgentEnd(
-        ctx,
-        runtime.activeGoal,
-        finalAssistant,
-        isUsageLimitedGoalInterruption(finalAssistant) ? "usage_limited" : "blocked",
-      );
+      if (
+        run.origin === "automatic" &&
+        (runtime.enforceAutomaticTurnLimit(ctx, true) || runtime.enforceNoProgressLimit(ctx, true))
+      ) {
+        return;
+      }
+      if (runtime.limitActiveGoalForBudget(ctx, false)) return;
+      if (!runtime.goalToolsAvailable()) {
+        runtime.pauseGoalForUnavailableTools(ctx);
+        return;
+      }
+      // Waiting does not grant retry eligibility. Pi still owns every attempt.
+      runtime.goalRecovery = {
+        goalId,
+        kind: isGoalContextOverflow(finalAssistant)
+          ? "compaction_retry"
+          : nativeRecovery
+            ? "provider_retry"
+            : "provider_error",
+        automaticOwner: run.origin === "automatic",
+        errorMessage: finalAssistant.errorMessage,
+      };
+      runtime.cancelContinuationWork();
+      runtime.persistGoal(runtime.activeGoal);
+      if (runtime.activeGoal?.id === goalId && runtime.ownsWorkflow(runtime.activeGoal)) {
+        runtime.updateStatus(ctx, runtime.activeGoal);
+      }
       return;
     }
 
@@ -553,6 +587,15 @@ export function registerGoalLifecycle(
     if (!runtime.goalToolsAvailable()) {
       runtime.pauseGoalForUnavailableTools(ctx);
       return;
+    }
+    if (finalAssistant?.stopReason === "length") {
+      // Reserve before either progress or final-state publication: a reentrant
+      // goal_wait invalidates old work, while a later length response is fresh.
+      runtime.pendingLengthRecovery = {
+        goalId,
+        kind: "compaction_retry",
+        automaticOwner: run.origin === "automatic",
+      };
     }
     if (
       run.origin === "automatic" &&
@@ -566,27 +609,41 @@ export function registerGoalLifecycle(
       return;
     }
 
-    runtime.persistGoal(runtime.activeGoal);
-    runtime.updateStatus(ctx, runtime.activeGoal);
-
     const currentGoal = runtime.activeGoal;
-    if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
-    runtime.requestContinuation(currentGoal);
+    if (!currentGoal || currentGoal.id !== goalId || !runtime.ownsWorkflow(currentGoal)) return;
+    runtime.persistGoal(currentGoal);
+    const persistedGoal = runtime.activeGoal;
+    if (!persistedGoal || persistedGoal.id !== goalId || !runtime.ownsWorkflow(persistedGoal)) return;
+    runtime.updateStatus(ctx, persistedGoal);
+    runtime.requestContinuation(persistedGoal);
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", (event, ctx) => {
     if (!sessionActive) return;
+    runtime.pendingLengthRecovery = undefined;
+    const settledRun = endedGoalRun;
+    endedGoalRun = undefined;
     if (runtime.activeGoal?.status === "active" && !runtime.ownsWorkflow(runtime.activeGoal)) {
       runtime.cancelContinuationWork();
       runtime.clearGoalRecovery();
       runtime.clearSettledSafetyTracking();
       return;
     }
-    runtime.finalizeSettledRecovery(ctx);
+    runtime.finalizeSettledRecovery(ctx, event.aborted === true || settledRun?.aborted === true, settledRun?.goalId);
     const resumedWait = runtime.dispatchDueGoalWait(ctx);
     if (!resumedWait) runtime.dispatchContinuationIfSettled(ctx);
     runtime.clearSettledSafetyTracking();
   });
+
+  function claimCompactionRecovery(goalId: string) {
+    const lengthRecovery = runtime.pendingLengthRecovery?.goalId === goalId ? runtime.pendingLengthRecovery : undefined;
+    if (lengthRecovery) runtime.pendingLengthRecovery = undefined;
+    const recovery = lengthRecovery ?? (runtime.goalRecovery?.goalId === goalId ? runtime.goalRecovery : undefined);
+    if (!recovery) return;
+    // Pi's public compaction events confirm recovery for this matching run.
+    runtime.goalRecovery = { ...recovery, kind: "compaction_retry" };
+    runtime.cancelContinuationWork();
+  }
 
   function goalContractBoundaryResult(ctx: StatusContext, goal?: ActiveGoal) {
     const message = runtime.goalContextContractForPrompt(ctx, goal);
@@ -594,6 +651,7 @@ export function registerGoalLifecycle(
   }
 
   function beginNonGoalFollowUp(ctx: StatusContext, resetSafetyEpoch: boolean) {
+    runtime.pendingLengthRecovery = undefined;
     runtime.clearGoalRecovery();
     runtime.clearStaleGoalToolCallBlock();
     if (resetSafetyEpoch) runtime.clearBudgetWrapUp();
@@ -606,7 +664,7 @@ export function registerGoalLifecycle(
     ctx: StatusContext,
     goal: ActiveGoal,
     assistant: AssistantMessageLike,
-    status: "paused" | "blocked" | "usage_limited",
+    status: "paused" | "usage_limited",
   ) {
     const stoppedGoal = runtime.stopActiveGoal(ctx, {
       kind: "agent_interruption",
@@ -621,17 +679,9 @@ export function registerGoalLifecycle(
       notifyTerminal(ctx.ui, `Goal paused after interruption${details}. Run /goal resume to continue.`, "warning");
       return;
     }
-    if (status === "usage_limited") {
-      notifyTerminal(
-        ctx.ui,
-        `Goal stopped after provider usage limit${details}. Run /goal resume when usage is available.`,
-        "warning",
-      );
-      return;
-    }
     notifyTerminal(
       ctx.ui,
-      `Goal blocked after agent error${details}. Resolve the blocker or run /goal resume to retry.`,
+      `Goal stopped after provider usage limit${details}. Run /goal resume when usage is available.`,
       "warning",
     );
   }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import goal from "../src/goal.js";
+import type { ActiveGoal } from "../src/persistence.js";
 
 const START_CHANNEL = "pi-goal:start";
 const CANCEL_CHANNEL = "pi-goal:cancel";
@@ -103,7 +104,7 @@ function errors(events: RunEvent[]) {
 
 function lastPersistedGoal(mock: ReturnType<typeof createMockPi>) {
   const entry = mock.entries.filter((candidate) => candidate.customType === "goal-state").at(-1);
-  return (entry?.data as { goal?: { id?: string; status?: string; text?: string; tokenBudget?: number } })?.goal;
+  return (entry?.data as { goal?: ActiveGoal })?.goal;
 }
 
 function requireGoalTool(mock: ReturnType<typeof createMockPi>, name: string) {
@@ -552,7 +553,13 @@ test("terminal listeners cannot make stale pause work mutate a replacement", asy
   );
 });
 
-test("provider retry exhaustion keeps a managed run active until later completion", async () => {
+test.each([
+  "HTTP 429: retry shortly",
+  "Connection prematurely closed BEFORE response",
+  "Unauthorized: invalid API key",
+  "400: invalid_request_error: unsupported parameter",
+  undefined,
+])("provider error keeps a managed run active until later completion: %s", async (errorMessage) => {
   const mock = createMockPi({ activeTools: ["read", "bash"] });
   registerGoal(mock);
   const context = bindSession(mock);
@@ -568,13 +575,17 @@ test("provider retry exhaustion keeps a managed run active until later completio
         {
           role: "assistant",
           stopReason: "error",
-          errorMessage: "HTTP 429: retry shortly",
+          errorMessage,
         },
       ],
     },
     context.ctx,
   );
+  assert.equal(lastPersistedGoal(mock)?.waiting, undefined, "wait only after settlement");
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  assert.equal(lastPersistedGoal(mock)?.id, goalId);
+  assert.ok(lastPersistedGoal(mock)?.waiting);
+  assert.equal(lastPersistedGoal(mock)?.waiting?.resumeAt, undefined);
   assert.deepEqual(
     states(events).map((event) => event.status),
     ["active"],
