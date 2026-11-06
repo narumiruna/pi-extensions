@@ -6,7 +6,9 @@ Main pushes and manual release runs on main run `.github/workflows/publish.yml`;
 flowchart TD
     Push[Push to main or manual release run] --> CI[Reusable CI: check and test]
     CI --> Select[Select Changesets mode]
-    Select -->|version| Version[Create or update Version PR]
+    Select -->|version| Plan{Package versions would change?}
+    Plan -->|Yes| Version[Create or update Version PR]
+    Plan -->|No| Skip
     Select -->|publish| Pack[Build and pack unpublished packages]
     Select -->|none| Skip[No release work]
     Pack --> Guard[Validate packed plan and local integrity]
@@ -14,7 +16,9 @@ flowchart TD
     Publish --> Reports[Action pushes tags and creates releases from native reports]
 ```
 
-Changesets selects `version` when there are non-empty pending changesets. Merging the Version PR consumes these changesets and updates manifests, changelogs, and the lockfile. The next main push selects `publish` if unpublished package versions remain. Empty-only changesets or no unpublished versions select `none`. CI failure blocks all release jobs.
+Changesets selects `version` when there are non-empty pending changesets, including changesets for packages excluded from versioning. Before the Version PR action, `scripts/check-version-plan.mjs` runs `changeset status --output` and permits the action only if the plan changes a package version. Private-only changesets with `privatePackages.version: false`, ignored-only changesets, and other no-op plans skip PR creation and updates. Plan failures fail the job instead of permitting a PR. Skipped changesets remain pending; the guard does not switch to publishing.
+
+Merging a Version PR consumes its versioned changesets and updates manifests, changelogs, and the lockfile. The next main push selects `publish` if no pending changesets remain and unpublished package versions exist. Empty-only changesets or no unpublished versions select `none`. CI failure blocks all release jobs.
 
 ## Permissions and authentication
 

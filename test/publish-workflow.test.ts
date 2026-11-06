@@ -9,6 +9,23 @@ import { test } from "vitest";
 const repositoryRoot = process.cwd();
 const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/publish.yml"), "utf8");
 
+test("version workflow checks the effective release plan before creating or updating a PR", () => {
+  const version = workflow.slice(workflow.indexOf("  version:\n"), workflow.indexOf("  pack:\n"));
+  const installIndex = version.indexOf("      - name: Install dependencies\n");
+  const guardIndex = version.indexOf("      - name: Check for package version changes\n");
+  const actionIndex = version.indexOf("      - name: Create or update version pull request\n");
+  assert.ok(installIndex >= 0 && guardIndex > installIndex && actionIndex > guardIndex);
+  assert.match(
+    version.slice(guardIndex, actionIndex),
+    /id: release-plan\n {8}run: node \.\/scripts\/check-version-plan\.mjs/u,
+  );
+  assert.match(
+    version.slice(actionIndex),
+    /if: steps\.release-plan\.outputs\.has-releases == 'true'\n {8}uses: changesets\/action\/version@/u,
+  );
+  assert.match(version.slice(actionIndex), /script: npm run version-packages/u);
+});
+
 test("publish workflow uses native Changesets artifact publishing without duplicate root gates", () => {
   const publish = workflow.slice(workflow.indexOf("  publish:\n"));
   assert.match(publish, /actions\/download-artifact@[a-f0-9]{40}/u);
