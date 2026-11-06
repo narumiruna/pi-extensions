@@ -165,7 +165,7 @@ it("delivers one settled work period to Telegram, Gotify, and Slack from the bui
       new Response(
         url === webhookUrl
           ? "ok"
-          : String(url).includes("push.example.com")
+          : url === "https://push.example.com/base/message"
             ? JSON.stringify({ id: 1, appid: 1, message: "accepted", date: "2026-07-06T00:00:00Z" })
             : '{"ok":true,"result":{}}',
       ),
@@ -236,11 +236,12 @@ it("delivers one settled work period through mixed existing, LINE, and Teams pro
     }),
   );
   fetcher.mockImplementation(async (url) => {
-    if (String(url).startsWith("https://ntfy.example"))
+    if (url === "https://ntfy.example/base")
       return Response.json({ id: "event", time: 1, event: "message", topic: "builds", message: "accepted" });
-    if (String(url).startsWith("https://api.pushover.net")) return Response.json({ status: 1 });
-    if (String(url).startsWith("https://discord.com")) return Response.json({ id: "123", channel_id: "456", type: 0 });
-    if (String(url).startsWith("https://bark.example")) return Response.json({ code: 200 });
+    if (url === "https://api.pushover.net/1/messages.json") return Response.json({ status: 1 });
+    if (url === "https://discord.com/api/webhooks/123456789012345678/DiscordSecret?wait=true")
+      return Response.json({ id: "123", channel_id: "456", type: 0 });
+    if (url === "https://bark.example/base/push") return Response.json({ code: 200 });
     if (url === "https://api.line.me/v2/bot/message/push")
       return Response.json({ sentMessages: [{ id: "461230966842064897" }] });
     return new Response(null, { status: 202 });
@@ -309,7 +310,7 @@ it.each(["rpc", "print", "json"])("uses settlement fallback in %s, rejects or ex
   fetcher.mockImplementation(async (url) =>
     url === teamsWebhookUrl
       ? new Response("Accepted", { status: 202 })
-      : String(url).startsWith("https://api.telegram.org")
+      : url === `https://api.telegram.org/bot${token}/sendMessage`
         ? Response.json({ ok: true, result: {} })
         : Response.json({ sentMessages: [{ id: "461230966842064897" }] }),
   );

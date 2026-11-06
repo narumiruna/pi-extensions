@@ -99,11 +99,15 @@ test("review preserves whitespace, sanitizes controls, and bounds exact text at 
       lines.every((line) => visibleWidth(line) <= width),
       `width ${width}`,
     );
-    assert.equal(lines.join("\n").includes("\u001b]8;;https://unsafe.example"), false);
+    const rendered = lines.join("\n");
+    assert.equal(rendered.includes("\u001b]8;;"), false);
+    assert.equal(rendered.includes("\u0007"), false);
+    assert.equal(rendered.includes("https:"), false);
   }
   const rendered = stripVTControlCharacters(harness.component.render(80).join("\n"));
   assert.match(rendered, / {2}indented {2,}value/);
   assert.match(rendered, /你🙂very-long-token/);
+  assert.match(rendered, /^unsafetext$/mu);
 });
 
 test("fixed and default review frames use consistent rules and preserve content", () => {
@@ -397,8 +401,11 @@ test("review renders semantic Markdown, LaTeX, code, controls, and cache invalid
       lines.every((line) => visibleWidth(line) <= width),
       `width ${width}`,
     );
-    assert.equal(lines.join("\n").includes("https://unsafe.example"), false);
-    assert.equal(lines.join("\n").includes("\u202e"), false);
+    const rendered = lines.join("\n");
+    assert.equal(rendered.includes("\u001b]8;;"), false);
+    assert.equal(rendered.includes("\u0007"), false);
+    assert.equal(rendered.includes("https:"), false);
+    assert.equal(rendered.includes("\u202e"), false);
   }
   const rendered = plainRender(harness.component, 80);
   assert.match(rendered, /^Formula\s*$/mu);
@@ -472,10 +479,17 @@ test("review renders fitting Mermaid art lazily and preserves mixed Markdown", a
 
   const running = runMenu(context.ctx, menu, { getState: () => undefined });
   await tui.waitForOpen();
-  const narrow = stripVTControlCharacters(tui.resize({ width: 18 }).join("\n"));
+  const narrowFrame = tui.resize({ width: 18 }).join("\n");
+  assert.equal(narrowFrame.includes("\u001b]8;;"), false);
+  assert.equal(narrowFrame.includes("\u0007"), false);
+  assert.equal(narrowFrame.includes("https:"), false);
+  const narrow = stripVTControlCharacters(narrowFrame);
   assert.match(narrow, /flowchart/u);
-  assert.doesNotMatch(narrow, /https:\/\/unsafe\.example/u);
-  const wide = stripVTControlCharacters(tui.resize({ width: 120 }).join("\n"));
+  const wideFrame = tui.resize({ width: 120 }).join("\n");
+  assert.equal(wideFrame.includes("\u001b]8;;"), false);
+  assert.equal(wideFrame.includes("\u0007"), false);
+  assert.equal(wideFrame.includes("https:"), false);
+  const wide = stripVTControlCharacters(wideFrame);
   assert.match(wide, /Before diagram\./u);
   assert.match(wide, /After diagram\./u);
   assert.match(wide, /plain ` tick/u);
@@ -669,9 +683,12 @@ test("intraline diff remains width-safe, searchable, and sanitized with tabs and
   for (const width of [1, 2, 8, 16, 40]) {
     const lines = harness.component.render(width);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    assert.equal(lines.join("\n").includes("unsafe.example"), false);
+    const rendered = lines.join("\n");
+    assert.equal(rendered.includes("\u001b]8;;"), false);
+    assert.equal(rendered.includes("\u0007"), false);
+    assert.equal(rendered.includes("https:"), false);
   }
-  harness.component.render(80);
+  assert.match(plainRender(harness.component, 80), /unsafeold/u);
   harness.component.handleInput(" ");
   harness.component.handleInput("safe-new");
   assert.match(plainRender(harness.component, 80), /1\/1/u);

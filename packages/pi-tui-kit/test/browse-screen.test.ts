@@ -200,7 +200,11 @@ test("browse exact details preserve documents, precedence, search identity, and 
   assert.match(rendered, /^ {4}tabbed$/mu);
   assert.match(rendered, /^你🙂wide$/mu);
   assert.doesNotMatch(rendered, /Status:|Legacy description|legacy detail must not render/u);
-  assert.equal(harness.component.render(40).join("\n").includes("https://unsafe.example"), false);
+  const rawDetail = harness.component.render(40).join("\n");
+  assert.equal(rawDetail.includes("\u001b]8;;"), false);
+  assert.equal(rawDetail.includes("\u0007"), false);
+  assert.equal(rawDetail.includes("https:"), false);
+  assert.match(rendered, /^unsafetext$/mu);
   assert.equal(
     harness.component.render(8).every((line) => visibleWidth(line) <= 8),
     true,
