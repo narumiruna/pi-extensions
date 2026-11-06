@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-edit-scope",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Limit Pi file edits to user-selected targets while keeping other files readable.",
   "type": "module",
   "license": "MIT",
