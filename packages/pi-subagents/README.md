@@ -22,18 +22,19 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 
 ## 📦 Install
 
-The version 3 runtime documented here is not yet published to npm.
-The npm package still contains the legacy 2.x runtime and does not provide the tools below.
-
-Install the repository source as one Pi package:
+Install from npm:
 
 ```bash
-pi install git:github.com/narumiruna/pi-extensions
+pi install npm:@narumitw/pi-subagents
 ```
 
-This Git installation enables every extension listed in the repository root manifest, including Pi Subagents.
+Try it for one invocation:
 
-To install only Pi Subagents, clone the repository, install dependencies, build its generated runtime, and install its package directory:
+```bash
+pi -e npm:@narumitw/pi-subagents
+```
+
+To install from a local checkout, clone the repository, install dependencies, build its generated runtime, and install its package directory:
 
 ```bash
 git clone https://github.com/narumiruna/pi-extensions.git

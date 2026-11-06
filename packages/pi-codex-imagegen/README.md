@@ -6,7 +6,7 @@
 
 Generate images from Pi through the Codex image endpoint, without starting Codex CLI, an agent, or its plugins.
 
-> **Endpoint:** The request contract is confirmed against [OpenAI Codex source](./docs/protocol.md#source-mapping). This uses an internal ChatGPT endpoint, not the public OpenAI Images API. Real account access and transparent output have not been verified. The endpoint can change or reject third-party clients. Do not publish the initial package until the [live checks](./docs/verification.md) pass and publication is explicitly approved.
+> **Endpoint:** The request contract is confirmed against [OpenAI Codex source](./docs/protocol.md#source-mapping). This uses an internal ChatGPT endpoint, not the public OpenAI Images API. Real account access and transparent output have not been verified. The endpoint can change or reject third-party clients. See the [verification guide](./docs/verification.md) for the remaining live checks.
 
 ## ✨ Features
 
@@ -17,7 +17,19 @@ Generate images from Pi through the Codex image endpoint, without starting Codex
 
 ## 📦 Install
 
-This new package is currently source-only; registry installation is unavailable before its first approved publication. Extensions run with Pi's permissions. Review the source before loading it.
+Extensions run with Pi's permissions. Review the source before installing or loading it.
+
+Install from npm:
+
+```bash
+pi install npm:@narumitw/pi-codex-imagegen
+```
+
+Try it for one invocation:
+
+```bash
+pi -e npm:@narumitw/pi-codex-imagegen
+```
 
 From the repository root:
 
