@@ -20,6 +20,11 @@ import {
 
 type StartedGoalFixture = Awaited<ReturnType<typeof startGoalForTest>>;
 
+const PREMATURE_CONNECTION_CLOSE_ERROR =
+  '400: {"message":"data:{\\"error\\":{\\"code\\":\\"400\\",\\"message\\":\\"Request failed\\",' +
+  '\\"param\\":\\"Connection prematurely closed BEFORE response\\",\\"type\\":\\"\\"},' +
+  '\\"request_id\\":\\"0ddb…\\"}}","type":"invalid_request_error"}';
+
 async function exhaustProviderRetries(fixture: StartedGoalFixture, errorMessage = "HTTP 429: retry shortly") {
   await fixture.mock.events.get("agent_end")?.[0]?.(
     {
@@ -94,6 +99,46 @@ test("usage-limit classification recognizes quota failures without swallowing un
     );
   }
 });
+
+test.each([
+  ["escaped proxy error", PREMATURE_CONNECTION_CLOSE_ERROR],
+  ["plain connection error", "Connection prematurely closed BEFORE response"],
+  ["uppercase connection error", "CONNECTION PREMATURELY CLOSED BEFORE RESPONSE"],
+  ["premature stream ending", "Stream prematurely ended"],
+  ["existing premature ending", "Premature end"],
+])("premature interruption remains retryable: %s", (_name, errorMessage) => {
+  assert.equal(isRetryableGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }), true);
+});
+
+test.each([
+  "400: invalid_request_error: unsupported parameter",
+  "Permission denied by remote service",
+  "Connection closed BEFORE response",
+  "Response closed normally",
+  ...[
+    "Unauthorized",
+    "Unauthorised",
+    "Invalid API key",
+    "Multi-auth rotation failed",
+    "2 credentials tried",
+    "Usage limit reached",
+    "Quota exhausted",
+    "Credit balance depleted",
+    "Billing hard limit reached",
+  ].map((reason) => `${reason}: ${PREMATURE_CONNECTION_CLOSE_ERROR}`),
+])("non-retryable errors are not overridden: %s", (errorMessage) => {
+  assert.equal(isRetryableGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }), false);
+});
+
+test.each(["stop", "length", "toolUse", "aborted"] as const)(
+  "premature-close wording does not make %s retryable",
+  (stopReason) => {
+    assert.equal(
+      isRetryableGoalInterruption({ role: "assistant", stopReason, errorMessage: PREMATURE_CONNECTION_CLOSE_ERROR }),
+      false,
+    );
+  },
+);
 
 test("agent_end maps abort, quota failure, and terminal error to distinct stopped states", async () => {
   for (const [assistant, status, notification] of [
@@ -335,6 +380,91 @@ test("agent_end keeps retryable interruptions recoverable and stops on non-retry
     ),
     { block: true, reason: STALE_GOAL_TOOL_REASON },
   );
+});
+
+test("a proxied premature connection close keeps the same goal active through waiting and follow-up", async () => {
+  let aborts = 0;
+  const branch: unknown[] = [];
+  const messages: unknown[] = [];
+  const fixture = await startGoalForTest({
+    abort: () => aborts++,
+    sessionManager: {
+      getBranch: () => branch,
+      getEntries: () => branch,
+      buildSessionContext: () => ({ messages }),
+    },
+  });
+  try {
+    const originalId = requireLastGoal(fixture.mock).id;
+    const kickoff = fixture.mock.sentUserMessages[0]?.text ?? "";
+    const boundary = (await fixture.mock.events.get("before_agent_start")?.[0]?.(
+      { prompt: kickoff, systemPrompt: "base" },
+      fixture.ctx,
+    )) as { message?: Record<string, unknown> } | undefined;
+    assert.ok(boundary?.message, "expected the active Goal contract before the provider request");
+    branch.push({ type: "custom_message", ...boundary.message });
+    messages.push({ role: "custom", ...boundary.message });
+    fixture.mock.events.get("agent_start")?.[0]?.({}, fixture.ctx);
+
+    await fixture.mock.events.get("agent_end")?.[0]?.(
+      { messages: [{ role: "assistant", stopReason: "error", errorMessage: PREMATURE_CONNECTION_CLOSE_ERROR }] },
+      fixture.ctx,
+    );
+    const afterEnd = requireLastGoal(fixture.mock);
+    assert.equal(afterEnd.status, "active");
+    assert.equal(afterEnd.id, originalId);
+    assert.equal(afterEnd.waiting, undefined, "waiting must start only at settlement");
+
+    await fixture.mock.events.get("agent_settled")?.[0]?.({}, fixture.ctx);
+    const waiting = requireLastGoal(fixture.mock);
+    assert.equal(waiting.status, "active");
+    assert.equal(waiting.id, originalId);
+    assert.match(waiting.waiting?.reason ?? "", /provider retries exhausted/i);
+    assert.equal(waiting.waiting?.resumeAt, undefined);
+    assert.equal(waiting.activeStartedAt, undefined);
+    assert.equal(aborts, 0);
+    assert.equal(fixture.mock.sentUserMessages.length, 1);
+    assert.equal(
+      fixture.mock.events.get("tool_call")?.[0]?.(
+        { toolName: "bash", toolCallId: "premature-close-recovery", input: {} },
+        fixture.ctx,
+      ),
+      undefined,
+    );
+    assert.equal(
+      fixture.mock.sentMessages.some(({ message }) => {
+        const contract = message as { customType?: string; content?: unknown };
+        return (
+          contract.customType === "goal-contract" &&
+          typeof contract.content === "string" &&
+          contract.content.includes("Goal mode is inactive.")
+        );
+      }),
+      false,
+    );
+
+    const entryCount = fixture.mock.entries.length;
+    await fixture.mock.events.get("agent_settled")?.[0]?.({}, fixture.ctx);
+    assert.equal(fixture.mock.entries.length, entryCount);
+    assert.equal(fixture.mock.sentUserMessages.length, 1);
+
+    startInteractiveFollowUp(fixture);
+    const awakened = requireLastGoal(fixture.mock);
+    assert.equal(awakened.id, originalId);
+    assert.equal(awakened.status, "active");
+    assert.equal(awakened.waiting, undefined);
+    const completed = await requireGoalTool(fixture.mock, "goal_complete").execute(
+      "complete-after-premature-close",
+      { goal_id: originalId, summary: "Completed and verified after the provider connection recovered." },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+    assert.equal(completed.terminate, true);
+    assert.equal(lastGoalStatus(fixture.mock), null);
+  } finally {
+    await fixture.mock.events.get("session_shutdown")?.[0]?.({}, fixture.ctx);
+  }
 });
 
 test("provider retry waiting state restores without dispatching work", async () => {
