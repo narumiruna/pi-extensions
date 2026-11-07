@@ -187,6 +187,58 @@ function restoredGoalContract(mock: ReturnType<typeof createMockPi>) {
 	return latestGoalContract(mock.sentMessages.map((sent) => sent.message));
 }
 
+test("checklist updates retain normalized provider prefixes and stable contracts", async () => {
+	const mock = createMockPi();
+	registerGoalWithSettingsPath(mock.pi, DEFAULT_SETTINGS_PATH);
+	mock.rawPi.setActiveTools([...mock.rawPi.getActiveTools(), "goal_progress"]);
+	const branch: Array<Record<string, unknown>> = [];
+	const { ctx } = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await mock.commands.get("goal")?.handler("verify checklist cache stability", ctx);
+	const kickoff = mock.sentUserMessages.at(-1)?.text ?? "";
+	const before = await captureRequest(mock, ctx, kickoff, [userMessage(kickoff)]);
+	const contract = latestGoalContract(before.messages);
+	branch.push({
+		type: "custom_message",
+		customType: contract.customType,
+		content: contract.content,
+	});
+	const id = requireLastGoal(mock).id;
+	const result = await requireGoalTool(mock, "goal_progress").execute(
+		"progress",
+		{
+			goal_id: id,
+			requirements: [{ id: "cache", text: "Prefix retained", status: "unverified", evidence: "" }],
+		},
+		undefined,
+		undefined,
+		ctx,
+	);
+	const after = await captureRequest(mock, ctx, "continue", [
+		...before.messages,
+		{
+			role: "toolResult",
+			toolCallId: "progress",
+			toolName: "goal_progress",
+			content: result.content,
+		},
+	]);
+	assert.deepEqual(
+		after.serializedInput.slice(0, before.serializedInput.length),
+		before.serializedInput,
+	);
+	assert.equal(after.instructions, before.instructions);
+	assert.deepEqual(after.activeTools, before.activeTools);
+	assert.deepEqual(after.toolDefinitions, before.toolDefinitions);
+	assert.equal(
+		after.messages.filter((m) => (m as { customType?: string }).customType === "goal-contract")
+			.length,
+		1,
+	);
+});
+
 test("Goal activation appends its contract without changing the stable tool schema", async () => {
 	const allTools = [builtinTool("read"), builtinTool("bash")];
 	const mock = createMockPi({ activeTools: ["read", "bash"], allTools });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type KeyId, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
@@ -38,6 +38,84 @@ function commands() {
 		},
 	};
 }
+
+test("recovery review is read-only, sanitized, and cancellable with remapped bindings", async () => {
+	const goal = {
+		...transitionGoal(createGoal("ship", 100, 0), "blocked"),
+		stopReason: "Missing access\u001b[31m",
+		requirements: [{ id: "test", text: "Tests pass", status: "unverified" as const, evidence: "" }],
+	};
+	const state = runtime(goal);
+	const tracked = commands();
+	const bindings: Record<string, KeyId> = {
+		"tui.select.down": "j",
+		"tui.select.up": "k",
+		"tui.select.confirm": "r",
+		"tui.select.cancel": "x",
+	};
+	const tui = createTuiHarness({
+		width: 100,
+		rows: 40,
+		keybindings: {
+			matches: (data, binding) => data === bindings[binding],
+			getKeys: (binding) => (bindings[binding] ? [bindings[binding]] : []),
+		},
+	});
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	try {
+		const running = showGoalManager(
+			state,
+			tracked.controller as never,
+			context.ctx,
+			async () => undefined,
+		);
+		await tui.waitForOpen();
+		for (let i = 0; i < buildGoalMenuState(state).actions.indexOf(GOAL_MENU_ACTIONS.status); i++)
+			tui.send("j");
+		tui.send("r");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		const review = tui.render(100).join("\n");
+		assert.match(review, /Goal recovery review/);
+		assert.match(review, /Missing access/);
+		assert.match(review, /Remaining: 1/);
+		assert.doesNotMatch(review, /→.*Tests pass/);
+		for (const width of [40, 80, 120])
+			assert.ok(tui.render(width).every((line) => visibleWidth(line) <= width));
+		tui.send("\u0003");
+		await running;
+		assert.equal(tracked.calls.length, 0);
+		assert.equal(state.activeGoal, goal);
+	} finally {
+		tui.dispose();
+	}
+});
+
+test("recovery review remains readable through the dialog rendering fallback", async () => {
+	const state = runtime({
+		...transitionGoal(createGoal("ship", 100, 0), "blocked"),
+		stopReason: "Missing access",
+	});
+	const tracked = commands();
+	let review = "";
+	const choices = [GOAL_MENU_ACTIONS.status, "Back"];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async (title: string, options: string[]) => {
+			if (/Goal recovery review/u.test(title)) {
+				review = title;
+				assert.deepEqual(options, ["Back"]);
+			}
+			return choices.shift();
+		},
+	});
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+	assert.match(review, /Why stopped: Missing access/);
+	assert.match(review, /Last recorded evidence: none/);
+	assert.match(review, /Next action:.*resolve.*\/goal resume/i);
+	assert.equal(tracked.calls.length, 0);
+});
 
 test("buildGoalMenuState prioritizes actions for empty, active, stopped, and budget states", () => {
 	const empty = runtime();

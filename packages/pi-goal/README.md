@@ -15,6 +15,9 @@ Explicit completion, blocker, and wait tools give each managed run a clear stopp
 - Renders an accepted `goal_complete` summary as Markdown in the TUI.
 - Tracks active, paused, blocked, usage-limited, budget-limited, waiting, and complete outcomes separately.
 - Pauses after a configurable response limit or repeated no-progress runs and offers a guided review before continuing.
+- Shows saved stop reasons, remaining requirements, recorded evidence, and recovery actions in status and the manager.
+- Warns about repeated identical tool activity without changing safety limits or stopping work.
+- Tracks a persistent, agent-reported requirement/evidence checklist and rejects completion while recorded items remain unverified or blocked.
 - Supports optional token budgets that stop Goal-owned work immediately when exhausted.
 - Keeps Goal continuation accounting out of the leading system instructions so post-activation provider request prefixes remain stable.
 - Persists the goal in the current session across reload, resume, compatible forks, and compaction.
@@ -139,9 +142,21 @@ See [Managing goals](./docs/managing-goals.md) for safety-epoch resets, failed-d
 
 ## 🛠️ Tools
 
-- `goal_complete` records completion only for the exact active goal id, requires an evidence-based summary, and renders an accepted summary as Markdown in the TUI.
+- `goal_complete` records completion only for the exact active goal id, requires an evidence-based summary and verified coverage of any recorded checklist, and renders an accepted summary as Markdown in the TUI.
+- `goal_progress` reads or additively updates the current goal's requirement/evidence checklist; verified items need concrete evidence, but these agent reports are not independent proof.
 - `goal_blocked` records a true repeated impasse with the exact goal id, reason, evidence, and repeated-turn count.
 - `goal_wait` pauses automatic continuation after the agent arranges an external wake source, with an optional bounded resume deadline.
+
+## 🔎 Progress and recovery
+
+Open `/goal` → **View full status** for a read-only review of the stop reason, usage, remaining requirements, recorded evidence, and next recovery action.
+The manager keeps existing resume, limit-review, and budget-increase actions.
+Repeated identical tool calls/results produce a warning only; changed output, legitimate polling, and tool activity do not prove progress or a stall.
+
+The agent can use `goal_progress` to track requirements under stable ids.
+Updates cannot remove requirements or narrow their text; changing the objective starts a fresh checklist, while budget-only edits and resumes preserve it.
+Goals without a checklist retain the existing completion path, and a checklist never replaces auditing the full objective.
+See [Progress and recovery](./docs/progress-and-recovery.md) for the tool contract, restoration, diagnostics, and limitations.
 
 ## 🔁 Session and reload behavior
 

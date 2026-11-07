@@ -1,4 +1,6 @@
 import { formatTokenCount } from "./accounting.js";
+import type { GoalRequirement } from "./progress.js";
+import type { ToolLoopState } from "./tool-loops.js";
 import { MIN_GOAL_WAIT_DELAY_MS } from "./wait.js";
 
 export type GoalStatus =
@@ -21,6 +23,8 @@ export interface GoalPromptContext {
 	timeUsedSeconds: number;
 	baselineTokens: number;
 	activeStartedAt?: number;
+	requirements?: GoalRequirement[];
+	toolLoop?: ToolLoopState;
 }
 
 export function buildGoalPrompt(goal: GoalPromptContext) {
@@ -62,7 +66,7 @@ export function buildGoalContextPrompt(goal: GoalPromptContext) {
 export function buildContinuePrompt(goal: GoalPromptContext, marker: string) {
 	const budgetLine =
 		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}${budgetLine}\n\nThis is automatic continuation #${goal.iteration}. The full objective persists across turns; continue from the authoritative current state.\n\n${goalModeRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
+	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}${budgetLine}\n\nThis is automatic continuation #${goal.iteration}. The full objective persists across turns; continue from the authoritative current state.${progressReminder(goal)}\n\n${goalModeRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
 }
 
 function goalContextBlock(goal: GoalPromptContext) {
@@ -91,6 +95,7 @@ function goalModeRules(goalLabel: string) {
 		"- Autonomously implement and verify the work. If a tool fails, try reasonable alternatives instead of yielding early.",
 		"- Before completion, treat completion as unproven and audit requirement by requirement. For every explicit requirement, artifact, command, test, gate, invariant, and deliverable, inspect authoritative evidence and match verification scope to requirement scope.",
 		"- Weak, indirect, missing, or merely consistent evidence is not enough; gather stronger evidence and keep working.",
+		"- When goal_progress is available, record the full requirement/evidence checklist early and update it as work advances. Read it again after resume or compaction. Use stable ids and preserve requirement scope; updates cannot remove or narrow recorded items. Mark verified only with concrete current evidence, and mark stale evidence unverified until rechecked. Recorded checklist items must all be verified before goal_complete; checklist coverage and agent claims are not independent proof that the full objective is complete.",
 		`- Only call the goal_complete tool after evidence proves every requirement of ${goalLabel} is satisfied and no required work remains. Pass this exact goal_id and never reuse an id from an older, stopped, replaced, or cleared turn.`,
 		"- Use goal_blocked only at a true impasse after the same blocker recurs for at least three consecutive goal turns, with concrete evidence that user or external action is required. Never use it merely because work is hard, slow, uncertain, incomplete, needs ordinary clarification, or hit a recoverable failure.",
 		"- After a blocked goal is resumed, start a fresh three-turn blocker audit before using goal_blocked again.",
@@ -99,6 +104,18 @@ function goalModeRules(goalLabel: string) {
 		"- Call goal_wait alone because parallel sibling tools can prevent immediate turn termination. Do not use it for ordinary unfinished work, and do not use goal_blocked for a recoverable external wait.",
 		"- If the goal is incomplete at the end of a turn and goal_wait was not accepted, expect automatic continuation and keep working from the current state.",
 	].join("\n");
+}
+
+function progressReminder(goal: GoalPromptContext) {
+	const remaining = goal.requirements
+		?.filter((item) => item.status !== "verified")
+		.map((item) => item.id);
+	return [
+		remaining?.length
+			? `\nRecorded requirements still pending: ${remaining.join(", ")}. Use goal_progress to read the full checklist.`
+			: "",
+		goal.toolLoop?.warning ? `\nTool activity diagnostic: ${goal.toolLoop.warning}` : "",
+	].join("");
 }
 
 function formatBudget(goal: GoalPromptContext) {

@@ -9,6 +9,8 @@ import {
 import { Markdown } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { notifyTerminal, safeTerminalText } from "./errors.js";
+import { completionCoverageIssue } from "./progress.js";
+import { registerGoalProgressTool } from "./progress-tool.js";
 import {
 	formatStatus,
 	GOAL_BLOCKED_TOOL,
@@ -146,7 +148,7 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalRuntime) {
 					? "summary is too long"
 					: isContradictoryCompletionSummary(summary)
 						? "summary says the goal is not complete"
-						: undefined;
+						: completionCoverageIssue(completedGoal.requirements);
 			if (rejectionReason) {
 				runtime.recordGoalUsage(completedGoal, ctx);
 				runtime.persistGoal(completedGoal);
@@ -349,6 +351,7 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalRuntime) {
 	pi.registerTool(goalCompleteTool);
 	pi.registerTool(goalBlockedTool);
 	pi.registerTool(goalWaitTool);
+	registerGoalProgressTool(pi, runtime);
 }
 
 interface GoalCompletionRenderResult {

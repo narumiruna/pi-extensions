@@ -422,6 +422,8 @@ export class GoalCommandController {
 			{
 				...rotatedGoal,
 				text: objective,
+				requirements: objective === currentGoal.text ? currentGoal.requirements : undefined,
+				toolLoop: undefined,
 				tokenBudget: effectiveTokenBudget,
 				waiting: undefined,
 			},

@@ -2,7 +2,7 @@ import type { GoalPromptContext } from "./prompts.js";
 import { buildGoalContextPrompt } from "./prompts.js";
 
 export const GOAL_CONTRACT_MESSAGE_TYPE = "goal-contract";
-export const GOAL_CONTRACT_VERSION = 2;
+export const GOAL_CONTRACT_VERSION = 3;
 
 const INACTIVE_GOAL_CONTRACT_CONTENT = [
 	"Goal mode is inactive.",

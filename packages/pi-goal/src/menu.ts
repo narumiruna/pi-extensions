@@ -91,6 +91,9 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState 
 						: `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`
 				}`,
 				automaticResponses,
+				...(goal.waiting || (goal.status !== "active" && goal.status !== "complete")
+					? recoveryOverview(goal, automaticTurnLimit)
+					: []),
 				...(pausedByAutomaticLimit
 					? ["Progress is saved. Review the safety limit before continuing."]
 					: []),
@@ -253,6 +256,7 @@ export async function showGoalManager(
 								limit === null
 									? "Continuing resets the counter to 0 and resumes with Unlimited automatic work."
 									: `Continuing resets the counter to 0 and allows up to ${limit} more automatic model responses.`,
+								...recoveryOverview(goal, limit),
 							]
 						: ["The paused goal is no longer available. Return to the Goal menu."],
 					items: goal
@@ -276,17 +280,22 @@ export async function showGoalManager(
 					hint: "back",
 				};
 			},
-			status: () => ({
-				kind: "detail",
-				title: "Goal status",
-				lines: runtime.activeGoal
-					? goalSummary(
-							runtime.activeGoal,
-							runtime.settings.continuationLimits.automaticTurns,
-						).split("\n")
-					: ["No goal is currently set."],
-				hint: "back",
-			}),
+			status: () => {
+				const goal = runtime.activeGoal;
+				displayedGoal = goal;
+				const lines = goal
+					? goalSummary(goal, runtime.settings.continuationLimits.automaticTurns).split("\n")
+					: ["No goal is currently set."];
+				return {
+					kind: "detail",
+					title:
+						goal && (goal.waiting || (goal.status !== "active" && goal.status !== "complete"))
+							? "Goal recovery review"
+							: "Goal status",
+					lines,
+					hint: "back",
+				};
+			},
 			help: () => ({
 				kind: "detail",
 				title: "Goal help",
@@ -638,13 +647,28 @@ function requireCurrentMenuGoal(
 	expected: ActiveGoal,
 	ctx: ExtensionCommandContext,
 ) {
-	if (runtime.activeGoal?.id === expected.id) return true;
+	if (
+		runtime.activeGoal?.id === expected.id &&
+		runtime.activeGoal.status === expected.status &&
+		runtime.activeGoal.waiting === expected.waiting &&
+		runtime.activeGoal.requirements === expected.requirements
+	)
+		return true;
 	notifyTerminal(
 		ctx.ui,
 		"The active goal changed while the dialog was open. Reopen /goal and try again.",
 		"warning",
 	);
 	return false;
+}
+
+function recoveryOverview(goal: ActiveGoal, automaticLimit: number | null) {
+	return goalSummary(goal, automaticLimit)
+		.split("\n")
+		.filter((line) =>
+			/^(Why stopped:|Requirements:|Last recorded evidence:|Next action:)/u.test(line),
+		)
+		.map((line) => safeGoalMenuText(line, 240));
 }
 
 function displayStatus(status?: ActiveGoal["status"]) {

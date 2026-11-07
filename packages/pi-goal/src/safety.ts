@@ -18,6 +18,7 @@ export function resetGoalSafetyEpoch(goal: ActiveGoal): ActiveGoal {
 		lastToolFreeOutputFingerprint: undefined,
 		safetyPauseCause: undefined,
 		safetyResetPending: undefined,
+		toolLoop: undefined,
 	};
 }
 

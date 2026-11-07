@@ -6,7 +6,9 @@ import {
 	nonNegativeFiniteNumber,
 	normalizeTokenBudget,
 } from "./accounting.js";
+import { type GoalRequirement, normalizeRequirements } from "./progress.js";
 import type { GoalStatus } from "./prompts.js";
+import { normalizeToolLoopState, type ToolLoopState } from "./tool-loops.js";
 import { type GoalWait, normalizeGoalWait } from "./wait.js";
 
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
@@ -33,6 +35,9 @@ export interface ActiveGoal {
 	safetyPauseCause?: SafetyPauseCause;
 	safetyResetPending?: boolean;
 	waiting?: GoalWait;
+	stopReason?: string;
+	requirements?: GoalRequirement[];
+	toolLoop?: ToolLoopState;
 }
 
 interface LegacyStoredGoal extends Omit<ActiveGoal, "status"> {
@@ -188,6 +193,9 @@ export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 		safetyPauseCause: normalizeSafetyPauseCause(goal.safetyPauseCause),
 		safetyResetPending: goal.safetyResetPending === true ? true : undefined,
 		waiting,
+		stopReason: typeof goal.stopReason === "string" ? goal.stopReason.slice(0, 1_000) : undefined,
+		requirements: normalizeRequirements(goal.requirements),
+		toolLoop: normalizeToolLoopState(goal.toolLoop),
 	};
 }
 

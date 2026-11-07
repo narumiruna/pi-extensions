@@ -26,6 +26,7 @@ import {
 	type SafetyPauseCause,
 	serializeGoalState,
 } from "./persistence.js";
+import { requirementReviewLines } from "./progress.js";
 import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
 import { nextToolFreeRepeatState, resetGoalSafetyEpoch } from "./safety.js";
 
@@ -678,7 +679,17 @@ export class GoalRuntime {
 				break;
 		}
 
-		this.activeGoal = transitionGoal(goal, status);
+		this.activeGoal = {
+			...transitionGoal(goal, status),
+			stopReason: (
+				terminalReason ??
+				(request.kind === "explicit_pause"
+					? "Paused by the user."
+					: request.kind === "tools_unavailable"
+						? "Required Goal tools are unavailable."
+						: "Goal activation did not finish; progress is preserved.")
+			).slice(0, 1_000),
+		};
 		if (terminalReason !== undefined) this.setTerminalReason(this.activeGoal.id, terminalReason);
 		const stoppedGoal = this.activeGoal;
 		this.persistGoal(stoppedGoal);
@@ -1437,7 +1448,7 @@ export function transitionGoal(goal: ActiveGoal, requestedStatus: GoalStatus): A
 		...goal,
 		status,
 		updatedAt: now,
-		...(status === "active" ? {} : { waiting: undefined }),
+		...(status === "active" ? { stopReason: undefined } : { waiting: undefined }),
 	};
 	checkpointGoalActiveTime(next, now, status === "active" && !next.waiting);
 	return next;
@@ -1495,7 +1506,7 @@ export function goalSummary(
 	automaticTurnLimit: number | null = DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns,
 ) {
 	const summary = [
-		`Goal: ${goal.text}`,
+		`Goal: ${safeGoalMenuText(goal.text, 4_000)}`,
 		`Status: ${goal.waiting ? "waiting" : goal.status}`,
 		...(goal.waiting
 			? [
@@ -1519,6 +1530,31 @@ export function goalSummary(
 				: "Safety pause: no progress. Progress is saved; open /goal to review and continue.",
 		);
 	}
+	if (goal.status !== "active" && goal.status !== "complete") {
+		summary.push(
+			`Why stopped: ${safeGoalMenuText(goal.stopReason ?? "No detailed reason was recorded in this older session.", 1_000)}`,
+		);
+	}
+	if (goal.toolLoop?.warning) summary.push(`Diagnostic: ${goal.toolLoop.warning}`);
+	summary.push(...requirementReviewLines(goal.requirements));
+	if (goal.waiting)
+		summary.push(
+			"Next action: wait for the arranged wake source, or /goal resume to recheck external state now.",
+		);
+	else if (goal.status === "budget_limited")
+		summary.push(
+			"Next action: open /goal → Increase budget and resume…; choose a cumulative budget above current usage.",
+		);
+	else if (goal.status === "blocked")
+		summary.push("Next action: resolve the recorded blocker, then /goal resume to retry.");
+	else if (goal.status === "usage_limited")
+		summary.push("Next action: restore provider/account availability, then /goal resume.");
+	else if (goal.status === "paused")
+		summary.push(
+			goal.safetyPauseCause
+				? "Next action: review the evidence and limits in /goal, then resume. Resume resets the safety epoch, not cumulative token usage."
+				: "Next action: resolve the stop reason if needed, then /goal resume. Resume resets the safety epoch, not cumulative token usage.",
+		);
 	summary.push(`Commands: ${goalCommandHint(goal)}`);
 	return summary.join("\n");
 }

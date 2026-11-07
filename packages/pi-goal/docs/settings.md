@@ -41,7 +41,7 @@ A successful save updates the visible state immediately.
 A failed save restores the prior value and reports the settings path so it can be retried.
 Escape returns to the previous screen without reverting changes that were already saved.
 
-Pi-goal registers `goal_complete`, `goal_blocked`, and `goal_wait` once and keeps their schemas stable from startup.
+Pi-goal registers `goal_complete`, `goal_blocked`, `goal_wait`, and `goal_progress` once and keeps their schemas stable from startup.
 Visible Goal tools do not mean Goal mode is active, and only the latest effective active Goal contract authorizes their use.
 Pi-goal never widens a restrictive active-tool policy; activation rejects when required terminal tools are missing, and an active Goal pauses if they later disappear.
 The retired `toolVisibility` key is ignored and preserved as unknown data when another setting is saved.
@@ -87,5 +87,7 @@ Pi-goal does not override that policy during restore or later turns.
 Activation fails when required terminal tools are unavailable, and an active goal pauses without automatic continuation if they disappear.
 A restrictive allowlist created before `goal_wait` existed can still run ordinary Goals with `goal_complete` and `goal_blocked`.
 The model cannot enter external waiting until that allowlist also includes `goal_wait`.
+Include `goal_progress` to let the agent read and update the requirement/evidence checklist.
+Tool-loop diagnostics are warning-only and independent of both configurable safety guards; they do not reset or replace either limit.
 The pause aborts a Goal-owned kickoff, resume, active edit, or automatic-continuation prompt.
 It does not cancel or stale-block unrelated user or extension turns, including startup follow-ups after a restrictive restore.

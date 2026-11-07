@@ -30,7 +30,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	assert.equal(typeof mock.commands.get("goal")?.getArgumentCompletions, "function");
 	assert.deepEqual(
 		mock.tools.map((tool) => tool.name),
-		["goal_complete", "goal_blocked", "goal_wait"],
+		["goal_complete", "goal_blocked", "goal_wait", "goal_progress"],
 	);
 	assert.deepEqual(mock.rawPi.getActiveTools(), [
 		"read",

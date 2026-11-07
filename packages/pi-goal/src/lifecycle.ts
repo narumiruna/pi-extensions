@@ -27,6 +27,7 @@ import {
 } from "./runtime.js";
 import { hasAssistantToolCall } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
+import { nextToolLoopState } from "./tool-loops.js";
 
 const REMOVED_QUEUE_SETTING_WARNING =
 	"Ordered goal queue has been removed. Use /goal edit to reprioritize an active objective, or start /goal <objectives> if no active goal exists.";
@@ -82,7 +83,10 @@ export function registerGoalLifecycle(
 
 		if (loaded.goal?.status === "active") {
 			if (!runtime.acquireWorkflow()) {
-				runtime.activeGoal = transitionGoal(loaded.goal, "paused");
+				runtime.activeGoal = {
+					...transitionGoal(loaded.goal, "paused"),
+					stopReason: "Another workflow is active in this session. Resume after it ends.",
+				};
 				runtime.persistGoal(runtime.activeGoal);
 				runtime.ensureInactiveGoalContextContract(ctx);
 				runtime.updateStatus(ctx, runtime.activeGoal);
@@ -482,6 +486,15 @@ export function registerGoalLifecycle(
 	});
 
 	pi.on("turn_end", (event, ctx) => {
+		const goal = runtime.activeGoal;
+		if (goal?.status === "active" && runtime.ownsWorkflow(goal) && runtime.canRecordGoalUsage()) {
+			const toolLoop = nextToolLoopState(goal.toolLoop, event);
+			runtime.activeGoal = { ...goal, toolLoop };
+			runtime.persistGoal(runtime.activeGoal);
+			if (toolLoop.warning && !goal.toolLoop?.warning) {
+				notifyTerminal(ctx.ui, toolLoop.warning, "warning");
+			}
+		}
 		runtime.recordAutomaticTurn(ctx, event.message);
 		// Terminal Goal tools transition state synchronously, but their inactive contract
 		// must wait until Pi has persisted the real tool result at this turn boundary.
