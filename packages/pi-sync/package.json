@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.69.1",
-    "fast-xml-parser": "^5.11.2",
+    "fast-xml-parser": "^5.12.0",
     "proper-lockfile": "^4.1.2",
     "semver": "^7.8.5"
   },
