@@ -155,10 +155,6 @@ for (const enabled of [false, true])
       try {
         const running = showSyncSettings(mock.ctx, async () => undefined, owner.signal);
         await tui.waitForOpen();
-        for (let index = 0; index < 4; index++) tui.send("j");
-        tui.send("x");
-        await tui.waitForPending();
-        await tui.waitForOpen();
         tui.send("\u001b[200~Continuous sync\u001b[201~");
         assert.match(tui.render().join("\n"), new RegExp(`Continuous sync.*${enabled ? "Off" : "On"}`));
         tui.send("x");
@@ -182,9 +178,6 @@ for (const enabled of [false, true])
           ),
         );
         if (!enabled) assert.ok(mock.notifications.every((item) => !item.message.includes("Monitoring starts")));
-        tui.send("q");
-        await tui.waitForPending();
-        await tui.waitForOpen();
         tui.send("q");
         await running;
       } finally {

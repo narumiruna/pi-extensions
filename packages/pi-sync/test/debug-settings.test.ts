@@ -39,8 +39,6 @@ for (const failFirst of [false, true]) {
       };
       try {
         await tui.waitForOpen();
-        for (let move = 0; move < 4; move++) tui.send("j");
-        await toggle();
         tui.send("\u001b[200~Debug startup timings\u001b[201~");
         assert.match(tui.render().join("\n"), /Debug startup timings.*Off/u);
         if (failFirst) {
@@ -56,9 +54,6 @@ for (const failFirst of [false, true]) {
         assert.match(tui.render().join("\n"), /Debug startup timings.*On/u);
         assert.equal(JSON.parse(await fs.readFile(localConfigPath(), "utf8")).futureField, "keep");
         assert.ok(context.notifications.some((entry) => entry.message.includes("next session start")));
-        tui.send("q");
-        await tui.waitForPending();
-        await tui.waitForOpen();
         tui.send("q");
         await running;
       } finally {

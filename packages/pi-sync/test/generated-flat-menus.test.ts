@@ -16,7 +16,7 @@ import { v3S3Settings } from "./helpers.js";
 
 initTheme("dark", false);
 
-test("package-directory Jiti smoke exercises grouped Settings, manager, cancelled Pull/Push, and History", async () => {
+test("package-directory Jiti smoke exercises flat Settings, manager, cancelled Pull/Push, and History", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-sync-flat-smoke-"));
   const agentDir = join(root, "agent");
   const previous = process.env.PI_CODING_AGENT_DIR;
@@ -72,9 +72,6 @@ test("package-directory Jiti smoke exercises grouped Settings, manager, cancelle
             tui.press("tui.select.confirm");
           }
         } else if (frame.split("\n").includes("Pi Sync Settings")) {
-          for (let index = 0; index < 4; index++) tui.press("tui.select.down");
-          tui.press("tui.select.confirm");
-        } else if (frame.includes("Pi Sync Settings ·")) {
           tui.send("\u001b[200~Show sync status\u001b[201~");
           frames.push(tui.render().join("\n"));
           tui.press("ctrl+c");
@@ -94,7 +91,15 @@ test("package-directory Jiti smoke exercises grouped Settings, manager, cancelle
       await handler({ type: "session_start", reason: "startup" }, context.ctx);
     await command.handler("", context.ctx);
     assert.equal(choices.length, 0);
-    assert.ok(frames.some((frame) => frame.includes("Pi Sync Settings")));
+    const settingsFrames = frames.filter((frame) => frame.split("\n").includes("Pi Sync Settings"));
+    assert.equal(settingsFrames.length, 2);
+    assert.match(settingsFrames[0] ?? "", /Included paths/u);
+    assert.match(settingsFrames[0] ?? "", /Type to search/u);
+    for (const frame of settingsFrames)
+      assert.doesNotMatch(
+        frame,
+        /Sync content|Sync behavior|Storage & setups|Advanced|All settings|Pi Sync Settings ·/u,
+      );
     assert.ok(
       frames.some((frame) => frame.includes("Checking remote changes")),
       frames.join("\n\n") + JSON.stringify(context.notifications),
