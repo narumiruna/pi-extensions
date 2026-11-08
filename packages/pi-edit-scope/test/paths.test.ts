@@ -236,14 +236,26 @@ describe("canonical targets", () => {
     await expect(resolveScopeTarget("a\0b", root, "either")).rejects.toThrow();
   });
 
-  it("does not apply read-only macOS filename fallbacks", async () => {
+  it("uses native filename matching without read-only macOS fallbacks", async () => {
     for (const [typed, actual] of [
       ["Screenshot 9 PM.png", "Screenshot 9\u202fPM.png"],
       ["caf\u00e9.txt", "cafe\u0301.txt"],
       ["l'ami.txt", "l\u2019ami.txt"],
+      ["caf\u00e9 l'ami.txt", "cafe\u0301 l\u2019ami.txt"],
     ]) {
       await fs.writeFile(join(root, actual), "before");
-      await expect(resolveScopeTarget(typed, root, "existing")).rejects.toThrow("does not exist");
+      const path = join(root, typed);
+      expect(resolveWritePath(typed, root)).toBe(path);
+      // Some filesystems resolve Unicode-equivalent names without an application fallback.
+      const canonical = await fs.realpath(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (canonical === undefined) {
+        await expect(resolveScopeTarget(typed, root, "existing")).rejects.toThrow("does not exist");
+      } else {
+        expect(await resolveScopeTarget(typed, root, "existing")).toEqual({ path, canonical, exists: true });
+      }
     }
   });
 
