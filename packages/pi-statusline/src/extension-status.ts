@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getAgentDir, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
+import type { ExtensionStatusMetadata, ExtensionStatusPresentation } from "./extension-status-metadata.js";
 import { powerlineExtensionSeparator } from "./powerline.js";
 import { DEFAULT_EXTENSION_STATUS_ICONS } from "./settings.js";
 import type { StatuslineConfig } from "./types.js";
@@ -10,6 +12,7 @@ export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>
 export interface ExtensionStatusRuntime {
   duplicateExtensions: string[];
   extensionStatusIconAliases: ExtensionStatusIconAliasMap;
+  extensionStatusMetadata?: ExtensionStatusMetadata;
 }
 
 const STATUSLINE_KEY = "statusline";
@@ -32,12 +35,19 @@ export function formatExtensionStatuses(
   hiddenKeys: ReadonlySet<string> = new Set(),
   trueColor = true,
 ): string {
+  runtime.extensionStatusMetadata?.reconcile(statuses);
   const separator = extensionStatusSeparator(config, theme, trueColor);
   const visibleStatuses = [
     ...formatDuplicateExtensionStatus(runtime, theme),
     ...[...statuses.entries()]
       .filter(([key, value]) => key !== STATUSLINE_KEY && !hiddenKeys.has(key) && value.trim().length > 0)
-      .map(([key, value]) => formatExtensionStatus(key, value, theme, config, runtime.extensionStatusIconAliases)),
+      .map(([key, value]) => {
+        const presentation = runtime.extensionStatusMetadata?.get(key, value);
+        return presentation
+          ? formatCompactExtensionStatus(key, value, presentation, theme, config, runtime.extensionStatusIconAliases)
+          : formatExtensionStatus(key, value, theme, config, runtime.extensionStatusIconAliases);
+      })
+      .filter((status) => status.length > 0),
   ].slice(0, 5);
 
   return visibleStatuses.join(separator);
@@ -59,6 +69,38 @@ export function formatExtensionStatus(
   return icon ? `${theme.fg(color, icon)} ${renderedText}` : renderedText;
 }
 
+function formatCompactExtensionStatus(
+  key: string,
+  value: string,
+  presentation: ExtensionStatusPresentation,
+  theme: Theme,
+  config: Pick<StatuslineConfig, "extensionStatusIcons">,
+  aliases: ExtensionStatusIconAliasMap,
+): string {
+  if (presentation.activity === "idle") return "";
+  // Only the compact path strips terminal controls; raw statuses retain their existing PR links.
+  const status = splitExtensionStatusIcon(
+    stripExtensionStatusPrefix(sanitizeTerminalText(key), sanitizeTerminalText(value)),
+  );
+  const icon = sanitizeTerminalText(extensionStatusIcon(key, status.icon, config.extensionStatusIcons, aliases));
+  const bodies = {
+    checking: "…",
+    working: "↻",
+    pushing: "↑",
+    pulling: "↓",
+    resolving: "AI",
+    retry: `retry: ${presentation.reason}`,
+    blocked: `! ${presentation.reason}`,
+    "local-change": "⇡",
+    "remote-change": "⇣",
+    review: "⇕",
+  };
+  const warning = presentation.activity === "blocked" || presentation.activity === "retry";
+  const color = warning ? "warning" : extensionColor(key, value);
+  const body = theme.fg(warning ? "warning" : "muted", bodies[presentation.activity]);
+  return icon ? `${theme.fg(color, icon)} ${body}` : body;
+}
+
 function extensionStatusIcon(
   key: string,
   leadingIcon: string | undefined,
@@ -68,14 +110,16 @@ function extensionStatusIcon(
   if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key];
   const namespaceIcon = configuredNamespaceIcon(key, configuredIcons);
   if (namespaceIcon !== undefined) return namespaceIcon;
-  const compatibleKey = COMPATIBLE_STATUS_ICON_KEYS[key];
+  const compatibleKey = Object.hasOwn(COMPATIBLE_STATUS_ICON_KEYS, key) ? COMPATIBLE_STATUS_ICON_KEYS[key] : undefined;
   if (compatibleKey && Object.hasOwn(configuredIcons, compatibleKey)) {
     return configuredIcons[compatibleKey];
   }
   for (const alias of extensionStatusAliasesForKey(key, extensionStatusIconAliases)) {
     if (Object.hasOwn(configuredIcons, alias)) return configuredIcons[alias];
   }
-  return leadingIcon ?? DEFAULT_EXTENSION_STATUS_ICONS[key] ?? "🔌";
+  return (
+    leadingIcon ?? (Object.hasOwn(DEFAULT_EXTENSION_STATUS_ICONS, key) ? DEFAULT_EXTENSION_STATUS_ICONS[key] : "🔌")
+  );
 }
 
 function configuredNamespaceIcon(key: string, configuredIcons: Readonly<Record<string, string>>): string | undefined {
@@ -105,7 +149,9 @@ function statusKeyMatchesStatusBase(key: string, statusBase: string): boolean {
 
 export function wrapExtensionStatusline(status: string, width: number): string[] {
   if (!status || width <= 0) return [];
-  return wrapTextWithAnsi(status, width);
+  return wrapTextWithAnsi(status, width).map((line) =>
+    visibleWidth(line) > width ? truncateToWidth(line, width, "") : line,
+  );
 }
 
 function formatDuplicateExtensionStatus(runtime: ExtensionStatusRuntime, theme: Theme): string[] {

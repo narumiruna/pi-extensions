@@ -93,7 +93,9 @@ export function createSyncAttentionController(): SyncAttentionController {
       }
       if (!state && classification === "status") {
         ctx.ui.setWidget(WIDGET_KEY, undefined);
-        setSyncStatus(ctx, observation?.inspection.remoteChanged ? "sync ⇣" : "sync ⇡");
+        setSyncStatus(ctx, observation?.inspection.remoteChanged ? "sync ⇣" : "sync ⇡", {
+          activity: observation?.inspection.remoteChanged ? "remote-change" : "local-change",
+        });
         return;
       }
       const presentation = state
@@ -104,7 +106,7 @@ export function createSyncAttentionController(): SyncAttentionController {
           };
       if (ctx.mode !== "tui") {
         ctx.ui.setWidget(WIDGET_KEY, undefined);
-        setSyncStatus(ctx, presentation.status);
+        setSyncStatus(ctx, presentation.status, { activity: "review" });
         return;
       }
       // Keep Kit outside the eager startup graph; module loading owns no cancellable resources.
@@ -113,7 +115,7 @@ export function createSyncAttentionController(): SyncAttentionController {
         throw error;
       });
       if (generation !== currentGeneration || signal?.aborted) return;
-      setSyncStatus(ctx, presentation.status);
+      setSyncStatus(ctx, presentation.status, { activity: "review" });
       ctx.ui.setWidget(
         WIDGET_KEY,
         (_tui, theme) =>

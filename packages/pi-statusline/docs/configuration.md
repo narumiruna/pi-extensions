@@ -192,3 +192,9 @@ For interoperable extensions, prefer one aggregated key or a stable coexistence 
 ```
 
 Put transient activity in the value, and clear the exact key that was set.
+
+### Optional semantic activity
+
+The [extension-neutral metadata v1 protocol](./extension-status-protocol.md) lets a publisher describe activity without supplying glyphs or relying on private message parsing. Valid participants use the quiet presentation: idle is hidden before the five-item limit, active work uses short static markers, and retries/blocked work retain a safe reason. No new setting is required; `extensionStatusIcons` keeps the precedence above.
+
+Missing, invalid, stale, or unsupported metadata falls back to raw text, not hidden status. Snapshot refresh is read-only and does not start the publisher's work. Native Pi footers and RPC observers still receive the raw status value.

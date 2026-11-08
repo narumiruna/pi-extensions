@@ -84,7 +84,7 @@ export function createStartupCheck(
             const captured = config;
             const identity = syncCheckConfigFingerprint(captured);
             checking = true;
-            setSyncStatus(ctx, "sync ...");
+            setSyncStatus(ctx, "sync ...", { activity: "checking" });
             const { inspectSync } = await timings.measure("inspection import", () => loaders.inspection());
             throwIfAborted(signal);
             const currentConfig = await loadConfigForCheck();

@@ -228,6 +228,8 @@ Partial sync keeps each side's unresolved versions, preserves their previous acc
 
 **Settings → Show sync status** defaults to **On**. Turning it Off immediately clears and suppresses pi-sync status text for background checks, transfers, and review attention; widgets and notifications remain available.
 
+With a footer that supports the [public semantic status protocol](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-statusline/docs/extension-status-protocol.md), normal standby—including another local monitoring owner—is hidden. Pi Statusline shows short static markers for checking, transfers, model resolution, and review, while retry/blocked states keep short reasons. Configured icons remain effective. Native Pi footers, RPC observers, and older or absent consumers retain the existing readable raw status; Sync needs no other extension to operate. See [Status display](./skills/configure-pi-sync/references/configuration.md#status-display) for reason labels and unchanged recovery behavior.
+
 **Settings → Skip secret scan** defaults to **Off**; enable it only after reviewing the destination and selected content because it disables push scanning for every setup.
 See [Secret scanning](./skills/configure-pi-sync/references/configuration.md#secret-scanning) for the setting and diagnostic behavior.
 

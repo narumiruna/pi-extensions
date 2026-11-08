@@ -229,6 +229,17 @@ Set it through **/sync → Settings → Show sync status**; changes are saved an
 When `false`, pi-sync clears and suppresses status text for background checks, manual and automatic transfers, and review attention.
 TUI review widgets and TUI/RPC notifications remain available, and lifecycle cleanup still clears any stale status owned by pi-sync.
 
+Pi Sync also publishes optional semantic metadata through the [extension-neutral status protocol](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-statusline/docs/extension-status-protocol.md).
+Pi Statusline uses that metadata for quiet display: waiting for changes and another local monitoring owner are hidden, while active work uses short static markers.
+The existing configured icon identifies Sync without an extra duplicate label.
+Native Pi footers, RPC observers, and older or absent metadata consumers still receive the original readable status value.
+This is not permission to sync, change retry policy, or erase recovery evidence.
+
+Retry and blocked states keep a short reason: `temp` (temporary service/network failure), `busy` (lock contention), `stale` (changed evidence), `auth` (authentication), `storage` (local storage), `review` (safety barrier), `model` (resolver/model failure or exhausted candidate attempts), `limit` (request-window allowance), or `unknown` (unclassified failure).
+Settings or private-state repair uses `repair`.
+A request-window limit is not a currency budget; exhausted attempts for one candidate remain a model block, not a timer-based allowance reset.
+Use the existing manager and **Check remote status** guidance to inspect recovery requirements rather than treating a short marker as a complete diagnosis.
+
 ### Debug startup timings
 
 The top-level user setting `debug` accepts only `true` or `false` and defaults to `false`.
@@ -554,7 +565,8 @@ Keep the directory as private evidence; do not delete it to repair a transfer.
 
 #### Status, recovery and downgrade
 
-The existing status key shows waiting, checking/syncing, scheduled retry, another local owner, or a stable blocked reason.
+The existing raw status key shows waiting, checking/syncing, scheduled retry, another local owner, or a stable blocked reason.
+A compatible Statusline uses the [quiet presentation described above](#status-display); normal hidden standby does not mean monitoring or another owner's work has stopped.
 **Check remote status** and the manager show advisory ownership, the last successful background check/transfer and safe next actions.
 Status also shows normalized rolling-window usage, the next window allowance, exhausted-candidate counts, serialized accounting bytes/capacity and on-disk bytes.
 Window allowance is not dispatch permission: candidate, capacity, ownership and safety checks still apply.
