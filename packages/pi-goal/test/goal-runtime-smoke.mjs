@@ -23,6 +23,7 @@ import {
   waitFor,
   waitForSettlement,
 } from "./support/goal-runtime-harness.mjs";
+import { usageLimitRecoveryScenario } from "./support/goal-usage-recovery-runtime.mjs";
 
 async function agentDirectoryIsolationScenario() {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -973,6 +974,7 @@ await unknownErrorFullAbortScenario();
 await unknownErrorSafetyScenario();
 await unknownErrorThresholdCompactionScenario();
 await explicitWaitErrorScenario();
+await usageLimitRecoveryScenario();
 await nativeBackoffAbortScenario("session");
 await nativeBackoffAbortScenario("retry");
 await managedNativeRetryWaitScenario();

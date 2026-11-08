@@ -45,12 +45,18 @@ export async function createHarness(
   const cleanupResources = async () => {
     try {
       await createdSession?.abort();
-      createdSession?.dispose();
+      // SDK dispose invalidates contexts but does not emit extension shutdown.
+      // Exercise the public lifecycle before disposal so owned waits are released.
+      await createdSession?.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
     } finally {
       try {
-        await rm(root, { recursive: true, force: true });
+        createdSession?.dispose();
       } finally {
-        restoreAgentDir();
+        try {
+          await rm(root, { recursive: true, force: true });
+        } finally {
+          restoreAgentDir();
+        }
       }
     }
   };

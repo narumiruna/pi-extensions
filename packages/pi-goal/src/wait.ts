@@ -1,6 +1,13 @@
+export interface UsageLimitScope {
+  provider: string;
+  model: string;
+  api: string;
+}
+
 export interface GoalWait {
   reason: string;
   resumeAt?: number;
+  usageLimit?: UsageLimitScope;
 }
 
 export const MAX_GOAL_WAIT_REASON_LENGTH = 1_000;
@@ -31,6 +38,19 @@ export function normalizeGoalWait(value: unknown): GoalWait | undefined {
   if (!isRecord(value)) return undefined;
   const reason = typeof value.reason === "string" ? value.reason.trim() : "";
   if (!reason || reason.length > MAX_GOAL_WAIT_REASON_LENGTH) return undefined;
+  let usageLimit: UsageLimitScope | undefined;
+  if (Object.hasOwn(value, "usageLimit")) {
+    const scope = value.usageLimit;
+    if (
+      !isRecord(scope) ||
+      typeof scope.provider !== "string" ||
+      typeof scope.model !== "string" ||
+      typeof scope.api !== "string" ||
+      !Object.hasOwn(value, "resumeAt")
+    )
+      return undefined;
+    usageLimit = { provider: scope.provider, model: scope.model, api: scope.api };
+  }
   if (!Object.hasOwn(value, "resumeAt")) return { reason };
   if (
     typeof value.resumeAt !== "number" ||
@@ -40,7 +60,7 @@ export function normalizeGoalWait(value: unknown): GoalWait | undefined {
   ) {
     return undefined;
   }
-  return { reason, resumeAt: value.resumeAt };
+  return { reason, resumeAt: value.resumeAt, ...(usageLimit ? { usageLimit } : {}) };
 }
 
 export class GoalWaitTimer {

@@ -15,6 +15,7 @@ When `~/.pi/agent/pi-goal.json` is absent, pi-goal uses these built-in defaults 
   "rpc": {
     "enabled": false
   },
+  "retryUsageLimits": false,
   "continuationLimits": {
     "automaticTurns": 25,
     "noProgressTurns": 3
@@ -23,7 +24,7 @@ When `~/.pi/agent/pi-goal.json` is absent, pi-goal uses these built-in defaults 
 ```
 
 Use `/goal` → **Settings…** in the TUI to create or update the file, or edit it directly.
-The Settings screen shows all three controls on one level.
+The Settings screen shows all four controls on one level.
 The two safety limits open separate choice screens:
 
 - **Automatic-work limit** shows the exact response limit or **Unlimited**.
@@ -31,6 +32,8 @@ The two safety limits open separate choice screens:
   Unlimited requires confirmation that tool loops may continue consuming tokens and provider cost without a response-count cap.
 - **No-progress guard** shows **_N_ runs** or **Off**.
   Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
+- **Retry usage limits** is an **On**/**Off** row, defaulting to **Off**.
+  It enables scheduled recovery after recognized provider quota errors; read the [recovery policy](#usage-limit-recovery) before enabling it.
 - **Managed run RPC** controls whether trusted installed extensions may start and cancel managed Goal runs.
   It defaults to **Off** and controls cooperation, not extension permissions.
 
@@ -60,7 +63,8 @@ Reload, replacement, and shutdown clear that in-memory ownership.
 `continuationLimits` controls the automatic-work safety guards:
 
 - `automaticTurns` accepts a positive safe integer or `null` and defaults to `25`.
-  It counts every completed normal `turn_end` owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries.
+  It counts completed normal `turn_end` responses owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries.
+  The only quota-recovery exception is a work-free, directly quota-rejected scheduled request, as described below.
   The user-triggered kickoff, resume, edit, and ordinary user runs are not charged.
   At the limit, the goal becomes `paused` with cause `continuation_limit` and pending continuation or recovery is cancelled.
   The current operation is aborted before a 26th normal response starts.
@@ -72,6 +76,48 @@ Reload, replacement, and shutdown clear that in-memory ownership.
   Consecutive empty or identical tool-free outputs increment the repeat count.
   Different non-empty output starts a new run at one, and any attempted tool call resets it.
   Set this field to `null` to disable only this heuristic.
+
+## Usage-limit recovery
+
+`retryUsageLimits` accepts only a boolean and defaults to `false`.
+With recovery disabled, a final recognized quota error stops the Goal as `usage_limited`; resolve the account condition and run `/goal resume` manually.
+To opt in, use **Retry usage limits** in Settings or set `"retryUsageLimits": true` in the user settings file and reload.
+There are no interval, retry-count, or provider-specific settings.
+
+When enabled, recovery keeps the same Goal ID, cumulative usage, safety counters, managed run, and cooperative workflow ownership in active waiting.
+Quiet waiting does not count toward active elapsed time.
+A usable public reset hint determines the next recovery deadline; otherwise the fallback is 15 minutes.
+Another extension or usage service is not required.
+The public usage API cannot always establish which limits apply, including for Codex; a displayed reset time does not guarantee an actionable hint or available quota.
+See the [lifecycle reference](./continuation-lifecycle.md#optional-usage-limit-recovery) for hint validation and dispatch rules.
+
+Waiting and read-only usage queries do not count as model responses.
+Only a scheduled recovery request that is directly rejected by a recognized usage limit without actual work is exempt from automatic-work and no-progress counters.
+Successful responses, partial work, the original rejected request, manual requests, and existing native retry work retain their existing accounting.
+All provider-reported token usage is retained, including failed-request usage.
+Recovery does not reset counters or bypass an exhausted work, no-progress, or token limit.
+
+The classifier is unchanged and includes subscription, billing, and credit exhaustion, not just temporary quotas.
+Recovery can wait indefinitely for account-owner action and can make paid requests when a deadline or external input wakes the Goal.
+It does not redeem credits, change authentication, or modify provider settings.
+Pi's native retry policy, ordinary `goal_wait`, and external-input wake behavior are unchanged.
+
+Turning recovery **Off** after a committed settings save cancels pending quota recovery and stops that Goal as `usage_limited` for manual recovery.
+A failed save does not commit that stop.
+Turning it **On** does not restart an already stopped Goal; resume it explicitly.
+Pause, clear, edit, replacement, completion, terminal limits, session replacement, shutdown, and observed model changes cancel pending recovery work.
+Reload restores the absolute deadline instead of restarting the interval.
+Pi does not report every credential change immediately, so immediate account-switch detection is not guaranteed.
+
+Live quota reset, provider accounting delay, entitlement behavior, and agreement with a provider console remain unverified.
+No live provider traffic was authorized for this change; deterministic verification does not establish those external behaviors.
+
+## Loading and compatibility
+
+The settings file is user-scoped at `<getAgentDir()>/pi-goal.json`, normally `~/.pi/agent/pi-goal.json`; Goal has no project settings override.
+Omitted fields use built-in defaults, and explicit valid user values override them.
+Settings reads do not create files or directories.
+Saves are ordered within one Pi process; they do not coordinate separate Pi processes.
 
 Settings are reread at Pi startup, session replacement, and `/reload`.
 Direct file edits are not watched, while Goal-menu changes apply immediately.

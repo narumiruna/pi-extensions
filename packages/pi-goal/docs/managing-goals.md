@@ -30,6 +30,24 @@ In the TUI, an automatic-work-limit pause offers **Review and continue…**, whi
 Changing the automatic-work limit alone leaves the goal paused; Back or Escape makes no change.
 An exhausted token budget must be raised above current usage before work can resume.
 
+## Recover from a provider usage limit
+
+By default, recognized quota errors stop the Goal as `usage_limited` with no scheduled recovery.
+Resolve the account condition and use `/goal resume`, or opt in to **Retry usage limits** in `/goal` → **Settings…** for future failures.
+Enabling the setting does not wake an already stopped Goal; resume it explicitly.
+
+Enabled recovery keeps the same Goal ID and safety epoch in active waiting, with its managed run and cooperative workflow ownership retained.
+It uses an applicable reset hint or a 15-minute fallback and may wait indefinitely for billing, credit, or entitlement action.
+Requests can incur provider charges; recovery does not redeem credits or change authentication or provider settings.
+An exhausted safety or token limit still prevents further automatic work.
+
+Use `/goal pause` or clear to stop recovery.
+Turning **Retry usage limits** Off after a successful save cancels active quota recovery and restores stopped `usage_limited` behavior.
+Editing or replacing the Goal cancels its previous recovery work; observed model changes also stop quota recovery.
+Reload preserves the absolute deadline, not a new interval.
+Manual `/goal resume` on an active waiting Goal wakes it without resetting its safety epoch, unlike resuming a stopped Goal.
+See the [settings reference](./settings.md#usage-limit-recovery) for counting, cancellation, and service limitations.
+
 ## Clear and migrate legacy queues
 
 Menu-driven Clear previews the affected goal and requires confirmation.

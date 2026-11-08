@@ -23,6 +23,9 @@ The maintained implementation and tests are authoritative:
 - `packages/pi-goal/src/prompts.ts`
 - `packages/pi-goal/src/goal-contract.ts`
 - `packages/pi-goal/src/workflow-mutex.ts`
+- `packages/pi-goal/src/wait.ts`
+- `packages/pi-goal/src/usage-limit-recovery.ts`
+- `packages/pi-goal/src/usage-reset.ts`
 - `packages/pi-goal/test/goal-continuation.test.ts`
 - `packages/pi-goal/test/goal-error-lifecycle.test.ts`
 - `packages/pi-goal/test/errors.test.ts`
@@ -42,8 +45,8 @@ keeps only the internal lifecycle rationale and public-API boundaries.
 
 `pi-goal` separates outcome classification from continuation dispatch:
 
-1. `turn_end` accounts every completed model response owned by automatic Goal work and enforces an
-   optional configured response cap.
+1. `turn_end` accounts completed model responses owned by automatic Goal work and enforces an
+   optional configured response cap, except for the narrowly owned quota rejection described below.
 2. `agent_end` records final usage, classifies the run outcome, applies the no-progress guard, and
    creates an in-memory continuation intent for an eligible active goal. It does not send the normal
    continuation.
@@ -96,12 +99,13 @@ A restrictive external allowlist can still hide Goal tools; Goal start and resto
 
 Pi owns recovery classification and execution. Goal delegates provider eligibility to the public `isRetryableAssistantError()` helper and overflow eligibility to `isContextOverflow()`.
 Native retry eligibility is separate from Goal's waiting policy: an unclassified assistant error can wait without becoming eligible for a Pi retry.
-Goal has no positive or negative retry patterns and no provider retry loop.
-Its existing subscription, quota, credit, and billing classifier remains final-status policy; it cannot veto recovery accepted by the native helpers.
+Goal has no positive or negative native retry patterns and does not implement Pi's provider retry loop.
+Its unchanged subscription, quota, credit, and billing classifier selects stopped `usage_limited` by default, or scheduled active waiting when `retryUsageLimits` is enabled; it cannot veto recovery accepted by the native helpers.
 SDK `auto_retry_start` and `auto_retry_end` notifications are not extension events, so Goal uses public agent and compaction events instead.
 
 - `agent_end` keeps a matching Goal active for native recovery or an unclassified assistant error, cancels ordinary continuation pressure, and records recovery ownership instead of stopping the Goal.
-  A native-ineligible recognized usage limit still selects `usage_limited` immediately.
+  With quota recovery disabled, a native-ineligible recognized usage limit still selects `usage_limited` immediately.
+  With recovery enabled, it retains recovery ownership until settlement before entering a scheduled wait.
   Unknown errors pass the same automatic-response, existing no-progress, token-budget, and helper-availability guards before recovery is recorded.
 - Native retries emit `agent_start` without `before_agent_start`; recovery carries the original manual or automatic ownership into that run.
 - A final `length` response retains its run origin until Pi confirms compaction recovery through `session_before_compact.willRetry` or an overflow `session_compact_failed` event.
@@ -113,25 +117,27 @@ SDK `auto_retry_start` and `auto_retry_end` notifications are not extension even
   This is separate from failed overflow or length compact-and-retry recovery, which requires a stopped state.
 - At settlement, `agent_settled.aborted` takes precedence over the retained failed assistant message and selects `paused`, even when a full session abort during backoff produced no new assistant response.
 - `session_compact_failed.aborted` also marks its matching ended run as cancelled, including threshold and overflow compaction. Independent manual compaction has no ended run to pause.
-- Otherwise, final recognized usage exhaustion selects `usage_limited`. Remaining provider retry or unclassified-error recovery enters deadline-free waiting while remaining canonically active.
+- Otherwise, final recognized usage exhaustion selects stopped `usage_limited` by default, or scheduled active waiting with quota recovery enabled. Remaining provider retry or unclassified-error recovery enters deadline-free waiting while remaining canonically active.
   Pending native-ineligible errors use a distinct `provider_error` kind, so their status does not claim unattempted retries were exhausted.
   Blank or absent error text still waits; any displayed detail is bounded and sanitized.
   Before publication, settlement rechecks current safety limits, budget, and helper availability because native post-run work can change them.
-  An explicit wait already accepted before a later assistant error retains its reason and deadline, unless cancellation, a recognized usage limit, or failed compaction recovery requires stopping.
-- Disabled retries or a zero retry budget can still end in quiet waiting, but never cause Goal to make an extra retry.
+  An explicit wait already accepted before a later non-usage assistant error retains its reason and deadline, unless cancellation or failed compaction recovery requires stopping.
+  Recognized usage errors instead follow the configured quota policy.
+- Disabled retries or a zero retry budget can still end in quiet waiting without another native retry; only opt-in quota recovery can schedule a later request for a recognized usage limit.
 - A non-Goal follow-up wakes the same Goal and preserves its stale-turn guard so the next model run can continue, complete, or wait again.
 - Remaining compaction recovery becomes `blocked` because no usable recovery response followed. Explicit `goal_blocked` and other stopped-state transitions remain independent of unknown-error waiting.
 
 Native retry-only cancellation preserves existing active waiting behavior for transient non-usage failures.
 The native TUI Escape handler during backoff and RPC `abort_retry` call `abortRetry()`, which emits an SDK retry-end notification but leaves `agent_settled.aborted` false.
-Final usage-limit policy still applies; otherwise Goal uses the same deadline-free wait as provider retry exhaustion, retains Goal identity and managed-run ownership, and sends no extra request.
+Final usage-limit policy still applies: default-off recovery stops as `usage_limited`, while enabled recovery can schedule a later request.
+For non-usage errors, Goal uses the same deadline-free wait as provider retry exhaustion, retains Goal identity and managed-run ownership, and sends no extra request.
 This is distinct from a full session abort or `/goal pause`, which selects `paused`; no Pi public-API change or private retry event is required.
 
 Native classification replaces Goal's former retry text fallbacks, not its ability to wait.
 The published `Connection prematurely closed BEFORE response` fixture and other truncated-stream variants remain native-ineligible, but now preserve the original active waiting and same-ID follow-up behavior.
 Mixed quota or authentication wording cannot prevent a native-classified retry; successful native recovery keeps the same Goal active.
 
-This policy intentionally also waits for invalid-request, authentication, permission, empty-message, and unrecognized account-limit errors that the existing usage policy does not identify.
+The ordinary provider-error policy intentionally also waits for invalid-request, authentication, permission, empty-message, and unrecognized account-limit errors that the existing usage policy does not identify.
 It cannot infer a structured error cause from arbitrary provider wording. Pi's native classifiers and Goal's usage-limit policy still use regex; Goal adds no new retry text heuristic.
 Waiting can last indefinitely, does not repair the failing request, and retains managed-run and cooperative Workflow Mutex ownership until wake, completion, or explicit cancellation.
 External messages can wake a permanently failing request and incur another provider charge; waiting itself creates no deadline, poller, continuation, or provider request.
@@ -141,6 +147,69 @@ Provider-error waiting cancels continuation pressure but retains Goal identity a
 Stopped transitions cancel current continuation ownership and block stale Goal-owned tool calls.
 Successful stopped-state resume rotates the goal id and starts a fresh blocker and safety audit.
 Waiting resume preserves the goal id, while clear removes Goal state and stale guards without aborting unrelated work.
+
+## Optional usage-limit recovery
+
+`retryUsageLimits` is a boolean that defaults to `false`; the [settings reference](./settings.md#usage-limit-recovery) owns enablement and operational warnings.
+This policy does not change error classification, native retry eligibility, backoff, cancellation, ordinary external waiting, or external-input wake rules.
+A final recognized usage error enters tagged active waiting only when enabled and after the native recovery boundary settles; cancellation takes precedence.
+It retains the Goal ID, cumulative usage, safety counters, and cooperative workflow ownership.
+A managed run stays nonterminal `active`: no terminal `usage_limited` event is emitted and later reopened.
+Quiet waiting is excluded from active elapsed time.
+
+### State and dispatch
+
+The existing wait record carries optional `usageLimit` metadata `{ provider, model, api }` and an absolute `resumeAt` deadline.
+Old wait records without that metadata remain ordinary waits.
+The fallback deadline is 15 minutes after rejection; another direct quota rejection of the scheduled request arranges a new wait.
+Successful work returns to normal Goal processing, and other errors retain their existing policies.
+Recovery does not call stopped-state `/goal resume`, rotate the Goal ID, or reset the safety epoch.
+
+The existing wait timer requests continuation intent; neither timers nor usage-query callbacks send model prompts directly.
+The common settled-idle dispatcher requires the exact session, Goal, generation, workflow ownership, available helpers, remaining budget, applicable safety limits, idle state, and no pending messages.
+One due deadline can dispatch at most one recovery request despite repeated settled events or competing callbacks.
+Start-boundary ownership checks still protect the non-atomic idle-send race described above.
+
+Pause, clear, edit, replacement, completion, terminal limits, helper loss, session replacement, shutdown, and observed model changes cancel owned timers, pending usage queries, and delivery intent.
+A model-scope mismatch stops quota recovery as `usage_limited`; Pi cannot immediately expose every credential change.
+Disabling recovery stops pending quota recovery only after the settings change commits; failed saves preserve the previous effective policy.
+Enabling it does not restart an old stopped Goal.
+Reload restores the persisted absolute deadline without restarting or re-clamping it; overdue deadlines still require the settled-idle gates.
+Only Goal-owned state and the chosen deadline persist, not raw usage reports, credentials, or account fingerprints.
+
+### Optional public reset hints
+
+Goal is independently installable and uses only the extension-neutral public [`usage:query:v1` event-bus protocol](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-usage/docs/api/usage-v1.md).
+It does not import, require, identify, or inspect another extension.
+A missing service leaves the fixed 15-minute fallback in place.
+The query uses `refresh: true`, the synchronous response-offer transport, a cancellation signal, and a deadline of at most 15 seconds; it does not create a usage poller or refresh-notification loop.
+The request is bound to the session-manager object, session ID, selected model and provider, Goal, and generation.
+Callbacks revalidate ownership after asynchronous work and synchronous event publication before changing the deadline.
+
+Only a fresh, valid refresh report for the selected provider can supply a hint.
+Public `modelKeys` must match the current model's exact `id` or `name`; Goal does not interpret private bucket IDs or display labels as model scope or window relationships.
+Unscoped buckets, including omitted or empty `modelKeys`, leave applicability ambiguous and require fallback.
+Among confirmed applicable exhausted buckets, Goal chooses the latest future reset so all confirmed constraints can reset.
+Missing or contradictory measurements, ambiguous window relationships, duplicate constraint identities, or missing usable future resets also require fallback.
+Absent, unavailable, malformed, stale, rejected, cancelled, or timed-out responses cannot supply a hint.
+
+Protocol `resetsAt` timestamps are Unix epoch milliseconds; `expiresAt` is report cache expiry, not quota reset.
+A selected deadline is only a scheduling hint, not proof that allowance has returned or a request-specific `retryAt` guarantee.
+Goal does not retain expired reports as authoritative availability evidence.
+The current public API cannot always express safe applicability, including for Codex, so neither an installed usage service nor a displayed reset guarantees an actionable hint.
+
+### Recovery accounting
+
+Request ownership, not error text alone, selects the exception.
+Only a directly quota-rejected, work-free **scheduled recovery request** is exempt from automatic-work and no-progress increments.
+Waiting and read-only usage queries create no model responses.
+The first or original rejection, manual requests, successful work, partial work, other errors, and existing native retry work keep their existing accounting.
+The exemption does not reset counters, subtract an unrelated earlier response, or bypass already exhausted safety or token limits.
+All provider-reported token usage remains counted, including failed-request usage.
+
+Because the unchanged classifier includes billing and credit exhaustion, enabled recovery can wait indefinitely and retain workflow ownership until account-owner action or cancellation.
+Recovery requests can incur charges; there is no automatic credit redemption, authentication change, or provider-settings mutation.
+Live quota reset, accounting delay, entitlement behavior, and provider-console agreement remain unverified; no live provider traffic was authorized for this change.
 
 ## Compaction persistence
 
@@ -177,7 +246,8 @@ Active elapsed time is accumulated only while status is `active` and not waiting
 
 Automatic-work safety is separate from the token budget:
 
-- `continuationLimits.automaticTurns` defaults to `25`; explicit `null` selects Unlimited, and `turn_end` counts normal responses from automatic continuations, including tool loops and matching recovery work.
+- `continuationLimits.automaticTurns` defaults to `25`; explicit `null` selects Unlimited, and `turn_end` counts normal responses from automatic continuations, including tool loops and matching native recovery work.
+  Only the work-free scheduled quota-rejection exception above is excluded.
 - `continuationLimits.noProgressTurns` defaults to `3`. Repeated empty or normalized-identical
   tool-free automatic runs pause the goal; attempted tool calls reset that heuristic.
 - The no-progress fingerprint is fixed-size and stores no raw assistant text.

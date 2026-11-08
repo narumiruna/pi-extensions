@@ -10,7 +10,7 @@ Explicit completion, blocker, and wait tools give each managed run a clear stopp
 
 - Starts and manages one session goal through `/goal` and its status, pause, resume, edit, and clear routes.
 - Continues exactly once from Pi's settled idle boundary after queued work, retries, and compaction have finished.
-- Waits quietly after exhausted retries or unclassified provider errors without adding a retry attempt.
+- Waits quietly after exhausted retries or unclassified provider errors; optional usage-limit recovery can schedule later requests.
 - Uses explicit `goal_complete`, `goal_blocked`, and `goal_wait` tools with stale-goal guards and evidence requirements.
 - Renders an accepted `goal_complete` summary as Markdown in the TUI.
 - Tracks active, paused, blocked, usage-limited, budget-limited, waiting, and complete outcomes separately.
@@ -62,7 +62,8 @@ A missing file uses the defaults without creating it:
     "automaticTurns": 25,
     "noProgressTurns": 3
   },
-  "rpc": { "enabled": false }
+  "rpc": { "enabled": false },
+  "retryUsageLimits": false
 }
 ```
 
@@ -70,6 +71,12 @@ The automatic-work limit counts model responses in Goal-owned automatic work, in
 The no-progress guard pauses repeated tool-free output.
 Choose **Unlimited** or **Off** explicitly to disable the corresponding guard; Unlimited requires confirmation and can continue consuming tokens and provider cost.
 Neither these guards nor an optional token budget is a dollar-cost cap.
+
+**Retry usage limits** is **Off** by default: recognized quota errors stop the Goal until manual resume.
+Opt in to keep the Goal waiting and attempt recovery after a usable reset hint or a fixed 15-minute fallback, without requiring another extension.
+Recovery can make paid requests and wait indefinitely for billing, credit, or entitlement action; it does not redeem credits or change authentication or settings.
+Only work-free, directly quota-rejected scheduled recovery requests are exempt from automatic-work and no-progress counters; all reported tokens still count.
+See [usage-limit recovery](./docs/settings.md#usage-limit-recovery) before enabling it.
 
 Menu saves apply immediately, run in order, preserve unknown fields, and publish atomically.
 Manual edits apply at session start or `/reload`.
@@ -89,8 +96,8 @@ Workflow mutual exclusion is cooperative and does not prevent unrelated processe
 
 Goal is independently installable and keeps its standalone behavior when no other protocol participant is present.
 On the characterized Pi `0.84.2` runtime, it participates in the anonymous `workflow:mutex:v1` `agent-workflow` group.
-An active Goal holds the group through ordinary work, external waiting, continuation delivery, compaction recovery, and provider retry.
-Paused, blocked, usage-limited, budget-limited, complete, cleared, and legacy-queue-only states do not hold it.
+An active Goal holds the group through ordinary work, external waiting, optional usage-limit recovery, continuation delivery, compaction recovery, and provider retry.
+Paused, blocked, stopped `usage_limited`, budget-limited, complete, cleared, and legacy-queue-only states do not hold it.
 
 Direct starts, menu starts, managed-run starts, stopped resumes, and stopped-goal edits use one final synchronous admission.
 Admission occurs after validation and confirmation but before any tool, Goal-state, persistence, prompt, queue, or status mutation.
@@ -179,7 +186,7 @@ This version no longer reads that global file, and `/goal clear` removes any leg
 - `paused · automatic limit 25/25` — the automatic-work limit paused the goal; `/goal` opens the recovery preview.
 - `paused · automatic 12/25` — another pause reason stopped work while preserving the finite epoch.
 - `blocked · automatic 12/25` — progress requires user or external action, or a terminal non-usage error stopped work.
-- `usage · automatic 12/25` — the provider or account usage limit stopped work.
+- `usage · automatic 12/25` — the provider or account usage limit stopped work under the manual-recovery policy; enabled recovery instead shows waiting.
 - `budget 100k/100k · automatic 12/25` — the user-configured token budget was reached; auto-continuation stops.
 - `complete` — shown briefly after `goal_complete` succeeds.
 
@@ -277,10 +284,11 @@ An accepted call keeps the canonical Goal status active, checkpoints active elap
 It persists the reason and optional absolute deadline and terminates the normal single-tool run.
 Call `goal_wait` alone because Pi only guarantees early termination when every finalized result in a parallel tool batch terminates.
 
-After Pi finishes handling a provider error, pi-goal enters the same active waiting state without a deadline unless cancellation, an explicit usage limit, a failed compaction recovery, or a Goal safety limit requires a stopped state.
-This applies to exhausted, disabled, or zero-budget retries and to errors Pi does not classify for retry; Goal never adds a retry attempt.
+After Pi finishes handling a non-usage provider error, pi-goal enters the same active waiting state without a deadline unless cancellation, a failed compaction recovery, or a Goal safety limit requires a stopped state.
+This applies to exhausted, disabled, or zero-budget retries and to errors Pi does not classify for retry; this ordinary provider-error wait adds no retry attempt.
+Recognized usage limits stop by default; [opt-in recovery](./docs/settings.md#usage-limit-recovery) instead uses a scheduled active wait.
 The warning reports bounded provider status and explains how a follow-up or `/goal resume` wakes the Goal.
-An already accepted `goal_wait` keeps its reason and deadline if a later assistant error occurs; the provider error does not replace that wait.
+An already accepted `goal_wait` keeps its reason and deadline if a later non-usage assistant error occurs; recognized usage errors instead follow the configured quota policy.
 Context-overflow compaction exhaustion remains blocked because another model turn can repeat the same oversized request without corrective compaction.
 
 Interactive input, RPC input, another extension's `sendUserMessage()` input, and supported non-Goal custom follow-ups clear the wait before their turn runs.
@@ -320,13 +328,14 @@ The user can resolve the external condition and run `/goal resume` to rotate the
 
 ## 🛑 Interruption and queued-input behavior
 
-A user pause or aborted turn produces `paused`; a final recognized provider/account quota error produces `usage_limited`; failed native compaction recovery produces `blocked`.
+A user pause or aborted turn produces `paused`; a final recognized provider/account quota error produces stopped `usage_limited` by default, or active waiting when `retryUsageLimits` is enabled; failed native compaction recovery produces `blocked`.
 Each stopped transition cancels pending continuation intent or delivery and aborts stale work when applicable.
 Stale tool calls remain blocked until the next non-goal user prompt, successful reactivation or replacement, or `/goal clear`.
 On `/goal clear`, the extension clears goal state, continuation markers, and any stale tool-call block without aborting an unrelated in-flight turn.
 Pi decides provider retry and context-overflow eligibility through its native classifiers.
 Its retry settings control provider retry attempts; native compact-and-retry recovery uses Pi's compaction settings and separate recovery limit.
-Goal adds no retry patterns or retry loop. Its usage-limit policy selects the final status without preventing recovery that Pi permits.
+Goal adds no retry patterns and does not change Pi's native retry eligibility, backoff, cancellation, or accounting.
+Its separate, default-off usage-limit policy can schedule recovery through the existing wait dispatcher after native recovery settles.
 An unclassified assistant error, including `Connection prematurely closed BEFORE response`, stays active until settlement and then enters deadline-free waiting even when Pi does not retry it.
 This intentionally also applies to invalid-request, authentication, permission, empty-message, and unrecognized account-limit errors that do not match the existing usage-limit policy.
 These errors can wait indefinitely and retain managed-run and Workflow Mutex ownership; use `/goal pause` or managed-run cancellation to stop them.
@@ -337,7 +346,7 @@ Native provider retries and overflow or truncated-response compaction retries st
 No extra continuation is queued, and automatic ownership remains charged through retry `agent_start` events.
 At `agent_settled`, reported cancellation takes precedence, including a full session abort during retry backoff without another assistant response.
 An aborted automatic compaction also pauses its matching Goal through Pi's compaction failure event.
-A final recognized usage limit selects `usage_limited`; otherwise remaining provider retry or unclassified-error recovery enters a deadline-free active wait before any continuation dispatches.
+A final recognized usage limit selects stopped `usage_limited` with recovery disabled, or scheduled active waiting with recovery enabled; otherwise remaining provider retry or unclassified-error recovery enters a deadline-free active wait before any continuation dispatches.
 A later non-Goal input wakes the same Goal without rotating its stale-turn guard, so the model can continue, complete, or enter another wait with the current `goal_id`.
 If matching compaction recovery still exists at `agent_settled`, the Goal becomes `blocked` because recovery did not produce usable context.
 Stale recovery cannot wait or block a replacement goal.
@@ -391,6 +400,7 @@ A successful start produces canonical state on `pi-goal:event:${runId}`:
 
 Later state events use `active`, `complete`, `blocked`, `paused`, `usage_limited`, `budget_limited`, or `cleared`.
 Only `complete` is a successful terminal outcome.
+Enabled usage-limit recovery keeps the same Goal ID and managed run `active`; it does not emit terminal `usage_limited` and later reopen that run.
 A matching completion may include `summary`; other terminal outcomes may include `reason`.
 Events come only from canonical Goal persistence and only for the matching managed run.
 Manual and restored Goals are not adopted or broadcast, unchanged persistence does not duplicate a status, and each run emits at most one terminal event.
