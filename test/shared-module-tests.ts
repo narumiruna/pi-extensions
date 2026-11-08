@@ -36,7 +36,7 @@ export const sharedModuleTests = [
   "packages/pi-context-management/test/notes-state.test.ts",
   "packages/pi-context-management/test/recall-context.test.ts",
   "packages/pi-context-management/test/settings.test.ts",
-  "packages/pi-file-context/test/build-runtime.test.ts",
+  "packages/pi-files/test/build-runtime.test.ts",
   "packages/pi-fleet/test/build-runtime.test.ts",
   "packages/pi-fleet/test/launch-envelope.test.ts",
   "packages/pi-fleet/test/pi-invocation.test.ts",

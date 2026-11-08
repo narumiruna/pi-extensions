@@ -2,6 +2,9 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-edit-scope)](https://www.npmjs.com/package/@narumitw/pi-edit-scope) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> [!WARNING]
+> Archived reference. This extension is replaced by [Pi Files](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-files). Follow the [migration guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-files/docs/migration.md). Do not load Pi Files together with `pi-file-context` or `pi-edit-scope`. The instructions below describe the archived package, not a current installation recommendation. No npm deprecation notice is implied.
+
 Limit Pi's native `write` and `edit` calls to files selected by the user. Other files remain readable. The restriction stays active until the user explicitly ends it.
 
 ## ✨ Features
