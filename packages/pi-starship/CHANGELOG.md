@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.67.1
+
+### Patch Changes
+
+- 45401e4: Update runtime dependencies within supported peer dependency ranges.
+
 ## 0.67.0
 
 ### Minor Changes

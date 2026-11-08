@@ -1,5 +1,11 @@
 # @narumitw/pi-chat
 
+## 0.1.12
+
+### Patch Changes
+
+- 45401e4: Update runtime dependencies within supported peer dependency ranges.
+
 ## 0.1.11
 
 ### Patch Changes

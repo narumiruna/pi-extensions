@@ -1,5 +1,11 @@
 # @narumitw/pi-langfuse
 
+## 0.54.1
+
+### Patch Changes
+
+- 45401e4: Update runtime dependencies within supported peer dependency ranges.
+
 ## 0.54.0
 
 ### Minor Changes

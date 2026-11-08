@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-chat",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Peer-to-peer chat extension for Pi.",
   "type": "module",
   "license": "MIT",
