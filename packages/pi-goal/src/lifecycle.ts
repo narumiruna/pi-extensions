@@ -27,6 +27,7 @@ import {
 } from "./runtime.js";
 import { hasAssistantToolCall } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
+import { usageLimitScope } from "./usage-limit-recovery.js";
 
 const REMOVED_QUEUE_SETTING_WARNING =
   "Ordered goal queue has been removed. Use /goal edit to reprioritize an active objective, or start /goal <objectives> if no active goal exists.";
@@ -175,6 +176,10 @@ export function registerGoalLifecycle(
     runtime.clearTerminalDetails();
     runtime.releaseWorkflow();
     runtime.unbindWorkflowSession(shutdownSession);
+  });
+
+  pi.on("model_select", (_event, ctx) => {
+    if (sessionActive) runtime.usageLimitRecovery.modelChanged(ctx);
   });
 
   pi.on("session_before_compact", (event, ctx) => {
@@ -425,7 +430,8 @@ export function registerGoalLifecycle(
     if (runtime.guardAbortGoalId) runtime.guardAbortGoalId = undefined;
     const goalPrompt = runtime.consumeOwnedGoalPrompt(event.prompt);
     const goalPromptGoalId = goalPrompt?.goalId;
-    const continuationGoalId = goalPromptGoalId ? undefined : runtime.markContinuationStarted(event.prompt);
+    const continuation = goalPromptGoalId ? undefined : runtime.markContinuationStarted(event.prompt);
+    const continuationGoalId = continuation?.goalId;
     const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
     const ownedPromptBoundary = runtime.hasOwnedPromptBoundary(event.prompt);
     const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
@@ -469,7 +475,7 @@ export function registerGoalLifecycle(
     if (runtime.activeGoal?.status !== "active" || !runtime.ownsWorkflow(runtime.activeGoal)) {
       return goalContractBoundaryResult(ctx);
     }
-    runtime.beginAgentRun(runtime.activeGoal.id, runOrigin);
+    runtime.beginAgentRun(runtime.activeGoal.id, runOrigin, continuation?.usageLimitRetry);
     if (!runtime.goalToolsAvailable()) {
       runtime.pauseGoalForUnavailableTools(ctx, ownedPromptGoalId !== undefined);
       return goalContractBoundaryResult(ctx);
@@ -546,7 +552,7 @@ export function registerGoalLifecycle(
 
     if (finalAssistant?.stopReason === "error") {
       const nativeRecovery = isRetryableGoalInterruption(finalAssistant);
-      if (!nativeRecovery && isUsageLimitedGoalInterruption(finalAssistant)) {
+      if (!nativeRecovery && isUsageLimitedGoalInterruption(finalAssistant) && !runtime.settings.retryUsageLimits) {
         runtime.clearGoalRecoveryForGoal(goalId);
         stopGoalAfterAgentEnd(ctx, runtime.activeGoal, finalAssistant, "usage_limited");
         return;
@@ -572,6 +578,9 @@ export function registerGoalLifecycle(
             : "provider_error",
         automaticOwner: run.origin === "automatic",
         errorMessage: finalAssistant.errorMessage,
+        ...(runtime.settings.retryUsageLimits && isUsageLimitedGoalInterruption(finalAssistant)
+          ? { usageLimitScope: run.usageLimitRetry ?? usageLimitScope(ctx) }
+          : {}),
       };
       runtime.cancelContinuationWork();
       runtime.persistGoal(runtime.activeGoal);

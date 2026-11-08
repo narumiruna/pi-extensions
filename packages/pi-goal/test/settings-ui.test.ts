@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createCustomSelectorHarness, createMockContext, createMockPi } from "../../../test/support.js";
 import { GoalCommandController } from "../src/commands.js";
 import { createGoal, GoalRuntime } from "../src/runtime.js";
 import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "../src/settings.js";
@@ -176,7 +176,7 @@ test("replacement confirmation sanitizes terminal controls without changing goal
   assert.equal(state.activeGoal?.text, "current\u001b]8;;bad\u0007 objective");
 });
 
-test("standard settings keep all three controls on one level", async () => {
+test("standard settings keep all four controls on one level", async () => {
   const state = runtime();
   let title = "";
   let options: string[] = [];
@@ -191,7 +191,7 @@ test("standard settings keep all three controls on one level", async () => {
   });
   await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
   assert.match(title, /Pi Goal Settings/);
-  assert.deepEqual(options, ["Automatic-work limit", "No-progress guard", "Managed run RPC"]);
+  assert.deepEqual(options, ["Automatic-work limit", "No-progress guard", "Retry usage limits", "Managed run RPC"]);
 });
 
 test("automatic-work settings can open directly from the safety recovery flow", async () => {
@@ -461,6 +461,186 @@ test("automatic-work editing rejects a replacement active goal without saving", 
   assert.match(context.notifications.at(-1)?.message ?? "", /active goal changed/i);
 });
 
+test("Retry usage limits saves each toggle without restarting an already stopped Goal", async () => {
+  const state = runtime();
+  state.activeGoal = createGoal("stopped objective", undefined, 0);
+  state.activeGoal.status = "usage_limited";
+  const goalId = state.activeGoal.id;
+  const saved: GoalSettings[] = [];
+  const selections = ["Retry usage limits", "Retry usage limits", undefined];
+  const context = createMockContext({
+    hasUI: true,
+    mode: "tui",
+    select: async () => selections.shift(),
+  });
+
+  assert.equal(state.settings.retryUsageLimits, false);
+  await showGoalSettings(state, context.ctx, {
+    settingsPath: "/tmp/pi-goal.json",
+    save(settings) {
+      saved.push(structuredClone(settings));
+    },
+  });
+
+  assert.deepEqual(
+    saved.map((settings) => settings.retryUsageLimits),
+    [true, false],
+  );
+  assert.deepEqual(state.settings, DEFAULT_GOAL_SETTINGS);
+  assert.equal(state.activeGoal?.id, goalId);
+  assert.equal(state.activeGoal?.status, "usage_limited");
+  assert.match(context.notifications.at(-1)?.message ?? "", /Retry usage limits: Off/i);
+});
+
+test("Retry usage limits rolls back after save or application failure in both directions", async () => {
+  for (const initial of [false, true]) {
+    for (const failure of ["save", "apply"] as const) {
+      const state = runtime();
+      state.settings.retryUsageLimits = initial;
+      if (failure === "apply") {
+        state.enforceAutomaticTurnLimit = () => {
+          throw new Error("application failed");
+        };
+      }
+      const saved: boolean[] = [];
+      const selections = ["Retry usage limits", undefined];
+      const context = createMockContext({
+        hasUI: true,
+        mode: "tui",
+        select: async () => selections.shift(),
+      });
+
+      await showGoalSettings(state, context.ctx, {
+        settingsPath: "/tmp/pi-goal.json",
+        save(settings) {
+          if (failure === "save") throw new Error("disk full");
+          saved.push(settings.retryUsageLimits);
+        },
+      });
+
+      assert.equal(state.settings.retryUsageLimits, initial);
+      assert.deepEqual(saved, failure === "save" ? [] : [!initial, initial]);
+      assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
+    }
+  }
+});
+
+test("Retry usage limits retains Kit framing, warnings, and remapped standard actions", async () => {
+  const state = runtime();
+  const roles: Array<{ role: string; text: string }> = [];
+  const tui = createTuiHarness({
+    width: 80,
+    rows: 30,
+    theme: {
+      fg: (role, text) => {
+        roles.push({ role, text });
+        return text;
+      },
+      bold: (text) => text,
+    },
+    keybindings: new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.down": "ctrl+n",
+      "tui.select.up": "ctrl+p",
+      "tui.select.confirm": "ctrl+y",
+      "tui.select.cancel": "ctrl+q",
+    }),
+  });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const saved: boolean[] = [];
+
+  try {
+    const running = showGoalSettings(state, context.ctx, {
+      settingsPath: "/tmp/pi-goal.json",
+      save(settings) {
+        saved.push(settings.retryUsageLimits);
+      },
+    });
+    await tui.waitForOpen();
+    tui.send("\u000e");
+    tui.send("\u000e");
+    for (const width of [40, 80, 120]) {
+      const lines = tui.render(width);
+      const frame = lines.join(" ").replace(/\s+/gu, " ");
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+      assert.equal(lines[0], "─".repeat(width));
+      assert.equal(lines.at(-1), "─".repeat(width));
+      assert.match(frame, /→ Retry usage limits\s+Off/);
+      assert.match(frame, /repeated provider requests.*charges/i);
+      assert.match(frame, /billing.*indefinitely/i);
+      assert.match(frame, /15-minute fallback/i);
+      assert.match(frame, /Ctrl\+Y.*change/i);
+      assert.match(frame, /Ctrl\+Q.*back/i);
+    }
+    assert.ok(roles.some(({ role, text }) => role === "border" && text === "─".repeat(80)));
+    assert.ok(roles.some(({ role, text }) => role === "muted" && /provider requests/i.test(text)));
+
+    tui.send("\u0019");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+    assert.equal(state.settings.retryUsageLimits, true);
+    assert.match(tui.render().join(" "), /Retry usage limits\s+On/);
+    assert.deepEqual(saved, [true]);
+    tui.send(" ");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+    assert.equal(state.settings.retryUsageLimits, false);
+    assert.deepEqual(saved, [true, false]);
+
+    for (const rows of [8, 7, 4, 30]) {
+      const lines = tui.resize({ width: 40, rows });
+      assert.ok(lines.length <= Math.max(1, rows - 3));
+      assert.ok(lines.every((line) => visibleWidth(line) <= 40));
+      assert.match(lines.join(" "), /→ Retry usage limits/);
+      assert.equal(lines[0] === "─".repeat(40), rows >= 8);
+    }
+    for (const width of [1, 20, 80]) {
+      const lines = tui.render(width);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    }
+    tui.invalidate();
+    assert.match(tui.render().join(" "), /Retry usage limits/);
+    tui.send("\u0011");
+    await running;
+    assert.equal(tui.isOpen, false);
+  } finally {
+    tui.dispose();
+  }
+});
+
+test("Retry usage limits reverts its displayed value after failure and the next toggle can save", async () => {
+  const state = runtime();
+  const tui = createTuiHarness({ width: 80, rows: 30 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  let attempts = 0;
+  try {
+    const running = showGoalSettings(state, context.ctx, {
+      settingsPath: "/tmp/pi-goal.json",
+      save() {
+        attempts++;
+        if (attempts === 1) throw new Error("disk full");
+      },
+    });
+    await tui.waitForOpen();
+    tui.type("Retry usage");
+    tui.press("tui.select.confirm");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+    assert.equal(state.settings.retryUsageLimits, false);
+    assert.match(tui.render().join(" "), /Retry usage limits\s+Off/);
+    assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
+    tui.press("tui.select.confirm");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+    assert.equal(state.settings.retryUsageLimits, true);
+    assert.match(tui.render().join(" "), /Retry usage limits\s+On/);
+    assert.equal(attempts, 2);
+    tui.press("ctrl+c");
+    await running;
+  } finally {
+    tui.dispose();
+  }
+});
+
 test("Managed run RPC setting defaults off and saves immediately", async () => {
   const state = runtime();
   let saved: GoalSettings | undefined;
@@ -530,10 +710,40 @@ test("Managed run RPC setting rolls back when save fails", async () => {
   assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
 });
 
+test("settings and invalid-file details render no cells at zero width", async () => {
+  for (const invalid of [false, true]) {
+    const state = runtime();
+    if (invalid) state.settingsLoadIssue = { kind: "invalid", reason: "invalid settings shape" };
+    const frames: string[][] = [];
+    const context = createMockContext({
+      mode: "tui",
+      hasUI: true,
+      custom: async (factory: unknown) => {
+        const harness = createCustomSelectorHarness(factory);
+        try {
+          frames.push(harness.render(0));
+          harness.invalidate();
+          frames.push(harness.render(0));
+          harness.handleInput("\u0003");
+          return await harness.resultPromise;
+        } finally {
+          harness.dispose();
+        }
+      },
+    });
+
+    await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
+
+    assert.deepEqual(frames, [[], []]);
+    assert.deepEqual(state.settings, DEFAULT_GOAL_SETTINGS);
+  }
+});
+
 test("invalid settings use a standard read-only detail screen", async () => {
   const state = runtime();
   state.settingsLoadIssue = { kind: "invalid", reason: "invalid settings shape" };
   let title = "";
+  let saves = 0;
   const context = createMockContext({
     hasUI: true,
     mode: "tui",
@@ -542,16 +752,43 @@ test("invalid settings use a standard read-only detail screen", async () => {
       return undefined;
     },
   });
-  await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
+  await showGoalSettings(state, context.ctx, {
+    settingsPath: "/tmp/pi-goal.json",
+    save() {
+      saves++;
+    },
+  });
+  assert.equal(saves, 0);
+  assert.match(title, /Retry usage limits: Off/i);
   assert.match(title, /Read only/i);
   assert.match(title, /Invalid settings file/i);
   assert.match(title, /Automatic-work limit: Up to 25 responses/i);
   assert.match(title, /Managed run RPC: Off/i);
 });
 
-test("showGoalSettings uses an observable manual fallback outside TUI", async () => {
-  const state = runtime();
-  const context = createMockContext({ hasUI: true, mode: "rpc" });
-  await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
-  assert.match(context.notifications.at(-1)?.message ?? "", /Edit pi-goal settings manually/);
+test("showGoalSettings never opens or saves settings outside TUI and gives RPC a manual path", async () => {
+  for (const mode of ["rpc", "print", "json"] as const) {
+    const state = runtime();
+    let customCalls = 0;
+    let saves = 0;
+    const context = createMockContext({
+      mode,
+      hasUI: mode === "rpc",
+      custom: async () => {
+        customCalls++;
+      },
+    });
+    await showGoalSettings(state, context.ctx, {
+      settingsPath: "/tmp/pi-goal.json",
+      save() {
+        saves++;
+      },
+    });
+    assert.equal(customCalls, 0);
+    assert.equal(saves, 0);
+    assert.deepEqual(state.settings, DEFAULT_GOAL_SETTINGS);
+    if (mode === "rpc") {
+      assert.match(context.notifications.at(-1)?.message ?? "", /Edit pi-goal settings manually: \/tmp\/pi-goal.json/);
+    }
+  }
 });

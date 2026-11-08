@@ -96,6 +96,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
     "context",
     "input",
     "message_start",
+    "model_select",
     "session_before_compact",
     "session_compact",
     "session_compact_failed",

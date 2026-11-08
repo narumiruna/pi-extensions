@@ -33,7 +33,13 @@ export async function showGoalSettings(
   const invalid = runtime.settingsLoadIssue?.kind === "invalid";
   const previewGoalIds = new Map<LimitField, string | null>();
   type Screen = "settings" | "automatic" | "no-progress" | "invalid";
-  type Action = "open-automatic" | "open-no-progress" | "choose-automatic" | "choose-no-progress" | "set-rpc";
+  type Action =
+    | "open-automatic"
+    | "open-no-progress"
+    | "choose-automatic"
+    | "choose-no-progress"
+    | "set-retry-usage-limits"
+    | "set-rpc";
   const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
     start: invalid ? "invalid" : (options.initialScreen ?? "settings"),
     screens: {
@@ -57,6 +63,15 @@ export async function showGoalSettings(
             action: "open-no-progress",
           },
           {
+            id: "retryUsageLimits",
+            label: "Retry usage limits",
+            description:
+              "Automatically retry usage limits. Repeated provider requests can incur charges. Billing or credit failures can wait indefinitely. Use a 15-minute fallback without a usable reset time.",
+            currentValue: runtime.settings.retryUsageLimits ? "On" : "Off",
+            values: ["Off", "On"],
+            action: "set-retry-usage-limits",
+          },
+          {
             id: "rpcEnabled",
             label: "Managed run RPC",
             description:
@@ -76,6 +91,7 @@ export async function showGoalSettings(
           `Invalid settings file. Pi-goal is using built-in defaults. Fix ${safeTerminalText(settingsPath)} and run /reload. The file will not be overwritten.`,
           `Automatic-work limit: ${formatAutomaticWork(runtime.settings.continuationLimits.automaticTurns)}`,
           `No-progress guard: ${formatNoProgressProtection(runtime.settings.continuationLimits.noProgressTurns)}`,
+          `Retry usage limits: ${runtime.settings.retryUsageLimits ? "On" : "Off"}`,
           `Managed run RPC: ${runtime.settings.rpc.enabled ? "On" : "Off"}`,
         ],
         hint: "back",
@@ -112,6 +128,24 @@ export async function showGoalSettings(
           previewGoalIds.get("noProgressTurns") ?? null,
           isMenuCurrent,
         ),
+      "set-retry-usage-limits": async ({ value }) => {
+        const enabled = value === "On";
+        if (enabled === runtime.settings.retryUsageLimits) return { kind: "stay" };
+        try {
+          const next = {
+            ...structuredClone(runtime.settings),
+            retryUsageLimits: enabled,
+          } satisfies GoalSettings;
+          applyGoalSettings(runtime, next, ctx, {
+            save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
+          });
+          notifyTerminal(ctx.ui, `Retry usage limits: ${enabled ? "On" : "Off"}.`, "info");
+          return { kind: "stay" };
+        } catch (error) {
+          notifySettingsFailure(ctx, settingsPath, error);
+          return { kind: "rejected" };
+        }
+      },
       "set-rpc": async ({ value }) => {
         const enabled = value === "On";
         if (enabled === runtime.settings.rpc.enabled) return { kind: "stay" };
@@ -268,23 +302,36 @@ export function applyGoalSettings(
   ctx: ExtensionCommandContext,
   options: GoalSettingsApplyOptions = {},
 ) {
+  runtime.withSettingsPublication(() => applyGoalSettingsTransaction(runtime, next, ctx, options));
+}
+
+function applyGoalSettingsTransaction(
+  runtime: GoalRuntime,
+  next: GoalSettings,
+  ctx: ExtensionCommandContext,
+  options: GoalSettingsApplyOptions,
+) {
   const snapshot = runtime.snapshotSettingsApplicationState();
   let fileSaved = false;
+  let applyingRuntime = false;
   try {
     runtime.settings = structuredClone(next);
     options.save?.(next);
     fileSaved = options.save !== undefined;
+    applyingRuntime = true;
     const activeGoalId = runtime.activeGoal?.id;
     const abortOwnedRun = activeGoalId !== undefined && runtime.agentRunGoalId === activeGoalId;
     const pausedByAutomaticLimit = runtime.enforceAutomaticTurnLimit(ctx, abortOwnedRun);
     if (!pausedByAutomaticLimit) runtime.enforceNoProgressLimit(ctx, abortOwnedRun);
+    runtime.usageLimitRecovery.stopIfDisabled(ctx);
     if (runtime.activeGoal) {
       runtime.updateStatus(ctx, runtime.activeGoal);
     }
   } catch (error) {
     const rollbackErrors: unknown[] = [];
     try {
-      runtime.restoreSettingsApplicationState(snapshot);
+      if (applyingRuntime) runtime.restoreSettingsApplicationState(snapshot);
+      else runtime.settings = structuredClone(snapshot.settings);
     } catch (rollbackError) {
       rollbackErrors.push(rollbackError);
     }
@@ -294,6 +341,8 @@ export function applyGoalSettings(
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError);
       }
+    }
+    if (applyingRuntime) {
       try {
         restorePersistedRuntime(runtime, ctx);
       } catch (rollbackError) {
