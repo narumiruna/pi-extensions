@@ -114,6 +114,48 @@ describe("cwd discovery", () => {
     expect(await discoverScopeFiles(join(root, "nested"), false)).toEqual([join(root, "nested", "inside")]);
   });
 
+  it("scans every directory level before deeper directories and closes each handle before opening the next", async () => {
+    const tree = new Map([
+      [root, directory([entry("a", "directory"), entry("z.txt"), entry("b", "directory")])],
+      [join(root, "a"), directory([entry("deep", "directory"), entry("a.txt")])],
+      [join(root, "b"), directory([entry("b.txt")])],
+      [join(root, "a", "deep"), directory([entry("deep.txt")])],
+    ]);
+    const events: string[] = [];
+    for (const [path, dir] of tree) {
+      dir.close.mockImplementation(async () => {
+        events.push(`close ${path}`);
+      });
+    }
+    vi.spyOn(fs, "opendir").mockImplementation(async (path) => {
+      const dir = tree.get(String(path));
+      if (!dir) throw new Error(`Unexpected directory: ${path}`);
+      events.push(`open ${path}`);
+      return dir.handle;
+    });
+    const inspect = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation(async (path) => stats(tree.has(String(path)) ? "directory" : "file"));
+
+    expect(await discoverScopeFiles(root, true)).toEqual([
+      join(root, "a", "a.txt"),
+      join(root, "a", "deep", "deep.txt"),
+      join(root, "b", "b.txt"),
+      join(root, "z.txt"),
+    ]);
+    expect(inspect.mock.calls.map(([path]) => path)).toEqual([
+      join(root, "a"),
+      join(root, "z.txt"),
+      join(root, "b"),
+      join(root, "a", "deep"),
+      join(root, "a", "a.txt"),
+      join(root, "b", "b.txt"),
+      join(root, "a", "deep", "deep.txt"),
+    ]);
+    expect(events).toEqual([...tree.keys()].flatMap((path) => [`open ${path}`, `close ${path}`]));
+    for (const dir of tree.values()) expect(dir.close).toHaveBeenCalledOnce();
+  });
+
   it("creates no filesystem entries", async () => {
     await fs.writeFile(join(root, "a"), "before");
     const mkdir = vi.spyOn(fs, "mkdir");
@@ -248,6 +290,20 @@ describe("cancellation", () => {
     const open = vi.spyOn(fs, "opendir");
     await expect(discoverScopeFiles(root, false, AbortSignal.abort(new Error("stop")))).rejects.toThrow("stop");
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("does not open queued directories after cancellation while closing their parent", async () => {
+    const dir = directory([entry("a", "directory"), entry("b", "directory")]);
+    const controller = new AbortController();
+    dir.close.mockImplementation(async () => {
+      controller.abort(new Error("stop"));
+    });
+    const open = vi.spyOn(fs, "opendir").mockResolvedValue(dir.handle);
+    vi.spyOn(fs, "lstat").mockResolvedValue(stats("directory"));
+
+    await expect(discoverScopeFiles(root, false, controller.signal)).rejects.toThrow("stop");
+    expect(open.mock.calls).toEqual([[root]]);
+    expect(dir.close).toHaveBeenCalledOnce();
   });
 
   it.each(["open", "read", "inspect", "close"])(

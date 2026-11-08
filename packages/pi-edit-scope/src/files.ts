@@ -41,7 +41,7 @@ async function closeDirectory(handle: Dir, path: string, signal?: AbortSignal): 
 }
 
 /**
- * Return normalized absolute lexical paths beneath cwd. Skip symlink entries and
+ * Scan breadth-first and return sorted absolute lexical paths beneath cwd. Skip symlink entries and
  * nonregular files. Hidden entries still count toward the work cap. No writes,
  * .gitignore processing, or partial results. A symlink used as cwd is permitted.
  */
@@ -52,8 +52,10 @@ export async function discoverScopeFiles(
 ): Promise<string[]> {
   const files: string[] = [];
   let entryCount = 0;
+  const directories = [{ directory: resolve(cwd), depth: 0 }];
 
-  async function visit(directory: string, depth: number): Promise<void> {
+  // Appended directories are visited after every directory already in the queue.
+  for (const { directory, depth } of directories) {
     signal?.throwIfAborted();
     if (depth > MAX_SCOPE_DEPTH) {
       throw new Error(`Scope scan exceeds depth ${MAX_SCOPE_DEPTH}. Open a narrower working directory.`);
@@ -96,8 +98,7 @@ export async function discoverScopeFiles(
         // Recheck metadata so a previously observed directory symlink is not followed.
         if (stats.isSymbolicLink()) continue;
         if (stats.isDirectory()) {
-          if (!excludedDirectories.has(entry.name)) await visit(path, depth + 1);
-          signal?.throwIfAborted();
+          if (!excludedDirectories.has(entry.name)) directories.push({ directory: path, depth: depth + 1 });
         } else if (stats.isFile()) {
           files.push(path);
           if (files.length > MAX_SCOPE_FILES) {
@@ -112,8 +113,6 @@ export async function discoverScopeFiles(
     }
   }
 
-  signal?.throwIfAborted();
-  await visit(resolve(cwd), 0);
   signal?.throwIfAborted();
   return files.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
