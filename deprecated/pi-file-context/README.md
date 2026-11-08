@@ -4,6 +4,9 @@
 [![Pi Extension](https://img.shields.io/badge/Pi-extension-blue)](https://github.com/earendil-works/pi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+> [!WARNING]
+> Archived reference. This extension is replaced by [Pi Files](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-files). Follow the [migration guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-files/docs/migration.md). Do not load Pi Files together with `pi-file-context` or `pi-edit-scope`. The instructions below describe the archived package, not a current installation recommendation. No npm deprecation notice is implied.
+
 Browse project files in Pi, select exact lines or Git changes, and review each snapshot before attaching it to the next prompt.
 
 ## ✨ Features

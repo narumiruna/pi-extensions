@@ -58,8 +58,7 @@ These extensions are part of my daily Pi setup:
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Use OpenAI Codex Remote Compaction V2 to persist and replay bounded opaque checkpoints, with `/codex-compact` manual controls and safe Pi-native fallback. | `pi install npm:@narumitw/pi-codex-compact` |
 | [`pi-codex-imagegen`](./packages/pi-codex-imagegen) | Generate images through `/codex-imagegen` and a default-enabled Codex tool, without starting a Codex agent. | `pi install npm:@narumitw/pi-codex-imagegen` |
 | [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
-| [`pi-edit-scope`](./packages/pi-edit-scope) | Restrict file edits to selected targets while keeping other files readable, with `/edit-scope`. | `pi install npm:@narumitw/pi-edit-scope` |
-| [`pi-file-context`](./packages/pi-file-context) | Browse project files, preview text, select exact lines or Git diff hunks, and attach immutable snapshots with Git provenance to the next prompt. Open it with configurable `Ctrl+Shift+X` or `/file-context`. | `pi install npm:@narumitw/pi-file-context` |
+| [`pi-files`](./packages/pi-files) | Browse and attach exact file snapshots, and independently restrict native edits to selected targets through `/files`. | [Build and install locally](./packages/pi-files#-install); not yet published |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
 | [`pi-plan-mode`](./packages/pi-plan-mode) | Codex-like, read-only `/plan` collaboration before implementation begins. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`pi-subagents`](./packages/pi-subagents) | Start bounded background Pi jobs with authenticated main-agent messaging. | `pi install npm:@narumitw/pi-subagents` |
@@ -198,10 +197,10 @@ npm --workspace @narumitw/pi-goal run build --if-present
 pi -e ./packages/pi-goal
 npm run package:pack -- goal
 
-# Another build-backed package uses the same local flow and pack workflow
-npm --workspace @narumitw/pi-file-context run build --if-present
-pi -e ./packages/pi-file-context
-npm run package:pack -- file-context
+# Pi Files requires a local build; it is not yet published to npm
+npm --workspace @narumitw/pi-files run build --if-present
+pi -e ./packages/pi-files
+npm run package:pack -- files
 
 # Libraries use the same generic pack workflow
 npm run package:pack -- tui-kit
@@ -267,6 +266,7 @@ Reusable libraries publish built ESM and declarations from `dist/`.
 The following packages remain available as source references but are excluded from active workspace scripts:
 
 - `pi-codex-accounts` — replaced by [`pi-accounts`](./packages/pi-accounts)
+- [`pi-file-context`](./deprecated/pi-file-context) and [`pi-edit-scope`](./deprecated/pi-edit-scope) — merged into [`pi-files`](./packages/pi-files); follow the [migration guide](./packages/pi-files/docs/migration.md) and do not co-load predecessors with the successor
 - [`pi-cbmem`](./deprecated/pi-cbmem) — deprecated without a replacement because a simple benchmark found insufficient benefit and substantially higher token usage
 - [`pi-chrome-devtools`](./deprecated/pi-chrome-devtools) — replaced by Chrome DevTools MCP through Pi's native MCP support; review the [migration instructions and compatibility differences](./deprecated/pi-chrome-devtools/README.md#-migration-to-native-mcp)
 - [`pi-firecrawl`](./deprecated/pi-firecrawl) — replaced by Firecrawl MCP through Pi's native MCP support; follow the [migration instructions](./deprecated/pi-firecrawl/README.md#-migration-to-native-mcp)

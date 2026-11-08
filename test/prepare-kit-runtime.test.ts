@@ -175,10 +175,10 @@ for (const kind of ["file", "symlink", "dangling symlink"] as const) {
   });
 }
 
-test("clean production Git preparation loads root-listed Edit Scope source and its lazy menu through native Jiti", async () => {
+test("clean production Git preparation loads root-listed Files source and its lazy menus through native Jiti", async () => {
   const checkout = await mkdtemp(join(tmpdir(), "prepare-git-production-"));
   try {
-    for (const packageId of ["pi-tui-kit", "pi-edit-scope"]) {
+    for (const packageId of ["pi-tui-kit", "pi-files"]) {
       const target = join(checkout, "packages", packageId);
       await mkdir(target, { recursive: true });
       await copyFile(resolve("packages", packageId, "package.json"), join(target, "package.json"));
@@ -202,12 +202,19 @@ test("clean production Git preparation loads root-listed Edit Scope source and i
     await writeFile(join(checkout, "packages/pi-inspect/src/web/app.css"), "body { color: red; }");
     const rootManifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
     const kitManifest = JSON.parse(await readFile(resolve("packages/pi-tui-kit/package.json"), "utf8"));
-    const scopeManifest = JSON.parse(await readFile(resolve("packages/pi-edit-scope/package.json"), "utf8"));
+    const filesManifest = JSON.parse(await readFile(resolve("packages/pi-files/package.json"), "utf8"));
+    const source = await inventory(resolve("packages/pi-files/src"));
+    assert.deepEqual(await inventory(join(checkout, "packages/pi-files/src")), source);
+    for (const file of ["index.ts", "files.ts", "file-context.ts", "scope/edit-scope.ts", "scope/picker.ts"]) {
+      assert.ok(Object.hasOwn(source, file), `production fixture must include ${file}`);
+    }
+    assert.equal(existsSync(join(checkout, "packages/pi-files/dist")), false);
     const dependencies = new Set([
       ...Object.keys(rootManifest.dependencies),
       ...Object.keys(kitManifest.dependencies),
       ...Object.keys(kitManifest.peerDependencies),
-      ...Object.keys(scopeManifest.peerDependencies),
+      ...Object.keys(filesManifest.dependencies).filter((name) => name !== "@narumitw/pi-tui-kit"),
+      ...Object.keys(filesManifest.peerDependencies),
     ]);
     for (const name of dependencies) {
       const target = join(checkout, "node_modules", name);
@@ -235,7 +242,7 @@ test("clean production Git preparation loads root-listed Edit Scope source and i
     assert.ok(existsSync(join(checkout, "packages/pi-inspect/browser-dist/app.js")));
     await writeFile(join(checkout, "smoke.mjs"), productionSmoke);
     const evidence = await runSmoke(checkout);
-    assert.match(evidence, /PASS clean Git source, lazy menu, Kit lazy questionnaire, lifecycle/u);
+    assert.match(evidence, /PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle/u);
   } finally {
     await rm(checkout, { recursive: true, force: true });
   }
@@ -291,7 +298,9 @@ await mkdir(process.env.PI_CODING_AGENT_DIR);
 const sdk = await import("@earendil-works/pi-coding-agent");
 sdk.initTheme("dark", false);
 const manifest = JSON.parse(await readFile("package.json", "utf8"));
-const entry = manifest.pi.extensions.find((file) => file === "./packages/pi-edit-scope/src/index.ts");
+const entries = manifest.pi.extensions.filter((file) => /\/pi-(?:files|file-context|edit-scope)\//u.test(file));
+assert.deepEqual(entries, ["./packages/pi-files/src/index.ts"]);
+const [entry] = entries;
 assert.ok(entry);
 const loader = new sdk.DefaultResourceLoader({
   cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR,
@@ -303,7 +312,10 @@ const loaded = loader.getExtensions();
 assert.deepEqual(loaded.errors, []);
 assert.equal(loaded.extensions.length, 1);
 const extension = loaded.extensions[0];
-assert.deepEqual([...extension.commands.keys()], ["edit-scope", "scope"]);
+assert.deepEqual([...extension.commands.keys()].sort(), ["edit-scope", "file-context", "files", "scope"]);
+for (const type of ["tool_call", "context_with_system", "session_start", "session_shutdown"]) {
+  assert.ok(extension.handlers.has(type), type);
+}
 assert.equal(extension.tools.size, 0);
 assert.equal(extension.path, join(process.cwd(), entry));
 const { createTuiHarness } = await import("@narumitw/pi-tui-kit/testing");
@@ -315,20 +327,22 @@ const ctx = {
   isIdle: () => true, hasPendingMessages: () => false, isProjectTrusted: () => false,
   sessionManager: { getBranch: () => [], getEntries: () => [], getSessionId: () => "production-git" },
   // Geometry is exercised by native package host tests; this harness verifies the lazy artifact.
-  ui: { custom: (factory) => harness.custom(factory), notify: (message, type) => notices.push({ message, type }), setWidget() {} },
+  ui: { custom: (factory) => harness.custom(factory), notify: (message, type) => notices.push({ message, type }), setWidget() {}, setStatus() {} },
 };
 const emit = async (type) => {
   for (const handler of extension.handlers.get(type) ?? []) await handler({ type, reason: "startup" }, ctx);
 };
 try {
   await emit("session_start");
-  const menu = extension.commands.get("edit-scope").handler("", ctx);
-  await Promise.race([harness.waitForOpen(), menu.then(() => { throw new Error("Menu closed before opening"); })]);
-  const frame = harness.render().join("\n");
-  harness.send("\x03");
-  await menu;
-  assert.match(frame, /Edit Scope/u);
-  assert.equal(harness.isOpen, false);
+  for (const [name, title] of [["files", /Files/u], ["scope", /Edit Scope/u]]) {
+    const menu = extension.commands.get(name).handler("", ctx);
+    await Promise.race([harness.waitForOpen(), menu.then(() => { throw new Error("Menu closed before opening"); })]);
+    const frame = harness.render().join("\n");
+    harness.send("\x03");
+    await menu;
+    assert.match(frame, title);
+    assert.equal(harness.isOpen, false);
+  }
   const questionnaire = runQuestionnaire(ctx, {
     questions: [{ id: "proof", header: "Lazy", prompt: "Generated lazy boundary", options: [{ label: "Ready" }] }],
   });
@@ -338,11 +352,13 @@ try {
   assert.equal((await questionnaire).kind, "closed");
   assert.match(questionFrame, /Generated lazy boundary/u);
   assert.deepEqual(notices, []);
-  assert.equal(existsSync(join(process.env.PI_CODING_AGENT_DIR, "pi-scope.json")), false);
+  for (const file of ["pi-file-context.json", "pi-scope.json", "pi-files.json"]) {
+    assert.equal(existsSync(join(process.env.PI_CODING_AGENT_DIR, file)), false, file);
+  }
 } finally {
   harness.dispose();
   await emit("session_shutdown");
   loaded.runtime.invalidate("production Git smoke complete");
 }
-console.log("PASS clean Git source, lazy menu, Kit lazy questionnaire, lifecycle");
+console.log("PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle");
 `;
