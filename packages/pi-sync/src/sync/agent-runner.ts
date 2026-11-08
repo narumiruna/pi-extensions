@@ -39,9 +39,9 @@ export async function runAgentResolver(
   beforeRequest?: (signal: AbortSignal) => Promise<void>,
 ): Promise<string> {
   const model = ctx.model;
-  if (!model) throw new ContinuousError("model", "Agent mode paused: select an available model first.");
+  if (!model) throw new ContinuousError("model", "Autonomous sync paused: select an available model first.");
   if (!Number.isSafeInteger(model.maxTokens) || model.maxTokens < 0)
-    throw new Error("Agent mode paused: selected model has an invalid output limit.");
+    throw new Error("Autonomous sync paused: selected model has an invalid output limit.");
   // Pi uses zero for unknown limits, including virtual models. Its registry caps routed requests.
   const maxTokens = model.maxTokens > 0 ? Math.min(AGENT_MAX_TOKENS, model.maxTokens) : AGENT_MAX_TOKENS;
   const controller = new AbortController();
@@ -74,7 +74,7 @@ export async function runAgentResolver(
       },
     });
     const childModel = runtime.getModel(provider, "resolver");
-    if (!childModel) throw new Error("Agent mode paused: resolver model unavailable.");
+    if (!childModel) throw new Error("Autonomous sync paused: resolver model unavailable.");
     ({ session } = await createAgentSession({
       cwd: ctx.cwd,
       model: childModel,
@@ -104,7 +104,7 @@ export async function runAgentResolver(
     });
     child.agent.streamFunction = async (_model, context, options) => {
       ownedSignal.throwIfAborted();
-      if (++calls > 1) throw new Error("Agent mode paused: one provider request per candidate is permitted.");
+      if (++calls > 1) throw new Error("Autonomous sync paused: one provider request per candidate is permitted.");
       await validate(ownedSignal);
       ownedSignal.throwIfAborted();
       if (beforeRequest) {
@@ -146,15 +146,16 @@ export async function runAgentResolver(
         last.stopReason !== "stop" ||
         last.content.some((block) => block.type !== "text" && block.type !== "thinking")
       )
-        throw new Error("Agent mode paused: incomplete, failed or tool-bearing model output.");
+        throw new Error("Autonomous sync paused: incomplete, failed or tool-bearing model output.");
       const output = last.content
         .filter((block) => block.type === "text")
         .map((block) => block.text)
         .join("");
-      if (Buffer.byteLength(output) > AGENT_OUTPUT_BYTES) throw new Error("Agent mode paused: output bound exceeded.");
+      if (Buffer.byteLength(output) > AGENT_OUTPUT_BYTES)
+        throw new Error("Autonomous sync paused: output bound exceeded.");
       if (ctx.hasUI)
         ctx.ui.notify(
-          `Pi Sync agent candidate: ${last.usage.totalTokens} tokens. Semantic correctness is not guaranteed.`,
+          `Pi Sync resolver candidate: ${last.usage.totalTokens} tokens. Semantic correctness is not guaranteed.`,
           "info",
         );
       return output;
@@ -169,13 +170,13 @@ export async function runAgentResolver(
     if (failure.retry)
       throw new ContinuousError(
         failure.kind,
-        "Agent mode paused: transient resolver transport failure.",
+        "Autonomous sync paused: transient resolver transport failure.",
         failure.delay,
       );
     // Provider errors can quote submitted content or auth; never surface their payload.
     throw new ContinuousError(
       "model",
-      "Agent mode paused: resolver failed or returned unusable output. Check model access and retry later.",
+      "Autonomous sync paused: resolver failed or returned unusable output. Check model access and retry later.",
     );
   } finally {
     clearTimeout(timer);

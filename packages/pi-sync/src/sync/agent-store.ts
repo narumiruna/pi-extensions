@@ -92,7 +92,7 @@ export async function withAgentClaim<T>(fn: (assertOwner: () => Promise<void>) =
       await withClaimGuard(async () => {
         const existing = await readClaim();
         if (existing && alive(existing.pid))
-          throw new ContinuousError("contention", "Agent mode deferred: another local resolver is running.");
+          throw new ContinuousError("contention", "Autonomous sync deferred: another local resolver is running.");
         // A durability failure can occur after rename: cleanup must own partial initialization too.
         armed = true;
         await writeJson(paths().claim, claim);

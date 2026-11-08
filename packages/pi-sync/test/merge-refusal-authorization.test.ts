@@ -37,7 +37,7 @@ for (const denied of ["automatic", "background", "no-ui", "print", "agent-off"] 
         },
         backend,
       ),
-      /requires foreground Agent mode in TUI or RPC/,
+      /requires foreground Autonomous sync in TUI or RPC/,
     );
     assert.equal(backend.mock.calls.length, 0);
     assert.equal(mock.requests.length, 0);

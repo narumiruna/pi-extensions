@@ -34,24 +34,27 @@ export async function resolveAgentPlan(
     return plan;
   }
   if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc"))
-    throw new Error("Agent mode paused: TUI/RPC is required.");
+    throw new Error("Autonomous sync paused: TUI/RPC is required.");
   const ancestors = (await readMergeAncestors(config, state)) ?? [];
   await validate();
   let evidence: ReturnType<typeof buildAgentEvidence>;
   try {
     evidence = buildAgentEvidence(plan, local, remote, ancestors);
   } catch {
-    throw new ContinuousError("unsafe", "Agent mode paused: unsafe or unsupported conflict evidence.");
+    throw new ContinuousError("unsafe", "Autonomous sync paused: unsafe or unsupported conflict evidence.");
   }
   if (!config.partialSync && evidence.unsupported.length)
-    throw new ContinuousError("unsafe", "Agent mode paused: unsupported conflicts prevent an all-or-nothing transfer.");
+    throw new ContinuousError(
+      "unsafe",
+      "Autonomous sync paused: unsupported conflicts prevent an all-or-nothing transfer.",
+    );
   if (!evidence.files.length) {
     if (options.agentRetryRefusal)
       throw new ContinuousError("unsafe", "No eligible cached refusal for the current evidence. Use Sync now.");
     if (config.partialSync) return plan;
     throw new ContinuousError(
       "unsafe",
-      "Agent mode paused: unsupported conflict or missing verified ancestor; evidence is unchanged.",
+      "Autonomous sync paused: unsupported conflict or missing verified ancestor; evidence is unchanged.",
     );
   }
   if (!evidence.units.length) {
@@ -59,7 +62,7 @@ export async function resolveAgentPlan(
       throw new ContinuousError("unsafe", "No eligible cached refusal for the current evidence. Use Sync now.");
     return applyAgentCandidate(plan, evidence, { version: 1, results: [] });
   }
-  if (!ctx.model) throw new ContinuousError("model", "Agent mode paused: select an available model first.");
+  if (!ctx.model) throw new ContinuousError("model", "Autonomous sync paused: select an available model first.");
   const model = digest(ctx.model);
   const key = digest([
     1,
@@ -75,7 +78,7 @@ export async function resolveAgentPlan(
     try {
       return applyAgentCandidate(plan, evidence, options.agentAcceptance.candidate);
     } catch {
-      throw new ContinuousError("unsafe", "Agent mode paused: candidate refused or unsupported conflict remains.");
+      throw new ContinuousError("unsafe", "Autonomous sync paused: candidate refused or unsupported conflict remains.");
     }
   }
   const validateEvidence = async (signal = options.signal) => {
@@ -85,7 +88,7 @@ export async function resolveAgentPlan(
       signal?.throwIfAborted();
     };
     await check();
-    if (digest(ctx.model) !== model) throw new Error("Agent mode paused: selected model changed.");
+    if (digest(ctx.model) !== model) throw new Error("Autonomous sync paused: selected model changed.");
     const current = await createSnapshot(config.snapshotIdentity, { ...snapshotOptions, signal });
     await check();
     const currentState = await readStateForConfig(config);
@@ -98,7 +101,7 @@ export async function resolveAgentPlan(
       !currentHead ||
       !backend.sameRevision(head.revision, currentHead.revision)
     )
-      throw new ContinuousError("stale", "Agent mode paused: conflict evidence changed; retry a fresh sync.");
+      throw new ContinuousError("stale", "Autonomous sync paused: conflict evidence changed; retry a fresh sync.");
   };
   throw new AgentResolutionRequired(key, evidence, validateEvidence);
 }

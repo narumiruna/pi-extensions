@@ -433,7 +433,7 @@ export async function syncBoth(
   options.background?.validate(config);
   if (options.agentRetryRefusal) {
     if (!config.agentMode || options.auto || options.background || !ctx.hasUI)
-      throw new Error("Enable Agent mode and use the foreground manager to retry a cached refusal.");
+      throw new Error("Enable Autonomous sync and use the foreground manager to retry a cached refusal.");
     const state = await readStateForConfig(config);
     validateMutation();
     const pending = await readMergeJournal(config);

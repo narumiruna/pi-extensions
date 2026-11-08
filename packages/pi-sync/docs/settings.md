@@ -3,7 +3,7 @@
 The authoritative settings reference now ships with the [manual-only configuration skill](../skills/configure-pi-sync/SKILL.md).
 Run `/skill:configure-pi-sync` for guidance, not automatic settings edits or transfers.
 Read the [complete settings reference](../skills/configure-pi-sync/references/configuration.md) without invoking the skill.
-The headings below preserve existing documentation links.
+The headings and invisible compatibility anchors below preserve existing documentation links.
 
 ## ⚙️ Settings
 
@@ -49,13 +49,17 @@ See [Automatic startup transfer](../skills/configure-pi-sync/references/configur
 
 See [Unchanged transfer fast path](../skills/configure-pi-sync/references/configuration.md#unchanged-transfer-fast-path).
 
-### Experimental Agent mode
+<a id="experimental-agent-mode"></a>
 
-See [Experimental Agent mode](../skills/configure-pi-sync/references/configuration.md#experimental-agent-mode).
+### Autonomous sync
 
-### Experimental Continuous sync
+See [Autonomous sync](../skills/configure-pi-sync/references/configuration.md#autonomous-sync).
 
-See [Experimental Continuous sync](../skills/configure-pi-sync/references/configuration.md#experimental-continuous-sync).
+<a id="experimental-continuous-sync"></a>
+
+### Continuous sync
+
+See [Continuous sync](../skills/configure-pi-sync/references/configuration.md#continuous-sync).
 
 #### Activation and ownership
 

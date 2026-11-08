@@ -21,7 +21,7 @@ for (const enabled of [false, true])
         Object.assign(settings.syncSetups.home.sync, { agentMode: !enabled });
         await fs.writeFile(localConfigPath(), JSON.stringify(settings));
         const controller = new AbortController();
-        const mock = createMockContext({ mode: "rpc", select: async () => "Yes, Enable Agent mode" });
+        const mock = createMockContext({ mode: "rpc", select: async () => "Yes, Enable Autonomous sync" });
         const ctx = mock.ctx as ExtensionCommandContext;
         const saved = await withConfigReplacementInstalledHookForTest(
           async () => {
@@ -48,6 +48,8 @@ for (const reason of ["active", "cancel", "replace", "notification-failure"] as 
       const tui = createTuiHarness({ width: 100, rows: 24 });
       const mock = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
       const ctx = mock.ctx as ExtensionCommandContext;
+      let savedFrame = "";
+      let reopenedFrame = "";
       try {
         await withConfigReplacementInstalledHookForTest(
           async () => {
@@ -61,12 +63,12 @@ for (const reason of ["active", "cancel", "replace", "notification-failure"] as 
           async () => {
             const running = showSyncSettings(mock.ctx, async () => undefined, controller.signal);
             await tui.waitForOpen();
-            tui.send("\u001b[200~Agent mode\u001b[201~");
+            tui.send("\u001b[200~Autonomous sync\u001b[201~");
             tui.press("tui.select.confirm");
             await tui.waitForPending();
             if (!cancel) {
               await tui.waitForOpen();
-              assert.match(tui.render().join("\n"), /Agent mode.*Off/);
+              savedFrame = tui.render().join("\n");
               tui.press("ctrl+c");
             }
             await running;
@@ -81,10 +83,21 @@ for (const reason of ["active", "cancel", "replace", "notification-failure"] as 
         // A new Settings flow must use the disk value, not the abandoned draft.
         const reopened = showSyncSettings(mock.ctx, async () => undefined);
         await tui.waitForOpen();
-        tui.send("\u001b[200~Agent mode\u001b[201~");
-        assert.match(tui.render().join("\n"), /Agent mode.*Off/);
+        tui.send("\u001b[200~Autonomous sync\u001b[201~");
+        reopenedFrame = tui.render().join("\n");
         tui.press("ctrl+c");
         await reopened;
+        if (!cancel) assert.match(savedFrame, /Autonomous sync.*Off/);
+        assert.match(reopenedFrame, /Autonomous sync.*Off/);
+        assert.doesNotMatch(`${savedFrame}\n${reopenedFrame}`, /experimental|agent[ -]mode/i);
+        if (reason === "active")
+          assert.ok(
+            mock.notifications.some(
+              (entry) =>
+                entry.message ===
+                "Autonomous sync saved. Applies to subsequent sync and the next session start; no transfer started.",
+            ),
+          );
       } finally {
         controller.abort();
         tui.dispose();

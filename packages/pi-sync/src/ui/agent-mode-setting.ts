@@ -6,10 +6,10 @@ import { confirmMergeReview } from "./merge-review.js";
 import { safeTerminalText } from "./terminal-text.js";
 
 export const AGENT_MODE_DESCRIPTION =
-  "This setup, experimental: one autonomous merged sync next startup and on Sync now. Sends eligible conflict text to the selected Pi model; may incur costs and replace/delete selected local and remote content without transfer prompts. No automatic reload. Unsupported conflicts pause.";
+  "This setup: sync eligible changes at session startup and on Sync now without transfer confirmation. Use the selected Pi model to resolve supported text and settings conflicts. Eligible conflict content may be sent to its provider and incur costs. Selected local and remote content can be replaced or deleted. Unresolved conflicts pause unless partial sync permits independent progress. Continuous sync is a separate opt-in. No automatic reload.";
 
 export const CONTINUOUS_DESCRIPTION =
-  "This setup, experimental: recurring sync while Pi is open. Requires Agent mode. Watches selected files, checks the remote every 60–66 seconds, and retries temporary failures. Local changes and retries can cause extra requests between polls. May disclose conflict text and incur model/storage costs. No automatic reload.";
+  "This setup: recurring sync while Pi is open. Requires Autonomous sync. Watches selected files, checks the remote every 60–66 seconds, and retries temporary failures. Local changes and retries can cause extra requests between polls. May disclose conflict text and incur model/storage costs. No automatic reload.";
 
 export function saveContinuousMode(
   ctx: ExtensionCommandContext,
@@ -33,8 +33,8 @@ export async function saveAgentMode(
   const setup = settings.syncSetups[setupName];
   if (!setup || settings.activeSyncSetup !== setupName) throw new Error("Current sync setup changed; reopen Settings.");
   const continuous = preference === "continuous";
-  const label = continuous ? "Continuous sync" : "Agent mode";
-  if (enabled && continuous && !setup.sync.agentMode) throw new Error("Enable Agent mode before Continuous sync.");
+  const label = continuous ? "Continuous sync" : "Autonomous sync";
+  if (enabled && continuous && !setup.sync.agentMode) throw new Error("Enable Autonomous sync before Continuous sync.");
   if (Boolean(setup.sync[preference]) === enabled) return true;
   if (enabled) {
     const summary = [
@@ -59,7 +59,7 @@ export async function saveAgentMode(
     if (
       !(await confirmMergeReview(
         ctx,
-        `Enable experimental ${label}?`,
+        `Enable ${label}?`,
         summary,
         signal,
         () => !signal?.aborted,
@@ -80,7 +80,7 @@ export async function saveAgentMode(
         settings.storageConnections[setup.storage.connection],
       )
     )
-      throw new Error("Sync setup or connection changed during Agent mode review; reopen Settings.");
+      throw new Error("Sync setup or connection changed during Autonomous sync review; reopen Settings.");
     return {
       ...current,
       syncSetups: { ...current.syncSetups, [setupName]: { ...setup, sync: { ...setup.sync, [preference]: enabled } } },

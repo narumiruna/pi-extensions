@@ -236,7 +236,7 @@ export function usage() {
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
-    "Experimental Continuous sync is a separate default-Off opt-in in Settings. It requires Agent mode, monitors while Pi is open, and can incur recurring network/model costs. Safety blocks and durable automatic request limits remain.",
+    "Continuous sync is a separate default-Off opt-in in Settings. It requires Autonomous sync, monitors while Pi is open, and can incur recurring network/model costs. Safety blocks and durable automatic request limits remain.",
     "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");
 }

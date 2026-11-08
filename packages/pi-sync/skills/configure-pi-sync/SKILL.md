@@ -15,7 +15,7 @@ This skill provides guidance only, even when the request asks you to apply a cha
 Read the relevant headings in the [settings reference](references/configuration.md), not the user's private settings file.
 Use **Settings ownership and required fields**, **Complete version 3 example**, and **Required backend shapes** for schema, backend, and destination questions.
 Use **Included content** for path selection and session privacy.
-Use **Required backend shapes**, **Automatic startup transfer**, **Experimental Agent mode**, and **Experimental Continuous sync** to distinguish automatic controls.
+Use **Required backend shapes**, **Automatic startup transfer**, **Autonomous sync**, and **Continuous sync** to distinguish automatic controls.
 Use **Settings field merge and machine-local fields** and **Content merge and partial progress** for versions 4 and 5.
 Use **Diagnostics** and **Unsupported old settings and recovery** for diagnostic side effects and recovery boundaries.
 If the reference does not establish an answer, state the missing evidence instead of inventing a field, default, migration, or compatibility guarantee.
@@ -34,6 +34,8 @@ These are instruction limits, not an OS sandbox or a guarantee that the agent ca
 
 For a question, give the supported setting name, scope, accepted value, default when applicable, and material effect from the reference.
 Do not equate `sync.automatic`, `sync.automaticTransfer`, `sync.agentMode`, and `sync.continuous`.
+Map Autonomous sync to the unchanged `sync.agentMode` key.
+Explain its authorization for eligible startup and Sync now transfers without another transfer confirmation before its model assistance for supported conflicts.
 
 For setup or a requested edit, explain that this skill cannot apply it and identify the corresponding `/sync` manager action for the user.
 Ask at most one question at a time when the backend, destination, or included content is not sufficiently clear.

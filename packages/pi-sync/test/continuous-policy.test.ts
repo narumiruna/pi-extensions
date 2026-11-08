@@ -86,7 +86,7 @@ for (const version of [3, 4, 5])
       }
     }));
 
-for (const decision of ["approve", "cancel", "stale", "abort-after-publication"] as const)
+for (const decision of ["approve", "cancel", "done", "stale", "abort-after-publication"] as const)
   test(`continuous consent ${decision} binds setup and preserves committed writes`, async () =>
     withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
@@ -95,10 +95,12 @@ for (const decision of ["approve", "cancel", "stale", "abort-after-publication"]
       await fs.writeFile(localConfigPath(), JSON.stringify(settings));
       const controller = new AbortController();
       let title = "";
+      let choices: string[] = [];
       const mock = createMockContext({
         mode: "rpc",
-        select: async (text: string) => {
+        select: async (text: string, options: string[]) => {
           title = text;
+          choices = options;
           if (decision === "stale")
             await updateLocalConfig((current) => ({
               ...current,
@@ -107,7 +109,7 @@ for (const decision of ["approve", "cancel", "stale", "abort-after-publication"]
                 home: { ...requiredHome(current), sync: { ...requiredHome(current).sync, automatic: true } },
               },
             }));
-          return decision === "cancel" ? "No, cancel" : "Yes, Enable Continuous sync";
+          return decision === "cancel" ? "No, cancel" : decision === "done" ? "Done" : "Yes, Enable Continuous sync";
         },
       });
       const save = () => saveContinuousMode(mock.ctx, "home", true, controller.signal);
@@ -120,10 +122,17 @@ for (const decision of ["approve", "cancel", "stale", "abort-after-publication"]
         Boolean(stored.syncSetups.home.sync.continuous),
         decision === "approve" || decision === "abort-after-publication",
       );
+      assert.match(title, /^Enable Continuous sync\?/);
+      assert.deepEqual(choices, ["No, cancel", "Yes, Enable Continuous sync", "View details", "Done"]);
+      assert.match(title, /Requires Autonomous sync/);
       assert.match(title, /60–66 seconds/);
       assert.match(title, /15-minute window/);
       assert.match(title, /different provider\/model/);
-      assert.doesNotMatch(title, /secret-key/);
+      assert.match(title, /model\/storage costs/);
+      assert.match(title, /No automatic reload/);
+      assert.match(title, /No transfer starts from Settings/);
+      assert.match(title, /request bounds, not a currency cap/);
+      assert.doesNotMatch(title, /secret-key|experimental|agent[ -]mode/i);
     }));
 
 test("continuous cannot enable Agent mode and disabling needs no new consent", async () =>
@@ -136,7 +145,7 @@ test("continuous cannot enable Agent mode and disabling needs no new consent", a
         throw new Error("unexpected consent");
       },
     });
-    await assert.rejects(saveContinuousMode(mock.ctx, "home", true), /Enable Agent mode/);
+    await assert.rejects(saveContinuousMode(mock.ctx, "home", true), /Enable Autonomous sync/);
     await updateLocalConfig((current) => ({
       ...current,
       syncSetups: {
