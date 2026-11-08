@@ -16,7 +16,13 @@ import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import {
+  getKeybindings,
+  KeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { displayFilePath, displayPath } from "../src/display.js";
 import type { ScopeMenuOptions, ScopeView } from "../src/menu.js";
@@ -259,12 +265,20 @@ describe("scope current-state manager", () => {
       h.tui.press("tui.input.submit");
       await closed;
       await h.tui.waitForOpen();
-      const review = h.text();
+      const reviews = [80, 110].map((width) => {
+        h.tui.resize({ width, rows: 32 });
+        return { width, lines: h.tui.render().map(stripVTControlCharacters) };
+      });
       h.tui.send("\x03");
       await h.running;
-      expect(review).toContain(`Path: ${displayPath(raw)}`);
-      expect(review).toContain(`Canonical target: ${displayPath(canonical)}`);
-      expect(review.includes("Outside the current directory.")).toBe(location !== "inside");
+      for (const { width, lines } of reviews) {
+        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+        // Exact previews hard-wrap paths; the temporary directory length varies by host.
+        const review = lines.join("");
+        expect(review).toContain(`Path: ${displayPath(raw)}`);
+        expect(review).toContain(`Canonical target: ${displayPath(canonical)}`);
+        expect(review.includes("Outside the current directory.")).toBe(location !== "inside");
+      }
       expect(h.options.apply).not.toHaveBeenCalled();
       expect(h.options.off).not.toHaveBeenCalled();
       await expect(access(canonical)).rejects.toMatchObject({ code: "ENOENT" });

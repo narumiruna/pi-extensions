@@ -91,7 +91,7 @@
     "esbuild": "0.28.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.3",
+    "@biomejs/biome": "2.6.5",
     "@changesets/cli": "3.0.3",
     "@earendil-works/chord": "1.5.0",
     "@earendil-works/pi-agent-core": "1.5.0",
@@ -99,15 +99,15 @@
     "@earendil-works/pi-coding-agent": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
     "@earendil-works/pi-tui": "1.5.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/semver": "^7.8.0",
     "concurrently": "^10.0.6",
     "husky": "9.1.7",
     "npm-check-updates": "23.1.1",
-    "semver": "7.8.5",
-    "typebox": "^1.4.3",
+    "semver": "7.8.6",
+    "typebox": "^1.4.4",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "overrides": {
     "agentfs-sdk": {

@@ -7,6 +7,7 @@ import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
 import { createSnapshot } from "../src/snapshot/snapshot.js";
 import { stageMergeBaseline } from "../src/state/merge-baseline-store.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
+import type { ContinuousClock } from "../src/sync/continuous-sync.js";
 import { inspectSync } from "../src/sync/sync-inspection.js";
 import { createSyncLoaders, type SyncDependencies } from "../src/sync/sync-loaders.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
@@ -49,6 +50,29 @@ export function continuousDependencies(
 export function continuousLoaders(backend: MemorySyncBackend, overrides: Partial<SyncDependencies> = {}) {
   return createSyncLoaders(continuousDependencies(backend, overrides));
 }
+/** Advance only between completed cycles; keep filesystem leases on real time. */
+export class ContinuousTestClock implements ContinuousClock {
+  private value = Date.now();
+  readonly tasks = new Set<{ at: number; run(): void }>();
+  now = () => this.value;
+  random = () => 0;
+  schedule = (ms: number, run: () => void) => {
+    const task = { at: this.value + ms, run };
+    this.tasks.add(task);
+    return () => {
+      this.tasks.delete(task);
+    };
+  };
+  advance(ms: number) {
+    this.value += ms;
+    for (const task of [...this.tasks]) {
+      if (task.at > this.value) continue;
+      this.tasks.delete(task);
+      task.run();
+    }
+  }
+}
+
 export async function waitStatus(statuses: ReadonlyMap<string, string | undefined>, expected: RegExp) {
   await vi.waitFor(() => assert.match(statuses.get("sync") ?? "", expected), { timeout: 1500, interval: 5 });
 }
