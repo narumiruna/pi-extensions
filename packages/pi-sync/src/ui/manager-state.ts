@@ -165,7 +165,7 @@ export async function describeManagerState(
       `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
       `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
       `Startup transfer: ${startupTransferSummary(config)}`,
-      `Agent mode: ${config.agentMode ? "On (experimental; autonomous merged sync)" : "Off"}`,
+      `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,
       ...(config.continuous ? await (await import("../sync/continuous-record.js")).continuousStatusLines(config) : []),
       `Last applied: ${lastAppliedSnapshot}`,
       ...(noSyncedContent

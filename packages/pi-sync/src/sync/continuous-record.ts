@@ -210,7 +210,7 @@ function hasReservationCapacity(record: ContinuousRecord, now: number): boolean 
 /** Read-only status: no directory creation, lease, mutation, request reservation or provider call. */
 export async function continuousStatusLines(config: AnySyncConfig, clock: () => number = Date.now): Promise<string[]> {
   if (!config.continuous) return ["Continuous sync: Off"];
-  if (!config.agentMode) return ["Continuous sync: paused; enable Agent mode first"];
+  if (!config.agentMode) return ["Continuous sync: paused; enable Autonomous sync first"];
   try {
     const binding = await continuousBinding(config);
     const document = await readContinuousPrivateDocument(`${binding}.json`);

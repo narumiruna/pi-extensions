@@ -81,7 +81,7 @@ export interface SyncPolicySettings {
   automatic: boolean;
   /** Explicit opt-in, separate from the legacy observe/shutdown policy. */
   automaticTransfer?: boolean;
-  /** Experimental autonomous merged-sync authorization. */
+  /** Autonomous merged-sync authorization. */
   agentMode?: boolean;
   /** Separate explicit authorization for recurring background work. */
   continuous?: boolean;

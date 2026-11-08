@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { loadConfig, syncConfigReviewFingerprint } from "../src/settings/config.js";
@@ -50,17 +51,19 @@ for (const automatic of [false, true])
         assert.equal(startupTransferEnabled({ automaticTransfer, agentMode }), automaticTransfer || agentMode);
       });
 
-for (const decision of ["cancel", "approve", "stale", "abort"] as const)
+for (const decision of ["cancel", "done", "approve", "stale", "abort"] as const)
   test(`one-time consent ${decision} preserves authorization boundaries`, async () =>
     withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(localConfigPath(), JSON.stringify({ ...v3S3Settings(), unknown: "keep" }));
       const controller = new AbortController();
       let summary = "";
+      let choices: string[] = [];
       const mock = createMockContext({
         mode: "rpc",
-        select: async (title: string) => {
+        select: async (title: string, options: string[]) => {
           summary = title;
+          choices = options;
           if (decision === "stale")
             await updateLocalConfig((current) => {
               assert.ok(current.syncSetups.home);
@@ -73,7 +76,7 @@ for (const decision of ["cancel", "approve", "stale", "abort"] as const)
               };
             });
           if (decision === "abort") controller.abort();
-          return decision === "cancel" ? "No, cancel" : "Yes, Enable Agent mode";
+          return decision === "cancel" ? "No, cancel" : decision === "done" ? "Done" : "Yes, Enable Autonomous sync";
         },
       });
       if (decision === "stale")
@@ -82,16 +85,31 @@ for (const decision of ["cancel", "approve", "stale", "abort"] as const)
       const persisted = JSON.parse(await fs.readFile(localConfigPath(), "utf8"));
       assert.equal(Boolean(persisted.syncSetups.home.sync.agentMode), decision === "approve");
       assert.equal(persisted.unknown, "keep");
-      assert.match(summary, /incur costs/);
+      assert.match(summary, /^Enable Autonomous sync\?/);
+      assert.deepEqual(choices, ["No, cancel", "Yes, Enable Autonomous sync", "View details", "Done"]);
+      assert.ok(
+        summary.includes(
+          "This setup: sync eligible changes at session startup and on Sync now without transfer confirmation. Use the selected Pi model to resolve supported text and settings conflicts. Eligible conflict content may be sent to its provider and incur costs. Selected local and remote content can be replaced or deleted. Unresolved conflicts pause unless partial sync permits independent progress. Continuous sync is a separate opt-in. No automatic reload.",
+        ),
+      );
+      assert.match(
+        summary,
+        /Only bounded Markdown\/plain-text conflicts and atomic global settings choices are eligible/,
+      );
+      assert.match(summary, /Model errors can change intended behavior/);
+      assert.match(summary, /Session histories, code, deletion conflicts and path collisions are not model-resolved/);
+      assert.match(summary, /baseline, selection, secret-scan and publication checks remain/);
+      assert.match(summary, /cannot exclude arbitrary concurrent local writers/);
+      assert.match(summary, /Disabling does not undo completed transfers or provider charges/);
       assert.match(summary, /No transfer starts from Settings/);
-      assert.doesNotMatch(summary, /secret-key/);
+      assert.doesNotMatch(summary, /secret-key|experimental|agent[ -]mode/i);
     }));
 
 test("TUI enablement supports hard cancel with non-default cancellation bindings", async () =>
   withTempHome(async (agentDir) => {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings()));
-    let rendered: string[] = [];
+    const rendered: Array<{ width: number; lines: string[] }> = [];
     let callbackError: unknown;
     const mock = createMockContext({
       mode: "tui",
@@ -114,7 +132,7 @@ test("TUI enablement supports hard cancel with non-default cancellation bindings
             },
             complete,
           );
-          rendered = component.render(48);
+          for (const width of [0, 1, 12, 24, 48]) rendered.push({ width, lines: component.render(width) });
           component.handleInput("\u0003");
           try {
             return await result;
@@ -131,7 +149,18 @@ test("TUI enablement supports hard cancel with non-default cancellation bindings
       throw callbackError ?? error;
     });
     assert.equal(result, false);
-    assert.ok(rendered.length > 0);
+    assert.equal(rendered.length, 5);
+    assert.deepEqual(rendered[0]?.lines, []);
+    for (const { width, lines } of rendered)
+      assert.ok(
+        lines.every((line) => visibleWidth(line) <= width),
+        `${width}: ${lines.join("\n")}`,
+      );
+    const review = rendered.at(-1)?.lines.join("\n") ?? "";
+    assert.match(review, /Enable Autonomous sync\?/);
+    assert.match(review, /→ No, cancel/);
+    assert.match(review, /Yes, Enable Autonomous sync/);
+    assert.doesNotMatch(review, /experimental|agent[ -]mode/i);
     assert.equal((await loadConfig()).agentMode, false);
   }));
 
@@ -159,7 +188,7 @@ test("failed atomic Agent mode save preserves prior bytes and permits retry", as
     await fs.mkdir(agentDir, { recursive: true });
     const original = JSON.stringify({ ...v3S3Settings(), unknown: "preserve" });
     await fs.writeFile(localConfigPath(), original);
-    const mock = createMockContext({ mode: "rpc", select: async () => "Yes, Enable Agent mode" });
+    const mock = createMockContext({ mode: "rpc", select: async () => "Yes, Enable Autonomous sync" });
     const rename = vi.spyOn(fs, "rename").mockRejectedValue(new Error("simulated disk failure"));
     try {
       await assert.rejects(saveAgentMode(mock.ctx, "home", true), /failure/);

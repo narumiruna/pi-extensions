@@ -102,7 +102,7 @@ export async function mergeSync(
       options.agentRetryRefusal &&
       (!config.agentMode || options.auto || options.background || !ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))
     )
-      throw new Error("Refused-candidate retry requires foreground Agent mode in TUI or RPC.");
+      throw new Error("Refused-candidate retry requires foreground Autonomous sync in TUI or RPC.");
   };
   const config = await loadConfig(options.setup);
   validateOwner(config);
@@ -131,7 +131,7 @@ export async function mergeSync(
           throw new Error("Session storage root changed during transfer; evidence retained for review.");
       }
       if (config.agentMode && JSON.stringify(ctx.model) !== modelToken)
-        throw new Error("Agent mode paused: selected model changed during transfer.");
+        throw new Error("Autonomous sync paused: selected model changed during transfer.");
       if (options.auto && (!startupTransferEnabled(latest) || !ctx.isIdle()))
         throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
     });
@@ -171,7 +171,7 @@ export async function mergeSync(
   // Recovery above never publishes. This gate applies only to new autonomous transfers.
   if ((options.auto || config.agentMode) && backend.capability === "read-check-write-verify") {
     throw new Error(
-      "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Disable Agent mode and use manual sync.",
+      "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Disable Autonomous sync and use manual sync.",
     );
   }
   const textBudget = { remaining: TEXT_MERGE_WORK_LIMIT };
@@ -353,7 +353,7 @@ export async function mergeSync(
         if (plan.kind !== "planned" || (plan.conflicts.length && !config.partialSync))
           throw new ContinuousError(
             "unsafe",
-            "Agent mode paused: unsupported or refused conflict groups remain; no transfer was performed.",
+            "Autonomous sync paused: unsupported or refused conflict groups remain; no transfer was performed.",
           );
       }
       if (

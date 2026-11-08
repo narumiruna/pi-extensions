@@ -1,6 +1,6 @@
-# Synthetic Agent merge-quality verification
+# Synthetic Autonomous sync merge-quality verification
 
-The [corpus](../test/agent-quality-corpus.ts) and [tests](../test/agent-quality.test.ts) check structural merge safety with synthetic data and fixed resolver responses. They do not measure real-model semantic accuracy. Agent mode remains experimental and default-off; the [settings reference](settings.md#experimental-agent-mode) and [implementation verification](agent-mode-verification.md) retain their authority.
+The [corpus](../test/agent-quality-corpus.ts) and [tests](../test/agent-quality.test.ts) check structural merge safety with synthetic data and fixed resolver responses. They do not measure real-model semantic accuracy. Autonomous sync is default-off; the [settings reference](settings.md#autonomous-sync) and [implementation verification](agent-mode-verification.md) retain their authority.
 
 ## Deterministic evidence
 
@@ -24,7 +24,7 @@ These tests prove fixture routing, contract validation and byte assembly for the
 
 No provider evaluation is authorized or executed by this work. A future evaluation must follow this protocol:
 
-1. Obtain explicit approval for the provider/model, model version when available, request count, cost ceiling, repetitions, deadline and retention policy. Keep Agent and Continuous settings unchanged. Stop after one clear external-service or entitlement failure unless a retry is separately requested.
+1. Obtain explicit approval for the provider/model, model version when available, request count, cost ceiling, repetitions, deadline and retention policy. Keep Autonomous sync and Continuous sync settings unchanged. Stop after one clear external-service or entitlement failure unless a retry is separately requested.
 2. Freeze the repository revision, corpus revision, resolver contract, model settings and scoring rules before requests. Register allowed exact outputs or whole-settings source choices for each resolvable case. The deterministic fixture response is one reference, not evidence that it is the only valid semantic merge. Do not add allowed results after seeing responses; report unregistered alternatives separately for review.
 3. Use only the committed synthetic fixtures. Exclude user files, session history, credentials, real remote storage and discovered resources. Send only the current bounded unit payload and existing resolver instructions. Do not send full files, hidden policies, expected answers, scoring notes or neighboring context. Keep unsupported cases as local eligibility checks; they must not cause a provider request.
 4. Record each attempt without overwriting failures: fixture ID, approved provider/model, outcome, schema validity, refused IDs, exact accepted bytes, elapsed time and provider-reported usage. Preserve raw synthetic output for review, but exclude authentication and provider error payloads. Do not retry refusals automatically.

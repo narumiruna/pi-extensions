@@ -89,7 +89,7 @@ export async function withAgentSyncLock<T>(
         try {
           candidate = parseAgentCandidate(raw, request.evidence);
         } catch {
-          throw new ContinuousError("model", "Agent mode paused: invalid resolver output; evidence retained.");
+          throw new ContinuousError("model", "Autonomous sync paused: invalid resolver output; evidence retained.");
         }
         if (retry && candidate.results.some((row) => "refuse" in row))
           throw new ContinuousError("model", "The model refused again. The previous refusal was retained.");
@@ -132,7 +132,7 @@ export async function withAgentSyncLock<T>(
           request = error;
         }
       }
-      throw new ContinuousError("stale", "Agent mode paused: content changed repeatedly; retry later.");
+      throw new ContinuousError("stale", "Autonomous sync paused: content changed repeatedly; retry later.");
     } finally {
       options.signal?.removeEventListener("abort", onAbort);
       if (!options.signal?.aborted) clearStatus();

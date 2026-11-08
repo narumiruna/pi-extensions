@@ -193,8 +193,8 @@ async function loadSetupMenuState(selectedName: string | undefined, signal?: Abo
       `Sessions: ${selection.sessions ? "On — privacy-sensitive" : "Off"}`,
       `Automatic sync: ${config.automatic ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
-      `Agent mode: ${config.agentMode ? "On (experimental; autonomous merged sync)" : "Off"}`,
-      `Continuous sync: ${config.continuous ? (config.agentMode ? "On (experimental; recurring requests and transfers)" : "Saved On; paused until Agent mode is enabled") : "Off"}`,
+      `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,
+      `Continuous sync: ${config.continuous ? (config.agentMode ? "On (recurring requests and transfers)" : "Saved On; paused until Autonomous sync is enabled") : "Off"}`,
       isCurrent
         ? "Edit included content and automatic sync in /sync → Settings."
         : "To edit included content or automatic sync, make this setup current, then open /sync → Settings.",

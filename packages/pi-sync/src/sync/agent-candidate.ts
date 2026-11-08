@@ -93,7 +93,7 @@ export function buildAgentEvidence(
   const evidence: AgentEvidence = { units: [], files: [], unsupported: [] };
   if (plan.kind !== "planned") return evidence;
   if (plan.conflicts.length > AGENT_MAX_UNITS)
-    throw new Error("Agent mode paused: too many conflict paths for bounded analysis.");
+    throw new Error("Autonomous sync paused: too many conflict paths for bounded analysis.");
   for (const conflict of plan.conflicts) {
     try {
       if (conflict.reason !== "both-changed") throw new Error("unsupported conflict");
@@ -159,7 +159,7 @@ export function buildAgentEvidence(
     }
   }
   if (evidence.units.length > AGENT_MAX_UNITS || Buffer.byteLength(JSON.stringify(evidence.units)) > AGENT_INPUT_BYTES)
-    throw new Error("Agent mode paused: conflict evidence exceeds its input bound.");
+    throw new Error("Autonomous sync paused: conflict evidence exceeds its input bound.");
   // Scan only the actual disclosure image; skipSecretScan never authorizes model disclosure.
   if (
     scanSnapshot({
@@ -169,7 +169,7 @@ export function buildAgentEvidence(
       ),
     }).length
   )
-    throw new Error("Agent mode paused: possible secrets in model evidence; nothing was disclosed.");
+    throw new Error("Autonomous sync paused: possible secrets in model evidence; nothing was disclosed.");
   return evidence;
 }
 

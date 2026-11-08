@@ -176,7 +176,7 @@ export async function showSyncSettings(
           },
           {
             id: "agentMode",
-            label: "Agent mode (experimental)",
+            label: "Autonomous sync",
             description: AGENT_MODE_DESCRIPTION,
             currentValue: state.agentMode ? "On" : "Off",
             values: ["On", "Off"],
@@ -184,8 +184,8 @@ export async function showSyncSettings(
           },
           {
             id: "continuous",
-            label: "Continuous sync (experimental)",
-            description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Agent mode is enabled." : ""}`,
+            label: "Continuous sync",
+            description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Autonomous sync is enabled." : ""}`,
             currentValue: state.continuous ? "On" : "Off",
             values: ["On", "Off"],
             action: "continuous",
@@ -203,7 +203,7 @@ export async function showSyncSettings(
             id: "mergeSettings",
             label: "Merge settings fields",
             description:
-              "This setup, experimental opt-in: merge independent global settings.json root fields with a verified private ancestor. Arrays and nested objects remain atomic. Applies to subsequent sync; no reload.",
+              "This setup, opt-in: merge independent global settings.json root fields with a verified private ancestor. Arrays and nested objects remain atomic. Applies to subsequent sync; no reload.",
             currentValue: state.mergeSettings ? "On" : "Off",
             values: ["On", "Off"],
             action: "merge-settings",
@@ -212,7 +212,7 @@ export async function showSyncSettings(
             id: "contentPolicy",
             label: "Content merge / partial progress",
             description:
-              "This setup, experimental opt-in: review the version-5 upgrade before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.",
+              "This setup, opt-in: review the version-5 upgrade before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.",
             currentValue: state.mergeContent
               ? state.partialSync
                 ? "Merge + partial"
@@ -279,7 +279,7 @@ export async function showSyncSettings(
           const partialSync = value === "Partial only" || value === "Merge + partial";
           if (
             !(await ctx.ui.confirm(
-              "Save experimental content policy?",
+              "Save content policy?",
               "This explicitly upgrades settings to version 5; partial snapshots use version 3 and older clients must refuse them. Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.",
               { signal: mutationSignal },
             ))
@@ -414,7 +414,7 @@ export async function showSyncSettings(
           try {
             validate();
             ctx.ui.notify(
-              "Agent mode saved. Applies to subsequent sync and the next session start; no transfer started.",
+              "Autonomous sync saved. Applies to subsequent sync and the next session start; no transfer started.",
               "info",
             );
           } catch {

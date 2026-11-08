@@ -152,21 +152,43 @@ for (const enabled of [false, true])
         tui.isOpen ? confirmation.custom(factory, options) : tui.custom(factory, options);
       const mock = createMockContext({ mode: "tui", hasUI: true, custom });
       const owner = new AbortController();
+      let initialFrame = "";
+      let initialDescription = "";
+      let confirmationFrame = "";
+      let savedFrame = "";
       try {
         const running = showSyncSettings(mock.ctx, async () => undefined, owner.signal);
         await tui.waitForOpen();
         tui.send("\u001b[200~Continuous sync\u001b[201~");
-        assert.match(tui.render().join("\n"), new RegExp(`Continuous sync.*${enabled ? "Off" : "On"}`));
+        initialFrame = tui.render().join("\n");
+        tui.resize({ width: 100, rows: 80 });
+        initialDescription = tui.render().join("\n").replace(/\s+/gu, " ");
+        tui.resize({ width: 40, rows: 24 });
+        tui.render();
         tui.send("x");
         if (enabled) {
           await confirmation.waitForOpen();
-          assert.match(confirmation.render().join("\n"), /Enable experimental Continuous sync/);
+          confirmationFrame = confirmation.render().join("\n");
           confirmation.press("tui.select.down");
           confirmation.press("tui.select.confirm");
         }
         await tui.waitForPending();
         await tui.waitForOpen();
-        assert.match(tui.render().join("\n"), new RegExp(`Continuous sync.*${enabled ? "On" : "Off"}`));
+        savedFrame = tui.render().join("\n");
+        tui.send("q");
+        await running;
+        assert.match(initialFrame, new RegExp(`Continuous sync.*${enabled ? "Off" : "On"}`));
+        assert.match(savedFrame, new RegExp(`Continuous sync.*${enabled ? "On" : "Off"}`));
+        assert.match(initialDescription, /Requires Autonomous sync/);
+        if (!enabled) assert.match(initialDescription, /Saved On, but paused until Autonomous sync is enabled/);
+        else {
+          assert.match(confirmationFrame, /Enable Continuous sync\?/);
+          assert.match(confirmationFrame, /Yes, Enable Continuous sync/);
+        }
+        assert.doesNotMatch(
+          `${initialDescription}\n${confirmationFrame}\n${savedFrame}`,
+          /experimental|agent[ -]mode/i,
+        );
         assert.equal((await loadConfig()).continuous, enabled);
         assert.ok(
           mock.notifications.some((item) =>
@@ -178,8 +200,6 @@ for (const enabled of [false, true])
           ),
         );
         if (!enabled) assert.ok(mock.notifications.every((item) => !item.message.includes("Monitoring starts")));
-        tui.send("q");
-        await running;
       } finally {
         owner.abort();
         confirmation.dispose();

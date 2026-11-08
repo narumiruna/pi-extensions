@@ -30,13 +30,29 @@ function headingId(heading: string): string {
     .replace(/\s/gu, "-");
 }
 
-function headings(markdown: string): string[] {
+function unfencedLines(markdown: string): string[] {
   let fenced = false;
-  return markdown.split("\n").flatMap((line) => {
-    if (line.startsWith("```")) fenced = !fenced;
-    if (fenced) return [];
-    return /^#{2,4} (.+)$/u.exec(line)?.slice(1) ?? [];
+  return markdown.split("\n").filter((line) => {
+    if (line.startsWith("```")) {
+      fenced = !fenced;
+      return false;
+    }
+    return !fenced;
   });
+}
+
+function headings(markdown: string): string[] {
+  return unfencedLines(markdown).flatMap((line) => /^#{2,4} (.+)$/u.exec(line)?.slice(1) ?? []);
+}
+
+function explicitAnchors(markdown: string): string[] {
+  return unfencedLines(markdown).flatMap((line) =>
+    [...line.matchAll(/<a\s+id="([^"]+)"\s*><\/a>/gu)].map((match) => match[1] ?? ""),
+  );
+}
+
+function fragmentIds(markdown: string): Set<string> {
+  return new Set([...headings(markdown).map(headingId), ...explicitAnchors(markdown)]);
 }
 
 function configurationExample(): Record<string, unknown> {
@@ -127,7 +143,19 @@ test("skill states guidance-only effects, disclosure limits, and stopping condit
   assert.doesNotMatch(skillText, /\.\.\/|scripts\/|pi-starship/u);
 });
 
-test("bundled links stay inside the skill and identify existing reference headings", () => {
+test("documentation fragments accept headings and explicit anchors outside fenced code", () => {
+  const markdown = [
+    "### Visible heading",
+    '<a id="legacy-fragment"></a>',
+    "```html",
+    '<a id="code-only"></a>',
+    "### Code heading",
+    "```",
+  ].join("\n");
+  assert.deepEqual([...fragmentIds(markdown)], ["visible-heading", "legacy-fragment"]);
+});
+
+test("bundled links stay inside the skill and identify existing reference fragments", () => {
   const documents = [path.join(skillDirectory, "SKILL.md"), referencePath];
   for (const document of documents) {
     const text = readFileSync(document, "utf8");
@@ -138,11 +166,7 @@ test("bundled links stay inside the skill and identify existing reference headin
       const resolved = file ? path.resolve(path.dirname(document), file) : document;
       assert.ok(resolved.startsWith(`${skillDirectory}${path.sep}`), `reference escapes skill: ${target}`);
       const destination = readFileSync(resolved, "utf8");
-      if (anchor)
-        assert.ok(
-          headings(destination).some((heading) => headingId(heading) === anchor),
-          target,
-        );
+      if (anchor) assert.ok(fragmentIds(destination).has(anchor), target);
     }
   }
   assert.match(reference, /authoritative public settings reference/u);
@@ -152,22 +176,18 @@ test("bundled links stay inside the skill and identify existing reference headin
   assert.doesNotMatch(readme, /\.\/docs\/settings\.md/u);
 });
 
-test("moved operational links still name existing repository files and headings", () => {
+test("moved operational links still name existing repository files and fragments", () => {
   const prefix = "https://github.com/narumiruna/pi-extensions/blob/main/";
   for (const match of reference.matchAll(/\]\((https:[^)]+)\)/gu)) {
     const target = match[1] ?? "";
     assert.ok(target.startsWith(prefix), `unexpected external reference: ${target}`);
     const [file = "", anchor] = target.slice(prefix.length).split("#");
     const destination = readFileSync(path.join(rootDirectory, file), "utf8");
-    if (anchor)
-      assert.ok(
-        headings(destination).some((heading) => headingId(heading) === anchor),
-        target,
-      );
+    if (anchor) assert.ok(fragmentIds(destination).has(anchor), target);
   }
 });
 
-test("old settings URLs retain all original headings as links to the authoritative reference", () => {
+test("old settings URLs retain all original fragments and link to current reference headings", () => {
   const originalHeadings = [
     "⚙️ Settings",
     "Editing in the manager",
@@ -190,12 +210,46 @@ test("old settings URLs retain all original headings as links to the authoritati
     "Content merge and partial progress",
     "Unsupported old settings and recovery",
   ];
-  assert.deepEqual(headings(oldReference), originalHeadings);
+  const renamedHeadings = new Map([
+    ["Experimental Agent mode", "Autonomous sync"],
+    ["Experimental Continuous sync", "Continuous sync"],
+  ]);
+  assert.deepEqual(
+    headings(oldReference),
+    originalHeadings.map((heading) => renamedHeadings.get(heading) ?? heading),
+  );
   for (const heading of originalHeadings) {
-    assert.ok(headings(reference).includes(heading));
-    assert.ok(oldReference.includes(`references/configuration.md#${headingId(heading)}`));
+    const currentHeading = renamedHeadings.get(heading) ?? heading;
+    assert.ok(headings(reference).includes(currentHeading), currentHeading);
+    assert.ok(fragmentIds(oldReference).has(headingId(heading)), `missing old URL: ${heading}`);
+    assert.ok(fragmentIds(reference).has(headingId(heading)), `missing reference URL: ${heading}`);
+    assert.ok(oldReference.includes(`references/configuration.md#${headingId(currentHeading)}`));
   }
   assert.doesNotMatch(oldReference, /```json/u, "the compatibility index must not duplicate the schema example");
+});
+
+test("all settings documents expose current headings and invisible legacy fragment anchors", () => {
+  for (const [label, document] of [
+    ["README", readme],
+    ["authoritative reference", reference],
+    ["compatibility index", oldReference],
+  ] as const) {
+    for (const [heading, legacyFragment] of [
+      ["Autonomous sync", "experimental-agent-mode"],
+      ["Continuous sync", "experimental-continuous-sync"],
+    ] as const) {
+      assert.ok(headings(document).includes(heading), `${label}: ${heading}`);
+      assert.ok(fragmentIds(document).has(headingId(heading)), `${label}: current fragment`);
+      assert.equal(explicitAnchors(document).filter((anchor) => anchor === legacyFragment).length, 1, label);
+      assert.ok(fragmentIds(document).has(legacyFragment), `${label}: ${legacyFragment}`);
+    }
+    const visibleText = document.replace(/<a\s+id="[^"]+"\s*><\/a>/gu, "");
+    assert.doesNotMatch(visibleText, /experimental|agent[ -]mode/iu, label);
+    assert.doesNotMatch(document, /\]\([^)\n]*#experimental-(?:agent-mode|continuous-sync)\)/u, label);
+  }
+  assert.match(skillText, /\*\*Autonomous sync\*\*/u);
+  assert.match(skillText, /\*\*Continuous sync\*\*/u);
+  assert.doesNotMatch(skillText, /experimental|agent[ -]mode/iu);
 });
 
 test("the published example validates Git, WebDAV, and R2/S3 with required per-setup policy", () => {

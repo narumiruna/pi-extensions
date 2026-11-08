@@ -1,8 +1,8 @@
 # Continuous sync verification
 
-This record describes implementation evidence and test scope. The [settings reference](settings.md#experimental-continuous-sync) owns user-facing behavior, limits and recovery.
+This record describes implementation evidence and test scope. The [settings reference](settings.md#continuous-sync) owns current user-facing behavior, limits and recovery.
 
-Later recovery classification, deadline propagation, confirmed-refusal retry, and read-only allowance/capacity diagnostics are documented in [Agent and Continuous sync recovery boundaries](agent-continuous-hardening.md). Historical verification below describes the original implementation.
+Later recovery classification, deadline propagation, confirmed-refusal retry, and read-only allowance/capacity diagnostics are documented in [Autonomous and Continuous sync recovery boundaries](agent-continuous-hardening.md). Historical verification below retains the former **Agent mode** name for Autonomous sync and the maturity labels used at that time; recorded results are unchanged.
 
 ## Boundaries and semantic audit
 

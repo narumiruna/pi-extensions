@@ -1,4 +1,4 @@
-# Agent and Continuous Sync Recovery Boundaries
+# Autonomous and Continuous sync recovery boundaries
 
 Pi Sync distinguishes a rejected pre-publication observation from an uncertain publication. Only proven freshness failures retry automatically. Unknown errors do not become retryable because their text looks temporary.
 
@@ -12,8 +12,8 @@ The authoritative paths are `src/sync/merged-sync.ts`, `agent-plan.ts`, and `con
 | Local bytes, baseline fingerprint, or remote revision changes before the publication journal | `stale`; no transfer of the rejected candidate. |
 | Local bytes or baseline changes after journal creation, before any backend publication call | Clear the safely uncommitted journal first, then report `stale`; a cleanup failure retains its original classification. |
 | Backend proves a conflict happened before commit and the candidate cannot have been active | Retire the uncommitted journal and use the existing bounded merge attempts; exhausted attempts retain the typed conflict cause and classify as `stale`. |
-| Upload possible-secret scan; remaining unsupported or refused Agent groups | `unsafe`; retain evidence, suppress unchanged resolution, and inspect changed evidence again. |
-| Bounded/unsafe Agent disclosure, unsupported conflict, missing verified ancestor, or invalid candidate application | `unsafe`; no inferred ancestor or bypass of partial-sync policy. |
+| Upload possible-secret scan; remaining unsupported or refused Autonomous sync groups | `unsafe`; retain evidence, suppress unchanged resolution, and inspect changed evidence again. |
+| Bounded/unsafe Autonomous sync disclosure, unsupported conflict, missing verified ancestor, or invalid candidate application | `unsafe`; no inferred ancestor or bypass of partial-sync policy. |
 | Missing model or unusable/refused resolver output | `model`; unchanged evidence does not repeatedly dispatch. A valid cached refusal stays cached during ordinary Sync now. |
 | Changed local, baseline, or remote evidence during resolver validation | `stale`; discard authorization for that observation. |
 | Known HTTP/network/lock errors | Preserve the existing typed/status/code policy and bounded retry delay. |
@@ -37,7 +37,7 @@ A request reservation published before cancellation remains spent. An atomic can
 
 Ordinary Sync now retains its existing cached-result policy. The manager-only **Retry refused model result…** action uses the same `sync` operation with an internal control value, not a new public command, flag, or setting.
 
-The action requires Agent mode, foreground TUI/RPC, an accepted baseline, matching current evidence, a valid cached refusal, and no pending merge journal. A pending journal must be reconciled through ordinary Sync now or reviewed recovery first. A missing, accepted, corrupt, stale, or unverified cached result is not retry authorization. Opening the manager may show the action before eligibility is known; activation checks it without dispatching when those conditions are absent.
+The action requires Autonomous sync, foreground TUI/RPC, an accepted baseline, matching current evidence, a valid cached refusal, and no pending merge journal. A pending journal must be reconciled through ordinary Sync now or reviewed recovery first. A missing, accepted, corrupt, stale, or unverified cached result is not retry authorization. Opening the manager may show the action before eligibility is known; activation checks it without dispatching when those conditions are absent.
 
 The flow holds the existing resolver claim while the operation lock is released for review and inference. The safe-default review names the setup, connection, exact configured storage path and bucket/branch where applicable, selected provider/model, conflict paths, disclosure, cost, and possible writes. Confirmation binds the same candidate key and cache bytes. Changed settings, model, session, evidence, or cache invalidates it. A competing participant cannot obtain another live resolver claim.
 
@@ -76,4 +76,4 @@ No live provider, production Git/S3/WebDAV, Windows, or Android verification is 
 
 ## Downgrade and recovery
 
-Stop Continuous sync and drain all participating owners before downgrade. Disable Agent mode too if autonomous startup work must stop. Reconcile pending journals with the current runtime. Preserve backups, snapshots, accepted and refused candidates, unresolved groups, and request accounting. This change adds no settings, accounting, or candidate schema migration. Do not delete private state to regain allowance or blindly republish an uncertain transfer.
+Stop Continuous sync and drain all participating owners before downgrade. Disable Autonomous sync too if autonomous startup work must stop. Reconcile pending journals with the current runtime. Preserve backups, snapshots, accepted and refused candidates, unresolved groups, and request accounting. This change adds no settings, accounting, or candidate schema migration. Do not delete private state to regain allowance or blindly republish an uncertain transfer.
