@@ -60,9 +60,9 @@ None of these controls is enabled by invoking the configuration skill.
 
 ### Editing in the manager
 
-Open `/sync` → **Settings** and choose **Sync content**, **Sync behavior**, **Storage & setups**, or **Advanced**.
-**All settings (search)** provides cross-category typing-to-search over the same rows.
-**Included paths** and **Compare included paths** are adjacent in Sync content; the latter compares path policies, not file contents.
+Open `/sync` → **Settings** to go directly to **Pi Sync Settings**.
+The screen has one searchable flat list with all 16 rows in their existing order and no category navigation or headings.
+**Included paths** and **Compare included paths** are adjacent; the latter compares path policies, not file contents.
 **Storage location** edits the current setup's coordinates, while **Manage sync setups** and **Manage storage connections** retain the catalog and affected-setup reviews.
 Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
 
@@ -219,14 +219,14 @@ It accepts:
 ### Status display
 
 The global `showStatus` setting accepts a boolean and defaults to `true` when omitted from an existing version 3 document.
-Set it through **/sync → Settings → Advanced → Show sync status**; changes are saved and applied immediately for every setup.
+Set it through **/sync → Settings → Show sync status**; changes are saved and applied immediately for every setup.
 When `false`, pi-sync clears and suppresses status text for background checks, manual and automatic transfers, and review attention.
 TUI review widgets and TUI/RPC notifications remain available, and lifecycle cleanup still clears any stale status owned by pi-sync.
 
 ### Debug startup timings
 
 The top-level user setting `debug` accepts only `true` or `false` and defaults to `false`.
-Edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`) or use **/sync → Settings → Advanced → Debug startup timings**.
+Edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`) or use **/sync → Settings → Debug startup timings**.
 UI changes save immediately through the existing ordered, atomic settings writer; both manual and UI changes take effect on the next session start, including `/reload`, new, resume, and fork.
 There is no project or environment override.
 
@@ -255,7 +255,7 @@ Set `debug` to `false` or remove it, then start a new session to disable reports
 ### Secret scanning
 
 The global `skipSecretScan` setting accepts a boolean and defaults to `false`, including when omitted from an existing version 3 document.
-Set it through **/sync → Settings → Advanced → Skip secret scan**; changes are saved immediately and apply to subsequent pushes for every sync setup, including automatic pushes.
+Set it through **/sync → Settings → Skip secret scan**; changes are saved immediately and apply to subsequent pushes for every sync setup, including automatic pushes.
 When `true`, pushes skip the local secret scan; other safety checks and confirmations remain unchanged.
 Enable it only after reviewing the destination and selected content because files containing secrets can be uploaded.
 `/sync doctor` still scans and reports possible secrets regardless of this setting.
@@ -295,7 +295,7 @@ RPC remains a read-only summary with the manual `sync.include` path.
 
 Every new snapshot stores the normalized included-content selection separately from the files that happened to exist.
 This preserves selected-but-missing paths without syncing `pi-sync.json`, storage credentials, automatic-sync preferences, or setup names.
-**Settings → Sync content → Compare included paths** opens the same review-first flow as a manager operation when local and remote lists differ.
+**Settings → Compare included paths** opens the same review-first flow as a manager operation when local and remote lists differ.
 Adoption revalidates the remote head, immutable snapshot, and complete reviewed setup configuration, including the shared connection and credentials, before one atomic settings update.
 Cancelling the network check leaves the content list unchanged.
 A settings save that has started its atomic replacement can still finish; later cancellation does not undo it.
@@ -317,7 +317,7 @@ Pull protects the currently open session file; restart Pi or resume a pulled ses
 ### Automatic startup transfer
 
 `sync.automaticTransfer` is optional and accepts only a boolean; absent means `false`.
-Set it through **/sync → Settings → Sync behavior → Startup transfer**.
+Set it through **/sync → Settings → Startup transfer**.
 It is separate from `sync.automatic`: the legacy setting retains observation and selected-content shutdown behavior.
 
 When explicitly enabled, one startup transfer waits for an idle boundary in TUI/RPC.
@@ -348,7 +348,7 @@ Unknown fields remain preserved and malformed/invalid files block saves, just as
 ### Experimental Agent mode
 
 `sync.agentMode` is an optional per-setup boolean, default `false`, in settings versions 3, 4, and 5.
-Open **Settings → Sync behavior → Agent mode (experimental)** and review the setup, destination, selected paths, model disclosure, costs, and autonomous writes before enabling.
+Open **Settings → Agent mode (experimental)** and review the setup, destination, selected paths, model disclosure, costs, and autonomous writes before enabling.
 RPC users can explicitly set the same field in the private settings file.
 Setting it to `true` is authorization, not just a display preference.
 
@@ -446,7 +446,7 @@ No Pi core changes or other extension are required.
 ### Experimental Continuous sync
 
 `sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3, 4 and 5.
-Open **Settings → Sync behavior → Continuous sync (experimental)** after enabling Agent mode.
+Open **Settings → Continuous sync (experimental)** after enabling Agent mode.
 RPC users can set the field explicitly in the private settings file.
 Existing Agent mode consent does not enable recurring requests.
 
@@ -617,7 +617,7 @@ Never reinterpret portable snapshots with an old binary.
 ### Content merge and partial progress
 
 `sync.mergeContent` and `sync.partialSync` are independent experimental booleans, both default `false`.
-The owning **Advanced → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit settings-version-5 upgrade.
+The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit settings-version-5 upgrade.
 Manual configuration must also declare version 5.
 Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration.
 Disabling options retains the schema and recovery evidence.

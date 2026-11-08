@@ -92,32 +92,20 @@ export async function showSyncSettings(
     | "storage-location"
     | "setups"
     | "connections";
-  type Group = "content" | "behavior" | "storage" | "advanced" | "all";
-  type Screen = "categories" | Group;
-  const groups: Record<Group, { label: string; ids: readonly string[] }> = {
-    content: { label: "Sync content", ids: ["include", "remoteInclude", "localFields"] },
-    behavior: {
-      label: "Sync behavior",
-      ids: ["automatic", "automaticTransfer", "agentMode", "continuous", "onSwitch"],
-    },
-    storage: { label: "Storage & setups", ids: ["storageLocation", "setups", "connections"] },
-    advanced: { label: "Advanced", ids: ["mergeSettings", "contentPolicy", "skipSecretScan", "showStatus", "debug"] },
-    all: { label: "All settings (search)", ids: [] },
-  };
   let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
   // Keep Kit's existing settings adapter: native SettingsList has no async save/rollback
   // contract or injected keybindings. Kit preserves these safety and accessibility behaviors.
-  // Categories use public navigation; All settings retains cross-category search.
-  const settingsScreen = (state: Awaited<ReturnType<typeof loadConfig>>, group: Group) =>
-    ({
-      kind: "settings",
-      title: `Pi Sync Settings · ${groups[group].label}`,
-      lines: [
-        `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
-        saveStatus,
-      ],
-      items: (
-        [
+  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, "settings", Action, ExtensionCommandContext>({
+    start: "settings",
+    screens: {
+      settings: ({ state }) => ({
+        kind: "settings",
+        title: "Pi Sync Settings",
+        lines: [
+          `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
+          saveStatus,
+        ],
+        items: [
           {
             id: "include",
             label: "Included paths",
@@ -262,32 +250,8 @@ export async function showSyncSettings(
             values: ["On", "Off"],
             action: "debug",
           },
-        ] satisfies MenuSettingItem<Action>[]
-      ).filter((item) => group === "all" || groups[group].ids.includes(item.id)),
-    }) as const;
-  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, Screen, Action, ExtensionCommandContext>({
-    start: "categories",
-    screens: {
-      categories: ({ state }) => ({
-        kind: "actions",
-        title: "Pi Sync Settings",
-        lines: [
-          `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
-          "Choose a task, or search all settings. Scope is shown in each setting's description.",
-          saveStatus,
-        ],
-        items: (Object.entries(groups) as [Group, (typeof groups)[Group]][]).map(([id, group]) => ({
-          id,
-          label: group.label,
-          to: id,
-        })),
-        hint: "back",
+        ] satisfies MenuSettingItem<Action>[],
       }),
-      content: ({ state }) => settingsScreen(state, "content"),
-      behavior: ({ state }) => settingsScreen(state, "behavior"),
-      storage: ({ state }) => settingsScreen(state, "storage"),
-      advanced: ({ state }) => settingsScreen(state, "advanced"),
-      all: ({ state }) => settingsScreen(state, "all"),
     },
     actions: {
       "storage-location": async ({ signal: actionSignal }) => {

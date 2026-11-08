@@ -7,6 +7,7 @@ import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { showSyncManager } from "../src/ui/manager-ui.js";
 import { boundedSettingsUI } from "../src/ui/settings-frame.js";
 import { showSyncSettings } from "../src/ui/settings-ui.js";
 import { startupTransferSummary } from "../src/ui/sync-behavior.js";
@@ -84,7 +85,7 @@ for (const [before, expected] of [
       const settings = { ...v3S3Settings(), version: 5 };
       Object.assign(settings.syncSetups.home.sync, { mergeContent: before[0], partialSync: before[1] });
       writeFileSync(localConfigPath(), JSON.stringify(settings));
-      const choices = ["Advanced", "Content merge / partial progress", undefined, undefined];
+      const choices = ["Content merge / partial progress", undefined];
       const context = createMockContext({ mode: "tui", select: async () => choices.shift() });
       await showSyncSettings(context.ctx, async () => undefined);
       const config = await loadConfig();
@@ -93,74 +94,112 @@ for (const [before, expected] of [
     }));
 }
 
-const categories = [
-  ["Sync content", ["Included paths", "Compare included paths", "Machine-local fields"]],
-  ["Sync behavior", ["Automatic sync", "Startup transfer", "On setup switch"]],
-  ["Storage & setups", ["Storage location", "Manage sync setups", "Manage storage connections"]],
-  [
-    "Advanced",
-    [
-      "Merge settings fields",
-      "Content merge / partial progress",
-      "Skip secret scan",
-      "Show sync status",
-      "Debug startup timings",
-    ],
-  ],
-] as const;
+const settingLabels = [
+  "Included paths",
+  "Compare included paths",
+  "Machine-local fields",
+  "Storage location",
+  "Manage sync setups",
+  "Manage storage connections",
+  "Automatic sync",
+  "Startup transfer",
+  "Agent mode (experimental)",
+  "Continuous sync (experimental)",
+  "On setup switch",
+  "Merge settings fields",
+  "Content merge / partial progress",
+  "Skip secret scan",
+  "Show sync status",
+  "Debug startup timings",
+];
 
-for (const [index, [name, labels]] of categories.entries()) {
-  test(`${name} contains its task rows and stays bounded through resize`, async () =>
-    withTempHome(async (root) => {
-      mkdirSync(root, { recursive: true });
-      writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));
-      const before = readFileSync(localConfigPath());
-      const tui = createTuiHarness({ width: 100, rows: 40 });
-      const context = createMockContext({ mode: "tui", custom: tui.custom });
-      const running = showSyncSettings(context.ctx, async () => undefined);
-      try {
-        await tui.waitForOpen();
-        const rootFrame = tui.render().join("\n");
-        assert.match(rootFrame, /All settings \(search\)/);
-        for (let move = 0; move < index; move++) tui.press("tui.select.down");
-        tui.press("tui.select.confirm");
-        await tui.waitForPending();
-        await tui.waitForOpen();
-        const initial = tui.render().join("\n");
-        assert.ok(initial.includes(`Pi Sync Settings · ${name}`));
-        for (const label of labels) assert.ok(initial.includes(label), initial);
-        for (const [other, otherLabels] of categories) {
-          if (other === name) continue;
-          for (const label of otherLabels) assert.equal(initial.includes(`→ ${label}`), false);
-        }
-        for (const rows of [4, 8, 16, 24]) {
-          for (const width of [1, 12, 48, 100]) {
-            tui.resize({ width, rows });
-            tui.invalidate();
-            const frame = tui.render();
-            assert.ok(frame.length <= Math.max(1, rows - 3), `${width}x${rows}`);
+test("Settings opens all original rows in order and one Back returns directly to the manager", async () =>
+  withTempHome(async (root) => {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));
+    const before = readFileSync(localConfigPath());
+    const frames: string[] = [];
+    const rows: string[][] = [];
+    const choices = ["Settings", undefined, undefined];
+    const context = createMockContext({
+      mode: "tui",
+      select: async (frame: string, options: string[]) => {
+        frames.push(frame);
+        if (frame.split("\n").includes("Pi Sync Settings")) rows.push(options);
+        return choices.shift();
+      },
+    });
+    await showSyncManager(context.ctx, async () => undefined);
+    assert.equal(choices.length, 0);
+    assert.equal(frames.length, 3);
+    assert.ok(frames[0]?.split("\n").includes("Manage sync"));
+    assert.ok(frames[1]?.split("\n").includes("Pi Sync Settings"));
+    assert.ok(frames[2]?.split("\n").includes("Manage sync"));
+    assert.deepEqual(rows, [settingLabels]);
+    assert.doesNotMatch(
+      frames[1] ?? "",
+      /Sync content|Sync behavior|Storage & setups|Advanced|All settings|Pi Sync Settings ·/u,
+    );
+    assert.deepEqual(readFileSync(localConfigPath()), before);
+    assert.deepEqual(context.notifications, []);
+  }));
+
+test("flat Settings uses the callback theme and retains the active row through resize", async () =>
+  withTempHome(async (root) => {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));
+    const before = readFileSync(localConfigPath());
+    const roles = new Set<string>();
+    const tui = createTuiHarness({
+      width: 100,
+      rows: 40,
+      theme: {
+        fg: (role, value) => {
+          roles.add(role);
+          return value;
+        },
+        bold: (value) => value,
+      },
+    });
+    const context = createMockContext({ mode: "tui", custom: tui.custom });
+    const running = showSyncSettings(context.ctx, async () => undefined);
+    try {
+      await tui.waitForOpen();
+      const initial = tui.render();
+      assert.ok(initial.includes("Pi Sync Settings"));
+      assert.match(initial.join("\n"), /Type to search/u);
+      assert.doesNotMatch(initial.join("\n"), /Sync content|Sync behavior|Storage & setups|Advanced|All settings/u);
+      assert.match(initial[0] ?? "", /^─+$/u);
+      assert.match(initial.at(-1) ?? "", /^─+$/u);
+      assert.ok(roles.has("border"));
+      assert.ok(roles.has("dim"));
+      for (const rows of [4, 8, 16, 24]) {
+        for (const width of [1, 12, 48, 100]) {
+          tui.resize({ width, rows });
+          tui.invalidate();
+          const frame = tui.render();
+          assert.ok(frame.length <= Math.max(1, rows - 3), `${width}x${rows}`);
+          assert.ok(
+            frame.every((line) => visibleWidth(line) <= width),
+            `${width}x${rows}: ${frame.join("\n")}`,
+          );
+          if (width >= 48)
             assert.ok(
-              frame.every((line) => visibleWidth(line) <= width),
-              `${width}x${rows}: ${frame.join("\n")}`,
+              frame.some((line) => line.includes("→ Included paths")),
+              frame.join("\n"),
             );
-            if (width >= 48)
-              assert.ok(
-                frame.some((line) => line.includes("→")),
-                frame.join("\n"),
-              );
-          }
         }
-        tui.press("ctrl+c");
-        await running;
-        assert.deepEqual(readFileSync(localConfigPath()), before);
-        assert.deepEqual(context.notifications, []);
-      } finally {
-        tui.dispose();
       }
-    }));
-}
+      tui.press("ctrl+c");
+      await running;
+      assert.deepEqual(readFileSync(localConfigPath()), before);
+      assert.deepEqual(context.notifications, []);
+    } finally {
+      tui.dispose();
+    }
+  }));
 
-test("All settings search handles paste and Backspace, retains saved scope and mouse coordinates", async () =>
+test("Settings search handles paste and Backspace, retains saved scope and mouse coordinates", async () =>
   withTempHome(async (root) => {
     mkdirSync(root, { recursive: true });
     writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));
@@ -171,10 +210,6 @@ test("All settings search handles paste and Backspace, retains saved scope and m
       routes.push(route);
     });
     try {
-      await tui.waitForOpen();
-      for (let move = 0; move < 4; move++) tui.press("tui.select.down");
-      tui.press("tui.select.confirm");
-      await tui.waitForPending();
       await tui.waitForOpen();
       tui.send("\u001b[200~Show sync statusx\u001b[201~");
       assert.match(tui.render().join("\n"), /No matching/);

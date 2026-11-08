@@ -61,12 +61,7 @@ for (const reason of ["active", "cancel", "replace", "notification-failure"] as 
           async () => {
             const running = showSyncSettings(mock.ctx, async () => undefined, controller.signal);
             await tui.waitForOpen();
-            tui.press("tui.select.down");
-            tui.press("tui.select.confirm");
-            await tui.waitForPending();
-            await tui.waitForOpen();
-            tui.press("tui.select.down");
-            tui.press("tui.select.down");
+            tui.send("\u001b[200~Agent mode\u001b[201~");
             tui.press("tui.select.confirm");
             await tui.waitForPending();
             if (!cancel) {
@@ -86,10 +81,7 @@ for (const reason of ["active", "cancel", "replace", "notification-failure"] as 
         // A new Settings flow must use the disk value, not the abandoned draft.
         const reopened = showSyncSettings(mock.ctx, async () => undefined);
         await tui.waitForOpen();
-        tui.press("tui.select.down");
-        tui.press("tui.select.confirm");
-        await tui.waitForPending();
-        await tui.waitForOpen();
+        tui.send("\u001b[200~Agent mode\u001b[201~");
         assert.match(tui.render().join("\n"), /Agent mode.*Off/);
         tui.press("ctrl+c");
         await reopened;

@@ -396,7 +396,6 @@ test.each([3, 4, 5])(
       sync(mock.pi);
       const choices = [
         "Settings",
-        "Storage & setups",
         "Manage sync setups",
         "Add sync setup",
         "r2",
@@ -703,10 +702,6 @@ test("settings UI exposes local editing and synced-content comparison", async ()
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
-        if (harness.render().includes("Pi Sync Settings")) {
-          harness.handleInput("\r");
-          return harness.result;
-        }
         rendered = harness.render().join("\n");
         harness.handleInput("\u0003");
         return harness.result;
@@ -730,14 +725,6 @@ test("settings UI persists the global secret-scan override", async () => {
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
-        if (harness.render().includes("Pi Sync Settings")) {
-          if (notifications.length > 0) harness.handleInput("\u0003");
-          else {
-            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
-            harness.handleInput("\r");
-          }
-          return harness.result;
-        }
         if (notifications.length > 0) {
           harness.handleInput("\u0003");
           return harness.result;
@@ -766,14 +753,6 @@ test("settings UI disables status globally and applies the saved value immediate
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
-        if (harness.render().includes("Pi Sync Settings")) {
-          if (context.notifications.length > 0) harness.handleInput("\u0003");
-          else {
-            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
-            harness.handleInput("\r");
-          }
-          return harness.result;
-        }
         if (context.notifications.length > 0) {
           harness.handleInput("\u0003");
           return harness.result;
@@ -808,7 +787,6 @@ test("settings UI disposes on session replacement without mutating settings", as
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 80);
-        harness.handleInput("\r");
         controller.abort(new DOMException("Session replaced", "AbortError"));
         harness.dispose();
         return harness.result;
@@ -832,14 +810,6 @@ test("settings UI restores its displayed value when a private atomic save is rej
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 80);
-        if (harness.render().includes("Pi Sync Settings")) {
-          if (notifications.length > 0) harness.handleInput("\u0003");
-          else {
-            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
-            harness.handleInput("\r");
-          }
-          return harness.result;
-        }
         harness.handleInput("Skip secret scan");
         harness.handleInput("\r");
         await harness.waitForPending();
@@ -875,14 +845,6 @@ test("a rejected status save preserves its displayed, persisted, and runtime val
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 80);
-        if (harness.render().includes("Pi Sync Settings")) {
-          if (context.notifications.length > 0) harness.handleInput("\u0003");
-          else {
-            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
-            harness.handleInput("\r");
-          }
-          return harness.result;
-        }
         harness.handleInput("Show sync status");
         harness.handleInput("\r");
         await harness.waitForPending();

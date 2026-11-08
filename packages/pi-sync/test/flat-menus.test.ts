@@ -175,7 +175,7 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
   test(`Settings ${row} returns to the setup-bound screen on cancellation`, async () => {
     await configured(async () => {
       const before = readFileSync(localConfigPath());
-      const choices = ["All settings (search)", row, undefined, undefined, undefined];
+      const choices = [row, undefined, undefined, undefined];
       const titles: string[] = [];
       const context = createMockContext({
         mode: "tui",
@@ -187,7 +187,7 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
         input: async () => undefined,
       });
       await showSyncSettings(context.ctx, async () => undefined);
-      assert.equal(titles.filter((title) => title.includes("Pi Sync Settings ·")).length, 2);
+      assert.equal(titles.filter((title) => title.split("\n").includes("Pi Sync Settings")).length, 2);
       assert.deepEqual(readFileSync(localConfigPath()), before);
       assert.deepEqual(context.notifications, []);
     });
@@ -211,7 +211,6 @@ for (const mode of ["tui", "rpc"] as const) {
         }));
         const choices = [
           "Settings",
-          ...(mode === "tui" ? ["All settings (search)"] : []),
           "Manage sync setups",
           "work",
           "Make current…",
@@ -249,7 +248,7 @@ for (const mode of ["tui", "rpc"] as const) {
                 const choice = choices.shift();
                 if (!choice) tui.press("ctrl+c");
                 else {
-                  if (title.startsWith("Pi Sync Settings ·")) tui.send(`\u001b[200~${choice}\u001b[201~`);
+                  if (title === "Pi Sync Settings") tui.send(`\u001b[200~${choice}\u001b[201~`);
                   else {
                     for (let index = 0; index < 20; index++) {
                       if (tui.render().some((line) => line.includes(`→ ${choice}`))) break;
@@ -299,7 +298,7 @@ for (const mode of ["tui", "rpc"] as const) {
         );
         assert.equal(
           titles.length,
-          (outcome === "applied" ? 4 : 5) + (mode === "tui" ? 1 : 0),
+          outcome === "applied" ? 4 : 5,
           JSON.stringify({ titles, notifications: context.notifications }),
         );
         assert.equal((await loadConfig()).setupName, "work");
@@ -313,7 +312,6 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
     await configured(async () => {
       const frames: string[] = [];
       let visits = 0;
-      let entered = false;
       let inputs = 0;
       const context = createMockContext({
         mode: "tui",
@@ -363,13 +361,6 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
           await tui.waitForOpen();
           const frame = tui.render().join("\n");
           if (frame.split("\n").includes("Pi Sync Settings")) {
-            if (entered) tui.send("q");
-            else {
-              entered = true;
-              for (let index = 0; index < 4; index++) tui.send("j");
-              tui.send("x");
-            }
-          } else if (frame.includes("Pi Sync Settings")) {
             visits++;
             if (visits === 1) tui.send(`\u001b[200~${row}\u001b[201~`);
             frames.push(tui.render().join("\n"));
@@ -413,8 +404,7 @@ test("Settings closes after management switches the active setup instead of edit
       mode: "tui",
       hasUI: true,
       select: async (title: string) => {
-        if (title.split("\n").includes("Pi Sync Settings")) return "All settings (search)";
-        if (title.includes("Pi Sync Settings ·")) {
+        if (title.split("\n").includes("Pi Sync Settings")) {
           screens++;
           return "Manage sync setups";
         }
@@ -450,11 +440,7 @@ for (const reason of ["Session replaced", "Shutdown", "Disposal"]) {
       };
       const running = showSyncSettings(context.ctx, async () => undefined, owner.signal);
       await tui.waitForOpen();
-      tui.press("tui.select.down");
-      tui.press("tui.select.down");
-      tui.press("tui.select.confirm");
-      await tui.waitForPending();
-      await tui.waitForOpen();
+      tui.send("\u001b[200~Storage location\u001b[201~");
       tui.press("tui.select.confirm");
       await inputStarted;
       if (reason === "Disposal") tui.dispose();
@@ -468,7 +454,7 @@ for (const reason of ["Session replaced", "Shutdown", "Disposal"]) {
   });
 }
 
-test("All settings preserves a searched row and new value after save with remapped keys", async () => {
+test("Settings preserves a searched row and new value after save with remapped keys", async () => {
   await configured(async () => {
     const tui = createTuiHarness({
       width: 48,
@@ -498,10 +484,6 @@ test("All settings preserves a searched row and new value after save with remapp
     const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
     const running = showSyncSettings(context.ctx, async () => undefined);
     await tui.waitForOpen();
-    for (let index = 0; index < 4; index++) tui.send("j");
-    tui.send("x");
-    await tui.waitForPending();
-    await tui.waitForOpen();
     tui.send("\u001b[200~Show sync status\u001b[201~");
     tui.send("x");
     await tui.waitForPending();
@@ -510,9 +492,6 @@ test("All settings preserves a searched row and new value after save with remapp
     assert.match(frame, /Show sync status.*Off/u);
     assert.doesNotMatch(frame, /Included content|Automatic sync/u);
     assert.equal((await loadConfig()).showStatus, false);
-    tui.send("q");
-    await tui.waitForPending();
-    await tui.waitForOpen();
     tui.send("q");
     await running;
     tui.dispose();
@@ -526,8 +505,7 @@ test("Settings closes when management removes its owning setup", async () => {
       mode: "tui",
       hasUI: true,
       select: async (title: string) => {
-        if (title.split("\n").includes("Pi Sync Settings")) return "All settings (search)";
-        if (title.includes("Pi Sync Settings ·")) {
+        if (title.split("\n").includes("Pi Sync Settings")) {
           screens++;
           return "Manage sync setups";
         }

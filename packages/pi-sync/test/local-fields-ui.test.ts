@@ -25,10 +25,6 @@ test("settings local-field input is disposed with owned cancellation and no save
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
-        if (harness.render().includes("Pi Sync Settings")) {
-          harness.handleInput("\r");
-          return harness.result;
-        }
         harness.handleInput("Machine-local");
         harness.handleInput("\r");
         await started;
@@ -71,10 +67,6 @@ for (const confirmed of [false, true]) {
         mode: "tui",
         custom: async (factory: unknown) => {
           const harness = createCustomSelectorHarness(factory, 100);
-          if (harness.render().includes("Pi Sync Settings")) {
-            harness.handleInput(activated ? "\u0003" : "\r");
-            return harness.result;
-          }
           if (activated) {
             harness.handleInput("tui.select.cancel");
             await harness.waitForPending();
@@ -87,6 +79,7 @@ for (const confirmed of [false, true]) {
           await harness.waitForPending();
           seenPolicy = (await loadConfig()).localFields;
           harness.handleInput("tui.select.cancel");
+          await harness.waitForPending();
           harness.dispose();
           return harness.result;
         },

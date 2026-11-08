@@ -98,7 +98,6 @@ test("nested new connection remains saved when the surrounding setup is cancelle
     writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));
     const choices = [
       "Settings",
-      "Storage & setups",
       "Manage sync setups",
       "Add sync setup",
       "Add a new storage connection…",
