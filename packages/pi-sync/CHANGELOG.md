@@ -1,5 +1,13 @@
 # @narumitw/pi-sync
 
+## 0.57.12
+
+### Patch Changes
+
+- 45401e4: Update runtime dependencies within supported peer dependency ranges.
+- 6e7b0fb: Rename Agent mode to Autonomous sync and remove experimental labels from Settings and related guidance. Explain transfer authorization before model-based conflict resolution. Keep existing settings keys, saved consent, default-off opt-ins, safety checks, and runtime behavior unchanged.
+- 33d4a5b: Open one searchable Pi Sync Settings list directly from the `/sync` manager's Settings action, without category navigation. Preserve all 16 rows, their order, reviews, and save behavior.
+
 ## 0.57.11
 
 ### Patch Changes
