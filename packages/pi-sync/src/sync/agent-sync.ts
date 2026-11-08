@@ -57,7 +57,7 @@ export async function withAgentSyncLock<T>(
             signal?.throwIfAborted();
           });
         await validate();
-        setSyncStatus(ctx, "sync resolving");
+        setSyncStatus(ctx, "sync resolving", { activity: "resolving" });
         const cached = await withLock("agent-cache-read", async () => {
           await assertOwner();
           options.signal?.throwIfAborted();

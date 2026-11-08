@@ -10,12 +10,13 @@ import { errorMessage } from "./sync/sync-errors.js";
 import { createSyncLoaders, type SyncDependencies } from "./sync/sync-loaders.js";
 import { registerStartupTimings } from "./ui/startup-timings-entry.js";
 import { createSyncAttentionController } from "./ui/sync-attention.js";
-import { setSyncStatus } from "./ui/sync-status.js";
+import { createSyncStatusPublisher, setSyncStatus } from "./ui/sync-status.js";
 import { safeTerminalText } from "./ui/terminal-text.js";
 
 export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDependencies> = {}) {
   const loaders = createSyncLoaders(dependencies);
   const attention = createSyncAttentionController();
+  const status = createSyncStatusPublisher(pi.events);
   const publishTimings = registerStartupTimings(pi);
   const check = createStartupCheck(loaders, attention, 30_000, publishTimings);
   let sessionAbort = new AbortController();
@@ -60,6 +61,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       if (!ctx.hasUI) {
         throw new Error("/sync requires TUI or RPC mode so results and safety prompts are observable.");
       }
+      status.bind(ctx);
       const signal = sessionAbort.signal;
       const manager = ctx.sessionManager;
       const command = splitArgs(args)[0];
@@ -104,39 +106,46 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    shutdownAbort?.abort(new DOMException("Session replaced", "AbortError"));
-    shutdownAbort = undefined;
-    sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
-    sessionAbort = new AbortController();
-    const signal = sessionAbort.signal;
-    owner = ctx.sessionManager;
-    continuousPossible = false;
-    startupDebug = false;
-    attention.reset(ctx);
-    const previous = initialization;
-    initialization = (async () => {
-      await previous;
-      if (signal.aborted) return false;
-      await continuous?.stop();
-      if (signal.aborted) return false;
-      await check.stop();
-      if (signal.aborted) return false;
-      try {
-        const startup = await withStateDirectoryAccess(() => startSession(ctx, signal, publishTimings));
+    const releaseStatus = status.start(ctx);
+    try {
+      shutdownAbort?.abort(new DOMException("Session replaced", "AbortError"));
+      shutdownAbort = undefined;
+      sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
+      sessionAbort = new AbortController();
+      const signal = sessionAbort.signal;
+      owner = ctx.sessionManager;
+      continuousPossible = false;
+      startupDebug = false;
+      attention.reset(ctx);
+      const previous = initialization;
+      initialization = (async () => {
+        await previous;
         if (signal.aborted) return false;
-        startupDebug = startup?.debug ?? false;
-        return startup?.config;
-      } catch (error) {
-        if (!signal.aborted && ctx.hasUI) {
-          ctx.ui.notify(`pi-sync recovery required: ${safeTerminalText(errorMessage(error))}`, "error");
+        await continuous?.stop();
+        if (signal.aborted) return false;
+        await check.stop();
+        if (signal.aborted) return false;
+        try {
+          const startup = await withStateDirectoryAccess(() => startSession(ctx, signal, publishTimings));
+          if (signal.aborted) return false;
+          startupDebug = startup?.debug ?? false;
+          return startup?.config;
+        } catch (error) {
+          if (!signal.aborted && ctx.hasUI) {
+            ctx.ui.notify(`pi-sync recovery required: ${safeTerminalText(errorMessage(error))}`, "error");
+          }
+          return false;
         }
-        return false;
+      })();
+      const ready = await initialization;
+      if (ready === false) releaseStatus();
+      if (ready && !signal.aborted) {
+        if (ready.continuous && ready.agentMode) await resumeContinuous(ctx, signal);
+        else if (ready.automatic || startupTransferEnabled(ready)) check.start(ctx, signal, ready);
       }
-    })();
-    const ready = await initialization;
-    if (ready && !signal.aborted) {
-      if (ready.continuous && ready.agentMode) await resumeContinuous(ctx, signal);
-      else if (ready.automatic || startupTransferEnabled(ready)) check.start(ctx, signal, ready);
+    } catch (error) {
+      releaseStatus();
+      throw error;
     }
   });
 
@@ -154,36 +163,41 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
   });
 
   pi.on("session_shutdown", async (event, ctx) => {
-    if (continuous && owner && owner !== ctx.sessionManager) return;
-    sessionAbort.abort(new DOMException("Session shut down", "AbortError"));
-    attention.reset(ctx);
-    shutdownAbort?.abort(new DOMException("Session shut down again", "AbortError"));
-    const controller = new AbortController();
-    shutdownAbort = controller;
-    const signal = combineSignals(controller.signal, AbortSignal.timeout(30_000));
-    const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
+    const releaseStatus = status.cleanupFor(ctx);
     try {
-      const ready = await initialization;
-      if (signal.aborted) return;
-      await continuous?.stop(ctx.sessionManager);
-      if (signal.aborted) return;
-      await check.stop();
-      if (signal.aborted) return;
-      if (ready !== false && reason !== "reload") {
-        await withStateDirectoryAccess(async () => {
-          if (signal.aborted) return;
-          await autoPushSessions(ctx, signal, loaders);
-        });
+      if (continuous && owner && owner !== ctx.sessionManager) return;
+      sessionAbort.abort(new DOMException("Session shut down", "AbortError"));
+      attention.reset(ctx);
+      shutdownAbort?.abort(new DOMException("Session shut down again", "AbortError"));
+      const controller = new AbortController();
+      shutdownAbort = controller;
+      const signal = combineSignals(controller.signal, AbortSignal.timeout(30_000));
+      const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
+      try {
+        const ready = await initialization;
+        if (signal.aborted) return;
+        await continuous?.stop(ctx.sessionManager);
+        if (signal.aborted) return;
+        await check.stop();
+        if (signal.aborted) return;
+        if (ready !== false && reason !== "reload") {
+          await withStateDirectoryAccess(async () => {
+            if (signal.aborted) return;
+            await autoPushSessions(ctx, signal, loaders);
+          });
+        }
+      } catch (error) {
+        if (!signal.aborted) {
+          ctx.ui.notify(`pi-sync session push skipped: ${errorMessage(error)}`, "warning");
+        }
+      } finally {
+        if (shutdownAbort === controller) shutdownAbort = undefined;
       }
-    } catch (error) {
-      if (!signal.aborted) {
-        ctx.ui.notify(`pi-sync session push skipped: ${errorMessage(error)}`, "warning");
-      }
+      if (signal.aborted) return;
+      setSyncStatus(ctx, undefined);
     } finally {
-      if (shutdownAbort === controller) shutdownAbort = undefined;
+      releaseStatus();
     }
-    if (signal.aborted) return;
-    setSyncStatus(ctx, undefined);
   });
 }
 

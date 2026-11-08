@@ -9,6 +9,7 @@ import {
   findDuplicateExtensions,
   readInstalledExtensionPackages,
 } from "./extension-status.js";
+import { subscribeExtensionStatusMetadata } from "./extension-status-metadata.js";
 import { type GitStatusSummary, gitStatusSummaryEqual, readGitStatus } from "./git-status.js";
 import { type RuntimeState, renderExtensionStatusline, renderStatusline } from "./render.js";
 import {
@@ -42,6 +43,7 @@ export default function statusline(pi: ExtensionAPI) {
   let loaded: LoadedStatuslineSettings | undefined;
   let previewPalettePreset: PalettePreset | undefined;
   let activeSessionManager: ExtensionContext["sessionManager"] | undefined;
+  let disposeFooter: (() => void) | undefined;
   const runtime: RuntimeState = {
     turnCount: 0,
     activeTools: new Map(),
@@ -135,6 +137,7 @@ export default function statusline(pi: ExtensionAPI) {
   };
 
   const installFooter = (ctx: ExtensionContext) => {
+    disposeFooter?.();
     const generation = ++sessionGeneration;
     menuController.abort(new DOMException("Statusline session context replaced", "AbortError"));
     menuController = new AbortController();
@@ -148,47 +151,93 @@ export default function statusline(pi: ExtensionAPI) {
     runtime.gitStatus = undefined;
     runtime.duplicateExtensions = [];
     runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
+    runtime.extensionStatusMetadata = undefined;
+    runtime.requestRender = undefined;
     ctx.ui.setStatus(STATUSLINE_KEY, undefined);
     if (!activeGitStatusTarget || !loaded) return;
     const installedPackages = readInstalledExtensionPackages(cwd);
     runtime.duplicateExtensions = findDuplicateExtensions(installedPackages);
     runtime.extensionStatusIconAliases = buildExtensionStatusIconAliases(installedPackages);
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      runtime.requestRender = () => tui.requestRender();
+    const sessionManager = ctx.sessionManager;
+    const createFooter: NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]> = (tui, theme, footerData) => {
+      if (generation !== sessionGeneration || sessionManager !== activeSessionManager) {
+        return { render: () => [], invalidate() {} };
+      }
+      disposeFooter?.();
+      activeGitStatusTarget = { cwd, generation };
+      let disposed = false;
+      let branchUnsubscribe: (() => void) | undefined;
+      let clock: ReturnType<typeof setInterval> | undefined;
+      let metadata: ReturnType<typeof subscribeExtensionStatusMetadata> | undefined;
+      const isCurrentFooter = () =>
+        !disposed && generation === sessionGeneration && sessionManager === activeSessionManager;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        try {
+          metadata?.dispose();
+        } finally {
+          try {
+            branchUnsubscribe?.();
+          } finally {
+            if (clock) clearInterval(clock);
+            if (disposeFooter === dispose) {
+              disposeFooter = undefined;
+              runtime.extensionStatusMetadata = undefined;
+              runtime.requestRender = undefined;
+            }
+            if (isActiveGitStatusTarget(cwd, generation)) {
+              activeGitStatusTarget = undefined;
+              abortGitStatusRefresh("Statusline footer disposed");
+              clearGitStatusDebounce();
+              pendingGitStatusRefresh = undefined;
+              runtime.gitStatus = undefined;
+            }
+          }
+        }
+      };
+      disposeFooter = dispose;
+      runtime.requestRender = () => {
+        if (isCurrentFooter()) tui.requestRender();
+      };
 
-      const refreshFooterGitStatus = () => refreshGitStatus(cwd, generation);
-      const branchUnsubscribe = footerData.onBranchChange(() => {
-        runtime.gitStatus = undefined;
-        abortGitStatusRefresh("Statusline Git branch changed");
-        clearGitStatusDebounce();
-        refreshFooterGitStatus();
-        tui.requestRender();
-      });
-      const clock = setInterval(() => {
-        clearGitStatusDebounce();
-        refreshFooterGitStatus();
-        tui.requestRender();
-      }, GIT_STATUS_REFRESH_INTERVAL_MS);
-      clock.unref();
+      try {
+        const refreshFooterGitStatus = () => refreshGitStatus(cwd, generation);
+        branchUnsubscribe = footerData.onBranchChange(() => {
+          if (!isCurrentFooter()) return;
+          runtime.gitStatus = undefined;
+          abortGitStatusRefresh("Statusline Git branch changed");
+          clearGitStatusDebounce();
+          refreshFooterGitStatus();
+          refresh();
+        });
+        clock = setInterval(() => {
+          if (!isCurrentFooter()) return;
+          clearGitStatusDebounce();
+          refreshFooterGitStatus();
+          refresh();
+        }, GIT_STATUS_REFRESH_INTERVAL_MS);
+        clock.unref();
+        metadata = subscribeExtensionStatusMetadata(
+          pi.events,
+          sessionManager,
+          () => footerData.getExtensionStatuses(),
+          () => {
+            if (isCurrentFooter()) refresh();
+          },
+        );
+        if (isCurrentFooter()) runtime.extensionStatusMetadata = metadata;
+        else metadata.dispose();
+      } catch (error) {
+        dispose();
+        throw error;
+      }
 
       return {
-        dispose() {
-          branchUnsubscribe();
-          clearInterval(clock);
-          if (isActiveGitStatusTarget(cwd, generation)) {
-            activeGitStatusTarget = undefined;
-            abortGitStatusRefresh("Statusline footer disposed");
-            clearGitStatusDebounce();
-            pendingGitStatusRefresh = undefined;
-            runtime.gitStatus = undefined;
-            runtime.duplicateExtensions = [];
-            runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
-            runtime.requestRender = undefined;
-          }
-        },
+        dispose,
         invalidate() {},
         render(width: number): string[] {
-          if (!loaded) return [];
+          if (!isCurrentFooter() || !loaded) return [];
           const config = previewPalettePreset
             ? { ...loaded.config, palettePreset: previewPalettePreset }
             : loaded.config;
@@ -199,7 +248,13 @@ export default function statusline(pi: ExtensionAPI) {
           return lines;
         },
       };
-    });
+    };
+    try {
+      ctx.ui.setFooter(createFooter);
+    } catch (error) {
+      disposeFooter?.();
+      throw error;
+    }
     refreshGitStatus(cwd, generation);
   };
 
@@ -242,14 +297,19 @@ export default function statusline(pi: ExtensionAPI) {
     runtime.activeTools.clear();
     runtime.isStreaming = false;
     runtime.uiPrompt = undefined;
-    loaded = loadStatuslineSettingsForAgent(agentDir);
-    const settingsNotice = consumeStatuslineSettingsNotice();
-    if (settingsNotice) ctx.ui.notify(settingsNotice, "warning");
-    if (loaded.diagnostics.length > 0) {
-      ctx.ui.notify(formatSettingsDiagnostics(loaded), "warning");
+    try {
+      loaded = loadStatuslineSettingsForAgent(agentDir);
+      const settingsNotice = consumeStatuslineSettingsNotice();
+      if (settingsNotice) ctx.ui.notify(settingsNotice, "warning");
+      if (loaded.diagnostics.length > 0) {
+        ctx.ui.notify(formatSettingsDiagnostics(loaded), "warning");
+      }
+      runtime.thinkingLevel = pi.getThinkingLevel();
+      installFooter(ctx);
+    } catch (error) {
+      disposeFooter?.();
+      throw error;
     }
-    runtime.thinkingLevel = pi.getThinkingLevel();
-    installFooter(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
@@ -259,6 +319,7 @@ export default function statusline(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (_event, ctx) => {
     if (!ownsRuntime(ctx)) return;
+    disposeFooter?.();
     sessionGeneration += 1;
     menuController.abort(new DOMException("Statusline session shut down", "AbortError"));
     activeSessionManager = undefined;
@@ -273,7 +334,7 @@ export default function statusline(pi: ExtensionAPI) {
     runtime.uiPrompt = undefined;
     runtime.duplicateExtensions = [];
     runtime.extensionStatusIconAliases = EMPTY_EXTENSION_STATUS_ICON_ALIASES;
-    ctx.ui.setFooter(undefined);
+    if (ctx.mode === "tui") ctx.ui.setFooter(undefined);
     ctx.ui.setStatus(STATUSLINE_KEY, undefined);
     runtime.requestRender = undefined;
   });

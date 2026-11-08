@@ -62,6 +62,43 @@ TUI Pull and Push reviews reuse the existing scrollable safe-default confirmatio
 
 This change does not touch model prompts, tool exposure, shared-terminal handoff, settings formats, credentials, or default sync policies. Existing startup/session signals and Kit/custom-interaction disposal own new UI calls. Any awaited review is followed by owner validation, and each mutating operation revalidates its mutable inputs before its existing commit boundary. Status and differences actions use existing routes; manager opening/refresh remains observational and does not contact the remote. Diagnostics discloses its WebDAV write/repair behavior before execution.
 
+## Quiet footer presentation
+
+Sync publishes optional semantic metadata alongside its unchanged raw `sync` status. A compatible footer hides normal standby, including another local monitoring owner, without stopping monitoring or changing election. Pi Statusline owns glyph selection, reason formatting, and visual suppression through the [extension-neutral v1 contract](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-statusline/docs/extension-status-protocol.md). Native footers, RPC observers, and older or absent consumers retain the original readable raw value.
+
+The producer inventory is:
+
+| Source | Existing raw status / branch | Semantic activity |
+| --- | --- | --- |
+| `continuous-sync.ts` | Waiting for changes; another local owner | `idle` |
+| `continuous-sync.ts` | Checking; syncing | `checking`; `working` |
+| `continuous-sync.ts` | Scheduled retry; blocked; private-state/settings repair | `retry`; `blocked`, with a safe short reason |
+| `startup-check.ts` | `sync ...` | `checking` |
+| `sync-queries.ts`; `remote-selection-ui.ts` | Setup and selected-content inspection | `checking` |
+| `sync-mutations.ts` | Push; pull | `pushing`; `pulling` |
+| `agent-sync.ts` | Model resolution | `resolving` |
+| `sync-attention.ts` | Local change; remote change; review | `local-change`; `remote-change`; `review` |
+| Status helper, command cleanup, automatic sync, and lifecycle cleanup | Clear; unannotated raw status; Show sync status Off | Withdraw optional metadata; raw behavior stays compatible |
+
+Failure classification stays in Sync. `transient`, `contention`, `stale`, `authentication`, `storage`, `unsafe`, `model`, `budget`, and `unknown` produce `temp`, `busy`, `stale`, `auth`, `storage`, `review`, `model`, `limit`, and `unknown`. Repair uses `repair`. A candidate's exhausted attempt count remains a model block; only the rolling request window uses `limit`. No short label grants permission, resets accounting, or replaces the existing recovery guidance.
+
+The metadata request path is read-only. Publication and snapshot responses use public `sessionManager` identity, not the UI object. Old cleanup must not release a replacement publisher, including a reload with the same session manager. New subscribers request a snapshot after subscribing; late snapshots cannot replace later live activity or withdrawal. Missing or invalid metadata falls back to raw text rather than hiding an unknown state.
+
+## Quiet footer verification
+
+The 2026-11-08 display integration was audited against `docs/extension-conventions.md`, `docs/extension-settings.md`, and `docs/readme-conventions.md`. Producer changes add semantic annotations to existing raw statuses; authorization, scheduler election, request accounting, provider calls, resolver prompts, settings writers, widgets, and notifications remain unchanged. Independent complete-diff and follow-up reviews covered correctness, security, lifecycle, compatibility, regressions, and scope.
+
+Verification evidence:
+
+- Build prerequisites and test compilation passed. The focused Sync, Statusline, public-contract, and Jiti suites passed: 209 files, 3,772 tests, and 19 existing skips. Cases cover every activity/reason, raw fallback, Show sync status, mixed publishers, icons, widths, terminal controls, headless session isolation, reload, disposal, and reentrant updates/cleanup. Reviews produced 25 failing regressions before their fixes; those cases now pass without weaker acceptance criteria or longer test timeouts.
+- Separate root `npm run check` and `npm test` gates passed: 942 files, 20,732 tests, 34 existing skips, and no unhandled errors. The fenced-code-aware heading audit passed for all 37 active package READMEs. Biome retained its existing informational advisories.
+- `npm run package:pack -- sync` and `npm run package:pack -- statusline` passed. Actual temporary tarballs contained 330 Sync entries and 38 Statusline entries, including public docs and declared source/runtime paths, without tests or plans. Package-owned validators checked exact static and dynamic relative imports across all 82 Sync and three Statusline generated runtime files.
+- Finite offline CLI smokes loaded source and extracted packages with Sync alone, Statusline alone, and both together. All six runs exercised lazy help through Pi's Jiti loader, reported zero network attempts and model runs, and shut down with clean EOF. `scripts/smoke-extension-status.mjs` blocks fetch/socket use; the extracted-package fixture supplies declared dependencies and Pi peers from the existing workspace, not a fresh registry installation.
+
+Validation uses canonical temporary paths. The full suite was restarted after review fixes; no path guard, permission check, retry rule, or test deadline was relaxed. Both packages have minor Changesets for the optional public protocol addition; manifests, lockfiles, and historical changelogs were not edited for this change.
+
+Physical-terminal font appearance, live model quality, production backends, a fresh registry install, Windows, and Android remain unverified. A maintainer can inspect marker spacing and distinct transfer/change arrows with the target terminal and font; this is not a new release gate. Live provider/backend checks require their own authorized environment. No publication, version tag, release dispatch, production transfer, or live-provider request was performed.
+
 ## Settings wording verification
 
 The 2026-11-08 wording update uses **Autonomous sync**, removes Settings maturity markers at the user's request, and keeps `sync.agentMode`, saved consent, defaults, opt-ins, and risk warnings unchanged. A semantic diff audit checked all 16 changed runtime files against the base plus approved prose substitutions; authorization, settings storage, resolver prompts, cancellation, disposal, session replacement, and shutdown logic are unchanged. Review followed `docs/extension-conventions.md`, `docs/extension-settings.md`, and `docs/readme-conventions.md`, plus the skill editing rules. An independent complete-diff review found no issues.

@@ -5,7 +5,7 @@ import { snapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { withLock } from "../state/lock.js";
 import { withStateDirectoryAccess } from "../state/state-directory.js";
 import { readStateForConfig } from "../state/sync-state-store.js";
-import { setSyncStatus } from "../ui/sync-status.js";
+import { setSyncStatus, syncStatusFailureReason } from "../ui/sync-status.js";
 import { withAgentSyncLock } from "./agent-sync.js";
 import { ContinuousError, continuousFailure } from "./continuous-errors.js";
 import { acquireContinuousLease, type ContinuousLease } from "./continuous-lease.js";
@@ -96,7 +96,10 @@ export function createContinuousSync(
             if (signal.aborted) return;
             try {
               validateContext();
-              setSyncStatus(ctx, "sync blocked: private state or settings need repair");
+              setSyncStatus(ctx, "sync blocked: private state or settings need repair", {
+                activity: "blocked",
+                reason: "repair",
+              });
               if (!repairNotices.has(ctx.sessionManager)) {
                 repairNotices.add(ctx.sessionManager);
                 ctx.ui.notify(
@@ -153,7 +156,7 @@ export function createContinuousSync(
               if (lease) {
                 await monitor(ctx, config, binding, lease, signal, explicitRetry, startup);
                 explicitRetry = false;
-              } else setSyncStatus(ctx, "sync waiting: another local owner");
+              } else setSyncStatus(ctx, "sync waiting: another local owner", { activity: "idle" });
             } finally {
               await lease?.release();
             }
@@ -162,7 +165,10 @@ export function createContinuousSync(
           if (signal.aborted) return;
           const failure = continuousFailure(error);
           if (!failure.retry && !(error instanceof Error && error.name === "AbortError")) throw error;
-          setSyncStatus(ctx, `sync retry scheduled: ${failure.kind}`);
+          setSyncStatus(ctx, `sync retry scheduled: ${failure.kind}`, {
+            activity: "retry",
+            reason: syncStatusFailureReason(failure.kind),
+          });
         }
         validateOwner();
         if (!continuousEnabled(await loadConfigForCheck())) return;
@@ -355,6 +361,9 @@ export function createContinuousSync(
             : state.phase === "retry"
               ? `sync retry scheduled: ${state.error}`
               : "sync waiting for changes",
+          state.phase === "blocked" || state.phase === "retry"
+            ? { activity: state.phase, reason: syncStatusFailureReason(state.error) }
+            : { activity: "idle" },
         );
         if (state.phase === "retry") pollDue = Math.min(pollDue, state.next);
         const next = Math.max(
@@ -400,7 +409,7 @@ export function createContinuousSync(
       ["authentication", "storage", "unknown"].includes(current.error ?? "")
     )
       return;
-    setSyncStatus(ctx, "sync checking");
+    setSyncStatus(ctx, "sync checking", { activity: "checking" });
     const inspectionModule = await timings.measure("inspection import", () => loaders.inspection());
     validate();
     const observed = await timings.measure("inspection and guards", () =>
@@ -470,7 +479,7 @@ export function createContinuousSync(
     if (observed.journal || observed.inspection.localChanged || observed.inspection.remoteChanged) {
       const operations = await timings.measure("operations import", () => loaders.operations());
       validate();
-      setSyncStatus(ctx, "sync syncing");
+      setSyncStatus(ctx, "sync syncing", { activity: "working" });
       const result = await timings.measure("automatic transfer", () =>
         withStateDirectoryAccess(() =>
           withAgentSyncLock(

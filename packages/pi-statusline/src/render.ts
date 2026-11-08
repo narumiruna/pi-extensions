@@ -47,6 +47,7 @@ export function renderStatusline(
 ): string {
   if (width <= 0) return "";
 
+  const inlineStatuses = legacyInlineStatuses(footerData.getExtensionStatuses(), runtime);
   const usageSummary = summarizeFooterUsage(ctx.sessionManager.getEntries());
   const rows: Array<{ configuredSegments: number; segments: RenderSegment[] }> = [
     { configuredSegments: 0, segments: [] },
@@ -60,7 +61,7 @@ export function renderStatusline(
     const row = rows.at(-1);
     if (!row) continue;
     row.configuredSegments += 1;
-    const rendered = buildSegment(name, ctx, footerData, config, runtime, usageSummary);
+    const rendered = buildSegment(name, ctx, footerData, config, runtime, usageSummary, inlineStatuses);
     if (rendered && rendered.text.length > 0) row.segments.push(rendered);
   }
 
@@ -84,7 +85,7 @@ export function renderExtensionStatusline(
   trueColor = true,
 ): string[] {
   const statuses = footerData.getExtensionStatuses();
-  const prContext = prContextFromStatuses(statuses);
+  const prContext = prContextFromStatuses(legacyInlineStatuses(statuses, runtime));
   const rendersPrInline = prContext !== undefined && mainLine.includes(prContext);
   const status = formatExtensionStatuses(
     statuses,
@@ -97,6 +98,16 @@ export function renderExtensionStatusline(
   return wrapExtensionStatusline(status, width);
 }
 
+function legacyInlineStatuses(
+  statuses: ReadonlyMap<string, string>,
+  runtime: ExtensionStatusRuntime,
+): ReadonlyMap<string, string> {
+  const metadata = runtime.extensionStatusMetadata;
+  if (!metadata) return statuses;
+  metadata.reconcile(statuses);
+  return new Map([...statuses].filter(([key, value]) => !metadata.get(key, value)));
+}
+
 function buildSegment(
   name: SegmentName,
   ctx: ExtensionContext,
@@ -104,6 +115,7 @@ function buildSegment(
   config: StatuslineConfig,
   runtime: RuntimeState,
   usageSummary: FooterUsageSummary,
+  inlineStatuses: ReadonlyMap<string, string>,
 ): RenderSegment | undefined {
   switch (name) {
     case "brand":
@@ -124,7 +136,7 @@ function buildSegment(
       return segment(name, runtime.thinkingLevel, config, thinkingColor(runtime.thinkingLevel), "header");
     case "branch": {
       const branch = footerData.getGitBranch();
-      const pr = branch ? prContextFromStatuses(footerData.getExtensionStatuses()) : undefined;
+      const pr = branch ? prContextFromStatuses(inlineStatuses) : undefined;
       return segment(name, formatGitBranchValue(branch, runtime.gitStatus, pr), config, "accent", "git");
     }
     case "cwd":

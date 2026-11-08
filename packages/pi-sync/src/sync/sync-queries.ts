@@ -27,7 +27,7 @@ export async function status(
 ) {
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
-  setSyncStatus(ctx, `checking ${config.setupName}`);
+  setSyncStatus(ctx, `checking ${config.setupName}`, { activity: "checking" });
   const { head, selectionState, localChanged, remoteChanged, localFiles, destination, capability } = await inspectSync(
     config,
     snapshotOptionsForContext(ctx, config),
@@ -70,7 +70,7 @@ export async function diff(
 ) {
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
-  setSyncStatus(ctx, `checking ${config.setupName}`);
+  setSyncStatus(ctx, `checking ${config.setupName}`, { activity: "checking" });
   const backend = await factory(config);
   const local = portableSnapshot(
     await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config)),

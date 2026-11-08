@@ -129,6 +129,12 @@ If the last remaining segment is itself wider than the row, that row renders emp
 - Context color changes to warning at 70% and error at 90%.
 - Git state is cached outside footer rendering and stale session results are ignored.
 
+### Compact extension activity
+
+Extensions can optionally supply [semantic status metadata v1](./docs/extension-status-protocol.md). Normal standby then disappears; checking uses `…`, work uses `↻`, and transfer directions use `↑` / `↓`. Pending-change arrows remain `⇡` / `⇣`; `⇕` means review is needed. Model resolution uses `AI`, while retries and blocked work retain short reasons such as `retry: limit` or `! auth`.
+
+Configured icons keep their existing precedence, including an empty override. Other extensions, unsupported metadata, and other footers retain their readable raw-status behavior. This changes display only, not the publisher's work, authorization, or recovery policy.
+
 ### Usage and context
 
 - `context` renders one-decimal current usage and the model window, such as `2.4%/272k`.

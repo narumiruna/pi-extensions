@@ -489,7 +489,7 @@ async function inspectConfiguredRemoteSelection(
   const config = await loadConfig(setupName);
   if (signal?.aborted) return undefined;
   validateOwner();
-  setSyncStatus(ctx, `checking synced content for ${safeTerminalText(config.setupName)}`);
+  setSyncStatus(ctx, `checking synced content for ${safeTerminalText(config.setupName)}`, { activity: "checking" });
   const backend = await factory(config);
   if (signal?.aborted) return undefined;
   validateOwner();
