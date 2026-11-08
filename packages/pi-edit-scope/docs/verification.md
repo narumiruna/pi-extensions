@@ -6,7 +6,7 @@ Deterministic tests exercise the real Pi loader, runner, agent loop, and stock t
 
 ## File selection
 
-Discovery starts at `ctx.cwd`, not the Git root. It skips symlink entries, nonregular files, and these exact directory names at every depth:
+Discovery starts at `ctx.cwd`, not the Git root. It scans breadth-first, completes each directory level before the next, and keeps only one directory handle open at a time. The completed inventory is sorted by absolute path. It skips symlink entries, nonregular files, and these exact directory names at every depth:
 
 ```text
 .git  .hg  .svn  node_modules  .venv  venv  __pycache__
