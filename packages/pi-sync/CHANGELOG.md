@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.58.0
+
+### Minor Changes
+
+- 379ebee: Add optional, extension-neutral status metadata v1 and a quiet footer presentation. Hide normal standby, shorten activity markers, and retain safe retry and blocked reasons while preserving configured icons and readable raw-status fallback. Keep sync authorization, scheduling, request limits, settings, notifications, and recovery behavior unchanged.
+
 ## 0.57.12
 
 ### Patch Changes
