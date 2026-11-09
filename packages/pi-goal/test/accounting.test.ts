@@ -207,7 +207,7 @@ test("branch-only contexts recount changed arrays instead of caching them", () =
   assert.equal(currentTokenTotal({ sessionManager: { ...sessionManager, getEntry: () => entries[0] } }), 27);
 });
 
-test("real SessionManager branches, compaction, custom records, and resets match a full recount", () => {
+test("real SessionManager branches, compaction, forks, and resets match a full recount", () => {
   const sessionManager = SessionManager.inMemory();
   const ctx = { sessionManager };
   const root = sessionManager.appendMessage(message(5));
@@ -228,6 +228,16 @@ test("real SessionManager branches, compaction, custom records, and resets match
   assert.equal(currentTokenTotal(ctx), 0);
   sessionManager.branch(right);
   assert.equal(currentTokenTotal(ctx), 25);
+  sessionManager.branchWithSummary(root, "abandoned path", {}, false, message(100).usage);
+  assert.equal(currentTokenTotal(ctx), 5);
+  sessionManager.branch(right);
+  sessionManager.appendLabelChange(root, "root label");
+  assert.equal(currentTokenTotal(ctx), 25);
+  const forkLeaf = sessionManager.getLeafId();
+  assert.ok(forkLeaf);
+  sessionManager.createBranchedSession(forkLeaf);
+  assert.equal(currentTokenTotal(ctx), 25);
+  assert.equal(currentTokenTotal(ctx), cumulativeAssistantTokens(sessionManager.getBranch()));
   sessionManager.newSession();
   assert.equal(currentTokenTotal(ctx), 0);
   sessionManager.appendMessage(message(3));
@@ -252,7 +262,7 @@ test("real file resume and same-manager reload invalidate totals even with ident
           ? { ...entry, message: { ...entry.message, usage: message(80).usage } }
           : entry,
       );
-    writeFileSync(path, [manager.getHeader(), ...entries].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    writeFileSync(path, `${[manager.getHeader(), ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`);
     manager.setSessionFile(path);
     assert.equal(currentTokenTotal({ sessionManager: manager }), 80);
     resumed.setSessionFile(path);

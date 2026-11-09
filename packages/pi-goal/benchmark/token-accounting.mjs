@@ -30,14 +30,16 @@ function assistant() {
 
 function measure(read, beforeEach = () => {}) {
   const times = [];
+  let checksum = 0;
   for (let index = 0; index < samples; index++) {
     beforeEach();
     const start = performance.now();
-    read();
+    const tokens = read();
     times.push(performance.now() - start);
+    checksum += tokens;
   }
   times.sort((a, b) => a - b);
-  return { medianMs: times[Math.floor(samples / 2)], p95Ms: times[Math.floor(samples * 0.95)] };
+  return { medianMs: times[Math.floor(samples / 2)], p95Ms: times[Math.floor(samples * 0.95)], checksum };
 }
 
 console.log(JSON.stringify({ node: process.version, os: `${platform()} ${release()}`, samples }));
