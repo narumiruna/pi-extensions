@@ -1,6 +1,6 @@
 # Pi Goal incremental accounting
 
-The fork replaces repeated full-branch token recounts with one checkpoint per
+The optimization replaces repeated full-branch token recounts with one checkpoint per
 sessionManager: the last processed leaf object and its cumulative assistant token
 total. Normal tool completions process new entries and that checkpoint, not the
 full history. Divergent branches and reloads recount safely. Retained cache state
@@ -111,7 +111,7 @@ The broader gate's remaining host/toolchain limitations match the earlier run:
 
 No root tests were changed or deadlines raised to hide failures. A clean broader
 gate under the pinned toolchain and functioning platform facilities is still
-required. The fork PR remains draft. Package metadata and runtime-loading behavior
+required. The PR remains draft. Package metadata and runtime-loading behavior
 are unchanged; no new pack smoke is required.
 
 ## Scope audit
@@ -127,5 +127,4 @@ budget enforcement, and goal snapshots are untouched.
 The extension conventions were reviewed. No settings, persistent formats, prompts,
 tools, timers, background work, dependencies, or publications changed. A patch
 Changeset records the package performance change. The rebuilt checkout is configured
-for local testing; existing Pi runtimes need `/reload`. This report targets the
-fork; upstream issue/PR publication still requires the user's approval.
+for local testing; existing Pi runtimes need `/reload`.

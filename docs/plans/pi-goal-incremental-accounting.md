@@ -1,8 +1,7 @@
 # Pi Goal incremental token accounting
 
-Status: implemented in the fork. See the
+Status: implemented. See the
 [benchmark and verification report](../benchmarks/pi-goal-incremental-accounting.md).
-This work targets `csp256/pi-extensions:main`, not upstream.
 
 ## Goal
 
@@ -74,5 +73,4 @@ existing runtimes need `/reload` after the package is rebuilt.
 The broader root gate still needs a clean run using the repository's pinned Node
 and compatible npm/platform facilities; verification details are in the linked
 report. No timeouts are raised or root tests bypassed to claim a green gate. No
-package is published. Keep the PR against our fork and do not file an upstream
-issue or PR without the user's approval.
+package is published.
