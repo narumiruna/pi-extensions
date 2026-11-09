@@ -15,6 +15,19 @@ accounting, persistence, and status formatting combined, versus 0.03 ms for
 persistence alone. These are exploratory wall-time measurements, exclude actual UI
 redraw, and are not historical event self-times or a repository performance gate.
 
+## Applicable rules and verification
+
+| Touched area | Applicable MUST rules | Named verification |
+| --- | --- | --- |
+| Accounting cache | Use public Pi APIs; scope session-owned resources by sessionManager; do not retain replaced sessions | Review of append-only entry contract and weak ownership; deterministic session/branch/reload tests |
+| Lifecycle and persistence | Preserve branch reconstruction, canonical snapshots, and budget enforcement | Existing budget/recovery tests and generated runtime smoke; new accounting equivalence tests |
+| Model context | Keep existing prompt, message, and tool-definition prefixes stable | Review: no context, prompt, or tool changes; existing cache-contract tests |
+| Published behavior | Include a package-specific Changeset and deterministic tests | Patch Changeset review; repository `npm run check` and `npm test` |
+| Performance evidence | Avoid host-dependent timing thresholds in deterministic tests | Count public API traversals; separate synthetic before/after benchmark |
+
+Settings, UI, package metadata, dependencies, and runtime loading are unchanged.
+The extension conventions and settings/persistence guide were read before coding.
+
 ## Proposed implementation
 
 - Inspect the current checkout and Pi's public session APIs before choosing a cache
