@@ -70,7 +70,8 @@ A patch Changeset records the published performance change. The PR contains sour
 tests, and reproducible benchmarks. The checkout is configured for local Pi testing;
 existing runtimes need `/reload` after the package is rebuilt.
 
-The broader root gate still needs a clean run using the repository's pinned Node
-and compatible npm/platform facilities; verification details are in the linked
-report. No timeouts are raised or root tests bypassed to claim a green gate. No
+The full GitHub Actions gate passed on Linux with the pinned Node/npm toolchain:
+20,761 tests passed, with unchanged platform/conditional skips. Verification details
+and the remaining local macOS native-watcher limitation are in the linked report.
+No timeouts were raised or root tests changed to obtain the passing gate. No
 package is published.

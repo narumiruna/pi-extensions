@@ -82,14 +82,19 @@ The single-checkpoint implementation avoids that history-proportional overhead.
 
 ## Verification
 
-Completed locally for the single-checkpoint implementation:
+The [full GitHub Actions run](https://github.com/csp256/pi-extensions/actions/runs/42722225929)
+passed on the repository's expected Linux CI environment with pinned Node v26.11.1
+and bundled npm 11.20.0. Installation, `npm run check`, and the full `npm test` gate
+all passed: **20,761 tests passed, 18 skipped; 942 files passed, one skipped**.
+This was the full suite, not just affected tests. No tests were disabled or deadlines
+raised by this PR; platform/conditional skips remain unchanged.
+
+Additional local verification for the single-checkpoint implementation:
 
 - `npm run check`: passed builds, Biome, extension boundaries, and workspace types.
-- Canonical affected gate:
-  `PI_EXTENSIONS_BUILD_READY=1 PI_EXTENSIONS_TEST_BASE=origin/main npm test`.
-  Test compilation passed; all **946 Goal tests across 37 files** passed, including
-  **13 accounting tests**. Across all 80 files: 1,461 tests passed, 10 failed, and
-  two were skipped after a suite setup failure. The broader gate is not green.
+- The earlier affected run passed test compilation and all **946 Goal tests across
+  37 files**, including **13 accounting tests**. Its unrelated root failures were
+  investigated separately, as described below.
 - `npm --workspace @narumitw/pi-goal run test:runtime`: passed the existing offline
   lifecycle, continuation, retry, compaction, ownership, wait, and budget scenarios.
 - Timing benchmark completed with checked reference totals; all nine isolated memory
@@ -98,21 +103,22 @@ Completed locally for the single-checkpoint implementation:
   the expected command/tools, no duplicate extension, warnings, or load errors.
 - `git diff --check`: passed.
 
-The broader gate's remaining host/toolchain limitations match the earlier run:
+Local host diagnosis:
 
-- The versioning fixture requires Node v26.11.1; this host has v26.3.0. Setup fails
-  and skips two tests.
-- Five npm install-policy assertions fail; this host's npm warns that
-  `min-release-age-exclude` is unsupported.
-- Native macOS file watching did not observe writes. The fsevents smoke and two
-  Pi exec readiness tests fail.
-- The root runtime-builder import-inventory test and extension-status contract test
-  exceed their unchanged five-second deadlines.
+- The initial run used Node v26.3.0 and npm 11.16.0 instead of the pinned toolchain.
+  An isolated official Node v26.11.1 installation with npm 11.20.0 passed installation
+  policy preflight, both versioning tests, and all 42 dependency-installation tests.
+- Runtime-builder and extension-status tests also passed on a single-worker rerun
+  with the pinned toolchain and an isolated home-directory temporary root.
+- Three native macOS watcher/readiness tests still fail locally: directory events
+  are not reliably delivered in the tested temporary locations. Direct probes
+  distinguished this from file-level notifications. The native macOS smoke is
+  platform-skipped on Linux; both Pi exec readiness tests passed in the full Linux
+  run. This does not establish that the local Mac's native watcher issue is fixed.
 
-No root tests were changed or deadlines raised to hide failures. A clean broader
-gate under the pinned toolchain and functioning platform facilities is still
-required. The PR remains draft. Package metadata and runtime-loading behavior
-are unchanged; no new pack smoke is required.
+No root tests, runtime code, dependency policies, or deadlines were changed to
+obtain the passing Linux gate. Package metadata and runtime-loading behavior are
+unchanged; no new pack smoke is required.
 
 ## Scope audit
 
