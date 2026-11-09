@@ -1,102 +1,131 @@
 # Pi Goal incremental accounting
 
-The fork replaces repeated full-branch token recounts with cached cumulative totals.
-Normal tool completions process new entries and one cached ancestor rather than
-walking the entire history. Goal-state snapshots are still persisted at the same
-boundaries; settings, model context, and budget semantics are unchanged.
+The fork replaces repeated full-branch token recounts with one checkpoint per
+sessionManager: the last processed leaf object and its cumulative assistant token
+total. Normal tool completions process new entries and that checkpoint, not the
+full history. Divergent branches and reloads recount safely. Retained cache state
+is constant per manager; historical prefixes are not cached.
+
+Goal-state snapshots are persisted at the same boundaries. Settings, model context,
+accounting semantics, and budget enforcement are unchanged.
 
 ## Reproduction
 
-After installing repository dependencies, run from the repository root:
+Run from the repository root after installing dependencies:
 
 ```sh
 node packages/pi-goal/benchmark/token-accounting.mjs
+node --expose-gc packages/pi-goal/benchmark/cache-memory.mjs 10000 110
+node --expose-gc packages/pi-goal/benchmark/cache-memory.mjs 60000 110
+node --expose-gc packages/pi-goal/benchmark/cache-memory.mjs 60000 1100000
 ```
 
-The benchmark uses real in-memory Pi SessionManagers with synthetic entries: one
-assistant usage record per four entries, with custom records between them. Each
-mode has 250 samples. Append modes add one assistant entry and one custom checkpoint
-before each timed read; insertion is outside the timed interval. Returned totals
-contribute to printed checksums, and incremental results are checked against the
-unchanged full recount before and after append phases.
+Timing uses real in-memory Pi SessionManagers with synthetic entries: one assistant
+usage record per four entries, with custom records between them. Each mode has
+250 samples. Append modes add one assistant entry and one custom checkpoint before
+each timed read; insertion is outside the timed interval. Returned totals contribute
+to printed checksums, and incremental totals are checked against the unchanged full
+recount before and after append phases.
 
-These measurements cover token accounting only, not persistence, UI redraw,
-model calls, or total tool latency. In particular, they are not directly comparable
-to the earlier exploratory 6.2 ms measurement that included saving and status formatting.
+Memory samples must each run in a fresh process. The benchmark warms accounting on
+a disposable manager, creates the measured manager, and records `heapUsed` before
+and after populating its checkpoint, with four forced garbage collections at each
+boundary. The manager stays live through both measurements. This measures retained
+JS heap deltas, not transient work arrays, baseline session memory, or process RSS.
+The large-token case exercises totals beyond V8's small-integer range.
 
-## Results
+These measurements cover accounting only, not saving, UI redraw, model calls, or
+total tool latency. They are not directly comparable to the earlier exploratory
+6.2 ms measurement that included saving and status formatting.
+
+## Timing results
 
 Local shared host: macOS (Darwin 25.5.0), Node v26.3.0, npm 11.16.0.
-Timings are indicative, not enforced thresholds. Very small values are microbenchmark
-measurements near timer/JIT overhead and are not fixed latency guarantees.
+Timings are indicative, not enforced thresholds. Very small values are near
+microbenchmark timer/JIT overhead and are not fixed latency guarantees.
 
-| Initial entries | Full recount after append, median / p95 (ms) | Incremental after append, median / p95 (ms) | One cold incremental read (ms) |
+| Initial entries | Full recount after append, median / p95 (ms) | Checkpoint after append, median / p95 (ms) | One cold checkpoint read (ms) |
 | --- | --- | --- | --- |
-| 100 | 0.01375 / 0.01833 | 0.00050 / 0.00075 | 0.10 |
-| 10,000 | 0.28308 / 0.31713 | 0.00025 / 0.00046 | 3.58 |
-| 60,000 | 2.38550 / 3.29171 | 0.00033 / 0.00046 | 18.32 |
+| 100 | 0.01921 / 0.07554 | 0.00038 / 0.00104 | 0.16 |
+| 10,000 | 0.32233 / 0.78896 | 0.00013 / 0.00017 | 7.27 |
+| 60,000 | 2.54408 / 5.45683 | 0.00013 / 0.00017 | 6.21 |
 
-At 60,000 entries, repeated unchanged reads measured 2.78546 ms median for the full
-recount and below 0.001 ms for the cached read. The important deterministic result
-is traversal cost: the new test requires 60,000 entry lookups for the cold read,
-one for an unchanged read, and three after two new entries.
+At 60,000 entries, unchanged reads measured 2.367 ms median for a full recount and
+below 0.001 ms for the checkpoint. The deterministic test requires 60,000 entry
+lookups cold, one when unchanged, and three after two new entries. Another test
+proves historical prefixes are not retained: divergent branch revisits recount,
+then appends use the new checkpoint.
 
-Cold cache population is slower than one full recount because it records every
-prefix. This is a one-time cost per uncached entry tree; reloads rebuild safely,
-branch switches reuse known prefixes, and steady-state work is proportional to
-newly visited entries. Weak maps release replaced managers and entry objects rather
-than retaining old sessions. The cache adds per-visited-entry memory while entries
-remain owned by the session.
+Cold reads and branch recounts remain linear in branch length. They use a temporary
+array to sum root-to-leaf and preserve floating-point/saturation semantics. This
+array is released after the call; it is not retained cache memory.
+
+## Retained-memory results
+
+Three fresh processes per case measured these heap deltas after garbage collection:
+
+| Entries | Tokens per assistant | Retained heap delta |
+| --- | --- | --- |
+| 10,000 | 110 | 5.0–15.7 KiB |
+| 60,000 | 110 | 2.8–3.1 KiB |
+| 60,000 | 1,100,000 | 6.9–7.1 KiB |
+
+These small deltas include GC/JIT noise and are not exact checkpoint object sizes;
+the non-monotonic values do not indicate negative per-entry costs. The structural
+claim is constant retained checkpoint state per manager, not a fixed byte count.
+The checkpoint references an existing leaf object rather than copying entry content.
+
+For comparison, the superseded per-entry prefix-cache implementation measured
+about 2.01 MiB at 60,000 entries with small totals and 2.80 MiB with large totals
+in three isolated processes per case using the same retained-heap methodology.
+The single-checkpoint implementation avoids that history-proportional overhead.
 
 ## Verification
 
-Completed locally:
+Completed locally for the single-checkpoint implementation:
 
-- `npm run check`: passed repository builds, Biome, extension boundaries, and all
-  workspace typechecks.
-- Test compilation with `tsc -p tsconfig.test.json`: passed, including the final
-  fork/branch-summary accounting assertions.
-- Canonical affected test gate, matching CI selection:
+- `npm run check`: passed builds, Biome, extension boundaries, and workspace types.
+- Canonical affected gate:
   `PI_EXTENSIONS_BUILD_READY=1 PI_EXTENSIONS_TEST_BASE=origin/main npm test`.
-  All 945 Goal tests across 37 files passed, including 12 new accounting tests.
-  The broader gate did not pass: 1,460 tests passed, 10 failed, and two were skipped
-  after a suite setup failure (80 files total).
-- Single-worker retry of all Goal tests and selected root failures: all 945 Goal
-  tests passed again; the root extension-status contract test recovered.
-- Final targeted run: all 12 accounting tests passed with branch summaries,
-  fork label re-chaining, same-file reload, and budget/snapshot assertions.
+  Test compilation passed; all **946 Goal tests across 37 files** passed, including
+  **13 accounting tests**. Across all 80 files: 1,461 tests passed, 10 failed, and
+  two were skipped after a suite setup failure. The broader gate is not green.
 - `npm --workspace @narumitw/pi-goal run test:runtime`: passed the existing offline
-  Pi lifecycle, continuation, retry, compaction, ownership, wait, and budget smoke.
-- The synthetic benchmark completed with matching reference totals.
+  lifecycle, continuation, retry, compaction, ownership, wait, and budget scenarios.
+- Timing benchmark completed with checked reference totals; all nine isolated memory
+  samples completed.
+- Rebuilt package loaded through the installed Pi's `DefaultResourceLoader` with
+  the expected command/tools, no duplicate extension, warnings, or load errors.
+- `git diff --check`: passed.
 
-The broader gate's remaining verification limitations are explicit:
+The broader gate's remaining host/toolchain limitations match the earlier run:
 
-- The versioning fixture requires the repository's pinned Node v26.11.1, whereas
-  this host has v26.3.0; its setup assertion fails and skips two tests.
-- Five npm install-policy assertions fail with this host's npm; it warns that
+- The versioning fixture requires Node v26.11.1; this host has v26.3.0. Setup fails
+  and skips two tests.
+- Five npm install-policy assertions fail; this host's npm warns that
   `min-release-age-exclude` is unsupported.
-- Native macOS file watching did not observe writes. Both the fsevents smoke and
-  Pi exec readiness tests failed on repeated runs.
-- The root runtime-builder import-inventory case exceeded its 5,000 ms deadline,
-  including a single-worker retry with the canonical temporary directory.
+- Native macOS file watching did not observe writes. The fsevents smoke and two
+  Pi exec readiness tests fail.
+- The root runtime-builder import-inventory test and extension-status contract test
+  exceed their unchanged five-second deadlines.
 
-No root tests were changed or deadlines raised to hide these results. A clean
-broader gate under the pinned toolchain and functioning platform facilities is
-still required; the draft PR does not claim that gate is green. No new package
-metadata or runtime-loading behavior requires a new pack/load smoke. Existing
-Goal generated-entry tests and runtime smoke passed.
+No root tests were changed or deadlines raised to hide failures. A clean broader
+gate under the pinned toolchain and functioning platform facilities is still
+required. The fork PR remains draft. Package metadata and runtime-loading behavior
+are unchanged; no new pack smoke is required.
 
 ## Scope audit
 
-The implementation uses only public session APIs and the append-only entry contract.
-Session and entry object identities isolate totals across shared UI objects, branch
-changes, reload, resume, and replacement. The original full recount remains the
-reference implementation and the fallback for branch-only contexts. Root-to-leaf
-accumulation preserves rounding and safe-integer saturation, and baseline subtraction
-and budget enforcement are untouched.
+The implementation uses only public session APIs and their append-only contract.
+A weak sessionManager key owns one checkpoint; entry object identity distinguishes
+reloads with reused IDs. Missing or empty leaves clear the checkpoint. Branch
+changes not containing the checkpoint recount and replace it. The original full
+recount remains the reference and fallback for branch-only contexts. Root-to-leaf
+accumulation preserves rounding and safe-integer saturation; baseline subtraction,
+budget enforcement, and goal snapshots are untouched.
 
-The extension conventions and settings/persistence guide were reviewed. No new
-settings, persistent formats, prompts, tools, timers, background work, dependencies,
-installation changes, or publications were introduced. A patch Changeset records
-the package performance change. The implementation and this report target our fork,
-not upstream.
+The extension conventions were reviewed. No settings, persistent formats, prompts,
+tools, timers, background work, dependencies, or publications changed. A patch
+Changeset records the package performance change. The rebuilt checkout is configured
+for local testing; existing Pi runtimes need `/reload`. This report targets the
+fork; upstream issue/PR publication still requires the user's approval.

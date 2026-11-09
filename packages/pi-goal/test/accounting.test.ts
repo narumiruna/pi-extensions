@@ -121,7 +121,7 @@ test("cold and warm traversal costs depend on uncached entries, not session leng
   assert.deepEqual(session.reads, { entry: 60_004, branch: 0 });
 });
 
-test("ancestor revisits, divergent branches, and empty leaves preserve branch-local totals", () => {
+test("ancestor revisits, divergent branches, and empty leaves recount branch-local totals", () => {
   const session = indexedSession();
   const ctx = { sessionManager: session.manager };
   session.append(assistant("root", null, { totalTokens: 10 }));
@@ -137,7 +137,33 @@ test("ancestor revisits, divergent branches, and empty leaves preserve branch-lo
   assert.equal(currentTokenTotal(ctx), 0);
   session.branch("right");
   assert.equal(currentTokenTotal(ctx), 50);
-  assert.deepEqual(session.reads, { entry: 7, branch: 0 });
+  assert.deepEqual(session.reads, { entry: 9, branch: 0 });
+});
+
+test("only the latest checkpoint is reused; branch recounts establish a new append checkpoint", () => {
+  const session = indexedSession();
+  const ctx = { sessionManager: session.manager };
+  session.append(assistant("root", null, { totalTokens: 10 }));
+  session.append(assistant("left", "root", { totalTokens: 20 }));
+  assert.equal(currentTokenTotal(ctx), 30);
+  assert.equal(session.reads.entry, 2);
+
+  session.branch("root");
+  session.append(assistant("right", "root", { totalTokens: 40 }));
+  assert.equal(currentTokenTotal(ctx), 50);
+  assert.equal(session.reads.entry, 4); // The historical root is not separately cached.
+  session.append(custom("checkpoint", "right"));
+  assert.equal(currentTokenTotal(ctx), 50);
+  assert.equal(session.reads.entry, 6); // New entry plus the current checkpoint.
+
+  session.branch("left");
+  assert.equal(currentTokenTotal(ctx), 30);
+  assert.equal(session.reads.entry, 8); // Revisiting an older branch recounts it.
+  session.append(assistant("next", "left", { totalTokens: 5 }));
+  assert.equal(currentTokenTotal(ctx), 35);
+  assert.equal(session.reads.entry, 10);
+  assert.equal(currentTokenTotal(ctx), 35);
+  assert.deepEqual(session.reads, { entry: 11, branch: 0 });
 });
 
 test("mixed appends and repeated branch changes remain equivalent to a full recount", () => {
