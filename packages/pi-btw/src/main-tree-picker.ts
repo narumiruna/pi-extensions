@@ -92,9 +92,7 @@ export async function pickMainEntry(
     return { kind: "back" };
   }
 
-  const tree = sanitizeTreeForDisplay(rawTree);
-  const rawCopyText = collectRawCopyText(rawTree);
-  const savedLabels = collectSavedLabels(rawTree);
+  const { tree, rawCopyText, savedLabels } = prepareTreeSnapshot(rawTree);
   const createSelector = dependencies.createSelector ?? createNativeTreeSelector;
   const copy = dependencies.copyToClipboard ?? copyText;
   const copyControllers = new Set<AbortController>();
@@ -200,18 +198,40 @@ function createNativeTreeSelector(options: MainThreadTreeSelectorOptions): MainT
   return result;
 }
 
-function sanitizeTreeForDisplay(tree: readonly SessionTreeNode[]): SessionTreeNode[] {
-  return tree.map((node) => {
-    const result: SessionTreeNode = {
-      entry: sanitizeEntryForDisplay(node.entry),
-      children: sanitizeTreeForDisplay(node.children),
-    };
-    if (node.label !== undefined) result.label = sanitizeSingleLine(node.label);
-    if (node.labelTimestamp !== undefined) {
-      result.labelTimestamp = sanitizeSingleLine(node.labelTimestamp);
+function prepareTreeSnapshot(rawTree: readonly SessionTreeNode[]): {
+  tree: SessionTreeNode[];
+  rawCopyText: Map<string, string>;
+  savedLabels: Map<string, SavedLabel>;
+} {
+  const tree: SessionTreeNode[] = [];
+  const rawCopyText = new Map<string, string>();
+  const savedLabels = new Map<string, SavedLabel>();
+  // Keep traversal state on the heap: valid session histories can be arbitrarily deep.
+  const stack = [{ source: rawTree, target: tree, index: 0 }];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.index === frame.source.length) {
+      stack.pop();
+      continue;
     }
-    return result;
-  });
+    const node = frame.source[frame.index++];
+    const label = node.label === undefined ? undefined : sanitizeSingleLine(node.label);
+    const labelTimestamp = node.labelTimestamp === undefined ? undefined : sanitizeSingleLine(node.labelTimestamp);
+    const displayNode: SessionTreeNode = {
+      entry: sanitizeEntryForDisplay(node.entry),
+      children: [],
+    };
+    if (label !== undefined) displayNode.label = label;
+    if (labelTimestamp !== undefined) displayNode.labelTimestamp = labelTimestamp;
+    frame.target.push(displayNode);
+    const text = getRawCopyText(node.entry);
+    if (text !== undefined) rawCopyText.set(node.entry.id, text);
+    savedLabels.set(node.entry.id, { label, labelTimestamp });
+    if (node.children.length > 0) {
+      stack.push({ source: node.children, target: displayNode.children, index: 0 });
+    }
+  }
+  return { tree, rawCopyText, savedLabels };
 }
 
 function sanitizeEntryForDisplay(entry: SessionEntry): SessionEntry {
@@ -305,19 +325,6 @@ function sanitizeToolArguments(value: unknown, seen: WeakMap<object, unknown>): 
   return result;
 }
 
-function collectRawCopyText(tree: readonly SessionTreeNode[]): Map<string, string> {
-  const result = new Map<string, string>();
-  const visit = (nodes: readonly SessionTreeNode[]) => {
-    for (const node of nodes) {
-      const text = getRawCopyText(node.entry);
-      if (text !== undefined) result.set(node.entry.id, text);
-      visit(node.children);
-    }
-  };
-  visit(tree);
-  return result;
-}
-
 function getRawCopyText(entry: SessionEntry): string | undefined {
   let text: string | undefined;
   if (entry.type === "message") {
@@ -351,21 +358,6 @@ function extractRawText(content: unknown): string {
 interface SavedLabel {
   label: string | undefined;
   labelTimestamp?: string;
-}
-
-function collectSavedLabels(tree: readonly SessionTreeNode[]): Map<string, SavedLabel> {
-  const result = new Map<string, SavedLabel>();
-  const visit = (nodes: readonly SessionTreeNode[]) => {
-    for (const node of nodes) {
-      result.set(node.entry.id, {
-        label: node.label === undefined ? undefined : sanitizeSingleLine(node.label),
-        labelTimestamp: node.labelTimestamp === undefined ? undefined : sanitizeSingleLine(node.labelTimestamp),
-      });
-      visit(node.children);
-    }
-  };
-  visit(tree);
-  return result;
 }
 
 async function copyText(text: string, signal: AbortSignal): Promise<void> {
