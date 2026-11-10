@@ -78,6 +78,9 @@ type AccountActivationErrorCode =
 
 `active` means the named credential was applied and its effective runtime authentication was verified, not that a remote request succeeded. `inactive` means the package-owned override was removed, not that Pi's restored credentials are valid remotely. Error replies include the requested `providerId` and `accountName` and a code, never raw provider or storage exception text.
 
+Activate accounts before starting dependent prompts.
+Changing the active provider's account or key during a run can cancel that run, including activation from a later lifecycle handler; check the owning run's cancellation signal as well as the reply before starting dependent work.
+
 | Error code | Meaning |
 | --- | --- |
 | `account_not_found` | Invalid or missing named account. |

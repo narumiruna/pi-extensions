@@ -68,6 +68,7 @@ function textResponse(text: string, inputTokens = 10): Response {
 
 for (const trigger of ["manual", "threshold", "overflow", "native-failure"] as const) {
   test(`real Pi ${trigger}: recovery failure hands off to native with checkpoint supersession`, async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const directory = await mkdtemp(join(tmpdir(), "pi-recovery-native-"));
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = directory;
@@ -118,8 +119,11 @@ for (const trigger of ["manual", "threshold", "overflow", "native-failure"] as c
       });
       modelRuntime.registerNativeProvider({
         ...native,
-        streamSimple: (active, context, options) =>
-          native.streamSimple(active, context, { ...options, maxRetries: 0, fetch: fixtureFetch(false) }),
+        streamSimple: (active, context, options) => {
+          // Pi ignores usage at or before a compaction boundary; each response must be newer.
+          vi.setSystemTime(Date.now() + 1);
+          return native.streamSimple(active, context, { ...options, maxRetries: 0, fetch: fixtureFetch(false) });
+        },
       });
       const state = {
         kind: "loaded" as const,

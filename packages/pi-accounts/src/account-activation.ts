@@ -1,3 +1,4 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AccountStore, getOwnCredential, parseAccountName } from "./account-store.js";
 import type { PersistSelection, SessionSelectionOwner, SyncProvider } from "./accounts.js";
 import type {
@@ -22,6 +23,30 @@ async function waitForActivation<T>(task: Promise<T>, signal: AbortSignal): Prom
     return await Promise.race([task, aborted]);
   } finally {
     signal.removeEventListener("abort", onAbort);
+  }
+}
+
+export async function prepareAccountRequest(
+  ctx: ExtensionContext,
+  owner: SessionSelectionOwner,
+  isOwnerCurrent: (owner: SessionSelectionOwner) => boolean,
+  syncProvider: SyncProvider,
+): Promise<void> {
+  if (!isOwnerCurrent(owner)) return;
+  const signal = ctx.signal ?? owner.signal;
+  // Pi awaits turn_start before preparing a request, although ctx.isIdle() is false.
+  while (isOwnerCurrent(owner) && !signal.aborted) {
+    const providerId = ctx.model?.provider as AccountProviderId | undefined;
+    if (!providerId || !owner.coordinators.has(providerId)) return;
+    if (owner.pendingInvalidations.has(providerId)) {
+      const result = await waitForActivation(syncProvider(providerId, ctx, owner, signal, ctx.model, true), signal);
+      if (!result || !isOwnerCurrent(owner) || signal.aborted) return;
+      if (result.status === "error") owner.abortProviders.add(providerId);
+      if (ctx.model?.provider !== providerId) continue;
+      if (result.status !== "error" && owner.pendingInvalidations.has(providerId)) continue;
+    }
+    if (owner.abortProviders.delete(providerId)) ctx.abort();
+    return;
   }
 }
 
