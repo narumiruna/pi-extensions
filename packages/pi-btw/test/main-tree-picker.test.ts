@@ -44,6 +44,16 @@ function userNode(id: string, parentId: string | null, text: string): SessionTre
   };
 }
 
+function linearTree(size: number): SessionTreeNode[] {
+  const nodes = Array.from({ length: size }, (_, index) =>
+    userNode(`entry-${index}`, index === 0 ? null : `entry-${index - 1}`, `message ${index}\u001b[2J`),
+  );
+  for (let index = 1; index < nodes.length; index++) {
+    nodes[index - 1].children.push(nodes[index]);
+  }
+  return nodes;
+}
+
 function createFakeSelector(onCreate: (options: MainThreadTreeSelectorOptions) => void): (
   options: MainThreadTreeSelectorOptions,
 ) => {
@@ -101,6 +111,148 @@ test("main-thread tree picker passes the session snapshot and current leaf to th
   assert.deepEqual(captured?.tree, [root]);
   assert.equal(captured?.currentLeafId, "active-leaf");
   assert.equal(mock.editorText, "newer main draft");
+});
+
+test("deep tree preprocessing preserves snapshots, ordering, raw copying, and saved labels", async () => {
+  const nodes = linearTree(10_000);
+  const leaf = nodes[nodes.length - 1];
+  leaf.label = "saved\u001b[2J";
+  leaf.labelTimestamp = "2026-01-01T00:00:00.000Z\u001b";
+  const sibling = userNode("sibling", nodes[0].entry.id, "sibling\u001b[2J");
+  const otherRoot = userNode("other-root", null, "other root");
+  nodes[0].children.push(sibling);
+  const rawTree = [nodes[0], otherRoot];
+  let captured: MainThreadTreeSelectorOptions | undefined;
+  const copied: string[] = [];
+  const restored: Array<{ entryId: string; label: string | undefined; timestamp: string | undefined }> = [];
+  const mock = createMockContext({
+    mode: "tui",
+    editorText: "main draft",
+    sessionManager: {
+      getTree: () => rawTree,
+      getLeafId: () => leaf.entry.id,
+      getEntry: (id: string) => (id === leaf.entry.id ? leaf.entry : undefined),
+    },
+    custom: async (factory: unknown) => {
+      const harness = await createTreeHarness(factory);
+      try {
+        harness.handleInput("copy");
+        harness.handleInput("label");
+        harness.handleInput("escape");
+        return await harness.resultPromise;
+      } finally {
+        harness.dispose();
+      }
+    },
+  });
+
+  const result = await pickMainEntry(
+    {
+      setLabel() {
+        throw new Error("read only");
+      },
+    } as never,
+    mock.ctx,
+    {
+      createSelector: (options) => {
+        captured = options;
+        return {
+          focused: false,
+          render: () => ["tree"],
+          invalidate() {},
+          handleInput(data) {
+            if (data === "copy") {
+              for (const entryId of [leaf.entry.id, sibling.entry.id, otherRoot.entry.id]) {
+                options.onCopy(entryId, "display text");
+              }
+            }
+            if (data === "label") options.onLabelChange(leaf.entry.id, "unsaved");
+            if (data === "escape") options.onCancel();
+          },
+          setViewLabel(entryId, label, timestamp) {
+            restored.push({ entryId, label, timestamp });
+          },
+        };
+      },
+      copyToClipboard: async (text) => {
+        copied.push(text);
+      },
+    },
+  );
+
+  assert.deepEqual(result, { kind: "back" });
+  assert.ok(captured, "preprocessing must reach the UI boundary");
+  assert.equal(captured.currentLeafId, leaf.entry.id);
+  assert.deepEqual(
+    captured.tree.map((node) => node.entry.id),
+    [nodes[0].entry.id, otherRoot.entry.id],
+  );
+  assert.deepEqual(
+    captured.tree[0].children.map((node) => node.entry.id),
+    [nodes[1].entry.id, sibling.entry.id],
+  );
+  let displayed = captured.tree[0];
+  for (const [index, raw] of nodes.entries()) {
+    assert.notEqual(displayed, raw);
+    assert.notEqual(displayed.entry, raw.entry);
+    assert.notEqual(displayed.children, raw.children);
+    assert.equal(displayed.entry.id, raw.entry.id);
+    assert.equal(displayed.entry.parentId, raw.entry.parentId);
+    if (
+      displayed.entry.type !== "message" ||
+      displayed.entry.message.role !== "user" ||
+      raw.entry.type !== "message" ||
+      raw.entry.message.role !== "user"
+    ) {
+      throw new Error("Expected user message entries");
+    }
+    assert.equal(displayed.entry.message.content, `message ${index}[2J`);
+    assert.equal(raw.entry.message.content, `message ${index}\u001b[2J`);
+    assert.equal(displayed.label, index === nodes.length - 1 ? "saved[2J" : undefined);
+    assert.equal(displayed.labelTimestamp, index === nodes.length - 1 ? "2026-01-01T00:00:00.000Z" : undefined);
+    assert.equal(displayed.children.length, index === 0 ? 2 : index === nodes.length - 1 ? 0 : 1);
+    if (index < nodes.length - 1) displayed = displayed.children[0];
+  }
+  assert.deepEqual(copied, ["message 9999\u001b[2J", "sibling\u001b[2J", "other root"]);
+  assert.deepEqual(restored, [{ entryId: leaf.entry.id, label: "saved[2J", timestamp: "2026-01-01T00:00:00.000Z" }]);
+  assert.equal(leaf.label, "saved\u001b[2J");
+  assert.equal(leaf.labelTimestamp, "2026-01-01T00:00:00.000Z\u001b");
+  assert.equal(mock.editorText, "main draft");
+  assert.ok(mock.notifications.some(({ message }) => message === "Could not update tree label: read only"));
+});
+
+test("native tree selector renders and cancels a deep linear tree", async () => {
+  initTheme("dark", false);
+  const nodes = linearTree(10_000);
+  const leafId = nodes[nodes.length - 1].entry.id;
+  for (const [input, kind] of [
+    ["\u001b", "back"],
+    ["\u0003", "closed"],
+  ] as const) {
+    let wide: string[] | undefined;
+    let narrow: string[] | undefined;
+    const mock = createMockContext({
+      mode: "tui",
+      sessionManager: { getTree: () => [nodes[0]], getLeafId: () => leafId },
+      custom: async (factory: unknown) => {
+        const harness = await createTreeHarness(factory);
+        try {
+          wide = harness.render(80);
+          narrow = harness.render(28);
+          harness.handleInput(input);
+          return await harness.resultPromise;
+        } finally {
+          harness.dispose();
+        }
+      },
+    });
+
+    assert.deepEqual(await pickMainEntry({ setLabel() {} } as never, mock.ctx), { kind });
+    assert.ok(wide?.some((line) => line.includes("message 9999[2J")));
+    assert.ok(wide?.every((line) => visibleWidth(line) <= 80));
+    assert.ok(narrow?.every((line) => visibleWidth(line) <= 28));
+    assert.deepEqual(mock.notifications, []);
+  }
 });
 
 test("tree display strips terminal controls while copy keeps the raw selected text", async () => {
