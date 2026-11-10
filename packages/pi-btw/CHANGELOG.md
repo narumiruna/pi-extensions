@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.63.7
+
+### Patch Changes
+
+- b2b91fa: Reduce main-thread tree picker allocations by joining raw text fragments only when copying and storing saved labels only when needed.
+
 ## 0.63.6
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @narumitw/pi-accounts
 
+## 0.54.2
+
+### Patch Changes
+
+- 9629149: Clear Pi session resources when a built-in provider's applied account identity changes, including Anthropic message threads and opt-in compatible gateways. Defer cleanup to an idle or pre-request boundary, cancel active work when authentication changes too late for that boundary, and preserve continuation state for unchanged authentication.
+
 ## 0.54.1
 
 ### Patch Changes
