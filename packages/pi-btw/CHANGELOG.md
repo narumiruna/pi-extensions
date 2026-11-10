@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.63.6
+
+### Patch Changes
+
+- aca87cf: Fix call stack overflows when opening the main-thread tree picker for deep session histories.
+
 ## 0.63.5
 
 ### Patch Changes
