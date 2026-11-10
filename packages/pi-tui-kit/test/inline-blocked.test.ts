@@ -30,6 +30,7 @@ function createInlineHost() {
     defaultEditor: {},
     keybindings: getKeybindings(),
     extensionDialogs: [],
+    extensionOverlays: new Map(),
     editorContainer: { clear: noop, addChild: noop },
     programStatus: {
       setBlocked(_source: string, status: Blocked) {

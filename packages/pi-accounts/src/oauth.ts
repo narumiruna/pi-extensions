@@ -137,7 +137,12 @@ export function createBuiltinProviderAdapters(
       oauth: createLazyProviderOwnedOAuth("xai", loader),
     },
   ];
-  return adapters.map((adapter) => ({ ...adapter, supportsApiKey: adapter.id !== "openai-codex" }));
+  return adapters.map((adapter) => ({
+    ...adapter,
+    // Continuations also belong to auth identities on opt-in Anthropic-compatible gateways.
+    invalidateConnections: adapter.invalidateConnections ?? cleanupSessionResources,
+    supportsApiKey: adapter.id !== "openai-codex",
+  }));
 }
 
 export function resolveProviderOAuth(

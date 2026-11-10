@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createAccountActivation } from "./account-activation.js";
+import { createAccountActivation, prepareAccountRequest } from "./account-activation.js";
 import {
   AccountStore,
   consumeMigrationNotice,
@@ -85,6 +85,8 @@ export type SessionSelectionOwner = {
   coordinators: Map<AccountProviderId, RuntimeAuthCoordinator>;
   results: Map<AccountProviderId, EnsureActiveProviderAuthResult>;
   appliedIdentities: Map<AccountProviderId, string>;
+  pendingInvalidations: Set<AccountProviderId>;
+  preparingRun: boolean;
   abortProviders: Set<AccountProviderId>;
   syncTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
   pendingSyncTasks: Map<AccountProviderId, Promise<EnsureActiveProviderAuthResult>>;
@@ -99,6 +101,7 @@ export type SyncProvider = (
   owner: SessionSelectionOwner,
   ownerSignal?: AbortSignal,
   model?: ExtensionContext["model"],
+  beforeRequest?: boolean,
 ) => Promise<EnsureActiveProviderAuthResult>;
 
 export type PersistSelection = (
@@ -188,6 +191,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       previous.selectionRevisions.clear();
       previous.activationRequests.clear();
       previous.appliedIdentities.clear();
+      previous.pendingInvalidations.clear();
       previous.abortProviders.clear();
       previous.syncTasks.clear();
       previous.pendingSyncTasks.clear();
@@ -214,6 +218,8 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       coordinators: new Map(providers.map((provider) => [provider.id, new RuntimeAuthCoordinator(pi, provider)])),
       results: new Map(),
       appliedIdentities: new Map(),
+      pendingInvalidations: new Set(),
+      preparingRun: false,
       abortProviders: new Set(),
       syncTasks: new Map(),
       pendingSyncTasks: new Map(),
@@ -281,7 +287,14 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     providerId,
   });
 
-  const syncProvider: SyncProvider = (providerId, ctx, owner, ownerSignal, model = ctx.model) => {
+  const syncProvider: SyncProvider = (
+    providerId,
+    ctx,
+    owner,
+    ownerSignal,
+    model = ctx.model,
+    beforeRequest = false,
+  ) => {
     let task!: Promise<EnsureActiveProviderAuthResult>;
     task = (async () => {
       const adapter = requireAdapter(adapters, providerId);
@@ -300,6 +313,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
             Date.now(),
             signal,
           );
+      if (beforeRequest && signal.aborted) return staleResult(providerId);
       let identity: string | undefined;
       let latest = owner.syncTasks.get(providerId);
       if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
@@ -309,18 +323,37 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
         const previousIdentity = owner.appliedIdentities.get(providerId);
         const shouldInvalidate =
           previousIdentity !== identity && !(previousIdentity === undefined && identity === "default");
-        if (shouldInvalidate) {
+        if (shouldInvalidate) owner.pendingInvalidations.add(providerId);
+        // Pi cleanup is session-wide: background auth must not close another provider's live socket.
+        if (
+          owner.pendingInvalidations.has(providerId) &&
+          ctx.model?.provider === providerId &&
+          (beforeRequest || ctx.isIdle())
+        ) {
           await adapter.invalidateConnections?.(owner.sessionId);
+          if (beforeRequest && signal.aborted) return staleResult(providerId);
           latest = owner.syncTasks.get(providerId);
           if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
           if (latest && latest !== task) return latest;
+          owner.pendingInvalidations.delete(providerId);
+        } else if (
+          shouldInvalidate &&
+          previousIdentity !== undefined &&
+          ctx.model?.provider === providerId &&
+          !owner.preparingRun &&
+          !ctx.signal?.aborted
+        ) {
+          // A later hook can change auth after turn_start. Abort instead of reusing an old thread.
+          ctx.abort();
         }
         owner.appliedIdentities.set(providerId, identity);
       } catch (error) {
+        if (beforeRequest && signal.aborted) return staleResult(providerId);
         latest = owner.syncTasks.get(providerId);
         if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
         if (latest && latest !== task) return latest;
         const credential = await selectedCredential(store, providerId, result, signal);
+        if (beforeRequest && signal.aborted) return staleResult(providerId);
         latest = owner.syncTasks.get(providerId);
         if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
         if (latest && latest !== task) return latest;
@@ -331,6 +364,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
           credential,
         );
       }
+      if (beforeRequest && signal.aborted) return staleResult(providerId);
       latest = owner.syncTasks.get(providerId);
       if (!isOwnerCurrent(owner)) return latest && latest !== task ? latest : staleResult(providerId);
       if (latest && latest !== task) return latest;
@@ -502,6 +536,16 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     const providerId = toProviderId(event.model.provider);
     if (providerId) {
       const result = await syncProvider(providerId, ctx, owner, undefined, event.model);
+      if (
+        isOwnerCurrent(owner) &&
+        ctx.model?.provider === providerId &&
+        owner.pendingInvalidations.has(providerId) &&
+        !owner.preparingRun &&
+        !ctx.isIdle() &&
+        !ctx.signal?.aborted
+      ) {
+        ctx.abort();
+      }
       if (isOwnerCurrent(owner) && result.status === "error" && hasEnvironmentSelection(owner)) {
         ctx.ui.notify(
           `${requireAdapter(adapters, providerId).displayName} account selected by PI_ACCOUNT failed closed. Check that the account exists and its authentication is valid.`,
@@ -517,6 +561,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     if (!isOwnerCurrent(owner)) return;
     const providerId = toProviderId(ctx.model?.provider);
     if (!providerId) return;
+    owner.preparingRun = true;
     try {
       const result = owner.startupCompletedProviders.has(providerId)
         ? await syncProvider(providerId, ctx, owner)
@@ -536,16 +581,14 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     } catch (error) {
       owner.abortProviders.add(providerId);
       throw error;
+    } finally {
+      owner.preparingRun = false;
     }
   });
 
   pi.on("turn_start", (_event, ctx) => {
     const owner = sessionOwners.get(ctx.sessionManager);
-    if (!owner || !isOwnerCurrent(owner)) return;
-    const providerId = toProviderId(ctx.model?.provider);
-    if (!providerId || !owner.abortProviders.has(providerId)) return;
-    owner.abortProviders.delete(providerId);
-    ctx.abort();
+    return owner ? prepareAccountRequest(ctx, owner, isOwnerCurrent, syncProvider) : undefined;
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -560,6 +603,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     owner.selectionRevisions.clear();
     owner.activationRequests.clear();
     owner.appliedIdentities.clear();
+    owner.pendingInvalidations.clear();
     owner.abortProviders.clear();
     owner.syncTasks.clear();
     owner.pendingSyncTasks.clear();

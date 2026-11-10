@@ -570,6 +570,7 @@ it("settles locally during Pi host reset without changing its dialog iteration o
     defaultEditor: {},
     keybindings: getKeybindings(),
     extensionDialogs: [],
+    extensionOverlays: new Map(),
     editorContainer: { clear: noop, addChild: noop },
     programStatus: { setBlocked: () => mounted.resolve() },
     ui: { terminal: { rows: 24 }, setFocus: noop, requestRender: f.requestRender, hideOverlay: noop },

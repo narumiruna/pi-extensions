@@ -69,6 +69,11 @@ The name applies to **every supported provider used by that process**; a provide
 Routine account selection and provider activation continue in the background after Pi starts.
 The first prompt, model switch, or `/accounts` operation that needs a provider waits for its current selection and authentication to finish; activation failures still fail that provider closed before a request is sent.
 
+Account or key changes clear Pi's session continuation state before the selected provider's next model request.
+Cleanup waits until that provider is idle or its next turn starts; unchanged authentication keeps continuation state.
+Account or key changes during active work can cancel the current run to prevent reuse of the previous account's continuation.
+Background activation of other providers does not interrupt the active run.
+
 ## 🔌 Supported providers
 
 | Provider | Provider ID | Account-specific behavior |
