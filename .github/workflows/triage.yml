@@ -12,6 +12,7 @@ jobs:
     environment: pi-oauth
     concurrency:
       group: pi-oauth-auth-json
+      queue: max
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
