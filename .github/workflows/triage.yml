@@ -23,7 +23,7 @@ jobs:
         with:
           auth-json: ${{ secrets.PI_AUTH_JSON }}
           auth-output: ${{ runner.temp }}/pi-triage-auth/auth.json
-          provider: openai-codex
+          provider: openai
           model: gpt-6.1-sol
           thinking: medium
 
