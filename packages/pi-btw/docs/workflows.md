@@ -13,6 +13,7 @@ The side thread retains the last 40,000 characters of this text and adds a trunc
 The initial snapshot stays immutable. Later main progress reaches the side model only after an explicit import; see [Import main updates](#import-main-updates).
 An explicit `Shift+L` label edit is the selector's only main-session mutation and persists through Pi.
 Native tree copying reports success or failure; Escape returns to the manager and Ctrl+C closes the flow.
+The [tree snapshot guide](./main-tree-snapshots.md) describes allocation behavior, measurements, and verification limits.
 
 **Resume side thread** searches retained in-memory threads by their first question and question count; threads containing only confirmed imports use **Main context updates** as their title.
 The first question remains the title; threads are ordered by their newest answer or visible error.
