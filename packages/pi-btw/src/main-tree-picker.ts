@@ -113,7 +113,14 @@ export async function pickMainEntry(
     };
     const onCopy = (entryId: string | undefined, displayText: string | undefined) => {
       if (settled) return;
-      const text = entryId ? rawCopyText.get(entryId) : displayText;
+      let text: string | undefined;
+      try {
+        const source = entryId ? rawCopyText.get(entryId) : displayText;
+        text = typeof source === "string" ? source : source?.join("");
+      } catch (error: unknown) {
+        notifySafely(ctx, `Could not copy selected message: ${formatError(error)}`, "error");
+        return;
+      }
       if (!text) {
         notifySafely(ctx, "Selected entry has no text to copy", "warning");
         return;
@@ -157,7 +164,8 @@ export async function pickMainEntry(
         }
         const persistedLabel = label === undefined ? undefined : sanitizeSingleLine(label);
         pi.setLabel(entryId, persistedLabel);
-        savedLabels.set(entryId, { label: persistedLabel });
+        if (persistedLabel === undefined) savedLabels.delete(entryId);
+        else savedLabels.set(entryId, { label: persistedLabel });
         selector?.setViewLabel?.(entryId, persistedLabel);
         tui.requestRender();
       } catch (error: unknown) {
@@ -198,13 +206,16 @@ function createNativeTreeSelector(options: MainThreadTreeSelectorOptions): MainT
   return result;
 }
 
-function prepareTreeSnapshot(rawTree: readonly SessionTreeNode[]): {
+type RawCopySource = string | readonly string[];
+
+/** @internal Package-local snapshot test boundary; not an extension entrypoint. */
+export function prepareTreeSnapshot(rawTree: readonly SessionTreeNode[]): {
   tree: SessionTreeNode[];
-  rawCopyText: Map<string, string>;
+  rawCopyText: Map<string, RawCopySource>;
   savedLabels: Map<string, SavedLabel>;
 } {
   const tree: SessionTreeNode[] = [];
-  const rawCopyText = new Map<string, string>();
+  const rawCopyText = new Map<string, RawCopySource>();
   const savedLabels = new Map<string, SavedLabel>();
   // Keep traversal state on the heap: valid session histories can be arbitrarily deep.
   const stack = [{ source: rawTree, target: tree, index: 0 }];
@@ -224,9 +235,11 @@ function prepareTreeSnapshot(rawTree: readonly SessionTreeNode[]): {
     if (label !== undefined) displayNode.label = label;
     if (labelTimestamp !== undefined) displayNode.labelTimestamp = labelTimestamp;
     frame.target.push(displayNode);
-    const text = getRawCopyText(node.entry);
-    if (text !== undefined) rawCopyText.set(node.entry.id, text);
-    savedLabels.set(node.entry.id, { label, labelTimestamp });
+    const source = captureRawCopySource(node.entry);
+    if (source !== undefined) rawCopyText.set(node.entry.id, source);
+    if (label !== undefined || labelTimestamp !== undefined) {
+      savedLabels.set(node.entry.id, { label, labelTimestamp });
+    }
     if (node.children.length > 0) {
       stack.push({ source: node.children, target: displayNode.children, index: 0 });
     }
@@ -325,34 +338,39 @@ function sanitizeToolArguments(value: unknown, seen: WeakMap<object, unknown>): 
   return result;
 }
 
-function getRawCopyText(entry: SessionEntry): string | undefined {
-  let text: string | undefined;
+function captureRawCopySource(entry: SessionEntry): RawCopySource | undefined {
+  let source: RawCopySource | undefined;
   if (entry.type === "message") {
-    if (entry.message.role === "bashExecution") text = entry.message.command;
+    if (entry.message.role === "bashExecution") source = entry.message.command;
     else if ("content" in entry.message) {
-      text = extractRawText(entry.message.content);
-      if (!text && entry.message.role === "assistant") text = entry.message.errorMessage;
+      source = captureRawText(entry.message.content);
+      const empty = typeof source === "string" ? source.length === 0 : source.every((part) => part.length === 0);
+      if (empty && entry.message.role === "assistant") source = entry.message.errorMessage;
     }
-  } else if (entry.type === "custom_message") text = extractRawText(entry.content);
-  else if (entry.type === "compaction" || entry.type === "branch_summary") text = entry.summary;
-  return text?.trim() ? text : undefined;
+  } else if (entry.type === "custom_message") source = captureRawText(entry.content);
+  else if (entry.type === "compaction" || entry.type === "branch_summary") source = entry.summary;
+  if (typeof source === "string") return /\S/u.test(source) ? source : undefined;
+  return source?.some((part) => /\S/u.test(part)) ? source : undefined;
 }
 
-function extractRawText(content: unknown): string {
+function captureRawText(content: unknown): RawCopySource {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        block !== null &&
-        typeof block === "object" &&
-        "type" in block &&
-        block.type === "text" &&
-        "text" in block &&
-        typeof block.text === "string",
-    )
-    .map((block) => block.text)
-    .join("");
+  // Retain immutable strings, not live blocks or joined copies of every message.
+  const parts: string[] = [];
+  for (const block of content) {
+    if (
+      block !== null &&
+      typeof block === "object" &&
+      "type" in block &&
+      block.type === "text" &&
+      "text" in block &&
+      typeof block.text === "string"
+    ) {
+      parts.push(block.text);
+    }
+  }
+  return parts.length === 1 ? parts[0] : parts;
 }
 
 interface SavedLabel {
