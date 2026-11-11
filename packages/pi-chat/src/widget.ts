@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type TuiMouseEvent, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, truncateToWidth } from "@earendil-works/pi-tui";
 import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import type { ChatSnapshot, TranscriptEntry } from "./chat-session.js";
 import type { WidgetMode } from "./settings.js";
@@ -14,21 +14,24 @@ interface ChatWidgetOptions {
 }
 
 export function createChatWidget(options: ChatWidgetOptions) {
+  let snapshot: ChatSnapshot | undefined;
+  let mode: WidgetMode = "off";
   const frame = new EditorStatusWidget({
     theme: options.theme,
     name: "Chat",
-    state: options.state,
-    renderBody: (width) => {
-      const snapshot = options.getSnapshot();
-      return snapshot
-        ? renderChatWidgetBody(snapshot, options.getMode(), width, options.theme, options.getTerminalRows())
-        : [];
+    get summary() {
+      return snapshot ? chatSummary(snapshot) : undefined;
     },
+    state: options.state,
+    renderBody: (width) =>
+      snapshot ? renderChatWidgetBody(snapshot, mode, width, options.theme, options.getTerminalRows()) : [],
   });
   return {
     render(width: number): string[] {
-      const snapshot = options.getSnapshot();
-      if (!snapshot || snapshot.state === "disconnected" || options.getMode() === "off") {
+      // Summary and body must use one snapshot, including renders while collapsed.
+      snapshot = options.getSnapshot();
+      mode = options.getMode();
+      if (!snapshot || snapshot.state === "disconnected" || mode === "off") {
         frame.invalidate();
         return [];
       }
@@ -36,7 +39,10 @@ export function createChatWidget(options: ChatWidgetOptions) {
     },
     invalidate: () => frame.invalidate(),
     handleMouse: (event: TuiMouseEvent) => frame.handleMouse(event),
-    dispose: () => frame.dispose(),
+    dispose: () => {
+      snapshot = undefined;
+      frame.dispose();
+    },
   };
 }
 
@@ -49,43 +55,28 @@ function renderChatWidgetBody(
 ): string[] {
   if (mode === "dock") return renderRoomDock(snapshot, width, terminalRows, theme);
 
-  const participants = snapshot.participants.length;
-  const presence = `${participants} active · ${snapshot.directNeighbors} direct neighbor${snapshot.directNeighbors === 1 ? "" : "s"}`;
-  const unread = snapshot.unread > 0 ? `${snapshot.unread} unread · ` : "";
-  const attention = snapshot.state === "degraded" ? " · reconnecting" : "";
-  const header = truncateToWidth(
-    theme.fg(snapshot.state === "degraded" ? "warning" : "accent", `chat · ${unread}${presence}${attention}`),
-    width,
-  );
-  const roomHint = truncateToWidth(
-    theme.fg("dim", `${sanitizeSingleLine(snapshot.room.label)} · /chat to open`),
-    width,
-  );
+  const header = truncateToWidth(theme.fg("accent", participantSummary(snapshot)), width);
+  const roomHint = truncateToWidth(theme.fg("dim", "/chat to open"), width);
   if (mode !== "latest") return [header, roomHint];
   const latest = snapshot.transcript.at(-1);
   if (!latest) return [header, roomHint];
   return [header, roomHint, renderMessagePreview(latest, width, theme, false)];
 }
 
-function renderRoomDock(snapshot: ChatSnapshot, width: number, terminalRows: number, theme: Theme): string[] {
-  const participantText = `${snapshot.participants.length} active · ${snapshot.directNeighbors} direct neighbor${snapshot.directNeighbors === 1 ? "" : "s"}`;
-  const stateText =
-    snapshot.state === "connecting"
-      ? "joining…"
-      : snapshot.state === "degraded"
-        ? `reconnecting · ${participantText}`
-        : snapshot.directNeighbors === 0
-          ? "waiting for neighbors"
-          : participantText;
+function chatSummary(snapshot: ChatSnapshot): string {
+  const state =
+    snapshot.state === "connecting" ? "joining… · " : snapshot.state === "degraded" ? "reconnecting · " : "";
   const unread = snapshot.unread > 0 ? ` · ${snapshot.unread} unread` : "";
-  const roomTitle = `ROOM ${sanitizeSingleLine(snapshot.room.label)}`;
-  const status = `${stateText}${unread}`;
-  const color = snapshot.state === "degraded" ? "warning" : "accent";
-  const combinedHeader = `${roomTitle} · ${status}`;
-  const header =
-    visibleWidth(combinedHeader) <= width
-      ? [theme.fg(color, combinedHeader)]
-      : [truncateToWidth(theme.fg(color, roomTitle), width), truncateToWidth(theme.fg(color, status), width)];
+  return `${state}${sanitizeSingleLine(snapshot.room.label)}${unread}`;
+}
+
+function participantSummary(snapshot: ChatSnapshot): string {
+  return `${snapshot.participants.length} active · ${snapshot.directNeighbors} direct neighbor${snapshot.directNeighbors === 1 ? "" : "s"}`;
+}
+
+function renderRoomDock(snapshot: ChatSnapshot, width: number, terminalRows: number, theme: Theme): string[] {
+  const waiting = snapshot.state === "connected" && snapshot.directNeighbors === 0 ? " · waiting for neighbors" : "";
+  const header = truncateToWidth(theme.fg("accent", `${participantSummary(snapshot)}${waiting}`), width);
   const previewCount = terminalRows < 10 ? 0 : terminalRows < 18 ? 1 : terminalRows < 26 ? 2 : 3;
   const previews = (previewCount === 0 ? [] : snapshot.transcript.slice(-previewCount)).map((entry) =>
     renderMessagePreview(entry, width, theme, true),
@@ -93,7 +84,7 @@ function renderRoomDock(snapshot: ChatSnapshot, width: number, terminalRows: num
   const target = snapshot.composerOpen
     ? `Input → CHAT ${sanitizeSingleLine(snapshot.room.label)} · Esc returns to Pi/LLM`
     : "Input → Pi/LLM · /chat then Enter to reply";
-  return [...header, ...previews, truncateToWidth(theme.fg("dim", target), width)];
+  return [header, ...previews, truncateToWidth(theme.fg("dim", target), width)];
 }
 
 function renderMessagePreview(entry: TranscriptEntry, width: number, theme: Theme, includeIdentity = false): string {

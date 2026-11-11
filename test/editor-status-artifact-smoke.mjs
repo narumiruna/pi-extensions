@@ -192,6 +192,7 @@ async function runtimeProof() {
   const publisher = kit.createEditorStatusPublisher({
     key: "fixture",
     name: "Fixture",
+    summary: (value) => (value === "updated while collapsed" ? "latest" : "active"),
     context: { mode: "tui", hasUI: true, ui },
     isCurrent: () => true,
     render: (value, activeTheme, width) =>
@@ -224,7 +225,8 @@ async function runtimeProof() {
   click(pointer);
   publisher.publish("updated while collapsed");
   assert.equal(frame.render(20).length, 1);
-  assert.match(frame.render(20)[0], /^─ ▸ Fixture ─+$/u);
+  assert.match(frame.render(40)[0], /^─ ▸ Fixture · latest ─+$/u);
+  frame.render(20);
   click({ ...pointer, y: 0, screenY: 0, height: 1 });
   assert.equal(frame.render(40)[1], "updated while collapsed");
   assert.equal(mounts, 1);

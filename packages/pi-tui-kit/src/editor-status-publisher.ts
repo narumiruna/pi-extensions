@@ -14,6 +14,8 @@ export interface EditorStatusPublisherOptions<T> {
   key: string;
   /** Replace the supplied frame's first divider with a named collapse control in TUI mode. */
   name?: string;
+  /** Current short divider text for named TUI mounts, including collapsed mounts. */
+  summary?(snapshot: T, width: number, rows: number): string;
   context: Pick<ExtensionContext, "mode" | "hasUI" | "ui">;
   isCurrent(): boolean;
   render(snapshot: T, theme: Theme, width: number, rows: number): readonly string[];
@@ -82,7 +84,7 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
         if (unchanged && rpcVisible) return;
         try {
           const lines = [...render(snapshot, ui.theme, 80, 36)];
-          if (!current()) return;
+          if (!current() || !Object.is(latest, snapshot)) return;
           rpcVisible = true;
           needsClear = true;
           writeVersion++;
@@ -110,11 +112,15 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
           (tui) => {
             token.tui = tui;
             let lines: readonly string[] = [];
+            let summary = "";
             let rendering = 0;
             const frame = name
               ? new EditorStatusWidget({
                   name,
                   state,
+                  get summary() {
+                    return summary;
+                  },
                   get theme() {
                     return ui.theme;
                   },
@@ -131,13 +137,29 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
                   }
                   // Render the latest snapshot even while collapsed so the owner's
                   // visibility and row-budget decisions remain authoritative.
-                  lines = render(latest, ui.theme, width, tui.terminal.rows);
-                  if (!current() || mount !== token || latest === undefined) {
+                  const snapshot = latest;
+                  const rows = tui.terminal.rows;
+                  const ownsSnapshot = () => current() && mount === token && Object.is(latest, snapshot);
+                  lines = render(snapshot, ui.theme, width, rows);
+                  if (!ownsSnapshot()) {
                     frame?.invalidate();
                     return [];
                   }
-                  if (lines.length === 0) frame?.invalidate();
-                  return frame && lines.length > 0 ? frame.render(width) : [...lines];
+                  if (lines.length === 0) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  summary = frame ? (options.summary?.(snapshot, width, rows) ?? "") : "";
+                  if (!ownsSnapshot()) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  const output = frame ? frame.render(width) : [...lines];
+                  if (!ownsSnapshot()) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  return output;
                 } catch (error) {
                   frame?.invalidate();
                   throw error;

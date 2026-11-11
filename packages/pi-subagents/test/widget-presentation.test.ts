@@ -9,7 +9,12 @@ import { createMockContext } from "../../../test/support.js";
 import type { ActiveJobDisplay, SubagentRuntime } from "../src/runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../src/settings.js";
 import { createSubagentWidgetController, renderSubagentWidget, type SubagentCyclePhase } from "../src/widget.js";
-import { subagentWidgetRowBudget } from "../src/widget-renderer.js";
+import {
+  renderSubagentWidgetSnapshot,
+  type SubagentWidgetSnapshot,
+  subagentWidgetRowBudget,
+  subagentWidgetSummary,
+} from "../src/widget-renderer.js";
 
 const theme = { fg: (_role: string, value: string) => value } as Theme;
 const job: ActiveJobDisplay = {
@@ -90,16 +95,18 @@ function fixture(initial: ActiveJobDisplay[] = [job], idle = true, phase: Subage
   };
 }
 
-function pointer(component: Component, y = 2, x = 199): TuiMouseEvent {
+function pointer(component: Component, y?: number, x = 199): TuiMouseEvent {
+  const height = component.render(200).length;
+  const row = y ?? Math.max(0, height - 1);
   return {
     type: "click",
     button: "left",
     x,
-    y,
+    y: row,
     screenX: x,
-    screenY: y,
+    screenY: row,
     width: 200,
-    height: component.render(200).length,
+    height,
     shift: false,
     alt: false,
     ctrl: false,
@@ -112,9 +119,9 @@ function clickWidget(component: Component, event: TuiMouseEvent) {
   return component.handleMouse?.({ ...event, type: "click" });
 }
 
-for (const y of [0, 1, 2]) {
+for (const row of ["first", "last"] as const) {
   for (const x of [0, 199]) {
-    test(`Subagents click (${x}, ${y}) collapses only its named frame and retains latest jobs`, () => {
+    test(`Subagents click (${x}, ${row}) collapses only its named frame and retains latest jobs`, () => {
       const f = fixture();
       const sibling = fixture();
       const component = f.component();
@@ -124,20 +131,25 @@ for (const y of [0, 1, 2]) {
       f.controls.setPinned(true);
       f.controls.setTrigger("user-message");
       const state = f.controls.state();
-      const event = pointer(component, y, x);
+      const event = pointer(component, row === "first" ? 0 : before.length - 1, x);
       assert.deepEqual(clickWidget(component, event), { handled: true, render: true });
       assert.equal(f.render().length, 1);
-      assert.match(f.render()[0] ?? "", /^─ ▸ Subagents ─+$/u);
+      assert.match(f.render()[0] ?? "", /^─ ▸ Subagents · 1 running · 0 queued ─+$/u);
       assert.deepEqual(sibling.render(), before);
       assert.deepEqual(f.controls.state(), state);
       assert.deepEqual(f.runtime.activeJobsForDisplay(), jobs);
-      const latest = [{ ...job, task: "Latest task while collapsed", elapsedMs: 7_000 }];
+      const latest = [
+        { ...job, task: "Latest task while collapsed", elapsedMs: 7_000 },
+        { ...job, jobId: "job_two", state: "queued" as const },
+      ];
+      const snapshot = structuredClone(latest);
       f.replace(latest);
       assert.equal(f.render().length, 1);
+      assert.match(f.render()[0] ?? "", /^─ ▸ Subagents · 1 running · 1 queued ─+$/u);
       assert.deepEqual(clickWidget(component, pointer(component, 0)), { handled: true, render: true });
-      assert.match(f.render()[0] ?? "", /^─ ▾ Subagents ─+$/u);
-      assert.deepEqual(f.render().slice(1), renderSubagentWidget(latest, theme, 200).slice(1));
-      assert.deepEqual(latest, [{ ...job, task: "Latest task while collapsed", elapsedMs: 7_000 }]);
+      assert.match(f.render()[0] ?? "", /^─ ▾ Subagents · 1 running · 1 queued ─+$/u);
+      assert.deepEqual(f.render().slice(1), renderSubagentWidget(latest, theme, 200).slice(2));
+      assert.deepEqual(latest, snapshot);
     });
   }
 }
@@ -167,16 +179,16 @@ test("Subagents disclosure survives absent jobs, disabled settings, and host rem
     const renders = f.requests.mock.calls.length;
     f.controls.setMode(mode);
     assert.ok(f.requests.mock.calls.length > renders);
-    assert.match(f.render()[0] ?? "", /^─ ▾ Subagents ─+$/u);
-    assert.ok(f.render().length > 1);
+    assert.match(f.render()[0] ?? "", /^─ ▾ Subagents · 1 running · 0 queued/u);
+    assert.equal(f.render().length, mode === "compact" ? 1 : 2);
     const component = f.component();
     assert.ok(component);
-    clickWidget(component, pointer(component, 1));
+    clickWidget(component, pointer(component));
     assert.equal(f.render().length, 1);
   }
   f.controls.setMode("hidden");
   f.controls.setMode("expanded");
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
 });
 
 test("retains one mount for visible changes, invalidates renders, and clears only its own key", () => {
@@ -209,18 +221,18 @@ test.each(["provider", "model"] as const)("refreshes a changed %s override witho
   const f = fixture([{ ...job, [field]: "first-id" }]);
   const component = f.component();
   const handle = f.controls.item(job.jobId);
-  assert.match(f.render()[2] ?? "", new RegExp(`${field}: first-id`, "u"));
+  assert.match(f.render()[1] ?? "", new RegExp(`${field}: first-id`, "u"));
   f.replace([{ ...job, [field]: "second-id" }]);
   assert.equal(f.component(), component);
   assert.equal(f.mounts.mock.calls.length, 1);
-  assert.match(f.render()[2] ?? "", new RegExp(`${field}: second-id`, "u"));
+  assert.match(f.render()[1] ?? "", new RegExp(`${field}: second-id`, "u"));
   assert.equal(handle?.compact(), false, "a semantic model change invalidates the old handle");
   assert.equal(f.controls.item(job.jobId)?.compact(), true);
-  assert.doesNotMatch(f.render()[2] ?? "", /provider:|model:/u);
+  assert.doesNotMatch(f.render()[1] ?? "", /provider:|model:/u);
   assert.equal(f.controls.item(job.jobId)?.expand(), true);
   f.replace([job]);
   assert.equal(f.component(), component);
-  assert.doesNotMatch(f.render()[2] ?? "", /provider:|model:/u);
+  assert.doesNotMatch(f.render()[1] ?? "", /provider:|model:/u);
 });
 
 test.each([0, 1, 2, 3, 4, 10])("renderer accounts for the separator in a %s-row budget", (budget) => {
@@ -250,9 +262,92 @@ test("height changes and compact rendering preserve truthful counts and local ro
     assert.ok(f.render().length <= subagentWidgetRowBudget(rows));
   }
   f.controls.setMode("compact");
-  assert.equal(f.render().length, 2);
-  assert.match(f.render()[1] ?? "", /2 active · 1 running · 1 queued · 2 not shown/u);
+  assert.equal(f.render().length, 1);
+  assert.match(f.render()[0] ?? "", /1 running · 1 queued/u);
+  assert.doesNotMatch(f.render()[0] ?? "", /not shown/u);
   assert.deepEqual(renderSubagentWidget([], theme, 80), []);
+});
+
+test.each([
+  { mode: "default", budget: 1, height: 1, omitted: 8 },
+  { mode: "default", budget: 2, height: 2, omitted: 7 },
+  { mode: "expanded", budget: 4, height: 4, omitted: 5 },
+  { mode: "expanded", budget: 10, height: 8, omitted: 1 },
+  { mode: "compact", budget: 1, height: 1, omitted: 1 },
+  { mode: "compact", budget: 10, height: 1, omitted: 1 },
+] as const)(
+  "named $mode view fits $budget rows and preserves $omitted omitted jobs",
+  ({ mode, budget, height, omitted }) => {
+    const jobs = Array.from({ length: 8 }, (_, index) => ({
+      ...job,
+      jobId: `job_${index}`,
+      state: index < 3 ? ("running" as const) : ("queued" as const),
+    }));
+    const snapshot: SubagentWidgetSnapshot = {
+      jobs,
+      items: jobs.slice(0, 7).map((value) => ({ id: value.jobId, value, mode: "expanded" })),
+      settings: DEFAULT_SUBAGENT_SETTINGS,
+      mode,
+    };
+    assert.equal(subagentWidgetSummary(snapshot, budget), `3 running · 5 queued · ${omitted} not shown (1 removed)`);
+    for (const width of [0, 1, 2, 40, 200]) {
+      const lines = renderSubagentWidgetSnapshot(snapshot, theme, width, budget, false);
+      assert.equal(lines.length, height);
+      assert.equal(lines[0], "─".repeat(width));
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+      assert.doesNotMatch(lines.slice(1).join("\n"), /Subagents|active|not shown/u);
+    }
+  },
+);
+
+test("named hidden, empty, removed, and zero-budget views have no orphan divider or summary", () => {
+  const snapshot: SubagentWidgetSnapshot = {
+    jobs: [job],
+    items: [{ id: job.jobId, value: job, mode: "expanded" }],
+    settings: DEFAULT_SUBAGENT_SETTINGS,
+    mode: "compact",
+  };
+  for (const hidden of [
+    { ...snapshot, jobs: [] },
+    { ...snapshot, items: [] },
+    { ...snapshot, mode: "hidden" as const },
+    { ...snapshot, settings: { ...DEFAULT_SUBAGENT_SETTINGS, showWidget: false } },
+  ]) {
+    assert.deepEqual(renderSubagentWidgetSnapshot(hidden, theme, 80, 10, false), []);
+    assert.equal(subagentWidgetSummary(hidden, 10), "");
+  }
+  for (const budget of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.9]) {
+    assert.deepEqual(renderSubagentWidgetSnapshot(snapshot, theme, 80, budget, false), []);
+    assert.equal(subagentWidgetSummary(snapshot, budget), "");
+  }
+});
+
+test("compact divider keeps current state counts while collapsed and after hidden-data restore", () => {
+  const f = fixture();
+  f.controls.setMode("compact");
+  const component = f.component();
+  assert.ok(component);
+  assert.deepEqual(clickWidget(component, pointer(component)), { handled: true, render: true });
+  f.replace([
+    { ...job, state: "queued" },
+    { ...job, jobId: "job_two" },
+  ]);
+  assert.match(f.render()[0] ?? "", /^─ ▸ Subagents · 1 running · 1 queued ─+$/u);
+  assert.doesNotMatch(f.render()[0] ?? "", /not shown/u);
+  f.terminal.rows = 9;
+  assert.equal(f.render().length, 1, "compact summary remains visible with one available row");
+  for (const width of [0, 1, 2, 20, 80, 200]) {
+    assert.ok(f.render(width).every((line) => visibleWidth(line) <= width));
+  }
+  f.terminal.rows = 8;
+  assert.deepEqual(f.render(), [], "zero available rows hide the complete frame");
+  f.terminal.rows = 36;
+  f.controls.setMode("hidden");
+  f.replace([{ ...job, state: "queued" }]);
+  assert.deepEqual(f.render(), []);
+  f.controls.setMode("compact");
+  assert.match(f.render()[0] ?? "", /^─ ▾ Subagents · 0 running · 1 queued ─+$/u);
+  assert.equal(f.render().length, 1);
 });
 
 test("settings disable beats pin and manual show; unpin does not itself compact", () => {
@@ -260,15 +355,15 @@ test("settings disable beats pin and manual show; unpin does not itself compact"
   f.controls.setPinned(true);
   f.controls.setTrigger("user-message");
   f.controller.userMessage(f.context.ctx);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   f.controls.setPinned(false);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   f.controller.update(f.context.ctx, { ...DEFAULT_SUBAGENT_SETTINGS, showWidget: false });
   f.controls.setPinned(true);
   f.controls.setMode("expanded");
   assert.deepEqual(f.render(), []);
   f.controller.update(f.context.ctx, DEFAULT_SUBAGENT_SETTINGS);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   f.controls.setMode("hidden");
   f.replace([{ ...job, task: "new revision" }]);
   assert.deepEqual(f.render(), []);
@@ -279,7 +374,7 @@ test.each(["stop", "length", "toolUse"])("future settled cycle compacts once aft
   f.controller.agentStarted(f.context.ctx);
   f.controls.setTrigger("settled-cycle");
   f.cycle(outcome); // Repeated start, queued user and tools still belong to the excluded current cycle.
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   assert.equal(f.controls.state().trigger, "settled-cycle");
   f.controller.agentStarted(f.context.ctx);
   f.controller.userMessage(f.context.ctx);
@@ -287,11 +382,11 @@ test.each(["stop", "length", "toolUse"])("future settled cycle compacts once aft
   f.tick();
   f.controller.turnEnded(f.context.ctx, outcome);
   f.controller.settled(f.context.ctx, false);
-  assert.equal(f.render().length, 2);
+  assert.equal(f.render().length, 1);
   assert.equal(f.controls.state().trigger, "manual");
   f.controls.setMode("expanded");
   f.cycle();
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
 });
 
 test("arming while Pi is preparing a run excludes it before agent_start is emitted", () => {
@@ -303,11 +398,11 @@ test("arming while Pi is preparing a run excludes it before agent_start is emitt
   f.controller.userMessage(f.context.ctx);
   f.controller.turnEnded(f.context.ctx, "stop");
   f.controller.settled(f.context.ctx, false);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   assert.equal(f.controls.state().trigger, "settled-cycle");
   f.setIdle(true);
   f.cycle();
-  assert.equal(f.render().length, 2);
+  assert.equal(f.render().length, 1);
 });
 
 test("busy start excludes the pre-existing cycle even when agent_start was missed during settings load", () => {
@@ -316,9 +411,9 @@ test("busy start excludes the pre-existing cycle even when agent_start was misse
   f.controller.userMessage(f.context.ctx);
   f.controller.turnEnded(f.context.ctx, "stop");
   f.controller.settled(f.context.ctx, false);
-  assert.equal(f.render().length, 3);
-  f.cycle();
   assert.equal(f.render().length, 2);
+  f.cycle();
+  assert.equal(f.render().length, 1);
 });
 
 test("positive idle discards provisional maintenance tracking without consuming the rule", () => {
@@ -328,7 +423,7 @@ test("positive idle discards provisional maintenance tracking without consuming 
   f.setIdle(true);
   f.controls.setTrigger("settled-cycle");
   f.cycle();
-  assert.equal(f.render().length, 2);
+  assert.equal(f.render().length, 1);
   assert.equal(f.controls.state().trigger, "manual");
 });
 
@@ -338,10 +433,10 @@ test("a live run signal seeds late attachment without treating other busy work a
   f.setIdle(false);
   f.controls.setTrigger("settled-cycle");
   f.cycle();
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   f.setIdle(true);
   f.cycle();
-  assert.equal(f.render().length, 2);
+  assert.equal(f.render().length, 1);
 });
 
 for (const reason of ["threshold", "overflow"] as const) {
@@ -353,10 +448,10 @@ for (const reason of ["threshold", "overflow"] as const) {
       f.controls.setTrigger("settled-cycle");
       f.controller.preparing(f.ctx);
       f.cycle();
-      assert.equal(f.render().length, 3);
+      assert.equal(f.render().length, 2);
       f.setIdle(true);
       f.cycle();
-      assert.equal(f.render().length, 2);
+      assert.equal(f.render().length, 1);
     });
   }
 }
@@ -373,7 +468,7 @@ for (const recovery of ["idle-arm", "next-preparation", "next-automatic-compacti
     if (recovery === "next-automatic-compaction") f.controller.automaticCompaction(f.ctx);
     f.controller.preparing(f.ctx);
     f.cycle();
-    assert.equal(f.render().length, 2);
+    assert.equal(f.render().length, 1);
     assert.equal(f.controls.state().trigger, "manual");
   });
 }
@@ -390,10 +485,10 @@ test.each([
   f.controller.userMessage(f.context.ctx);
   if (outcome) f.controller.turnEnded(f.context.ctx, outcome);
   f.controller.settled(f.context.ctx, aborted);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
   assert.equal(f.controls.state().trigger, "settled-cycle");
   f.cycle();
-  assert.equal(f.render().length, 2);
+  assert.equal(f.render().length, 1);
 });
 
 test("a future custom-only cycle cannot reuse post-arm user consumption from the excluded cycle", () => {
@@ -406,9 +501,9 @@ test("a future custom-only cycle cannot reuse post-arm user consumption from the
   f.controller.agentStarted(f.context.ctx);
   f.controller.turnEnded(f.context.ctx, "stop");
   f.controller.settled(f.context.ctx, false);
-  assert.equal(f.render().length, 3);
-  f.cycle();
   assert.equal(f.render().length, 2);
+  f.cycle();
+  assert.equal(f.render().length, 1);
 });
 
 test("semantic changes rearm against the active cycle; elapsed refreshes do not", () => {
@@ -419,9 +514,9 @@ test("semantic changes rearm against the active cycle; elapsed refreshes do not"
   f.replace([{ ...job, task: "New work" }]);
   f.controller.turnEnded(f.context.ctx, "stop");
   f.controller.settled(f.context.ctx, false);
-  assert.equal(f.render().length, 3);
-  f.cycle();
   assert.equal(f.render().length, 2);
+  f.cycle();
+  assert.equal(f.render().length, 1);
 });
 
 test("raw IDs isolate item views, preserve removal across snapshots, and invalidate stale handles", () => {
@@ -431,22 +526,22 @@ test("raw IDs isolate item views, preserve removal across snapshots, and invalid
   assert.ok(raw);
   assert.equal(raw.compact(), true);
   const compact = f.render();
-  assert.doesNotMatch(compact[2] ?? "", /thinking:/u);
-  assert.match(compact[3] ?? "", /thinking:/u);
+  assert.doesNotMatch(compact[1] ?? "", /thinking:/u);
+  assert.match(compact[2] ?? "", /thinking:/u);
   f.replace([{ ...job, jobId: rawId, elapsedMs: 3_000 }, job]);
   assert.equal(raw.expand(), true, "cosmetic updates preserve handle identity");
   const stale = f.controls.item(rawId);
   f.replace([{ ...job, jobId: rawId, task: "Semantic replacement" }, job]);
   assert.equal(stale?.remove(), false);
   assert.equal(f.controls.item(rawId)?.remove(), true);
-  assert.match(f.render()[1] ?? "", /1 not shown \(1 removed\)/u);
+  assert.match(f.render()[0] ?? "", /1 not shown \(1 removed\)/u);
   f.tick();
   assert.equal(f.controls.item(rawId), undefined);
   assert.equal(f.controls.item(job.jobId)?.remove(), true);
   assert.deepEqual(f.render(), [], "all removed items leave no orphan separator");
   assert.equal(f.runtime.activeJobsForDisplay().length, 2);
   f.controls.resetItems();
-  assert.equal(f.render().length, 4);
+  assert.equal(f.render().length, 3);
   assert.equal(raw.remove(), false, "reset invalidates old collection handles");
   const removed = f.controls.item(rawId);
   assert.equal(removed?.remove(), true);
@@ -469,7 +564,7 @@ test("accepts eight maximum-size UTF-8 runtime jobs and rejects invalid snapshot
     model,
   }));
   const f = fixture(jobs);
-  assert.equal(f.render().length, 10);
+  assert.equal(f.render().length, 9);
   const original = f.render();
   for (const invalid of [
     [...jobs, { ...job, jobId: "overflow" }],
@@ -482,7 +577,7 @@ test("accepts eight maximum-size UTF-8 runtime jobs and rejects invalid snapshot
     assert.deepEqual(f.render(), original);
   }
   f.replace([job]);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
 });
 
 test("same-manager reset clears the old UI first and rejects stale callbacks before context access", () => {
@@ -497,7 +592,7 @@ test("same-manager reset clears the old UI first and rejects stale callbacks bef
   clickWidget(oldComponent, oldEvent);
   assert.equal(f.render().length, 1);
   f.controls.setMode("compact");
-  clickWidget(oldComponent, pointer(oldComponent, 1));
+  clickWidget(oldComponent, pointer(oldComponent));
   assert.equal(f.render().length, 1);
   f.controls.setPinned(true);
   f.controls.setTrigger("user-message");
@@ -507,7 +602,7 @@ test("same-manager reset clears the old UI first and rejects stale callbacks bef
   assert.equal(typeof f.mounts.mock.calls[2]?.[1], "function");
   assert.deepEqual(f.controller.controls(oldContext)?.state(), { mode: "default", pinned: false, trigger: "manual" });
   assert.equal(f.unsubscribe.mock.calls.length, 1);
-  assert.equal(f.render().length, 3, "new session owner starts expanded");
+  assert.equal(f.render().length, 2, "new session owner starts expanded");
   assert.equal(clickWidget(oldComponent, oldEvent), undefined);
   assert.deepEqual(oldComponent?.render(200), []);
   const currentComponent = f.component();
@@ -684,5 +779,5 @@ test("failed mount releases timers and subscription and permits a fresh owner", 
   assert.equal(f.unsubscribe.mock.calls.length, 2);
   f.ctx.ui.setWidget = setWidget;
   f.controller.start(f.context.ctx);
-  assert.equal(f.render().length, 3);
+  assert.equal(f.render().length, 2);
 });

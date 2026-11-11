@@ -30,6 +30,11 @@ Import `createEditorStatusPublisher` from `@narumitw/pi-tui-kit/editor-status-pu
 Pass `key`, `context`, `isCurrent`, and `render(snapshot, theme, width, rows)`.
 The render callback returns complete terminal lines, including the standard `EditorStatusWidget` divider as its first line.
 Supply `name` to replace that first divider with `─ ▾ Name ───` in TUI mode without adding a row.
+Supply `summary(snapshot, width, rows)` for short, current divider text such as `─ ▾ Progress · 1/4 complete ───`.
+The callback runs for visible named TUI frames, including collapsed frames; it is not called for RPC or unnamed output.
+Keep summary text unstyled. Kit sanitizes it before width-safe rendering and rejects output if a callback replaces the snapshot or owner.
+A renderer may return only its standard divider when the summary is the complete visible content. Return `[]` only to hide the widget.
+Owners remove duplicate body headers themselves; Kit does not inspect or rewrite domain text.
 An unmodified primary-button click anywhere in the widget collapses it to `─ ▸ Name ───`; clicking anywhere on that line restores the latest body.
 Only fullscreen Pi routes mouse events. The control never requests editor focus; wheel, drag, modified clicks, other buttons, and OSC 8 link cells do not toggle it.
 Press, drag, and release remain native so body text can be selected and copied.
@@ -51,6 +56,7 @@ The snapshot renderer still runs while collapsed so owner visibility and row-bud
 Disclosure does not stop background work, edit saved settings, clear attention, or change jobs, tasks, permissions, or tool activation.
 No global widget registry or terminal-input listener is installed.
 For direct `EditorStatusWidget` mounts, pass a stable owner-local `EditorStatusWidgetState` across replacements and forward mouse and disposal methods through every wrapper.
+Use the `summary` string option, or an option getter, to keep direct-mount divider state current while collapsed.
 
 Existing owner controls restore the body without changing domain data:
 
@@ -152,6 +158,27 @@ The owner supplies a truthful summary and item priority.
 Count the separator in a supplied total row budget, include omitted/hidden counts, and do not infer available space across other widgets.
 When no visible entries remain, clear the widget rather than leaving only a separator.
 Manual item removal never deletes a task or hides it from the owner's domain manager.
+
+## Named widget content
+
+Keep the name and a short summary in the divider. Put state that needs more space, safety messages, item rows, and actions in the body.
+Order critical state before optional counts so it survives ordinary label clipping when space permits.
+Owners retain their standalone RPC, notification, and tool-result labels because those surfaces do not have the named divider.
+
+| Widget | Divider summary | Body |
+| --- | --- | --- |
+| Progress | Blocked count, completion count, and compact-view active count; removed count when applicable. | Step rows; completion and summary-only views need no duplicate header. |
+| Subagents | Current running/queued counts and actual omitted or removed counts. | Job rows; deliberate summary mode does not claim every job was omitted by a limit. |
+| Herdr | Sibling-agent count. | Agent state and identity rows, including hidden-agent count. |
+| Files | Existing name-only divider. | Edit restriction or blocked warning first, followed by queued prompt context. |
+| Plan mode | Planning, discussion, readiness, saved, or implementation state. | Applicable edit restriction and user actions, not model-only tool instructions. |
+| Active tools | Callable-tool count. | Tool groups and exposure markers. |
+| Chat | Room, connection attention, and unread state. | Presence counts, mode-appropriate previews, and the dock input target. |
+| Ticker | Updating or last-update state. | Quote rows with stale/unavailable markers. |
+| Cache hit monitor | Waiting/aggregate state, or LIVE and request number. | Provider/model and metrics; the full formula remains in documentation. |
+| Sync | Review state. | Setup identity, selection differences or review reason, and an explicit no-transfer notice. |
+
+Physical-terminal appearance and IME acceptance still require the operator check below.
 
 ## Verification and handoff
 

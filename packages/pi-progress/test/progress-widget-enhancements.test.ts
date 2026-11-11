@@ -105,23 +105,27 @@ test("blocked text stays visible, prioritized, and incomplete without scheduling
   }
 });
 
-test("shows a transient completion summary while retaining Progress state", async () => {
+test.each(["tui", "rpc"] as const)("%s: transient completion summary retains Progress state", async (mode) => {
   vi.useFakeTimers();
   try {
     const harness = createHarness();
-    const current = createContext();
+    const current = createContext({ mode });
     await harness.emit("session_start", current.ctx);
     await setProgress(harness, current.ctx, [{ text: "finish", status: "in_progress" }]);
     const result = await setProgress(harness, current.ctx, [{ text: "finish", status: "completed" }]);
     assert.deepEqual(result.details.steps, [{ text: "finish", status: "completed" }]);
     const { theme } = identityTheme();
-    assert.deepEqual(current.widgets.at(-1)?.content?.(current.tui, theme).render(40), [
-      `─ ▾ Progress ${"─".repeat(27)}`,
-      "✓ 1/1 steps completed",
-    ]);
+    if (mode === "tui") {
+      assert.deepEqual(current.widgets.at(-1)?.content?.(current.tui, theme).render(40), [
+        `─ ▾ Progress · ✓ 1/1 steps completed ${"─".repeat(3)}`,
+      ]);
+    } else {
+      assert.deepEqual(current.widgets.at(-1)?.lines, ["─".repeat(80), "✓ 1/1 steps completed"]);
+    }
 
     await vi.advanceTimersByTimeAsync(COMPLETION_SUMMARY_MS - 1);
-    assert.equal(typeof current.widgets.at(-1)?.content, "function");
+    if (mode === "tui") assert.equal(typeof current.widgets.at(-1)?.content, "function");
+    else assert.ok(Array.isArray(current.widgets.at(-1)?.lines));
     await vi.advanceTimersByTimeAsync(1);
     assert.deepEqual(current.widgets.at(-1), { key: WIDGET_KEY, content: undefined, options: undefined });
 
@@ -250,7 +254,6 @@ test("loads display settings and ignores stale asynchronous completion after rep
   ]);
   assert.deepEqual(collapsed.widgets.at(-1)?.content?.(collapsed.tui, identityTheme().theme).render(40), [
     `─ ▾ Progress ${"─".repeat(27)}`,
-    "Progress",
     "▶ active",
     "… 1 more",
   ]);
@@ -279,7 +282,10 @@ test("loads display settings and ignores stale asynchronous completion after rep
   resolveFirst?.(loadedSettings({ showProgress: true }));
   await firstStart;
   await setProgress(staleHarness, current.ctx, [{ text: "current", status: "pending" }]);
-  assert.equal(current.widgets.at(-1)?.content?.(current.tui, identityTheme().theme).render(40)[1], "Progress");
+  assert.deepEqual(current.widgets.at(-1)?.content?.(current.tui, identityTheme().theme).render(40), [
+    `─ ▾ Progress ${"─".repeat(27)}`,
+    "○ current",
+  ]);
   assert.deepEqual(previous.widgets.at(-1), { key: WIDGET_KEY, content: undefined, options: undefined });
 });
 

@@ -132,13 +132,14 @@ test("live Chat refresh and display changes reuse the mounted frame and release 
       const component = context.mounted[0];
       assert.ok(component);
       assert.equal(context.mounted.length, 1);
-      assert.match(component.render(80)[0] ?? "", /^─ ▾ Chat ─+/u);
+      assert.match(component.render(80)[0] ?? "", /^─ ▾ Chat · private /u);
       click(component, component.render(80).length - 1);
       assert.equal(component.render(80).length, 1);
       let requests = context.requests;
       transport.refresh();
       assert.ok(context.requests > requests);
       assert.equal(component.render(80).length, 1);
+      assert.match(component.render(80)[0] ?? "", /▸ Chat · reconnecting · private /u);
       click(component, 0);
       assert.match(component.render(80).join("\n"), /reconnecting/u);
       click(component, 1);
@@ -207,7 +208,7 @@ test("replacement and stale disposal cannot publish or redraw through the old mo
       await command.handler(invite, second.ctx);
       const current = second.mounted[0];
       assert.ok(current);
-      assert.match(current.render(80)[0] ?? "", /^─ ▾ Chat ─+/u);
+      assert.match(current.render(80)[0] ?? "", /^─ ▾ Chat · private /u);
       assert.ok(current.render(80).length > 1);
       assert.deepEqual(old.render(80), []);
       old.dispose?.();

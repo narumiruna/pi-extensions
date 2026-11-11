@@ -107,9 +107,9 @@ test("keeps rows bounded across resize and uses the callback theme on every rend
   const themedComponent = widgetComponent(context, callbackTheme);
   for (const width of [0, 1, 2, 24, 80, 200, 24, 200]) {
     const lines = component.render(width);
-    assert.equal(lines.length, 3);
+    assert.equal(lines.length, 2);
     assert.equal(visibleWidth(lines[0] ?? ""), width);
-    if (width >= 24) assert.match(lines[0] ?? "", /^─ ▾ Subagents ─+$/u);
+    if (width >= 48) assert.match(lines[0] ?? "", /^─ ▾ Subagents · 0 running · 1 queued ─+$/u);
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
     themedComponent.invalidate();
     themedComponent.render(width);
@@ -168,8 +168,8 @@ test("carries separate queued and running tasks and levels without changing chil
     tasks.map((task, index) => ({ task, state: "queued", thinkingLevel: levels[index] })),
   );
   const queuedRows = widgetComponent(context).render(200);
-  assert.match(queuedRows[2] ?? "", /Review authentication with full constra… · thinking: off · queued/u);
-  assert.match(queuedRows[3] ?? "", /Implement .*… · thinking: max · queued/u);
+  assert.match(queuedRows[1] ?? "", /Review authentication with full constra… · thinking: off · queued/u);
+  assert.match(queuedRows[2] ?? "", /Implement .*… · thinking: max · queued/u);
   const firstSnapshot = queued[0];
   assert.ok(firstSnapshot);
   firstSnapshot.task = "mutated snapshot";
@@ -193,8 +193,8 @@ test("carries separate queued and running tasks and levels without changing chil
     [...children.values()].map(({ request }) => request.thinkingLevel),
     levels,
   );
-  assert.match(runningRows[2] ?? "", / · thinking: off/u);
-  assert.match(runningRows[3] ?? "", / · thinking: max/u);
+  assert.match(runningRows[1] ?? "", / · thinking: off/u);
+  assert.match(runningRows[2] ?? "", / · thinking: max/u);
   assert.deepEqual(Object.keys(spawned[0] ?? {}).sort(), ["jobId", "state"]);
   const activeMetadata = JSON.stringify(runtime.inspectJobs());
   assert.doesNotMatch(activeMetadata, /task|preview|thinkingLevel|Review authentication|Implement/u);
@@ -204,7 +204,7 @@ test("carries separate queued and running tasks and levels without changing chil
   firstChild.finish({ state: "completed", result: "done", limitations: [], truncated: false });
   const result = await runtime.wait(first.jobId, undefined);
   assert.equal(result.state, "completed");
-  assert.equal(widgetComponent(context).render(200).length, 3);
+  assert.equal(widgetComponent(context).render(200).length, 2);
   assert.doesNotMatch(widgetComponent(context).render(200).join("\n"), /Review authentication/u);
   await runtime.cancel(second.jobId);
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
@@ -227,14 +227,14 @@ test("refreshes a changed task even when the remaining display data is unchanged
   refresh();
   const firstFactory = context.widgets.get(SUBAGENT_WIDGET_KEY);
   const first = widgetComponent(context);
-  assert.match(first.render(200)[2] ?? "", /First task/u);
+  assert.match(first.render(200)[1] ?? "", /First task/u);
   refresh();
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory);
   jobs.mockReturnValue([{ ...displayJob, task: "Second task" }]);
   refresh();
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory, "visible changes retain the mount");
   assert.equal(widgetComponent(context), first);
-  assert.match(first.render(200)[2] ?? "", /Second task/u);
+  assert.match(first.render(200)[1] ?? "", /Second task/u);
 });
 
 test("refreshes a changed thinking level in the retained component without republishing unchanged data", async () => {
@@ -249,7 +249,7 @@ test("refreshes a changed thinking level in the retained component without repub
   refresh();
   const firstFactory = context.widgets.get(SUBAGENT_WIDGET_KEY);
   const first = widgetComponent(context);
-  assert.match(first.render(200)[2] ?? "", /thinking: off/u);
+  assert.match(first.render(200)[1] ?? "", /thinking: off/u);
   refresh();
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory);
   jobs.mockReturnValue([{ ...displayJob, thinkingLevel: "max" }]);
@@ -257,7 +257,7 @@ test("refreshes a changed thinking level in the retained component without repub
   const changedFactory = context.widgets.get(SUBAGENT_WIDGET_KEY);
   assert.equal(changedFactory, firstFactory);
   assert.equal(widgetComponent(context), first);
-  assert.match(first.render(200)[2] ?? "", /thinking: max/u);
+  assert.match(first.render(200)[1] ?? "", /thinking: max/u);
   refresh();
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), changedFactory);
 });
@@ -267,7 +267,7 @@ test("clears task rows and levels and releases refresh ownership across session 
   const timers = vi.spyOn(globalThis, "clearInterval");
   runtime.start(jobInput("Old session task", "off"));
   await Promise.resolve();
-  assert.match(widgetComponent(context).render(200)[2] ?? "", /Old session task/u);
+  assert.match(widgetComponent(context).render(200)[1] ?? "", /Old session task/u);
   await runtime.shutdown();
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
   assert.equal(children.get("Old session task")?.request.signal.aborted, true);
@@ -277,10 +277,10 @@ test("clears task rows and levels and releases refresh ownership across session 
   cleanups.push(async () => controller.shutdown(replacement.ctx));
   assert.ok(timers.mock.calls.length > 0);
   runtime.start(jobInput("New session task", "max"));
-  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task · thinking: max · queued/u);
+  assert.match(widgetComponent(replacement).render(200)[1] ?? "", /New session task · thinking: max · queued/u);
   assert.doesNotMatch(widgetComponent(replacement).render(200).join("\n"), /Old session task|thinking: off/u);
   controller.shutdown(context.ctx);
-  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task/u);
+  assert.match(widgetComponent(replacement).render(200)[1] ?? "", /New session task/u);
   controller.shutdown(replacement.ctx);
   controller.shutdown(replacement.ctx);
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
@@ -353,8 +353,8 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   controller.update(context.ctx, preferences);
   const rows = widgetComponent(context).render(200);
   assert.doesNotMatch(rows.join("\n"), /job_|tools:|no timeout/u);
-  assert.match(rows[2] ?? "", /▶ Keep running when hidden · thinking: off/u);
-  assert.match(rows[3] ?? "", /Finish while hidden · thinking: max/u);
+  assert.match(rows[1] ?? "", /▶ Keep running when hidden · thinking: off/u);
+  assert.match(rows[2] ?? "", /Finish while hidden · thinking: max/u);
   assert.equal(widgetComponent(context), original);
   assert.doesNotMatch(original.render(200).join("\n"), /job_|tools:|no timeout/u);
   controller.update(context.ctx, { ...preferences, showWidget: false });
@@ -369,8 +369,8 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   assert.ok(mock.sentMessages.some(({ message }) => JSON.stringify(message).includes(second.jobId)));
   controller.update(context.ctx, preferences);
   const restored = widgetComponent(context).render(200);
-  assert.equal(restored.length, 3);
-  assert.match(restored[2] ?? "", /Keep running when hidden · thinking: off/u);
+  assert.equal(restored.length, 2);
+  assert.match(restored[1] ?? "", /Keep running when hidden · thinking: off/u);
   assert.doesNotMatch(restored.join("\n"), /job_|tools:|no timeout|thinking: max/u);
   assert.doesNotMatch(JSON.stringify(mock.sentMessages), /thinkingLevel/u);
   assert.equal(children.get("Keep running when hidden")?.request.task, "Keep running when hidden");
@@ -385,7 +385,7 @@ test("clears the previous widget on replacement and ignores stale settings updat
   cleanups.push(async () => controller.shutdown(replacement.ctx));
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
   controller.update(context.ctx, { ...DEFAULT_SUBAGENT_SETTINGS, showWidget: false });
-  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /Old owner/u);
+  assert.match(widgetComponent(replacement).render(200)[1] ?? "", /Old owner/u);
 });
 
 async function setupWidget() {

@@ -33,14 +33,16 @@ test("TUI view controls use non-default keys, sticky hide/show, pin, and hard ca
   const component = current.component;
   assert.ok(component);
   const height = component.render(80).length;
+  const y = height - 1;
+  assert.equal(height, 2);
   for (const type of ["press", "release", "click"] as const) {
     component.handleMouse?.({
       type,
       button: "left",
       x: 79,
-      y: 2,
+      y,
       screenX: 79,
-      screenY: 2,
+      screenY: y,
       width: 80,
       height,
       shift: false,

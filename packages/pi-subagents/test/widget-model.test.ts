@@ -139,7 +139,7 @@ test.each(
     ...(model !== undefined ? [`model: ${model}`] : []),
     "0s",
   ];
-  assert.equal(f.render()[2], `▶ Check selection · ${fields.join(" · ")}`);
+  assert.equal(f.render()[1], `▶ Check selection · ${fields.join(" · ")}`);
   assert.equal(f.requests[0]?.provider, selected.provider);
   assert.equal(f.requests[0]?.model, selected.model);
   assert.equal(Object.hasOwn(f.requests[0] ?? {}, "modelOverrides"), false);
@@ -149,7 +149,7 @@ test.each(
 test("shows both explicit IDs when no parent model is selected", async () => {
   const f = await fixture({ parent: undefined });
   await f.spawn({ provider: "other-provider", model: "other-model" });
-  assert.equal(f.render()[2], "▶ Check selection · provider: other-provider · model: other-model · 0s");
+  assert.equal(f.render()[1], "▶ Check selection · provider: other-provider · model: other-model · 0s");
 });
 
 test("keeps spawn-time comparisons fixed after parent changes without exposing model metadata", async () => {
@@ -159,13 +159,13 @@ test("keeps spawn-time comparisons fixed after parent changes without exposing m
   Object.defineProperty(f.context.ctx, "model", { configurable: true, get: readModel });
   const first = await f.spawn({ provider: "other-provider", model: "other-model" });
   const component = f.component();
-  const before = f.render()[2];
+  const before = f.render()[1];
   assert.equal(before, "▶ Check selection · provider: other-provider · model: other-model · 0s");
   current = { provider: "other-provider", id: "other-model" };
   const second = await f.spawn({}, "Inherit new pair");
   assert.equal(f.component(), component, "ordinary updates retain the mounted widget");
-  assert.equal(f.render()[2], before);
-  assert.equal(f.render()[3], "▶ Inherit new pair · 0s");
+  assert.equal(f.render()[1], before);
+  assert.equal(f.render()[2], "▶ Inherit new pair · 0s");
   assert.equal(readModel.mock.calls.length, 2, "each admission captures the parent pair once");
   assert.deepEqual(
     f.requests.map(({ provider, model }) => ({ provider, model })),
@@ -200,7 +200,7 @@ test("compares against the effective pair after asynchronous attachment prefligh
   await admission;
   assert.equal(f.requests[0]?.provider, "other-provider");
   assert.equal(f.requests[0]?.model, "other-model");
-  assert.equal(f.render()[2], "▶ Check selection · 0s");
+  assert.equal(f.render()[1], "▶ Check selection · 0s");
 });
 
 test("copies local model overrides for queued and running snapshots without changing child payloads", async () => {
@@ -227,7 +227,7 @@ test("copies local model overrides for queued and running snapshots without chan
   assert.equal(snapshot.state, "queued");
   assert.equal(snapshot.provider, selected.provider);
   assert.equal(snapshot.model, selected.model);
-  assert.equal(f.render()[2], "○ Check selection · provider: other-provider · model: other-model · queued");
+  assert.equal(f.render()[1], "○ Check selection · provider: other-provider · model: other-model · queued");
   snapshot.provider = "mutated snapshot";
   snapshot.model = "mutated snapshot";
   await Promise.resolve();
@@ -235,7 +235,7 @@ test("copies local model overrides for queued and running snapshots without chan
   assert.equal(running?.state, "running");
   assert.equal(running?.provider, selected.provider);
   assert.equal(running?.model, selected.model);
-  assert.equal(f.render()[2], "▶ Check selection · provider: other-provider · model: other-model · 0s");
+  assert.equal(f.render()[1], "▶ Check selection · provider: other-provider · model: other-model · 0s");
   assert.equal(f.requests[0]?.provider, selected.provider);
   assert.equal(f.requests[0]?.model, selected.model);
   assert.equal(Object.hasOwn(f.requests[0] ?? {}, "modelOverrides"), false);

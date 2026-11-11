@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import { HorizontalRule } from "@narumitw/pi-tui-kit";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { StartupObservation, SyncInspection } from "../src/sync/sync-inspection.js";
@@ -10,6 +11,12 @@ import {
   observationSummary,
 } from "../src/ui/sync-attention.js";
 import { configureSyncStatus } from "../src/ui/sync-status.js";
+
+const divider = (width: number, collapsed = false) =>
+  new HorizontalRule({
+    label: `${collapsed ? "▸" : "▾"} Sync · Needs review`,
+    labelAlignment: "left",
+  }).render(width)[0];
 
 test("attention presentation is sanitized, textual, bounded, and clearable", async () => {
   const controller = createSyncAttentionController();
@@ -41,20 +48,24 @@ test("attention presentation is sanitized, textual, bounded, and clearable", asy
       },
     },
   );
-  for (const width of [0, 1, 2, 32, 60, 100]) {
+  for (const width of [0, 1, 2, 32, 60, 100, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.9, 32.9]) {
+    const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
     const lines = component.render(width);
-    assert.equal(visibleWidth(lines[0] ?? ""), width);
-    if (width >= 10) assert.match(lines[0] ?? "", /^─ ▾ Sync ─+/u);
-    assert.equal(themeCalls.includes("borderMuted"), width > 2);
+    assert.equal(lines[0], divider(normalized));
+    assert.equal(themeCalls.includes("borderMuted"), normalized > 2);
     themeCalls.length = 0;
     assert.equal(lines.length, 4);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     assert.equal(lines.join("\n").includes("\u001b]8"), false);
-    if (width >= 32) {
-      assert.match(lines.join("\n"), /Remote 1 · Device 1/u);
-      assert.match(lines.join("\n"), /No changes/u);
-    }
+    if (normalized === 0) assert.deepEqual(lines, ["", "", "", ""]);
   }
+  assert.deepEqual(component.render(100), [
+    divider(100),
+    "Setup: home?]8;;spoof",
+    "Selection: 1 remote-only · 1 device-only",
+    "No transfer performed · Run /sync to review",
+  ]);
+  assert.equal(controller.current()?.decision.setupName, "home\u001b]8;;spoof");
 
   controller.clear(ctx);
   assert.equal(statuses.get("sync"), undefined);
@@ -92,17 +103,22 @@ test("blank-column body clicks retain collapse through attention updates and res
     ctrl: false,
   };
   assert.deepEqual(clickWidget(first, event), { handled: true, render: true });
-  assert.equal(first.render(100).length, 1);
+  assert.deepEqual(first.render(100), [divider(100, true)]);
   first.dispose?.();
+  assert.equal(clickWidget(first, { ...event, y: 0, screenY: 0, height: 1 }), undefined);
   const latest = observation({ head: undefined, localChanged: false, remoteChanged: false });
   controller.observe(latest);
   await controller.publish(ctx);
   const updated = mount();
-  assert.equal(updated.render(100).length, 1);
-  assert.match(updated.render(100)[0] ?? "", /▸ Sync/u);
+  assert.deepEqual(updated.render(100), [divider(100, true)]);
   const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(100).length };
   assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
-  assert.match(updated.render(100).join("\n"), /Remote snapshot missing; review needed/u);
+  assert.deepEqual(updated.render(100), [
+    divider(100),
+    "Setup: home?]8;;spoof",
+    "Remote snapshot missing; review needed",
+    "No transfer performed · Run /sync to review",
+  ]);
   clickWidget(updated, { ...collapsed, height: updated.render(100).length });
   controller.clear(ctx);
   await controller.publish(ctx);
@@ -187,7 +203,31 @@ test("attention presentation explains an order-only difference", async () => {
     theme: { fg(color: string, text: string): string },
   ) => { render(width: number): string[] };
   const component = factory({}, { fg: (_color, text) => text });
-  assert.match(component.render(60).join("\n"), /Only list order differs/u);
+  assert.deepEqual(component.render(60), [
+    divider(60),
+    "Setup: home",
+    "Selection: only list order differs",
+    "No transfer performed · Run /sync to review",
+  ]);
+});
+
+test.each(["rpc", "print", "json"] as const)("keeps explicit review publication unchanged in %s", async (mode) => {
+  const controller = createSyncAttentionController();
+  const { ctx, widgets, statuses, notifications } = createMockContext({ mode });
+  controller.set(
+    {
+      setupName: "home",
+      configIdentity: "identity",
+      localInclude: ["settings.json"],
+      remoteInclude: ["AGENTS.md"],
+    },
+    "sync",
+  );
+  await controller.publish(ctx);
+  assert.equal(widgets.get("sync:attention"), undefined);
+  assert.equal(statuses.get("sync"), mode === "rpc" ? "sync ⇕" : undefined);
+  assert.deepEqual(notifications, []);
+  controller.reset(ctx);
 });
 
 for (const action of ["clear", "reset", "abort"] as const) {
@@ -239,6 +279,95 @@ function observation(overrides: Partial<SyncInspection> = {}): StartupObservatio
     },
   };
 }
+
+const observationPresentations: Array<{
+  inspection: Partial<SyncInspection>;
+  automaticTransfer?: boolean;
+  reason: string;
+  widgetReason?: string;
+}> = [
+  {
+    inspection: { localChanged: true, remoteChanged: true },
+    reason: "Local and remote changed since last sync; review needed",
+  },
+  {
+    inspection: { head: undefined },
+    reason: "Remote snapshot missing; review needed",
+  },
+  {
+    inspection: { firstSync: true },
+    reason: "No sync baseline; review remote and local content",
+  },
+  {
+    inspection: { selectionState: { kind: "legacy", discovered: [] } },
+    automaticTransfer: true,
+    reason:
+      "Legacy remote has no authoritative content list; review /sync and choose an explicit direction to adopt policy",
+  },
+  {
+    inspection: {
+      selectionState: {
+        kind: "different",
+        include: ["AGENTS.md"],
+        remoteOnly: ["AGENTS.md"],
+        localOnly: ["settings.json"],
+      },
+    },
+    reason: "Synced-content list differs; review needed",
+    widgetReason: "Selection: 1 remote-only · 1 device-only",
+  },
+  {
+    inspection: {
+      selectionState: {
+        kind: "different",
+        include: ["AGENTS.md", "settings.json"],
+        remoteOnly: [],
+        localOnly: [],
+      },
+    },
+    reason: "Synced-content list differs; review needed",
+    widgetReason: "Selection: only list order differs",
+  },
+];
+
+test.each(observationPresentations)("separates named review from unchanged notifications: $reason", async (entry) => {
+  for (const mode of ["tui", "rpc"] as const) {
+    const controller = createSyncAttentionController();
+    const { ctx, widgets, notifications, statuses } = createMockContext({ mode });
+    const value = observation(entry.inspection);
+    value.setupName = "home";
+    value.automaticTransfer = entry.automaticTransfer;
+    const before = structuredClone(value);
+    controller.observe(value);
+    await controller.publish(ctx);
+    controller.notifyObservation(ctx);
+    assert.equal(statuses.get("sync"), "sync ⇕");
+    assert.deepEqual(notifications, [
+      { message: `Pi Sync check · home\n${entry.reason}\nNo startup transfer · Run /sync to review`, level: "warning" },
+    ]);
+    const factory = widgets.get("sync:attention");
+    if (mode === "tui") {
+      const component = (factory as (tui: unknown, theme: unknown) => Component & { dispose?(): void })(
+        {},
+        { fg: (_role: string, text: string) => text },
+      );
+      const lines = [
+        divider(160),
+        "Setup: home",
+        entry.widgetReason ?? entry.reason,
+        "No transfer performed · Run /sync to review",
+      ];
+      assert.deepEqual(component.render(160), lines);
+      component.invalidate();
+      assert.deepEqual(component.render(160), lines);
+      component.dispose?.();
+    } else {
+      assert.equal(factory, undefined);
+    }
+    assert.deepEqual(value, before);
+    controller.reset(ctx);
+  }
+});
 
 // Every head/selection class, crossed with baseline and change flags, proves precedence
 // even for defensive combinations that today's inspector does not produce.

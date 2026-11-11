@@ -65,9 +65,12 @@ test("privacy-safe widget hides message text by default and bounds every line", 
       },
     ],
   });
-  const count = renderChatWidget(state, "count", 28, theme as never);
+  const count = renderChatWidget(state, "count", 80, theme as never);
   assert.equal(count.join("\n").includes("private message"), false);
-  assert.match(count.join("\n"), /2 unread/u);
+  assert.match(count[0] ?? "", /Chat · private .* · 2 unread/u);
+  assert.equal(count[1], "1 active · 1 direct neighbor");
+  assert.equal(count[2], "/chat to open");
+  assert.ok(renderChatWidget(state, "count", 28, theme as never).every((line) => visibleWidth(line) <= 28));
   const latest = renderChatWidget(state, "latest", 28, theme as never);
   assert.match(latest.join("\n"), /private message/u);
   assert.equal(
@@ -102,8 +105,9 @@ test("room dock keeps status, bounded recent messages, and the real input target
     transcript,
   });
   const wide = renderDock(state, 64, 30);
-  assert.equal(wide[0], `─ ▾ Chat ${"─".repeat(55)}`);
-  assert.match(wide[1] ?? "", /ROOM.*private/u);
+  assert.match(wide[0] ?? "", /^─ ▾ Chat · private /u);
+  assert.equal(wide[1], "1 active · 1 direct neighbor");
+  assert.doesNotMatch(wide.join("\n"), /ROOM /u);
   assert.doesNotMatch(wide.join("\n"), /old/u);
   assert.match(wide.join("\n"), /one/u);
   assert.match(wide.join("\n"), /three/u);
@@ -138,7 +142,7 @@ test("room dock keeps status, bounded recent messages, and the real input target
 test("room dock distinguishes joining, waiting, and degraded partial connectivity", () => {
   const joining = renderChatWidget(snapshot({ state: "connecting" }), "dock" as never, 48, theme as never);
   assert.match(joining.join("\n"), /joining/u);
-  const waiting = renderChatWidget(snapshot(), "dock" as never, 48, theme as never);
+  const waiting = renderChatWidget(snapshot(), "dock" as never, 80, theme as never);
   assert.match(waiting.join("\n"), /waiting for neighbors/u);
   const degraded = renderChatWidget(
     snapshot({

@@ -18,6 +18,7 @@ import {
   HerdrWidgetModel,
   type HerdrWidgetSnapshot,
   herdrWidgetFingerprint,
+  herdrWidgetSummary,
 } from "./herdr-widget.js";
 
 export interface HerdrObserverEnvironment {
@@ -49,7 +50,7 @@ class HerdrTopologyChangedError extends Error {}
 class HerdrCleanupError extends AggregateError {}
 
 function renderHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme, width: number): readonly string[] {
-  return createHerdrWidget(snapshot, theme).render(width);
+  return createHerdrWidget(snapshot, theme, false).render(width);
 }
 
 function isRelevantEvent(model: HerdrWidgetModel, event: HerdrPaneEvent): boolean {
@@ -356,6 +357,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         name: "Herdr",
         context: ctx,
         isCurrent: () => expectedGeneration === generation,
+        summary: herdrWidgetSummary,
         render: renderHerdrWidget,
       });
       const task = run(ctx, expectedGeneration, controller.signal);

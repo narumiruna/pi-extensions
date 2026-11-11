@@ -1007,8 +1007,9 @@ test("legacy identity settings without a display mode remain status-only without
       { fg: (_color: string, text: string) => text },
     );
     const lines = widget.render(80);
-    assert.match(lines[0] ?? "", /^─ ▾ Chat ─+/u);
-    assert.match(lines[1] ?? "", /^chat ·/u);
+    assert.match(lines[0] ?? "", /^─ ▾ Chat · #pi-dev/u);
+    assert.match(lines[1] ?? "", /^0 active · 0 direct neighbors/u);
+    assert.equal(lines[2], "/chat to open");
     await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
   });
 });

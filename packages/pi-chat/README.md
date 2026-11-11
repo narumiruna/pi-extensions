@@ -264,6 +264,8 @@ Closing it returns to Pi and the dock without leaving the room.
 On short terminals, the dock and composer reduce message rows before hiding room, connectivity, or input-target status.
 
 In fullscreen TUI mode, click anywhere in the **Chat** widget to collapse or expand it without moving keyboard focus.
+The divider keeps joining or reconnecting state before the room and nonzero unread count, including while collapsed.
+The expanded body keeps participant and direct-neighbor counts.
 Updates keep the current collapse state; leaving the room or replacing the session resets it.
 To restore the body with the keyboard, use `/chat` → **Settings** → **Joined room display** and select a visible mode.
 Pi Chat registers no global shortcut. `/chat` remains the menu-first entrypoint.

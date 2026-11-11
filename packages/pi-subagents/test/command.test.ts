@@ -243,7 +243,7 @@ test("public hooks compact on consumed user messages, not input attempts or othe
   await emit(mock, "message_start", context.ctx, {
     message: { role: "user", content: "extension-generated or consumed queue" },
   });
-  assert.match(widgetText(context), /1 active · 1 running · 0 queued/u);
+  assert.match(widgetText(context), /1 running · 0 queued/u);
   assert.doesNotMatch(widgetText(context), /Run test task/u);
   assert.equal(JSON.stringify(mock.tools), definitions);
   assert.deepEqual(mock.sentMessages, []);
@@ -422,7 +422,7 @@ test("existing keyboard view controls restore disclosure without changing settin
   await spawnJob(mock, context);
   const settings = { ...store.settings };
   collapseWidget(context);
-  assert.match(widgetText(context), /^─ ▸ Subagents ─+$/u);
+  assert.match(widgetText(context), /^─ ▸ Subagents · 1 running · 0 queued ─+$/u);
   const menu = invoke(mock, context, "");
   try {
     await tui.waitForOpen();
@@ -447,7 +447,7 @@ test("tree navigation closes the old menu and resets presentation without cancel
   await spawnJob(mock, context);
   await armTrigger(mock, context, tui, "Next consumed user message");
   const old = collapseWidget(context);
-  assert.match(widgetText(context), /^─ ▸ Subagents ─+$/u);
+  assert.match(widgetText(context), /^─ ▸ Subagents · 1 running · 0 queued ─+$/u);
   const menu = invoke(mock, context, "");
   await tui.waitForOpen();
   await emit(mock, "session_tree", context.ctx);
@@ -560,15 +560,17 @@ function collapseWidget(context: Context): Component {
   assert.equal(typeof factory, "function");
   const component = widgetComponents.get(factory as object);
   assert.ok(component);
+  const height = component.render(200).length;
+  const y = height - 1;
   const event: TuiMouseEvent = {
     type: "press",
     button: "left",
     x: 199,
-    y: 2,
+    y,
     screenX: 199,
-    screenY: 2,
+    screenY: y,
     width: 200,
-    height: component.render(200).length,
+    height,
     shift: false,
     alt: false,
     ctrl: false,

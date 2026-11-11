@@ -395,7 +395,7 @@ test("remapped widget menu controls actual presentation and disabled settings be
   const root = text(f.tui.render());
   f.tui.press("ctrl+c");
   await command;
-  assert.match(compact, /2 active · 1 running · 1 queued/u);
+  assert.match(compact, /1 running · 1 queued/u);
   assert.doesNotMatch(compact, /thinking:/u);
   assert.match(pinned, /pinned: true/u);
   assert.match(pinned, /Unpin view/u);

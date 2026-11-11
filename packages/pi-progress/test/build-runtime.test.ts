@@ -106,10 +106,14 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     const widget = widgets.at(-1)?.content as Parameters<ExtensionContext["ui"]["setWidget"]>[1];
     assert.ok(typeof widget === "function");
     const component = widget({ terminal: { rows: 36 }, requestRender() {} } as unknown as TUI, theme);
-    assert.equal(
-      component.render(100)[2],
+    assert.deepEqual(component.render(100), [
+      theme.fg("borderMuted", "─") +
+        " " +
+        theme.fg("muted", "▾ Progress · ◆ 1 blocked · 0/1 complete") +
+        " " +
+        theme.fg("borderMuted", "─".repeat(58)),
       theme.fg("thinkingHigh", "◆ ") + theme.fg("thinkingHigh", "Verify generated runtime — waiting for approval"),
-    );
+    ]);
     const command = extension.commands.get("progress");
     assert.ok(command);
     // Exercise the emitted menu's lazy import through Pi's Jiti-loaded runtime.

@@ -61,12 +61,12 @@ import { createEditorStatusCollection, type EditorStatusCollection, type EditorS
 import { createEditorStatusPublisher as rootPublisher, createEditorStatusView as rootView, createEditorStatusCollection as rootCollection, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit";
 import { EditorStatusWidget, type EditorStatusWidgetState as FocusedWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 declare const context: ExtensionContext;
-const options: EditorStatusPublisherOptions<string> = { key: "fixture:status", name: "Fixture", context, isCurrent: () => true, render: (snapshot: string, theme: Theme, width: number, rows: number) => ["─".repeat(width), theme.fg("muted", snapshot.slice(0, width))] };
+const options: EditorStatusPublisherOptions<string> = { key: "fixture:status", name: "Fixture", summary: (snapshot: string, width: number, rows: number) => [snapshot, width, rows].join(" "), context, isCurrent: () => true, render: (snapshot: string, theme: Theme, width: number, rows: number) => ["─".repeat(width), theme.fg("muted", snapshot.slice(0, width))] };
 const publisher: EditorStatusPublisher<string> = createEditorStatusPublisher(options);
 publisher.publish("one"); publisher.setCollapsed(true); publisher.setCollapsed(false); publisher.publish(undefined); publisher.dispose();
 const state: EditorStatusWidgetState = { collapsed: false };
 const focusedState: FocusedWidgetState = state;
-const widget = new EditorStatusWidget({ name: "Fixture", state: focusedState, theme: context.ui.theme, renderBody: () => ["body"] });
+const widget = new EditorStatusWidget({ name: "Fixture", summary: "1/4 complete", state: focusedState, theme: context.ui.theme, renderBody: () => ["body"] });
 widget.setCollapsed(true); widget.render(20); widget.dispose();
 const view: EditorStatusView = createEditorStatusView({ onChange() {}, canCompact: () => true });
 const mode: EditorStatusMode = "compact"; const trigger: EditorStatusTrigger = "settled-cycle";

@@ -9,7 +9,14 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { fetchQuotes, QuoteRequestTimeoutError } from "./quotes.js";
-import { formatTickerPlain, mergeQuoteResults, renderTickerBody, type TickerItem, type TickerView } from "./render.js";
+import {
+  formatTickerPlain,
+  mergeQuoteResults,
+  renderTickerBody,
+  type TickerItem,
+  type TickerView,
+  tickerSummary,
+} from "./render.js";
 import { createSettingsWriter, loadSettings, normalizeSymbols, parseSymbols } from "./settings.js";
 
 export interface StockTickerDependencies {
@@ -62,6 +69,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
           new EditorStatusWidget({
             theme,
             name: "Ticker",
+            summary: tickerSummary(snapshot),
             state,
             renderBody: (width) => renderTickerBody(snapshot, theme, width),
           }),

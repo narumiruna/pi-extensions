@@ -32,16 +32,18 @@ function setup(mode: "tui" | "rpc" | "print" | "json" = "tui") {
 
 afterEach(() => vi.useRealTimers());
 
-function pointer(component: Component, y = 2, x = 79): TuiMouseEvent {
+function pointer(component: Component, y?: number, x = 79): TuiMouseEvent {
+  const height = component.render(80).length;
+  const row = y ?? Math.max(0, height - 1);
   return {
     type: "click",
     button: "left",
     x,
-    y,
+    y: row,
     screenX: x,
-    screenY: y,
+    screenY: row,
     width: 80,
-    height: component.render(80).length,
+    height,
     shift: false,
     alt: false,
     ctrl: false,
@@ -54,7 +56,7 @@ function clickWidget(component: Component, event: TuiMouseEvent) {
   return component.handleMouse?.({ ...event, type: "click" });
 }
 
-for (const y of [0, 1, 2]) {
+for (const y of [0, 1]) {
   for (const x of [0, 79]) {
     test(`Progress click (${x}, ${y}) collapses only its named frame without changing data or controls`, () => {
       const { current, presentation } = setup();
@@ -67,19 +69,26 @@ for (const y of [0, 1, 2]) {
         const state = [presentation.view.mode, presentation.view.pinned, presentation.view.trigger];
         const event = pointer(component, y, x);
         assert.deepEqual(clickWidget(component, event), { handled: true, render: true });
-        assert.match(current.renderWidget()[0] ?? "", /^─ ▸ Progress ─+$/u);
-        assert.equal(current.renderWidget().length, 1);
+        assert.deepEqual(current.renderWidget(), [`─ ▸ Progress · 0/1 complete ${"─".repeat(52)}`]);
         assert.deepEqual(sibling.current.renderWidget(), before);
         assert.deepEqual(presentation.items(), items);
         assert.deepEqual([presentation.view.mode, presentation.view.pinned, presentation.view.trigger], state);
         const latest: ProgressStep[] = [{ text: "latest blocker", status: "blocked" }];
         const settings = { ...DEFAULT_PROGRESS_SETTINGS };
         presentation.update(latest, settings);
-        assert.equal(current.renderWidget().length, 1);
+        assert.deepEqual(current.renderWidget(), [`─ ▸ Progress · ⚠ 1 blocked · 0/1 complete ${"─".repeat(38)}`]);
         assert.deepEqual(clickWidget(component, pointer(component, 0)), { handled: true, render: true });
         const expanded = current.renderWidget();
-        assert.match(expanded[0] ?? "", /^─ ▾ Progress ─+$/u);
-        assert.deepEqual(expanded.slice(1), renderProgressWidget(latest, identityTheme().theme, 80).slice(1));
+        assert.deepEqual(expanded, [`─ ▾ Progress · ⚠ 1 blocked · 0/1 complete ${"─".repeat(38)}`, "⚠ latest blocker"]);
+        assert.deepEqual(
+          expanded.slice(1),
+          renderProgressWidget(latest, identityTheme().theme, 80, { showHeader: false }).slice(1),
+        );
+        assert.deepEqual(renderProgressWidget(latest, identityTheme().theme, 80), [
+          "─".repeat(80),
+          "Progress · 0/1 complete",
+          "⚠ latest blocker",
+        ]);
         assert.deepEqual(latest, [{ text: "latest blocker", status: "blocked" }]);
         assert.deepEqual(settings, DEFAULT_PROGRESS_SETTINGS);
       } finally {
@@ -88,6 +97,26 @@ for (const y of [0, 1, 2]) {
       }
     });
   }
+}
+
+for (const x of [0, 79]) {
+  test(`Progress click (${x}, 2) outside the shorter named frame preserves disclosure and controls`, () => {
+    const { current, presentation } = setup();
+    try {
+      const component = current.component;
+      assert.ok(component);
+      const before = current.renderWidget();
+      const items = presentation.items();
+      const state = [presentation.view.mode, presentation.view.pinned, presentation.view.trigger];
+      assert.equal(before.length, 2);
+      assert.equal(clickWidget(component, pointer(component, before.length, x)), undefined);
+      assert.deepEqual(current.renderWidget(), before);
+      assert.deepEqual(presentation.items(), items);
+      assert.deepEqual([presentation.view.mode, presentation.view.pinned, presentation.view.trigger], state);
+    } finally {
+      presentation.dispose();
+    }
+  });
 }
 
 test("Progress disclosure survives clear/update and host remount; existing show modes and reset restore it", () => {
@@ -110,15 +139,15 @@ test("Progress disclosure survives clear/update and host remount; existing show 
       const renders = current.renderRequests;
       presentation.show(mode);
       assert.ok(current.renderRequests > renders, "keyboard restore requests a render even for the same view");
-      assert.match(current.renderWidget()[0] ?? "", /^─ ▾ Progress ─+$/u);
-      assert.ok(current.renderWidget().length > 1);
+      assert.equal(current.renderWidget()[0], `─ ▾ Progress · 0/1 complete ${"─".repeat(52)}`);
+      assert.equal(current.renderWidget().length, mode === "compact" ? 1 : 2);
       const component: Component | undefined = current.component;
       assert.ok(component);
-      clickWidget(component, pointer(component, 1));
+      clickWidget(component, pointer(component));
       assert.equal(current.renderWidget().length, 1);
     }
     presentation.reset(pending);
-    assert.equal(current.renderWidget().length, 3);
+    assert.equal(current.renderWidget().length, 2);
     assert.match(current.renderWidget().join("\n"), /○ work/u);
   } finally {
     presentation.dispose();
@@ -138,11 +167,11 @@ for (const boundary of ["session_tree", "session_start"] as const) {
       assert.equal(current.renderWidget().length, 1);
       await harness.emit(boundary, current.ctx);
       assert.match(current.renderWidget().join("\n"), /○ work/u);
-      assert.equal(current.renderWidget().length, 3);
+      assert.equal(current.renderWidget().length, 2);
       assert.equal(clickWidget(old, event), undefined);
       assert.deepEqual(old.render(80), []);
       old.dispose?.();
-      assert.equal(current.renderWidget().length, 3);
+      assert.equal(current.renderWidget().length, 2);
       assert.deepEqual(harness.entries, [], "disclosure never appends session entries");
       await harness.emit("session_shutdown", current.ctx);
       assert.equal(current.component, undefined);
@@ -275,7 +304,7 @@ test("manual hidden is sticky; clear reappears even on an identical tool update"
   presentation.update([{ text: "new", status: "pending" }], DEFAULT_PROGRESS_SETTINGS);
   assert.match(current.renderWidget().join("\n"), /○ new/u);
   presentation.show("compact");
-  assert.equal(current.renderWidget().length, 2);
+  assert.deepEqual(current.renderWidget(), [`─ ▾ Progress · 0/1 complete ${"─".repeat(52)}`]);
   assert.doesNotMatch(current.renderWidget().join("\n"), /○ new/u);
   presentation.update(pending, { ...DEFAULT_PROGRESS_SETTINGS, enabled: false });
   presentation.show("expanded");
@@ -310,7 +339,7 @@ test("raw text and duplicate occurrence identities preserve independent item cho
   presentation.refresh();
   assert.equal(presentation.items()[0]?.mode, "compact");
   assert.equal(presentation.items().length, 2);
-  assert.match(current.renderWidget().join("\n"), /1 blocked.*1 hidden/u);
+  assert.equal(current.renderWidget()[0], `─ ▾ Progress · ⚠ 1 blocked · 0/3 complete · 1 removed ${"─".repeat(26)}`);
   // Status changes preserve view choices, but invalidate a revision-bound handle.
   presentation.update([{ text: "same", status: "completed" }, ...steps.slice(1)], DEFAULT_PROGRESS_SETTINGS);
   assert.equal(handle?.remove(), false);
@@ -512,13 +541,21 @@ for (const rows of [0, 1, 2, 3, 4, 8, 12, 36, 100, Number.NaN, Number.POSITIVE_I
       for (const width of [0, 1, 2, 10, 80]) {
         const lines = current.renderWidget(width);
         assert.ok(lines.length <= (Number.isFinite(rows) ? rows : 12));
-        if (rows < 2 || mode === "hidden") assert.deepEqual(lines, []);
+        if (rows < 1 || mode === "hidden") assert.deepEqual(lines, []);
+        else {
+          assert.ok(lines.length > 0);
+          if (rows === 1) assert.equal(lines.length, 1);
+          if (width === 80) assert.match(lines[0] ?? "", /^─ ▾ Progress · ⚠ 1 blocked · 0\/20 complete ─+$/u);
+        }
         for (const line of lines) assert.ok(visibleWidth(line) <= width);
       }
     }
     presentation.show("default");
     presentation.update(complete, DEFAULT_PROGRESS_SETTINGS, true);
-    assert.equal(current.renderWidget().length, rows < 2 ? 0 : 2);
+    assert.deepEqual(
+      current.renderWidget(),
+      rows < 1 ? [] : [`─ ▾ Progress · ✓ 1/1 steps completed ${"─".repeat(43)}`],
+    );
     presentation.dispose();
   });
 }

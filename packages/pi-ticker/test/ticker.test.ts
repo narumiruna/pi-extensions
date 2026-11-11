@@ -168,7 +168,8 @@ test("mounts the Kit widget with callback themes and keeps publication snapshots
   if (typeof loadingFactory !== "function") throw new Error("Missing loading widget");
   const loadingWidget = loadingFactory(undefined as never, identityTheme);
   const loadingFrame = loadingWidget.render(80);
-  assert.match(loadingFrame.join("\n"), /updating…/);
+  assert.match(loadingFrame[0] ?? "", /Ticker · Updating…/u);
+  assert.doesNotMatch(loadingFrame.slice(1).join("\n"), /Stocks|Updating/u);
 
   await vi.advanceTimersByTimeAsync(0);
   const publication = current.widgets.at(-1);
@@ -189,13 +190,14 @@ test("mounts the Kit widget with callback themes and keeps publication snapshots
   assert.ok(widget instanceof EditorStatusWidget);
   const frame = widget.render(80);
   const plainFrame = frame.map(stripTerminalSequences);
-  assert.equal(plainFrame[0], `─ ▾ Ticker ${"─".repeat(69)}`);
+  assert.ok(plainFrame[0]?.includes(`Ticker · Updated ${new Date(Date.now()).toLocaleTimeString()}`));
+  assert.doesNotMatch(plainFrame.slice(1).join("\n"), /Stocks|Updated/u);
   assert.ok(calls.some(([role]) => role === "muted"));
   assert.ok(calls.some(([role]) => role === "accent"));
   assert.ok(calls.some(([role]) => role === "text"));
   assert.ok(calls.some(([role]) => role === "success"));
   assert.ok(calls.some(([role]) => role === "dim"));
-  assert.ok(calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(69)));
+  assert.ok(calls.some(([role, text]) => role === "borderMuted" && text.length > 0 && /^─+$/u.test(text)));
   assert.match(plainFrame.join("\n"), /NVDA \$110\.00/);
 
   color = "\u001b[36m";
@@ -221,6 +223,7 @@ test("mounts the Kit widget with callback themes and keeps publication snapshots
 
 function clickWidget(component: Component, event: TuiMouseEvent) {
   component.handleMouse?.({ ...event, type: "press" });
+  component.render(event.width);
   component.handleMouse?.({ ...event, type: "release" });
   return component.handleMouse?.({ ...event, type: "click" });
 }
@@ -261,14 +264,37 @@ test("whole-body blank-column clicks retain collapse through polling and restore
     const response = await successfulResponse(input);
     return new Response((await response.text()).replace('"regularMarketPrice":110', '"regularMarketPrice":120'));
   });
-  await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+  vi.advanceTimersByTime(POLL_INTERVAL_MS);
+  const loading = mount();
+  assert.equal(loading.render(100).length, 1);
+  assert.match(loading.render(100)[0] ?? "", /▸ Ticker · Updating…/u);
+  loading.dispose?.();
+  await vi.advanceTimersByTimeAsync(0);
   const updated = mount();
   assert.equal(updated.render(100).length, 1);
-  assert.match(updated.render(100)[0] ?? "", /▸ Ticker/u);
+  assert.ok(updated.render(100)[0]?.includes(`▸ Ticker · Updated ${new Date(Date.now()).toLocaleTimeString()}`));
+  assert.doesNotMatch(updated.render(100)[0] ?? "", /Updating|NVDA/u);
   const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(100).length };
   assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
   assert.match(updated.render(100).join("\n"), /NVDA \$120\.00/u);
-  clickWidget(updated, { ...collapsed, height: updated.render(100).length });
+  const narrow = updated.render(16);
+  assert.ok(narrow.length > lines.length, "narrow quotes have more body rows");
+  assert.deepEqual(
+    clickWidget(updated, {
+      ...event,
+      x: 15,
+      screenX: 15,
+      width: 16,
+      y: narrow.length - 1,
+      screenY: narrow.length - 1,
+      height: narrow.length,
+    }),
+    { handled: true, render: true },
+  );
+  assert.equal(updated.render(16).length, 1);
+  updated.dispose?.();
+  updated.dispose?.();
+  assert.equal(clickWidget(updated, collapsed), undefined);
   await harness.command.handler("refresh", current.ctx);
   await vi.advanceTimersByTimeAsync(0);
   const refreshed = mount();
@@ -448,7 +474,7 @@ test("keeps completed quotes when another symbol reaches the shared timeout", as
   const frame = render(current.widgets.at(-1))?.join("\n") ?? "";
   assert.match(frame, /NVDA \$110\.00/);
   assert.match(frame, /AAPL unavailable/);
-  assert.match(frame, /updated/);
+  assert.match(frame, /Ticker · Updated /u);
   await harness.emit("session_shutdown", current.ctx);
 });
 
@@ -463,14 +489,14 @@ test("keeps the last successful update time when every refresh request fails", a
   await harness.emit("session_start", current.ctx);
   await vi.waitFor(() => assert.equal(fetchMock.mock.calls.length, 1));
   await vi.waitFor(() => assert.match(render(current.widgets.at(-1))?.join("\n") ?? "", /NVDA \$110\.00/));
-  const successfulHeading = render(current.widgets.at(-1))?.find((line) => line.includes("updated"));
+  const successfulHeading = render(current.widgets.at(-1))?.[0];
   assert.ok(successfulHeading);
 
   now.mockReturnValue(1_700_000_060_000);
   fetchMock.mockImplementation(async () => new Response("unavailable", { status: 503 }));
   await harness.command.handler("refresh", current.ctx);
   await vi.waitFor(() => assert.match(render(current.widgets.at(-1))?.join("\n") ?? "", /NVDA .* stale/));
-  const failedHeading = render(current.widgets.at(-1))?.find((line) => line.includes("updated"));
+  const failedHeading = render(current.widgets.at(-1))?.[0];
   assert.equal(failedHeading, successfulHeading);
   await harness.emit("session_shutdown", current.ctx);
 });
@@ -510,15 +536,17 @@ test("uses plain RPC widgets and rejects commands without a UI", async () => {
   await harness.emit("session_shutdown", rpc.ctx);
 
   fetchMock.mockClear();
-  const json = await createContext("json");
-  await harness.emit("session_start", json.ctx);
-  assert.equal(fetchMock.mock.calls.length, 0);
-  assert.equal(json.widgets.length, 0);
-  await assert.rejects(harness.command.handler("help", json.ctx), /requires TUI or RPC mode/);
-  await assert.rejects(harness.command.handler("NVDA", json.ctx), /requires TUI or RPC mode/);
-  assert.equal(json.notifications.length, 0);
-  await assert.rejects(readFile(join(json.cwd, SETTINGS_FILE_NAME)), { code: "ENOENT" });
-  await harness.emit("session_shutdown", json.ctx);
+  for (const mode of ["print", "json"] as const) {
+    const context = await createContext(mode);
+    await harness.emit("session_start", context.ctx);
+    assert.equal(fetchMock.mock.calls.length, 0);
+    assert.equal(context.widgets.length, 0);
+    await assert.rejects(harness.command.handler("help", context.ctx), /requires TUI or RPC mode/);
+    await assert.rejects(harness.command.handler("NVDA", context.ctx), /requires TUI or RPC mode/);
+    assert.equal(context.notifications.length, 0);
+    await assert.rejects(readFile(join(context.cwd, SETTINGS_FILE_NAME)), { code: "ENOENT" });
+    await harness.emit("session_shutdown", context.ctx);
+  }
 });
 
 test("waits for queued saves before a replacement session loads settings", async () => {

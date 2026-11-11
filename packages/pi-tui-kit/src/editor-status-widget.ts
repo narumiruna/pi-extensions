@@ -19,6 +19,8 @@ export interface EditorStatusWidgetOptions {
   theme: Pick<Theme, "fg">;
   /** A name enables the labeled divider and whole-widget collapse control. */
   name?: string;
+  /** Short, unstyled divider text; a getter can supply current owner state. */
+  summary?: string;
   /** Optional owner-local state shared by successive mounts, never by unrelated widgets. */
   state?: EditorStatusWidgetState;
   /** Render extension-owned body rows for the normalized terminal width. */
@@ -79,7 +81,12 @@ export class EditorStatusWidget implements Component {
     if (this.disposed) return [];
     // A body callback can change disclosure. Build the label and visible body
     // from the current state, not the state before that callback.
-    this.ruleOptions.label = this.name ? `${this.collapsed ? "▸" : "▾"} ${this.name}` : undefined;
+    const summaryVersion = this.invalidation;
+    const summary = this.name ? sanitizeTerminalText(this.options.summary ?? "").trim() : "";
+    if (this.disposed || this.invalidation !== summaryVersion) return [];
+    this.ruleOptions.label = this.name
+      ? `${this.collapsed ? "▸" : "▾"} ${this.name}${summary ? ` · ${summary}` : ""}`
+      : undefined;
     const visibleBody = this.collapsed ? [] : body;
     const version = this.invalidation;
     const lines = [

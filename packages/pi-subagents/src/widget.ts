@@ -17,6 +17,7 @@ import {
   renderSubagentWidgetSnapshot,
   type SubagentWidgetSnapshot,
   subagentWidgetRowBudget,
+  subagentWidgetSummary,
 } from "./widget-renderer.js";
 
 export { renderSubagentWidget } from "./widget-renderer.js";
@@ -178,8 +179,9 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
           name: "Subagents",
           context: ctx,
           isCurrent,
+          summary: (snapshot, _width, rows) => subagentWidgetSummary(snapshot, subagentWidgetRowBudget(rows)),
           render: (snapshot, theme, width, rows) =>
-            renderSubagentWidgetSnapshot(snapshot, theme, width, subagentWidgetRowBudget(rows)),
+            renderSubagentWidgetSnapshot(snapshot, theme, width, subagentWidgetRowBudget(rows), false),
         });
         // The owner records public preparation/run hooks while settings load.
         // General busy state also includes navigation and manual compaction.

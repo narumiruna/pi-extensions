@@ -18,7 +18,11 @@ type WidgetRecord = [string, string[] | WidgetFactory | undefined, { placement: 
 
 const divider = (width: number) =>
   new HorizontalRule({ label: "▾ Active tools", labelAlignment: "left" }).render(width)[0];
-const DIVIDER = `─ ▾ Active tools ${"─".repeat(63)}`;
+const namedDivider = (count: number, width = 80, collapsed = false) =>
+  new HorizontalRule({
+    label: `${collapsed ? "▸" : "▾"} Active tools · ${count} available`,
+    labelAlignment: "left",
+  }).render(width)[0];
 const IDENTITY_THEME = {
   fg: (_role: string, text: string) => text,
 } as unknown as Theme;
@@ -94,7 +98,7 @@ test("stays off by default and can start, refresh, and stop in the owned session
   harness.controller.setEnabled(current.ctx, true);
   assert.deepEqual(renderWidgetRecord(current.widgets.at(-1)), [
     ACTIVE_TOOL_WIDGET_KEY,
-    [DIVIDER, "Tools (2)", "Built-in (2): read · bash"],
+    [namedDivider(2), "Built-in (2): read · bash"],
     { placement: "aboveEditor" },
   ]);
 
@@ -102,7 +106,7 @@ test("stays off by default and can start, refresh, and stop in the owned session
   await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS);
   assert.deepEqual(renderWidgetRecord(current.widgets.at(-1)), [
     ACTIVE_TOOL_WIDGET_KEY,
-    [DIVIDER, "Tools (3)", "Built-in (3): read · edit · write"],
+    [namedDivider(3), "Built-in (3): read · edit · write"],
     { placement: "aboveEditor" },
   ]);
 
@@ -146,7 +150,7 @@ test("retains Active tools disclosure through polling, empty tools, and enable c
   const previous = mountWidget(current.widgets.at(-1));
   const height = previous.render(80).length;
   assert.deepEqual(widgetClick(previous, 0, 1, height), { handled: true, render: true });
-  assert.deepEqual(previous.render(80), [`─ ▸ Active tools ${"─".repeat(63)}`]);
+  assert.deepEqual(previous.render(80), [namedDivider(1, 80, true)]);
   previous.dispose?.();
 
   harness.setActiveTools([]);
@@ -155,7 +159,7 @@ test("retains Active tools disclosure through polling, empty tools, and enable c
   harness.setActiveTools(["read", "bash"]);
   await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS);
   let component = mountWidget(current.widgets.at(-1));
-  assert.equal(component.render(80).length, 1);
+  assert.deepEqual(component.render(80), [namedDivider(2, 80, true)]);
   assert.equal(widgetClick(previous, 0, 1, height), undefined);
   component.dispose?.();
   harness.controller.setEnabled(current.ctx, false);
@@ -167,12 +171,17 @@ test("retains Active tools disclosure through polling, empty tools, and enable c
   harness.controller.expand(current.ctx);
   component = mountWidget(current.widgets.at(-1));
   const expanded = component.render(80);
-  assert.deepEqual(expanded, [DIVIDER, "Tools (2)", "Built-in (2): read · bash"]);
-  // The blank right side of a short body row is inside the click target.
+  assert.deepEqual(expanded, [namedDivider(2), "Built-in (2): read · bash"]);
+  assert.equal(expanded.length, 2);
+  assert.equal(widgetClick(component, 79, 2, expanded.length), undefined, "the removed title row is not a target");
+  // The blank right side of the only body row is inside the click target.
   assert.deepEqual(widgetClick(component, 79, 1, expanded.length), { handled: true, render: true });
-  assert.equal(component.render(80).length, 1);
+  assert.deepEqual(component.render(80), [namedDivider(2, 80, true)]);
+  assert.deepEqual(widgetClick(component, 0, 0, 1), { handled: true, render: true });
+  assert.deepEqual(component.render(80), expanded);
   harness.controller.shutdown(current.ctx);
   component.dispose?.();
+  assert.equal(widgetClick(component, 0, 0, 1), undefined);
   assert.equal(vi.getTimerCount(), 0);
 });
 
@@ -188,7 +197,7 @@ test("resets Active tools disclosure on session start and isolates stale input a
   const current = createContext();
   harness.controller.start(current.ctx, true);
   const component = mountWidget(current.widgets.at(-1));
-  assert.equal(component.render(80)[0], DIVIDER);
+  assert.equal(component.render(80)[0], namedDivider(1));
   assert.equal(widgetClick(oldComponent, 79, 1, height), undefined);
   widgetClick(component, 79, 1, component.render(80).length);
   harness.controller.shutdown(previous.ctx);
@@ -196,7 +205,7 @@ test("resets Active tools disclosure on session start and isolates stale input a
   component.dispose?.();
   harness.controller.shutdown(current.ctx);
   harness.controller.start(current.ctx, true);
-  assert.equal(mountWidget(current.widgets.at(-1)).render(80)[0], DIVIDER);
+  assert.equal(mountWidget(current.widgets.at(-1)).render(80)[0], namedDivider(1));
   harness.controller.shutdown(current.ctx);
 });
 
@@ -227,6 +236,41 @@ test("keeps RPC widget content as plain strings and does nothing without UI", ()
   harness.controller.start(print.ctx, true);
   assert.deepEqual(print.widgets, []);
   harness.controller.shutdown(print.ctx);
+});
+
+test.each(["tui", "rpc"] as const)("keeps callable counts and grouped exposure rows exact in %s", (mode) => {
+  const harness = createHarness(["read", "read", "hidden"]);
+  const sourceInfo = {
+    path: "/extensions/example/index.ts",
+    source: "local",
+    scope: "user",
+    origin: "top-level",
+  } as const;
+  harness.setConfiguredTools([
+    toolInfo("read"),
+    toolInfo("hidden", { exposure: "hidden" }),
+    toolInfo("inactive", { exposure: "model-only", sourceInfo }),
+    toolInfo("deferred", { exposure: "deferred", sourceInfo }),
+    toolInfo("callable", { exposure: "codemode", sourceInfo }),
+  ]);
+  const current = createContext(mode);
+  const rows = ["Built-in (1): read", "Extension (2): example (2) [codemode: 1] [deferred: 1]"];
+  try {
+    harness.controller.start(current.ctx, true);
+    assert.deepEqual(renderWidgetRecord(current.widgets.at(-1), 120)?.[1], [
+      mode === "tui" ? namedDivider(3, 120) : "Tools (3)",
+      ...rows,
+    ]);
+    if (mode === "tui") {
+      const component = mountWidget(current.widgets.at(-1));
+      assert.equal(component.render(80).length, 3);
+      assert.deepEqual(widgetClick(component, 79, 2, 3), { handled: true, render: true });
+      assert.deepEqual(component.render(80), [namedDivider(3, 80, true)]);
+      component.dispose?.();
+    }
+  } finally {
+    harness.controller.shutdown(current.ctx);
+  }
 });
 
 test("renders a muted divider and wraps every safe tool name within the available width", () => {
@@ -280,14 +324,14 @@ test("uses the callback theme after resize and invalidation without republishing
   const component = factory(undefined as never, { fg } as unknown as Theme);
   for (const width of [0, 1, 40, 80, 12]) {
     const lines = component.render(width);
-    assert.equal(stripTerminalSequences(lines[0] ?? ""), stripTerminalSequences(divider(width) ?? ""));
+    assert.equal(stripTerminalSequences(lines[0] ?? ""), stripTerminalSequences(namedDivider(2, width) ?? ""));
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    if (width === 0) assert.deepEqual(lines, ["", "", ""]);
+    if (width === 0) assert.deepEqual(lines, ["", ""]);
     else if (width > 2) assert.ok(fg.mock.calls.some(([role]) => role === "borderMuted"));
   }
   color = "\u001b[32m";
   component.invalidate();
-  assert.equal(stripTerminalSequences(component.render(80)[0] ?? ""), DIVIDER);
+  assert.equal(stripTerminalSequences(component.render(80)[0] ?? ""), namedDivider(2));
   assert.ok(component.render(80)[0]?.includes(color));
   assert.ok(!component.render(80)[0]?.includes("\u001b[31m"));
   await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS * 2);

@@ -169,6 +169,8 @@ A later summary epoch uses only canonical Progress context for the then-current 
 ## 🖥️ Widget presentation
 
 In TUI mode, the widget appears above the editor with one full-width themed separator named **Progress**.
+The divider includes current counts, such as `Progress · 1/4 complete`, with blocked state before optional counts.
+Counts stay visible when collapsed. The body contains step rows without another title; compact and completion views can use only the divider.
 In fullscreen TUI mode, click anywhere in the widget, including blank columns, to collapse it to that named separator. Click the separator to restore the latest content without moving keyboard focus.
 Disclosure is local to this widget and survives updates, transient hide/show, and host remounts. Selecting a visible Widget view restores disclosure; session start and tree navigation reset it.
 Collapse does not change saved progress, settings, item views, pins, automatic rules, or completion retention.
@@ -178,14 +180,14 @@ RPC publishes string-line snapshots at 80 columns with a 36-row terminal budget 
 Print and JSON retain structured tool behavior without creating a widget or completion timer.
 
 The total row budget includes the separator. It uses one third of terminal height, bounded between four and twelve rows, but never exceeds terminal height.
-With fewer than two rows, the widget renders nothing. All views, including detailed and pinned views, obey this limit.
+With one available row, TUI shows only the named divider and summary; with no rows it renders nothing. RPC keeps its two-row minimum. All views, including detailed and pinned views, obey the row limit.
 When detail does not fit, active and blocked work has priority; the summary retains blocked counts and reports hidden or omitted work.
 This is a local limit, not a measurement of space left by other widgets.
 
 ### Manual views and task items
 
 Use Widget view in `/progress` to select detailed, compact, hidden, or the default configured view.
-Compact shows saved completion, active, blocked, and hidden-item counts instead of a sliced detail list.
+Compact shows saved completion, active, blocked, and removed-item counts in the TUI divider instead of a sliced detail list. RPC retains its standalone summary row.
 Manual view choices cancel automatic compaction. Manual hide stays hidden across tool updates until you show it again or reset the session/branch view.
 In contrast, Clear widget and `/progress clear` are transient: even an identical tool update can show saved progress again.
 The persistent `enabled: false` setting takes priority over all session-local controls.
@@ -252,7 +254,7 @@ On Pi 1.5 or later, the inline settings screen reports `question` waiting status
 Edit `blockedStyle` in the file; it has no settings-screen rows. Each field is optional. For example, `"blockedStyle": { "icon": "◆", "color": "thinkingHigh" }` uses a diamond and the current theme's `thinkingHigh` color.
 `icon` must be one safe grapheme with a Pi-calculated width of one terminal cell. Empty strings, whitespace, terminal controls, standalone combining marks, and wider icons such as `⚠️` are not accepted. Terminal fonts can still render glyphs differently.
 `color` must name a foreground theme role, not a background role, hex value, or ANSI sequence. The role is resolved against the current theme when rendering.
-The icon applies to blocked rows and all blocked-count summaries. The color applies to blocked rows and warning-styled summaries; existing muted aggregate headers remain muted. Other statuses and default rendering stay unchanged.
+The icon applies to blocked rows and all blocked-count summaries. The color applies to blocked rows and standalone warning-styled summaries. Named divider text uses the standard muted label role. Other statuses stay unchanged.
 Invalid style fields fall back independently and report a warning at session start in TUI and RPC modes; other valid settings remain active. Loading does not repair or rewrite the source values.
 
 Manual file changes take effect at the next session start, including `/reload`.

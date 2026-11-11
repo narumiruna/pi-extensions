@@ -49,6 +49,9 @@ When the available width cannot preserve the requested padding, the component re
 
 Use `EditorStatusWidget` as a width-safe frame for status or progress rows near Pi's editor.
 Supply `name` to put a sanitized name in the full-width `borderMuted` divider: `─ ▾ Progress ───`.
+Supply short, unstyled `summary` text to show current counts or state on the same row: `─ ▾ Progress · 1/4 complete ───`.
+A `summary` getter can read current owner state. The summary is sanitized at render time and remains visible when collapsed.
+Keep details and safety messages in the body; do not repeat the widget name or summary there.
 In fullscreen mode, an unmodified primary-button click anywhere in the widget, including body rows and blank columns, collapses it to one named divider: `─ ▸ Progress ───`.
 Click anywhere on that divider to restore the latest body. The control does not take keyboard focus.
 Press, drag, and release remain native for text selection and copy. A click needs a prior eligible press with matching local and screen geometry.
@@ -73,6 +76,7 @@ export function publishProgress(ctx: ExtensionContext, lines: readonly string[],
     (_tui, theme) =>
       new EditorStatusWidget({
         name: "Progress",
+        summary: "1/4 complete",
         state,
         theme,
         renderBody: () => snapshot.map((line) => theme.fg("muted", line)),

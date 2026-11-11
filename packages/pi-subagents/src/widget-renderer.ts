@@ -25,15 +25,46 @@ export function subagentWidgetRowBudget(rows: number): number {
     : 0;
 }
 
+export function subagentWidgetSummary(snapshot: SubagentWidgetSnapshot, maxRows: number): string {
+  const { jobs, items, mode } = snapshot;
+  const budget = normalizeRowBudget(maxRows);
+  if (!isVisible(snapshot) || budget === 0) return "";
+  // Compact mode intentionally has no job rows; only removed jobs are omitted.
+  const shown = mode === "compact" ? items.length : Math.min(items.length, budget - 1);
+  const omitted = jobs.length - shown;
+  const removed = jobs.length - items.length;
+  const running = jobs.filter((job) => job.state === "running").length;
+  const counts = `${running} running · ${jobs.length - running} queued`;
+  return `${counts}${omitted > 0 ? ` · ${omitted} not shown${removed > 0 ? ` (${removed} removed)` : ""}` : ""}`;
+}
+
+function normalizeRowBudget(maxRows: number): number {
+  return Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : 0;
+}
+
+function isVisible({ jobs, items, settings, mode }: SubagentWidgetSnapshot): boolean {
+  return settings.showWidget && mode !== "hidden" && jobs.length > 0 && items.length > 0;
+}
+
 export function renderSubagentWidgetSnapshot(
   snapshot: SubagentWidgetSnapshot,
   theme: Theme,
   width: number,
   maxRows: number,
+  includeHeader = true,
 ): string[] {
   const { jobs, items, settings, mode } = snapshot;
-  const budget = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : 0;
-  if (!settings.showWidget || mode === "hidden" || jobs.length === 0 || items.length === 0 || budget < 2) return [];
+  const budget = normalizeRowBudget(maxRows);
+  if (!isVisible(snapshot) || budget < (includeHeader ? 2 : 1)) return [];
+  // Named TUI publishers put the counts in the divider, not in a body heading.
+  if (!includeHeader) {
+    const shown = mode === "compact" ? [] : items.slice(0, budget - 1);
+    return new EditorStatusWidget({
+      theme,
+      renderBody: () =>
+        shown.map(({ value, mode: itemMode }) => renderJob(value, theme, settings, itemMode === "compact")),
+    }).render(width);
+  }
   const running = jobs.filter((job) => job.state === "running").length;
   const counts = `Subagents · ${jobs.length} active · ${running} running · ${jobs.length - running} queued`;
   const removed = jobs.length - items.length;

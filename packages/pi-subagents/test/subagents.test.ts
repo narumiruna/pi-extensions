@@ -396,13 +396,13 @@ test("shows task-first defaults and keeps spawn-time thinking comparisons stable
   assert.equal(typeof factory, "function");
   const component = factory?.({ terminal: { rows: 36 }, requestRender() {} }, identityTheme());
   const lines = component?.render(120) ?? [];
-  assert.equal(lines[0], `─ ▾ Subagents ${"─".repeat(106)}`);
-  assert.equal(lines[1], "Subagents · 2 active");
+  assert.match(lines[0] ?? "", /^─ ▾ Subagents · 2 running · 0 queued ─+$/u);
+  assert.equal(visibleWidth(lines[0] ?? ""), 120);
   assert.equal(first.details.state, "queued");
   assert.equal(second.details.state, "queued");
-  assert.equal(lines[2], "▶ First · thinking: off · 1m 5s / 2m");
-  assert.equal(lines[3], "▶ Second · 0s");
-  assert.doesNotMatch(lines.join("\n"), /job_|tools:|running|no timeout/u);
+  assert.equal(lines[1], "▶ First · thinking: off · 1m 5s / 2m");
+  assert.equal(lines[2], "▶ Second · 0s");
+  assert.doesNotMatch(lines.slice(1).join("\n"), /job_|tools:|running|no timeout/u);
   (context.ctx as ExtensionContext).thinkingLevel = "low";
   mock.rawPi.setThinkingLevel("max");
   now = 66_000;
@@ -413,8 +413,8 @@ test("shows task-first defaults and keeps spawn-time thinking comparisons stable
     | undefined;
   assert.equal(refreshedFactory, factory, "elapsed updates retain the visible mount");
   const refreshedLines = component?.render(120) ?? [];
-  assert.equal(refreshedLines[2], "▶ First · thinking: off · 1m 6s / 2m");
-  assert.equal(refreshedLines[3], "▶ Second · 1s");
+  assert.equal(refreshedLines[1], "▶ First · thinking: off · 1m 6s / 2m");
+  assert.equal(refreshedLines[2], "▶ Second · 1s");
   assert.doesNotMatch(refreshedLines.join("\n"), /thinking: low|thinking: max/u);
   for (const line of component?.render(24) ?? []) {
     assert.ok(visibleWidth(line) <= 24);
@@ -458,8 +458,8 @@ test("hides the inherited Pi fallback thinking level without tracking later pare
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.ok(factory);
   const lines = factory({ terminal: { rows: 36 }, requestRender() {} }, identityTheme()).render(200);
-  assert.match(lines[2] ?? "", /^▶ Reason carefully · \d+s$/u);
-  assert.match(lines[3] ?? "", /^▶ New parent level · \d+s$/u);
+  assert.match(lines[1] ?? "", /^▶ Reason carefully · \d+s$/u);
+  assert.match(lines[2] ?? "", /^▶ New parent level · \d+s$/u);
   assert.doesNotMatch(lines.join("\n"), /thinking:/u);
   assert.deepEqual(
     requests.map(({ thinkingLevel }) => thinkingLevel),
@@ -495,7 +495,7 @@ test.each(SUBAGENT_THINKING_LEVELS)("hides inherited and explicit default thinki
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as (_tui: unknown, theme: Theme) => Component;
   const component = factory({ terminal: { rows: 36 }, requestRender() {} }, identityTheme());
   const before = component.render(200);
-  assert.deepEqual(before.slice(2), [
+  assert.deepEqual(before.slice(1), [
     "▶ Inherited · 0s",
     "▶ Explicit default · 0s",
     `▶ Different level · thinking: ${different} · 0s`,
@@ -505,8 +505,8 @@ test.each(SUBAGENT_THINKING_LEVELS)("hides inherited and explicit default thinki
   mock.rawPi.setThinkingLevel(different);
   await spawnJob(mock, context, "New default");
   const after = component.render(200);
-  assert.deepEqual(after.slice(2, 5), before.slice(2));
-  assert.equal(after[5], "▶ New default · 0s");
+  assert.deepEqual(after.slice(1, 4), before.slice(1));
+  assert.equal(after[4], "▶ New default · 0s");
   assert.deepEqual(
     requests.map((request) => request.thinkingLevel),
     [level, level, different, different],

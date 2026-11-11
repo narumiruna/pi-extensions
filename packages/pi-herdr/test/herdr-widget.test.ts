@@ -15,6 +15,7 @@ import {
   createHerdrWidget,
   HerdrWidgetModel,
   herdrWidgetFingerprint,
+  herdrWidgetSummary,
   MAX_HERDR_WIDGET_AGENTS,
 } from "../src/herdr-widget.js";
 
@@ -311,6 +312,57 @@ test("renders Herdr's distinct static symbol and semantic theme role for every a
     "· unknown": "dim",
   });
 });
+
+test.each([
+  { state: "blocked", symbol: "×", role: "error" },
+  { state: "done", symbol: "✓", role: "accent" },
+  { state: "working", symbol: "◐", role: "warning" },
+  { state: "idle", symbol: "○", role: "success" },
+  { state: "unknown", symbol: "·", role: "dim" },
+] as const)(
+  "named body starts with the $state row and retains overflow within narrow bounds",
+  ({ state, symbol, role }) => {
+    const roles = new Map<string, string>();
+    const theme = {
+      bold: (text: string) => text,
+      fg: (name: string, text: string) => {
+        roles.set(text, name);
+        return text;
+      },
+    } as Theme;
+    const snapshot = {
+      totalAgents: 7,
+      hiddenAgents: 2,
+      rows: Array.from({ length: MAX_HERDR_WIDGET_AGENTS }, (_, index) => ({
+        agent: `agent_${index}`,
+        pane: `p${index}`,
+        paneId: `w1:p${index}`,
+        space: "w1",
+        state,
+        stateLabel: state,
+      })),
+    };
+    const original = structuredClone(snapshot);
+    const named = createHerdrWidget(snapshot, theme, false);
+    const unnamed = createHerdrWidget(snapshot, theme);
+    assert.equal(herdrWidgetSummary(snapshot), "7 sibling agents");
+    assert.equal(herdrWidgetSummary({ ...snapshot, totalAgents: 1 }), "1 sibling agent");
+    assert.equal(unnamed.render(200)[1], "Herdr · 7 sibling agents", "default standalone heading stays unchanged");
+    for (const width of [0, 1, 2, 12, 32, 80, 200]) {
+      const lines = named.render(width);
+      assert.equal(lines.length, MAX_HERDR_WIDGET_AGENTS + 2);
+      assert.equal(lines[0], "─".repeat(width));
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    }
+    const lines = named.render(200);
+    assert.equal(lines[1], `${symbol} ${state}  agent_0 · p0 · w1`);
+    assert.equal(lines.at(-1), "+2 more");
+    assert.doesNotMatch(lines.slice(1).join("\n"), /Herdr|sibling agents/u);
+    assert.equal(roles.get(`${symbol} ${state}`), role);
+    assert.equal(roles.get("+2 more"), "dim");
+    assert.deepEqual(snapshot, original);
+  },
+);
 
 test("sanitizes before sorting and renders terminal-width-safe themed rows", () => {
   const model = new HerdrWidgetModel();

@@ -12,6 +12,7 @@ import {
   createCacheSample,
   formatMonitorLines,
   type MonitorLine,
+  sanitizeDisplayLabel,
 } from "./metrics.js";
 
 export const COMMAND_NAME = "cache-hit-monitor";
@@ -198,15 +199,32 @@ function createCacheMonitorWidget(
   theme: Theme,
   state?: EditorStatusWidgetState,
 ): EditorStatusWidget {
+  const summary = view.latest
+    ? `${view.streaming ? "LIVE · " : ""}request #${view.requestNumber}`
+    : view.session.requestCount > 0
+      ? "aggregate usage only"
+      : "waiting for provider cache usage";
+  // Adapt structured report rows before styling or wrapping; RPC keeps the full report.
+  const report = formatMonitorLines(view);
+  const body: MonitorLine[] = view.latest
+    ? [
+        {
+          role: "title",
+          text: `${sanitizeDisplayLabel(view.latest.provider)}/${sanitizeDisplayLabel(view.latest.model)}`,
+        },
+        ...report.slice(1, -1),
+      ]
+    : view.session.requestCount > 0
+      ? report.slice(1)
+      : [{ role: "dim", text: "Cache usage is unknown until this provider reports cache activity." }];
   // Kit normalizes fractional and invalid widths before body wrapping.
   return new EditorStatusWidget({
     theme,
     name: "Cache hit monitor",
+    summary,
     state,
     renderBody: (width) =>
-      width === 0
-        ? formatMonitorLines(view).map(() => "")
-        : formatMonitorLines(view).flatMap((line) => wrapTextWithAnsi(styleLine(line, theme), width)),
+      width === 0 ? body.map(() => "") : body.flatMap((line) => wrapTextWithAnsi(styleLine(line, theme), width)),
   });
 }
 

@@ -12,8 +12,10 @@ import {
 
 export interface RenderProgressWidgetOptions {
   settings?: Readonly<ProgressSettings>;
+  /** Named TUI dividers own the header; standalone output keeps it by default. */
+  showHeader?: boolean;
   terminalRows?: number;
-  /** Total rows, including the separator. Fewer than two rows hide the frame. */
+  /** Total rows, including the divider; named summary-only output can use one row. */
   maxRows?: number;
   viewMode?: "default" | "expanded" | "compact" | "hidden";
   items?: readonly { value: ProgressStep; mode: "expanded" | "compact" }[];
@@ -37,22 +39,25 @@ export function renderProgressWidget(
 ): string[] {
   const renderWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
   const settings = options.settings ?? DEFAULT_PROGRESS_SETTINGS;
+  const showHeader = options.showHeader !== false;
   const maxRows =
     options.maxRows === undefined
       ? undefined
       : Number.isFinite(options.maxRows)
         ? Math.max(0, Math.floor(options.maxRows))
         : widgetRowBudget(options.terminalRows);
-  if (options.viewMode === "hidden" || (maxRows !== undefined && maxRows < 2)) return [];
+  if (options.viewMode === "hidden" || (maxRows !== undefined && maxRows < (showHeader ? 2 : 1))) return [];
   const items = options.items ?? steps.map((value) => ({ value, mode: "expanded" as const }));
   if (options.items && items.length === 0) return [];
   const configuredStyle = normalizeBlockedStyle(settings.blockedStyle);
   const blockedStyle = { icon: configuredStyle.icon, color: resolveBlockedColor(configuredStyle, theme) };
   const removed = steps.length - items.length;
-  if (options.viewMode === "compact") return renderCompactProgress(steps, removed, theme, renderWidth, blockedStyle);
+  if (options.viewMode === "compact")
+    return renderCompactProgress(steps, removed, theme, renderWidth, blockedStyle, showHeader);
   const presentationChanged = removed > 0 || items.some((item) => item.mode === "compact");
-  const header = renderHeader(steps, theme, renderWidth, settings.showProgress);
-  if (presentationChanged) header[1] = theme.fg("muted", progressSummary(steps, removed, blockedStyle.icon));
+  const header = renderHeader(steps, theme, renderWidth, settings.showProgress, showHeader);
+  if (showHeader && presentationChanged)
+    header[1] = theme.fg("muted", progressSummary(steps, removed, blockedStyle.icon));
   const rendered = items.map(({ value: step, mode }) => ({
     step,
     lines: renderStep(step, theme, renderWidth, blockedStyle, mode === "compact"),
@@ -85,26 +90,27 @@ export function renderProgressWidget(
   const omittedBlocked = rendered.some(
     ({ step, lines: detail }) => step.status === "blocked" && !lines.includes(detail[0] ?? ""),
   );
-  if (omittedBlocked && lines.length > 1)
+  if (showHeader && omittedBlocked && lines.length > 1)
     lines[1] = theme.fg(blockedStyle.color, progressSummary(steps, removed, blockedStyle.icon));
   if (maxRows !== undefined && lines.length > maxRows) {
     // Under a cap, keep attention work ahead of pending/completed detail and
     // reserve a truthful aggregate instead of silently slicing off blocked work.
-    if (maxRows === 2) return renderCompactProgress(steps, steps.length, theme, renderWidth, blockedStyle);
+    if (maxRows <= (showHeader ? 2 : 1))
+      return renderCompactProgress(steps, steps.length, theme, renderWidth, blockedStyle, showHeader);
     const priority = [...rendered].sort((a, b) => stepPriority(a.step) - stepPriority(b.step));
     const body: string[] = [];
     let shown = 0;
     for (const item of priority) {
       if (!settings.showCompleted && item.step.status === "completed") continue;
       if (settings.maxVisibleItems !== null && shown >= settings.maxVisibleItems) break;
-      const available = maxRows - 2 - body.length - 1;
+      const available = maxRows - 1 - (showHeader ? 1 : 0) - body.length - 1;
       if (available <= 0) break;
       body.push(...clipLines(item.lines, available, renderWidth));
       shown++;
     }
     lines = [
       header[0] ?? "",
-      theme.fg("muted", progressSummary(steps, steps.length - shown, blockedStyle.icon)),
+      ...(showHeader ? [theme.fg("muted", progressSummary(steps, steps.length - shown, blockedStyle.icon))] : []),
       ...body,
     ];
     if (body.length > 0 && steps.length > shown && lines.length < maxRows)
@@ -133,29 +139,57 @@ export function progressSummary(
   ].join(" · ");
 }
 
+export function progressDividerSummary(
+  steps: readonly ProgressStep[],
+  settings: Readonly<ProgressSettings>,
+  removed = 0,
+  compact = false,
+): string {
+  const blocked = steps.filter((step) => step.status === "blocked").length;
+  const completed = steps.filter((step) => step.status === "completed").length;
+  const active = steps.filter((step) => step.status === "in_progress").length;
+  const icon = normalizeBlockedStyle(settings.blockedStyle).icon;
+  return [
+    ...(blocked ? [`${icon} ${blocked} blocked`] : []),
+    ...(settings.showProgress || compact ? [`${completed}/${steps.length} complete`] : []),
+    ...(compact && active ? [`${active} active`] : []),
+    ...(removed ? [`${removed} removed`] : []),
+  ].join(" · ");
+}
+
 function renderCompactProgress(
   steps: readonly ProgressStep[],
   hidden: number,
   theme: Theme,
   width: number,
   blockedStyle: RenderedBlockedStyle,
+  showHeader: boolean,
 ): string[] {
   return new EditorStatusWidget({
     theme,
-    renderBody: () => [
-      theme.fg(
-        steps.some((step) => step.status === "blocked") ? blockedStyle.color : "muted",
-        progressSummary(steps, hidden, blockedStyle.icon),
-      ),
-    ],
+    renderBody: () =>
+      showHeader
+        ? [
+            theme.fg(
+              steps.some((step) => step.status === "blocked") ? blockedStyle.color : "muted",
+              progressSummary(steps, hidden, blockedStyle.icon),
+            ),
+          ]
+        : [],
   }).render(width);
 }
 
-export function renderCompletionSummary(total: number, theme: Theme, width: number, maxRows = 2): string[] {
-  if (Number.isFinite(maxRows) && maxRows < 2) return [];
+export function renderCompletionSummary(
+  total: number,
+  theme: Theme,
+  width: number,
+  maxRows = 2,
+  showBody = true,
+): string[] {
+  if (Number.isFinite(maxRows) && maxRows < (showBody ? 2 : 1)) return [];
   return new EditorStatusWidget({
     theme,
-    renderBody: () => [theme.fg("success", `✓ ${total}/${total} steps completed`)],
+    renderBody: () => (showBody ? [theme.fg("success", `✓ ${total}/${total} steps completed`)] : []),
   }).render(width);
 }
 
@@ -170,13 +204,20 @@ export function widgetRowBudget(terminalRows?: number): number {
   return Math.max(4, Math.min(12, Math.floor(rows / 3)));
 }
 
-function renderHeader(steps: readonly ProgressStep[], theme: Theme, width: number, showProgress: boolean): string[] {
+function renderHeader(
+  steps: readonly ProgressStep[],
+  theme: Theme,
+  width: number,
+  showProgress: boolean,
+  showHeader: boolean,
+): string[] {
   const completed = steps.filter((step) => step.status === "completed").length;
   return new EditorStatusWidget({
     theme,
-    renderBody: () => [
-      theme.fg("muted", showProgress ? `Progress · ${completed}/${steps.length} complete` : "Progress"),
-    ],
+    renderBody: () =>
+      showHeader
+        ? [theme.fg("muted", showProgress ? `Progress · ${completed}/${steps.length} complete` : "Progress")]
+        : [],
   }).render(width);
 }
 

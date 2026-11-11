@@ -41,14 +41,17 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
 
   const publish = (ctx: ExtensionContext): void => {
     if (!enabled || !ctx.hasUI || !ownsSession(ctx)) return;
-    const content = formatActiveToolWidget(pi.getActiveTools(), pi.getAllTools());
+    const presentation = summarizeActiveTools(pi.getActiveTools(), pi.getAllTools());
+    const content = presentation ? activeToolText(presentation) : undefined;
     const value = content?.join("\n");
     if (hasPublished && value === publishedValue) return;
-    if (content && ctx.mode === "tui") {
+    if (presentation && ctx.mode === "tui") {
       const state = widgetState;
-      ctx.ui.setWidget(ACTIVE_TOOL_WIDGET_KEY, (_tui, theme) => createActiveToolWidget(content, theme, state), {
-        placement: "aboveEditor",
-      });
+      ctx.ui.setWidget(
+        ACTIVE_TOOL_WIDGET_KEY,
+        (_tui, theme) => createActiveToolWidget(presentation.rows, theme, state, `${presentation.count} available`),
+        { placement: "aboveEditor" },
+      );
     } else {
       ctx.ui.setWidget(ACTIVE_TOOL_WIDGET_KEY, content, { placement: "aboveEditor" });
     }
@@ -114,10 +117,27 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
   };
 }
 
+interface ActiveToolPresentation {
+  count: number;
+  rows: string[];
+}
+
 export function formatActiveToolWidget(
   toolNames: Iterable<string>,
   configuredTools: readonly ToolInfo[],
 ): string[] | undefined {
+  const presentation = summarizeActiveTools(toolNames, configuredTools);
+  return presentation ? activeToolText(presentation) : undefined;
+}
+
+function activeToolText(presentation: ActiveToolPresentation): string[] {
+  return [`Tools (${presentation.count})`, ...presentation.rows];
+}
+
+function summarizeActiveTools(
+  toolNames: Iterable<string>,
+  configuredTools: readonly ToolInfo[],
+): ActiveToolPresentation | undefined {
   const metadata = new Map(configuredTools.map((tool) => [tool.name, tool]));
   const names = new Set(toolNames);
   for (const tool of configuredTools) {
@@ -160,27 +180,25 @@ export function formatActiveToolWidget(
   }
   const count = Object.values(groups).reduce((total, tools) => total + tools.length, 0);
   if (count === 0) return undefined;
-  return [
-    `Tools (${count})`,
-    ...Object.entries(groups).flatMap(([group, tools]) => {
-      const labels =
-        group === "MCP"
-          ? [...mcpNamespaces].map(([namespace, count]) => {
-              const label = namespace ? sanitizeToolName(namespace).replace(/^mcp__/, "") || "Other" : "Other";
-              return `${label} (${count})`;
-            })
-          : group === "Extension"
-            ? [...extensions.values()].map(({ label, count, codemode, deferred }) =>
-                [
-                  `${label} (${count})`,
-                  ...(codemode > 0 ? [`[codemode: ${codemode}]`] : []),
-                  ...(deferred > 0 ? [`[deferred: ${deferred}]`] : []),
-                ].join(" "),
-              )
-            : tools;
-      return tools.length > 0 ? [`${group} (${tools.length}): ${labels.join(" · ")}`] : [];
-    }),
-  ];
+  const rows = Object.entries(groups).flatMap(([group, tools]) => {
+    const labels =
+      group === "MCP"
+        ? [...mcpNamespaces].map(([namespace, count]) => {
+            const label = namespace ? sanitizeToolName(namespace).replace(/^mcp__/, "") || "Other" : "Other";
+            return `${label} (${count})`;
+          })
+        : group === "Extension"
+          ? [...extensions.values()].map(({ label, count, codemode, deferred }) =>
+              [
+                `${label} (${count})`,
+                ...(codemode > 0 ? [`[codemode: ${codemode}]`] : []),
+                ...(deferred > 0 ? [`[deferred: ${deferred}]`] : []),
+              ].join(" "),
+            )
+          : tools;
+    return tools.length > 0 ? [`${group} (${tools.length}): ${labels.join(" · ")}`] : [];
+  });
+  return { count, rows };
 }
 
 function extensionLabel(source: SourceInfo | undefined): string {
@@ -209,11 +227,13 @@ function createActiveToolWidget(
   lines: readonly string[],
   theme: Theme,
   state?: EditorStatusWidgetState,
+  summary?: string,
 ): EditorStatusWidget {
   // Kit normalizes fractional and invalid widths and clips wrapped glyphs wider than the row.
   return new EditorStatusWidget({
     theme,
     name: "Active tools",
+    summary,
     state,
     renderBody: (width) => (width === 0 ? lines.map(() => "") : lines.flatMap((line) => wrapTextWithAnsi(line, width))),
   });

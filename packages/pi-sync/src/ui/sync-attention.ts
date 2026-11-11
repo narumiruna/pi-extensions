@@ -107,10 +107,7 @@ export function createSyncAttentionController(): SyncAttentionController {
       }
       const presentation = state
         ? attentionPresentation(state.decision)
-        : {
-            status: "sync ⇕",
-            lines: observationLines(observation as StartupObservation),
-          };
+        : observationPresentation(observation as StartupObservation);
       if (ctx.mode !== "tui") {
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         setSyncStatus(ctx, presentation.status, { activity: "review" });
@@ -130,6 +127,7 @@ export function createSyncAttentionController(): SyncAttentionController {
           new EditorStatusWidget({
             theme,
             name: "Sync",
+            summary: "Needs review",
             state: presentationState,
             renderBody: (width) =>
               presentation.lines.map((line, index) =>
@@ -144,13 +142,27 @@ export function createSyncAttentionController(): SyncAttentionController {
 function attentionPresentation(decision: RemoteSelectionDecision) {
   const setupName = safeTerminalText(decision.setupName);
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
-  const difference =
-    comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
-      ? "Only list order differs"
-      : `Remote ${comparison.remoteOnly.length} · Device ${comparison.localOnly.length}`;
   return {
     status: "sync ⇕",
-    lines: [`Pi Sync needs review · ${setupName}`, difference, "No changes · Run /sync to review"],
+    lines: [`Setup: ${setupName}`, selectionDifference(comparison), "No transfer performed · Run /sync to review"],
+  };
+}
+
+function selectionDifference(comparison: { remoteOnly: readonly string[]; localOnly: readonly string[] }) {
+  return comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+    ? "Selection: only list order differs"
+    : `Selection: ${comparison.remoteOnly.length} remote-only · ${comparison.localOnly.length} device-only`;
+}
+
+function observationPresentation(observation: StartupObservation) {
+  const selection = observation.inspection.selectionState;
+  return {
+    status: "sync ⇕",
+    lines: [
+      `Setup: ${safeTerminalText(observation.setupName)}`,
+      selection?.kind === "different" ? selectionDifference(selection) : observationSummary(observation),
+      "No transfer performed · Run /sync to review",
+    ],
   };
 }
 

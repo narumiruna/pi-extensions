@@ -3,7 +3,13 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { test } from "vitest";
-import { formatTickerPlain, mergeQuoteResults, renderTickerBody, type TickerView } from "../src/render.js";
+import {
+  formatTickerPlain,
+  mergeQuoteResults,
+  renderTickerBody,
+  type TickerView,
+  tickerSummary,
+} from "../src/render.js";
 
 const theme = {
   fg: (_role: string, text: string) => text,
@@ -20,7 +26,12 @@ const quote = {
 };
 
 function createWidget(view: TickerView) {
-  return new EditorStatusWidget({ name: "Ticker", theme, renderBody: (width) => renderTickerBody(view, theme, width) });
+  return new EditorStatusWidget({
+    name: "Ticker",
+    summary: tickerSummary(view),
+    theme,
+    renderBody: (width) => renderTickerBody(view, theme, width),
+  });
 }
 
 test("renders every widget line within the supplied width", () => {
@@ -32,7 +43,7 @@ test("renders every widget line within the supplied width", () => {
     loading: false,
     updatedAt: 1_700_000_000_000,
   }).render(32);
-  assert.equal(stripTerminalSequences(lines[0] ?? ""), `─ ▾ Ticker ${"─".repeat(21)}`);
+  assert.match(stripTerminalSequences(lines[0] ?? ""), /Ticker · Updated /u);
   assert.ok(lines.every((line) => visibleWidth(line) <= 32));
   assert.ok(lines.some((line) => stripTerminalSequences(line) === "NVDA $110.00 +10.00 (+10.00%)"));
   assert.ok(lines.some((line) => stripTerminalSequences(line).startsWith("AAPL $110.00")));
@@ -48,17 +59,16 @@ test("packs complete quotes together and wraps them only when they do not fit", 
   });
   const item = "NVDA $110.00 +10.00 (+10.00%)";
   const second = item.replace("NVDA", "AAPL");
-  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, "Stocks", `${item}  │  ${second}`]);
-  assert.deepEqual(widget.render(32), [`─ ▾ Ticker ${"─".repeat(21)}`, "Stocks", item, second]);
+  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, `${item}  │  ${second}`]);
+  assert.deepEqual(widget.render(32), [`─ ▾ Ticker ${"─".repeat(21)}`, item, second]);
   assert.deepEqual(widget.render(16), [
     "─ ▾ Ticker ─────",
-    "Stocks",
     "NVDA $110.00",
     "+10.00 (+10.00%)",
     "AAPL $110.00",
     "+10.00 (+10.00%)",
   ]);
-  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, "Stocks", `${item}  │  ${second}`]);
+  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, `${item}  │  ${second}`]);
 });
 
 test.each([80, 32, 7, 2, 1, 0, -1, 0.9, 7.9, Number.NaN, Infinity, -Infinity])(
@@ -71,11 +81,11 @@ test.each([80, 32, 7, 2, 1, 0, -1, 0.9, 7.9, Number.NaN, Infinity, -Infinity])(
     const lines = widget.render(width);
     const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
     assert.equal(visibleWidth(lines[0] ?? ""), normalized);
-    if (normalized >= 12) assert.match(lines[0] ?? "", /^─ ▾ Ticker ─+/u);
+    if (normalized >= 32) assert.match(lines[0] ?? "", /^─ ▾ Ticker · Updating…/u);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     if (normalized === 0) assert.deepEqual(lines, [""]);
     else assert.ok(lines.length > 1);
-    if (normalized === 80) assert.match(lines[2] ?? "", /東京📈e\u0301 円 110\.00 .* stale/);
+    if (normalized === 80) assert.match(lines[1] ?? "", /東京📈e\u0301 円 110\.00 .* stale/);
   },
 );
 
@@ -107,7 +117,7 @@ test("sanitizes raw display values before styling and packing without changing t
     renderBody: (width) => renderTickerBody(view, callbackTheme, width),
   });
   const plain = ["Stocks", "NVDA X USD 110.00 +10.00 (+10.00%)"];
-  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, ...plain]);
+  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, ...plain.slice(1)]);
   assert.deepEqual(formatTickerPlain(view), plain);
   assert.ok(calls.includes("NVDA X"));
   assert.ok(calls.every((text) => ["\u001b", "\u0007", "\u202e", "\n"].every((control) => !text.includes(control))));
@@ -152,6 +162,28 @@ test("preserves meaningful precision for low-priced and FX quotes", () => {
 
   assert.match(plain[1] ?? "", /MICRO \$0\.000012 \+0\.000001/);
   assert.match(plain[2] ?? "", /EURUSD=X \$1\.08437 \+0\.00123/);
+});
+
+test.each([
+  [true, undefined, "Updating…"],
+  [true, 1_700_000_000_000, "Updating…"],
+  [false, 1_700_000_000_000, `Updated ${new Date(1_700_000_000_000).toLocaleTimeString()}`],
+  [false, 0, `Updated ${new Date(0).toLocaleTimeString()}`],
+  [false, undefined, undefined],
+] as const)("puts loading=%s and updatedAt=%s only in the divider", (loading, updatedAt, summary) => {
+  const view: TickerView = { items: [{ symbol: "NVDA", quote, stale: true }, { symbol: "AAPL" }], loading, updatedAt };
+  const widget = createWidget(view);
+  const lines = widget.render(100);
+  assert.equal(tickerSummary(view), summary);
+  assert.ok(lines[0]?.includes(summary ? `Ticker · ${summary}` : "Ticker ─"));
+  assert.doesNotMatch(lines.slice(1).join("\n"), /Stocks|Updating|Updated/u);
+  assert.match(lines.slice(1).join("\n"), /NVDA .* stale.*AAPL unavailable/u);
+  widget.setCollapsed(true);
+  const collapsed = widget.render(100);
+  assert.equal(collapsed.length, 1);
+  assert.ok(collapsed[0]?.includes(summary ? `▸ Ticker · ${summary}` : "▸ Ticker ─"));
+  assert.doesNotMatch(collapsed[0] ?? "", /NVDA|unavailable/u);
+  widget.dispose();
 });
 
 test("keeps the previous quote as stale when one refresh fails", () => {
