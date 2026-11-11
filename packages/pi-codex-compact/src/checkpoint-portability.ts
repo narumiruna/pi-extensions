@@ -82,6 +82,7 @@ export async function checkpointIssuerRequest(
     model,
     profile: route.profile,
     protocol: details.protocol,
+    thinkingLevel: ctx.thinkingLevel,
     context: { systemPrompt: ctx.getSystemPrompt(), messages: convertToLlm(messages), tools: [] },
     apiKey: auth.apiKey,
     headers: auth.headers,

@@ -9,6 +9,7 @@ import { collectProviderUsage } from "./remote-shared.js";
 import {
   abortError,
   assertPreparedInput,
+  codexReasoningEffort,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
 } from "./remote-types.js";
@@ -39,6 +40,7 @@ export async function requestRemoteCompactionV2(request: RemoteCompactionRequest
     headers: request.headers,
     env: request.env,
     signal: request.signal,
+    reasoningEffort: codexReasoningEffort(request),
     transport: "sse",
     cacheRetention: "none",
     timeoutMs: request.requestTimeoutMs ?? 5 * 60 * 1000,

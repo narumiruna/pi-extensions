@@ -242,6 +242,7 @@ test("validates bounded unary compact output and response streaming", async () =
     id: "resp_compact",
     object: "response.compaction",
     output: [
+      { role: "developer", content: [{ type: "input_text", text: "Azure retained its developer message" }] },
       { role: "user", content: [{ type: "input_text", text: "retained" }] },
       { type: "compaction", encrypted_content: "opaque" },
     ],
@@ -249,7 +250,10 @@ test("validates bounded unary compact output and response streaming", async () =
   };
   const validated = validateCompactedResponse(value);
   assert.equal(validated.item.encrypted_content, "opaque");
-  assert.equal(validated.output.length, 2);
+  assert.deepEqual(
+    validated.output.slice(0, 2).map((message) => message.role),
+    ["developer", "user"],
+  );
   const collected = await collectCompactResponse(Response.json(value));
   assert.deepEqual(collected.output, validated.output);
 });
@@ -274,6 +278,7 @@ test("rejects unsafe, malformed, oversized, and aborted unary compact responses"
     { role: "user", content: [{ type: "input_image", image_url: 42 }] },
     { role: "user", content: [{ type: "input_image", image_url: "image", detail: "huge" }] },
     { role: "user", content: [{ type: "input_file", file_data: "opaque" }] },
+    { role: "developer", content: [{ type: "input_image", image_url: "not-allowed" }] },
   ]) {
     assert.throws(() => validateCompactedResponse({ output: [retained, item] }), /unsupported retained/);
   }

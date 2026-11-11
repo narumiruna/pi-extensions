@@ -11,6 +11,7 @@ import { collectProviderUsage } from "./remote-shared.js";
 import {
   abortError,
   assertPreparedInput,
+  codexReasoningEffort,
   isJsonObject,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
@@ -239,6 +240,7 @@ export async function requestResponsesCompact(request: RemoteCompactionRequest):
     headers: request.headers,
     env: request.env,
     signal: request.signal,
+    reasoningEffort: codexReasoningEffort(request),
     transport: "sse",
     cacheRetention: "none",
     timeoutMs: request.requestTimeoutMs ?? 5 * 60 * 1000,

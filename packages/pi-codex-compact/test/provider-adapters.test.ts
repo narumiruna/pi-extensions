@@ -207,6 +207,28 @@ for (const api of Object.keys(PROVIDER_MODULES) as SupportedApi[]) {
       assert.equal(usage.totalTokens, 12);
     });
 
+    if (api === "openai-codex-responses") {
+      test("passes the session reasoning level through the installed Codex adapter", async () => {
+        const result = await requestRemoteCompaction({
+          provider: await providerFor(api),
+          model: modelFor(api),
+          context: context(),
+          profile: "codex-responses-v1",
+          protocol: "remote-v2",
+          thinkingLevel: "medium",
+          apiKey: apiKey(api),
+          signal: new AbortController().signal,
+          maxRetries: 0,
+          fetch: async (_input, init) => {
+            const body = JSON.parse(zlib.zstdDecompressSync(init?.body as Uint8Array).toString("utf8"));
+            assert.equal(body.reasoning.effort, "medium");
+            return responseSse([COMPACTION_ITEM]);
+          },
+        });
+        assert.equal(result.item.encrypted_content, "opaque");
+      });
+    }
+
     test("accepts a synthetic completion after a same-origin compact URL rewrite", async () => {
       const provider = await providerFor(api);
       const model = modelFor(api);

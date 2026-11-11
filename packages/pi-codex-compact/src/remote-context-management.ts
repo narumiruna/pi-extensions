@@ -9,6 +9,8 @@ import { collectProviderUsage } from "./remote-shared.js";
 import {
   abortError,
   assertPreparedInput,
+  codexReasoningEffort,
+  isJsonObject,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
 } from "./remote-types.js";
@@ -36,6 +38,7 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
       headers: request.headers,
       env: request.env,
       signal,
+      reasoningEffort: codexReasoningEffort(request),
       transport: "sse",
       cacheRetention: "none",
       timeoutMs: request.requestTimeoutMs ?? 300_000,
@@ -84,6 +87,9 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
         const prepared = {
           ...expanded,
           // Request stateless reasoning without changing the provider's thinking effort.
+          reasoning: isJsonObject(expanded.reasoning)
+            ? { ...expanded.reasoning, summary: undefined }
+            : expanded.reasoning,
           include: include.includes("reasoning.encrypted_content")
             ? [...include]
             : [...include, "reasoning.encrypted_content"],

@@ -89,7 +89,12 @@ function compactionEntry(
 
 test("builds newest-first bounded replacement history and puts opaque item last", () => {
   const history = buildReplacementHistory(
-    [rawUser("oldest"), { type: "compaction", encrypted_content: "old" }, rawUser("newest")],
+    [
+      { role: "developer", content: [{ type: "input_text", text: "retained by Azure" }] },
+      rawUser("oldest"),
+      { type: "compaction", encrypted_content: "old" },
+      rawUser("newest"),
+    ],
     opaque,
     { tokenBudget: 2, byteBudget: 2048 },
   );
@@ -97,6 +102,7 @@ test("builds newest-first bounded replacement history and puts opaque item last"
   assert.equal(history.at(-1)?.encrypted_content, "opaque");
   assert.match(JSON.stringify(history), /newest/);
   assert.doesNotMatch(JSON.stringify(history), /encrypted_content":"old/);
+  assert.doesNotMatch(JSON.stringify(history), /developer/);
 });
 
 test("partially truncates the oldest fitting text item", () => {

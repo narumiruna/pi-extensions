@@ -2,7 +2,13 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type AssistantMessage, type AssistantMessageEventStream, normalizeContext } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { expandRemoteCompactionPayload, MAX_COMPACTION_ITEM_BYTES, MAX_SSE_BYTES } from "./protocol.js";
-import { abortError, assertPreparedInput, isJsonObject, type RemoteCompactionRequest } from "./remote-types.js";
+import {
+  abortError,
+  assertPreparedInput,
+  codexReasoningEffort,
+  isJsonObject,
+  type RemoteCompactionRequest,
+} from "./remote-types.js";
 
 export const RECOVERY_INSTRUCTION =
   "Summarize the preceding conversation and encrypted checkpoint into a plaintext continuation checkpoint. Preserve user goals, constraints, decisions, completed work, pending tasks, and relevant file paths. Do not continue the task, call tools, or emit another encrypted checkpoint. Later retained messages are provided separately by the client.";
@@ -53,6 +59,7 @@ export async function summarizeCheckpoint(
       headers: request.headers,
       env: request.env,
       signal,
+      reasoningEffort: codexReasoningEffort(request),
       transport: "sse",
       cacheRetention: "none",
       maxTokens: options.maxTokens,
