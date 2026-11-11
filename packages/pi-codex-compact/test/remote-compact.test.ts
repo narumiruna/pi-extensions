@@ -137,7 +137,15 @@ for (const api of Object.keys(PROVIDER_MODULES) as ResponsesCompactionApi[]) {
           }
           assert.equal(typeof init?.body, "string");
           requestBody = JSON.parse(String(init?.body));
-          return compactResponse();
+          return compactResponse(
+            api === "azure-openai-responses"
+              ? [
+                  { role: "developer", content: [{ type: "input_text", text: "Azure retained instructions" }] },
+                  { role: "user", content: [{ type: "input_text", text: "retained" }] },
+                  COMPACTION_ITEM,
+                ]
+              : undefined,
+          );
         },
       });
 
@@ -149,6 +157,9 @@ for (const api of Object.keys(PROVIDER_MODULES) as ResponsesCompactionApi[]) {
       assert.ok(Array.isArray(requestBody.input));
       assert.equal(result.item.encrypted_content, "opaque");
       assert.equal(result.compactedOutput?.at(-1)?.type, "compaction");
+      if (api === "azure-openai-responses") {
+        assert.equal(result.compactedOutput?.[0]?.role, "developer");
+      }
       assert.equal(result.promptInput.length > 0, true);
       assert.deepEqual(
         {

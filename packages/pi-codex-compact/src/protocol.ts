@@ -195,13 +195,19 @@ function isRetainedCompactContent(value: unknown): value is JsonObject {
 }
 
 function isRetainedCompactMessage(value: unknown): value is JsonObject {
-  return (
-    isObject(value) &&
-    value.role === "user" &&
-    (value.type === undefined || value.type === "message") &&
-    Array.isArray(value.content) &&
-    value.content.length > 0 &&
-    value.content.every(isRetainedCompactContent)
+  if (
+    !isObject(value) ||
+    (value.role !== "user" && value.role !== "developer") ||
+    (value.type !== undefined && value.type !== "message") ||
+    !Array.isArray(value.content) ||
+    value.content.length === 0
+  ) {
+    return false;
+  }
+  return value.content.every((part) =>
+    value.role === "developer"
+      ? isObject(part) && part.type === "input_text" && typeof part.text === "string"
+      : isRetainedCompactContent(part),
   );
 }
 
