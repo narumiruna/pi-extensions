@@ -1,6 +1,10 @@
-# 🧭 pi-typesafe — Typed Jev Decisions for Pi
+# 🧭 pi-typesafe — Deprecated Typed Jev Decisions for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-typesafe)](https://www.npmjs.com/package/@narumitw/pi-typesafe) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
+> [!WARNING]
+> `@narumitw/pi-typesafe` is deprecated without a replacement in this repository, retained under `deprecated/` for reference, and excluded from active workspace checks, tests, releases, and maintenance.
+> This integration is experimental. This repository change does not deprecate published versions in the npm registry or publish a new release.
 
 Give Pi a `typesafe_question` tool for narrow, structured decisions through TypeSafe's official Jev API, with an explicit opt-in OpenRouter fallback.
 Jev returns probabilities instead of prose, while Pi or your application remains responsible for the workflow.
@@ -16,25 +20,21 @@ Jev returns probabilities instead of prose, while Pi or your application remains
 - Bundles a `typesafe-ai` skill with TypeSafe concepts, question design, API and SDK references, composition patterns, and practical cookbooks.
 - Honors tool cancellation and bounds model-visible output to Pi's 50 KB or 2,000-line limits.
 
-## 📦 Install
+## 📦 Archived reference
 
-Install the extension permanently:
-
-```bash
-pi install npm:@narumitw/pi-typesafe
-```
-
-Try it without installing permanently:
+The source, tests, and changelog remain here as historical references and receive no feature, compatibility, or security fixes.
+Do not install this package for new sessions.
+Exit Pi, then remove the package from each scope where it was installed:
 
 ```bash
-pi -e npm:@narumitw/pi-typesafe
+pi uninstall npm:@narumitw/pi-typesafe
 ```
 
-Try this package locally from the repository root:
-
-```bash
-pi -e ./packages/pi-typesafe
-```
+Use `pi uninstall --local npm:@narumitw/pi-typesafe` for a project installation.
+Remove explicit extension or skill paths, `-e` arguments, or resource filters that still select this package.
+The repository root no longer loads it.
+Existing settings files and credentials are not changed or deleted.
+The remaining sections describe historical behavior only.
 
 Pi extensions run with the Pi process's user permissions, so install only trusted packages.
 This extension sends tool-provided state and questions to TypeSafe directly, or to OpenRouter and TypeSafe only when you explicitly enable the fallback.
@@ -160,7 +160,7 @@ Requests may incur charges according to the selected provider's account and mode
 ## 🗂️ Package layout
 
 ```text
-packages/pi-typesafe/
+deprecated/pi-typesafe/
 ├── src/
 │   ├── index.ts        # Thin Pi entrypoint
 │   ├── jev.ts          # Tool registration and public exports

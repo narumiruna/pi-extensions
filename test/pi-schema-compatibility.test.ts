@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { expectTypeOf, test } from "vitest";
-import type { jevToolParameters } from "../packages/pi-typesafe/src/jev.js";
 
 const mode = Type.Unsafe<"fast" | "safe">(StringEnum(["fast", "safe"] as const));
 const parameters = Type.Object(
@@ -18,9 +17,6 @@ const parameters = Type.Object(
 );
 
 expectTypeOf<Static<typeof parameters>["mode"]>().toEqualTypeOf<"fast" | "safe">();
-expectTypeOf<Static<typeof jevToolParameters>["questions"][string]["type"]>().toEqualTypeOf<
-  "noul" | "choice" | "score"
->();
 
 const canonical = { count: 2, enabled: true, tags: ["one"], mode: "fast" };
 const validCases = [

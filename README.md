@@ -63,16 +63,6 @@ These extensions are part of my daily Pi setup:
 | [`pi-plan-mode`](./packages/pi-plan-mode) | Codex-like, read-only `/plan` collaboration before implementation begins. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`pi-subagents`](./packages/pi-subagents) | Start bounded background Pi jobs with authenticated main-agent messaging. | `pi install npm:@narumitw/pi-subagents` |
 
-### TypeSafe AI
-
-These TypeSafe AI integrations are experimental and may change as they are evaluated in real workflows.
-
-| Package | Use it for | Install |
-| --- | --- | --- |
-| [`pi-typesafe`](./packages/pi-typesafe) | Make typed Jev decisions with validated probabilities for yes-or-no, fixed-choice, and ordered-score questions. | `pi install npm:@narumitw/pi-typesafe` |
-| [`pi-typesafe-compact`](./packages/pi-typesafe-compact) | Use Jev to select older history before summarizing it with Pi's native compaction flow and active model. | `pi install npm:@narumitw/pi-typesafe-compact` |
-| [`pi-typesafe-search`](./packages/pi-typesafe-search) | Search workspace files with SQLite FTS5 and Jev semantic reranking, without embeddings or a vector database. | `pi install npm:@narumitw/pi-typesafe-search` |
-
 ### Task and workspace workflows
 
 | Package | Use it for | Install |
@@ -273,6 +263,7 @@ The following packages remain available as source references but are excluded fr
 - `pi-retry` — replaced by Pi's built-in provider retry and timeout behavior
 - `pi-google-genai` — replaced by the `grounding-with-google-genai` agent skill
 - `pi-image-drop` — deprecated without a replacement
+- [`pi-typesafe`](./deprecated/pi-typesafe), [`pi-typesafe-compact`](./deprecated/pi-typesafe-compact), and [`pi-typesafe-search`](./deprecated/pi-typesafe-search) — deprecated without a replacement; source retained for reference, with no npm registry deprecation or new release
 - [`pi-workflow`](./deprecated/pi-workflow) — replaced by focused Plan and Goal products; atomic Plan-to-Goal handoff has [no replacement](./deprecated/pi-workflow/README.md#-migration-from-pi-workflow)
 - `pi-jupyter` — deprecated without a replacement
 - `pi-webui` — deprecated without a replacement

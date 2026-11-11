@@ -28,7 +28,7 @@ This runtime-only preparation does not replace Kit's package build or prepack: t
 All 29 original builders were compared with `pi-analytics` after normalizing only the package-specific temporary names. Shared behavior includes the esbuild options, staging, dependency exclusion, static eager traversal, banners/maps, owned output paths, cleanup, and backup/rename recovery.
 
 `Kit` below means `@narumitw/pi-tui-kit`. The wrappers retain the complete literal input lists. All migrated wrappers keep their original banner, staging prefix and test-output prefix.
-This historical audit includes `pi-firecrawl` and `pi-chrome-devtools`, now archived under `deprecated/` and excluded from active build and test gates.
+This historical audit includes `pi-firecrawl`, `pi-chrome-devtools`, and `pi-typesafe-search`, now archived under `deprecated/` and excluded from active build and test gates.
 
 | Package(s) | Package-owned differences | Classification / disposition |
 | --- | --- | --- |

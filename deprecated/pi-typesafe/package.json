@@ -1,7 +1,7 @@
 {
-  "name": "@narumitw/pi-typesafe-compact",
+  "name": "@narumitw/pi-typesafe",
   "version": "0.1.3",
-  "description": "TypeSafe JEV-guided selective history compaction for Pi.",
+  "description": "Deprecated Pi extension for typed Jev decisions through TypeSafe, with an opt-in OpenRouter fallback.",
   "type": "module",
   "license": "MIT",
   "private": false,
@@ -9,13 +9,15 @@
     "pi-package",
     "pi-extension",
     "pi",
+    "openrouter",
+    "typesafe",
     "jev",
-    "typesafe-ai",
-    "compaction",
-    "context-window"
+    "classification",
+    "structured-decisions"
   ],
   "files": [
     "src",
+    "skills",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -23,6 +25,9 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "scripts": {
@@ -31,24 +36,23 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.69.0",
     "@typesafe-ai/sdk": "^0.7.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "1.5.0",
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-coding-agent": "1.5.0",
     "@types/node": "26.6.6",
+    "typebox": "1.4.4",
     "typescript": "7.0.2"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/narumiruna/pi-extensions",
-    "directory": "packages/pi-typesafe-compact"
+    "directory": "deprecated/pi-typesafe"
   }
 }

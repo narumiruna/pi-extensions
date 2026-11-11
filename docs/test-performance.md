@@ -94,9 +94,9 @@ input. Context projection functions operate on supplied entries rather than allo
 Pi's file mutation queue removes settled path entries and retains only a settled registration barrier.
 These findings must be checked again when the relevant dependency implementation changes.
 
-Eighteen exact builder suites are also admitted: Accounts, Analytics, BTW, Caffeinate, Chat,
+Seventeen exact builder suites are also admitted: Accounts, Analytics, BTW, Caffeinate, Chat,
 Context Management, File Context, Fleet, GitHub PR, Goal, Herdr, LSP, Recall, Starship, Statusline,
-Tool, TypeSafe Search, and Worktree. They retain unique physical
+Tool, and Worktree. They retain unique physical
 outputs and Pi Jiti's `moduleCache: false`, so extension evaluation stays cold even when the native
 SDK peer is warm. Loader reload does not emit lifecycle events. No extension watcher, inhibitor,
 server, or timer starts on these called paths.

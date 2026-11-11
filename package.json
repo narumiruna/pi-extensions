@@ -27,7 +27,6 @@
       "./packages/pi-goal/src/index.ts",
       "./packages/pi-herdr/src/index.ts",
       "./packages/pi-inspect/src/index.ts",
-      "./packages/pi-typesafe-search/src/index.ts",
       "./packages/pi-langfuse/src/index.ts",
       "./packages/pi-lsp/src/index.ts",
       "./packages/pi-notes/src/index.ts",
@@ -42,16 +41,13 @@
       "./packages/pi-ticker/src/index.ts",
       "./packages/pi-progress/src/index.ts",
       "./packages/pi-tool/src/index.ts",
-      "./packages/pi-typesafe/src/index.ts",
-      "./packages/pi-typesafe-compact/src/index.ts",
       "./packages/pi-usage/src/index.ts",
       "./packages/pi-worktree/src/index.ts"
     ],
     "skills": [
       "./packages/pi-herdr/skills",
       "./packages/pi-starship/skills",
-      "./packages/pi-sync/skills",
-      "./packages/pi-typesafe/skills"
+      "./packages/pi-sync/skills"
     ]
   },
   "scripts": {
