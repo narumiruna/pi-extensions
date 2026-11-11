@@ -22,7 +22,7 @@ test("generated entry loads through Pi Jiti and preserves registration plus life
   try {
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    const entrypoint = resolve("packages/pi-typesafe-search/dist/index.ts");
+    const entrypoint = resolve("deprecated/pi-typesafe-search/dist/index.ts");
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,

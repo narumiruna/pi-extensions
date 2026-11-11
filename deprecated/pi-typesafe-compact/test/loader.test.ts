@@ -13,7 +13,7 @@ test("source entrypoint loads through Pi without factory file or network side ef
   try {
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    const entrypoint = resolve("packages/pi-typesafe-compact/src/index.ts");
+    const entrypoint = resolve("deprecated/pi-typesafe-compact/src/index.ts");
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,

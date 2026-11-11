@@ -1,6 +1,10 @@
-# 🧠 pi-typesafe-compact — Select History with TypeSafe Before Pi Compacts It
+# 🧠 pi-typesafe-compact — Deprecated TypeSafe History Compaction
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-typesafe-compact)](https://www.npmjs.com/package/@narumitw/pi-typesafe-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
+> [!WARNING]
+> `@narumitw/pi-typesafe-compact` is deprecated without a replacement in this repository, retained under `deprecated/` for reference, and excluded from active workspace checks, tests, releases, and maintenance.
+> This integration is experimental. This repository change does not deprecate published versions in the npm registry or publish a new release.
 
 Use TypeSafe AI's JEV Noul evaluator to choose older Pi history units, then pass only that selected context through Pi's native `compact()` function and the model already active in Pi.
 Pi still owns compaction timing, recent-history retention, `/compact`, summary generation, and overflow recovery.
@@ -16,32 +20,26 @@ Pi still owns compaction timing, recent-history retention, `/compact`, summary g
 - Falls back to Pi-native compaction when configuration, evaluation, bounds, or summarization fails.
 - Stores the TypeSafe API key in a private extension-owned settings file and offers masked TUI setup.
 
-## 📦 Install
+## 📦 Archived reference
 
-Install persistently from npm:
-
-```bash
-pi install npm:@narumitw/pi-typesafe-compact
-```
-
-Try the published package without installing it:
+The source, tests, and changelog remain here as historical references and receive no feature, compatibility, or security fixes.
+Do not install this package for new sessions.
+Exit Pi, then remove the package from each scope where it was installed:
 
 ```bash
-pi -e npm:@narumitw/pi-typesafe-compact
+pi uninstall npm:@narumitw/pi-typesafe-compact
 ```
 
-Try a local checkout from the repository root:
-
-```bash
-npm install
-npm run build --workspace @narumitw/pi-tui-kit
-pi -e ./packages/pi-typesafe-compact
-```
+Use `pi uninstall --local npm:@narumitw/pi-typesafe-compact` for a project installation.
+Remove explicit extension paths, `-e` arguments, or resource filters that still select this package.
+The repository root no longer loads it.
+The existing settings file and its API key are not changed or deleted.
+The remaining sections describe historical behavior only.
 
 The TypeSafe SDK requires Node.js 20 or newer.
 Pi extensions run with your user permissions, so review third-party source before installing it.
 Do not load another custom compaction extension at the same time because Pi runs every registered compaction hook in extension order.
-When loading this repository's root package, run `pi config` before setting a TypeSafe key and disable the `pi-codex-compact` and `pi-context-management` extension entrypoints.
+When inspecting the archived extension, disable other compaction extensions before setting a TypeSafe key.
 
 ## 🚀 Quick start
 
@@ -150,7 +148,7 @@ When a bound cannot be satisfied safely, the extension warns in UI-capable modes
 ## 🗂️ Package layout
 
 ```text
-packages/pi-typesafe-compact/
+deprecated/pi-typesafe-compact/
 ├── src/
 │   ├── index.ts              # Thin Pi entrypoint
 │   ├── typesafe-compact.ts   # Lifecycle and compaction orchestration

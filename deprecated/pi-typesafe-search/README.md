@@ -1,6 +1,10 @@
-# 🔎 pi-typesafe-search — FTS5 Search with Jev Semantic Reranking
+# 🔎 pi-typesafe-search — Deprecated FTS5 Search with Jev Semantic Reranking
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-typesafe-search)](https://www.npmjs.com/package/@narumitw/pi-typesafe-search) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
+> [!WARNING]
+> `@narumitw/pi-typesafe-search` is deprecated without a replacement in this repository, retained under `deprecated/` for reference, and excluded from active workspace checks, tests, releases, and maintenance.
+> This integration is experimental. This repository change does not deprecate published versions in the npm registry or publish a new release.
 
 Search workspace files through an incremental SQLite FTS5 index, then let TypeSafe Jev decide which source excerpts are semantically useful for the query.
 It stores no embeddings and requires no vector database or downloaded model.
@@ -15,28 +19,21 @@ It stores no embeddings and requires no vector database or downloaded model.
 - Keeps credentials and per-workspace indexes under the Pi agent directory with private POSIX permissions.
 - Supports cancellation, progressive candidate widening, bounded inputs, and bounded Pi tool output.
 
-## 📦 Install
+## 📦 Archived reference
 
-Install the extension permanently:
-
-```bash
-pi install npm:@narumitw/pi-typesafe-search
-```
-
-Try it without installing permanently:
+The source, tests, and changelog remain here as historical references and receive no feature, compatibility, or security fixes.
+Do not install this package for new sessions.
+Exit Pi, then remove the package from each scope where it was installed:
 
 ```bash
-pi -e npm:@narumitw/pi-typesafe-search
+pi uninstall npm:@narumitw/pi-typesafe-search
 ```
 
-Build and try this package locally from the repository root:
-
-```bash
-npm --workspace @narumitw/pi-typesafe-search run build
-pi -e ./packages/pi-typesafe-search
-```
-
-An unbuilt local checkout has no generated entrypoint and cannot be loaded by package directory.
+Use `pi uninstall --local npm:@narumitw/pi-typesafe-search` for a project installation.
+Remove explicit extension paths, `-e` arguments, or resource filters that still select this package.
+The repository root no longer loads it.
+Existing settings, API keys, and local indexes are not changed or deleted.
+The remaining sections describe historical behavior only.
 
 pi-typesafe-search requires the Node.js runtime supported by the current Pi release and its built-in SQLite FTS5 support.
 Pi extensions run with the Pi process's user permissions, so install only trusted packages.
@@ -183,7 +180,7 @@ Deleting an index never deletes workspace source.
 ## 🗂️ Package layout
 
 ```text
-packages/pi-typesafe-search/
+deprecated/pi-typesafe-search/
 ├── src/
 │   ├── index.ts               # Thin Pi entrypoint
 │   ├── typesafe-search.ts     # Tool registration and session lifecycle

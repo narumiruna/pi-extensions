@@ -184,7 +184,6 @@ export const sharedModuleTests = [
   "packages/pi-tui-kit/test/terminal-text.test.ts",
   "packages/pi-tui-kit/test/testing-rpc.test.ts",
   "packages/pi-tui-kit/test/testing-tui.test.ts",
-  "packages/pi-typesafe-search/test/build-runtime.test.ts",
   "packages/pi-usage/test/adapters.test.ts",
   "packages/pi-usage/test/auth-resolution-lifecycle.test.ts",
   "packages/pi-usage/test/baseten.test.ts",
