@@ -121,6 +121,8 @@ export default function toolExtension(pi: ExtensionAPI, options: ToolExtensionOp
         import("./tool-catalog.js"),
       ]);
       if (!commandIsCurrent()) return;
+      // The existing manager is the keyboard route to restore the summary.
+      activeToolStatus.expand(ctx);
       const catalog = createToolCatalog(
         pi.getAllTools(),
         pi.getActiveTools(),

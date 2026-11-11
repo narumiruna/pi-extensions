@@ -115,7 +115,7 @@ test("shows a transient completion summary while retaining Progress state", asyn
     assert.deepEqual(result.details.steps, [{ text: "finish", status: "completed" }]);
     const { theme } = identityTheme();
     assert.deepEqual(current.widgets.at(-1)?.content?.(current.tui, theme).render(40), [
-      "─".repeat(40),
+      `─ ▾ Progress ${"─".repeat(27)}`,
       "✓ 1/1 steps completed",
     ]);
 
@@ -248,7 +248,7 @@ test("loads display settings and ignores stale asynchronous completion after rep
     { text: "later", status: "pending" },
   ]);
   assert.deepEqual(collapsed.widgets.at(-1)?.content?.(collapsed.tui, identityTheme().theme).render(40), [
-    "─".repeat(40),
+    `─ ▾ Progress ${"─".repeat(27)}`,
     "Progress",
     "▶ active",
     "… 1 more",

@@ -42,6 +42,8 @@ This extension reads usage and model metadata already present in the active Pi s
 Run `/cache-hit-monitor` in TUI or RPC mode to show the widget.
 Run the same command again to hide it.
 The widget updates when the provider reports usage and is removed when the session shuts down.
+In fullscreen TUI mode, click anywhere in **Cache hit monitor** to collapse or expand it without moving keyboard focus.
+Updates keep the collapse state. Hide and show it with `/cache-hit-monitor` to restore the body with the keyboard; a new session resets the state.
 
 ## 💬 Commands
 

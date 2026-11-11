@@ -16,7 +16,7 @@ initTheme("dark", false);
 const { registerFiles } = await import("../src/files.js");
 const { resolveScopeTarget } = await import("../src/scope/paths.js");
 const { createSnapshot, STATE_TYPE } = await import("../src/scope/state.js");
-const { createPendingWidget } = await import("./widget-support.js");
+const { createPendingWidget, widgetClick } = await import("./widget-support.js");
 const pending: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of pending.splice(0)) await close();
@@ -130,6 +130,63 @@ test("registers one command surface and keeps context attachment separate from s
   const injected = await f.emit("before_agent_start", { messageType: "user" });
   expect(JSON.stringify(injected)).toContain("exact snapshot");
   expect(await f.emit("before_agent_start", { messageType: "user" })).toBeUndefined();
+  expect(await gate(f, f.other)).toMatchObject({ block: true });
+});
+
+test("keeps Files collapsed across summary and branch updates, with manager keyboard restoration", async () => {
+  const f = await fixture();
+  await f.apply();
+  let component = createPendingWidget(f.base.widgets.get("files"));
+  const expanded = component.render(120);
+  expect(expanded[0]).toBe(`─ ▾ Files ${"─".repeat(110)}`);
+  // A body click is not limited to the divider or the label.
+  expect(component.handleMouse?.(widgetClick(0, 1, expanded.length))).toEqual({ handled: true, render: true });
+  expect(component.render(120)).toEqual([`─ ▸ Files ${"─".repeat(110)}`]);
+  component.dispose?.(); // Pi disposes the previous component before a replacement mount.
+  await quote(f);
+  component = createPendingWidget(f.base.widgets.get("files"));
+  expect(component.render(120)).toHaveLength(1);
+  await f.emit("session_tree");
+  component.dispose?.();
+  component = createPendingWidget(f.base.widgets.get("files"));
+  expect(component.render(120)).toHaveLength(1);
+  expect(await gate(f, f.other)).toMatchObject({ block: true });
+
+  const running = f.command("files");
+  await waitText(f.tui, "Manage edit scope");
+  component.dispose?.();
+  component = createPendingWidget(f.base.widgets.get("files"));
+  const restored = component.render(120);
+  expect(restored.join("\n")).toContain("Next prompt context · 1 snippet");
+  f.tui.press("ctrl+c");
+  await running;
+  expect(await gate(f, f.other)).toMatchObject({ block: true });
+  // The blank right side of a short body row is also part of the widget.
+  expect(component.handleMouse?.(widgetClick(119, restored.length - 1, restored.length))).toEqual({
+    handled: true,
+    render: true,
+  });
+  expect(component.render(120)).toHaveLength(1);
+  await f.emit("before_agent_start", { messageType: "user" });
+  component.dispose?.();
+  component = createPendingWidget(f.base.widgets.get("files"));
+  expect(component.render(120)).toHaveLength(1);
+  expect(await gate(f, f.other)).toMatchObject({ block: true });
+});
+
+test("resets Files disclosure on session replacement and ignores disposed input", async () => {
+  const f = await fixture();
+  await f.apply();
+  const previous = createPendingWidget(f.base.widgets.get("files"));
+  const click = widgetClick(119, 1, previous.render(120).length);
+  previous.handleMouse?.(click);
+  expect(previous.render(120)).toHaveLength(1);
+  previous.dispose?.();
+  await f.emit("session_start");
+  const current = createPendingWidget(f.base.widgets.get("files"));
+  expect(current.render(120).length).toBeGreaterThan(1);
+  expect(previous.handleMouse?.(click)).toBeUndefined();
+  expect(current.render(120)[0]).toBe(`─ ▾ Files ${"─".repeat(110)}`);
   expect(await gate(f, f.other)).toMatchObject({ block: true });
 });
 

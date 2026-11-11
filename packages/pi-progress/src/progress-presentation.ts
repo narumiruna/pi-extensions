@@ -67,6 +67,7 @@ export function createProgressPresentation(options: {
   };
   const publisher = createEditorStatusPublisher<Snapshot>({
     key: WIDGET_KEY,
+    name: "Progress",
     context: options.context,
     isCurrent: current,
     render: (snapshot, theme, width, rows) => {
@@ -198,6 +199,7 @@ export function createProgressPresentation(options: {
     show(mode: "default" | "expanded" | "compact" | "hidden") {
       if (!current()) return;
       hidden = false;
+      if (mode !== "hidden") publisher.setCollapsed(false);
       view.setMode(mode);
       if (mode === "hidden") cancelTimer();
       else if (completion && timer === undefined) startTimer();
@@ -206,6 +208,7 @@ export function createProgressPresentation(options: {
     reset(next: readonly ProgressStep[], hideCompleted = false, publishNow = true) {
       if (!current()) return;
       cancelTimer();
+      publisher.setCollapsed(false);
       completion = false;
       collection.dispose();
       collection = newCollection();

@@ -258,13 +258,15 @@ The current release intentionally omits:
 - more than 256 tracked remote participants or 8 direct neighbors per client;
 - automatic transfer of chat content into the Pi editor, transcript, or model context.
 
-A joined room uses a persistent read-only widget while the normal Pi view is active.
+A joined room uses a persistent widget while the normal Pi view is active.
 Selecting **Reply in <room>** opens the full chat view instead of a small floating window.
 Closing it returns to Pi and the dock without leaving the room.
 On short terminals, the dock and composer reduce message rows before hiding room, connectivity, or input-target status.
 
-Pi's public extension widget API does not provide generic mouse hit-testing, so the dock is not clickable and Pi Chat registers no global shortcut.
-`/chat` remains the menu-first entrypoint.
+In fullscreen TUI mode, click anywhere in the **Chat** widget to collapse or expand it without moving keyboard focus.
+Updates keep the current collapse state; leaving the room or replacing the session resets it.
+To restore the body with the keyboard, use `/chat` → **Settings** → **Joined room display** and select a visible mode.
+Pi Chat registers no global shortcut. `/chat` remains the menu-first entrypoint.
 
 ## 🧪 Local network smoke
 

@@ -30,6 +30,23 @@ test("TUI view controls use non-default keys, sticky hide/show, pin, and hard ca
   Object.assign(current.ctx.ui, { custom: tui.custom });
   await harness.emit("session_start", current.ctx);
   const result = await setProgress(harness, current.ctx, [{ text: "saved work", status: "pending" }]);
+  const component = current.component;
+  assert.ok(component);
+  component.render(80);
+  component.handleMouse?.({
+    type: "click",
+    button: "left",
+    x: 79,
+    y: 2,
+    screenX: 79,
+    screenY: 2,
+    width: 80,
+    height: 3,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+  assert.equal(current.renderWidget().length, 1);
   const running = open(harness, current);
   const evidence: string[] = [];
   try {

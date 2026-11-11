@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { type Component, type TUI, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
@@ -167,6 +167,104 @@ function fixture() {
   };
 }
 
+function pointer(component: Component, y = 1, x = 79): TuiMouseEvent {
+  return {
+    type: "click",
+    button: "left",
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    width: 80,
+    height: component.render(80).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+}
+
+for (const y of [0, 1, 2]) {
+  for (const x of [0, 79]) {
+    test(`Herdr click (${x}, ${y}) collapses only its named frame and restores authoritative updates`, async () => {
+      const f = fixture();
+      const sibling = fixture();
+      f.observer.start(f.ctx);
+      sibling.observer.start(sibling.ctx);
+      try {
+        await until(() => f.text().includes("idle") && sibling.text().includes("idle"));
+        const component = f.mounted.get(HERDR_WIDGET_KEY);
+        assert.ok(component);
+        const before = component.render(80);
+        assert.equal(before.length, 3, "named frame replaces the old divider without adding a row");
+        assert.match(before[0] ?? "", /^─ ▾ Herdr ─+$/u);
+        const state = { ...f.state };
+        const event = pointer(component, y, x);
+        assert.deepEqual(component.handleMouse?.({ ...event, type: "press" }), { handled: true, render: false });
+        // Do not force a redraw between press and click; redraw cancels stale geometry.
+        assert.deepEqual(component.handleMouse?.(event), { handled: true, render: true });
+        assert.deepEqual(f.state, state, "disclosure makes no Herdr requests or data changes");
+        assert.equal(component.render(80).length, 1);
+        assert.match(component.render(80)[0] ?? "", /^─ ▸ Herdr ─+$/u);
+        assert.equal(sibling.text(), before.join("\n"));
+        const repaints = f.repaints;
+        f.state.status = "blocked";
+        f.invalidate();
+        await until(() => f.repaints > repaints);
+        assert.equal(component.render(80).length, 1);
+        assert.deepEqual(component.handleMouse?.(pointer(component, 0)), { handled: true, render: true });
+        assert.match(f.text(), /blocked/u);
+        assert.equal(component.render(80).length, before.length);
+        for (const width of [0, 1, 2, 10, 80]) {
+          assert.ok(component.render(width).every((line) => visibleWidth(line) <= width));
+        }
+      } finally {
+        await f.observer.shutdown(f.ctx);
+        await sibling.observer.shutdown(sibling.ctx);
+      }
+    });
+  }
+}
+
+test("Herdr retains disclosure across absent siblings and host remount; restore only redraws current data", async () => {
+  const f = fixture();
+  f.observer.start(f.ctx);
+  try {
+    await until(() => f.text().includes("idle"));
+    const original = f.mounted.get(HERDR_WIDGET_KEY);
+    assert.ok(original);
+    const event = pointer(original);
+    original.handleMouse?.(event);
+    assert.equal(original.render(80).length, 1);
+    original.dispose?.();
+    f.state.status = "working";
+    f.invalidate();
+    await until(() => f.mounts === 2);
+    assert.equal(f.mounted.get(HERDR_WIDGET_KEY)?.render(80).length, 1);
+    assert.equal(original.handleMouse?.(event), undefined);
+    f.state.siblings = false;
+    f.invalidate();
+    await until(() => !f.mounted.has(HERDR_WIDGET_KEY));
+    f.state.siblings = true;
+    f.state.status = "done";
+    f.invalidate();
+    await until(() => f.mounted.has(HERDR_WIDGET_KEY));
+    assert.equal(f.mounted.get(HERDR_WIDGET_KEY)?.render(80).length, 1);
+    const state = { ...f.state };
+    const repaints = f.repaints;
+    assert.equal(f.observer.restore(f.ctx), true);
+    assert.equal(f.repaints, repaints + 1);
+    assert.match(f.text(), /done/u);
+    assert.equal(f.observer.restore(f.ctx), false);
+    assert.equal(f.observer.restore(createMockContext({ mode: "tui" }).ctx), false);
+    assert.deepEqual(f.state, state, "restore neither restarts nor refreshes the observer");
+    await f.observer.shutdown(f.ctx);
+    assert.equal(f.observer.restore(f.ctx), false);
+    assert.equal(original.handleMouse?.(event), undefined);
+  } finally {
+    await f.observer.shutdown(f.ctx);
+  }
+});
+
 test("authoritative Herdr updates retain one mounted widget and sibling order", async () => {
   const f = fixture();
   f.mounted.set("before", { render: () => ["before"], invalidate() {} });
@@ -216,11 +314,17 @@ test("same-manager restart disposes before replacement and ignores old component
   try {
     await until(() => f.mounted.has(HERDR_WIDGET_KEY));
     const old = f.mounted.get(HERDR_WIDGET_KEY);
+    assert.ok(old);
+    const event = pointer(old);
+    old.handleMouse?.(event);
+    assert.equal(old.render(80).length, 1);
     f.observer.start(f.ctx);
     assert.equal(f.disposals, 1);
     assert.equal(f.mounted.has(HERDR_WIDGET_KEY), false);
     await until(() => f.mounts === 2);
     const current = f.mounted.get(HERDR_WIDGET_KEY);
+    assert.equal(current?.render(80).length, 3, "session restart resets disclosure");
+    assert.equal(old.handleMouse?.(event), undefined);
     old?.dispose?.();
     f.state.status = "blocked";
     f.invalidate();

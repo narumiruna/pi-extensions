@@ -1,7 +1,7 @@
 import { basename, dirname, extname } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SourceInfo, Theme, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 
 export const ACTIVE_TOOL_WIDGET_KEY = "tool:active-tools";
 export const ACTIVE_TOOL_REFRESH_INTERVAL_MS = 500;
@@ -11,6 +11,7 @@ export interface ActiveToolStatusController {
   start(ctx: ExtensionContext, enabled: boolean): void;
   setEnabled(ctx: ExtensionContext, enabled: boolean): void;
   refresh(ctx: ExtensionContext): void;
+  expand(ctx: ExtensionContext): void;
   shutdown(ctx: ExtensionContext): void;
   isEnabled(): boolean;
 }
@@ -22,6 +23,7 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
   let enabled = false;
   let publishedValue: string | undefined;
   let hasPublished = false;
+  let widgetState: EditorStatusWidgetState = { collapsed: false };
 
   const ownsSession = (ctx: ExtensionContext) => ctx.sessionManager === activeSession;
 
@@ -43,7 +45,8 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
     const value = content?.join("\n");
     if (hasPublished && value === publishedValue) return;
     if (content && ctx.mode === "tui") {
-      ctx.ui.setWidget(ACTIVE_TOOL_WIDGET_KEY, (_tui, theme) => createActiveToolWidget(content, theme), {
+      const state = widgetState;
+      ctx.ui.setWidget(ACTIVE_TOOL_WIDGET_KEY, (_tui, theme) => createActiveToolWidget(content, theme, state), {
         placement: "aboveEditor",
       });
     } else {
@@ -68,6 +71,7 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
       if (activeContext) clear(activeContext);
       activeContext = ctx;
       activeSession = ctx.sessionManager;
+      widgetState = { collapsed: false };
       enabled = nextEnabled;
       publishedValue = undefined;
       hasPublished = false;
@@ -89,12 +93,19 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
     refresh(ctx) {
       publish(ctx);
     },
+    expand(ctx) {
+      if (!ownsSession(ctx) || ctx.mode !== "tui" || !widgetState.collapsed) return;
+      widgetState.collapsed = false;
+      hasPublished = false;
+      publish(ctx);
+    },
     shutdown(ctx) {
       if (!ownsSession(ctx)) return;
       stopRefreshing();
       clear(ctx);
       activeContext = undefined;
       activeSession = undefined;
+      widgetState = { collapsed: false };
       enabled = false;
     },
     isEnabled() {
@@ -194,10 +205,16 @@ export function renderActiveToolWidget(lines: readonly string[], theme: Theme, w
   return createActiveToolWidget(lines, theme).render(width);
 }
 
-function createActiveToolWidget(lines: readonly string[], theme: Theme): EditorStatusWidget {
+function createActiveToolWidget(
+  lines: readonly string[],
+  theme: Theme,
+  state?: EditorStatusWidgetState,
+): EditorStatusWidget {
   // Kit normalizes fractional and invalid widths and clips wrapped glyphs wider than the row.
   return new EditorStatusWidget({
     theme,
+    name: "Active tools",
+    state,
     renderBody: (width) => (width === 0 ? lines.map(() => "") : lines.flatMap((line) => wrapTextWithAnsi(line, width))),
   });
 }

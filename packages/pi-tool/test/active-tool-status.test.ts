@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI, ExtensionContext, Theme, ToolInfo } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { HorizontalRule } from "@narumitw/pi-tui-kit";
 import { afterEach, test, vi } from "vitest";
 import {
   ACTIVE_TOOL_REFRESH_INTERVAL_MS,
@@ -12,10 +13,12 @@ import {
   sanitizeToolName,
 } from "../src/active-tool-status.js";
 
-type WidgetFactory = (_tui: never, theme: Theme) => Component;
+type WidgetFactory = (_tui: never, theme: Theme) => Component & { dispose?(): void };
 type WidgetRecord = [string, string[] | WidgetFactory | undefined, { placement: "aboveEditor" } | undefined];
 
-const DIVIDER = "─".repeat(80);
+const divider = (width: number) =>
+  new HorizontalRule({ label: "▾ Active tools", labelAlignment: "left" }).render(width)[0];
+const DIVIDER = `─ ▾ Active tools ${"─".repeat(63)}`;
 const IDENTITY_THEME = {
   fg: (_role: string, text: string) => text,
 } as unknown as Theme;
@@ -110,6 +113,90 @@ test("stays off by default and can start, refresh, and stop in the owned session
   assert.equal(current.widgets.length, countAfterDisable);
 });
 
+function mountWidget(record: WidgetRecord | undefined): Component & { dispose?(): void } {
+  const factory = record?.[1];
+  assert.equal(typeof factory, "function");
+  return (factory as WidgetFactory)(undefined as never, IDENTITY_THEME);
+}
+
+function widgetClick(x: number, y: number, height: number): TuiMouseEvent {
+  return {
+    type: "click",
+    button: "left",
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    width: 80,
+    height,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+}
+
+test("retains Active tools disclosure through polling, empty tools, and enable changes", async () => {
+  vi.useFakeTimers();
+  const harness = createHarness(["read"]);
+  const current = createContext();
+  harness.controller.start(current.ctx, true);
+  const previous = mountWidget(current.widgets.at(-1));
+  const click = widgetClick(0, 1, previous.render(80).length);
+  assert.deepEqual(previous.handleMouse?.(click), { handled: true, render: true });
+  assert.deepEqual(previous.render(80), [`─ ▸ Active tools ${"─".repeat(63)}`]);
+  previous.dispose?.();
+
+  harness.setActiveTools([]);
+  harness.controller.refresh(current.ctx);
+  assert.equal(current.widgets.at(-1)?.[1], undefined);
+  harness.setActiveTools(["read", "bash"]);
+  await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS);
+  let component = mountWidget(current.widgets.at(-1));
+  assert.equal(component.render(80).length, 1);
+  assert.equal(previous.handleMouse?.(click), undefined);
+  component.dispose?.();
+  harness.controller.setEnabled(current.ctx, false);
+  harness.controller.setEnabled(current.ctx, true);
+  component = mountWidget(current.widgets.at(-1));
+  assert.equal(component.render(80).length, 1);
+  component.dispose?.();
+
+  harness.controller.expand(current.ctx);
+  component = mountWidget(current.widgets.at(-1));
+  const expanded = component.render(80);
+  assert.deepEqual(expanded, [DIVIDER, "Tools (2)", "Built-in (2): read · bash"]);
+  // The blank right side of a short body row is inside the click target.
+  assert.deepEqual(component.handleMouse?.(widgetClick(79, 1, expanded.length)), { handled: true, render: true });
+  assert.equal(component.render(80).length, 1);
+  harness.controller.shutdown(current.ctx);
+  component.dispose?.();
+  assert.equal(vi.getTimerCount(), 0);
+});
+
+test("resets Active tools disclosure on session start and isolates stale input and shutdown", () => {
+  const harness = createHarness(["read"]);
+  const previous = createContext();
+  harness.controller.start(previous.ctx, true);
+  const oldComponent = mountWidget(previous.widgets.at(-1));
+  const click = widgetClick(79, 1, oldComponent.render(80).length);
+  oldComponent.handleMouse?.(click);
+  oldComponent.dispose?.();
+
+  const current = createContext();
+  harness.controller.start(current.ctx, true);
+  const component = mountWidget(current.widgets.at(-1));
+  assert.equal(component.render(80)[0], DIVIDER);
+  assert.equal(oldComponent.handleMouse?.(click), undefined);
+  component.handleMouse?.(click);
+  harness.controller.shutdown(previous.ctx);
+  assert.equal(component.render(80).length, 1);
+  component.dispose?.();
+  harness.controller.shutdown(current.ctx);
+  harness.controller.start(current.ctx, true);
+  assert.equal(mountWidget(current.widgets.at(-1)).render(80)[0], DIVIDER);
+  harness.controller.shutdown(current.ctx);
+});
+
 test("session replacement clears the old widget and ignores stale shutdown", () => {
   const harness = createHarness(["read"]);
   const previous = createContext();
@@ -154,12 +241,13 @@ test("renders a muted divider and wraps every safe tool name within the availabl
   );
 
   assert.deepEqual(lines.map(stripTerminalSequences), [
-    "─".repeat(40),
+    `─ ▾ Active tools ${"─".repeat(23)}`,
     "Active tools (6)",
     "read · bash · edit · write ·",
     "runtime_diagnostics · subagent_spawn",
   ]);
-  assert.deepEqual(roles, ["borderMuted"]);
+  assert.ok(roles.includes("borderMuted"));
+  assert.ok(roles.includes("muted"));
   assert.ok(lines.every((line) => visibleWidth(line) <= 40));
 });
 
@@ -170,7 +258,7 @@ test.each([0, 1, 2, 12, 80, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEG
     const body = ["Active tools (3)", "read · 界界 · e\u0301_tool"];
     const wrapped = normalized === 0 ? body.map(() => "") : body.flatMap((line) => wrapTextWithAnsi(line, normalized));
     const lines = renderActiveToolWidget(body, IDENTITY_THEME, width);
-    assert.deepEqual(lines, ["─".repeat(normalized), ...wrapped.map((line) => truncateToWidth(line, normalized, ""))]);
+    assert.deepEqual(lines, [divider(normalized), ...wrapped.map((line) => truncateToWidth(line, normalized, ""))]);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     if (normalized === 0) assert.deepEqual(lines, ["", "", ""]);
   },
@@ -189,14 +277,16 @@ test("uses the callback theme after resize and invalidation without republishing
   const component = factory(undefined as never, { fg } as unknown as Theme);
   for (const width of [0, 1, 40, 80, 12]) {
     const lines = component.render(width);
-    assert.equal(stripTerminalSequences(lines[0] ?? ""), "─".repeat(width));
+    assert.equal(stripTerminalSequences(lines[0] ?? ""), stripTerminalSequences(divider(width) ?? ""));
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
     if (width === 0) assert.deepEqual(lines, ["", "", ""]);
-    else assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+    else if (width > 2) assert.ok(fg.mock.calls.some(([role]) => role === "borderMuted"));
   }
   color = "\u001b[32m";
   component.invalidate();
-  assert.equal(component.render(80)[0], `${color}${DIVIDER}\u001b[0m`);
+  assert.equal(stripTerminalSequences(component.render(80)[0] ?? ""), DIVIDER);
+  assert.ok(component.render(80)[0]?.includes(color));
+  assert.ok(!component.render(80)[0]?.includes("\u001b[31m"));
   await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS * 2);
   harness.controller.refresh(current.ctx);
   assert.equal(current.widgets.length, 1);
@@ -518,7 +608,7 @@ test("renders grouped codemode content safely at zero, narrow, and wide widths",
   assert.ok(body);
   for (const width of [0, 1, 2, 12, 40, 80]) {
     const lines = renderActiveToolWidget(body, IDENTITY_THEME, width);
-    assert.equal(lines[0], "─".repeat(width));
+    assert.equal(lines[0], divider(width));
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
   }
 });

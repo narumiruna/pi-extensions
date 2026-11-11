@@ -1,12 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { type TuiMouseEvent, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import type { ChatSnapshot, TranscriptEntry } from "./chat-session.js";
 import type { WidgetMode } from "./settings.js";
 import { sanitizeChatText, sanitizeSingleLine } from "./text.js";
 
 interface ChatWidgetOptions {
   theme: Theme;
+  state?: EditorStatusWidgetState;
   getSnapshot(): ChatSnapshot | undefined;
   getMode(): WidgetMode;
   getTerminalRows(): number;
@@ -15,6 +16,8 @@ interface ChatWidgetOptions {
 export function createChatWidget(options: ChatWidgetOptions) {
   const frame = new EditorStatusWidget({
     theme: options.theme,
+    name: "Chat",
+    state: options.state,
     renderBody: (width) => {
       const snapshot = options.getSnapshot();
       return snapshot
@@ -25,10 +28,15 @@ export function createChatWidget(options: ChatWidgetOptions) {
   return {
     render(width: number): string[] {
       const snapshot = options.getSnapshot();
-      if (!snapshot || snapshot.state === "disconnected" || options.getMode() === "off") return [];
+      if (!snapshot || snapshot.state === "disconnected" || options.getMode() === "off") {
+        frame.invalidate();
+        return [];
+      }
       return frame.render(width);
     },
     invalidate: () => frame.invalidate(),
+    handleMouse: (event: TuiMouseEvent) => frame.handleMouse(event),
+    dispose: () => frame.dispose(),
   };
 }
 

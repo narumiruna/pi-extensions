@@ -175,6 +175,7 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
         view = createEditorStatusView({ onChange: publish, canCompact: () => settings.showWidget && jobs.length > 0 });
         publisher = createEditorStatusPublisher({
           key: SUBAGENT_WIDGET_KEY,
+          name: "Subagents",
           context: ctx,
           isCurrent,
           render: (snapshot, theme, width, rows) =>
@@ -189,7 +190,9 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
         controls = {
           state: () => ({ mode: ownedView.mode, pinned: ownedView.pinned, trigger: ownedView.trigger }),
           setMode: (mode) => {
-            if (isCurrent()) ownedView.setMode(mode);
+            if (!isCurrent()) return;
+            if (mode !== "hidden") publisher?.setCollapsed(false);
+            ownedView.setMode(mode);
           },
           setPinned: (pinned) => {
             if (isCurrent()) ownedView.setPinned(pinned);

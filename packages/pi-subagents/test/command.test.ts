@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -411,11 +411,43 @@ for (const operation of ["session_before_tree", "session_before_compact"] as con
   });
 }
 
+test("existing keyboard view controls restore disclosure without changing settings or jobs", async () => {
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+    "tui.select.down": "ctrl+n",
+    "tui.select.confirm": "ctrl+y",
+    "tui.select.cancel": "ctrl+x",
+  });
+  const tui = createTuiHarness({ keybindings });
+  const { mock, context, children, store } = await setup({ mode: "tui", custom: tui.custom });
+  await spawnJob(mock, context);
+  const settings = { ...store.settings };
+  collapseWidget(context);
+  assert.match(widgetText(context), /^─ ▸ Subagents ─+$/u);
+  const menu = invoke(mock, context, "");
+  try {
+    await tui.waitForOpen();
+    await choose(tui, "Widget view", ["\u000e", "\u0019"]);
+    await choose(tui, "Show details", ["\u000e", "\u0019"]);
+    assert.match(widgetText(context), /Run test task/u);
+    assert.match(widgetText(context), /^─ ▾ Subagents /u);
+    assert.deepEqual(store.settings, settings);
+    await assert.rejects(fs.readFile(store.userPath), { code: "ENOENT" });
+    assert.equal(children[0]?.signal.aborted, false);
+    assert.deepEqual(mock.sentMessages, []);
+  } finally {
+    tui.press("ctrl+c");
+    await menu;
+    tui.dispose();
+  }
+});
+
 test("tree navigation closes the old menu and resets presentation without cancelling jobs", async () => {
   const tui = createTuiHarness();
   const { mock, context, children } = await setup({ mode: "tui", custom: tui.custom });
   await spawnJob(mock, context);
   await armTrigger(mock, context, tui, "Next consumed user message");
+  const old = collapseWidget(context);
+  assert.match(widgetText(context), /^─ ▸ Subagents ─+$/u);
   const menu = invoke(mock, context, "");
   await tui.waitForOpen();
   await emit(mock, "session_tree", context.ctx);
@@ -423,6 +455,8 @@ test("tree navigation closes the old menu and resets presentation without cancel
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   assert.equal(tui.isOpen, false);
   assert.match(widgetText(context), /Run test task/u);
+  assert.match(widgetText(context), /^─ ▾ Subagents /u);
+  assert.deepEqual(old.render(200), []);
   assert.equal(children[0]?.signal.aborted, false);
   assert.deepEqual(mock.sentMessages, []);
 });
@@ -437,14 +471,18 @@ async function armTrigger(mock: Mock, context: Context, tui: ReturnType<typeof c
   await command;
 }
 
-async function choose(tui: ReturnType<typeof createTuiHarness>, label: string) {
+async function choose(
+  tui: ReturnType<typeof createTuiHarness>,
+  label: string,
+  [down, confirm]: readonly [string, string] = ["\u001b[B", "\r"],
+) {
   for (let index = 0; index < 20; index++) {
     if (tui.render().some((line) => stripVTControlCharacters(line).includes(`→ ${label}`))) {
-      tui.press("tui.select.confirm");
+      tui.send(confirm);
       await tui.waitForOpen();
       return;
     }
-    tui.press("tui.select.down");
+    tui.send(down);
   }
   throw new Error(`Menu item not found: ${label}`);
 }
@@ -514,6 +552,31 @@ function widgetText(context: Context) {
     widgetComponents.set(factory, component);
   }
   return component.render(200).join("\n");
+}
+
+function collapseWidget(context: Context): Component {
+  widgetText(context);
+  const factory = context.widgets.get(SUBAGENT_WIDGET_KEY);
+  assert.equal(typeof factory, "function");
+  const component = widgetComponents.get(factory as object);
+  assert.ok(component);
+  assert.deepEqual(
+    component.handleMouse?.({
+      type: "click",
+      button: "left",
+      x: 199,
+      y: 2,
+      screenX: 199,
+      screenY: 2,
+      width: 200,
+      height: component.render(200).length,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    }),
+    { handled: true, render: true },
+  );
+  return component;
 }
 
 function deferred() {

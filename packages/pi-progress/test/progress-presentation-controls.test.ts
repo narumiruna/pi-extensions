@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, test, vi } from "vitest";
 import { createProgressPresentation, progressDisplayItems } from "../src/progress-presentation.js";
 import { renderProgressWidget } from "../src/progress-renderer.js";
 import { MAX_PROGRESS_STEPS, MAX_PROGRESS_TEXT_LENGTH, type ProgressStep } from "../src/progress-state.js";
 import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettingsLoadResult } from "../src/settings.js";
-import { createContext, createHarness, identityTheme, setProgress } from "./progress-harness.js";
+import { createContext, createHarness, identityTheme, setProgress, toolResultEntry } from "./progress-harness.js";
 
 const pending: ProgressStep[] = [{ text: "work", status: "pending" }];
 const complete: ProgressStep[] = [{ text: "work", status: "completed" }];
@@ -31,6 +31,123 @@ function setup(mode: "tui" | "rpc" | "print" | "json" = "tui") {
 }
 
 afterEach(() => vi.useRealTimers());
+
+function pointer(component: Component, y = 2, x = 79): TuiMouseEvent {
+  return {
+    type: "click",
+    button: "left",
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    width: 80,
+    height: component.render(80).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+}
+
+for (const y of [0, 1, 2]) {
+  for (const x of [0, 79]) {
+    test(`Progress click (${x}, ${y}) collapses only its named frame without changing data or controls`, () => {
+      const { current, presentation } = setup();
+      const sibling = setup();
+      try {
+        const component = current.component;
+        assert.ok(component);
+        const before = current.renderWidget();
+        const items = presentation.items();
+        const state = [presentation.view.mode, presentation.view.pinned, presentation.view.trigger];
+        const event = pointer(component, y, x);
+        assert.deepEqual(component.handleMouse?.({ ...event, type: "press" }), { handled: true, render: false });
+        // Do not force a redraw between press and click; redraw cancels stale geometry.
+        assert.deepEqual(component.handleMouse?.(event), { handled: true, render: true });
+        assert.match(current.renderWidget()[0] ?? "", /^─ ▸ Progress ─+$/u);
+        assert.equal(current.renderWidget().length, 1);
+        assert.deepEqual(sibling.current.renderWidget(), before);
+        assert.deepEqual(presentation.items(), items);
+        assert.deepEqual([presentation.view.mode, presentation.view.pinned, presentation.view.trigger], state);
+        const latest: ProgressStep[] = [{ text: "latest blocker", status: "blocked" }];
+        const settings = { ...DEFAULT_PROGRESS_SETTINGS };
+        presentation.update(latest, settings);
+        assert.equal(current.renderWidget().length, 1);
+        assert.deepEqual(component.handleMouse?.(pointer(component, 0)), { handled: true, render: true });
+        const expanded = current.renderWidget();
+        assert.match(expanded[0] ?? "", /^─ ▾ Progress ─+$/u);
+        assert.deepEqual(expanded.slice(1), renderProgressWidget(latest, identityTheme().theme, 80).slice(1));
+        assert.deepEqual(latest, [{ text: "latest blocker", status: "blocked" }]);
+        assert.deepEqual(settings, DEFAULT_PROGRESS_SETTINGS);
+      } finally {
+        presentation.dispose();
+        sibling.presentation.dispose();
+      }
+    });
+  }
+}
+
+test("Progress disclosure survives clear/update and host remount; existing show modes and reset restore it", () => {
+  const { current, presentation } = setup();
+  try {
+    const original = current.component;
+    assert.ok(original);
+    original.handleMouse?.(pointer(original));
+    original.render(80);
+    original.dispose?.();
+    presentation.refresh();
+    assert.notEqual(current.component, original);
+    assert.equal(current.renderWidget().length, 1);
+    assert.equal(original.handleMouse?.(pointer(original, 0)), undefined);
+    presentation.clear();
+    presentation.showOnUpdate();
+    presentation.update([{ text: "latest hidden update", status: "pending" }], DEFAULT_PROGRESS_SETTINGS);
+    assert.equal(current.renderWidget().length, 1);
+    for (const mode of ["default", "expanded", "compact"] as const) {
+      const renders = current.renderRequests;
+      presentation.show(mode);
+      assert.ok(current.renderRequests > renders, "keyboard restore requests a render even for the same view");
+      assert.match(current.renderWidget()[0] ?? "", /^─ ▾ Progress ─+$/u);
+      assert.ok(current.renderWidget().length > 1);
+      const component: Component | undefined = current.component;
+      assert.ok(component);
+      component.handleMouse?.(pointer(component, 1));
+      assert.equal(current.renderWidget().length, 1);
+    }
+    presentation.reset(pending);
+    assert.equal(current.renderWidget().length, 3);
+    assert.match(current.renderWidget().join("\n"), /○ work/u);
+  } finally {
+    presentation.dispose();
+  }
+});
+
+for (const boundary of ["session_tree", "session_start"] as const) {
+  test(`Progress ${boundary} resets disclosure and stale components cannot affect the new owner`, async () => {
+    const harness = createHarness();
+    const current = createContext({ branch: [toolResultEntry({ version: 5, steps: pending })] });
+    await harness.emit("session_start", current.ctx);
+    try {
+      const old = current.component;
+      assert.ok(old);
+      const event = pointer(old);
+      old.handleMouse?.(event);
+      assert.equal(current.renderWidget().length, 1);
+      await harness.emit(boundary, current.ctx);
+      assert.match(current.renderWidget().join("\n"), /○ work/u);
+      assert.equal(current.renderWidget().length, 3);
+      assert.equal(old.handleMouse?.(event), undefined);
+      assert.deepEqual(old.render(80), []);
+      old.dispose?.();
+      assert.equal(current.renderWidget().length, 3);
+      assert.deepEqual(harness.entries, [], "disclosure never appends session entries");
+      await harness.emit("session_shutdown", current.ctx);
+      assert.equal(current.component, undefined);
+      assert.equal(old.handleMouse?.(event), undefined);
+    } finally {
+      await harness.emit("session_shutdown", current.ctx);
+    }
+  });
+}
 
 test("completion expiry uses an unreferenced Node timer and still cancels on disposal", () => {
   const timeout = vi.spyOn(globalThis, "setTimeout");

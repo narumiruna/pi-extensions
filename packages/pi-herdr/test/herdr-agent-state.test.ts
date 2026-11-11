@@ -48,6 +48,7 @@ function enabledOptions(requests: HerdrRequest[]): HerdrAgentStateOptions {
     },
     widgetObserver: {
       start() {},
+      restore: () => false,
       async shutdown() {},
     },
   };
@@ -159,6 +160,7 @@ test.each(["rpc", "json", "print"])("%s sessions never report or mutate native o
       start(ctx) {
         observerStarts.push(ctx.mode);
       },
+      restore: () => false,
       async shutdown(ctx) {
         observerShutdowns.push(ctx.mode);
       },
@@ -221,6 +223,7 @@ test("TUI sessions start and shut down the widget observer", async () => {
       start(ctx) {
         events.push(`start:${ctx.mode}`);
       },
+      restore: () => false,
       async shutdown(ctx) {
         events.push(`shutdown:${ctx.mode}`);
       },
@@ -571,7 +574,7 @@ test("quit drains every normal report and widget shutdown before cleanup", async
         await new Promise<void>((finish) => pending.push({ signal, finish }));
       }
     },
-    widgetObserver: { start() {}, shutdown: () => stopped },
+    widgetObserver: { start() {}, restore: () => false, shutdown: () => stopped },
   })(mock.pi);
   const started = tuiContext();
   await emit(mock, "session_start", { reason: "startup" }, started.ctx);
@@ -650,7 +653,7 @@ test("unavailable socket does not interrupt quit or repeated shutdown", async ()
   const mock = createMockPi();
   herdrModule.createHerdrAgentStateExtension({
     environment: { enabled: true, paneId: "w1:p2", socketEndpoint: join(agentDir, "missing.sock") },
-    widgetObserver: { start() {}, async shutdown() {} },
+    widgetObserver: { start() {}, restore: () => false, async shutdown() {} },
   })(mock.pi);
   const started = tuiContext();
   await emit(mock, "session_start", { reason: "startup" }, started.ctx);
@@ -709,6 +712,7 @@ test("socket transport retries one failed delivery and preserves the request", a
     environment: { enabled: true, paneId: "w1:p2", socketEndpoint: socketPath },
     widgetObserver: {
       start() {},
+      restore: () => false,
       async shutdown() {},
     },
   })(mock.pi);
@@ -781,7 +785,7 @@ test("a disabled widget does not disable lifecycle or metadata reporting", async
   herdrModule.createHerdrAgentStateExtension({
     ...enabledOptions(requests),
     settingsPath,
-    widgetObserver: { start, async shutdown() {} },
+    widgetObserver: { start, restore: () => false, async shutdown() {} },
   })(mock.pi);
   const ctx = tuiContext().ctx;
   await emit(mock, "session_start", { reason: "startup" }, ctx);

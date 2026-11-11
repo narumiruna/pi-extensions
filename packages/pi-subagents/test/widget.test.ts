@@ -108,12 +108,13 @@ test("keeps rows bounded across resize and uses the callback theme on every rend
   for (const width of [0, 1, 2, 24, 80, 200, 24, 200]) {
     const lines = component.render(width);
     assert.equal(lines.length, 3);
-    assert.equal(lines[0], "─".repeat(width));
+    assert.equal(visibleWidth(lines[0] ?? ""), width);
+    if (width >= 24) assert.match(lines[0] ?? "", /^─ ▾ Subagents ─+$/u);
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
     themedComponent.invalidate();
     themedComponent.render(width);
     if (width > 0) {
-      assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+      assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text.includes("─")));
     }
   }
   assert.ok(fg.mock.calls.some(([role, text]) => role === "text" && text.includes("…")));

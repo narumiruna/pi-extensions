@@ -41,6 +41,7 @@ export interface HerdrObserverOptions {
 
 export interface HerdrWidgetObserver {
   start(ctx: ExtensionContext): void;
+  restore(ctx: ExtensionContext): boolean;
   shutdown(ctx: ExtensionContext): Promise<void>;
 }
 
@@ -352,6 +353,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
       const expectedGeneration = generation;
       publisher = createEditorStatusPublisher({
         key: HERDR_WIDGET_KEY,
+        name: "Herdr",
         context: ctx,
         isCurrent: () => expectedGeneration === generation,
         render: renderHerdrWidget,
@@ -367,6 +369,10 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
           ownedTasks.delete(task);
         },
       );
+    },
+    restore(ctx) {
+      if (activeSession === undefined || !owns(ctx)) return false;
+      return publisher?.setCollapsed(false) ?? false;
     },
     async shutdown(ctx) {
       if (activeSession !== undefined && !owns(ctx)) return;

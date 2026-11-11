@@ -156,7 +156,10 @@ Terminal titles are not used as agent identity.
 The widget orders agents by `blocked`, `done`, `working`, `idle`, and `unknown`, shows at most five rows, and reports any remaining count.
 A state label published through Herdr metadata can replace the raw state name.
 Herdr's public pane responses do not expose the blocked prompt message, so the widget cannot show that reason.
-The widget is read-only and does not focus panes, read terminal output, send prompts, or mark a background `done` state as seen.
+The widget does not focus panes, read terminal output, send prompts, or mark a background `done` state as seen.
+Its separator is named **Herdr**. In fullscreen TUI mode, click anywhere in the widget, including blank columns, to collapse it to that separator. Click the separator to restore the latest agents without moving keyboard focus.
+Opening `/herdr` in TUI mode also restores disclosure when the widget is enabled, without changing or saving the enable setting.
+Disclosure survives updates, temporary absence, and host remounts; session start or restarting the observer resets it. Collapse does not change Herdr data, reporting, subscriptions, or saved settings.
 The extension discovers the current workspace, pane list, and agent names, opens pane-scoped status subscriptions plus pane-update and workspace-name subscriptions, and then reloads those identities.
 Events trigger serialized, coalesced reads rather than replacing current state with event payloads. If an event arrives during a read, the extension reads again before publishing that result.
 Agent names, workspace labels, and cleared presentation fields update from these authoritative reads.

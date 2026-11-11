@@ -6,7 +6,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { fetchQuotes, QuoteRequestTimeoutError } from "./quotes.js";
 import { formatTickerPlain, mergeQuoteResults, renderTickerBody, type TickerItem, type TickerView } from "./render.js";
@@ -39,6 +39,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
   const activeMenus = new Set<Promise<void>>();
   let symbols: string[] = [];
   let widgetEnabled = true;
+  let widgetState: EditorStatusWidgetState = { collapsed: false };
   let view: TickerView = createInitialView(symbols);
   const settingsWriter = (dependencies.createSettingsWriter ?? createSettingsWriter)();
   const readSettings = dependencies.loadSettings ?? loadSettings;
@@ -54,11 +55,14 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
     }
     const snapshot = cloneView(view);
     if (ctx.mode === "tui") {
+      const state = widgetState;
       ctx.ui.setWidget(
         WIDGET_KEY,
         (_tui, theme) =>
           new EditorStatusWidget({
             theme,
+            name: "Ticker",
+            state,
             renderBody: (width) => renderTickerBody(snapshot, theme, width),
           }),
         { placement: "aboveEditor" },
@@ -163,6 +167,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
           await settingsWriter.saveWidgetEnabled(settingsPath(), nextWidgetEnabled);
           if (signal.aborted || !ownsSession(ctx, expectedGeneration)) return;
           widgetEnabled = nextWidgetEnabled;
+          if (widgetEnabled) widgetState.collapsed = false;
           if (!widgetEnabled) stopPolling();
           publish(ctx);
           if (widgetEnabled) startCycle(ctx, expectedGeneration);
@@ -173,6 +178,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
             notify(ctx, "Ticker widget is disabled. Enable it before refreshing.", "warning");
             return;
           }
+          widgetState.collapsed = false;
           startCycle(ctx, expectedGeneration);
         },
       });
@@ -193,6 +199,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
     const expectedGeneration = ++generation;
     symbols = [];
     widgetEnabled = true;
+    widgetState = { collapsed: false };
     view = createInitialView(symbols);
     publish(ctx);
 
@@ -213,6 +220,7 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
     sessionController?.abort();
     stopPolling();
     clearWidget(ctx);
+    widgetState = { collapsed: false };
     activeSession = undefined;
     sessionController = undefined;
     generation += 1;
@@ -248,7 +256,10 @@ export default function stockTicker(pi: ExtensionAPI, dependencies: Partial<Stoc
           notify(ctx, "Ticker widget is disabled. Enable it with /ticker before refreshing.", "warning");
           return;
         }
-        if (ownsSession(ctx)) startCycle(ctx);
+        if (ownsSession(ctx)) {
+          widgetState.collapsed = false;
+          startCycle(ctx);
+        }
         notify(ctx, "Refreshing stock quotes.");
         return;
       }

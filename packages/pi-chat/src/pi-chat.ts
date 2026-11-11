@@ -1,5 +1,7 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import type { ChatSnapshot, ChatTransport } from "./chat-session.js";
 import { ChatSession } from "./chat-session.js";
 import type { PublicRoomDirectory } from "./directory-network.js";
@@ -102,6 +104,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
     let createChatWidget: ChatWidgetModule["createChatWidget"] | undefined;
     let widgetRender: (() => void) | undefined;
     let widgetInstalled = false;
+    let widgetState: EditorStatusWidgetState = { collapsed: false };
 
     const isCurrent = (owner: unknown, ownerGeneration: number) =>
       activeSessionManager === owner && generation === ownerGeneration && !controller.signal.aborted;
@@ -157,11 +160,13 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
         if (!createWidget) return;
         if (!widgetInstalled) {
           const ownerGeneration = generation;
+          const state = widgetState;
           ctx.ui.setWidget(CHAT_UI_KEY, (tui, theme) => {
             let disposed = false;
             const ownsWidget = () => !disposed && isCurrent(ctx.sessionManager, ownerGeneration);
             const widget = createWidget({
               theme,
+              state,
               getSnapshot: () => (ownsWidget() ? latestSnapshot : undefined),
               getMode: () => settings.widgetMode ?? "count",
               getTerminalRows: () => tui.terminal.rows,
@@ -173,8 +178,10 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
             return {
               render: (width: number) => widget.render(width),
               invalidate: () => widget.invalidate(),
+              handleMouse: (event: TuiMouseEvent) => (ownsWidget() ? widget.handleMouse(event) : undefined),
               dispose() {
                 disposed = true;
+                widget.dispose();
                 if (widgetRender === requestRender) widgetRender = undefined;
               },
             };
@@ -196,6 +203,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
       roomDirectory = undefined;
       latestSnapshot = undefined;
       chatDraft = "";
+      widgetState = { collapsed: false };
       await Promise.allSettled([owned?.leave(), ownedDirectory?.stop()]);
       if (uiContext) clearUi(uiContext, uiGeneration);
     };
@@ -348,6 +356,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
         await transport.stop();
         return false;
       }
+      widgetState = { collapsed: false };
       createChatWidget = widgetModule.createChatWidget;
       const session = new ChatSession({
         room,
@@ -603,6 +612,7 @@ export function createPiChatExtension(dependencies: Partial<PiChatDependencies> 
           const next = await updateChatSettings({ widgetMode: value }, { settingsPath: deps.settingsPath, signal });
           if (!ownsMenu()) return;
           settings = next;
+          if (value !== "off") widgetState.collapsed = false;
           updateUi(ctx, chatSession?.snapshot());
         },
         getIdentityResetPreview: () => {

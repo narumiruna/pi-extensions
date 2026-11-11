@@ -396,7 +396,7 @@ test("shows task-first defaults and keeps spawn-time thinking comparisons stable
   assert.equal(typeof factory, "function");
   const component = factory?.({ terminal: { rows: 36 }, requestRender() {} }, identityTheme());
   const lines = component?.render(120) ?? [];
-  assert.equal(lines[0], "─".repeat(120));
+  assert.equal(lines[0], `─ ▾ Subagents ${"─".repeat(106)}`);
   assert.equal(lines[1], "Subagents · 2 active");
   assert.equal(first.details.state, "queued");
   assert.equal(second.details.state, "queued");

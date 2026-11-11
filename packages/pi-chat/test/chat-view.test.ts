@@ -102,7 +102,7 @@ test("room dock keeps status, bounded recent messages, and the real input target
     transcript,
   });
   const wide = renderDock(state, 64, 30);
-  assert.equal(wide[0], "─".repeat(64));
+  assert.equal(wide[0], `─ ▾ Chat ${"─".repeat(55)}`);
   assert.match(wide[1] ?? "", /ROOM.*private/u);
   assert.doesNotMatch(wide.join("\n"), /old/u);
   assert.match(wide.join("\n"), /one/u);

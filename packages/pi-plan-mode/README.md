@@ -177,6 +177,7 @@ Enabling questionnaires again does not call the model or reopen old questions.
 Free discussion keeps the same read-only restrictions and allows plain-text questions without questionnaire dialogs.
 Completed plans are still displayed, stored, and marked `plan ready`, but no automatic action menu opens; use `/plan` manually to implement, save, export, revise, exit, or enable questionnaires.
 The editor widget shows the interaction mode and the available F2 or `/plan` entry point, including when a plan is ready.
+In fullscreen TUI mode, click the **Plan mode** divider or any body row, including its blank right side, to collapse or expand it. Collapse changes only the display, not the workflow or read-only restrictions. The choice survives status updates and branch navigation, but resets on session replacement or reload. Open `/plan` without arguments to expand it from the keyboard.
 The interaction mode restores with the active workflow on reload or resume; a new workflow starts with questionnaires enabled.
 See [interaction switching](./docs/command-workflows.md#questionnaires-and-free-discussion) for RPC behavior and recovery.
 

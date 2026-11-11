@@ -3,7 +3,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { type AutocompleteItem, type Component, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  type AutocompleteItem,
+  type Component,
+  stripTerminalSequences,
+  type TuiMouseEvent,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test, vi } from "vitest";
@@ -23,7 +29,7 @@ interface Command {
 }
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
-type WidgetFactory = (_tui: never, theme: Theme) => Component;
+type WidgetFactory = (_tui: never, theme: Theme) => Component & { dispose?(): void };
 type WidgetRecord = [string, string[] | WidgetFactory | undefined, unknown?];
 
 const temporaryDirectories: string[] = [];
@@ -183,13 +189,13 @@ test("mounts the Kit widget with callback themes and keeps publication snapshots
   assert.ok(widget instanceof EditorStatusWidget);
   const frame = widget.render(80);
   const plainFrame = frame.map(stripTerminalSequences);
-  assert.equal(frame[0], `\u001b[31m${"─".repeat(80)}\u001b[39m`);
+  assert.equal(plainFrame[0], `─ ▾ Ticker ${"─".repeat(69)}`);
   assert.ok(calls.some(([role]) => role === "muted"));
   assert.ok(calls.some(([role]) => role === "accent"));
   assert.ok(calls.some(([role]) => role === "text"));
   assert.ok(calls.some(([role]) => role === "success"));
   assert.ok(calls.some(([role]) => role === "dim"));
-  assert.ok(calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(80)));
+  assert.ok(calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(69)));
   assert.match(plainFrame.join("\n"), /NVDA \$110\.00/);
 
   color = "\u001b[36m";
@@ -210,6 +216,62 @@ test("mounts the Kit widget with callback themes and keeps publication snapshots
   assert.deepEqual(loadingWidget.render(80), loadingFrame);
   await harness.emit("session_shutdown", current.ctx);
   assert.deepEqual(current.widgets.at(-1), [WIDGET_KEY, undefined, undefined]);
+  assert.equal(vi.getTimerCount(), 0);
+});
+
+test("whole-body blank-column clicks retain collapse through polling and restore current quotes", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn(successfulResponse);
+  vi.stubGlobal("fetch", fetchMock);
+  const harness = createHarness();
+  const current = await createContext();
+  await writeFile(join(current.cwd, SETTINGS_FILE_NAME), '{"symbols":["NVDA"]}\n');
+  const mount = () => {
+    const factory = current.widgets.at(-1)?.[1];
+    if (typeof factory !== "function") throw new Error("Missing ticker widget");
+    return factory(undefined as never, identityTheme);
+  };
+  await harness.emit("session_start", current.ctx);
+  await vi.advanceTimersByTimeAsync(0);
+  const first = mount();
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 99,
+    y: first.render(100).length - 1,
+    screenX: 99,
+    screenY: 0,
+    width: 100,
+    height: first.render(100).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.deepEqual(first.handleMouse?.(event), { handled: true, render: false });
+  assert.deepEqual(first.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+  assert.equal(first.render(100).length, 1);
+  first.dispose?.();
+  fetchMock.mockImplementation(async (input) => {
+    const response = await successfulResponse(input);
+    return new Response((await response.text()).replace('"regularMarketPrice":110', '"regularMarketPrice":120'));
+  });
+  await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+  const updated = mount();
+  assert.equal(updated.render(100).length, 1);
+  assert.match(updated.render(100)[0] ?? "", /▸ Ticker/u);
+  assert.deepEqual(updated.handleMouse?.({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  assert.match(updated.render(100).join("\n"), /NVDA \$120\.00/u);
+  updated.handleMouse?.({ ...event, type: "click", y: 0 });
+  await harness.command.handler("refresh", current.ctx);
+  await vi.advanceTimersByTimeAsync(0);
+  const refreshed = mount();
+  assert.ok(refreshed.render(100).length > 1, "keyboard refresh expands the body");
+  refreshed.handleMouse?.({ ...event, type: "click", y: 0 });
+  const replacement = { ...current.ctx, sessionManager: {} as ExtensionContext["sessionManager"] };
+  await harness.emit("session_start", replacement);
+  await vi.advanceTimersByTimeAsync(0);
+  assert.ok(mount().render(100).length > 1, "new session starts expanded");
+  await harness.emit("session_shutdown", replacement);
   assert.equal(vi.getTimerCount(), 0);
 });
 

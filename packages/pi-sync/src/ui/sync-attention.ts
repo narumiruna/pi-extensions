@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import type { EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
@@ -35,6 +36,7 @@ export interface SyncAttentionController {
   markOffered(): boolean;
   clear(ctx: ExtensionContext): void;
   reset(ctx: ExtensionContext): void;
+  expand(): void;
   publish(ctx: ExtensionContext, signal?: AbortSignal): Promise<void>;
 }
 
@@ -42,6 +44,7 @@ export function createSyncAttentionController(): SyncAttentionController {
   let state: SyncAttentionState | undefined;
   let observation: StartupObservation | undefined;
   let generation = 0;
+  let widgetState: EditorStatusWidgetState = { collapsed: false };
 
   return {
     observe(value) {
@@ -81,7 +84,11 @@ export function createSyncAttentionController(): SyncAttentionController {
       generation++;
       state = undefined;
       observation = undefined;
+      widgetState = { collapsed: false };
       clearAttentionPresentation(ctx);
+    },
+    expand() {
+      widgetState.collapsed = false;
     },
     async publish(ctx, signal) {
       const currentGeneration = ++generation;
@@ -116,11 +123,14 @@ export function createSyncAttentionController(): SyncAttentionController {
       });
       if (generation !== currentGeneration || signal?.aborted) return;
       setSyncStatus(ctx, presentation.status, { activity: "review" });
+      const presentationState = widgetState;
       ctx.ui.setWidget(
         WIDGET_KEY,
         (_tui, theme) =>
           new EditorStatusWidget({
             theme,
+            name: "Sync",
+            state: presentationState,
             renderBody: (width) =>
               presentation.lines.map((line, index) =>
                 width === 0 ? "" : truncateToWidth(theme.fg(index === 0 ? "warning" : "muted", line), width, "…"),

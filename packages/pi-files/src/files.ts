@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { type ContextOptions, type ContextService, registerFileContext } from "./context-service.js";
 import type { FileQuote } from "./file-context.js";
 import { publishFilesWidget } from "./files-widget.js";
@@ -10,6 +11,7 @@ interface Flow {
   promise: Promise<void>;
 }
 interface Display {
+  widgetState: EditorStatusWidgetState;
   quotes: readonly FileQuote[];
   scope?: ScopeView;
 }
@@ -25,14 +27,14 @@ export async function registerFiles(pi: ExtensionAPI, options: FilesOptions = {}
   const display = (ctx: ExtensionContext): Display => {
     let state = displays.get(ctx.sessionManager);
     if (!state) {
-      state = { quotes: [] };
+      state = { quotes: [], widgetState: { collapsed: false } };
       displays.set(ctx.sessionManager, state);
     }
     return state;
   };
   const redraw = (ctx: ExtensionContext) => {
     const state = display(ctx);
-    publishFilesWidget(ctx, state.quotes, state.scope);
+    publishFilesWidget(ctx, state.quotes, state.scope, state.widgetState);
   };
   const runFlow = (
     ctx: ExtensionContext,
@@ -73,7 +75,11 @@ export async function registerFiles(pi: ExtensionAPI, options: FilesOptions = {}
     if (flows.get(ctx.sessionManager) === flow) flows.delete(ctx.sessionManager);
   };
   // Run before the service handlers so replaced UI cannot outlive restoration.
-  pi.on("session_start", (_event, ctx) => cancelFlow(ctx));
+  pi.on("session_start", (_event, ctx) => {
+    cancelFlow(ctx);
+    displays.delete(ctx.sessionManager);
+    if (ctx.hasUI) ctx.ui.setWidget("files", undefined);
+  });
   pi.on("session_tree", (_event, ctx) => cancelFlow(ctx));
   pi.on("session_shutdown", (_event, ctx) => cancelFlow(ctx));
 
@@ -133,6 +139,11 @@ export async function registerFiles(pi: ExtensionAPI, options: FilesOptions = {}
         if (route === "off") {
           scope.off(commandCtx);
           return;
+        }
+        // The existing manager is the keyboard route to restore the summary.
+        if (display(scoped).widgetState.collapsed) {
+          display(scoped).widgetState.collapsed = false;
+          redraw(scoped);
         }
         const { showFilesMenu } = await import("./files-menu.js");
         scoped.signal?.throwIfAborted();

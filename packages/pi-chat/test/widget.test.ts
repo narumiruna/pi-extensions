@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import type { ChatSnapshot } from "../src/chat-session.js";
 import { createPrivateRoom } from "../src/protocol.js";
@@ -50,14 +50,15 @@ for (const mode of ["count", "latest", "dock"] as const) {
       const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
       calls.length = 0;
       const lines = component.render(width);
-      assert.equal(lines[0], "─".repeat(normalized));
+      assert.equal(visibleWidth(lines[0] ?? ""), normalized);
+      if (normalized >= 10) assert.match(lines[0] ?? "", /^─ ▾ Chat ─+/u);
       assert.ok(lines.length > 1);
       assert.ok(
         lines.every((line) => visibleWidth(line) <= normalized),
         `${mode} at ${width}`,
       );
-      if (normalized > 0) assert.ok(calls.some(([role, text]) => role === "borderMuted" && text === lines[0]));
-      else assert.ok(lines.every((line) => line === ""));
+      if (normalized > 2) assert.ok(calls.some(([role]) => role === "borderMuted"));
+      if (normalized === 0) assert.ok(lines.every((line) => line === ""));
     }
     const body = component.render(100).slice(1).join("\n");
     if (mode === "count") assert.doesNotMatch(body, /private 開發者/u);
@@ -174,4 +175,54 @@ test("dock retains local preview thresholds and split header policy beneath the 
     assert.equal(narrow.length, 4 + previews);
     assert.ok(narrow.every((line) => visibleWidth(line) <= 20));
   }
+});
+
+test("Chat forwards full-body blank-column clicks and restores the latest snapshot after remount", () => {
+  let current = snapshot();
+  const state = { collapsed: false };
+  const create = () =>
+    createChatWidget({
+      theme: { fg: (_role: string, text: string) => text } as never,
+      state,
+      getSnapshot: () => current,
+      getMode: () => "latest",
+      getTerminalRows: () => 30,
+    });
+  const first = create();
+  const lines = first.render(100);
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 99,
+    y: lines.length - 1,
+    screenX: 99,
+    screenY: lines.length - 1,
+    width: 100,
+    height: lines.length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.equal(first.handleMouse({ ...event, ctrl: true }), undefined);
+  assert.deepEqual(first.handleMouse(event), { handled: true, render: false });
+  assert.equal(state.collapsed, false);
+  assert.deepEqual(first.handleMouse({ ...event, type: "click" }), { handled: true, render: true });
+  assert.match(first.render(100)[0] ?? "", /▸ Chat/u);
+  assert.equal(first.render(100).length, 1);
+  current = snapshot({ unread: 7, state: "degraded" });
+  first.dispose();
+  first.dispose();
+  assert.equal(first.handleMouse(event), undefined);
+  assert.deepEqual(first.render(100), []);
+  const replacement = create();
+  assert.equal(replacement.render(100).length, 1);
+  assert.deepEqual(replacement.handleMouse({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  const restored = replacement.render(100).join("\n");
+  assert.match(restored, /7 unread/u);
+  assert.match(restored, /reconnecting/u);
+  assert.match(restored, /private 開發者/u);
+  current = snapshot({ state: "disconnected" });
+  assert.deepEqual(replacement.render(100), []);
+  assert.equal(replacement.handleMouse({ ...event, type: "click", y: 0 }), undefined);
+  replacement.dispose();
 });

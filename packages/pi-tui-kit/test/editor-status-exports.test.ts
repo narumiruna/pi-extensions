@@ -12,7 +12,7 @@ const helpers = [
 ] as const;
 
 for (const [entry, name] of helpers) {
-  test(`${entry} has a dependency-free focused runtime and the same root export`, async () => {
+  test(`${entry} has a focused display-only runtime and the same root export`, async () => {
     const result = await build({
       entryPoints: [path.resolve(`packages/pi-tui-kit/dist/${entry}.js`)],
       bundle: true,
@@ -23,13 +23,20 @@ for (const [entry, name] of helpers) {
       metafile: true,
     });
     assert.deepEqual(
-      Object.keys(result.metafile.inputs).map((input) => path.basename(input)),
-      [`${entry}.js`],
+      Object.keys(result.metafile.inputs)
+        .map((input) => path.basename(input))
+        .sort(),
+      entry === "editor-status-publisher"
+        ? ["editor-status-publisher.js", "editor-status-widget.js", "horizontal-rule.js", "terminal-text.js"]
+        : [`${entry}.js`],
     );
-    assert.deepEqual(
-      Object.values(result.metafile.outputs).flatMap((output) => output.imports),
-      [],
-    );
+    const imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
+    if (entry === "editor-status-publisher") {
+      assert.ok(imports.length > 0);
+      assert.ok(imports.every((item) => item.external && item.path === "@earendil-works/pi-tui"));
+    } else {
+      assert.deepEqual(imports, []);
+    }
     const rootSpecifier = "@narumitw/pi-tui-kit";
     const focusedSpecifier = `@narumitw/pi-tui-kit/${entry}`;
     const [root, focused] = await Promise.all([import(rootSpecifier), import(focusedSpecifier)]);
@@ -51,11 +58,16 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { createEditorStatusPublisher, type EditorStatusPublisher, type EditorStatusPublisherOptions } from "@narumitw/pi-tui-kit/editor-status-publisher";
 import { createEditorStatusView, type EditorStatusView, type EditorStatusMode, type EditorStatusTrigger } from "@narumitw/pi-tui-kit/editor-status-view";
 import { createEditorStatusCollection, type EditorStatusCollection, type EditorStatusCollectionInput, type EditorStatusCollectionItem, type EditorStatusItemHandle } from "@narumitw/pi-tui-kit/editor-status-collection";
-import { createEditorStatusPublisher as rootPublisher, createEditorStatusView as rootView, createEditorStatusCollection as rootCollection } from "@narumitw/pi-tui-kit";
+import { createEditorStatusPublisher as rootPublisher, createEditorStatusView as rootView, createEditorStatusCollection as rootCollection, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit";
+import { EditorStatusWidget, type EditorStatusWidgetState as FocusedWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 declare const context: ExtensionContext;
-const options: EditorStatusPublisherOptions<string> = { key: "fixture:status", context, isCurrent: () => true, render: (snapshot: string, theme: Theme, width: number, rows: number) => [theme.fg("muted", snapshot.slice(0, width))] };
+const options: EditorStatusPublisherOptions<string> = { key: "fixture:status", name: "Fixture", context, isCurrent: () => true, render: (snapshot: string, theme: Theme, width: number, rows: number) => ["─".repeat(width), theme.fg("muted", snapshot.slice(0, width))] };
 const publisher: EditorStatusPublisher<string> = createEditorStatusPublisher(options);
-publisher.publish("one"); publisher.publish(undefined); publisher.dispose();
+publisher.publish("one"); publisher.setCollapsed(true); publisher.setCollapsed(false); publisher.publish(undefined); publisher.dispose();
+const state: EditorStatusWidgetState = { collapsed: false };
+const focusedState: FocusedWidgetState = state;
+const widget = new EditorStatusWidget({ name: "Fixture", state: focusedState, theme: context.ui.theme, renderBody: () => ["body"] });
+widget.setCollapsed(true); widget.render(20); widget.dispose();
 const view: EditorStatusView = createEditorStatusView({ onChange() {}, canCompact: () => true });
 const mode: EditorStatusMode = "compact"; const trigger: EditorStatusTrigger = "settled-cycle";
 view.setMode(mode); view.setTrigger(trigger); view.agentStarted(); view.userMessage(); view.settled(true); view.dispose();

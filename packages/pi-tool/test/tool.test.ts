@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { initTheme } from "@earendil-works/pi-coding-agent";
-import { getKeybindings } from "@earendil-works/pi-tui";
+import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { type Component, getKeybindings } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
@@ -328,6 +328,58 @@ test("a delayed settings load cannot overwrite a replacement session", async () 
   await previousStart;
   assert.equal(typeof current.widgets.get("tool:active-tools"), "function");
   assert.equal(previous.widgets.has("tool:active-tools"), false);
+  await mock.events.get("session_shutdown")?.[0]?.({}, current.ctx);
+});
+
+test("/tool restores a collapsed summary without changing tools or saving settings", async () => {
+  const saved: unknown[] = [];
+  const mock = createMockPi({ allTools: [...configuredTools], activeTools: ["read"] });
+  toolExtension(mock.pi, {
+    ...TEST_SETTINGS,
+    readSettings: async () => ({ kind: "loaded", settings: { activeToolStatus: true } }),
+    updateSettings: async (patch) => {
+      saved.push(patch);
+      return { activeToolStatus: true };
+    },
+  });
+  const tui = createTuiHarness({ width: 80, rows: 20 });
+  const current = createMockContext({
+    mode: "tui",
+    custom: tui.custom,
+    getSystemPromptOptions: () => ({ cwd: "/home/test/project", toolSnippets: {} }),
+  });
+  await mock.events.get("session_start")?.[0]?.({}, current.ctx);
+  const mount = () => {
+    const factory = current.widgets.get("tool:active-tools") as (
+      _tui: never,
+      theme: Theme,
+    ) => Component & { dispose?(): void };
+    return factory(undefined as never, { fg: (_role: string, text: string) => text } as Theme);
+  };
+  const previous = mount();
+  const height = previous.render(80).length;
+  previous.handleMouse?.({
+    type: "click",
+    button: "left",
+    x: 79,
+    y: 1,
+    screenX: 79,
+    screenY: 1,
+    width: 80,
+    height,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+  assert.equal(previous.render(80).length, 1);
+  previous.dispose?.();
+  const running = mock.commands.get("tool")?.handler("", current.ctx);
+  await tui.waitForOpen();
+  assert.equal(mount().render(80).length, height);
+  tui.press("ctrl+c");
+  await running;
+  assert.deepEqual(saved, []);
+  assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
   await mock.events.get("session_shutdown")?.[0]?.({}, current.ctx);
 });
 

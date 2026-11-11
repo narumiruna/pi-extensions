@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { StartupObservation, SyncInspection } from "../src/sync/sync-inspection.js";
@@ -43,8 +43,9 @@ test("attention presentation is sanitized, textual, bounded, and clearable", asy
   );
   for (const width of [0, 1, 2, 32, 60, 100]) {
     const lines = component.render(width);
-    assert.equal(lines[0], "─".repeat(width));
-    assert.equal(themeCalls.includes("borderMuted"), width > 0);
+    assert.equal(visibleWidth(lines[0] ?? ""), width);
+    if (width >= 10) assert.match(lines[0] ?? "", /^─ ▾ Sync ─+/u);
+    assert.equal(themeCalls.includes("borderMuted"), width > 2);
     themeCalls.length = 0;
     assert.equal(lines.length, 4);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
@@ -58,6 +59,95 @@ test("attention presentation is sanitized, textual, bounded, and clearable", asy
   controller.clear(ctx);
   assert.equal(statuses.get("sync"), undefined);
   assert.equal(widgets.get("sync:attention"), undefined);
+});
+
+test("blank-column body clicks retain collapse through attention updates and reset with the owner", async () => {
+  const controller = createSyncAttentionController();
+  const { ctx, widgets } = createMockContext({ mode: "tui" });
+  const mount = () => {
+    const factory = widgets.get("sync:attention") as (tui: unknown, theme: unknown) => Component & { dispose?(): void };
+    return factory({}, { fg: (_role: string, text: string) => text });
+  };
+  controller.observe(observation({ localChanged: true, remoteChanged: true }));
+  await controller.publish(ctx);
+  const first = mount();
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 99,
+    y: first.render(100).length - 1,
+    screenX: 99,
+    screenY: 0,
+    width: 100,
+    height: first.render(100).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.deepEqual(first.handleMouse?.(event), { handled: true, render: false });
+  assert.deepEqual(first.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+  assert.equal(first.render(100).length, 1);
+  first.dispose?.();
+  const latest = observation({ head: undefined, localChanged: false, remoteChanged: false });
+  controller.observe(latest);
+  await controller.publish(ctx);
+  const updated = mount();
+  assert.equal(updated.render(100).length, 1);
+  assert.match(updated.render(100)[0] ?? "", /▸ Sync/u);
+  assert.deepEqual(updated.handleMouse?.({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  assert.match(updated.render(100).join("\n"), /Remote snapshot missing; review needed/u);
+  updated.handleMouse?.({ ...event, type: "click", y: 0 });
+  controller.clear(ctx);
+  await controller.publish(ctx);
+  assert.equal(mount().render(100).length, 1, "temporary presentation clearing keeps owner state");
+  controller.expand();
+  await controller.publish(ctx);
+  const expanded = mount();
+  assert.ok(expanded.render(100).length > 1);
+  expanded.handleMouse?.({ ...event, type: "click", y: 0 });
+  controller.reset(ctx);
+  controller.observe(latest);
+  await controller.publish(ctx);
+  assert.ok(mount().render(100).length > 1, "owner reset starts expanded");
+  controller.reset(ctx);
+});
+
+test("the existing /sync menu route expands retained attention after closing", async () => {
+  const manager = await import("../src/ui/manager-ui.js");
+  const show = vi.spyOn(manager, "showSyncManager").mockResolvedValue(undefined);
+  const { handleCommand } = await import("../src/commands/command-handler.js");
+  const controller = createSyncAttentionController();
+  const { ctx, widgets } = createMockContext({ mode: "tui" });
+  controller.set({ setupName: "home", configIdentity: "identity", localInclude: [], remoteInclude: [] }, "sync");
+  const mount = () => {
+    const factory = widgets.get("sync:attention") as (tui: unknown, theme: unknown) => Component;
+    return factory({}, { fg: (_role: string, text: string) => text });
+  };
+  try {
+    await controller.publish(ctx);
+    const component = mount();
+    component.render(80);
+    component.handleMouse?.({
+      type: "click",
+      button: "left",
+      x: 79,
+      y: 0,
+      screenX: 79,
+      screenY: 0,
+      width: 80,
+      height: 4,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+    assert.equal(component.render(80).length, 1);
+    await handleCommand("", ctx, new AbortController().signal, {} as never, controller);
+    assert.equal(show.mock.calls.length, 1);
+    assert.ok(mount().render(80).length > 1);
+  } finally {
+    show.mockRestore();
+    controller.reset(ctx);
+  }
 });
 
 test("disabled status preserves the TUI review widget", async () => {

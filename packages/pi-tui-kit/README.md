@@ -17,6 +17,7 @@ Consumers reuse its navigation, rendering, cancellation, and mode adaptation ins
 - Provides standalone document review, multi-select, task, confirmation, questionnaire, live-choice, secret-input, and custom-interaction helpers.
 - Adds opt-in full-source Copy to review and exact browse-detail views without closing or confirming them.
 - Provides focused Mermaid Markdown, terminal-document, terminal-text, interaction-hint, editor-status-widget, horizontal-rule, and testing helpers.
+- Supports named widget dividers with independent whole-widget click collapse and restore in fullscreen Pi.
 - Exposes bounded-frame row mappings and configured-key canonicalization without taking over native input routing.
 - Publishes built ESM and TypeScript declarations for independently installable extensions.
 
@@ -139,7 +140,7 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Testing](./docs/api.md#-supported-testing-entrypoint) — the public `/testing` subpath and TUI/RPC harnesses.
 - [Mermaid Markdown transformers](./docs/api.md#mermaid-markdown-transformers) — lazy preparation, final-message transformation, fallback behavior, and lifecycle ownership.
 - [Public exports and compatibility history](./docs/api.md#-public-api) — helpers, types, focused subpaths, and API-version changes.
-- [Horizontal rules](./docs/api.md#-horizontal-rules) and [editor status widgets](./docs/api.md#-editor-status-widgets) — passive, width-safe presentation components.
+- [Horizontal rules](./docs/api.md#-horizontal-rules) and [editor status widgets](./docs/api.md#-editor-status-widgets) — width-safe presentation with optional named collapse controls.
 - [Editor status presentation](./docs/editor-status-presentation.md) — optional stable snapshot publication, explicit view controls, and bounded consumer-local items without taking over Pi's layout.
 - [Editor status presentation](./docs/editor-status-presentation.md) — stable snapshots, session-local view controls, and bounded item collections with consumer-owned policy.
 - [Bounded frames](./docs/api.md#bounded-frames) and [configured keys](./docs/api.md#configured-keys) — row mappings and key syntax helpers with caller-owned input policy.

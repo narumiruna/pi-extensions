@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import {
   type CacheMonitorView,
   type CacheSample,
@@ -26,6 +26,7 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
   let streamingSample: CacheSample | undefined;
   let publishedSignature: string | undefined;
   let visible = false;
+  let widgetState: EditorStatusWidgetState = { collapsed: false };
 
   const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
@@ -71,7 +72,8 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
     const signature = JSON.stringify(lines);
     if (signature === publishedSignature) return;
     if (ctx.mode === "tui") {
-      ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => createCacheMonitorWidget(view, theme), {
+      const state = widgetState;
+      ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => createCacheMonitorWidget(view, theme, state), {
         placement: "aboveEditor",
       });
     } else {
@@ -99,6 +101,7 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
 
       visible = !visible;
       if (visible) {
+        widgetState.collapsed = false;
         restore(ctx);
         publish(ctx);
       } else clearWidget(ctx);
@@ -112,6 +115,7 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
     }
     activeSession = ctx.sessionManager;
     visible = false;
+    widgetState = { collapsed: false };
     publishedSignature = undefined;
     restore(ctx);
   });
@@ -181,6 +185,7 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
     cacheReportingProviders.clear();
     streamingSample = undefined;
     visible = false;
+    widgetState = { collapsed: false };
   });
 }
 
@@ -188,10 +193,16 @@ export function renderCacheMonitor(view: CacheMonitorView, theme: Theme, width: 
   return createCacheMonitorWidget(view, theme).render(width);
 }
 
-function createCacheMonitorWidget(view: CacheMonitorView, theme: Theme): EditorStatusWidget {
+function createCacheMonitorWidget(
+  view: CacheMonitorView,
+  theme: Theme,
+  state?: EditorStatusWidgetState,
+): EditorStatusWidget {
   // Kit normalizes fractional and invalid widths before body wrapping.
   return new EditorStatusWidget({
     theme,
+    name: "Cache hit monitor",
+    state,
     renderBody: (width) =>
       width === 0
         ? formatMonitorLines(view).map(() => "")

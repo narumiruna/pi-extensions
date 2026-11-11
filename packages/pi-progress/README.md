@@ -168,7 +168,10 @@ A later summary epoch uses only canonical Progress context for the then-current 
 
 ## 🖥️ Widget presentation
 
-In TUI mode, the widget appears above the editor with one full-width themed separator.
+In TUI mode, the widget appears above the editor with one full-width themed separator named **Progress**.
+In fullscreen TUI mode, click anywhere in the widget, including blank columns, to collapse it to that named separator. Click the separator to restore the latest content without moving keyboard focus.
+Disclosure is local to this widget and survives updates, transient hide/show, and host remounts. Selecting a visible Widget view restores disclosure; session start and tree navigation reset it.
+Collapse does not change saved progress, settings, item views, pins, automatic rules, or completion retention.
 Visible updates, including the completion-summary transition, keep the same mounted component and sibling position.
 Hide removes the widget and its separator; showing it again uses Pi's current insertion position.
 RPC publishes string-line snapshots at 80 columns with a 36-row terminal budget because Pi does not expose client dimensions.

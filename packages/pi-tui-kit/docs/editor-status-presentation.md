@@ -3,7 +3,7 @@
 [API reference](./api.md#-editor-status-widgets) · [README](../README.md)
 
 The optional editor status helpers update one extension-owned widget without taking over Pi's layout, input, or terminal.
-`EditorStatusWidget` remains the passive horizontal frame with its original API.
+`EditorStatusWidget` keeps its original unnamed passive frame and supports an optional named, collapsible divider.
 The owner supplies immutable display snapshots, safe text, summaries, priority, row budgets, and domain policy.
 
 ## Ownership and admission
@@ -28,7 +28,13 @@ Do not manufacture an incremental API by splitting a complete snapshot into item
 
 Import `createEditorStatusPublisher` from `@narumitw/pi-tui-kit/editor-status-publisher`.
 Pass `key`, `context`, `isCurrent`, and `render(snapshot, theme, width, rows)`.
-The render callback returns complete terminal lines, including the standard `EditorStatusWidget` frame.
+The render callback returns complete terminal lines, including the standard `EditorStatusWidget` divider as its first line.
+Supply `name` to replace that first divider with `─ ▾ Name ───` in TUI mode without adding a row.
+An unmodified primary-button click anywhere in the widget collapses it to `─ ▸ Name ───`; clicking anywhere on that line restores the latest body.
+Only fullscreen Pi routes mouse events. The control never requests editor focus; wheel, drag, modified clicks, other buttons, and OSC 8 link cells do not toggle it.
+A redraw between press and release cancels that gesture because Pi retains the original press target's screen coordinates; a fresh click uses the current layout.
+`setCollapsed(false)` restores the body from an owner keyboard action and requests a render after a change.
+RPC keeps the original complete string snapshot; headless and RPC publishers reject disclosure changes.
 
 `publish(snapshot)` mounts once when visible.
 Later immutable snapshots invalidate that component and request a Pi render rather than calling `setWidget()` again.
@@ -36,6 +42,30 @@ The callback receives the current public theme and terminal dimensions; do not r
 `publish(undefined)` hides the widget, and `dispose()` releases its owned mount idempotently.
 Headless contexts acquire no UI resources; RPC receives plain string snapshots at 80 columns and 36 rows.
 The owner may retain its existing TUI-only scope instead of enabling RPC.
+
+Disclosure state belongs to one publisher and survives ordinary snapshots, hide/show, theme changes, resize, and host remounts.
+A fresh publisher starts expanded; owner session/tree resets can also call `setCollapsed(false)`.
+The snapshot renderer still runs while collapsed so owner visibility and row-budget decisions remain authoritative.
+Disclosure does not stop background work, edit saved settings, clear attention, or change jobs, tasks, permissions, or tool activation.
+No global widget registry or terminal-input listener is installed.
+For direct `EditorStatusWidget` mounts, pass a stable owner-local `EditorStatusWidgetState` across replacements and forward mouse and disposal methods through every wrapper.
+
+Existing owner controls restore the body without changing domain data:
+
+| Widget | Keyboard restore path |
+| --- | --- |
+| Progress | `/progress` → Widget view → default, details, or summary. |
+| Subagents | `/subagents` → Widget view → details or summary. |
+| Herdr | Open `/herdr`. |
+| Files | Open `/files`. |
+| Plan mode | Open `/plan` without arguments. |
+| Active tools | Open `/tool`. |
+| Chat | `/chat` → select an enabled widget display mode. |
+| Ticker | `/ticker refresh` or the existing Refresh action. |
+| Cache hit monitor | Use the existing toggle to hide, then show the monitor. |
+| Sync | Open `/sync`. |
+
+These are restore paths, not new commands. Existing disable, attention, and visibility policies still apply.
 
 This prevents ordinary updates from moving a widget after its siblings.
 It does not reserve global positions: Pi inserts a hidden widget at the end when it is shown again.
@@ -126,10 +156,11 @@ Manual item removal never deletes a task or hides it from the owner's domain man
 Deterministic tests cover native regular/fullscreen publication, sibling order, mount/dispose counts, immutable snapshots, themes, narrow widths, RPC/headless behavior, stale owners, and failed initialization.
 Pure view/collection tests cover event positions, retries, pin/manual precedence, bounded replacement, atomic failure, removed markers, and stale item handles.
 Consumer tests cover existing menus, settings, authoritative state, completion retention, and selected event policies.
-Strict external-consumer and eager-graph tests keep the original widget entry unchanged and each optional helper dependency-free at runtime.
+Strict external-consumer and eager-graph tests keep display entrypoints limited to Kit display helpers and Pi TUI; view and collection helpers have no runtime dependencies.
 Changesets fixtures verify that the Kit minor release raises each adopting consumer's generated dependency floor; exact-artifact publication guards remain required.
 
-The implementation verification passed both repository gates: `npm run check` and separate `npm test` (797 files, 15,384 tests; the existing one-file/two-test skips remain).
+Verification with the repository's pinned Node release passed both gates: `npm run check` and separate `npm test` (925 files, 20,705 passing tests, 34 existing skips, and no unhandled errors).
+Named-disclosure regressions include full-width/body clicks, independent owners, current-data restore, keyboard recovery, stale/disposed input, reentrant body/theme callbacks, and a moved press target in Pi's installed fullscreen input dock.
 These passing gates do not establish exact tracking across an unobserved maintenance/custom-run boundary; a separate native diagnostic reproduces the one-extra-cycle limit above.
 The complete intended diff was reviewed for correctness, security, lifecycle safety, compatibility, regressions, and scope against the extension, settings, README, Kit admission, and coordinated-release guides.
 Failure-injection tests cover cleanup exceptions across all three consumers, joining source/menu/settings/runtime work, stale context getters, retrying failed publication cleanup, reentrant policy/measurement callbacks, and capacity bypass attempts.

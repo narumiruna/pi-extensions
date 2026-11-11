@@ -1,13 +1,18 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { FileQuote } from "./file-context.js";
 import { displayPath } from "./scope/display.js";
 import type { ScopeView } from "./scope/menu.js";
 
 /** One owned widget; context summaries never replace an active restriction. */
-export function publishFilesWidget(ctx: ExtensionContext, quotes: readonly FileQuote[], scope?: ScopeView): void {
+export function publishFilesWidget(
+  ctx: ExtensionContext,
+  quotes: readonly FileQuote[],
+  scope?: ScopeView,
+  widgetState?: EditorStatusWidgetState,
+): void {
   if (!ctx.hasUI) return;
   if (!quotes.length && (!scope || scope.state === "inactive")) {
     ctx.ui.setWidget("files", undefined);
@@ -50,6 +55,8 @@ export function publishFilesWidget(ctx: ExtensionContext, quotes: readonly FileQ
     (_tui, theme) =>
       new EditorStatusWidget({
         theme,
+        name: "Files",
+        state: widgetState,
         renderBody: (width) =>
           width === 0 ? lines.map(() => "") : render(theme).flatMap((line) => wrapTextWithAnsi(line, width)),
       }),

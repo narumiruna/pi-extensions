@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import * as collectionApi from "@narumitw/pi-tui-kit/editor-status-collection";
 import * as viewApi from "@narumitw/pi-tui-kit/editor-status-view";
 import { afterEach, test, vi } from "vitest";
@@ -89,6 +89,91 @@ function fixture(initial: ActiveJobDisplay[] = [job], idle = true, phase: Subage
     },
   };
 }
+
+function pointer(component: Component, y = 2, x = 199): TuiMouseEvent {
+  return {
+    type: "click",
+    button: "left",
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    width: 200,
+    height: component.render(200).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+}
+
+for (const y of [0, 1, 2]) {
+  for (const x of [0, 199]) {
+    test(`Subagents click (${x}, ${y}) collapses only its named frame and retains latest jobs`, () => {
+      const f = fixture();
+      const sibling = fixture();
+      const component = f.component();
+      assert.ok(component);
+      const before = f.render();
+      const jobs = structuredClone(f.runtime.activeJobsForDisplay());
+      f.controls.setPinned(true);
+      f.controls.setTrigger("user-message");
+      const state = f.controls.state();
+      const event = pointer(component, y, x);
+      assert.deepEqual(component.handleMouse?.({ ...event, type: "press" }), { handled: true, render: false });
+      // Do not force a redraw between press and click; redraw cancels stale geometry.
+      assert.deepEqual(component.handleMouse?.(event), { handled: true, render: true });
+      assert.equal(f.render().length, 1);
+      assert.match(f.render()[0] ?? "", /^─ ▸ Subagents ─+$/u);
+      assert.deepEqual(sibling.render(), before);
+      assert.deepEqual(f.controls.state(), state);
+      assert.deepEqual(f.runtime.activeJobsForDisplay(), jobs);
+      const latest = [{ ...job, task: "Latest task while collapsed", elapsedMs: 7_000 }];
+      f.replace(latest);
+      assert.equal(f.render().length, 1);
+      assert.deepEqual(component.handleMouse?.(pointer(component, 0)), { handled: true, render: true });
+      assert.match(f.render()[0] ?? "", /^─ ▾ Subagents ─+$/u);
+      assert.deepEqual(f.render().slice(1), renderSubagentWidget(latest, theme, 200).slice(1));
+      assert.deepEqual(latest, [{ ...job, task: "Latest task while collapsed", elapsedMs: 7_000 }]);
+    });
+  }
+}
+
+test("Subagents disclosure survives absent jobs, disabled settings, and host remount; existing views restore it", () => {
+  const f = fixture();
+  const original = f.component();
+  assert.ok(original);
+  original.handleMouse?.(pointer(original));
+  assert.equal(f.render().length, 1);
+  original.dispose?.();
+  f.replace([{ ...job, elapsedMs: 1_000 }]);
+  assert.notEqual(f.component(), original);
+  assert.equal(f.render().length, 1);
+  assert.equal(original.handleMouse?.(pointer(original, 0)), undefined);
+  f.replace([]);
+  assert.deepEqual(f.render(), []);
+  f.replace([job]);
+  assert.equal(f.render().length, 1);
+  const disabled = { ...DEFAULT_SUBAGENT_SETTINGS, showWidget: false };
+  f.controller.update(f.ctx, disabled);
+  assert.deepEqual(f.render(), []);
+  f.controller.update(f.ctx, DEFAULT_SUBAGENT_SETTINGS);
+  assert.equal(f.render().length, 1);
+  assert.deepEqual(disabled, { ...DEFAULT_SUBAGENT_SETTINGS, showWidget: false });
+  for (const mode of ["default", "expanded", "compact"] as const) {
+    const renders = f.requests.mock.calls.length;
+    f.controls.setMode(mode);
+    assert.ok(f.requests.mock.calls.length > renders);
+    assert.match(f.render()[0] ?? "", /^─ ▾ Subagents ─+$/u);
+    assert.ok(f.render().length > 1);
+    const component = f.component();
+    assert.ok(component);
+    component.handleMouse?.(pointer(component, 1));
+    assert.equal(f.render().length, 1);
+  }
+  f.controls.setMode("hidden");
+  f.controls.setMode("expanded");
+  assert.equal(f.render().length, 3);
+});
 
 test("retains one mount for visible changes, invalidates renders, and clears only its own key", () => {
   const f = fixture();
@@ -403,7 +488,13 @@ test("same-manager reset clears the old UI first and rejects stale callbacks bef
   const oldTick = f.tick;
   const oldHandle = f.controls.item(job.jobId);
   const oldContext = f.context.ctx as ExtensionContext;
+  assert.ok(oldComponent);
+  const oldEvent = pointer(oldComponent);
+  oldComponent.handleMouse?.(oldEvent);
+  assert.equal(f.render().length, 1);
   f.controls.setMode("compact");
+  oldComponent.handleMouse?.(pointer(oldComponent, 1));
+  assert.equal(f.render().length, 1);
   f.controls.setPinned(true);
   f.controls.setTrigger("user-message");
   f.controller.start(oldContext);
@@ -412,6 +503,8 @@ test("same-manager reset clears the old UI first and rejects stale callbacks bef
   assert.equal(typeof f.mounts.mock.calls[2]?.[1], "function");
   assert.deepEqual(f.controller.controls(oldContext)?.state(), { mode: "default", pinned: false, trigger: "manual" });
   assert.equal(f.unsubscribe.mock.calls.length, 1);
+  assert.equal(f.render().length, 3, "new session owner starts expanded");
+  assert.equal(oldComponent?.handleMouse?.(oldEvent), undefined);
   assert.deepEqual(oldComponent?.render(200), []);
   const currentComponent = f.component();
   oldComponent?.dispose?.();

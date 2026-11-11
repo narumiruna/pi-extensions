@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import type { PlanModeState } from "./state.js";
 
 const STATUS_KEY = "plan-mode";
@@ -12,6 +12,7 @@ export function updatePlanModeUi(
   state: PlanModeState,
   toolSummary: () => string,
   interactionShortcut?: string,
+  widgetState?: EditorStatusWidgetState,
 ) {
   ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
   const discussion = state.interactionMode === "discussion";
@@ -39,17 +40,23 @@ export function updatePlanModeUi(
     lines = ["Implementation plan active", "Use /plan to show, replace, or clear it."];
   }
 
-  publishPlanModeWidget(ctx, lines);
+  publishPlanModeWidget(ctx, lines, widgetState);
 }
 
 export function renderPlanModeWidget(lines: readonly string[], theme: Theme, width: number): string[] {
   return createPlanModeWidget(lines, theme).render(width);
 }
 
-function createPlanModeWidget(lines: readonly string[], theme: Theme): EditorStatusWidget {
+function createPlanModeWidget(
+  lines: readonly string[],
+  theme: Theme,
+  state?: EditorStatusWidgetState,
+): EditorStatusWidget {
   // Kit normalizes fractional and invalid widths before clipping sanitized body rows.
   return new EditorStatusWidget({
     theme,
+    name: "Plan mode",
+    state,
     renderBody: () =>
       lines.map((line, index) => {
         const text = sanitizePlanModeWidgetLine(line);
@@ -119,7 +126,11 @@ export function planModeStatusText(state: PlanModeState, toolSummary: () => stri
   return "Plan mode is off.";
 }
 
-function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] | undefined) {
+function publishPlanModeWidget(
+  ctx: ExtensionContext,
+  lines: readonly string[] | undefined,
+  widgetState?: EditorStatusWidgetState,
+) {
   if (!lines) {
     ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
     return;
@@ -130,7 +141,7 @@ function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] |
   }
 
   const snapshot = [...lines];
-  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => createPlanModeWidget(snapshot, theme));
+  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => createPlanModeWidget(snapshot, theme, widgetState));
 }
 
 function formatInteractionHint(state: PlanModeState, interactionShortcut?: string) {

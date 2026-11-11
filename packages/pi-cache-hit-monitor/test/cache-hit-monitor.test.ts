@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Api, AssistantMessage, Model, ModelCostRates } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import cacheHitMonitor, { COMMAND_NAME, renderCacheMonitor, WIDGET_KEY } from "../src/index.js";
@@ -27,7 +27,7 @@ const THEME = {
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown;
-type WidgetFactory = (_tui: never, theme: Theme) => Component;
+type WidgetFactory = (_tui: never, theme: Theme) => Component & { dispose?(): void };
 type WidgetRecord = [string, string[] | WidgetFactory | undefined, { placement: "aboveEditor" } | undefined];
 
 function assistant(
@@ -385,10 +385,12 @@ test.each([0, 1, 2, 12, 80, 200, -1, Number.NaN, Number.POSITIVE_INFINITY, Numbe
             normalized,
           ),
     );
-    assert.deepEqual(lines, [
-      normalized === 0 ? "" : theme.fg("borderMuted", "─".repeat(normalized)),
-      ...body.map((line) => truncateToWidth(line, normalized, "")),
-    ]);
+    assert.deepEqual(
+      lines.slice(1),
+      body.map((line) => truncateToWidth(line, normalized, "")),
+    );
+    assert.equal(visibleWidth(lines[0] ?? ""), normalized);
+    if (normalized >= 24) assert.match(stripTerminalSequences(lines[0] ?? ""), /^─ ▾ Cache hit monitor ─+/u);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     if (normalized === 0) assert.ok(lines.every((line) => line === ""));
   },
@@ -416,7 +418,8 @@ test("uses the callback theme after resize and invalidation without changing pub
       assert.ok(lines.every((line) => line === ""));
       assert.equal(fg.mock.calls.length, 0);
     } else {
-      assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+      if (width > 2) assert.ok(fg.mock.calls.some(([role]) => role === "borderMuted"));
+      if (width >= 24) assert.match(stripTerminalSequences(lines[0] ?? ""), /^─ ▾ Cache hit monitor ─+/u);
       assert.ok(fg.mock.calls.some(([role]) => role === "accent"));
       assert.ok(fg.mock.calls.some(([role]) => role === "success"));
     }
@@ -429,6 +432,52 @@ test("uses the callback theme after resize and invalidation without changing pub
   await harness.emit("session_tree", {}, current.ctx);
   assert.equal(current.widgets.length, 1);
   assert.equal(current.widgets.at(-1)?.[1], factory);
+  await harness.emit("session_shutdown", {}, current.ctx);
+});
+
+test("body and blank-column clicks retain collapse across usage remounts and restore the latest data", async () => {
+  const harness = createHarness();
+  const current = createContext("tui", [messageEntry(assistant(200, 800))]);
+  const mount = () => {
+    const factory = current.widgets.at(-1)?.[1];
+    assert.equal(typeof factory, "function");
+    if (typeof factory !== "function") throw new Error("Missing monitor widget");
+    return factory(undefined as never, THEME);
+  };
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+  const first = mount();
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 159,
+    y: first.render(160).length - 1,
+    screenX: 159,
+    screenY: 0,
+    width: 160,
+    height: first.render(160).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.deepEqual(first.handleMouse?.(event), { handled: true, render: false });
+  assert.deepEqual(first.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+  assert.equal(first.render(160).length, 1);
+  first.dispose?.();
+  await harness.emit("message_update", { message: assistant(100, 900) }, current.ctx);
+  const updated = mount();
+  assert.equal(updated.render(160).length, 1);
+  assert.match(updated.render(160)[0] ?? "", /▸ Cache hit monitor/u);
+  assert.deepEqual(updated.handleMouse?.({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  assert.match(updated.render(160).join("\n"), /LIVE.*hit 90\.0%/s);
+  updated.handleMouse?.({ ...event, type: "click", y: 0 });
+  await harness.command("", current.ctx);
+  await harness.command("", current.ctx);
+  assert.ok(mount().render(160).length > 1, "show command restores the body");
+  await harness.emit("session_shutdown", {}, current.ctx);
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+  assert.ok(mount().render(160).length > 1, "new session starts expanded");
   await harness.emit("session_shutdown", {}, current.ctx);
 });
 

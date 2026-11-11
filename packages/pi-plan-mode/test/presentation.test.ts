@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { HorizontalRule } from "@narumitw/pi-tui-kit";
 import { test, vi } from "vitest";
 import {
   clearPlanModeUi,
@@ -10,6 +11,9 @@ import {
   updatePlanModeUi,
 } from "../src/presentation.js";
 import type { PlanModeState } from "../src/state.js";
+
+const divider = (width: number) =>
+  new HorizontalRule({ label: "▾ Plan mode", labelAlignment: "left" }).render(width)[0];
 
 test("renders an editor-style divider above bounded Plan mode content", () => {
   const roles: string[] = [];
@@ -22,8 +26,13 @@ test("renders an editor-style divider above bounded Plan mode content", () => {
 
   const lines = renderPlanModeWidget(["Plan mode: planning", "A longer status line"], theme, 12);
 
-  assert.deepEqual(lines.map(stripTerminalSequences), ["─".repeat(12), "Plan mode: p", "A longer sta"]);
-  assert.deepEqual(roles, ["muted", "borderMuted"]);
+  assert.deepEqual(lines.map(stripTerminalSequences), [
+    stripTerminalSequences(divider(12) ?? ""),
+    "Plan mode: p",
+    "A longer sta",
+  ]);
+  assert.ok(roles.includes("muted"));
+  assert.ok(roles.includes("borderMuted"));
   assert.ok(lines.every((line) => visibleWidth(line) <= 12));
 });
 
@@ -35,7 +44,7 @@ test.each([0, 1, 2, 12, 80, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEG
     const theme = { fg: (_role: string, text: string) => text } as Theme;
     const lines = renderPlanModeWidget(body, theme, width);
     assert.deepEqual(lines, [
-      "─".repeat(normalized),
+      divider(normalized),
       ...body.map((line) => truncateToWidth(sanitizePlanModeWidgetLine(line), normalized, "")),
     ]);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
@@ -120,14 +129,19 @@ test.each(widgetStates)("preserves widget publication and exact-key cleanup for 
         const lines = component.render(width);
         assert.ok(lines.every((line) => visibleWidth(line) <= width));
         if (width === 0) assert.deepEqual(lines, ["", ...body.map(() => "")]);
-        else assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+        else {
+          assert.equal(stripTerminalSequences(lines[0] ?? ""), stripTerminalSequences(divider(width) ?? ""));
+          if (width > 2) assert.ok(fg.mock.calls.some(([role]) => role === "borderMuted"));
+        }
       }
       assert.deepEqual(component.render(80).slice(1).map(stripTerminalSequences), body);
       assert.ok(fg.mock.calls.some(([role, text]) => role === "muted" && text === body.at(-1)));
       color = "\u001b[32m";
       component.invalidate();
       const recolored = component.render(80);
-      assert.equal(recolored[0], `${color}${"─".repeat(80)}\u001b[0m`);
+      assert.equal(stripTerminalSequences(recolored[0] ?? ""), `─ ▾ Plan mode ${"─".repeat(66)}`);
+      assert.ok(recolored[0]?.includes(color));
+      assert.ok(!recolored[0]?.includes("\u001b[31m"));
       assert.equal(recolored.at(-1), `${color}${body.at(-1)}\u001b[0m`);
       assert.equal(setWidget.mock.calls.length, 1);
     } else {

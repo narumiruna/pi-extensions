@@ -1,13 +1,19 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "./editor-status-widget.js";
+import { sanitizeTerminalText } from "./terminal-text.js";
 
 export interface EditorStatusPublisher<T> {
   publish(snapshot: T | undefined): void;
+  /** Set the named TUI frame's disclosure from an owner keyboard action. */
+  setCollapsed(collapsed: boolean): boolean;
   dispose(): void;
 }
 
 export interface EditorStatusPublisherOptions<T> {
   key: string;
+  /** Replace the supplied frame's first divider with a named collapse control in TUI mode. */
+  name?: string;
   context: Pick<ExtensionContext, "mode" | "hasUI" | "ui">;
   isCurrent(): boolean;
   render(snapshot: T, theme: Theme, width: number, rows: number): readonly string[];
@@ -27,10 +33,12 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
   // Read context properties only while this owner is valid. Headless publishers
   // do not retain a UI object (headless sessions can share the same no-op UI).
   const { key, isCurrent, render } = options;
-  if (!isCurrent()) return { publish() {}, dispose() {} };
+  if (!isCurrent()) return { publish() {}, setCollapsed: () => false, dispose() {} };
   const { mode, hasUI } = options.context;
-  if (!hasUI || (mode !== "tui" && mode !== "rpc")) return { publish() {}, dispose() {} };
+  if (!hasUI || (mode !== "tui" && mode !== "rpc")) return { publish() {}, setCollapsed: () => false, dispose() {} };
   const ui = options.context.ui;
+  const name = sanitizeTerminalText(options.name ?? "").trim();
+  const state = { collapsed: false };
   let disposed = false;
   let latest: T | undefined;
   let mount: Mount | undefined;
@@ -101,15 +109,36 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
           key,
           (tui) => {
             token.tui = tui;
+            let lines: readonly string[] = [];
+            const frame = name
+              ? new EditorStatusWidget({
+                  name,
+                  state,
+                  get theme() {
+                    return ui.theme;
+                  },
+                  renderBody: () => lines.slice(1),
+                })
+              : undefined;
             const component = {
               render(width: number): string[] {
+                frame?.invalidate();
                 if (!current() || mount !== token || latest === undefined) return [];
-                // ui.theme is Pi's current callback theme, including replacements
-                // after a theme change. Do not retain themed lines or the first theme.
-                return [...render(latest, ui.theme, width, tui.terminal.rows)];
+                // Render the latest snapshot even while collapsed so the owner's
+                // visibility and row-budget decisions remain authoritative.
+                lines = render(latest, ui.theme, width, tui.terminal.rows);
+                if (!current() || mount !== token || latest === undefined) return [];
+                return frame && lines.length > 0 ? frame.render(width) : [...lines];
               },
-              invalidate() {},
+              handleMouse(event: TuiMouseEvent) {
+                if (!current() || mount !== token || latest === undefined) return undefined;
+                return frame?.handleMouse(event);
+              },
+              invalidate() {
+                frame?.invalidate();
+              },
               dispose() {
+                frame?.dispose();
                 // Host disposal must never clear a newer mount or call back into UI.
                 if (mount === token) {
                   mount = undefined;
@@ -126,6 +155,13 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
         if (writeVersion === attempt) fail(error);
         throw error;
       }
+    },
+    setCollapsed(collapsed) {
+      if (!current() || mode !== "tui" || !name || state.collapsed === collapsed) return false;
+      state.collapsed = collapsed;
+      mount?.component?.invalidate();
+      mount?.tui?.requestRender();
+      return true;
     },
     dispose() {
       if (disposed && !needsClear) return;

@@ -9,9 +9,12 @@ import { createPiChatExtension } from "../src/pi-chat.js";
 test("Chat keeps the shared widget import inside its lazy module", async () => {
   const entry = await readFile(new URL("../src/pi-chat.ts", import.meta.url), "utf8");
   const widget = await readFile(new URL("../src/widget.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(entry, /@narumitw\/pi-tui-kit/u);
+  assert.doesNotMatch(entry, /^import(?! type\b).*@narumitw\/pi-tui-kit/mu);
   assert.match(entry, /\(\) => import\("\.\/widget\.js"\)/u);
-  assert.match(widget, /import \{ EditorStatusWidget \} from "@narumitw\/pi-tui-kit\/editor-status-widget"/u);
+  assert.match(
+    widget,
+    /import \{ EditorStatusWidget, type EditorStatusWidgetState \} from "@narumitw\/pi-tui-kit\/editor-status-widget"/u,
+  );
   assert.doesNotMatch(widget, /["']─["']\.repeat/u);
 });
 

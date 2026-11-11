@@ -20,7 +20,7 @@ const quote = {
 };
 
 function createWidget(view: TickerView) {
-  return new EditorStatusWidget({ theme, renderBody: (width) => renderTickerBody(view, theme, width) });
+  return new EditorStatusWidget({ name: "Ticker", theme, renderBody: (width) => renderTickerBody(view, theme, width) });
 }
 
 test("renders every widget line within the supplied width", () => {
@@ -32,7 +32,7 @@ test("renders every widget line within the supplied width", () => {
     loading: false,
     updatedAt: 1_700_000_000_000,
   }).render(32);
-  assert.equal(stripTerminalSequences(lines[0] ?? ""), "─".repeat(32));
+  assert.equal(stripTerminalSequences(lines[0] ?? ""), `─ ▾ Ticker ${"─".repeat(21)}`);
   assert.ok(lines.every((line) => visibleWidth(line) <= 32));
   assert.ok(lines.some((line) => stripTerminalSequences(line) === "NVDA $110.00 +10.00 (+10.00%)"));
   assert.ok(lines.some((line) => stripTerminalSequences(line).startsWith("AAPL $110.00")));
@@ -48,17 +48,17 @@ test("packs complete quotes together and wraps them only when they do not fit", 
   });
   const item = "NVDA $110.00 +10.00 (+10.00%)";
   const second = item.replace("NVDA", "AAPL");
-  assert.deepEqual(widget.render(80), ["─".repeat(80), "Stocks", `${item}  │  ${second}`]);
-  assert.deepEqual(widget.render(32), ["─".repeat(32), "Stocks", item, second]);
+  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, "Stocks", `${item}  │  ${second}`]);
+  assert.deepEqual(widget.render(32), [`─ ▾ Ticker ${"─".repeat(21)}`, "Stocks", item, second]);
   assert.deepEqual(widget.render(16), [
-    "─".repeat(16),
+    "─ ▾ Ticker ─────",
     "Stocks",
     "NVDA $110.00",
     "+10.00 (+10.00%)",
     "AAPL $110.00",
     "+10.00 (+10.00%)",
   ]);
-  assert.deepEqual(widget.render(80), ["─".repeat(80), "Stocks", `${item}  │  ${second}`]);
+  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, "Stocks", `${item}  │  ${second}`]);
 });
 
 test.each([80, 32, 7, 2, 1, 0, -1, 0.9, 7.9, Number.NaN, Infinity, -Infinity])(
@@ -70,7 +70,8 @@ test.each([80, 32, 7, 2, 1, 0, -1, 0.9, 7.9, Number.NaN, Infinity, -Infinity])(
     });
     const lines = widget.render(width);
     const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
-    assert.equal(lines[0], "─".repeat(normalized));
+    assert.equal(visibleWidth(lines[0] ?? ""), normalized);
+    if (normalized >= 12) assert.match(lines[0] ?? "", /^─ ▾ Ticker ─+/u);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     if (normalized === 0) assert.deepEqual(lines, [""]);
     else assert.ok(lines.length > 1);
@@ -101,11 +102,12 @@ test("sanitizes raw display values before styling and packing without changing t
     },
   } as unknown as Theme;
   const widget = new EditorStatusWidget({
+    name: "Ticker",
     theme: callbackTheme,
     renderBody: (width) => renderTickerBody(view, callbackTheme, width),
   });
   const plain = ["Stocks", "NVDA X USD 110.00 +10.00 (+10.00%)"];
-  assert.deepEqual(widget.render(80), ["─".repeat(80), ...plain]);
+  assert.deepEqual(widget.render(80), [`─ ▾ Ticker ${"─".repeat(69)}`, ...plain]);
   assert.deepEqual(formatTickerPlain(view), plain);
   assert.ok(calls.includes("NVDA X"));
   assert.ok(calls.every((text) => ["\u001b", "\u0007", "\u202e", "\n"].every((control) => !text.includes(control))));

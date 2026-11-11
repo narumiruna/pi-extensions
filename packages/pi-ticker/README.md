@@ -50,6 +50,8 @@ Open the ticker manager in TUI mode:
 
 Choose **Add custom ticker…** and enter a Yahoo Finance symbol such as `MSFT`, `SPY`, or `BTC-USD`.
 The widget appears after the settings save and the first quote request completes.
+In fullscreen TUI mode, click anywhere in **Ticker** to collapse or expand it without moving keyboard focus.
+Polling keeps the collapse state and continues to update quotes. `/ticker refresh`, the manager's refresh action, or enabling the widget restores the body. A new session resets the collapse state.
 
 ## 🧭 Ticker manager
 
