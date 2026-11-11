@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { test } from "vitest";
 import { requestRemoteCompaction } from "../src/remote.js";
+import { codexReasoningEffort, type RemoteCompactionRequest } from "../src/remote-types.js";
 
 const model = {
   id: "gpt-5.6",
@@ -30,6 +31,21 @@ const usage = {
   totalTokens: 12,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+test("Codex compaction selects a supported effort without changing other providers", () => {
+  const request = { model, thinkingLevel: "off" } as RemoteCompactionRequest;
+  assert.equal(codexReasoningEffort(request), "none");
+  assert.equal(codexReasoningEffort({ ...request, thinkingLevel: undefined }), "medium");
+  assert.equal(
+    codexReasoningEffort({
+      ...request,
+      thinkingLevel: "xhigh",
+      model: { ...model, thinkingLevelMap: { xhigh: null, high: "high", medium: "medium" } },
+    }),
+    "high",
+  );
+  assert.equal(codexReasoningEffort({ ...request, model: { ...model, api: "azure-openai-responses" } }), undefined);
+});
 
 function fakeProvider(
   observe: (payload: unknown, options: OpenAICodexResponsesOptions) => void,
@@ -109,6 +125,7 @@ test("uses the public provider stream with reordered SSE items, bounded retry op
     sent = payload;
     assert.equal(options.transport, "sse");
     assert.equal(options.cacheRetention, "none");
+    assert.equal(options.reasoningEffort, "medium");
     assert.equal(options.timeoutMs, 300_000);
     assert.equal(options.maxRetries, 2);
   });
@@ -118,6 +135,7 @@ test("uses the public provider stream with reordered SSE items, bounded retry op
     context: { messages: [] } satisfies Context,
     protocol: "remote-v2",
     profile: "codex-responses-v1",
+    thinkingLevel: "medium",
     apiKey: "oauth-token",
     signal: new AbortController().signal,
     fetch: async () => responseSse(),
