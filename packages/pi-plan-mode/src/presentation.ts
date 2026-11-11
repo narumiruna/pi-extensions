@@ -1,55 +1,85 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import type { PlanModeState } from "./state.js";
 
 const STATUS_KEY = "plan-mode";
 const PLAN_WIDGET_KEY = "plan-mode-plan";
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
+interface PlanModeWidgetPresentation {
+  summary: string;
+  body: readonly string[];
+  fallback: readonly string[];
+}
+
 export function updatePlanModeUi(
   ctx: ExtensionContext,
   state: PlanModeState,
   toolSummary: () => string,
   interactionShortcut?: string,
+  widgetState?: EditorStatusWidgetState,
 ) {
   ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
   const discussion = state.interactionMode === "discussion";
   const interactionHint = formatInteractionHint(state, ctx.mode === "tui" ? interactionShortcut : undefined);
-  let lines: string[] | undefined;
+  let presentation: PlanModeWidgetPresentation | undefined;
   if (state.enabled && state.latestPlan) {
-    lines = [
-      "Proposed plan ready",
-      ...(discussion ? ["Plan mode: free discussion"] : []),
-      "Use /plan to implement, save, revise, or exit Plan mode.",
-      interactionHint,
-    ];
+    const actions = "Use /plan to implement, save, revise, or exit Plan mode.";
+    presentation = {
+      summary: discussion ? "Ready · Free discussion" : "Ready",
+      body: ["File edits remain blocked.", actions, interactionHint],
+      fallback: [
+        "Proposed plan ready",
+        ...(discussion ? ["Plan mode: free discussion"] : []),
+        actions,
+        interactionHint,
+      ],
+    };
   } else if (state.enabled) {
-    lines = [
-      discussion ? "Plan mode: free discussion" : "Plan mode: planning",
-      toolSummary(),
-      discussion
-        ? "Plain-text questions are allowed; questionnaires are paused."
-        : "Finish with plan_mode_complete when decision-ready.",
-      interactionHint,
-    ];
+    const tools = toolSummary();
+    const discussionHint = "Plain-text questions are allowed; questionnaires are paused.";
+    presentation = {
+      summary: discussion ? "Free discussion" : "Planning",
+      body: ["File edits remain blocked.", tools, ...(discussion ? [discussionHint] : []), interactionHint],
+      fallback: [
+        discussion ? "Plan mode: free discussion" : "Plan mode: planning",
+        tools,
+        discussion ? discussionHint : "Finish with plan_mode_complete when decision-ready.",
+        interactionHint,
+      ],
+    };
   } else if (state.savedPlan) {
-    lines = ["Plan saved for later", "Use /plan to show, implement, or clear it."];
+    const actions = "Use /plan to show, implement, or clear it.";
+    presentation = { summary: "Saved", body: [actions], fallback: ["Plan saved for later", actions] };
   } else if (state.activeImplementation) {
-    lines = ["Implementation plan active", "Use /plan to show, replace, or clear it."];
+    const actions = "Use /plan to show, replace, or clear it.";
+    presentation = {
+      summary: "Implementation active",
+      body: [actions],
+      fallback: ["Implementation plan active", actions],
+    };
   }
 
-  publishPlanModeWidget(ctx, lines);
+  publishPlanModeWidget(ctx, presentation, widgetState);
 }
 
 export function renderPlanModeWidget(lines: readonly string[], theme: Theme, width: number): string[] {
   return createPlanModeWidget(lines, theme).render(width);
 }
 
-function createPlanModeWidget(lines: readonly string[], theme: Theme): EditorStatusWidget {
+function createPlanModeWidget(
+  lines: readonly string[],
+  theme: Theme,
+  state?: EditorStatusWidgetState,
+  summary?: string,
+): EditorStatusWidget {
   // Kit normalizes fractional and invalid widths before clipping sanitized body rows.
   return new EditorStatusWidget({
     theme,
+    name: "Plan mode",
+    summary,
+    state,
     renderBody: () =>
       lines.map((line, index) => {
         const text = sanitizePlanModeWidgetLine(line);
@@ -119,18 +149,24 @@ export function planModeStatusText(state: PlanModeState, toolSummary: () => stri
   return "Plan mode is off.";
 }
 
-function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] | undefined) {
-  if (!lines) {
+function publishPlanModeWidget(
+  ctx: ExtensionContext,
+  presentation: PlanModeWidgetPresentation | undefined,
+  widgetState?: EditorStatusWidgetState,
+) {
+  if (!presentation) {
     ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
     return;
   }
   if (ctx.mode !== "tui") {
-    ctx.ui.setWidget(PLAN_WIDGET_KEY, [...lines]);
+    ctx.ui.setWidget(PLAN_WIDGET_KEY, [...presentation.fallback]);
     return;
   }
 
-  const snapshot = [...lines];
-  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => createPlanModeWidget(snapshot, theme));
+  const snapshot = [...presentation.body];
+  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) =>
+    createPlanModeWidget(snapshot, theme, widgetState, presentation.summary),
+  );
 }
 
 function formatInteractionHint(state: PlanModeState, interactionShortcut?: string) {

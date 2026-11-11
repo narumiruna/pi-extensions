@@ -103,7 +103,9 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
   await mock.commands.get("plan")?.handler("save", context.ctx);
 
   assert.equal(context.statuses.get("plan-mode"), "plan saved");
-  assert.match(renderMockWidget(context.widgets.get("plan-mode-plan")).join("\n"), /saved for later/i);
+  const widget = renderMockWidget(context.widgets.get("plan-mode-plan"));
+  assert.match(widget[0] ?? "", /▾ Plan mode · Saved/u);
+  assert.deepEqual(widget.slice(1), ["Use /plan to show, implement, or clear it."]);
   assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
   assert.equal(mock.thinkingLevel, "low");
   assert.equal(mock.sentUserMessages.length, 0);

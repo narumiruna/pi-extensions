@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { ChatTransport, ChatTransportListener } from "../src/chat-session.js";
@@ -63,6 +63,26 @@ function mountedContext(mode: "tui" | "rpc" | "print" | "json" = "tui") {
   };
 }
 
+function click(component: Component, y: number): void {
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 79,
+    y,
+    screenX: 79,
+    screenY: y,
+    width: 80,
+    height: component.render(80).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.equal(component.handleMouse?.(event), undefined);
+  component.render(80); // Native selection redraws after a passive press.
+  assert.equal(component.handleMouse?.({ ...event, type: "release" }), undefined);
+  assert.deepEqual(component.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+}
+
 async function fixture(
   run: (extension: typeof import("../src/pi-chat.js"), settingsPath: string) => Promise<void>,
 ): Promise<void> {
@@ -112,11 +132,17 @@ test("live Chat refresh and display changes reuse the mounted frame and release 
       const component = context.mounted[0];
       assert.ok(component);
       assert.equal(context.mounted.length, 1);
-      assert.equal(component.render(80)[0], "─".repeat(80));
+      assert.match(component.render(80)[0] ?? "", /^─ ▾ Chat · private /u);
+      click(component, component.render(80).length - 1);
+      assert.equal(component.render(80).length, 1);
       let requests = context.requests;
       transport.refresh();
       assert.ok(context.requests > requests);
+      assert.equal(component.render(80).length, 1);
+      assert.match(component.render(80)[0] ?? "", /▸ Chat · reconnecting · private /u);
+      click(component, 0);
       assert.match(component.render(80).join("\n"), /reconnecting/u);
+      click(component, 1);
       await source.updateWidgetMode("dock", new AbortController().signal);
       assert.equal(context.mounted.length, 1);
       assert.match(component.render(80).at(-1) ?? "", /Input → Pi\/LLM/u);
@@ -173,6 +199,8 @@ test("replacement and stale disposal cannot publish or redraw through the old mo
       await command.handler(invite, first.ctx);
       const old = first.mounted[0];
       assert.ok(old);
+      click(old, old.render(80).length - 1);
+      assert.equal(old.render(80).length, 1);
       const oldRequests = first.requests;
       await emit(mock, "session_start", second.ctx);
       assert.equal(first.widgets.get("chat"), undefined);
@@ -180,7 +208,8 @@ test("replacement and stale disposal cannot publish or redraw through the old mo
       await command.handler(invite, second.ctx);
       const current = second.mounted[0];
       assert.ok(current);
-      assert.equal(current.render(80)[0], "─".repeat(80));
+      assert.match(current.render(80)[0] ?? "", /^─ ▾ Chat · private /u);
+      assert.ok(current.render(80).length > 1);
       assert.deepEqual(old.render(80), []);
       old.dispose?.();
       await emit(mock, "session_shutdown", first.ctx);

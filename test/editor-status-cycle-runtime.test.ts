@@ -278,15 +278,15 @@ async function createRuntime(consumer: Consumer, observerFirst = false) {
   const text = () => (mounted?.render(100) ?? lines ?? []).map(stripVTControlCharacters);
   const taskRow = consumer === "progress" ? /First task/u : /Pending fake child/u;
   const assertExpanded = () => {
-    assert.ok(text().length > 2, `expected expanded ${consumer}: ${text().join("\n")}`);
+    assert.equal(text().length, consumer === "progress" ? 4 : 2, `expected expanded ${consumer}: ${text().join("\n")}`);
     assert.match(text().join("\n"), taskRow);
   };
   const assertCompact = () => {
-    assert.equal(text().length, 2, text().join("\n"));
+    assert.equal(text().length, consumer === "progress" ? 2 : 1, text().join("\n"));
     assert.doesNotMatch(text().join("\n"), taskRow);
     assert.match(
       text().join("\n"),
-      consumer === "progress" ? /Progress · 0\/2 complete/u : /Subagents · 1 active · 1 running · 0 queued/u,
+      consumer === "progress" ? /Progress · 0\/2 complete/u : /Subagents · 1 running · 0 queued/u,
     );
     assert.deepEqual(errors, []);
   };

@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import type { EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
@@ -35,6 +36,7 @@ export interface SyncAttentionController {
   markOffered(): boolean;
   clear(ctx: ExtensionContext): void;
   reset(ctx: ExtensionContext): void;
+  expand(): void;
   publish(ctx: ExtensionContext, signal?: AbortSignal): Promise<void>;
 }
 
@@ -42,6 +44,7 @@ export function createSyncAttentionController(): SyncAttentionController {
   let state: SyncAttentionState | undefined;
   let observation: StartupObservation | undefined;
   let generation = 0;
+  let widgetState: EditorStatusWidgetState = { collapsed: false };
 
   return {
     observe(value) {
@@ -81,7 +84,11 @@ export function createSyncAttentionController(): SyncAttentionController {
       generation++;
       state = undefined;
       observation = undefined;
+      widgetState = { collapsed: false };
       clearAttentionPresentation(ctx);
+    },
+    expand() {
+      widgetState.collapsed = false;
     },
     async publish(ctx, signal) {
       const currentGeneration = ++generation;
@@ -100,10 +107,7 @@ export function createSyncAttentionController(): SyncAttentionController {
       }
       const presentation = state
         ? attentionPresentation(state.decision)
-        : {
-            status: "sync ⇕",
-            lines: observationLines(observation as StartupObservation),
-          };
+        : observationPresentation(observation as StartupObservation);
       if (ctx.mode !== "tui") {
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         setSyncStatus(ctx, presentation.status, { activity: "review" });
@@ -116,11 +120,15 @@ export function createSyncAttentionController(): SyncAttentionController {
       });
       if (generation !== currentGeneration || signal?.aborted) return;
       setSyncStatus(ctx, presentation.status, { activity: "review" });
+      const presentationState = widgetState;
       ctx.ui.setWidget(
         WIDGET_KEY,
         (_tui, theme) =>
           new EditorStatusWidget({
             theme,
+            name: "Sync",
+            summary: "Needs review",
+            state: presentationState,
             renderBody: (width) =>
               presentation.lines.map((line, index) =>
                 width === 0 ? "" : truncateToWidth(theme.fg(index === 0 ? "warning" : "muted", line), width, "…"),
@@ -134,13 +142,27 @@ export function createSyncAttentionController(): SyncAttentionController {
 function attentionPresentation(decision: RemoteSelectionDecision) {
   const setupName = safeTerminalText(decision.setupName);
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
-  const difference =
-    comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
-      ? "Only list order differs"
-      : `Remote ${comparison.remoteOnly.length} · Device ${comparison.localOnly.length}`;
   return {
     status: "sync ⇕",
-    lines: [`Pi Sync needs review · ${setupName}`, difference, "No changes · Run /sync to review"],
+    lines: [`Setup: ${setupName}`, selectionDifference(comparison), "No transfer performed · Run /sync to review"],
+  };
+}
+
+function selectionDifference(comparison: { remoteOnly: readonly string[]; localOnly: readonly string[] }) {
+  return comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+    ? "Selection: only list order differs"
+    : `Selection: ${comparison.remoteOnly.length} remote-only · ${comparison.localOnly.length} device-only`;
+}
+
+function observationPresentation(observation: StartupObservation) {
+  const selection = observation.inspection.selectionState;
+  return {
+    status: "sync ⇕",
+    lines: [
+      `Setup: ${safeTerminalText(observation.setupName)}`,
+      selection?.kind === "different" ? selectionDifference(selection) : observationSummary(observation),
+      "No transfer performed · Run /sync to review",
+    ],
   };
 }
 

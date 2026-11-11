@@ -191,6 +191,8 @@ async function runtimeProof() {
   };
   const publisher = kit.createEditorStatusPublisher({
     key: "fixture",
+    name: "Fixture",
+    summary: (value) => (value === "updated while collapsed" ? "latest" : "active"),
     context: { mode: "tui", hasUI: true, ui },
     isCurrent: () => true,
     render: (value, activeTheme, width) =>
@@ -199,7 +201,37 @@ async function runtimeProof() {
   publisher.publish("before");
   publisher.publish("after");
   assert.equal(mounts, 1);
-  assert.equal(mounted.get("fixture").render(20)[1], "after");
+  const frame = mounted.get("fixture");
+  assert.equal(frame.render(20)[1], "after");
+  const pointer = {
+    type: "click",
+    button: "left",
+    x: 19,
+    y: 1,
+    screenX: 19,
+    screenY: 1,
+    width: 20,
+    height: 2,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  const click = (event) => {
+    assert.equal(frame.handleMouse({ ...event, type: "press" }), undefined);
+    frame.render(event.width); // Native selection redraw.
+    assert.equal(frame.handleMouse({ ...event, type: "release" }), undefined);
+    assert.deepEqual(frame.handleMouse(event), { handled: true, render: true });
+  };
+  click(pointer);
+  publisher.publish("updated while collapsed");
+  assert.equal(frame.render(20).length, 1);
+  assert.match(frame.render(40)[0], /^─ ▸ Fixture · latest ─+$/u);
+  frame.render(20);
+  click({ ...pointer, y: 0, screenY: 0, height: 1 });
+  assert.equal(frame.render(40)[1], "updated while collapsed");
+  assert.equal(mounts, 1);
+  assert.equal(publisher.setCollapsed(true), true);
+  assert.equal(publisher.setCollapsed(false), true);
   publisher.dispose();
   assert.equal(mounted.size, 0);
   for (const id of ["pi-progress", "pi-subagents", "pi-herdr"]) {

@@ -47,23 +47,39 @@ When the available width cannot preserve the requested padding, the component re
 
 ## 📊 Editor status widgets
 
-Use `EditorStatusWidget` as a width-safe presentation frame for passive status or progress rows near Pi's editor.
-The component renders the standard `borderMuted` top rule and truncates every extension-owned body row to the available terminal width.
-The consumer continues owning widget keys, placement, snapshots, body formatting, terminal-text sanitization, RPC publication, refresh scheduling, and session lifecycle.
-The body renderer receives a normalized non-negative integer width and runs on every render, so it can wrap or style content before the final width guard.
+Use `EditorStatusWidget` as a width-safe frame for status or progress rows near Pi's editor.
+Supply `name` to put a sanitized name in the full-width `borderMuted` divider: `─ ▾ Progress ───`.
+Supply short, unstyled `summary` text to show current counts or state on the same row: `─ ▾ Progress · 1/4 complete ───`.
+A `summary` getter can read current owner state. The summary is sanitized at render time and remains visible when collapsed.
+Keep details and safety messages in the body; do not repeat the widget name or summary there.
+In fullscreen mode, an unmodified primary-button click anywhere in the widget, including body rows and blank columns, collapses it to one named divider: `─ ▸ Progress ───`.
+Click anywhere on that divider to restore the latest body. The control does not take keyboard focus.
+Press, drag, and release remain native for text selection and copy. A click needs a prior eligible press with matching local and screen geometry.
+Unchanged selection redraws preserve the press; invalidation, changed output, disposal, or moved geometry cancels it.
+Unnamed widgets keep the original passive frame.
+
+The consumer owns widget keys, placement, snapshots, body formatting, terminal-text sanitization, RPC publication, refresh scheduling, and session lifecycle.
+Pass an owner-local `state: { collapsed: false }` across replacement components to preserve disclosure through updates; use a new state for a new session.
+`setCollapsed(boolean)` supplies the owner keyboard-action path and returns whether the state changed; request a host render after a change.
+Regular mode leaves mouse input to the terminal. Keep an owner keyboard restore path available in both modes.
+Forward `handleMouse()` and `dispose()` when wrapping this component.
+The body renderer receives a normalized non-negative integer width and runs only while expanded, so restoration uses current data.
 
 ```ts
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 
-export function publishProgress(ctx: ExtensionContext, lines: readonly string[]) {
+export function publishProgress(ctx: ExtensionContext, lines: readonly string[], state: { collapsed: boolean }) {
   const snapshot = [...lines];
   ctx.ui.setWidget(
     "example:progress",
     (_tui, theme) =>
       new EditorStatusWidget({
+        name: "Progress",
+        summary: "1/4 complete",
+        state,
         theme,
-        renderBody: (width) => snapshot.map((line) => theme.fg("muted", line)),
+        renderBody: () => snapshot.map((line) => theme.fg("muted", line)),
       }),
     { placement: "aboveEditor" },
   );
@@ -79,8 +95,6 @@ Their subpaths are `editor-status-publisher`, `editor-status-view`, and `editor-
 The publisher retains visible TUI components and adapts RPC snapshots, while owners keep data, settings, timing, events, and priority policy.
 See [editor status presentation](./editor-status-presentation.md) for ownership, exact event semantics, capacity failures, two-consumer admission, recovery, and terminal/release limits.
 No `upsert`, `push`, `append`, shared registry, or sidebar API is provided.
-
-Optional [editor status presentation helpers](./editor-status-presentation.md) provide stable snapshot publication, explicit session-local view transitions, and bounded whole-snapshot item collections. Use the focused `editor-status-publisher`, `editor-status-view`, and `editor-status-collection` subpaths, or their root exports. The frame remains unchanged; owners retain data, policy, events, timers, row reservations, and cleanup. No helper coordinates extensions or adds a right sidebar.
 
 ## Bounded frames
 
@@ -1184,11 +1198,11 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `sanitizeTerminalDocument()` — normalizes and sanitizes untrusted multiline display text while retaining LF and tabs; `@narumitw/pi-tui-kit/terminal-document` also exports it.
 - `hardWrapTerminalDocument()` — sanitizes, expands tabs, and hard-wraps exact multiline display text by terminal cells; `@narumitw/pi-tui-kit/terminal-document` also exports it.
 - `sanitizeTerminalText()` — removes terminal and bidirectional controls from untrusted single-line display text without changing raw payloads; `@narumitw/pi-tui-kit/terminal-text` also exports it.
-- `EditorStatusWidget` — frames passive editor status rows with a muted top rule and terminal-width guard; `@narumitw/pi-tui-kit/editor-status-widget` exports it and its options.
+- `EditorStatusWidget` — frames editor status rows with a muted divider and terminal-width guard; an optional name enables whole-widget collapse/restore. `@narumitw/pi-tui-kit/editor-status-widget` exports it, its options, and `EditorStatusWidgetState`.
 - `createEditorStatusPublisher` — retains one owner-scoped TUI mount and publishes plain RPC snapshots; its focused subpath is `editor-status-publisher`.
 - `createEditorStatusView` — applies session-local manual modes and explicitly armed one-shot compaction; its focused subpath is `editor-status-view`.
 - `createEditorStatusCollection` — holds bounded whole-snapshot items with independent presentation controls; its focused subpath is `editor-status-collection`.
-- `createEditorStatusPublisher`, `createEditorStatusView`, and `createEditorStatusCollection` — optional [owner-local presentation helpers](./editor-status-presentation.md); each has a dependency-free focused subpath with the corresponding `editor-status-*` name.
+- `createEditorStatusPublisher`, `createEditorStatusView`, and `createEditorStatusCollection` — optional [owner-local presentation helpers](./editor-status-presentation.md); each has a focused subpath with the corresponding `editor-status-*` name; publication uses only the shared display helpers and Pi TUI at runtime.
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
 - `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
 - `renderBoundedFrameLayout()`, `BoundedFrameLayout`, and `BoundedFrameContentRow` — provide the same frame with original content indexes for caller-owned coordinate mapping.

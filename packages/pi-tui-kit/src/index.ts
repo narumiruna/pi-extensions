@@ -46,6 +46,7 @@ export {
 export {
   EditorStatusWidget,
   type EditorStatusWidgetOptions,
+  type EditorStatusWidgetState,
 } from "./editor-status-widget.js";
 export {
   createFullscreenHandoff,

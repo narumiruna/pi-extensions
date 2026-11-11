@@ -187,12 +187,19 @@ function stateSymbol(state: HerdrAgentStatus): string {
   }
 }
 
-export function createHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme): EditorStatusWidget {
+export function herdrWidgetSummary(snapshot: HerdrWidgetSnapshot): string {
+  return `${snapshot.totalAgents} sibling ${snapshot.totalAgents === 1 ? "agent" : "agents"}`;
+}
+
+export function createHerdrWidget(
+  snapshot: HerdrWidgetSnapshot,
+  theme: Theme,
+  includeHeader = true,
+): EditorStatusWidget {
   return new EditorStatusWidget({
     theme,
     renderBody() {
-      const noun = snapshot.totalAgents === 1 ? "agent" : "agents";
-      const lines = [theme.fg("muted", `Herdr · ${snapshot.totalAgents} sibling ${noun}`)];
+      const lines = includeHeader ? [theme.fg("muted", `Herdr · ${herdrWidgetSummary(snapshot)}`)] : [];
       const separator = theme.fg("dim", " · ");
       for (const row of snapshot.rows) {
         const state = stateStyle(theme, row.state, `${stateSymbol(row.state)} ${row.stateLabel}`);

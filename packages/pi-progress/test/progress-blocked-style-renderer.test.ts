@@ -317,7 +317,14 @@ test("presentation snapshots own their nested style after caller mutation", () =
     configured.blockedStyle.icon = "?";
     configured.blockedStyle.color = "error";
     presentation.refresh();
-    assert.equal(current.renderWidget()[2], theme.fg("thinkingHigh", "! ") + theme.fg("thinkingHigh", "approval"));
+    assert.deepEqual(current.renderWidget(), [
+      theme.fg("borderMuted", "─") +
+        " " +
+        theme.fg("muted", "▾ Progress · ! 1 blocked · 0/1 complete") +
+        " " +
+        theme.fg("borderMuted", "─".repeat(38)),
+      theme.fg("thinkingHigh", "! ") + theme.fg("thinkingHigh", "approval"),
+    ]);
     assert.deepEqual(DEFAULT_PROGRESS_SETTINGS.blockedStyle, { icon: "⚠", color: "warning" });
   } finally {
     presentation.dispose();
@@ -364,10 +371,17 @@ test("the mounted presentation uses the replacement Theme and revalidates its co
   try {
     presentation.update(blocked, settings("syntaxKeyword"));
     const mounted = current.component;
-    assert.equal(current.renderWidget()[2], first.fg("syntaxKeyword", "! ") + first.fg("syntaxKeyword", "approval"));
+    assert.equal(current.renderWidget()[1], first.fg("syntaxKeyword", "! ") + first.fg("syntaxKeyword", "approval"));
     current.setTheme(next);
     mounted?.invalidate();
-    assert.equal(current.renderWidget()[2], next.fg("syntaxKeyword", "! ") + next.fg("syntaxKeyword", "approval"));
+    assert.deepEqual(current.renderWidget(), [
+      next.fg("borderMuted", "─") +
+        " " +
+        next.fg("muted", "▾ Progress · ! 1 blocked · 0/1 complete") +
+        " " +
+        next.fg("borderMuted", "─".repeat(38)),
+      next.fg("syntaxKeyword", "! ") + next.fg("syntaxKeyword", "approval"),
+    ]);
     assert.ok(lookup.mock.calls.some(([role]) => role === "syntaxKeyword"));
     assert.equal(current.component, mounted, "theme changes must not remount the widget");
     assert.notEqual(first.getFgAnsi("syntaxKeyword"), next.getFgAnsi("syntaxKeyword"));
@@ -401,18 +415,31 @@ test("presentation item compact/remove and hide/show keep the custom blocked agg
     assert.equal(presentation.item(gate.id)?.remove(), true);
     presentation.refresh();
     let lines = current.renderWidget();
-    assert.equal(lines[1], theme.fg("muted", "! 2 blocked · 0/3 complete · 1 hidden"));
+    assert.equal(
+      lines[0],
+      theme.fg("borderMuted", "─") +
+        " " +
+        theme.fg("muted", "▾ Progress · ! 2 blocked · 0/3 complete · 1 removed") +
+        " " +
+        theme.fg("borderMuted", "─".repeat(26)),
+    );
     assert.equal(rowWith(lines, "! approval"), theme.fg("error", "! ") + theme.fg("error", "approval"));
     assert.doesNotMatch(plain(lines).join("\n"), /gate|⚠/u);
     assert.equal(presentation.item(approval.id)?.remove(), true);
     presentation.refresh();
     lines = current.renderWidget();
-    assert.equal(lines[1], theme.fg("muted", "! 2 blocked · 0/3 complete · 2 hidden"));
+    const divider =
+      theme.fg("borderMuted", "─") +
+      " " +
+      theme.fg("muted", "▾ Progress · ! 2 blocked · 0/3 complete · 2 removed") +
+      " " +
+      theme.fg("borderMuted", "─".repeat(26));
+    assert.equal(lines[0], divider);
     assert.doesNotMatch(plain(lines).join("\n"), /approval|gate|⚠/u);
     presentation.show("hidden");
     assert.deepEqual(current.renderWidget(), []);
     presentation.show("expanded");
-    assert.equal(current.renderWidget()[1], theme.fg("muted", "! 2 blocked · 0/3 complete · 2 hidden"));
+    assert.equal(current.renderWidget()[0], divider);
   } finally {
     presentation.dispose();
   }

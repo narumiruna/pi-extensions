@@ -18,6 +18,7 @@ import {
   HerdrWidgetModel,
   type HerdrWidgetSnapshot,
   herdrWidgetFingerprint,
+  herdrWidgetSummary,
 } from "./herdr-widget.js";
 
 export interface HerdrObserverEnvironment {
@@ -41,6 +42,7 @@ export interface HerdrObserverOptions {
 
 export interface HerdrWidgetObserver {
   start(ctx: ExtensionContext): void;
+  restore(ctx: ExtensionContext): boolean;
   shutdown(ctx: ExtensionContext): Promise<void>;
 }
 
@@ -48,7 +50,7 @@ class HerdrTopologyChangedError extends Error {}
 class HerdrCleanupError extends AggregateError {}
 
 function renderHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme, width: number): readonly string[] {
-  return createHerdrWidget(snapshot, theme).render(width);
+  return createHerdrWidget(snapshot, theme, false).render(width);
 }
 
 function isRelevantEvent(model: HerdrWidgetModel, event: HerdrPaneEvent): boolean {
@@ -352,8 +354,10 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
       const expectedGeneration = generation;
       publisher = createEditorStatusPublisher({
         key: HERDR_WIDGET_KEY,
+        name: "Herdr",
         context: ctx,
         isCurrent: () => expectedGeneration === generation,
+        summary: herdrWidgetSummary,
         render: renderHerdrWidget,
       });
       const task = run(ctx, expectedGeneration, controller.signal);
@@ -367,6 +371,10 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
           ownedTasks.delete(task);
         },
       );
+    },
+    restore(ctx) {
+      if (activeSession === undefined || !owns(ctx)) return false;
+      return publisher?.setCollapsed(false) ?? false;
     },
     async shutdown(ctx) {
       if (activeSession !== undefined && !owns(ctx)) return;

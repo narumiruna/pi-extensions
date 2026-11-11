@@ -54,6 +54,8 @@ To restrict edits separately, open scope management from `/files`, check files i
 
 Interactive routes require TUI mode and reject unknown or trailing arguments. Scope routes and permission changes require an idle agent with no pending messages. RPC, print, and JSON reject interactive commands before custom UI; restored enforcement remains active in all modes.
 
+In fullscreen TUI mode, click the **Files** divider or any summary row, including its blank right side, to collapse or expand the widget. Collapse affects only the display; queued context and edit restrictions stay active. The choice survives summary updates and branch navigation, but resets on session replacement or reload. Open `/files` to expand it from the keyboard.
+
 The explorer and checked-file picker remain separate components with different selection keys. There is no combined quote-and-authorize action. Closing a screen, cancelling, or ending a run does not release an applied restriction. See the [context workflow](docs/file-context-reference.md) and [scope workflow and recovery](docs/edit-scope-reference.md) for interaction, mode errors, and limits.
 
 ## ⚙️ Settings

@@ -42,6 +42,10 @@ This extension reads usage and model metadata already present in the active Pi s
 Run `/cache-hit-monitor` in TUI or RPC mode to show the widget.
 Run the same command again to hide it.
 The widget updates when the provider reports usage and is removed when the session shuts down.
+In fullscreen TUI mode, click anywhere in **Cache hit monitor** to collapse or expand it without moving keyboard focus.
+The divider retains the live request number, waiting state, or aggregate-only state while collapsed.
+The expanded body keeps provider/model labels and metrics; formulas remain in this reference and RPC output.
+Updates keep the collapse state. Hide and show it with `/cache-hit-monitor` to restore the body with the keyboard; a new session resets the state.
 
 ## 💬 Commands
 
@@ -55,7 +59,7 @@ It accepts no arguments, supports TUI and RPC modes, and rejects print and JSON 
 - `loss` is only the downward part of that hit-rate change.
 - `uncached` is the latest `input` share and token count.
 - `eligible` is the smaller prompt-token count between the previous and current request.
-- `re-billed` estimates reusable-prefix tokens not covered by the current `cacheRead` count.
+- `re-billed` estimates reusable-prefix tokens not covered by the current `cacheRead` count: `max(0, min(previous prompt, current prompt) - current cacheRead)`.
 - `cache saved` estimates the price difference between uncached input and cache-read pricing.
 - `miss premium` estimates the extra price of re-billed tokens compared with cache-read pricing.
 - `start gap` is the elapsed time between the previous and current provider request start timestamps.

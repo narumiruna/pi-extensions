@@ -9,6 +9,7 @@ import type {
   InputEvent,
   InputSource,
 } from "@earendil-works/pi-coding-agent";
+import type { EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { completePlanArguments } from "./command.js";
 import {
   normalizePlanModeCompletion,
@@ -167,6 +168,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let workflowOwner: WorkflowMutexOwner | undefined;
   let currentSession: object | undefined;
   let currentSessionContext: ExtensionContext | undefined;
+  let widgetState: EditorStatusWidgetState = { collapsed: false };
   let interactiveUiPromise: Promise<InteractiveUi> | undefined;
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
@@ -409,6 +411,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
           "The interactive /plan menu is unavailable in print and JSON modes. Use /plan start or /plan <prompt>.",
         );
       }
+      // Opening the existing manager restores the summary without changing Plan mode.
+      if (ctx.mode === "tui" && widgetState.collapsed) {
+        widgetState.collapsed = false;
+        updateUi(ctx);
+      }
       if (!state.enabled) {
         if (state.activeImplementation && ctx.hasUI) {
           await showActivePlanMenu(ctx);
@@ -515,6 +522,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     cancelDeferredFreshImplementation();
     const generation = ++menuGeneration;
     finalizationRequest.reset();
+    widgetState = { collapsed: false };
     currentSession = ctx.sessionManager;
     currentSessionContext = ctx;
     workflowOwner = undefined;
@@ -665,6 +673,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (currentSession === ctx.sessionManager) {
       currentSession = undefined;
       currentSessionContext = undefined;
+      widgetState = { collapsed: false };
     }
   });
 
@@ -2065,6 +2074,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function bindWorkflowSessionIfNeeded(ctx: ExtensionContext) {
     if (currentSession === ctx.sessionManager) return;
+    widgetState = { collapsed: false };
     currentSession = ctx.sessionManager;
     workflowOwner = undefined;
     workflowMutex.bindSession(ctx.sessionManager);
@@ -2108,7 +2118,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function updateUi(ctx: ExtensionContext) {
-    updatePlanModeUi(ctx, state, formatToolSummary, interaction.shortcutLabel(ctx));
+    updatePlanModeUi(ctx, state, formatToolSummary, interaction.shortcutLabel(ctx), widgetState);
   }
 
   function clearUi(ctx: ExtensionContext) {

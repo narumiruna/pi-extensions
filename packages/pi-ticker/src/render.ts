@@ -18,14 +18,18 @@ export interface TickerView {
 
 export function renderTickerBody(view: TickerView, theme: Theme, width: number): string[] {
   if (width === 0) return [];
-  const heading = renderHeading(view, theme);
   const separator = theme.fg("dim", "  │  ");
-  const quotes = packItems(
+  return packItems(
     view.items.map((item) => renderItem(item, theme)),
     separator,
     width,
   );
-  return [...wrapTextWithAnsi(heading, width), ...quotes];
+}
+
+export function tickerSummary(view: TickerView): string | undefined {
+  if (view.loading) return "Updating…";
+  if (view.updatedAt !== undefined) return `Updated ${new Date(view.updatedAt).toLocaleTimeString()}`;
+  return undefined;
 }
 
 export function formatTickerPlain(view: TickerView): string[] {
@@ -49,14 +53,6 @@ export function mergeQuoteResults(
       ? { symbol: result.symbol, quote: existing.quote, error: result.error, stale: true }
       : { symbol: result.symbol, error: result.error };
   });
-}
-
-function renderHeading(view: TickerView, theme: Theme): string {
-  if (view.loading) return theme.fg("muted", "Stocks · updating…");
-  if (view.updatedAt) {
-    return theme.fg("muted", `Stocks · updated ${new Date(view.updatedAt).toLocaleTimeString()}`);
-  }
-  return theme.fg("muted", "Stocks");
 }
 
 function renderItem(item: TickerItem, theme: Theme): string {

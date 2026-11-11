@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import type { Api, AssistantMessage, Model, ModelCostRates } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import cacheHitMonitor, { COMMAND_NAME, renderCacheMonitor, WIDGET_KEY } from "../src/index.js";
-import { createCacheMonitorView, createCacheSample, formatMonitorLines } from "../src/metrics.js";
+import { createCacheMonitorView, createCacheSample, formatMonitorLines, sanitizeDisplayLabel } from "../src/metrics.js";
 
 const RATES: ModelCostRates = { input: 10, output: 20, cacheRead: 1, cacheWrite: 20 };
 const MODEL: Model<Api> = {
@@ -27,7 +27,7 @@ const THEME = {
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown;
-type WidgetFactory = (_tui: never, theme: Theme) => Component;
+type WidgetFactory = (_tui: never, theme: Theme) => Component & { dispose?(): void };
 type WidgetRecord = [string, string[] | WidgetFactory | undefined, { placement: "aboveEditor" } | undefined];
 
 function assistant(
@@ -137,15 +137,17 @@ test("stays hidden by default, then previews and finalizes detailed metrics when
 
   await harness.command("", current.ctx);
   assert.deepEqual(current.notifications, [["Cache hit monitor shown.", "info"]]);
-  assert.deepEqual(renderWidget(current.widgets.at(-1), 160)?.slice(1), [
-    "Prompt cache · waiting for provider cache usage",
-    "Hit = cacheRead / (input + cacheRead + cacheWrite). All-zero cache fields remain unknown until this provider reports cache activity.",
-  ]);
+  const waiting = renderWidget(current.widgets.at(-1), 160);
+  assert.match(waiting?.[0] ?? "", /Cache hit monitor · waiting for provider cache usage/u);
+  assert.deepEqual(waiting?.slice(1), ["Cache usage is unknown until this provider reports cache activity."]);
 
   const first = assistant(200, 800);
   await harness.emit("message_update", { message: first, assistantMessageEvent: {} }, current.ctx);
   const live = renderWidget(current.widgets.at(-1));
+  assert.match(live?.[0] ?? "", /Cache hit monitor · LIVE · request #1/u);
+  assert.equal(live?.[1], "test-provider/test-model");
   assert.match(live?.join("\n") ?? "", /LIVE.*hit 80\.0%/s);
+  assert.doesNotMatch(live?.slice(1).join("\n") ?? "", /Prompt cache|LIVE|request #1|Formula|hit=read\/prompt/u);
   const updateCount = current.widgets.length;
   const outputDelta = assistant(200, 800, 0, {
     content: [{ type: "text", text: "more generated text" }],
@@ -347,14 +349,25 @@ test("uses plain string widgets in RPC mode and remains silent without UI", asyn
   await harness.command("", rpc.ctx);
   const rpcContent = rpc.widgets.at(-1)?.[1];
   assert.ok(Array.isArray(rpcContent));
-  assert.match(rpcContent.join("\n"), /hit 80\.0%/);
+  const sample = createCacheSample(assistant(200, 800), 0, MODEL);
+  assert.ok(sample);
+  assert.deepEqual(
+    rpcContent,
+    formatMonitorLines(createCacheMonitorView([sample])).map(({ text }) => text),
+  );
+  assert.match(rpcContent.join("\n"), /Prompt cache.*request #1/);
+  assert.match(rpcContent.join("\n"), /Formula {2}hit=read\/prompt/);
+  await harness.emit("session_shutdown", {}, rpc.ctx);
 
-  const json = createContext("json", [messageEntry(assistant(200, 800))]);
-  await harness.emit("session_start", {}, json.ctx);
-  assert.equal(json.widgets.length, 0);
-  await assert.rejects(() => harness.command("", json.ctx), {
-    message: `/${COMMAND_NAME} requires TUI or RPC mode.`,
-  });
+  for (const mode of ["print", "json"] as const) {
+    const context = createContext(mode, [messageEntry(assistant(200, 800))]);
+    await harness.emit("session_start", {}, context.ctx);
+    assert.equal(context.widgets.length, 0);
+    await assert.rejects(() => harness.command("", context.ctx), {
+      message: `/${COMMAND_NAME} requires TUI or RPC mode.`,
+    });
+    await harness.emit("session_shutdown", {}, context.ctx);
+  }
 });
 
 test.each([0, 1, 2, 12, 80, 200, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0.5, 12.9])(
@@ -377,7 +390,14 @@ test.each([0, 1, 2, 12, 80, 200, -1, Number.NaN, Number.POSITIVE_INFINITY, Numbe
       bold: (text: string) => `\u001b[1m${text}\u001b[22m`,
     } as unknown as Theme;
     const lines = renderCacheMonitor(view, theme, width);
-    const body = formatMonitorLines(view).flatMap((line) =>
+    const report = formatMonitorLines(view);
+    const body = [
+      {
+        role: "title" as const,
+        text: `${sanitizeDisplayLabel(sample.provider)}/${sanitizeDisplayLabel(sample.model)}`,
+      },
+      ...report.slice(1, -1),
+    ].flatMap((line) =>
       normalized === 0
         ? [""]
         : wrapTextWithAnsi(
@@ -385,12 +405,77 @@ test.each([0, 1, 2, 12, 80, 200, -1, Number.NaN, Number.POSITIVE_INFINITY, Numbe
             normalized,
           ),
     );
-    assert.deepEqual(lines, [
-      normalized === 0 ? "" : theme.fg("borderMuted", "─".repeat(normalized)),
-      ...body.map((line) => truncateToWidth(line, normalized, "")),
-    ]);
+    assert.deepEqual(
+      lines.slice(1),
+      body.map((line) => truncateToWidth(line, normalized, "")),
+    );
+    assert.equal(visibleWidth(lines[0] ?? ""), normalized);
+    if (normalized >= 40) assert.match(stripTerminalSequences(lines[0] ?? ""), /^─ ▾ Cache hit monitor · request #1/u);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     if (normalized === 0) assert.ok(lines.every((line) => line === ""));
+  },
+);
+
+test.each(["waiting", "aggregate", "unknown aggregate", "latest", "live"] as const)(
+  "keeps %s state in the divider without repeating the title or formula",
+  (state) => {
+    const sample = createCacheSample(assistant(200, 800), 0, MODEL);
+    assert.ok(sample);
+    const view =
+      state === "live"
+        ? createCacheMonitorView([], sample)
+        : state === "latest"
+          ? createCacheMonitorView([sample])
+          : createCacheMonitorView([], undefined, {
+              summaryRecords:
+                state === "waiting"
+                  ? []
+                  : state === "aggregate"
+                    ? [sample]
+                    : [
+                        {
+                          input: 1_000,
+                          cacheRead: 0,
+                          cacheWrite: 0,
+                          promptTokens: 1_000,
+                          hitRatePercent: null,
+                          uncachedRatePercent: null,
+                          promptCost: 0.01,
+                          estimatedSavings: null,
+                        },
+                      ],
+            });
+    const summary =
+      state === "live"
+        ? "LIVE · request #1"
+        : state === "latest"
+          ? "request #1"
+          : state === "waiting"
+            ? "waiting for provider cache usage"
+            : "aggregate usage only";
+    const lines = renderCacheMonitor(view, THEME, 200);
+    assert.ok(lines[0]?.includes(`Cache hit monitor · ${summary}`));
+    const body = lines.slice(1).join("\n");
+    assert.doesNotMatch(body, /Prompt cache|Formula|hit=read\/prompt|Hit = cacheRead/u);
+    if (state === "waiting") {
+      assert.match(body, /Cache usage is unknown/u);
+      assert.doesNotMatch(body, /hit 0\.0%|read 0|write 0/u);
+    } else if (state === "unknown aggregate") {
+      assert.match(body, /Session {2}1 req.*hit n\/a.*saved ~n\/a/u);
+      assert.doesNotMatch(body, /hit 0\.0%/u);
+    } else if (state === "aggregate") {
+      assert.match(body, /Session {2}1 req.*hit 80\.0%/u);
+      assert.match(body, /Latest request metrics are unavailable/u);
+    } else {
+      assert.equal(lines[1], "test-provider/test-model");
+      assert.match(body, /Latest {2}hit 80\.0%/u);
+    }
+    for (const width of [40, 12, 2, 1, 0]) {
+      const narrow = renderCacheMonitor(view, THEME, width);
+      assert.ok(narrow.every((line) => visibleWidth(line) <= width));
+      assert.equal(visibleWidth(narrow[0] ?? ""), width);
+      if (width === 0) assert.ok(narrow.every((line) => line === ""));
+    }
   },
 );
 
@@ -416,7 +501,8 @@ test("uses the callback theme after resize and invalidation without changing pub
       assert.ok(lines.every((line) => line === ""));
       assert.equal(fg.mock.calls.length, 0);
     } else {
-      assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+      if (width > 2) assert.ok(fg.mock.calls.some(([role]) => role === "borderMuted"));
+      if (width >= 40) assert.match(stripTerminalSequences(lines[0] ?? ""), /^─ ▾ Cache hit monitor · request #1/u);
       assert.ok(fg.mock.calls.some(([role]) => role === "accent"));
       assert.ok(fg.mock.calls.some(([role]) => role === "success"));
     }
@@ -430,6 +516,135 @@ test("uses the callback theme after resize and invalidation without changing pub
   assert.equal(current.widgets.length, 1);
   assert.equal(current.widgets.at(-1)?.[1], factory);
   await harness.emit("session_shutdown", {}, current.ctx);
+});
+
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.render(event.width);
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
+test("body and blank-column clicks retain collapse across usage remounts and restore the latest data", async () => {
+  const harness = createHarness();
+  const current = createContext("tui", [messageEntry(assistant(200, 800))]);
+  const mount = () => {
+    const factory = current.widgets.at(-1)?.[1];
+    assert.equal(typeof factory, "function");
+    if (typeof factory !== "function") throw new Error("Missing monitor widget");
+    return factory(undefined as never, THEME);
+  };
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+  const first = mount();
+  const lines = first.render(160);
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 159,
+    y: lines.length - 1,
+    screenX: 159,
+    screenY: lines.length - 1,
+    width: 160,
+    height: lines.length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.deepEqual(clickWidget(first, event), { handled: true, render: true });
+  assert.equal(first.render(160).length, 1);
+  first.dispose?.();
+  await harness.emit("message_update", { message: assistant(100, 900) }, current.ctx);
+  const updated = mount();
+  assert.equal(updated.render(160).length, 1);
+  assert.match(updated.render(160)[0] ?? "", /▸ Cache hit monitor · LIVE · request #2/u);
+  assert.doesNotMatch(updated.render(160)[0] ?? "", /test-provider|Formula/u);
+  const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(160).length };
+  assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
+  assert.match(updated.render(160).join("\n"), /LIVE.*hit 90\.0%/s);
+  const narrow = updated.render(32);
+  assert.ok(narrow.length > lines.length, "wrapped metrics change the click height");
+  assert.deepEqual(
+    clickWidget(updated, {
+      ...event,
+      x: 31,
+      screenX: 31,
+      width: 32,
+      y: narrow.length - 1,
+      screenY: narrow.length - 1,
+      height: narrow.length,
+    }),
+    { handled: true, render: true },
+  );
+  assert.equal(updated.render(160).length, 1);
+  updated.dispose?.();
+  updated.dispose?.();
+  assert.equal(clickWidget(updated, collapsed), undefined);
+  await harness.emit("message_end", { message: assistant(100, 900) }, current.ctx);
+  const finalized = mount();
+  assert.equal(finalized.render(160).length, 1);
+  assert.match(finalized.render(160)[0] ?? "", /▸ Cache hit monitor · request #2/u);
+  assert.doesNotMatch(finalized.render(160)[0] ?? "", /LIVE/u);
+  finalized.dispose?.();
+  await harness.command("", current.ctx);
+  await harness.command("", current.ctx);
+  assert.ok(mount().render(160).length > 1, "show command restores the body");
+  await harness.emit("session_shutdown", {}, current.ctx);
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+  assert.ok(mount().render(160).length > 1, "new session starts expanded");
+  await harness.emit("session_shutdown", {}, current.ctx);
+});
+
+test("waiting becomes aggregate-only in the collapsed divider without implying a zero hit rate", async () => {
+  const harness = createHarness();
+  const current = createContext();
+  const mount = () => {
+    const factory = current.widgets.at(-1)?.[1];
+    if (typeof factory !== "function") throw new Error("Missing monitor widget");
+    return factory(undefined as never, THEME);
+  };
+  await harness.emit("session_start", {}, current.ctx);
+  await harness.command("", current.ctx);
+  const waiting = mount();
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 159,
+    y: 1,
+    screenX: 159,
+    screenY: 1,
+    width: 160,
+    height: waiting.render(160).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  assert.deepEqual(clickWidget(waiting, event), { handled: true, render: true });
+  assert.equal(waiting.render(160).length, 1);
+  assert.match(waiting.render(160)[0] ?? "", /▸ Cache hit monitor · waiting for provider cache usage/u);
+  waiting.dispose?.();
+  current.setEntries([
+    {
+      type: "usage",
+      id: "unknown-warm",
+      parentId: null,
+      kind: "cache_warm",
+      provider: "test-provider",
+      model: "test-model",
+      usage: assistant(1_000, 0).usage,
+    } as SessionEntry,
+  ]);
+  await harness.emit("agent_settled", {}, current.ctx);
+  const aggregate = mount();
+  assert.equal(aggregate.render(160).length, 1);
+  assert.match(aggregate.render(160)[0] ?? "", /▸ Cache hit monitor · aggregate usage only/u);
+  assert.doesNotMatch(aggregate.render(160)[0] ?? "", /waiting|0\.0%/u);
+  assert.deepEqual(clickWidget(aggregate, { ...event, y: 0, screenY: 0, height: 1 }), { handled: true, render: true });
+  assert.match(aggregate.render(200).join("\n"), /Session {2}1 req.*hit n\/a/u);
+  aggregate.dispose?.();
+  await harness.emit("session_shutdown", {}, current.ctx);
+  assert.deepEqual(current.widgets.at(-1), [WIDGET_KEY, undefined, undefined]);
 });
 
 test("renders every line within narrow widths and strips unsafe model text", () => {
@@ -448,7 +663,7 @@ test("renders every line within narrow widths and strips unsafe model text", () 
   const zeroWidthLines = renderCacheMonitor(view, THEME, 0);
 
   assert.ok(lines.every((line) => visibleWidth(line) <= 32));
-  assert.equal(zeroWidthLines.length, formatMonitorLines(view).length + 1);
+  assert.equal(zeroWidthLines.length, formatMonitorLines(view).length);
   assert.ok(zeroWidthLines.every((line) => line === ""));
   assert.match(plain.join("\n"), /provider\/model unsafe/);
   assert.ok(

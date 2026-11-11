@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { type Component, type TUI, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
@@ -59,7 +59,7 @@ function fixture() {
     mounted.set(key, component);
     if (failMount) throw new Error("partial host initialization failed");
   }) as ExtensionContext["ui"]["setWidget"];
-  const state = { status: "idle", siblings: true, reads: 0, subscriptions: 0 };
+  const state = { status: "idle", siblings: true, siblingCount: 1, reads: 0, subscriptions: 0 };
   const signals: AbortSignal[] = [];
   let emit: (frame: unknown) => void = () => {};
   const pane = (id: string) => ({
@@ -89,7 +89,10 @@ function fixture() {
           await pending.wait;
         }
       }
-      const panes = [pane("w1:p1"), ...(state.siblings ? [pane("w1:p2")] : [])];
+      const panes = [
+        pane("w1:p1"),
+        ...Array.from({ length: state.siblings ? state.siblingCount : 0 }, (_, index) => pane(`w1:p${index + 2}`)),
+      ];
       if (request.method === "pane.current") return { type: "pane_current", pane: panes[0] };
       if (request.method === "pane.list") return { type: "pane_list", panes };
       if (request.method === "agent.list") return { type: "agent_list", agents: panes };
@@ -167,6 +170,117 @@ function fixture() {
   };
 }
 
+function pointer(component: Component, y?: number, x = 79): TuiMouseEvent {
+  const height = component.render(80).length;
+  const row = y ?? Math.max(0, height - 1);
+  return {
+    type: "click",
+    button: "left",
+    x,
+    y: row,
+    screenX: x,
+    screenY: row,
+    width: 80,
+    height,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+}
+
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
+for (const row of ["first", "last"] as const) {
+  for (const x of [0, 79]) {
+    test(`Herdr click (${x}, ${row}) collapses only its named frame and restores authoritative updates`, async () => {
+      const f = fixture();
+      const sibling = fixture();
+      f.observer.start(f.ctx);
+      sibling.observer.start(sibling.ctx);
+      try {
+        await until(() => f.text().includes("idle") && sibling.text().includes("idle"));
+        const component = f.mounted.get(HERDR_WIDGET_KEY);
+        assert.ok(component);
+        const before = component.render(80);
+        assert.equal(before.length, 2, "named frame has no duplicate body heading");
+        assert.match(before[0] ?? "", /^─ ▾ Herdr · 1 sibling agent ─+$/u);
+        assert.match(before[1] ?? "", /^○ idle/u);
+        const state = { ...f.state };
+        const event = pointer(component, row === "first" ? 0 : before.length - 1, x);
+        assert.deepEqual(clickWidget(component, event), { handled: true, render: true });
+        assert.deepEqual(f.state, state, "disclosure makes no Herdr requests or data changes");
+        assert.equal(component.render(80).length, 1);
+        assert.match(component.render(80)[0] ?? "", /^─ ▸ Herdr · 1 sibling agent ─+$/u);
+        assert.equal(sibling.text(), before.join("\n"));
+        f.state.status = "blocked";
+        f.state.siblingCount = 2;
+        f.invalidate();
+        await until(() => f.text().includes("2 sibling agents"));
+        const current = f.mounted.get(HERDR_WIDGET_KEY);
+        assert.ok(current);
+        assert.equal(current.render(80).length, 1);
+        assert.match(current.render(80)[0] ?? "", /^─ ▸ Herdr · 2 sibling agents ─+$/u);
+        assert.deepEqual(clickWidget(current, pointer(current, 0)), { handled: true, render: true });
+        assert.match(f.text(), /blocked/u);
+        assert.equal(current.render(80).length, 3);
+        for (const width of [0, 1, 2, 10, 80]) {
+          assert.ok(current.render(width).every((line) => visibleWidth(line) <= width));
+        }
+      } finally {
+        await f.observer.shutdown(f.ctx);
+        await sibling.observer.shutdown(sibling.ctx);
+      }
+    });
+  }
+}
+
+test("Herdr retains disclosure across absent siblings and host remount; restore only redraws current data", async () => {
+  const f = fixture();
+  f.observer.start(f.ctx);
+  try {
+    await until(() => f.text().includes("idle"));
+    const original = f.mounted.get(HERDR_WIDGET_KEY);
+    assert.ok(original);
+    const event = pointer(original);
+    clickWidget(original, event);
+    assert.equal(original.render(80).length, 1);
+    original.dispose?.();
+    f.state.status = "working";
+    f.invalidate();
+    await until(() => f.mounts === 2);
+    assert.equal(f.mounted.get(HERDR_WIDGET_KEY)?.render(80).length, 1);
+    assert.equal(clickWidget(original, event), undefined);
+    f.state.siblings = false;
+    f.invalidate();
+    await until(() => !f.mounted.has(HERDR_WIDGET_KEY));
+    f.state.siblings = true;
+    f.state.siblingCount = 2;
+    f.state.status = "done";
+    f.invalidate();
+    await until(() => f.mounted.has(HERDR_WIDGET_KEY));
+    assert.equal(f.mounted.get(HERDR_WIDGET_KEY)?.render(80).length, 1);
+    assert.match(f.text(), /^─ ▸ Herdr · 2 sibling agents ─+$/u);
+    const state = { ...f.state };
+    const repaints = f.repaints;
+    assert.equal(f.observer.restore(f.ctx), true);
+    assert.equal(f.repaints, repaints + 1);
+    assert.match(f.text(), /Herdr · 2 sibling agents/u);
+    assert.match(f.text().split("\n")[1] ?? "", /^✓ done/u);
+    assert.equal(f.observer.restore(f.ctx), false);
+    assert.equal(f.observer.restore(createMockContext({ mode: "tui" }).ctx), false);
+    assert.deepEqual(f.state, state, "restore neither restarts nor refreshes the observer");
+    await f.observer.shutdown(f.ctx);
+    assert.equal(f.observer.restore(f.ctx), false);
+    assert.equal(clickWidget(original, event), undefined);
+  } finally {
+    await f.observer.shutdown(f.ctx);
+  }
+});
+
 test("authoritative Herdr updates retain one mounted widget and sibling order", async () => {
   const f = fixture();
   f.mounted.set("before", { render: () => ["before"], invalidate() {} });
@@ -216,11 +330,17 @@ test("same-manager restart disposes before replacement and ignores old component
   try {
     await until(() => f.mounted.has(HERDR_WIDGET_KEY));
     const old = f.mounted.get(HERDR_WIDGET_KEY);
+    assert.ok(old);
+    const event = pointer(old);
+    clickWidget(old, event);
+    assert.equal(old.render(80).length, 1);
     f.observer.start(f.ctx);
     assert.equal(f.disposals, 1);
     assert.equal(f.mounted.has(HERDR_WIDGET_KEY), false);
     await until(() => f.mounts === 2);
     const current = f.mounted.get(HERDR_WIDGET_KEY);
+    assert.equal(current?.render(80).length, 2, "session restart resets disclosure");
+    assert.equal(clickWidget(old, event), undefined);
     old?.dispose?.();
     f.state.status = "blocked";
     f.invalidate();

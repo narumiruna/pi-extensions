@@ -17,6 +17,7 @@ import {
   renderSubagentWidgetSnapshot,
   type SubagentWidgetSnapshot,
   subagentWidgetRowBudget,
+  subagentWidgetSummary,
 } from "./widget-renderer.js";
 
 export { renderSubagentWidget } from "./widget-renderer.js";
@@ -175,10 +176,12 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
         view = createEditorStatusView({ onChange: publish, canCompact: () => settings.showWidget && jobs.length > 0 });
         publisher = createEditorStatusPublisher({
           key: SUBAGENT_WIDGET_KEY,
+          name: "Subagents",
           context: ctx,
           isCurrent,
+          summary: (snapshot, _width, rows) => subagentWidgetSummary(snapshot, subagentWidgetRowBudget(rows)),
           render: (snapshot, theme, width, rows) =>
-            renderSubagentWidgetSnapshot(snapshot, theme, width, subagentWidgetRowBudget(rows)),
+            renderSubagentWidgetSnapshot(snapshot, theme, width, subagentWidgetRowBudget(rows), false),
         });
         // The owner records public preparation/run hooks while settings load.
         // General busy state also includes navigation and manual compaction.
@@ -189,7 +192,9 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
         controls = {
           state: () => ({ mode: ownedView.mode, pinned: ownedView.pinned, trigger: ownedView.trigger }),
           setMode: (mode) => {
-            if (isCurrent()) ownedView.setMode(mode);
+            if (!isCurrent()) return;
+            if (mode !== "hidden") publisher?.setCollapsed(false);
+            ownedView.setMode(mode);
           },
           setPinned: (pinned) => {
             if (isCurrent()) ownedView.setPinned(pinned);

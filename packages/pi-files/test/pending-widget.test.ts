@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { HorizontalRule } from "@narumitw/pi-tui-kit";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { createFileQuoteSnapshot } from "../src/file-context.js";
@@ -49,12 +50,17 @@ test("frames pending quotes with the callback theme across resize and invalidati
       lines.every((line) => visibleWidth(line) <= normalized),
       `width ${width}`,
     );
-    assert.equal(stripTerminalSequences(lines[0] ?? ""), "─".repeat(normalized));
+    assert.equal(
+      stripTerminalSequences(lines[0] ?? ""),
+      stripTerminalSequences(
+        new HorizontalRule({ label: "▾ Files", labelAlignment: "left" }).render(normalized)[0] ?? "",
+      ),
+    );
     if (normalized === 0) {
       assert.ok(lines.every((line) => line === ""));
       assert.deepEqual(roles, []);
     } else {
-      assert.ok(roles.includes("borderMuted"));
+      if (normalized > 2) assert.ok(roles.includes("borderMuted"));
       assert.ok(roles.includes("accent"));
       assert.ok(roles.includes("muted"));
     }
@@ -76,7 +82,7 @@ test("captures pending quote display snapshots without changing raw paths or con
   publishPendingQuoteWidget(context.ctx, quotes);
   const component = createPendingWidget(context.widgets.get("files"));
   const before = component.render(160);
-  assert.equal(before[0], "─".repeat(160));
+  assert.equal(before[0], `─ ▾ Files ${"─".repeat(150)}`);
   assert.match(before[1] ?? "", /Next prompt context · 1 snippet/u);
   assert.ok(before[2]?.includes("src/unsafe\\x1b[31m\\x0a.txt"));
   assert.ok(before.every((line) => !line.includes("\u001b")));

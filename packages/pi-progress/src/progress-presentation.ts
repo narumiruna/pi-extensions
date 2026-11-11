@@ -2,7 +2,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createEditorStatusCollection } from "@narumitw/pi-tui-kit/editor-status-collection";
 import { createEditorStatusPublisher } from "@narumitw/pi-tui-kit/editor-status-publisher";
 import { createEditorStatusView } from "@narumitw/pi-tui-kit/editor-status-view";
-import { renderCompletionSummary, renderProgressWidget, widgetRowBudget } from "./progress-renderer.js";
+import {
+  progressDividerSummary,
+  renderCompletionSummary,
+  renderProgressWidget,
+  widgetRowBudget,
+} from "./progress-renderer.js";
 import {
   allProgressCompleted,
   cloneProgressSteps,
@@ -67,16 +72,27 @@ export function createProgressPresentation(options: {
   };
   const publisher = createEditorStatusPublisher<Snapshot>({
     key: WIDGET_KEY,
+    name: "Progress",
     context: options.context,
     isCurrent: current,
+    summary: (snapshot, _width, rows) =>
+      snapshot.completion && snapshot.mode === "default"
+        ? `✓ ${snapshot.steps.length}/${snapshot.steps.length} steps completed`
+        : progressDividerSummary(
+            snapshot.steps,
+            snapshot.settings,
+            snapshot.steps.length - snapshot.items.length,
+            snapshot.mode === "compact" || rows <= 2,
+          ),
     render: (snapshot, theme, width, rows) => {
       const terminalRows = Number.isFinite(rows) ? Math.max(0, Math.floor(rows)) : 36;
       const maxRows = Math.min(terminalRows, widgetRowBudget(terminalRows));
       if (snapshot.completion && snapshot.mode === "default") {
-        return renderCompletionSummary(snapshot.steps.length, theme, width, maxRows);
+        return renderCompletionSummary(snapshot.steps.length, theme, width, maxRows, options.context.mode !== "tui");
       }
       return renderProgressWidget(snapshot.steps, theme, width, {
         settings: snapshot.settings,
+        showHeader: options.context.mode !== "tui",
         terminalRows: rows,
         maxRows,
         viewMode: snapshot.mode,
@@ -198,6 +214,7 @@ export function createProgressPresentation(options: {
     show(mode: "default" | "expanded" | "compact" | "hidden") {
       if (!current()) return;
       hidden = false;
+      if (mode !== "hidden") publisher.setCollapsed(false);
       view.setMode(mode);
       if (mode === "hidden") cancelTimer();
       else if (completion && timer === undefined) startTimer();
@@ -206,6 +223,7 @@ export function createProgressPresentation(options: {
     reset(next: readonly ProgressStep[], hideCompleted = false, publishNow = true) {
       if (!current()) return;
       cancelTimer();
+      publisher.setCollapsed(false);
       completion = false;
       collection.dispose();
       collection = newCollection();

@@ -1,13 +1,21 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "./editor-status-widget.js";
+import { sanitizeTerminalText } from "./terminal-text.js";
 
 export interface EditorStatusPublisher<T> {
   publish(snapshot: T | undefined): void;
+  /** Set the named TUI frame's disclosure from an owner keyboard action. */
+  setCollapsed(collapsed: boolean): boolean;
   dispose(): void;
 }
 
 export interface EditorStatusPublisherOptions<T> {
   key: string;
+  /** Replace the supplied frame's first divider with a named collapse control in TUI mode. */
+  name?: string;
+  /** Current short divider text for named TUI mounts, including collapsed mounts. */
+  summary?(snapshot: T, width: number, rows: number): string;
   context: Pick<ExtensionContext, "mode" | "hasUI" | "ui">;
   isCurrent(): boolean;
   render(snapshot: T, theme: Theme, width: number, rows: number): readonly string[];
@@ -27,10 +35,12 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
   // Read context properties only while this owner is valid. Headless publishers
   // do not retain a UI object (headless sessions can share the same no-op UI).
   const { key, isCurrent, render } = options;
-  if (!isCurrent()) return { publish() {}, dispose() {} };
+  if (!isCurrent()) return { publish() {}, setCollapsed: () => false, dispose() {} };
   const { mode, hasUI } = options.context;
-  if (!hasUI || (mode !== "tui" && mode !== "rpc")) return { publish() {}, dispose() {} };
+  if (!hasUI || (mode !== "tui" && mode !== "rpc")) return { publish() {}, setCollapsed: () => false, dispose() {} };
   const ui = options.context.ui;
+  const name = sanitizeTerminalText(options.name ?? "").trim();
+  const state = { collapsed: false };
   let disposed = false;
   let latest: T | undefined;
   let mount: Mount | undefined;
@@ -74,7 +84,7 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
         if (unchanged && rpcVisible) return;
         try {
           const lines = [...render(snapshot, ui.theme, 80, 36)];
-          if (!current()) return;
+          if (!current() || !Object.is(latest, snapshot)) return;
           rpcVisible = true;
           needsClear = true;
           writeVersion++;
@@ -101,15 +111,71 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
           key,
           (tui) => {
             token.tui = tui;
+            let lines: readonly string[] = [];
+            let summary = "";
+            let rendering = 0;
+            const frame = name
+              ? new EditorStatusWidget({
+                  name,
+                  state,
+                  get summary() {
+                    return summary;
+                  },
+                  get theme() {
+                    return ui.theme;
+                  },
+                  renderBody: () => lines.slice(1),
+                })
+              : undefined;
             const component = {
               render(width: number): string[] {
-                if (!current() || mount !== token || latest === undefined) return [];
-                // ui.theme is Pi's current callback theme, including replacements
-                // after a theme change. Do not retain themed lines or the first theme.
-                return [...render(latest, ui.theme, width, tui.terminal.rows)];
+                rendering++;
+                try {
+                  if (!current() || mount !== token || latest === undefined) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  // Render the latest snapshot even while collapsed so the owner's
+                  // visibility and row-budget decisions remain authoritative.
+                  const snapshot = latest;
+                  const rows = tui.terminal.rows;
+                  const ownsSnapshot = () => current() && mount === token && Object.is(latest, snapshot);
+                  lines = render(snapshot, ui.theme, width, rows);
+                  if (!ownsSnapshot()) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  if (lines.length === 0) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  summary = frame ? (options.summary?.(snapshot, width, rows) ?? "") : "";
+                  if (!ownsSnapshot()) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  const output = frame ? frame.render(width) : [...lines];
+                  if (!ownsSnapshot()) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  return output;
+                } catch (error) {
+                  frame?.invalidate();
+                  throw error;
+                } finally {
+                  rendering--;
+                }
               },
-              invalidate() {},
+              handleMouse(event: TuiMouseEvent) {
+                if (rendering > 0 || !current() || mount !== token || latest === undefined) return undefined;
+                return frame?.handleMouse(event);
+              },
+              invalidate() {
+                frame?.invalidate();
+              },
               dispose() {
+                frame?.dispose();
                 // Host disposal must never clear a newer mount or call back into UI.
                 if (mount === token) {
                   mount = undefined;
@@ -126,6 +192,13 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
         if (writeVersion === attempt) fail(error);
         throw error;
       }
+    },
+    setCollapsed(collapsed) {
+      if (!current() || mode !== "tui" || !name || state.collapsed === collapsed) return false;
+      state.collapsed = collapsed;
+      mount?.component?.invalidate();
+      mount?.tui?.requestRender();
+      return true;
     },
     dispose() {
       if (disposed && !needsClear) return;

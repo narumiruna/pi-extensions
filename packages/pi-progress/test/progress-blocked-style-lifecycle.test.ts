@@ -43,11 +43,22 @@ for (const mode of ["tui", "rpc", "print", "json"] as const) {
         assert.equal(current.notifications.length, 1);
         assert.equal(current.notifications[0]?.type, "warning");
         assert.match(current.notifications[0]?.message ?? "", /blockedStyle.icon.*blockedStyle.color/u);
-        assert.deepEqual(current.renderWidget(), [
-          theme.fg("borderMuted", "─".repeat(80)),
-          theme.fg("muted", "Progress"),
-          theme.fg("warning", "⚠ ") + theme.fg("warning", "approval"),
-        ]);
+        if (mode === "tui") {
+          assert.deepEqual(current.renderWidget(), [
+            theme.fg("borderMuted", "─") +
+              " " +
+              theme.fg("muted", "▾ Progress · ⚠ 1 blocked") +
+              " " +
+              theme.fg("borderMuted", "─".repeat(53)),
+            theme.fg("warning", "⚠ ") + theme.fg("warning", "approval"),
+          ]);
+        } else {
+          assert.deepEqual(current.renderWidget(), [
+            theme.fg("borderMuted", "─".repeat(80)),
+            theme.fg("muted", "Progress"),
+            theme.fg("warning", "⚠ ") + theme.fg("warning", "approval"),
+          ]);
+        }
       } else {
         assert.deepEqual(current.notifications, []);
         assert.deepEqual(current.widgets, []);
@@ -70,13 +81,13 @@ test("session restart reads changed style without rewriting stored progress or p
   replacement.setTheme(theme);
   try {
     await harness.emit("session_start", current.ctx);
-    assert.equal(current.renderWidget()[2], theme.fg("thinkingHigh", "◆ ") + theme.fg("thinkingHigh", "approval"));
+    assert.equal(current.renderWidget()[1], theme.fg("thinkingHigh", "◆ ") + theme.fg("thinkingHigh", "approval"));
     assert.deepEqual(current.notifications, []);
     const mounted = current.component;
     await writeFile(path, JSON.stringify({ blockedStyle: { icon: "!", color: "error" } }));
     await harness.emit("session_start", replacement.ctx);
     assert.deepEqual(mounted?.render(80), []);
-    assert.equal(replacement.renderWidget()[2], theme.fg("error", "! ") + theme.fg("error", "approval"));
+    assert.equal(replacement.renderWidget()[1], theme.fg("error", "! ") + theme.fg("error", "approval"));
     assert.deepEqual(replacement.notifications, []);
     assert.deepEqual(harness.entries, []);
     assert.deepEqual(replacement.branch, branch());
@@ -144,9 +155,9 @@ test("the existing settings screen saves display preferences without losing file
     screen.press("ctrl+c");
     await command;
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { blockedStyle, displayMode: "expanded" });
-    assert.equal(current.renderWidget()[2], theme.fg("thinkingHigh", "◆ ") + theme.fg("thinkingHigh", "approval"));
+    assert.equal(current.renderWidget()[1], theme.fg("thinkingHigh", "◆ ") + theme.fg("thinkingHigh", "approval"));
     assert.deepEqual(current.notifications, []);
-    assert.equal(stripVTControlCharacters(current.renderWidget()[2] ?? ""), "◆ approval");
+    assert.equal(stripVTControlCharacters(current.renderWidget()[1] ?? ""), "◆ approval");
   } finally {
     screen.dispose();
     await command;

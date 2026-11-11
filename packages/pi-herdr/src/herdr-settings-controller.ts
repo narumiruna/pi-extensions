@@ -37,6 +37,7 @@ export function createHerdrSettingsController(
           import("./herdr-menu.js"),
         ]);
         if (!current(expected)) return;
+        if (enabled && ctx.mode === "tui") observer.restore(ctx);
         await runMenu(
           ctx,
           createHerdrMenu({

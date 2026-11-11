@@ -1320,7 +1320,7 @@ test("proposed-plan parser distinguishes valid and malformed output", () => {
   assert.equal(parseProposedPlan("<PROPOSED_PLAN>\n# Plan\n</PROPOSED_PLAN>").kind, "malformed");
 });
 
-test("active Plan UI advertises the completion tool rather than legacy XML", async () => {
+test("active Plan widget omits finish instructions without changing menu guidance", async () => {
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi);
   let activeMenu = "";
@@ -1333,8 +1333,9 @@ test("active Plan UI advertises the completion tool rather than legacy XML", asy
   });
   await mock.commands.get("plan")?.handler("start", context.ctx);
   const widget = renderMockWidget(context.widgets.get("plan-mode-plan"));
-  assert.equal(widget[0], "─".repeat(80));
-  assert.match(widget.join("\n"), /plan_mode_complete/);
+  assert.equal(widget[0], `─ ▾ Plan mode · Planning ${"─".repeat(55)}`);
+  assert.ok(widget.includes("File edits remain blocked."));
+  assert.doesNotMatch(widget.join("\n"), /Finish with plan_mode_complete/);
   assert.doesNotMatch(widget.join("\n"), /proposed_plan/);
   await mock.commands.get("plan")?.handler("", context.ctx);
   assert.match(activeMenu, /plan_mode_complete/);

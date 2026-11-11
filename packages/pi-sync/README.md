@@ -150,6 +150,8 @@ Back returns to the sync manager, and Ctrl+C closes the complete flow.
 Startup checks never open a dialog. While checking, TUI and RPC status show **sync ...**. With a sync baseline and no content-list mismatch, they use **sync ⇡** for local changes to push and **sync ⇣** for remote changes to pull. Review conditions use **sync ⇕**; in TUI, a persistent widget above the editor also identifies both sides changing, first sync with an existing remote snapshot, a differing content list (including order-only differences), or a missing remote snapshot despite an existing baseline. Both sides changing is a reason to review, not a confirmed file conflict.
 No selected content and first sync with an empty remote stay quiet outside `/sync`, which provides setup or initialization guidance. Legacy remote metadata without an authoritative content list does not independently trigger a widget for observation-only checks. With **Startup transfer** enabled, an established legacy remote instead shows review attention and requires an explicit direction to adopt the content policy; no automatic transfer runs. An included-content mismatch puts **Review synced content (recommended)** in the manager, where a fresh review verifies the remote snapshot before offering changes.
 Check results are advisory observations against the last sync baseline, not proof of a file conflict or current equality. Opening the manager uses local information and shows when the check completed; it does not contact remote storage. Transfer actions recheck current content.
+In fullscreen TUI mode, click anywhere in **Sync** to collapse or expand the widget without moving keyboard focus. Attention updates keep the collapse state. Open and close `/sync` to restore the body with the keyboard; a new session resets the state.
+
 The widget has no expiry timer. Attention stays in memory and is invalidated by relevant settings/state changes or a foreground transfer's commit boundary, and cleared on session replacement or shutdown. A newer observation replaces the presentation, clearing the widget when only status or no reminder is needed. Cancelling a review or a failure before commit preserves a still-valid observation and its appropriate presentation.
 
 Interactive TUI `/sync sync`, `/sync pull`, and `/sync push` routes without `--yes` open the same review flow when they detect the mismatch.
@@ -371,7 +373,7 @@ Preserve both roots before manual recovery; with every Pi process closed and no 
 Pi exposes terminal components rather than a semantic or ARIA tree.
 Release checks cover textual state, keyboard operation, Escape and Back behavior, control escaping, and narrow rendering.
 Critical meaning appears in text such as `(current)`, `Review needed`, `No startup transfer`, `Warning`, `Invalid`, `Saved`, `Cancelled`, and `Applied`.
-Color is supplementary, and the attention widget is informational rather than interactive.
+Color is supplementary. The attention widget's mouse control changes only its presentation; `/sync` provides keyboard access to review actions.
 
 ## 🗂️ Package layout
 

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
@@ -29,7 +31,7 @@ class FullscreenHost extends TuiAltScreen {
   }
 }
 
-function fixture(mode: "regular" | "fullscreen") {
+function fixture(mode: "regular" | "fullscreen", createLayout?: (widgets: Component, editor: Input) => Component) {
   let width = 40;
   let rows = 20;
   let input: (data: string) => void = () => {};
@@ -59,11 +61,23 @@ function fixture(mode: "regular" | "fullscreen") {
     setProgress: noop,
     setProgramStatus: noop,
   };
-  const host = mode === "regular" ? new MainHost(terminal, false) : new FullscreenHost(terminal, false);
+  const copied: string[] = [];
+  const opened: string[] = [];
+  const host =
+    mode === "regular"
+      ? new MainHost(terminal, false)
+      : new FullscreenHost(terminal, false, undefined, {
+          copyOnSelect: false,
+          copySelection: async (text) => {
+            copied.push(text);
+            return true;
+          },
+          openUrl: (url) => opened.push(url),
+        });
   const widgets = new Map<string, Widget>();
   const container = new Container();
   const editor = new Input();
-  const root = new VStack([container, editor]);
+  const root = createLayout?.(container, editor) ?? new VStack([container, editor]);
   if (host instanceof FullscreenHost) host.setLayoutRoot(root);
   else host.addChild(root);
   host.setFocus(editor);
@@ -116,6 +130,8 @@ function fixture(mode: "regular" | "fullscreen") {
     widgets,
     calls,
     writes,
+    copied,
+    opened,
     editor,
     get mounts() {
       return mounts;
@@ -139,9 +155,9 @@ function fixture(mode: "regular" | "fullscreen") {
       host.invalidate();
       host.flush();
     },
-    send(data: string) {
+    send(data: string, flush = true) {
       input(data);
-      host.flush();
+      if (flush) host.flush();
     },
     stop() {
       for (const widget of widgets.values()) widget.dispose?.();
@@ -154,6 +170,366 @@ function fixture(mode: "regular" | "fullscreen") {
 function renderer(snapshot: string, theme: Theme, width: number) {
   return new EditorStatusWidget({ theme, renderBody: () => [snapshot] }).render(width);
 }
+
+function mouseBytes(x: number, y: number, button = 0, release = false): string {
+  return `\u001b[<${button};${x + 1};${y + 1}${release ? "m" : "M"}`;
+}
+
+for (const mode of ["regular", "fullscreen"] as const) {
+  test(`${mode}: named publication keeps current data, owner-local disclosure and editor input`, (t) => {
+    const f = fixture(mode);
+    t.onTestFinished(() => f.stop());
+    const publisher = createEditorStatusPublisher({
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render: renderer,
+    });
+    const sibling = createEditorStatusPublisher({
+      key: "subagents",
+      name: "Subagents",
+      context: f.context,
+      isCurrent: () => true,
+      render: renderer,
+    });
+    publisher.publish("before");
+    sibling.publish("running");
+    f.host.flush();
+    const widget = f.widgets.get("progress");
+    assert.ok(widget);
+    assert.match(widget.render(40)[0] ?? "", /^─ ▾ Progress ─+$/u);
+    if (mode === "fullscreen") {
+      f.send(mouseBytes(39, 1)); // Native selection redraws after the passive press.
+      assert.equal(publisher.setCollapsed(false), false);
+      f.send(mouseBytes(39, 1, 0, true));
+    } else {
+      assert.equal(publisher.setCollapsed(true), true); // Owner keyboard action in regular mode.
+    }
+    assert.equal(widget.render(40).length, 1);
+    assert.match(widget.render(40)[0] ?? "", /^─ ▸ Progress ─+$/u);
+    assert.equal(f.widgets.get("subagents")?.render(40).length, 2);
+    publisher.publish("latest");
+    f.host.flush();
+    assert.equal(widget.render(40).length, 1);
+    assert.equal(f.mounts, 2);
+    assert.deepEqual([...f.widgets.keys()], ["progress", "subagents"]);
+    f.send("draft");
+    f.send("\u001b[200~-paste-\u001b[201~");
+    assert.equal(f.editor.getValue(), "draft-paste-");
+    assert.equal(f.host.getFocusedComponent(), f.editor);
+    if (mode === "fullscreen") {
+      f.send(mouseBytes(39, 0));
+      f.send(mouseBytes(39, 0, 0, true));
+    } else {
+      assert.equal(publisher.setCollapsed(false), true);
+    }
+    assert.equal(widget.render(40)[1], "latest");
+    assert.equal(f.host.getFocusedComponent(), f.editor);
+    publisher.setCollapsed(true);
+    publisher.publish(undefined);
+    publisher.publish("returned");
+    const replacement = f.widgets.get("progress");
+    assert.equal(replacement?.render(40).length, 1);
+    widget.dispose?.();
+    assert.equal(publisher.setCollapsed(false), true);
+    assert.equal(replacement?.render(40)[1], "returned");
+    publisher.dispose();
+    assert.equal(publisher.setCollapsed(true), false);
+    sibling.dispose();
+  });
+}
+
+test("the installed fullscreen input dock rejects a press after sibling growth moves its target", async (t) => {
+  // Exercise Pi's installed dock, not a second approximation of its bottom anchoring.
+  const viewportPath = pathToFileURL(
+    resolve("node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js"),
+  ).href;
+  const { createChatViewport } = await import(viewportPath);
+  const empty: Component = { render: () => [], invalidate() {} };
+  const f = fixture(
+    "fullscreen",
+    (widgetsAbove, editor) =>
+      createChatViewport({
+        document: empty,
+        pendingMessages: empty,
+        status: empty,
+        footer: empty,
+        widgetsAbove,
+        editor,
+      }).root,
+  );
+  t.onTestFinished(() => f.stop());
+  const first = createEditorStatusPublisher({
+    key: "first",
+    name: "First",
+    context: f.context,
+    isCurrent: () => true,
+    render: renderer,
+  });
+  const sibling = createEditorStatusPublisher({
+    key: "sibling",
+    name: "Sibling",
+    context: f.context,
+    isCurrent: () => true,
+    render: (value: string, theme, width) =>
+      new EditorStatusWidget({ theme, renderBody: () => value.split("\n") }).render(width),
+  });
+  first.publish("first body");
+  sibling.publish("sibling body");
+  f.host.flush();
+  const widget = f.widgets.get("first");
+  assert.ok(widget?.handleMouse);
+  const handleMouse = widget.handleMouse.bind(widget);
+  let observedPress = false;
+  widget.handleMouse = (event) => {
+    const result = handleMouse(event);
+    if (event.type === "press") observedPress = true;
+    return result;
+  };
+  const oldRow = 20 - 3 - widget.render(40).length - (f.widgets.get("sibling")?.render(40).length ?? 0);
+  f.send(mouseBytes(39, oldRow));
+  assert.equal(observedPress, true);
+  sibling.publish("row one\nrow two\nrow three\nrow four");
+  f.host.flush(); // The input dock grows upward; the original cell now belongs to Sibling.
+  f.send(mouseBytes(39, oldRow, 0, true));
+  assert.match(widget.render(40)[0] ?? "", /^─ ▾ First ─+$/u);
+  assert.equal(widget.render(40).length, 2);
+  assert.equal(f.widgets.get("sibling")?.render(40).length, 5);
+  f.send(mouseBytes(39, oldRow - 3));
+  f.send(mouseBytes(39, oldRow - 3, 0, true));
+  assert.equal(widget.render(40).length, 1);
+  assert.equal(f.host.getFocusedComponent(), f.editor);
+  first.dispose();
+  sibling.dispose();
+});
+
+for (const mount of ["direct", "publisher"] as const) {
+  for (const row of [1, 2]) {
+    test(`fullscreen ${mount}: body row ${row} keeps native drag selection and exact copy`, async (t) => {
+      const f = fixture("fullscreen");
+      t.onTestFinished(() => f.stop());
+      assert.ok(f.host instanceof FullscreenHost);
+      const lines = ["/tmp/a.ts", "job ready"];
+      if (mount === "publisher") {
+        const publisher = createEditorStatusPublisher({
+          key: "progress",
+          name: "Progress",
+          context: f.context,
+          isCurrent: () => true,
+          render: (_snapshot: string, theme, width) =>
+            new EditorStatusWidget({ theme, renderBody: () => lines }).render(width),
+        });
+        publisher.publish("active");
+      } else {
+        f.context.ui.setWidget(
+          "progress",
+          (_tui, theme) => new EditorStatusWidget({ name: "Progress", theme, renderBody: () => lines }),
+        );
+      }
+      f.host.flush();
+      f.send(mouseBytes(0, row));
+      f.send(mouseBytes(8, row, 32));
+      f.send(mouseBytes(8, row, 0, true));
+      assert.equal(f.host.hasActiveSelection(), true);
+      assert.equal(await f.host.copyActiveSelectionToClipboard(), true);
+      assert.deepEqual(f.copied, [lines[row - 1]]);
+      assert.equal(f.widgets.get("progress")?.render(40).length, 3);
+      assert.equal(f.host.getFocusedComponent(), f.editor);
+      // A fresh click still collapses after a completed selection gesture.
+      f.send(mouseBytes(39, row));
+      f.send(mouseBytes(39, row, 0, true));
+      assert.equal(f.widgets.get("progress")?.render(40).length, 1);
+    });
+  }
+}
+
+for (const replacement of [false, true]) {
+  test(`fullscreen rejects a click on a ${replacement ? "replacement" : "new"} mount without its own press`, (t) => {
+    const f = fixture("fullscreen");
+    t.onTestFinished(() => f.stop());
+    const options = {
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render: renderer,
+    };
+    const old = createEditorStatusPublisher(options);
+    if (replacement) old.publish("old body");
+    f.host.flush();
+    f.send(mouseBytes(39, 1));
+    old.dispose();
+    const current = createEditorStatusPublisher(options);
+    current.publish("new body");
+    f.host.flush();
+    f.send(mouseBytes(39, 1, 0, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, 2);
+    f.send(mouseBytes(39, 1));
+    f.send(mouseBytes(39, 1, 0, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, 1);
+    current.dispose();
+  });
+}
+
+for (const protocol of ["sgr", "sgr-no-release-button", "x10"] as const) {
+  test(`fullscreen ${protocol}: link and disclosure routing follows the installed host`, (t) => {
+    const f = fixture("fullscreen");
+    t.onTestFinished(() => f.stop());
+    const bytes = (x: number, y: number, release = false) =>
+      protocol !== "x10"
+        ? mouseBytes(x, y, release && protocol === "sgr-no-release-button" ? 3 : 0, release)
+        : `\u001b[M${String.fromCharCode(release ? 35 : 32, x + 33, y + 33)}`;
+    const publisher = createEditorStatusPublisher({
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render: renderer,
+    });
+    publisher.publish("\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007");
+    f.host.flush();
+    f.send(bytes(1, 1));
+    f.send(bytes(1, 1, true));
+    // The installed host consumes X10 pointer input without routing it.
+    assert.deepEqual(f.opened, protocol === "x10" ? [] : ["https://example.com"]);
+    assert.equal(f.widgets.get("progress")?.render(40).length, 2);
+    f.send(bytes(39, 1));
+    f.send(bytes(39, 1, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, protocol === "x10" ? 2 : 1);
+    f.send(bytes(39, 0));
+    f.send(bytes(39, 0, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, 2);
+    publisher.dispose();
+  });
+}
+
+test("named publisher rejects mouse input reentered from the owner renderer", (t) => {
+  const f = fixture("fullscreen");
+  t.onTestFinished(() => f.stop());
+  let reenter: (() => void) | undefined;
+  const publisher = createEditorStatusPublisher({
+    key: "progress",
+    name: "Progress",
+    context: f.context,
+    isCurrent: () => true,
+    render(snapshot: string, theme, width) {
+      reenter?.();
+      return renderer(snapshot, theme, width);
+    },
+  });
+  publisher.publish("body");
+  f.host.flush();
+  const widget = f.widgets.get("progress");
+  assert.ok(widget);
+  f.send(mouseBytes(39, 1));
+  let result: unknown = "not called";
+  reenter = () => {
+    result = widget.handleMouse?.({
+      type: "click",
+      button: "left",
+      x: 39,
+      y: 1,
+      screenX: 39,
+      screenY: 1,
+      width: 40,
+      height: 2,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+  };
+  assert.equal(widget.render(40).length, 2);
+  assert.equal(result, undefined);
+  reenter = undefined;
+  f.send(mouseBytes(39, 1, 0, true));
+  assert.equal(widget.render(40).length, 1);
+  publisher.dispose();
+});
+
+for (const failure of ["empty", "throw"] as const) {
+  test(`named publisher clears old hit geometry after an ${failure} render`, (t) => {
+    const f = fixture("fullscreen");
+    t.onTestFinished(() => f.stop());
+    let fail = false;
+    const publisher = createEditorStatusPublisher({
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render(snapshot: string, theme, width) {
+        if (fail) {
+          if (failure === "throw") throw new Error("render failed");
+          return [];
+        }
+        return renderer(snapshot, theme, width);
+      },
+    });
+    publisher.publish("body");
+    const widget = f.widgets.get("progress");
+    assert.ok(widget);
+    widget.render(40);
+    const event = {
+      type: "press" as const,
+      button: "left" as const,
+      x: 39,
+      y: 1,
+      screenX: 39,
+      screenY: 1,
+      width: 40,
+      height: 2,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    };
+    widget.handleMouse?.(event);
+    fail = true;
+    if (failure === "throw") assert.throws(() => widget.render(40), /render failed/u);
+    else assert.deepEqual(widget.render(40), []);
+    assert.equal(widget.handleMouse?.({ ...event, type: "click" }), undefined);
+    fail = false;
+    assert.equal(widget.render(40).length, 2);
+    assert.equal(widget.handleMouse?.({ ...event, type: "click" }), undefined);
+    publisher.dispose();
+  });
+}
+
+test("fullscreen drag, modified/right clicks, and stale named owners cannot toggle", (t) => {
+  const f = fixture("fullscreen");
+  t.onTestFinished(() => f.stop());
+  let current = true;
+  const publisher = createEditorStatusPublisher({
+    key: "progress",
+    name: "Progress",
+    context: f.context,
+    isCurrent: () => current,
+    render: renderer,
+  });
+  publisher.publish("body");
+  f.host.flush();
+  const widget = f.widgets.get("progress");
+  assert.ok(widget);
+  f.send(mouseBytes(2, 1));
+  f.send(mouseBytes(3, 1, 32));
+  f.send(mouseBytes(3, 1, 0, true));
+  assert.equal(widget.render(40).length, 2);
+  for (const button of [2, 4, 8, 16]) {
+    f.send(mouseBytes(2, 1, button));
+    f.send(mouseBytes(2, 1, button, true));
+    assert.equal(widget.render(40).length, 2);
+  }
+  current = false;
+  Object.defineProperty(f.context.ui, "theme", {
+    get() {
+      throw new Error("stale theme");
+    },
+  });
+  f.send(mouseBytes(39, 1));
+  f.send(mouseBytes(39, 1, 0, true));
+  assert.equal(publisher.setCollapsed(true), false);
+  assert.deepEqual(widget.render(40), []);
+  publisher.dispose();
+});
 
 for (const mode of ["regular", "fullscreen"] as const) {
   test(`${mode}: visible updates retain mounts and sibling order; hide/show inserts again`, (t) => {
@@ -390,6 +766,7 @@ test("RPC publishes full string snapshots at 80 columns and 36 rows, then clears
   const seen: [number, number][] = [];
   const publisher = createEditorStatusPublisher({
     key: "rpc:view",
+    name: "RPC view",
     context,
     isCurrent: () => current,
     render(snapshot: string, activeTheme, width, rows) {
@@ -398,6 +775,7 @@ test("RPC publishes full string snapshots at 80 columns and 36 rows, then clears
     },
   });
   publisher.publish("one");
+  assert.equal(publisher.setCollapsed(true), false);
   publisher.publish("one");
   theme = { fg: (_role: string, text: string) => `\u001b[32m${text}\u001b[0m` } as Theme;
   publisher.publish("two");
@@ -528,6 +906,7 @@ for (const mode of ["print", "json", "tui", "rpc"] as const) {
     };
     const publisher = createEditorStatusPublisher({
       key: "none",
+      name: "Headless",
       context,
       isCurrent: () => true,
       render() {
@@ -535,6 +914,7 @@ for (const mode of ["print", "json", "tui", "rpc"] as const) {
       },
     });
     publisher.publish("ignored");
+    assert.equal(publisher.setCollapsed(true), false);
     publisher.publish(undefined);
     publisher.dispose();
     publisher.dispose();

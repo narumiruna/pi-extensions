@@ -92,6 +92,7 @@ Extension tools are summarized by source entrypoint and tool count, for example:
 Extension labels use the npm package name or local entrypoint name. An `index` entrypoint uses its parent directory, skipping a `src` or `dist` directory.
 SDK tools share an **SDK** summary, and active names without metadata share **Other**.
 Use `/tool` to browse the full tool list.
+In fullscreen TUI mode, click the **Active tools** divider or any body row, including its blank right side, to collapse or expand the widget. Collapse changes only the display, not tool availability or the saved widget setting. The choice survives refreshes and disable/enable changes, but resets on session replacement or reload. Open `/tool` to expand it from the keyboard.
 Built-in entries show `[codemode]` or `[deferred]` for these runtime exposures; Extension summaries show their counts, such as `[codemode: 2]`.
 Both exposures allow calls from codemode scripts without activation.
 Pi reports MCP tools configured as `codemode` as runtime `deferred` tools.

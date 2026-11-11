@@ -163,8 +163,7 @@ test("writes only version 5 Progress details, updates the widget, and clears sta
   assert.ok(firstDetailStep);
   assert.equal("step" in firstDetailStep, false);
   assert.deepEqual(renderedBody(current), [
-    "─".repeat(80),
-    "Progress · 1/3 complete",
+    `─ ▾ Progress · ⚠ 1 blocked · 1/3 complete ${"─".repeat(38)}`,
     "✓ task 1",
     "▶ task 2",
     "⚠ task 3 — approval",

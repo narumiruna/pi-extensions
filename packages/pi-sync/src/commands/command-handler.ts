@@ -56,6 +56,7 @@ export async function handleCommand(
     );
   };
   if (!rawArgs.trim()) {
+    attention.expand();
     try {
       const { showSyncManager } = await import("../ui/manager-ui.js");
       if (sessionSignal.aborted) return;

@@ -3,7 +3,7 @@
 [API reference](./api.md#-editor-status-widgets) · [README](../README.md)
 
 The optional editor status helpers update one extension-owned widget without taking over Pi's layout, input, or terminal.
-`EditorStatusWidget` remains the passive horizontal frame with its original API.
+`EditorStatusWidget` keeps its original unnamed passive frame and supports an optional named, collapsible divider.
 The owner supplies immutable display snapshots, safe text, summaries, priority, row budgets, and domain policy.
 
 ## Ownership and admission
@@ -28,7 +28,20 @@ Do not manufacture an incremental API by splitting a complete snapshot into item
 
 Import `createEditorStatusPublisher` from `@narumitw/pi-tui-kit/editor-status-publisher`.
 Pass `key`, `context`, `isCurrent`, and `render(snapshot, theme, width, rows)`.
-The render callback returns complete terminal lines, including the standard `EditorStatusWidget` frame.
+The render callback returns complete terminal lines, including the standard `EditorStatusWidget` divider as its first line.
+Supply `name` to replace that first divider with `─ ▾ Name ───` in TUI mode without adding a row.
+Supply `summary(snapshot, width, rows)` for short, current divider text such as `─ ▾ Progress · 1/4 complete ───`.
+The callback runs for visible named TUI frames, including collapsed frames; it is not called for RPC or unnamed output.
+Keep summary text unstyled. Kit sanitizes it before width-safe rendering and rejects output if a callback replaces the snapshot or owner.
+A renderer may return only its standard divider when the summary is the complete visible content. Return `[]` only to hide the widget.
+Owners remove duplicate body headers themselves; Kit does not inspect or rewrite domain text.
+An unmodified primary-button click anywhere in the widget collapses it to `─ ▸ Name ───`; clicking anywhere on that line restores the latest body.
+Only fullscreen Pi routes mouse events. The control never requests editor focus; wheel, drag, modified clicks, other buttons, and OSC 8 link cells do not toggle it.
+Press, drag, and release remain native so body text can be selected and copied.
+A click requires a prior eligible press at the same local and screen coordinates with the same dimensions.
+An unchanged selection redraw keeps that press; invalidation, changed content, disposal, or moved geometry cancels it.
+`setCollapsed(false)` restores the body from an owner keyboard action and requests a render after a change.
+RPC keeps the original complete string snapshot; headless and RPC publishers reject disclosure changes.
 
 `publish(snapshot)` mounts once when visible.
 Later immutable snapshots invalidate that component and request a Pi render rather than calling `setWidget()` again.
@@ -36,6 +49,31 @@ The callback receives the current public theme and terminal dimensions; do not r
 `publish(undefined)` hides the widget, and `dispose()` releases its owned mount idempotently.
 Headless contexts acquire no UI resources; RPC receives plain string snapshots at 80 columns and 36 rows.
 The owner may retain its existing TUI-only scope instead of enabling RPC.
+
+Disclosure state belongs to one publisher and survives ordinary snapshots, hide/show, theme changes, resize, and host remounts.
+A fresh publisher starts expanded; owner session/tree resets can also call `setCollapsed(false)`.
+The snapshot renderer still runs while collapsed so owner visibility and row-budget decisions remain authoritative.
+Disclosure does not stop background work, edit saved settings, clear attention, or change jobs, tasks, permissions, or tool activation.
+No global widget registry or terminal-input listener is installed.
+For direct `EditorStatusWidget` mounts, pass a stable owner-local `EditorStatusWidgetState` across replacements and forward mouse and disposal methods through every wrapper.
+Use the `summary` string option, or an option getter, to keep direct-mount divider state current while collapsed.
+
+Existing owner controls restore the body without changing domain data:
+
+| Widget | Keyboard restore path |
+| --- | --- |
+| Progress | `/progress` → Widget view → default, details, or summary. |
+| Subagents | `/subagents` → Widget view → details or summary. |
+| Herdr | Open `/herdr`. |
+| Files | Open `/files`. |
+| Plan mode | Open `/plan` without arguments. |
+| Active tools | Open `/tool`. |
+| Chat | `/chat` → select an enabled widget display mode. |
+| Ticker | `/ticker refresh` or the existing Refresh action. |
+| Cache hit monitor | Use the existing toggle to hide, then show the monitor. |
+| Sync | Open `/sync`. |
+
+These are restore paths, not new commands. Existing disable, attention, and visibility policies still apply.
 
 This prevents ordinary updates from moving a widget after its siblings.
 It does not reserve global positions: Pi inserts a hidden widget at the end when it is shown again.
@@ -121,15 +159,37 @@ Count the separator in a supplied total row budget, include omitted/hidden count
 When no visible entries remain, clear the widget rather than leaving only a separator.
 Manual item removal never deletes a task or hides it from the owner's domain manager.
 
+## Named widget content
+
+Keep the name and a short summary in the divider. Put state that needs more space, safety messages, item rows, and actions in the body.
+Order critical state before optional counts so it survives ordinary label clipping when space permits.
+Owners retain their standalone RPC, notification, and tool-result labels because those surfaces do not have the named divider.
+
+| Widget | Divider summary | Body |
+| --- | --- | --- |
+| Progress | Blocked count, completion count, and compact-view active count; removed count when applicable. | Step rows; completion and summary-only views need no duplicate header. |
+| Subagents | Current running/queued counts and actual omitted or removed counts. | Job rows; deliberate summary mode does not claim every job was omitted by a limit. |
+| Herdr | Sibling-agent count. | Agent state and identity rows, including hidden-agent count. |
+| Files | Existing name-only divider. | Edit restriction or blocked warning first, followed by queued prompt context. |
+| Plan mode | Planning, discussion, readiness, saved, or implementation state. | Applicable edit restriction and user actions, not model-only tool instructions. |
+| Active tools | Callable-tool count. | Tool groups and exposure markers. |
+| Chat | Room, connection attention, and unread state. | Presence counts, mode-appropriate previews, and the dock input target. |
+| Ticker | Updating or last-update state. | Quote rows with stale/unavailable markers. |
+| Cache hit monitor | Waiting/aggregate state, or LIVE and request number. | Provider/model and metrics; the full formula remains in documentation. |
+| Sync | Review state. | Setup identity, selection differences or review reason, and an explicit no-transfer notice. |
+
+Physical-terminal appearance and IME acceptance still require the operator check below.
+
 ## Verification and handoff
 
 Deterministic tests cover native regular/fullscreen publication, sibling order, mount/dispose counts, immutable snapshots, themes, narrow widths, RPC/headless behavior, stale owners, and failed initialization.
 Pure view/collection tests cover event positions, retries, pin/manual precedence, bounded replacement, atomic failure, removed markers, and stale item handles.
 Consumer tests cover existing menus, settings, authoritative state, completion retention, and selected event policies.
-Strict external-consumer and eager-graph tests keep the original widget entry unchanged and each optional helper dependency-free at runtime.
+Strict external-consumer and eager-graph tests keep display entrypoints limited to Kit display helpers and Pi TUI; view and collection helpers have no runtime dependencies.
 Changesets fixtures verify that the Kit minor release raises each adopting consumer's generated dependency floor; exact-artifact publication guards remain required.
 
-The implementation verification passed both repository gates: `npm run check` and separate `npm test` (797 files, 15,384 tests; the existing one-file/two-test skips remain).
+Verification uses the repository's pinned Node release and both gates: `npm run check` and separate `npm test`.
+Named-disclosure regressions include full-width/body clicks, native drag selection and exact copy, independent owners, current-data restore, keyboard recovery, stale/disposed input, reentrant body/theme callbacks, and moved or replaced press targets in Pi's installed fullscreen host.
 These passing gates do not establish exact tracking across an unobserved maintenance/custom-run boundary; a separate native diagnostic reproduces the one-extra-cycle limit above.
 The complete intended diff was reviewed for correctness, security, lifecycle safety, compatibility, regressions, and scope against the extension, settings, README, Kit admission, and coordinated-release guides.
 Failure-injection tests cover cleanup exceptions across all three consumers, joining source/menu/settings/runtime work, stale context getters, retrying failed publication cleanup, reentrant policy/measurement callbacks, and capacity bypass attempts.

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { HorizontalRule } from "@narumitw/pi-tui-kit";
 import { test, vi } from "vitest";
 import {
   clearPlanModeUi,
@@ -10,6 +11,13 @@ import {
   updatePlanModeUi,
 } from "../src/presentation.js";
 import type { PlanModeState } from "../src/state.js";
+import { createMockWidget, widgetClick } from "./widget-support.js";
+
+const divider = (width: number, summary?: string, collapsed = false) =>
+  new HorizontalRule({
+    label: `${collapsed ? "▸" : "▾"} Plan mode${summary ? ` · ${summary}` : ""}`,
+    labelAlignment: "left",
+  }).render(width)[0];
 
 test("renders an editor-style divider above bounded Plan mode content", () => {
   const roles: string[] = [];
@@ -22,8 +30,13 @@ test("renders an editor-style divider above bounded Plan mode content", () => {
 
   const lines = renderPlanModeWidget(["Plan mode: planning", "A longer status line"], theme, 12);
 
-  assert.deepEqual(lines.map(stripTerminalSequences), ["─".repeat(12), "Plan mode: p", "A longer sta"]);
-  assert.deepEqual(roles, ["muted", "borderMuted"]);
+  assert.deepEqual(lines.map(stripTerminalSequences), [
+    stripTerminalSequences(divider(12) ?? ""),
+    "Plan mode: p",
+    "A longer sta",
+  ]);
+  assert.ok(roles.includes("muted"));
+  assert.ok(roles.includes("borderMuted"));
   assert.ok(lines.every((line) => visibleWidth(line) <= 12));
 });
 
@@ -35,7 +48,7 @@ test.each([0, 1, 2, 12, 80, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEG
     const theme = { fg: (_role: string, text: string) => text } as Theme;
     const lines = renderPlanModeWidget(body, theme, width);
     assert.deepEqual(lines, [
-      "─".repeat(normalized),
+      divider(normalized),
       ...body.map((line) => truncateToWidth(sanitizePlanModeWidgetLine(line), normalized, "")),
     ]);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
@@ -44,10 +57,18 @@ test.each([0, 1, 2, 12, 80, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEG
   },
 );
 
-const widgetStates: Array<{ state: PlanModeState; status: string; body: string[] }> = [
+const widgetStates: Array<{
+  state: PlanModeState;
+  status: string;
+  summary: string;
+  namedBody: string[];
+  body: string[];
+}> = [
   {
     state: { enabled: true, awaitingAction: false },
     status: "plan active",
+    summary: "Planning",
+    namedBody: ["File edits remain blocked.", "Read tools only", "Use /plan to switch to free discussion."],
     body: [
       "Plan mode: planning",
       "Read tools only",
@@ -58,6 +79,12 @@ const widgetStates: Array<{ state: PlanModeState; status: string; body: string[]
   {
     state: { enabled: true, awaitingAction: true, latestPlan: "A proposed plan" },
     status: "plan ready",
+    summary: "Ready",
+    namedBody: [
+      "File edits remain blocked.",
+      "Use /plan to implement, save, revise, or exit Plan mode.",
+      "Use /plan to switch to free discussion.",
+    ],
     body: [
       "Proposed plan ready",
       "Use /plan to implement, save, revise, or exit Plan mode.",
@@ -67,6 +94,13 @@ const widgetStates: Array<{ state: PlanModeState; status: string; body: string[]
   {
     state: { enabled: true, awaitingAction: false, interactionMode: "discussion" },
     status: "plan discussion",
+    summary: "Free discussion",
+    namedBody: [
+      "File edits remain blocked.",
+      "Read tools only",
+      "Plain-text questions are allowed; questionnaires are paused.",
+      "Use /plan to enable questionnaires.",
+    ],
     body: [
       "Plan mode: free discussion",
       "Read tools only",
@@ -77,6 +111,12 @@ const widgetStates: Array<{ state: PlanModeState; status: string; body: string[]
   {
     state: { enabled: true, awaitingAction: false, interactionMode: "discussion", latestPlan: "Ready" },
     status: "plan ready",
+    summary: "Ready · Free discussion",
+    namedBody: [
+      "File edits remain blocked.",
+      "Use /plan to implement, save, revise, or exit Plan mode.",
+      "Use /plan to enable questionnaires.",
+    ],
     body: [
       "Proposed plan ready",
       "Plan mode: free discussion",
@@ -87,6 +127,8 @@ const widgetStates: Array<{ state: PlanModeState; status: string; body: string[]
   {
     state: { enabled: false, awaitingAction: false, savedPlan: { plan: "Saved", source: "plan_mode_complete" } },
     status: "plan saved",
+    summary: "Saved",
+    namedBody: ["Use /plan to show, implement, or clear it."],
     body: ["Plan saved for later", "Use /plan to show, implement, or clear it."],
   },
   {
@@ -96,11 +138,13 @@ const widgetStates: Array<{ state: PlanModeState; status: string; body: string[]
       activeImplementation: { id: "plan", plan: "Active", source: "plan_mode_complete", startedAt: 0 },
     },
     status: "plan implementing",
+    summary: "Implementation active",
+    namedBody: ["Use /plan to show, replace, or clear it."],
     body: ["Implementation plan active", "Use /plan to show, replace, or clear it."],
   },
 ];
 
-test.each(widgetStates)("preserves widget publication and exact-key cleanup for $status", ({ state, status, body }) => {
+test.each(widgetStates)("publishes exact rows for $status", ({ state, status, summary, namedBody, body }) => {
   for (const mode of ["tui", "rpc"] as const) {
     const setWidget = vi.fn();
     const setStatus = vi.fn();
@@ -119,16 +163,25 @@ test.each(widgetStates)("preserves widget publication and exact-key cleanup for 
       for (const width of [80, 0, 1, 12, 80]) {
         const lines = component.render(width);
         assert.ok(lines.every((line) => visibleWidth(line) <= width));
-        if (width === 0) assert.deepEqual(lines, ["", ...body.map(() => "")]);
-        else assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+        if (width === 0) assert.deepEqual(lines, ["", ...namedBody.map(() => "")]);
+        else {
+          assert.equal(stripTerminalSequences(lines[0] ?? ""), stripTerminalSequences(divider(width, summary) ?? ""));
+          if (width > 2) assert.ok(fg.mock.calls.some(([role]) => role === "borderMuted"));
+        }
       }
-      assert.deepEqual(component.render(80).slice(1).map(stripTerminalSequences), body);
-      assert.ok(fg.mock.calls.some(([role, text]) => role === "muted" && text === body.at(-1)));
+      assert.deepEqual(component.render(80).slice(1).map(stripTerminalSequences), namedBody);
+      assert.equal(namedBody.includes("File edits remain blocked."), state.enabled);
+      assert.ok(namedBody.every((line) => !line.includes("Finish with plan_mode_complete")));
+      if (namedBody.length > 1) {
+        assert.ok(fg.mock.calls.some(([role, text]) => role === "muted" && text === namedBody.at(-1)));
+      }
       color = "\u001b[32m";
       component.invalidate();
       const recolored = component.render(80);
-      assert.equal(recolored[0], `${color}${"─".repeat(80)}\u001b[0m`);
-      assert.equal(recolored.at(-1), `${color}${body.at(-1)}\u001b[0m`);
+      assert.equal(stripTerminalSequences(recolored[0] ?? ""), divider(80, summary));
+      assert.ok(recolored[0]?.includes(color));
+      assert.ok(!recolored[0]?.includes("\u001b[31m"));
+      assert.equal(stripTerminalSequences(recolored.at(-1) ?? ""), namedBody.at(-1));
       assert.equal(setWidget.mock.calls.length, 1);
     } else {
       assert.deepEqual(content, body, "non-TUI publication stays plain and unframed");
@@ -147,6 +200,43 @@ test.each(widgetStates)("preserves widget publication and exact-key cleanup for 
     assert.deepEqual(setWidget.mock.calls.at(-1), ["plan-mode-plan", undefined]);
   }
 });
+
+test.each(widgetStates)("uses reduced row heights for $summary", ({ state, summary, namedBody }) => {
+  const setWidget = vi.fn();
+  const ctx = { mode: "tui", hasUI: true, ui: { setWidget, setStatus: vi.fn() } } as unknown as ExtensionContext;
+  const widgetState = { collapsed: false };
+  updatePlanModeUi(ctx, state, () => "Read tools only", undefined, widgetState);
+  const component = createMockWidget(setWidget.mock.calls[0]?.[1]);
+  const expanded = [divider(120, summary), ...namedBody];
+  assert.deepEqual(component.render(120), expanded);
+  assert.equal(widgetClick(component, 119, expanded.length, expanded.length), undefined);
+  assert.deepEqual(widgetClick(component, 119, expanded.length - 1, expanded.length), { handled: true, render: true });
+  assert.deepEqual(component.render(120), [divider(120, summary, true)]);
+  assert.deepEqual(widgetClick(component, 0, 0, 1), { handled: true, render: true });
+  assert.deepEqual(component.render(120), expanded);
+  component.dispose?.();
+  assert.equal(widgetClick(component, 0, 0, 1), undefined);
+  assert.equal(widgetState.collapsed, false);
+});
+
+test.each(["Plan mode: planning", "Proposed plan ready", "Plan saved for later"])(
+  "keeps arbitrary tool-summary rows instead of inferring state from %s",
+  (tools) => {
+    const setWidget = vi.fn();
+    const ctx = { mode: "tui", hasUI: true, ui: { setWidget, setStatus: vi.fn() } } as unknown as ExtensionContext;
+    const state = { enabled: true, awaitingAction: false };
+    updatePlanModeUi(ctx, state, () => tools);
+    state.enabled = false;
+    const component = createMockWidget(setWidget.mock.calls[0]?.[1]);
+    assert.deepEqual(component.render(120), [
+      divider(120, "Planning"),
+      "File edits remain blocked.",
+      tools,
+      "Use /plan to switch to free discussion.",
+    ]);
+    component.dispose?.();
+  },
+);
 
 test.each(["print", "json"] as const)("keeps existing no-op status adapters without custom UI in %s mode", (mode) => {
   const setWidget = vi.fn();
@@ -200,6 +290,10 @@ test("status text describes discussion, readiness, and restrictions without an i
     assert.equal(text.includes("A proposed plan is ready"), latestPlan !== undefined);
   }
   const state = { enabled: true, awaitingAction: false };
+  assert.match(
+    planModeStatusText(state, () => "read only"),
+    /Explore, ask, and finish with plan_mode_complete when decision-ready\./u,
+  );
   assert.equal(
     planModeStatusText(state, () => "read only"),
     planModeStatusText({ ...state, interactionMode: "questions" }, () => "read only"),
