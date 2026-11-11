@@ -1,5 +1,13 @@
 # @narumitw/pi-codex-compact
 
+## 0.56.5
+
+### Patch Changes
+
+- 7f53ac0: Forward session reasoning effort to Codex compaction requests and accept Azure retained developer messages.
+- Updated dependencies [cf7b63d]
+  - @narumitw/pi-tui-kit@0.70.0
+
 ## 0.56.4
 
 ### Patch Changes

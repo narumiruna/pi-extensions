@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-ticker",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Pi extension that shows configurable Yahoo Finance quotes above the editor.",
   "type": "module",
   "license": "MIT",
@@ -36,7 +36,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.69.0"
+    "@narumitw/pi-tui-kit": "^0.70.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

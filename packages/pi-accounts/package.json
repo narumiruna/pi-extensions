@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-accounts",
-  "version": "0.54.2",
+  "version": "0.54.3",
   "description": "Pi extension for switching named provider-owned OAuth accounts.",
   "type": "module",
   "license": "MIT",
@@ -42,7 +42,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.69.0",
+    "@narumitw/pi-tui-kit": "^0.70.0",
     "proper-lockfile": "^4.1.2"
   },
   "peerDependencies": {

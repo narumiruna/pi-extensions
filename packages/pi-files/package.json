@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-files",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Browse and attach file context, and independently limit native Pi edits to selected targets.",
   "type": "module",
   "license": "MIT",
@@ -38,7 +38,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.69.0"
+    "@narumitw/pi-tui-kit": "^0.70.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

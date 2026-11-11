@@ -2,6 +2,20 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.8.0
+
+### Minor Changes
+
+- 223fb0d: Add optional `blockedStyle.icon` and `blockedStyle.color` preferences for blocked steps and summaries. Validate safe single-cell icons and current-theme foreground roles, fall back per field with startup diagnostics, and preserve existing default rendering and muted aggregate headers. Keep the new preferences file-only and preserve them during settings-screen saves.
+
+### Patch Changes
+
+- cf7b63d: Put editor widget names and short current count/state summaries in their divider lines. Remove duplicate body titles while retaining safety text, detail rows, privacy modes, and standalone RPC/tool output. In fullscreen Pi, click anywhere in a widget to collapse it to one named line, then click that line to restore the latest content. Preserve independent, session-local disclosure through updates without taking editor focus, changing domain data, or stopping background work. Existing owner controls provide keyboard restoration; regular-mode mouse input remains terminal-owned.
+  
+  The Kit minor release supplies the named widget state and publisher disclosure APIs. Changesets raises all adopting consumers' Kit dependency floors in the same Version PR. Publish and verify the exact Kit artifact before its consumers.
+- Updated dependencies [cf7b63d]
+  - @narumitw/pi-tui-kit@0.70.0
+
 ## 0.7.2
 
 ### Patch Changes
