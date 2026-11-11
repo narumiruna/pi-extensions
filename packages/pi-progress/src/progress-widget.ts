@@ -29,11 +29,12 @@ import {
   validateProgressArguments,
 } from "./progress-state.js";
 import {
-  DEFAULT_PROGRESS_SETTINGS,
+  cloneProgressSettings as cloneSettings,
   loadProgressSettings,
   type ProgressSettings,
   type ProgressSettingsLoadResult,
   progressSettingsPath,
+  resolveBlockedColor,
   saveProgressSettings,
 } from "./settings.js";
 
@@ -361,6 +362,15 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
         sanitizeProgressText(`Invalid progress settings at ${loaded.path}; using defaults. ${loaded.issue}`),
         "warning",
       );
+    } else if (loaded.kind === "loaded" && ctx.hasUI) {
+      const warnings = [...(loaded.warnings ?? [])];
+      resolveBlockedColor(settings.blockedStyle, ctx.ui.theme, warnings);
+      if (warnings.length > 0) {
+        ctx.ui.notify(
+          sanitizeProgressText(`Ignored progress style settings at ${loaded.path}. ${warnings.join(" ")}`),
+          "warning",
+        );
+      }
     }
     publish(ctx);
   });
@@ -493,9 +503,5 @@ export {
 export { renderProgressWidget, sanitizeProgressText as sanitizeProgressStep };
 
 function cloneDefaultSettings(): ProgressSettings {
-  return { ...DEFAULT_PROGRESS_SETTINGS };
-}
-
-function cloneSettings(value: Readonly<ProgressSettings>): ProgressSettings {
-  return { ...value };
+  return cloneSettings();
 }

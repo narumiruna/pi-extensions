@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   DefaultResourceLoader,
@@ -9,9 +9,11 @@ import {
   initTheme,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { createProgressTheme } from "./progress-theme.js";
 
 initTheme("dark");
 
@@ -30,6 +32,10 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   try {
     await builder.buildRuntime({ outputDirectory: output });
     await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(agentDir, "pi-progress.json"),
+      JSON.stringify({ blockedStyle: { icon: "◆", color: "thinkingHigh" } }),
+    );
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
       cwd: root,
@@ -52,12 +58,14 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     const widgets: Array<{ key: string; content: unknown }> = [];
     const notifications: Array<{ message: string; type: string | undefined }> = [];
     const sessionManager = { getBranch: () => [] };
+    const theme = createProgressTheme();
     const ctx = {
       mode: "tui",
       hasUI: true,
       sessionManager,
       isIdle: () => true,
       ui: {
+        theme,
         setWidget(key: string, content: unknown) {
           widgets.push({ key, content });
         },
@@ -95,7 +103,13 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       version: 5,
       steps: [{ text: "Verify generated runtime — waiting for approval", status: "blocked" }],
     });
-    assert.equal(typeof widgets.at(-1)?.content, "function");
+    const widget = widgets.at(-1)?.content as Parameters<ExtensionContext["ui"]["setWidget"]>[1];
+    assert.ok(typeof widget === "function");
+    const component = widget({ terminal: { rows: 36 }, requestRender() {} } as unknown as TUI, theme);
+    assert.equal(
+      component.render(100)[2],
+      theme.fg("thinkingHigh", "◆ ") + theme.fg("thinkingHigh", "Verify generated runtime — waiting for approval"),
+    );
     const command = extension.commands.get("progress");
     assert.ok(command);
     // Exercise the emitted menu's lazy import through Pi's Jiti-loaded runtime.

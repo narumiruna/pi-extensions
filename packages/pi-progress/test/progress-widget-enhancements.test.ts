@@ -52,6 +52,7 @@ test("adapts widget rows, prioritizes active work, and honors display settings",
     renderProgressWidget(steps, theme, 40, {
       terminalRows: 12,
       settings: {
+        ...DEFAULT_PROGRESS_SETTINGS,
         enabled: true,
         displayMode: "expanded",
         showCompleted: false,

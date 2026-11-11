@@ -108,6 +108,7 @@ test("changes all five settings in one screen with bounded rendering", async () 
     { showProgress: false },
   ]);
   assert.deepEqual(current.options.get(), {
+    ...DEFAULT_PROGRESS_SETTINGS,
     enabled: false,
     displayMode: "expanded",
     showCompleted: false,
