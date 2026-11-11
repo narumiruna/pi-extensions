@@ -33,7 +33,7 @@ export class EditorStatusWidget implements Component {
   private readonly rule: HorizontalRule;
   private readonly ruleOptions: HorizontalRuleOptions;
   private layout: { width: number; lines: string[] } | undefined;
-  private pressVersion: number | undefined;
+  private press: TuiMouseEvent | undefined;
   private invalidation = 0;
   private disposed = false;
 
@@ -64,12 +64,16 @@ export class EditorStatusWidget implements Component {
   invalidate() {
     this.invalidation++;
     this.layout = undefined;
+    this.press = undefined;
     this.rule.invalidate();
   }
 
   render(width: number): string[] {
     if (this.disposed) return [];
+    const previous = this.layout;
+    const press = this.press;
     this.invalidate();
+    const renderVersion = this.invalidation;
     const renderWidth = normalizeWidth(width);
     const body = this.collapsed ? [] : this.options.renderBody(renderWidth);
     if (this.disposed) return [];
@@ -84,11 +88,23 @@ export class EditorStatusWidget implements Component {
     ];
     if (this.disposed || this.invalidation !== version) return [];
     this.layout = { width: renderWidth, lines };
+    // Native selection redraws after a passive press. Keep that press only when
+    // the frame is unchanged and no owner callback invalidated it during render.
+    if (
+      press &&
+      this.invalidation === renderVersion &&
+      previous?.width === renderWidth &&
+      previous.lines.length === lines.length &&
+      previous.lines.every((line, index) => line === lines[index])
+    )
+      this.press = press;
     return lines;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const layout = this.layout;
+    const press = this.press;
+    if (event.type !== "move") this.press = undefined;
     if (
       this.disposed ||
       !this.name ||
@@ -100,25 +116,32 @@ export class EditorStatusWidget implements Component {
       event.x >= layout.width ||
       event.y < 0 ||
       event.y >= Math.min(layout.lines.length, event.height) ||
-      event.button !== "left" ||
+      (event.button !== "left" && !(event.button === "none" && (event.type === "release" || event.type === "click"))) ||
       event.shift ||
       event.alt ||
       event.ctrl ||
       getOsc8LinkAtColumn(layout.lines[event.y] ?? "", event.x) !== undefined
     )
       return undefined;
-    // Accept the press so Pi can synthesize a click on release. Never take
-    // keyboard focus or toggle on press: a drag is not a click.
+    // Observe, but do not claim, the press. Pi must own drag selection and copy.
+    // Its selection path synthesizes a click against the current layout.
     if (event.type === "press") {
-      this.pressVersion = this.invalidation;
-      return { handled: true, render: false };
+      this.press = { ...event };
+      return undefined;
     }
+    if (
+      !press ||
+      press.x !== event.x ||
+      press.y !== event.y ||
+      press.screenX !== event.screenX ||
+      press.screenY !== event.screenY ||
+      press.width !== event.width ||
+      press.height !== event.height
+    )
+      return undefined;
+    // A release can omit its button. Only a matching left press can reach here.
+    if (event.type === "release") this.press = press;
     if (event.type !== "click") return undefined;
-    // Pi retains the press target's old screen origin until release. A redraw
-    // can move this widget, so do not accept a click from that old geometry.
-    const cancelled = this.pressVersion !== undefined && this.pressVersion !== this.invalidation;
-    this.pressVersion = undefined;
-    if (cancelled) return { handled: true, render: false };
     return this.setCollapsed(!this.collapsed) ? { handled: true, render: true } : undefined;
   }
 

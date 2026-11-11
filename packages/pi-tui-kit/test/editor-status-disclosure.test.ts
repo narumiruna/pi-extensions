@@ -24,6 +24,13 @@ function pointer(overrides: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
   };
 }
 
+function click(widget: EditorStatusWidget, overrides: Partial<TuiMouseEvent> = {}) {
+  const event = pointer(overrides);
+  assert.equal(widget.handleMouse({ ...event, type: "press" }), undefined);
+  assert.equal(widget.handleMouse({ ...event, type: "release" }), undefined);
+  return widget.handleMouse(event);
+}
+
 for (const y of [0, 1, 2]) {
   for (const x of [0, 4, 39]) {
     test(`whole-widget cell (${x}, ${y}) collapses on click, not press, and the line restores latest content`, () => {
@@ -32,15 +39,16 @@ for (const y of [0, 1, 2]) {
       const expanded = widget.render(40);
       assert.match(expanded[0] ?? "", /^─ ▾ Progress ─+$/u);
       assert.equal(expanded.length, 3);
-      assert.deepEqual(widget.handleMouse(pointer({ type: "press", x, y })), { handled: true, render: false });
+      assert.equal(widget.handleMouse(pointer({ type: "press", x, y })), undefined);
       assert.equal(widget.collapsed, false);
+      assert.equal(widget.handleMouse(pointer({ type: "release", x, y })), undefined);
       assert.deepEqual(widget.handleMouse(pointer({ x, y })), { handled: true, render: true });
       assert.equal(widget.collapsed, true);
       text = "updated while collapsed";
       const collapsed = widget.render(40);
       assert.equal(collapsed.length, 1);
       assert.match(collapsed[0] ?? "", /^─ ▸ Progress ─+$/u);
-      assert.deepEqual(widget.handleMouse(pointer({ x: 39, y: 0, height: 1 })), { handled: true, render: true });
+      assert.deepEqual(click(widget, { x: 39, y: 0, height: 1 }), { handled: true, render: true });
       assert.deepEqual(widget.render(40).slice(1), [text, "second row"]);
     });
   }
@@ -162,17 +170,60 @@ test("owner-local state survives replacement, but old components cannot change i
   assert.equal(sibling.collapsed, false);
 });
 
-test("redraw cancels a pending press until a fresh click gesture", () => {
-  const widget = new EditorStatusWidget({ name: "Progress", theme, renderBody: () => ["body"] });
+test("unchanged native selection redraw preserves a press; changed content cancels it", () => {
+  let body = "before";
+  const widget = new EditorStatusWidget({ name: "Progress", theme, renderBody: () => [body] });
   widget.render(40);
-  assert.deepEqual(widget.handleMouse(pointer({ type: "press" })), { handled: true, render: false });
+  assert.equal(widget.handleMouse(pointer()), undefined);
+  assert.equal(widget.handleMouse(pointer({ type: "press" })), undefined);
   widget.render(40);
-  assert.deepEqual(widget.handleMouse(pointer()), { handled: true, render: false });
+  body = "after";
+  widget.render(40);
+  assert.equal(widget.handleMouse(pointer({ type: "release" })), undefined);
+  assert.equal(widget.handleMouse(pointer()), undefined);
   assert.equal(widget.collapsed, false);
-  assert.deepEqual(widget.handleMouse(pointer({ type: "press" })), { handled: true, render: false });
+  assert.equal(widget.handleMouse(pointer({ type: "press" })), undefined);
+  widget.render(40);
+  assert.equal(widget.handleMouse(pointer({ type: "release" })), undefined);
   assert.deepEqual(widget.handleMouse(pointer()), { handled: true, render: true });
   assert.equal(widget.collapsed, true);
 });
+
+for (const change of [
+  { x: 38 },
+  { y: 0 },
+  { screenX: 40 },
+  { screenY: 2 },
+  { height: 2 },
+] satisfies Partial<TuiMouseEvent>[]) {
+  test(`click requires the same press geometry: ${JSON.stringify(change)}`, () => {
+    const widget = new EditorStatusWidget({ name: "Progress", theme, renderBody: () => ["body", "second"] });
+    widget.render(40);
+    widget.handleMouse(pointer({ type: "press" }));
+    assert.equal(widget.handleMouse(pointer(change)), undefined);
+    assert.equal(widget.collapsed, false);
+    assert.equal(widget.handleMouse(pointer()), undefined);
+  });
+}
+
+for (const cancellation of ["invalidate", "drag", "modified-press", "link-press"] as const) {
+  test(`${cancellation} cancels an earlier eligible press`, () => {
+    const widget = new EditorStatusWidget({
+      name: "Progress",
+      theme,
+      renderBody: () => ["\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007"],
+    });
+    widget.render(40);
+    widget.handleMouse(pointer({ type: "press" }));
+    if (cancellation === "invalidate") widget.invalidate();
+    else if (cancellation === "drag") widget.handleMouse(pointer({ type: "drag" }));
+    else if (cancellation === "modified-press") widget.handleMouse(pointer({ type: "press", shift: true }));
+    else widget.handleMouse(pointer({ type: "press", x: 1 }));
+    widget.render(40);
+    assert.equal(widget.handleMouse(pointer()), undefined);
+    assert.equal(widget.collapsed, false);
+  });
+}
 
 test("reentrant body disclosure renders the final state without stale body rows", () => {
   let widget: EditorStatusWidget;
@@ -220,5 +271,5 @@ test("OSC 8 link cells keep their native behavior while adjacent blank cells col
   assert.equal(widget.handleMouse(pointer({ type: "press", x: 1 })), undefined);
   assert.equal(widget.handleMouse(pointer({ x: 1 })), undefined);
   assert.equal(widget.collapsed, false);
-  assert.deepEqual(widget.handleMouse(pointer()), { handled: true, render: true });
+  assert.deepEqual(click(widget), { handled: true, render: true });
 });

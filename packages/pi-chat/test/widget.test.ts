@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import type { ChatSnapshot } from "../src/chat-session.js";
 import { createPrivateRoom } from "../src/protocol.js";
@@ -177,6 +177,12 @@ test("dock retains local preview thresholds and split header policy beneath the 
   }
 });
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 test("Chat forwards full-body blank-column clicks and restores the latest snapshot after remount", () => {
   let current = snapshot();
   const state = { collapsed: false };
@@ -203,26 +209,28 @@ test("Chat forwards full-body blank-column clicks and restores the latest snapsh
     alt: false,
     ctrl: false,
   };
-  assert.equal(first.handleMouse({ ...event, ctrl: true }), undefined);
-  assert.deepEqual(first.handleMouse(event), { handled: true, render: false });
+  assert.equal(clickWidget(first, { ...event, ctrl: true }), undefined);
+  first.handleMouse(event);
   assert.equal(state.collapsed, false);
+  first.handleMouse({ ...event, type: "release" });
   assert.deepEqual(first.handleMouse({ ...event, type: "click" }), { handled: true, render: true });
   assert.match(first.render(100)[0] ?? "", /▸ Chat/u);
   assert.equal(first.render(100).length, 1);
   current = snapshot({ unread: 7, state: "degraded" });
   first.dispose();
   first.dispose();
-  assert.equal(first.handleMouse(event), undefined);
+  assert.equal(clickWidget(first, event), undefined);
   assert.deepEqual(first.render(100), []);
   const replacement = create();
   assert.equal(replacement.render(100).length, 1);
-  assert.deepEqual(replacement.handleMouse({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  const collapsed = { ...event, y: 0, screenY: 0, height: replacement.render(100).length };
+  assert.deepEqual(clickWidget(replacement, collapsed), { handled: true, render: true });
   const restored = replacement.render(100).join("\n");
   assert.match(restored, /7 unread/u);
   assert.match(restored, /reconnecting/u);
   assert.match(restored, /private 開發者/u);
   current = snapshot({ state: "disconnected" });
   assert.deepEqual(replacement.render(100), []);
-  assert.equal(replacement.handleMouse({ ...event, type: "click", y: 0 }), undefined);
+  assert.equal(clickWidget(replacement, { ...collapsed, height: 0 }), undefined);
   replacement.dispose();
 });

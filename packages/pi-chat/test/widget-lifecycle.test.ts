@@ -77,7 +77,9 @@ function click(component: Component, y: number): void {
     alt: false,
     ctrl: false,
   };
-  assert.deepEqual(component.handleMouse?.(event), { handled: true, render: false });
+  assert.equal(component.handleMouse?.(event), undefined);
+  component.render(80); // Native selection redraws after a passive press.
+  assert.equal(component.handleMouse?.({ ...event, type: "release" }), undefined);
   assert.deepEqual(component.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
 }
 

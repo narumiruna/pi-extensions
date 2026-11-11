@@ -215,11 +215,17 @@ async function runtimeProof() {
     alt: false,
     ctrl: false,
   };
-  assert.deepEqual(frame.handleMouse(pointer), { handled: true, render: true });
+  const click = (event) => {
+    assert.equal(frame.handleMouse({ ...event, type: "press" }), undefined);
+    frame.render(event.width); // Native selection redraw.
+    assert.equal(frame.handleMouse({ ...event, type: "release" }), undefined);
+    assert.deepEqual(frame.handleMouse(event), { handled: true, render: true });
+  };
+  click(pointer);
   publisher.publish("updated while collapsed");
   assert.equal(frame.render(20).length, 1);
   assert.match(frame.render(20)[0], /^─ ▸ Fixture ─+$/u);
-  assert.deepEqual(frame.handleMouse({ ...pointer, y: 0, height: 1 }), { handled: true, render: true });
+  click({ ...pointer, y: 0, screenY: 0, height: 1 });
   assert.equal(frame.render(40)[1], "updated while collapsed");
   assert.equal(mounts, 1);
   assert.equal(publisher.setCollapsed(true), true);

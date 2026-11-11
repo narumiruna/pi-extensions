@@ -183,6 +183,12 @@ function pointer(component: Component, y = 1, x = 79): TuiMouseEvent {
   };
 }
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 for (const y of [0, 1, 2]) {
   for (const x of [0, 79]) {
     test(`Herdr click (${x}, ${y}) collapses only its named frame and restores authoritative updates`, async () => {
@@ -199,9 +205,7 @@ for (const y of [0, 1, 2]) {
         assert.match(before[0] ?? "", /^─ ▾ Herdr ─+$/u);
         const state = { ...f.state };
         const event = pointer(component, y, x);
-        assert.deepEqual(component.handleMouse?.({ ...event, type: "press" }), { handled: true, render: false });
-        // Do not force a redraw between press and click; redraw cancels stale geometry.
-        assert.deepEqual(component.handleMouse?.(event), { handled: true, render: true });
+        assert.deepEqual(clickWidget(component, event), { handled: true, render: true });
         assert.deepEqual(f.state, state, "disclosure makes no Herdr requests or data changes");
         assert.equal(component.render(80).length, 1);
         assert.match(component.render(80)[0] ?? "", /^─ ▸ Herdr ─+$/u);
@@ -211,7 +215,7 @@ for (const y of [0, 1, 2]) {
         f.invalidate();
         await until(() => f.repaints > repaints);
         assert.equal(component.render(80).length, 1);
-        assert.deepEqual(component.handleMouse?.(pointer(component, 0)), { handled: true, render: true });
+        assert.deepEqual(clickWidget(component, pointer(component, 0)), { handled: true, render: true });
         assert.match(f.text(), /blocked/u);
         assert.equal(component.render(80).length, before.length);
         for (const width of [0, 1, 2, 10, 80]) {
@@ -233,14 +237,14 @@ test("Herdr retains disclosure across absent siblings and host remount; restore 
     const original = f.mounted.get(HERDR_WIDGET_KEY);
     assert.ok(original);
     const event = pointer(original);
-    original.handleMouse?.(event);
+    clickWidget(original, event);
     assert.equal(original.render(80).length, 1);
     original.dispose?.();
     f.state.status = "working";
     f.invalidate();
     await until(() => f.mounts === 2);
     assert.equal(f.mounted.get(HERDR_WIDGET_KEY)?.render(80).length, 1);
-    assert.equal(original.handleMouse?.(event), undefined);
+    assert.equal(clickWidget(original, event), undefined);
     f.state.siblings = false;
     f.invalidate();
     await until(() => !f.mounted.has(HERDR_WIDGET_KEY));
@@ -259,7 +263,7 @@ test("Herdr retains disclosure across absent siblings and host remount; restore 
     assert.deepEqual(f.state, state, "restore neither restarts nor refreshes the observer");
     await f.observer.shutdown(f.ctx);
     assert.equal(f.observer.restore(f.ctx), false);
-    assert.equal(original.handleMouse?.(event), undefined);
+    assert.equal(clickWidget(original, event), undefined);
   } finally {
     await f.observer.shutdown(f.ctx);
   }
@@ -316,7 +320,7 @@ test("same-manager restart disposes before replacement and ignores old component
     const old = f.mounted.get(HERDR_WIDGET_KEY);
     assert.ok(old);
     const event = pointer(old);
-    old.handleMouse?.(event);
+    clickWidget(old, event);
     assert.equal(old.render(80).length, 1);
     f.observer.start(f.ctx);
     assert.equal(f.disposals, 1);
@@ -324,7 +328,7 @@ test("same-manager restart disposes before replacement and ignores old component
     await until(() => f.mounts === 2);
     const current = f.mounted.get(HERDR_WIDGET_KEY);
     assert.equal(current?.render(80).length, 3, "session restart resets disclosure");
-    assert.equal(old.handleMouse?.(event), undefined);
+    assert.equal(clickWidget(old, event), undefined);
     old?.dispose?.();
     f.state.status = "blocked";
     f.invalidate();

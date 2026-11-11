@@ -44,7 +44,13 @@ for (const mode of ["tui", "rpc", "print", "json"] as const) {
         assert.equal(current.notifications[0]?.type, "warning");
         assert.match(current.notifications[0]?.message ?? "", /blockedStyle.icon.*blockedStyle.color/u);
         assert.deepEqual(current.renderWidget(), [
-          theme.fg("borderMuted", "─".repeat(80)),
+          mode === "tui"
+            ? theme.fg("borderMuted", "─") +
+              " " +
+              theme.fg("muted", "▾ Progress") +
+              " " +
+              theme.fg("borderMuted", "─".repeat(67))
+            : theme.fg("borderMuted", "─".repeat(80)),
           theme.fg("muted", "Progress"),
           theme.fg("warning", "⚠ ") + theme.fg("warning", "approval"),
         ]);

@@ -106,6 +106,12 @@ function pointer(component: Component, y = 2, x = 199): TuiMouseEvent {
   };
 }
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 for (const y of [0, 1, 2]) {
   for (const x of [0, 199]) {
     test(`Subagents click (${x}, ${y}) collapses only its named frame and retains latest jobs`, () => {
@@ -119,9 +125,7 @@ for (const y of [0, 1, 2]) {
       f.controls.setTrigger("user-message");
       const state = f.controls.state();
       const event = pointer(component, y, x);
-      assert.deepEqual(component.handleMouse?.({ ...event, type: "press" }), { handled: true, render: false });
-      // Do not force a redraw between press and click; redraw cancels stale geometry.
-      assert.deepEqual(component.handleMouse?.(event), { handled: true, render: true });
+      assert.deepEqual(clickWidget(component, event), { handled: true, render: true });
       assert.equal(f.render().length, 1);
       assert.match(f.render()[0] ?? "", /^─ ▸ Subagents ─+$/u);
       assert.deepEqual(sibling.render(), before);
@@ -130,7 +134,7 @@ for (const y of [0, 1, 2]) {
       const latest = [{ ...job, task: "Latest task while collapsed", elapsedMs: 7_000 }];
       f.replace(latest);
       assert.equal(f.render().length, 1);
-      assert.deepEqual(component.handleMouse?.(pointer(component, 0)), { handled: true, render: true });
+      assert.deepEqual(clickWidget(component, pointer(component, 0)), { handled: true, render: true });
       assert.match(f.render()[0] ?? "", /^─ ▾ Subagents ─+$/u);
       assert.deepEqual(f.render().slice(1), renderSubagentWidget(latest, theme, 200).slice(1));
       assert.deepEqual(latest, [{ ...job, task: "Latest task while collapsed", elapsedMs: 7_000 }]);
@@ -142,13 +146,13 @@ test("Subagents disclosure survives absent jobs, disabled settings, and host rem
   const f = fixture();
   const original = f.component();
   assert.ok(original);
-  original.handleMouse?.(pointer(original));
+  clickWidget(original, pointer(original));
   assert.equal(f.render().length, 1);
   original.dispose?.();
   f.replace([{ ...job, elapsedMs: 1_000 }]);
   assert.notEqual(f.component(), original);
   assert.equal(f.render().length, 1);
-  assert.equal(original.handleMouse?.(pointer(original, 0)), undefined);
+  assert.equal(clickWidget(original, pointer(original, 0)), undefined);
   f.replace([]);
   assert.deepEqual(f.render(), []);
   f.replace([job]);
@@ -167,7 +171,7 @@ test("Subagents disclosure survives absent jobs, disabled settings, and host rem
     assert.ok(f.render().length > 1);
     const component = f.component();
     assert.ok(component);
-    component.handleMouse?.(pointer(component, 1));
+    clickWidget(component, pointer(component, 1));
     assert.equal(f.render().length, 1);
   }
   f.controls.setMode("hidden");
@@ -490,10 +494,10 @@ test("same-manager reset clears the old UI first and rejects stale callbacks bef
   const oldContext = f.context.ctx as ExtensionContext;
   assert.ok(oldComponent);
   const oldEvent = pointer(oldComponent);
-  oldComponent.handleMouse?.(oldEvent);
+  clickWidget(oldComponent, oldEvent);
   assert.equal(f.render().length, 1);
   f.controls.setMode("compact");
-  oldComponent.handleMouse?.(pointer(oldComponent, 1));
+  clickWidget(oldComponent, pointer(oldComponent, 1));
   assert.equal(f.render().length, 1);
   f.controls.setPinned(true);
   f.controls.setTrigger("user-message");
@@ -504,7 +508,7 @@ test("same-manager reset clears the old UI first and rejects stale callbacks bef
   assert.deepEqual(f.controller.controls(oldContext)?.state(), { mode: "default", pinned: false, trigger: "manual" });
   assert.equal(f.unsubscribe.mock.calls.length, 1);
   assert.equal(f.render().length, 3, "new session owner starts expanded");
-  assert.equal(oldComponent?.handleMouse?.(oldEvent), undefined);
+  assert.equal(clickWidget(oldComponent, oldEvent), undefined);
   assert.deepEqual(oldComponent?.render(200), []);
   const currentComponent = f.component();
   oldComponent?.dispose?.();

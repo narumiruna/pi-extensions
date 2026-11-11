@@ -140,7 +140,7 @@ test("keeps Files collapsed across summary and branch updates, with manager keyb
   const expanded = component.render(120);
   expect(expanded[0]).toBe(`─ ▾ Files ${"─".repeat(110)}`);
   // A body click is not limited to the divider or the label.
-  expect(component.handleMouse?.(widgetClick(0, 1, expanded.length))).toEqual({ handled: true, render: true });
+  expect(widgetClick(component, 0, 1, expanded.length)).toEqual({ handled: true, render: true });
   expect(component.render(120)).toEqual([`─ ▸ Files ${"─".repeat(110)}`]);
   component.dispose?.(); // Pi disposes the previous component before a replacement mount.
   await quote(f);
@@ -162,7 +162,7 @@ test("keeps Files collapsed across summary and branch updates, with manager keyb
   await running;
   expect(await gate(f, f.other)).toMatchObject({ block: true });
   // The blank right side of a short body row is also part of the widget.
-  expect(component.handleMouse?.(widgetClick(119, restored.length - 1, restored.length))).toEqual({
+  expect(widgetClick(component, 119, restored.length - 1, restored.length)).toEqual({
     handled: true,
     render: true,
   });
@@ -178,14 +178,14 @@ test("resets Files disclosure on session replacement and ignores disposed input"
   const f = await fixture();
   await f.apply();
   const previous = createPendingWidget(f.base.widgets.get("files"));
-  const click = widgetClick(119, 1, previous.render(120).length);
-  previous.handleMouse?.(click);
+  const height = previous.render(120).length;
+  widgetClick(previous, 119, 1, height);
   expect(previous.render(120)).toHaveLength(1);
   previous.dispose?.();
   await f.emit("session_start");
   const current = createPendingWidget(f.base.widgets.get("files"));
   expect(current.render(120).length).toBeGreaterThan(1);
-  expect(previous.handleMouse?.(click)).toBeUndefined();
+  expect(widgetClick(previous, 119, 1, height)).toBeUndefined();
   expect(current.render(120)[0]).toBe(`─ ▾ Files ${"─".repeat(110)}`);
   expect(await gate(f, f.other)).toMatchObject({ block: true });
 });

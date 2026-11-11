@@ -119,9 +119,9 @@ function mountWidget(record: WidgetRecord | undefined): Component & { dispose?()
   return (factory as WidgetFactory)(undefined as never, IDENTITY_THEME);
 }
 
-function widgetClick(x: number, y: number, height: number): TuiMouseEvent {
-  return {
-    type: "click",
+function widgetClick(component: Component, x: number, y: number, height: number) {
+  const event: TuiMouseEvent = {
+    type: "press",
     button: "left",
     x,
     y,
@@ -133,6 +133,9 @@ function widgetClick(x: number, y: number, height: number): TuiMouseEvent {
     alt: false,
     ctrl: false,
   };
+  component.handleMouse?.(event);
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
 }
 
 test("retains Active tools disclosure through polling, empty tools, and enable changes", async () => {
@@ -141,8 +144,8 @@ test("retains Active tools disclosure through polling, empty tools, and enable c
   const current = createContext();
   harness.controller.start(current.ctx, true);
   const previous = mountWidget(current.widgets.at(-1));
-  const click = widgetClick(0, 1, previous.render(80).length);
-  assert.deepEqual(previous.handleMouse?.(click), { handled: true, render: true });
+  const height = previous.render(80).length;
+  assert.deepEqual(widgetClick(previous, 0, 1, height), { handled: true, render: true });
   assert.deepEqual(previous.render(80), [`─ ▸ Active tools ${"─".repeat(63)}`]);
   previous.dispose?.();
 
@@ -153,7 +156,7 @@ test("retains Active tools disclosure through polling, empty tools, and enable c
   await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS);
   let component = mountWidget(current.widgets.at(-1));
   assert.equal(component.render(80).length, 1);
-  assert.equal(previous.handleMouse?.(click), undefined);
+  assert.equal(widgetClick(previous, 0, 1, height), undefined);
   component.dispose?.();
   harness.controller.setEnabled(current.ctx, false);
   harness.controller.setEnabled(current.ctx, true);
@@ -166,7 +169,7 @@ test("retains Active tools disclosure through polling, empty tools, and enable c
   const expanded = component.render(80);
   assert.deepEqual(expanded, [DIVIDER, "Tools (2)", "Built-in (2): read · bash"]);
   // The blank right side of a short body row is inside the click target.
-  assert.deepEqual(component.handleMouse?.(widgetClick(79, 1, expanded.length)), { handled: true, render: true });
+  assert.deepEqual(widgetClick(component, 79, 1, expanded.length), { handled: true, render: true });
   assert.equal(component.render(80).length, 1);
   harness.controller.shutdown(current.ctx);
   component.dispose?.();
@@ -178,16 +181,16 @@ test("resets Active tools disclosure on session start and isolates stale input a
   const previous = createContext();
   harness.controller.start(previous.ctx, true);
   const oldComponent = mountWidget(previous.widgets.at(-1));
-  const click = widgetClick(79, 1, oldComponent.render(80).length);
-  oldComponent.handleMouse?.(click);
+  const height = oldComponent.render(80).length;
+  widgetClick(oldComponent, 79, 1, height);
   oldComponent.dispose?.();
 
   const current = createContext();
   harness.controller.start(current.ctx, true);
   const component = mountWidget(current.widgets.at(-1));
   assert.equal(component.render(80)[0], DIVIDER);
-  assert.equal(oldComponent.handleMouse?.(click), undefined);
-  component.handleMouse?.(click);
+  assert.equal(widgetClick(oldComponent, 79, 1, height), undefined);
+  widgetClick(component, 79, 1, component.render(80).length);
   harness.controller.shutdown(previous.ctx);
   assert.equal(component.render(80).length, 1);
   component.dispose?.();

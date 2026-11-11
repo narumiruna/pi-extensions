@@ -435,6 +435,12 @@ test("uses the callback theme after resize and invalidation without changing pub
   await harness.emit("session_shutdown", {}, current.ctx);
 });
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 test("body and blank-column clicks retain collapse across usage remounts and restore the latest data", async () => {
   const harness = createHarness();
   const current = createContext("tui", [messageEntry(assistant(200, 800))]);
@@ -447,30 +453,31 @@ test("body and blank-column clicks retain collapse across usage remounts and res
   await harness.emit("session_start", {}, current.ctx);
   await harness.command("", current.ctx);
   const first = mount();
+  const lines = first.render(160);
   const event: TuiMouseEvent = {
     type: "press",
     button: "left",
     x: 159,
-    y: first.render(160).length - 1,
+    y: lines.length - 1,
     screenX: 159,
-    screenY: 0,
+    screenY: lines.length - 1,
     width: 160,
-    height: first.render(160).length,
+    height: lines.length,
     shift: false,
     alt: false,
     ctrl: false,
   };
-  assert.deepEqual(first.handleMouse?.(event), { handled: true, render: false });
-  assert.deepEqual(first.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+  assert.deepEqual(clickWidget(first, event), { handled: true, render: true });
   assert.equal(first.render(160).length, 1);
   first.dispose?.();
   await harness.emit("message_update", { message: assistant(100, 900) }, current.ctx);
   const updated = mount();
   assert.equal(updated.render(160).length, 1);
   assert.match(updated.render(160)[0] ?? "", /▸ Cache hit monitor/u);
-  assert.deepEqual(updated.handleMouse?.({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(160).length };
+  assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
   assert.match(updated.render(160).join("\n"), /LIVE.*hit 90\.0%/s);
-  updated.handleMouse?.({ ...event, type: "click", y: 0 });
+  clickWidget(updated, { ...collapsed, height: updated.render(160).length });
   await harness.command("", current.ctx);
   await harness.command("", current.ctx);
   assert.ok(mount().render(160).length > 1, "show command restores the body");

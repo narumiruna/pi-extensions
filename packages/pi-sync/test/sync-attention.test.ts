@@ -61,6 +61,12 @@ test("attention presentation is sanitized, textual, bounded, and clearable", asy
   assert.equal(widgets.get("sync:attention"), undefined);
 });
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 test("blank-column body clicks retain collapse through attention updates and reset with the owner", async () => {
   const controller = createSyncAttentionController();
   const { ctx, widgets } = createMockContext({ mode: "tui" });
@@ -71,21 +77,21 @@ test("blank-column body clicks retain collapse through attention updates and res
   controller.observe(observation({ localChanged: true, remoteChanged: true }));
   await controller.publish(ctx);
   const first = mount();
+  const lines = first.render(100);
   const event: TuiMouseEvent = {
     type: "press",
     button: "left",
     x: 99,
-    y: first.render(100).length - 1,
+    y: lines.length - 1,
     screenX: 99,
-    screenY: 0,
+    screenY: lines.length - 1,
     width: 100,
-    height: first.render(100).length,
+    height: lines.length,
     shift: false,
     alt: false,
     ctrl: false,
   };
-  assert.deepEqual(first.handleMouse?.(event), { handled: true, render: false });
-  assert.deepEqual(first.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+  assert.deepEqual(clickWidget(first, event), { handled: true, render: true });
   assert.equal(first.render(100).length, 1);
   first.dispose?.();
   const latest = observation({ head: undefined, localChanged: false, remoteChanged: false });
@@ -94,9 +100,10 @@ test("blank-column body clicks retain collapse through attention updates and res
   const updated = mount();
   assert.equal(updated.render(100).length, 1);
   assert.match(updated.render(100)[0] ?? "", /▸ Sync/u);
-  assert.deepEqual(updated.handleMouse?.({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(100).length };
+  assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
   assert.match(updated.render(100).join("\n"), /Remote snapshot missing; review needed/u);
-  updated.handleMouse?.({ ...event, type: "click", y: 0 });
+  clickWidget(updated, { ...collapsed, height: updated.render(100).length });
   controller.clear(ctx);
   await controller.publish(ctx);
   assert.equal(mount().render(100).length, 1, "temporary presentation clearing keeps owner state");
@@ -104,7 +111,7 @@ test("blank-column body clicks retain collapse through attention updates and res
   await controller.publish(ctx);
   const expanded = mount();
   assert.ok(expanded.render(100).length > 1);
-  expanded.handleMouse?.({ ...event, type: "click", y: 0 });
+  clickWidget(expanded, { ...collapsed, height: expanded.render(100).length });
   controller.reset(ctx);
   controller.observe(latest);
   await controller.publish(ctx);
@@ -126,16 +133,16 @@ test("the existing /sync menu route expands retained attention after closing", a
   try {
     await controller.publish(ctx);
     const component = mount();
-    component.render(80);
-    component.handleMouse?.({
-      type: "click",
+    const height = component.render(80).length;
+    clickWidget(component, {
+      type: "press",
       button: "left",
       x: 79,
       y: 0,
       screenX: 79,
       screenY: 0,
       width: 80,
-      height: 4,
+      height,
       shift: false,
       alt: false,
       ctrl: false,

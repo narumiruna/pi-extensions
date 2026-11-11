@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import { type Component, KeybindingsManager, TUI_KEYBINDINGS, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -560,22 +560,22 @@ function collapseWidget(context: Context): Component {
   assert.equal(typeof factory, "function");
   const component = widgetComponents.get(factory as object);
   assert.ok(component);
-  assert.deepEqual(
-    component.handleMouse?.({
-      type: "click",
-      button: "left",
-      x: 199,
-      y: 2,
-      screenX: 199,
-      screenY: 2,
-      width: 200,
-      height: component.render(200).length,
-      shift: false,
-      alt: false,
-      ctrl: false,
-    }),
-    { handled: true, render: true },
-  );
+  const event: TuiMouseEvent = {
+    type: "press",
+    button: "left",
+    x: 199,
+    y: 2,
+    screenX: 199,
+    screenY: 2,
+    width: 200,
+    height: component.render(200).length,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  component.handleMouse?.(event);
+  component.handleMouse?.({ ...event, type: "release" });
+  assert.deepEqual(component.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
   return component;
 }
 

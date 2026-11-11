@@ -358,19 +358,21 @@ test("/tool restores a collapsed summary without changing tools or saving settin
   };
   const previous = mount();
   const height = previous.render(80).length;
-  previous.handleMouse?.({
-    type: "click",
-    button: "left",
-    x: 79,
-    y: 1,
-    screenX: 79,
-    screenY: 1,
-    width: 80,
-    height,
-    shift: false,
-    alt: false,
-    ctrl: false,
-  });
+  for (const type of ["press", "release", "click"] as const) {
+    previous.handleMouse?.({
+      type,
+      button: "left",
+      x: 79,
+      y: 1,
+      screenX: 79,
+      screenY: 1,
+      width: 80,
+      height,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+  }
   assert.equal(previous.render(80).length, 1);
   previous.dispose?.();
   const running = mock.commands.get("tool")?.handler("", current.ctx);

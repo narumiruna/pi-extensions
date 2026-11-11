@@ -10,9 +10,9 @@ export function createPendingWidget(
   return (value as (tui: undefined, theme: Pick<Theme, "fg">) => Component & { dispose?(): void })(undefined, theme);
 }
 
-export function widgetClick(x: number, y: number, height: number, width = 120): TuiMouseEvent {
-  return {
-    type: "click",
+export function widgetClick(component: Component, x: number, y: number, height: number, width = 120) {
+  const event: TuiMouseEvent = {
+    type: "press",
     button: "left",
     x,
     y,
@@ -24,4 +24,7 @@ export function widgetClick(x: number, y: number, height: number, width = 120): 
     alt: false,
     ctrl: false,
   };
+  component.handleMouse?.(event);
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
 }

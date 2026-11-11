@@ -32,7 +32,9 @@ The render callback returns complete terminal lines, including the standard `Edi
 Supply `name` to replace that first divider with `─ ▾ Name ───` in TUI mode without adding a row.
 An unmodified primary-button click anywhere in the widget collapses it to `─ ▸ Name ───`; clicking anywhere on that line restores the latest body.
 Only fullscreen Pi routes mouse events. The control never requests editor focus; wheel, drag, modified clicks, other buttons, and OSC 8 link cells do not toggle it.
-A redraw between press and release cancels that gesture because Pi retains the original press target's screen coordinates; a fresh click uses the current layout.
+Press, drag, and release remain native so body text can be selected and copied.
+A click requires a prior eligible press at the same local and screen coordinates with the same dimensions.
+An unchanged selection redraw keeps that press; invalidation, changed content, disposal, or moved geometry cancels it.
 `setCollapsed(false)` restores the body from an owner keyboard action and requests a render after a change.
 RPC keeps the original complete string snapshot; headless and RPC publishers reject disclosure changes.
 
@@ -159,8 +161,8 @@ Consumer tests cover existing menus, settings, authoritative state, completion r
 Strict external-consumer and eager-graph tests keep display entrypoints limited to Kit display helpers and Pi TUI; view and collection helpers have no runtime dependencies.
 Changesets fixtures verify that the Kit minor release raises each adopting consumer's generated dependency floor; exact-artifact publication guards remain required.
 
-Verification with the repository's pinned Node release passed both gates: `npm run check` and separate `npm test` (925 files, 20,705 passing tests, 34 existing skips, and no unhandled errors).
-Named-disclosure regressions include full-width/body clicks, independent owners, current-data restore, keyboard recovery, stale/disposed input, reentrant body/theme callbacks, and a moved press target in Pi's installed fullscreen input dock.
+Verification uses the repository's pinned Node release and both gates: `npm run check` and separate `npm test`.
+Named-disclosure regressions include full-width/body clicks, native drag selection and exact copy, independent owners, current-data restore, keyboard recovery, stale/disposed input, reentrant body/theme callbacks, and moved or replaced press targets in Pi's installed fullscreen host.
 These passing gates do not establish exact tracking across an unobserved maintenance/custom-run boundary; a separate native diagnostic reproduces the one-extra-cycle limit above.
 The complete intended diff was reviewed for correctness, security, lifecycle safety, compatibility, regressions, and scope against the extension, settings, README, Kit admission, and coordinated-release guides.
 Failure-injection tests cover cleanup exceptions across all three consumers, joining source/menu/settings/runtime work, stale context getters, retrying failed publication cleanup, reentrant policy/measurement callbacks, and capacity bypass attempts.

@@ -51,6 +51,8 @@ Use `EditorStatusWidget` as a width-safe frame for status or progress rows near 
 Supply `name` to put a sanitized name in the full-width `borderMuted` divider: `─ ▾ Progress ───`.
 In fullscreen mode, an unmodified primary-button click anywhere in the widget, including body rows and blank columns, collapses it to one named divider: `─ ▸ Progress ───`.
 Click anywhere on that divider to restore the latest body. The control does not take keyboard focus.
+Press, drag, and release remain native for text selection and copy. A click needs a prior eligible press with matching local and screen geometry.
+Unchanged selection redraws preserve the press; invalidation, changed output, disposal, or moved geometry cancels it.
 Unnamed widgets keep the original passive frame.
 
 The consumer owns widget keys, placement, snapshots, body formatting, terminal-text sanitization, RPC publication, refresh scheduling, and session lifecycle.

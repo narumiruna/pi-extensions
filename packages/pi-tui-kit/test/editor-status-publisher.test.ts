@@ -61,7 +61,19 @@ function fixture(mode: "regular" | "fullscreen", createLayout?: (widgets: Compon
     setProgress: noop,
     setProgramStatus: noop,
   };
-  const host = mode === "regular" ? new MainHost(terminal, false) : new FullscreenHost(terminal, false);
+  const copied: string[] = [];
+  const opened: string[] = [];
+  const host =
+    mode === "regular"
+      ? new MainHost(terminal, false)
+      : new FullscreenHost(terminal, false, undefined, {
+          copyOnSelect: false,
+          copySelection: async (text) => {
+            copied.push(text);
+            return true;
+          },
+          openUrl: (url) => opened.push(url),
+        });
   const widgets = new Map<string, Widget>();
   const container = new Container();
   const editor = new Input();
@@ -118,6 +130,8 @@ function fixture(mode: "regular" | "fullscreen", createLayout?: (widgets: Compon
     widgets,
     calls,
     writes,
+    copied,
+    opened,
     editor,
     get mounts() {
       return mounts;
@@ -186,7 +200,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
     assert.ok(widget);
     assert.match(widget.render(40)[0] ?? "", /^─ ▾ Progress ─+$/u);
     if (mode === "fullscreen") {
-      f.send(mouseBytes(39, 1), false); // Accepted press does not request a render.
+      f.send(mouseBytes(39, 1)); // Native selection redraws after the passive press.
       assert.equal(publisher.setCollapsed(false), false);
       f.send(mouseBytes(39, 1, 0, true));
     } else {
@@ -205,7 +219,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
     assert.equal(f.editor.getValue(), "draft-paste-");
     assert.equal(f.host.getFocusedComponent(), f.editor);
     if (mode === "fullscreen") {
-      f.send(mouseBytes(39, 0), false);
+      f.send(mouseBytes(39, 0));
       f.send(mouseBytes(39, 0, 0, true));
     } else {
       assert.equal(publisher.setCollapsed(false), true);
@@ -267,27 +281,218 @@ test("the installed fullscreen input dock rejects a press after sibling growth m
   const widget = f.widgets.get("first");
   assert.ok(widget?.handleMouse);
   const handleMouse = widget.handleMouse.bind(widget);
-  let acceptedPress = false;
+  let observedPress = false;
   widget.handleMouse = (event) => {
     const result = handleMouse(event);
-    if (event.type === "press" && result?.handled) acceptedPress = true;
+    if (event.type === "press") observedPress = true;
     return result;
   };
   const oldRow = 20 - 3 - widget.render(40).length - (f.widgets.get("sibling")?.render(40).length ?? 0);
-  f.send(mouseBytes(39, oldRow), false);
-  assert.equal(acceptedPress, true);
+  f.send(mouseBytes(39, oldRow));
+  assert.equal(observedPress, true);
   sibling.publish("row one\nrow two\nrow three\nrow four");
   f.host.flush(); // The input dock grows upward; the original cell now belongs to Sibling.
   f.send(mouseBytes(39, oldRow, 0, true));
   assert.match(widget.render(40)[0] ?? "", /^─ ▾ First ─+$/u);
   assert.equal(widget.render(40).length, 2);
-  f.send(mouseBytes(39, oldRow - 3), false);
+  assert.equal(f.widgets.get("sibling")?.render(40).length, 5);
+  f.send(mouseBytes(39, oldRow - 3));
   f.send(mouseBytes(39, oldRow - 3, 0, true));
   assert.equal(widget.render(40).length, 1);
   assert.equal(f.host.getFocusedComponent(), f.editor);
   first.dispose();
   sibling.dispose();
 });
+
+for (const mount of ["direct", "publisher"] as const) {
+  for (const row of [1, 2]) {
+    test(`fullscreen ${mount}: body row ${row} keeps native drag selection and exact copy`, async (t) => {
+      const f = fixture("fullscreen");
+      t.onTestFinished(() => f.stop());
+      assert.ok(f.host instanceof FullscreenHost);
+      const lines = ["/tmp/a.ts", "job ready"];
+      if (mount === "publisher") {
+        const publisher = createEditorStatusPublisher({
+          key: "progress",
+          name: "Progress",
+          context: f.context,
+          isCurrent: () => true,
+          render: (_snapshot: string, theme, width) =>
+            new EditorStatusWidget({ theme, renderBody: () => lines }).render(width),
+        });
+        publisher.publish("active");
+      } else {
+        f.context.ui.setWidget(
+          "progress",
+          (_tui, theme) => new EditorStatusWidget({ name: "Progress", theme, renderBody: () => lines }),
+        );
+      }
+      f.host.flush();
+      f.send(mouseBytes(0, row));
+      f.send(mouseBytes(8, row, 32));
+      f.send(mouseBytes(8, row, 0, true));
+      assert.equal(f.host.hasActiveSelection(), true);
+      assert.equal(await f.host.copyActiveSelectionToClipboard(), true);
+      assert.deepEqual(f.copied, [lines[row - 1]]);
+      assert.equal(f.widgets.get("progress")?.render(40).length, 3);
+      assert.equal(f.host.getFocusedComponent(), f.editor);
+      // A fresh click still collapses after a completed selection gesture.
+      f.send(mouseBytes(39, row));
+      f.send(mouseBytes(39, row, 0, true));
+      assert.equal(f.widgets.get("progress")?.render(40).length, 1);
+    });
+  }
+}
+
+for (const replacement of [false, true]) {
+  test(`fullscreen rejects a click on a ${replacement ? "replacement" : "new"} mount without its own press`, (t) => {
+    const f = fixture("fullscreen");
+    t.onTestFinished(() => f.stop());
+    const options = {
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render: renderer,
+    };
+    const old = createEditorStatusPublisher(options);
+    if (replacement) old.publish("old body");
+    f.host.flush();
+    f.send(mouseBytes(39, 1));
+    old.dispose();
+    const current = createEditorStatusPublisher(options);
+    current.publish("new body");
+    f.host.flush();
+    f.send(mouseBytes(39, 1, 0, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, 2);
+    f.send(mouseBytes(39, 1));
+    f.send(mouseBytes(39, 1, 0, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, 1);
+    current.dispose();
+  });
+}
+
+for (const protocol of ["sgr", "sgr-no-release-button", "x10"] as const) {
+  test(`fullscreen ${protocol}: link and disclosure routing follows the installed host`, (t) => {
+    const f = fixture("fullscreen");
+    t.onTestFinished(() => f.stop());
+    const bytes = (x: number, y: number, release = false) =>
+      protocol !== "x10"
+        ? mouseBytes(x, y, release && protocol === "sgr-no-release-button" ? 3 : 0, release)
+        : `\u001b[M${String.fromCharCode(release ? 35 : 32, x + 33, y + 33)}`;
+    const publisher = createEditorStatusPublisher({
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render: renderer,
+    });
+    publisher.publish("\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007");
+    f.host.flush();
+    f.send(bytes(1, 1));
+    f.send(bytes(1, 1, true));
+    // The installed host consumes X10 pointer input without routing it.
+    assert.deepEqual(f.opened, protocol === "x10" ? [] : ["https://example.com"]);
+    assert.equal(f.widgets.get("progress")?.render(40).length, 2);
+    f.send(bytes(39, 1));
+    f.send(bytes(39, 1, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, protocol === "x10" ? 2 : 1);
+    f.send(bytes(39, 0));
+    f.send(bytes(39, 0, true));
+    assert.equal(f.widgets.get("progress")?.render(40).length, 2);
+    publisher.dispose();
+  });
+}
+
+test("named publisher rejects mouse input reentered from the owner renderer", (t) => {
+  const f = fixture("fullscreen");
+  t.onTestFinished(() => f.stop());
+  let reenter: (() => void) | undefined;
+  const publisher = createEditorStatusPublisher({
+    key: "progress",
+    name: "Progress",
+    context: f.context,
+    isCurrent: () => true,
+    render(snapshot: string, theme, width) {
+      reenter?.();
+      return renderer(snapshot, theme, width);
+    },
+  });
+  publisher.publish("body");
+  f.host.flush();
+  const widget = f.widgets.get("progress");
+  assert.ok(widget);
+  f.send(mouseBytes(39, 1));
+  let result: unknown = "not called";
+  reenter = () => {
+    result = widget.handleMouse?.({
+      type: "click",
+      button: "left",
+      x: 39,
+      y: 1,
+      screenX: 39,
+      screenY: 1,
+      width: 40,
+      height: 2,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+  };
+  assert.equal(widget.render(40).length, 2);
+  assert.equal(result, undefined);
+  reenter = undefined;
+  f.send(mouseBytes(39, 1, 0, true));
+  assert.equal(widget.render(40).length, 1);
+  publisher.dispose();
+});
+
+for (const failure of ["empty", "throw"] as const) {
+  test(`named publisher clears old hit geometry after an ${failure} render`, (t) => {
+    const f = fixture("fullscreen");
+    t.onTestFinished(() => f.stop());
+    let fail = false;
+    const publisher = createEditorStatusPublisher({
+      key: "progress",
+      name: "Progress",
+      context: f.context,
+      isCurrent: () => true,
+      render(snapshot: string, theme, width) {
+        if (fail) {
+          if (failure === "throw") throw new Error("render failed");
+          return [];
+        }
+        return renderer(snapshot, theme, width);
+      },
+    });
+    publisher.publish("body");
+    const widget = f.widgets.get("progress");
+    assert.ok(widget);
+    widget.render(40);
+    const event = {
+      type: "press" as const,
+      button: "left" as const,
+      x: 39,
+      y: 1,
+      screenX: 39,
+      screenY: 1,
+      width: 40,
+      height: 2,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    };
+    widget.handleMouse?.(event);
+    fail = true;
+    if (failure === "throw") assert.throws(() => widget.render(40), /render failed/u);
+    else assert.deepEqual(widget.render(40), []);
+    assert.equal(widget.handleMouse?.({ ...event, type: "click" }), undefined);
+    fail = false;
+    assert.equal(widget.render(40).length, 2);
+    assert.equal(widget.handleMouse?.({ ...event, type: "click" }), undefined);
+    publisher.dispose();
+  });
+}
 
 test("fullscreen drag, modified/right clicks, and stale named owners cannot toggle", (t) => {
   const f = fixture("fullscreen");

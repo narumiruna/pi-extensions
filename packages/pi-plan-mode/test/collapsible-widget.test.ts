@@ -15,7 +15,7 @@ test("retains Plan mode disclosure across interaction and ready-plan updates, wi
       let component = createMockWidget(f.context.widgets.get(KEY));
       const expanded = component.render(120);
       assert.equal(expanded[0], EXPANDED);
-      assert.deepEqual(component.handleMouse?.(widgetClick(0, 1, expanded.length)), { handled: true, render: true });
+      assert.deepEqual(widgetClick(component, 0, 1, expanded.length), { handled: true, render: true });
       assert.deepEqual(component.render(120), [COLLAPSED]);
       component.dispose?.();
 
@@ -48,7 +48,7 @@ test("retains Plan mode disclosure across interaction and ready-plan updates, wi
       await running;
       assert.deepEqual(f.state(), before);
       // Click the blank right side of a body row, not its text.
-      assert.deepEqual(component.handleMouse?.(widgetClick(119, 1, restored.length)), { handled: true, render: true });
+      assert.deepEqual(widgetClick(component, 119, 1, restored.length), { handled: true, render: true });
       assert.deepEqual(component.render(120), [COLLAPSED]);
     },
     { bindings: { "tui.select.cancel": "ctrl+q" } },
@@ -60,15 +60,15 @@ test("retains Plan disclosure on tree restoration but resets on session replacem
     await f.command("start");
     f.branch.push({ type: "custom", customType: "plan-mode-state", data: f.state() });
     const previous = createMockWidget(f.context.widgets.get(KEY));
-    const click = widgetClick(119, 1, previous.render(120).length);
-    previous.handleMouse?.(click);
+    const height = previous.render(120).length;
+    widgetClick(previous, 119, 1, height);
     assert.deepEqual(previous.render(120), [COLLAPSED]);
     previous.dispose?.();
 
     await f.emit("session_tree");
     const remount = createMockWidget(f.context.widgets.get(KEY));
     assert.deepEqual(remount.render(120), [COLLAPSED]);
-    assert.equal(previous.handleMouse?.(click), undefined);
+    assert.equal(widgetClick(previous, 119, 1, height), undefined);
     remount.dispose?.();
 
     const replacement = createMockContext({
@@ -84,7 +84,7 @@ test("retains Plan disclosure on tree restoration but resets on session replacem
     await f.emit("session_start", { reason: "resume" });
     const current = createMockWidget(replacement.widgets.get(KEY));
     assert.equal(current.render(120)[0], EXPANDED);
-    assert.equal(remount.handleMouse?.(click), undefined);
+    assert.equal(widgetClick(remount, 119, 1, height), undefined);
     await f.emit("session_shutdown", {}, f.context.ctx);
     assert.equal(current.render(120)[0], EXPANDED);
     assert.equal(f.state().enabled, true);

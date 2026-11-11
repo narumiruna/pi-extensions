@@ -110,6 +110,7 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
           (tui) => {
             token.tui = tui;
             let lines: readonly string[] = [];
+            let rendering = 0;
             const frame = name
               ? new EditorStatusWidget({
                   name,
@@ -122,16 +123,30 @@ export function createEditorStatusPublisher<T>(options: EditorStatusPublisherOpt
               : undefined;
             const component = {
               render(width: number): string[] {
-                frame?.invalidate();
-                if (!current() || mount !== token || latest === undefined) return [];
-                // Render the latest snapshot even while collapsed so the owner's
-                // visibility and row-budget decisions remain authoritative.
-                lines = render(latest, ui.theme, width, tui.terminal.rows);
-                if (!current() || mount !== token || latest === undefined) return [];
-                return frame && lines.length > 0 ? frame.render(width) : [...lines];
+                rendering++;
+                try {
+                  if (!current() || mount !== token || latest === undefined) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  // Render the latest snapshot even while collapsed so the owner's
+                  // visibility and row-budget decisions remain authoritative.
+                  lines = render(latest, ui.theme, width, tui.terminal.rows);
+                  if (!current() || mount !== token || latest === undefined) {
+                    frame?.invalidate();
+                    return [];
+                  }
+                  if (lines.length === 0) frame?.invalidate();
+                  return frame && lines.length > 0 ? frame.render(width) : [...lines];
+                } catch (error) {
+                  frame?.invalidate();
+                  throw error;
+                } finally {
+                  rendering--;
+                }
               },
               handleMouse(event: TuiMouseEvent) {
-                if (!current() || mount !== token || latest === undefined) return undefined;
+                if (rendering > 0 || !current() || mount !== token || latest === undefined) return undefined;
                 return frame?.handleMouse(event);
               },
               invalidate() {

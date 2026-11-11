@@ -219,6 +219,12 @@ test("mounts the Kit widget with callback themes and keeps publication snapshots
   assert.equal(vi.getTimerCount(), 0);
 });
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 test("whole-body blank-column clicks retain collapse through polling and restore current quotes", async () => {
   vi.useFakeTimers();
   const fetchMock = vi.fn(successfulResponse);
@@ -234,21 +240,21 @@ test("whole-body blank-column clicks retain collapse through polling and restore
   await harness.emit("session_start", current.ctx);
   await vi.advanceTimersByTimeAsync(0);
   const first = mount();
+  const lines = first.render(100);
   const event: TuiMouseEvent = {
     type: "press",
     button: "left",
     x: 99,
-    y: first.render(100).length - 1,
+    y: lines.length - 1,
     screenX: 99,
-    screenY: 0,
+    screenY: lines.length - 1,
     width: 100,
-    height: first.render(100).length,
+    height: lines.length,
     shift: false,
     alt: false,
     ctrl: false,
   };
-  assert.deepEqual(first.handleMouse?.(event), { handled: true, render: false });
-  assert.deepEqual(first.handleMouse?.({ ...event, type: "click" }), { handled: true, render: true });
+  assert.deepEqual(clickWidget(first, event), { handled: true, render: true });
   assert.equal(first.render(100).length, 1);
   first.dispose?.();
   fetchMock.mockImplementation(async (input) => {
@@ -259,14 +265,15 @@ test("whole-body blank-column clicks retain collapse through polling and restore
   const updated = mount();
   assert.equal(updated.render(100).length, 1);
   assert.match(updated.render(100)[0] ?? "", /▸ Ticker/u);
-  assert.deepEqual(updated.handleMouse?.({ ...event, type: "click", y: 0 }), { handled: true, render: true });
+  const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(100).length };
+  assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
   assert.match(updated.render(100).join("\n"), /NVDA \$120\.00/u);
-  updated.handleMouse?.({ ...event, type: "click", y: 0 });
+  clickWidget(updated, { ...collapsed, height: updated.render(100).length });
   await harness.command.handler("refresh", current.ctx);
   await vi.advanceTimersByTimeAsync(0);
   const refreshed = mount();
   assert.ok(refreshed.render(100).length > 1, "keyboard refresh expands the body");
-  refreshed.handleMouse?.({ ...event, type: "click", y: 0 });
+  clickWidget(refreshed, { ...collapsed, height: refreshed.render(100).length });
   const replacement = { ...current.ctx, sessionManager: {} as ExtensionContext["sessionManager"] };
   await harness.emit("session_start", replacement);
   await vi.advanceTimersByTimeAsync(0);

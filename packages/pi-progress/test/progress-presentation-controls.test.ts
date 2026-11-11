@@ -48,6 +48,12 @@ function pointer(component: Component, y = 2, x = 79): TuiMouseEvent {
   };
 }
 
+function clickWidget(component: Component, event: TuiMouseEvent) {
+  component.handleMouse?.({ ...event, type: "press" });
+  component.handleMouse?.({ ...event, type: "release" });
+  return component.handleMouse?.({ ...event, type: "click" });
+}
+
 for (const y of [0, 1, 2]) {
   for (const x of [0, 79]) {
     test(`Progress click (${x}, ${y}) collapses only its named frame without changing data or controls`, () => {
@@ -60,9 +66,7 @@ for (const y of [0, 1, 2]) {
         const items = presentation.items();
         const state = [presentation.view.mode, presentation.view.pinned, presentation.view.trigger];
         const event = pointer(component, y, x);
-        assert.deepEqual(component.handleMouse?.({ ...event, type: "press" }), { handled: true, render: false });
-        // Do not force a redraw between press and click; redraw cancels stale geometry.
-        assert.deepEqual(component.handleMouse?.(event), { handled: true, render: true });
+        assert.deepEqual(clickWidget(component, event), { handled: true, render: true });
         assert.match(current.renderWidget()[0] ?? "", /^─ ▸ Progress ─+$/u);
         assert.equal(current.renderWidget().length, 1);
         assert.deepEqual(sibling.current.renderWidget(), before);
@@ -72,7 +76,7 @@ for (const y of [0, 1, 2]) {
         const settings = { ...DEFAULT_PROGRESS_SETTINGS };
         presentation.update(latest, settings);
         assert.equal(current.renderWidget().length, 1);
-        assert.deepEqual(component.handleMouse?.(pointer(component, 0)), { handled: true, render: true });
+        assert.deepEqual(clickWidget(component, pointer(component, 0)), { handled: true, render: true });
         const expanded = current.renderWidget();
         assert.match(expanded[0] ?? "", /^─ ▾ Progress ─+$/u);
         assert.deepEqual(expanded.slice(1), renderProgressWidget(latest, identityTheme().theme, 80).slice(1));
@@ -91,13 +95,13 @@ test("Progress disclosure survives clear/update and host remount; existing show 
   try {
     const original = current.component;
     assert.ok(original);
-    original.handleMouse?.(pointer(original));
+    clickWidget(original, pointer(original));
     original.render(80);
     original.dispose?.();
     presentation.refresh();
     assert.notEqual(current.component, original);
     assert.equal(current.renderWidget().length, 1);
-    assert.equal(original.handleMouse?.(pointer(original, 0)), undefined);
+    assert.equal(clickWidget(original, pointer(original, 0)), undefined);
     presentation.clear();
     presentation.showOnUpdate();
     presentation.update([{ text: "latest hidden update", status: "pending" }], DEFAULT_PROGRESS_SETTINGS);
@@ -110,7 +114,7 @@ test("Progress disclosure survives clear/update and host remount; existing show 
       assert.ok(current.renderWidget().length > 1);
       const component: Component | undefined = current.component;
       assert.ok(component);
-      component.handleMouse?.(pointer(component, 1));
+      clickWidget(component, pointer(component, 1));
       assert.equal(current.renderWidget().length, 1);
     }
     presentation.reset(pending);
@@ -130,19 +134,19 @@ for (const boundary of ["session_tree", "session_start"] as const) {
       const old = current.component;
       assert.ok(old);
       const event = pointer(old);
-      old.handleMouse?.(event);
+      clickWidget(old, event);
       assert.equal(current.renderWidget().length, 1);
       await harness.emit(boundary, current.ctx);
       assert.match(current.renderWidget().join("\n"), /○ work/u);
       assert.equal(current.renderWidget().length, 3);
-      assert.equal(old.handleMouse?.(event), undefined);
+      assert.equal(clickWidget(old, event), undefined);
       assert.deepEqual(old.render(80), []);
       old.dispose?.();
       assert.equal(current.renderWidget().length, 3);
       assert.deepEqual(harness.entries, [], "disclosure never appends session entries");
       await harness.emit("session_shutdown", current.ctx);
       assert.equal(current.component, undefined);
-      assert.equal(old.handleMouse?.(event), undefined);
+      assert.equal(clickWidget(old, event), undefined);
     } finally {
       await harness.emit("session_shutdown", current.ctx);
     }
