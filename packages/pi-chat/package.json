@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-chat",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Peer-to-peer chat extension for Pi.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.69.0",
+    "@narumitw/pi-tui-kit": "^0.70.0",
     "hyperdht": "6.36.0",
     "hyperswarm": "4.17.2",
     "sodium-universal": "5.0.1"

@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-codex-compact",
-  "version": "0.56.4",
+  "version": "0.56.5",
   "description": "Responses compaction protocols for compatible Pi providers.",
   "type": "module",
   "license": "MIT",
@@ -34,7 +34,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.69.0"
+    "@narumitw/pi-tui-kit": "^0.70.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
