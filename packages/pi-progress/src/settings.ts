@@ -1,7 +1,8 @@
 import { constants } from "node:fs";
 import { chmod, type FileHandle, mkdir, mkdtemp, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type Theme, type ThemeColor, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 export const PROGRESS_SETTINGS_FILE = "pi-progress.json";
 export const MAX_PROGRESS_SETTINGS_BYTES = 64 * 1024;
@@ -9,12 +10,21 @@ export const PROGRESS_DISPLAY_MODES = ["adaptive", "expanded", "collapsed"] as c
 
 export type ProgressDisplayMode = (typeof PROGRESS_DISPLAY_MODES)[number];
 
+export interface ProgressBlockedStyle {
+  readonly icon: string;
+  /** Resolved against the current theme at the display boundary. */
+  readonly color: string;
+}
+
+const iconSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 export interface ProgressSettings {
   enabled: boolean;
   displayMode: ProgressDisplayMode;
   showCompleted: boolean;
   maxVisibleItems: number | null;
   showProgress: boolean;
+  blockedStyle: ProgressBlockedStyle;
 }
 
 export const DEFAULT_PROGRESS_SETTINGS: Readonly<ProgressSettings> = Object.freeze({
@@ -23,18 +33,19 @@ export const DEFAULT_PROGRESS_SETTINGS: Readonly<ProgressSettings> = Object.free
   showCompleted: true,
   maxVisibleItems: null,
   showProgress: true,
+  blockedStyle: Object.freeze({ icon: "⚠", color: "warning" }),
 });
 
 export type ProgressSettingsLoadResult =
   | { kind: "missing"; path: string; settings: ProgressSettings }
-  | { kind: "loaded"; path: string; settings: ProgressSettings }
+  | { kind: "loaded"; path: string; settings: ProgressSettings; warnings?: readonly string[] }
   | { kind: "invalid"; path: string; settings: ProgressSettings; issue: string };
 
 export function progressSettingsPath(): string {
   return join(getAgentDir(), PROGRESS_SETTINGS_FILE);
 }
 
-export function normalizeProgressSettings(value: unknown): ProgressSettings | undefined {
+export function normalizeProgressSettings(value: unknown, warnings: string[] = []): ProgressSettings | undefined {
   if (!isRecord(value)) return undefined;
   const widgetValue = Object.hasOwn(value, "widget") ? value.widget : undefined;
   if (widgetValue !== undefined && !isRecord(widgetValue)) return undefined;
@@ -70,7 +81,51 @@ export function normalizeProgressSettings(value: unknown): ProgressSettings | un
     showCompleted,
     maxVisibleItems,
     showProgress,
+    blockedStyle: normalizeBlockedStyle(settings.blockedStyle, warnings),
   };
+}
+
+export function normalizeBlockedStyle(value: unknown, warnings: string[] = []): ProgressBlockedStyle {
+  const defaults = DEFAULT_PROGRESS_SETTINGS.blockedStyle;
+  if (value === undefined) return { ...defaults };
+  if (!isRecord(value)) {
+    warnings.push("blockedStyle must be an object; using its defaults.");
+    return { ...defaults };
+  }
+  let icon = defaults.icon;
+  let color = defaults.color;
+  if (Object.hasOwn(value, "icon")) {
+    if (isBlockedIcon(value.icon)) icon = value.icon;
+    else warnings.push("blockedStyle.icon must be one safe, single-cell grapheme; using the default icon.");
+  }
+  if (Object.hasOwn(value, "color")) {
+    if (typeof value.color === "string") color = value.color;
+    else warnings.push("blockedStyle.color must name a foreground theme role; using warning.");
+  }
+  return { icon, color };
+}
+
+export function resolveBlockedColor(style: ProgressBlockedStyle, theme: Theme, warnings: string[] = []): ThemeColor {
+  // The default is a required Pi role. Do not require an initialized theme for defaults or headless reads.
+  if (style.color === "warning") return "warning";
+  try {
+    // Foreground and background roles share theme.colors, but only this API checks the foreground slot.
+    theme.getFgAnsi(style.color as ThemeColor);
+    return style.color as ThemeColor;
+  } catch {
+    warnings.push("blockedStyle.color must name a foreground theme role; using warning.");
+    return "warning";
+  }
+}
+
+function isBlockedIcon(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    !/[\p{Cc}\p{Cf}\p{Cs}\p{White_Space}]/u.test(value) &&
+    !/^\p{M}/u.test(value) &&
+    [...iconSegmenter.segment(value)].length === 1 &&
+    visibleWidth(value) === 1
+  );
 }
 
 export async function loadProgressSettings(
@@ -99,6 +154,9 @@ export async function saveProgressSettings(
     throwIfAborted(signal);
     if (loaded.kind === "invalid") throw new Error(`Cannot save invalid settings: ${loaded.issue}`);
     const nextDocument = { ...document, ...patch };
+    if (patch.blockedStyle && isRecord(document.blockedStyle)) {
+      nextDocument.blockedStyle = { ...document.blockedStyle, ...patch.blockedStyle };
+    }
     const settings = normalizeProgressSettings(nextDocument);
     if (!settings) throw new Error("Invalid settings update");
     const text = `${JSON.stringify(nextDocument, null, 2)}\n`;
@@ -137,7 +195,7 @@ async function loadSettingsFile(
   } catch (error) {
     throwIfAborted(signal);
     if (isNodeError(error) && error.code === "ENOENT") {
-      return { kind: "missing", path, settings: cloneDefaultSettings() };
+      return { kind: "missing", path, settings: cloneProgressSettings() };
     }
     return invalidResult(path, safeReadIssue(error));
   }
@@ -176,10 +234,11 @@ async function loadSettingsFile(
     } catch {
       return invalidResult(path, "invalid JSON");
     }
-    const settings = normalizeProgressSettings(parsed);
+    const warnings: string[] = [];
+    const settings = normalizeProgressSettings(parsed, warnings);
     if (!settings || !isRecord(parsed)) return invalidResult(path, "invalid settings shape or values");
     onDocument?.(parsed, stats.mode);
-    return { kind: "loaded", path, settings };
+    return { kind: "loaded", path, settings, ...(warnings.length > 0 ? { warnings } : {}) };
   } catch (error) {
     throwIfAborted(signal);
     return invalidResult(path, safeReadIssue(error));
@@ -193,12 +252,12 @@ function booleanSetting(record: Record<string, unknown>, key: string, fallback: 
   return typeof value === "boolean" ? value : undefined;
 }
 
-function cloneDefaultSettings(): ProgressSettings {
-  return { ...DEFAULT_PROGRESS_SETTINGS };
+export function cloneProgressSettings(value: Readonly<ProgressSettings> = DEFAULT_PROGRESS_SETTINGS): ProgressSettings {
+  return { ...value, blockedStyle: { ...value.blockedStyle } };
 }
 
 function invalidResult(path: string, issue: string): ProgressSettingsLoadResult {
-  return { kind: "invalid", path, settings: cloneDefaultSettings(), issue };
+  return { kind: "invalid", path, settings: cloneProgressSettings(), issue };
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

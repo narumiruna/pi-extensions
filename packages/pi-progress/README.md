@@ -233,17 +233,27 @@ Canonical user settings are read from `<Pi agent directory>/pi-progress.json`, n
   "displayMode": "adaptive",
   "showCompleted": true,
   "maxVisibleItems": null,
-  "showProgress": true
+  "showProgress": true,
+  "blockedStyle": {
+    "icon": "⚠",
+    "color": "warning"
+  }
 }
 ```
 
 `displayMode` accepts `adaptive`, `expanded`, or `collapsed`.
-`maxVisibleItems` accepts `null` or an integer from 1 through 50; the other fields are booleans with the defaults shown above.
-Use `/progress settings` in TUI mode to edit these user settings. Enter or Space changes a value; the item limit opens a number input. Enter a whole number from 1 to 50, or leave it blank for no limit. Invalid input stays open for correction.
+`maxVisibleItems` accepts `null` or an integer from 1 through 50. `enabled`, `showCompleted`, and `showProgress` are booleans.
+Use `/progress settings` in TUI mode to edit these five display preferences. Enter or Space changes a value; the item limit opens a number input. Enter a whole number from 1 to 50, or leave it blank for no limit. Invalid input stays open for correction.
 The screen uses the shared Kit frame with full-width top and bottom rules. When fewer than five rows remain for the screen, it omits the rules to retain the active setting or input field.
 Each successful save applies immediately. Closing the screen cancels pending work, but a save already publishing can still finish and apply to the current session; completed saves are not undone. Ctrl+C always closes the screen.
 A failed save reports an error and restores the displayed value. Invalid existing files must be repaired before saving.
 On Pi 1.5 or later, the inline settings screen reports `question` waiting status to supported terminals until it closes. This does not change step statuses or notifications. Older hosts keep the same settings UI without this terminal status.
+
+Edit `blockedStyle` in the file; it has no settings-screen rows. Each field is optional. For example, `"blockedStyle": { "icon": "◆", "color": "thinkingHigh" }` uses a diamond and the current theme's `thinkingHigh` color.
+`icon` must be one safe grapheme with a Pi-calculated width of one terminal cell. Empty strings, whitespace, terminal controls, standalone combining marks, and wider icons such as `⚠️` are not accepted. Terminal fonts can still render glyphs differently.
+`color` must name a foreground theme role, not a background role, hex value, or ANSI sequence. The role is resolved against the current theme when rendering.
+The icon applies to blocked rows and all blocked-count summaries. The color applies to blocked rows and warning-styled summaries; existing muted aggregate headers remain muted. Other statuses and default rendering stay unchanged.
+Invalid style fields fall back independently and report a warning at session start in TUI and RPC modes; other valid settings remain active. Loading does not repair or rewrite the source values.
 
 Manual file changes take effect at the next session start, including `/reload`.
 Reads and saves are ordered within one Pi process. Each save reads the latest valid document, preserves unknown fields, and publishes through a temporary file and rename; separate Pi processes are not coordinated.

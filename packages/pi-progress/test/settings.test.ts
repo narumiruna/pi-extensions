@@ -26,7 +26,7 @@ test("normalizes partial flat Progress settings and rejects invalid values", () 
     maxVisibleItems: 7,
     showProgress: false,
   };
-  assert.deepEqual(normalizeProgressSettings(settings), settings);
+  assert.deepEqual(normalizeProgressSettings(settings), { ...DEFAULT_PROGRESS_SETTINGS, ...settings });
   for (const displayMode of ["adaptive", "expanded", "collapsed"]) {
     assert.equal(normalizeProgressSettings({ displayMode })?.displayMode, displayMode);
   }
