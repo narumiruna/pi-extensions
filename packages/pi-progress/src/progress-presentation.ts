@@ -11,7 +11,7 @@ import {
   type ProgressStep,
   progressTextLength,
 } from "./progress-state.js";
-import type { ProgressSettings } from "./settings.js";
+import { cloneProgressSettings, type ProgressSettings } from "./settings.js";
 
 export const COMPLETION_SUMMARY_MS = 3_000;
 export const WIDGET_KEY = "progress";
@@ -43,7 +43,7 @@ export function createProgressPresentation(options: {
   setTimeout: typeof globalThis.setTimeout;
   clearTimeout: typeof globalThis.clearTimeout;
 }) {
-  let settings = { ...options.settings };
+  let settings = cloneProgressSettings(options.settings);
   let steps: ProgressStep[] = [];
   let collection = newCollection();
   let revision = "";
@@ -99,7 +99,7 @@ export function createProgressPresentation(options: {
     if (lastFingerprint !== fingerprint) {
       lastSnapshot = {
         steps: cloneProgressSteps(steps),
-        settings: { ...settings },
+        settings: cloneProgressSettings(settings),
         items,
         mode: view.mode,
         completion,
@@ -168,7 +168,7 @@ export function createProgressPresentation(options: {
       const enabledChanged = settings.enabled !== nextSettings.enabled;
       // Validate the complete collection before changing any effective state.
       if (changed) collection.replace(progressDisplayItems(cloneProgressSteps(next)));
-      settings = { ...nextSettings };
+      settings = cloneProgressSettings(nextSettings);
       if (changed) {
         steps = cloneProgressSteps(next);
         revision = nextRevision;
