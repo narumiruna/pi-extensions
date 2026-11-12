@@ -215,7 +215,8 @@ export class PreviewSession {
         this.signal.removeEventListener("abort", abort);
         if (slot.generation === generation) {
           slot.controller = undefined;
-          if (!this.signal.aborted) slot.invalidate?.deref()?.();
+          // A capacity retry changes no visible state.
+          if (!this.signal.aborted && slot.timer === undefined) slot.invalidate?.deref()?.();
         }
       }
     };

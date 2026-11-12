@@ -308,12 +308,14 @@ describe("responsive session-owned previews", () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(accepted).toBe(LIMITS.maxPending);
     expect(pending).toHaveLength(LIMITS.maxPending);
+    expect(invalidate).not.toHaveBeenCalled();
     for (const finish of pending.splice(0)) finish();
     await vi.advanceTimersByTimeAsync(150);
     expect(accepted).toBe(6);
     for (const finish of pending.splice(0)) finish();
     await vi.advanceTimersByTimeAsync(150);
     expect(vi.getTimerCount()).toBe(0);
+    expect(invalidate).toHaveBeenCalledTimes(6);
     for (let i = 0; i < 6; i++) {
       const lines = owner.draw(`burst-${i}`, value, options.width, theme(options.appearance), invalidate);
       expect(lines[0]).toContain("\x1b_G");
@@ -336,10 +338,12 @@ describe("responsive session-owned previews", () => {
     owner.draw("waiting", record, 82, theme("dark"), invalidate);
     await vi.advanceTimersByTimeAsync(300);
     expect(service.raster).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
     busy = false;
     await vi.advanceTimersByTimeAsync(150);
     expect(service.raster).toHaveBeenCalledExactlyOnceWith(record.layout, "dark", 800, expect.any(AbortSignal));
     expect(owner.draw("waiting", record, 82, theme("dark"), invalidate)[0]).toContain("\x1b_G");
+    expect(invalidate).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -420,6 +424,7 @@ describe("responsive session-owned previews", () => {
     await vi.advanceTimersByTimeAsync(150);
     const lines = owner.draw("one", record, 122, theme("dark"), invalidate);
     expect(lines[0]).toBe("Preview update failed: bad input");
+    expect(invalidate).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1000);
     expect(service.raster).toHaveBeenCalledOnce();
   });
