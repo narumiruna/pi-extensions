@@ -1,0 +1,58 @@
+{
+  "name": "@narumitw/pi-illustrate",
+  "version": "0.1.0",
+  "description": "Render SVG and Mermaid diagrams in Pi through Kitty terminal graphics.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "engines": {
+    "node": ">=20.3.0"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "svg",
+    "mermaid",
+    "kitty",
+    "terminal"
+  ],
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "biome check . && npm run typecheck",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.70.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "@xmldom/xmldom": "^0.9.12",
+    "css-tree": "^3.2.1",
+    "pele": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/css-tree": "^2.3.11"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narumiruna/pi-extensions",
+    "directory": "packages/pi-illustrate"
+  }
+}

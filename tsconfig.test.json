@@ -2,9 +2,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    "allowJs": true,
     "jsx": "react-jsx",
     "outDir": "node_modules/.cache/pi-extensions-test",
     "rootDir": "."
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "test/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/src/**/*.mjs", "packages/*/test/**/*.ts", "test/**/*.ts"]
 }
