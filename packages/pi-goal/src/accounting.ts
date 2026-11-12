@@ -1,4 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export interface GoalAccountingState {
   status: string;
@@ -96,7 +97,51 @@ export function cumulativeAssistantTokens(entries: unknown[]) {
   return total;
 }
 
+function entryAssistantTokens(entry: SessionEntry): number {
+  return entry.type === "message" && entry.message?.role === "assistant"
+    ? assistantUsageTokens(entry.message.usage)
+    : 0;
+}
+
+type UsageSessionManager = Partial<Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId" | "getEntry">>;
+
+// Pi entries are append-only: retain just the last leaf and its cumulative total.
+// Object identity detects reloads with reused IDs; divergent branches recount.
+// Weak manager keys release checkpoints when their sessions are discarded.
+const tokenTotals = new WeakMap<UsageSessionManager, { entry: SessionEntry; total: number }>();
+
 export function currentTokenTotal(ctx: UsageContext): number {
-  const sessionManager = ctx.sessionManager as { getBranch?: () => unknown[] } | undefined;
-  return cumulativeAssistantTokens(sessionManager?.getBranch?.() ?? []);
+  const sessionManager = ctx.sessionManager as UsageSessionManager | undefined;
+  if (typeof sessionManager?.getLeafId !== "function" || typeof sessionManager.getEntry !== "function") {
+    // Compatibility with branch-only contexts; never cache their mutable arrays.
+    return cumulativeAssistantTokens(sessionManager?.getBranch?.() ?? []);
+  }
+
+  const id = sessionManager.getLeafId();
+  const leaf = id ? sessionManager.getEntry(id) : undefined;
+  if (!leaf) {
+    tokenTotals.delete(sessionManager);
+    return 0;
+  }
+  const checkpoint = tokenTotals.get(sessionManager);
+  if (leaf === checkpoint?.entry) return checkpoint.total;
+
+  const pending: SessionEntry[] = [];
+  let total = 0;
+  let entry: SessionEntry | undefined = leaf;
+  while (entry) {
+    if (entry === checkpoint?.entry) {
+      total = checkpoint.total;
+      break;
+    }
+    pending.push(entry);
+    entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
+  }
+
+  // Sum root-to-leaf to preserve full-recount rounding and saturation semantics.
+  for (let index = pending.length - 1; index >= 0; index--) {
+    total = Math.min(Number.MAX_SAFE_INTEGER, total + entryAssistantTokens(pending[index]));
+  }
+  tokenTotals.set(sessionManager, { entry: leaf, total });
+  return total;
 }
