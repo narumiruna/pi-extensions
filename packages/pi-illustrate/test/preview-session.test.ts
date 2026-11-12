@@ -2,10 +2,15 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
   getCellDimensions,
+  Image,
   setCapabilities,
   setCellDimensions,
+  Text,
+  TuiAltScreen,
+  TuiMainScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewSession, type RenderService } from "../src/preview-session.js";
 import {
@@ -58,6 +63,97 @@ afterEach(async () => {
 });
 
 describe("responsive session-owned previews", () => {
+  it("reuses image output across component recreation, invalidation, and unchanged appearance", () => {
+    const { owner, invalidate } = setup();
+    const render = vi.spyOn(Image.prototype, "render");
+    const first = owner.draw("one", record, 82, theme("dark"), invalidate);
+    const component = owner.component("one", record, theme("dark"), invalidate);
+    component.invalidate();
+    expect(component.render(82)).toEqual(first);
+    owner.refresh();
+    expect(owner.draw("one", record, 82, theme("dark"), invalidate)).toEqual(first);
+    expect(render).toHaveBeenCalledOnce();
+    expect(owner.cacheBytes).toBe(PNG.length + first.join("").length);
+  });
+
+  it("rebuilds image output after geometry or bitmap changes", () => {
+    const { owner, invalidate } = setup();
+    const render = vi.spyOn(Image.prototype, "render");
+    owner.draw("one", record, 82, theme("dark"), invalidate);
+    expect(owner.draw("one", record, 42, theme("dark"), invalidate)[0]).toContain("c=40,r=10");
+    setCellDimensions({ widthPx: 10, heightPx: 10 });
+    expect(owner.draw("one", record, 42, theme("dark"), invalidate)[0]).toContain("c=40,r=20");
+    owner.seed("one", record, image(400), "dark");
+    owner.draw("one", record, 42, theme("dark"), invalidate);
+    expect(render).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(["regular", "fullscreen"])("does not retransmit an unchanged image during %s text updates", (mode) => {
+    const { owner } = setup();
+    const terminal = new FullscreenTerminal();
+    terminal.columns = 82;
+    terminal.rows = 30;
+    const host = mode === "fullscreen" ? new TuiAltScreen(terminal) : new TuiMainScreen(terminal);
+    const text = new Text("after", 0, 0);
+    host.addChild(owner.component("one", record, theme("dark"), () => host.requestRender()));
+    host.addChild(text);
+    try {
+      host.start();
+      host.renderNow();
+      expect(terminal.writes.join("")).toContain("\x1b_Ga=T");
+      terminal.writes.length = 0;
+      text.setText("updated text");
+      host.invalidate();
+      host.renderNow();
+      expect(terminal.writes.join("")).not.toContain("\x1b_Ga=T");
+    } finally {
+      host.stop({ preserveScreen: true });
+    }
+  });
+
+  it.each(["ghostty", "wezterm"])("reuses uploaded PNGs when fullscreen image placements move in %s", (program) => {
+    vi.stubEnv("TERM_PROGRAM", program);
+    vi.stubEnv("WEZTERM_PANE", undefined);
+    const { owner } = setup();
+    const terminal = new FullscreenTerminal();
+    terminal.columns = 82;
+    terminal.rows = 30;
+    const host = new TuiAltScreen(terminal);
+    const text = new Text("before", 0, 0);
+    host.addChild(text);
+    host.addChild(owner.component("one", record, theme("dark"), () => host.requestRender()));
+    try {
+      host.start();
+      host.renderNow();
+      expect(terminal.writes.join("")).toContain("\x1b_Ga=T");
+      terminal.writes.length = 0;
+      text.setText("before\nextra row");
+      host.renderNow();
+      expect(terminal.writes.join("")).toContain("\x1b_Ga=p");
+      expect(terminal.writes.join("")).not.toContain("\x1b_Ga=T");
+      terminal.writes.length = 0;
+      host.invalidate();
+      host.renderNow(true);
+      expect(terminal.writes.join("")).toContain("\x1b_Ga=p");
+      expect(terminal.writes.join("")).not.toContain("\x1b_Ga=T");
+      terminal.rows = 10;
+      host.renderNow();
+      terminal.writes.length = 0;
+      host.scrollToTop();
+      host.renderNow();
+      expect(terminal.writes.join("")).toContain("\x1b_Ga=p");
+      expect(terminal.writes.join("")).not.toContain("\x1b_Ga=T");
+      terminal.writes.length = 0;
+      host.scrollBy(1);
+      host.renderNow();
+      expect(terminal.writes.join("")).toContain("\x1b_Ga=p");
+      expect(terminal.writes.join("")).not.toContain("\x1b_Ga=T");
+    } finally {
+      host.stop({ preserveScreen: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("uses all requested columns, preserves ratio, and transmits exactly one image", () => {
     const { owner, service, invalidate } = setup();
     const lines = owner.draw("one", record, 82, theme("dark"), invalidate);
@@ -99,11 +195,15 @@ describe("responsive session-owned previews", () => {
 
   it("rerasterizes appearance without rerunning layout and labels the pending old bitmap", async () => {
     const { owner, service, invalidate } = setup();
+    const render = vi.spyOn(Image.prototype, "render");
+    owner.draw("one", record, 82, theme("dark"), invalidate);
     expect(owner.draw("one", record, 82, theme("light"), invalidate)[0]).toBe("Updating preview…");
+    expect(render).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(0);
     expect(service.raster).toHaveBeenCalledWith(record.layout, "light", 800, expect.any(AbortSignal));
     expect(service.layout).not.toHaveBeenCalled();
     expect(owner.draw("one", record, 82, theme("light"), invalidate)[0]).toContain("\x1b_G");
+    expect(render).toHaveBeenCalledTimes(2);
   });
 
   it("does not recolor SVG and honors explicit Mermaid appearance settings", async () => {
@@ -156,6 +256,7 @@ describe("responsive session-owned previews", () => {
     await owner.dispose();
     await owner.dispose();
     expect(service.dispose).toHaveBeenCalledOnce();
+    expect(owner.cacheBytes).toBe(0);
     expect(component.render(82)).toEqual(["Preview session closed."]);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -367,7 +468,12 @@ describe("responsive session-owned previews", () => {
   it("bounds the preview cache without retaining bitmap copies on the component", () => {
     const { owner } = setup();
     const large = { ...image(800), png: "A".repeat(5 * 1024 * 1024) };
-    for (let i = 0; i < 8; i++) owner.seed(`entry-${i}`, record, large, "dark");
-    expect(owner.cacheBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
+    for (let i = 0; i < 8; i++) {
+      owner.seed(`entry-${i}`, record, large, "dark");
+      owner.draw(`entry-${i}`, record, 82, theme("dark"), () => {});
+      expect(owner.cacheBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
+    }
+    expect(owner.draw("entry-0", record, 82, theme("dark"), () => {}).join("")).not.toContain("\x1b_G");
+    expect(owner.draw("entry-7", record, 82, theme("dark"), () => {}).join("")).toContain("\x1b_G");
   });
 });

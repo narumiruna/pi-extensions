@@ -34,6 +34,7 @@ interface Slot {
   wanted: string;
   appearance?: Appearance;
   artifact?: RasterResult;
+  image?: { key: string; lines: string[] };
   timer?: ReturnType<typeof setTimeout>;
   controller?: AbortController;
   invalidate?: WeakRef<() => void>;
@@ -78,7 +79,10 @@ export class PreviewSession {
   }
   get cacheBytes(): number {
     let size = 0;
-    for (const slot of this.slots.values()) size += slot.artifact?.png.length ?? 0;
+    for (const slot of this.slots.values()) {
+      size += slot.artifact?.png.length ?? 0;
+      size += slot.image?.lines.reduce((total, line) => total + line.length, 0) ?? 0;
+    }
     return size;
   }
 
@@ -101,6 +105,7 @@ export class PreviewSession {
     const slot = this.slot(id, record);
     this.cancel(slot);
     slot.artifact = artifact;
+    slot.image = undefined;
     slot.appearance = appearance;
     slot.failure = undefined;
     slot.wanted = "";
@@ -158,6 +163,7 @@ export class PreviewSession {
       if (this.cacheBytes <= CACHE_BYTES) break;
       if (id === currentId || !slot.artifact) continue;
       slot.artifact = undefined;
+      slot.image = undefined;
       slot.failure = "Preview cache limit reached. Change its display size to request a new preview.";
     }
   }
@@ -191,6 +197,7 @@ export class PreviewSession {
         const artifact = await this.service.raster(slot.record.layout, appearance, widthPx, controller.signal);
         if (this.signal.aborted || controller.signal.aborted || slot.generation !== generation) return;
         slot.artifact = artifact;
+        slot.image = undefined;
         slot.appearance = appearance;
         this.trimCache(id);
       } catch (error) {
@@ -263,18 +270,24 @@ export class PreviewSession {
     else if (!artifact || (record.layout.kind === "mermaid" && slot.appearance !== appearance))
       lines.push(line("Updating preview…"));
     if (!artifact) return lines.length ? lines : [line("Preparing preview…")];
-    const image = new Image(
-      artifact.png,
-      "image/png",
-      { fallbackColor: (text) => theme.fg("muted", text) },
-      {
-        maxWidthCells: cols,
-        maxHeightCells: Math.max(1, heightRows + 1),
-        imageId: slot.imageId,
-      },
-      { widthPx: artifact.width, heightPx: artifact.height },
-    );
-    return [...lines, ...image.render(width)];
+    const imageKey = `${width}:${cols}:${heightRows}:${cell.widthPx}:${cell.heightPx}`;
+    if (slot.image?.key !== imageKey) {
+      // Preserve Pi's Kitty transmission generation so moving a preview does not upload its PNG again.
+      const image = new Image(
+        artifact.png,
+        "image/png",
+        { fallbackColor: (text) => theme.fg("muted", text) },
+        {
+          maxWidthCells: cols,
+          maxHeightCells: Math.max(1, heightRows + 1),
+          imageId: slot.imageId,
+        },
+        { widthPx: artifact.width, heightPx: artifact.height },
+      );
+      slot.image = { key: imageKey, lines: image.render(width) };
+      this.trimCache(id);
+    }
+    return [...lines, ...slot.image.lines];
   }
 
   component(id: string, record: IllustrateRecord, theme: Theme, invalidate: () => void): Component {

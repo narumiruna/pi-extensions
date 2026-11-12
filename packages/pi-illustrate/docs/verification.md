@@ -19,10 +19,12 @@ The package tests cover atomic settings saves and failures, the real native ESM 
 
 `test/native-runtime.test.ts` loads the real package through Pi's public SDK, uses local deterministic provider behavior, and checks CLI JSON/RPC framing and mode rejection without a provider request. No automated test starts an interactive terminal.
 
+`test/preview-session.test.ts` drives Pi's real regular and fullscreen renderers with a mock terminal. It checks that unrelated text updates do not resend image data, and that fullscreen movement, scrolling, and forced redraws reuse uploaded PNGs in the default and WezTerm output paths. Geometry and bitmap changes rebuild the encoded output. The session cache limit includes both PNG data and encoded image lines; these tests do not establish physical flicker acceptance.
+
 ## Completed implementation checks
 
 - `npm run check` passed for the repository builds, Biome, boundaries, and workspace typechecks.
-- `npm test` passed: 943 files, 21,238 tests passed, 34 existing tests skipped, and zero failures. The package has 301 passing tests, without per-test timeout increases.
+- `npm test` passed: 943 files, 21,244 tests passed, 34 existing tests skipped, and zero failures. The package has 307 passing tests, without per-test timeout increases.
 - Real Jiti and CLI smokes exercised local rendering, command rejection, JSON/RPC framing, startup, and shutdown without provider requests.
 - A real npm tarball was inspected, installed into an isolated consumer with runtime dependencies, and loaded through Pi. Its native ESM worker rendered a 320 by 78 pixel CJK Mermaid diagram with zero external requests.
 - The semantic review covered the extension, settings, and README guides; model-prefix preservation after native system/tool patches; worker cancellation and stale ownership; queue-capacity retries and cache limits; rounded raster area; raw terminal-control assertions; atomic settings failures; SVG/CSS resource restrictions; and published import paths.
@@ -62,7 +64,7 @@ Expected observations:
 3. Shrinking stays responsive. Enlargement beyond the cached resolution settles to a sharp image after resize stops. Rapid changes do not restore an older size or palette.
 4. Mermaid follows Pi appearance or the explicit override. Raw SVG keeps its colors. Existing model snapshots do not change.
 5. Inspect English and CJK label metrics, contrast, and missing glyphs with installed fonts.
-6. In regular and fullscreen modes, scroll images out of view and back, resize, change theme, zoom the terminal font, navigate a session branch, `/reload`, and quit. No owned workers or stale previews should remain after teardown.
+6. In regular and fullscreen modes, scroll images out of view and back, resize, change theme, zoom the terminal font, navigate a session branch, `/reload`, and quit. Watch for flicker during scrolling and unrelated text updates. No owned workers or stale previews should remain after teardown.
 
 Unverified until observed: physical rendering, terminal mouse routing, subjective clarity and contrast, scrolling/placement cleanup, platform-specific fonts, font-zoom refresh, and actual HiDPI behavior. Do not claim validation for an untested terminal or platform. These observations are external acceptance checks, not unfinished automated code tasks.
 
