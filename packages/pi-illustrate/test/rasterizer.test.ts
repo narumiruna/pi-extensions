@@ -131,6 +131,42 @@ it("caps target width by aspect ratio, axis, and area budgets without stretching
   expect(() => rasterWidth({ width: 1, height: 100_000 }, 10)).toThrow();
 });
 
+it.each([
+  { width: 99979, height: 100000, requested: 3000, expected: 2827 },
+  { width: 100000, height: 12000, requested: 10000, expected: 8163 },
+  { width: 17499.664, height: 17502.757999999998, requested: 3000, expected: 2827 },
+])("caps rounded pixel area for $width by $height", ({ width, height, requested, expected }) => {
+  const capped = rasterWidth({ width, height }, requested);
+  expect(capped).toBe(expected);
+  expect(capped * Math.max(1, Math.round((capped * height) / width))).toBeLessThanOrEqual(LIMITS.maxPixels);
+});
+
+it("keeps rounded axis and area limits across near-boundary aspect ratios", () => {
+  for (let i = 1; i <= 300; i++) {
+    for (const layout of [
+      { width: 100000 - i, height: 100000 },
+      { width: 100000, height: 12000 + i },
+      { width: 12000 + i, height: 100000 },
+    ]) {
+      const width = rasterWidth(layout, 10000);
+      const height = Math.max(1, Math.round((width * layout.height) / layout.width));
+      expect(width).toBeGreaterThan(0);
+      expect(width).toBeLessThanOrEqual(LIMITS.maxRasterDimension);
+      expect(height).toBeLessThanOrEqual(LIMITS.maxRasterDimension);
+      expect(width * height).toBeLessThanOrEqual(LIMITS.maxPixels);
+    }
+  }
+});
+
+it("renders a native PNG at the adjusted near-square area boundary", async () => {
+  const renderer = service();
+  const layout = await renderer.layout("svg", '<svg width="99979" height="100000"/>');
+  const width = rasterWidth(layout, 3000);
+  const image = await renderer.raster(layout, "dark", width);
+  expect(pngHeader(image.png)).toEqual({ width: 2827, height: 2828 });
+  expect(image.width * image.height).toBeLessThanOrEqual(LIMITS.maxPixels);
+});
+
 it("cleans up a real native worker on immediate cancellation and idempotent disposal", async () => {
   const renderer = service();
   const signal = new AbortController();

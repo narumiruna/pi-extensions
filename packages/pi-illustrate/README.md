@@ -85,7 +85,11 @@ The saved tool content remains text-only. A deterministic context projection add
 
 Pi's available component width and cached character-cell pixels determine the target image size. The cell dimensions can be estimated; they do not identify the physical monitor resolution. Geometry is rounded to terminal cells.
 
-Shrinking reuses the current PNG. Enlargement also reuses it while its resolution is sufficient. When more resolution is needed, the preview scales immediately and a new PNG is generated after resize has stopped for 150 ms. A Mermaid appearance change requests a new PNG without rerunning the layout. Pending or failed changes are labeled instead of presenting an old bitmap as current.
+Shrinking reuses the current PNG. Enlargement also reuses it while its resolution is sufficient. When more resolution is needed, the preview scales immediately and a new PNG is generated after resize has stopped for 150 ms. A Mermaid appearance change requests a new PNG without rerunning the layout. Missing previews and old Mermaid palettes are labeled during updates.
+
+A full render queue delays updates and is retried automatically. Other rendering errors remain visible and are not retried for the same size and appearance.
+
+At the 64-preview cache limit, completed tool calls still return their record and any requested model image; an uncached local preview shows the limit instead.
 
 Fixed limits cap resolution and work; reaching the pixel limit can leave a large display upscaled. This is not a claim of pixel-perfect rendering on every terminal or display density.
 
@@ -118,7 +122,7 @@ Pi can fail to detect images through terminal multiplexers or SSH. This package 
 
 Work is bounded to 50,000 input characters, 4 MiB normalized SVG, 1,000 edges/references, 20,000 SVG elements, depth 128, 1,000 CSS rules, 8,000,000 raster pixels, 8,192 pixels per raster axis, and 4 MiB PNG. One worker runs at a time with at most four accepted operations and a 128 MiB JavaScript heap. Worker startup and each ready-worker operation have separate five-second deadlines. Pixel limits bound output bitmaps; the JavaScript heap limit is not an OS-level limit on native memory. The child process provides cancellation, not a general-purpose security sandbox.
 
-A session retains at most 64 preview records and a 32 MiB compressed preview cache. An evicted preview reports the cache limit; a size or appearance change can request it again. Display height is limited to 4,096 terminal rows. The host's own transcript and session storage are outside this cache budget.
+A session caches at most 64 previews and 32 MiB of compressed preview data. An evicted preview reports the cache limit; a size or appearance change can request it again. Display height is limited to 4,096 terminal rows. The host's own transcript and session storage are outside this cache budget.
 
 Automated tests cover rendering and protocol data, not physical terminal acceptance. See [verification and external handoff](./docs/verification.md) for remaining visual, platform, and release checks. No publication or release action is authorized by local verification.
 

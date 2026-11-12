@@ -213,6 +213,40 @@ it("does not resurrect an owner if shutdown races replacement teardown", async (
   expect(work.layout).not.toHaveBeenCalled();
 });
 
+it("returns the completed record and requested model image beyond 64 local previews", async () => {
+  await getHandler("session_start")({}, ctx);
+  const tool = getTool("illustrate_svg");
+  for (let i = 0; i < 64; i++) {
+    await tool.execute(`full-${i}`, { svg: layout.svg }, undefined, undefined, ctx as ExtensionToolContext);
+  }
+  const result = await tool.execute(
+    "extra",
+    { svg: layout.svg, sendToModel: true },
+    undefined,
+    undefined,
+    ctx as ExtensionToolContext,
+  );
+  expect(result.details).toMatchObject({ type: "pi-illustrate/v1", layout, modelImage: { type: "image", data: png } });
+  expect(result.content.every((item) => item.type === "text")).toBe(true);
+  expect(work.raster).toHaveBeenCalledTimes(65);
+  assert.ok(tool.renderResult);
+  const component = tool.renderResult(
+    result,
+    { expanded: false, isPartial: false },
+    {
+      appearance: "dark",
+      fg: (_role: string, text: string) => text,
+    } as Theme,
+    {
+      toolCallId: "extra",
+      showImages: true,
+      isError: false,
+      invalidate: vi.fn(),
+    } as unknown as Parameters<typeof tool.renderResult>[3],
+  );
+  expect(component.render(82).join("")).toContain("preview limit");
+});
+
 it("makes the model opt-in explicit and preserves text-only stored content", async () => {
   await getHandler("session_start")({}, ctx);
   const ordinary = (await run()) as { content: { type: string }[]; details: { modelImage?: unknown } };

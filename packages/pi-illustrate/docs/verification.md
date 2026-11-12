@@ -22,10 +22,10 @@ The package tests cover atomic settings saves and failures, the real native ESM 
 ## Completed implementation checks
 
 - `npm run check` passed for the repository builds, Biome, boundaries, and workspace typechecks.
-- `npm test` passed: 943 files, 21,210 tests passed, 34 existing tests skipped, and zero failures. The package has 273 passing tests, without per-test timeout increases.
+- `npm test` passed: 943 files, 21,238 tests passed, 34 existing tests skipped, and zero failures. The package has 301 passing tests, without per-test timeout increases.
 - Real Jiti and CLI smokes exercised local rendering, command rejection, JSON/RPC framing, startup, and shutdown without provider requests.
 - A real npm tarball was inspected, installed into an isolated consumer with runtime dependencies, and loaded through Pi. Its native ESM worker rendered a 320 by 78 pixel CJK Mermaid diagram with zero external requests.
-- The semantic review covered the extension, settings, and README guides; model-prefix preservation after native system/tool patches; worker cancellation and stale ownership; atomic settings failures; SVG/CSS resource restrictions; and published import paths.
+- The semantic review covered the extension, settings, and README guides; model-prefix preservation after native system/tool patches; worker cancellation and stale ownership; queue-capacity retries and cache limits; rounded raster area; raw terminal-control assertions; atomic settings failures; SVG/CSS resource restrictions; and published import paths.
 - The only shared test-configuration change copies package-owned `.mjs` runtime assets into the test output. There are no new Kit APIs, project settings, credentials, tool-activation switches, generated extension bundles, or extension-to-extension dependencies.
 - `npm audit` reports one pre-existing low-severity `fast-xml-parser` advisory in the host dependency graph. Its lockfile entry is unchanged; this package does not use that parser. No forced audit fix was applied.
 

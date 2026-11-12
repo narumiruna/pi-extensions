@@ -8,7 +8,15 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
-import { type Appearance, type DiagramLayout, Rasterizer, type RasterResult, rasterWidth } from "./rasterizer.js";
+import {
+  type Appearance,
+  type DiagramLayout,
+  LIMITS,
+  Rasterizer,
+  type RasterResult,
+  RenderQueueFullError,
+  rasterWidth,
+} from "./rasterizer.js";
 import type { IllustrateRecord } from "./records.js";
 import type { Cols, IllustrateSettings } from "./settings.js";
 
@@ -88,6 +96,8 @@ export class PreviewSession {
 
   seed(id: string, record: IllustrateRecord, artifact: RasterResult, appearance: Appearance): void {
     this.allowed?.add(id);
+    // A cache limit must not discard a completed tool result or its model snapshot.
+    if (!this.slots.has(id) && this.slots.size >= MAX_PREVIEWS) return;
     const slot = this.slot(id, record);
     this.cancel(slot);
     slot.artifact = artifact;
@@ -177,6 +187,7 @@ export class PreviewSession {
       const abort = () => controller.abort();
       this.signal.addEventListener("abort", abort, { once: true });
       try {
+        if (this.service.active >= LIMITS.maxPending) throw new RenderQueueFullError();
         const artifact = await this.service.raster(slot.record.layout, appearance, widthPx, controller.signal);
         if (this.signal.aborted || controller.signal.aborted || slot.generation !== generation) return;
         slot.artifact = artifact;
@@ -184,6 +195,11 @@ export class PreviewSession {
         this.trimCache(id);
       } catch (error) {
         if (this.signal.aborted || controller.signal.aborted || slot.generation !== generation) return;
+        if (error instanceof RenderQueueFullError) {
+          // Keep current demand and retry only capacity failures. cancel() owns this timer too.
+          slot.timer = setTimeout(() => void run(), RESIZE_DELAY_MS);
+          return;
+        }
         slot.failure = sanitizeTerminalText(error instanceof Error ? error.message : "Preview rendering failed.").slice(
           0,
           300,

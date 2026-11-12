@@ -168,7 +168,9 @@ describe("native Illustrate settings", () => {
     const f = fixture();
     const running = showIllustrateSettings(f.ctx, f.owner);
     await f.tui.waitForOpen();
-    const lines = plain(f.tui.render(100));
+    const raw = f.tui.render(100);
+    expect(raw.join("\n")).not.toContain("\x1b]0;unsafe");
+    const lines = plain(raw);
     expect(lines[0]).toBe("─".repeat(100));
     expect(lines.at(-1)).toBe("─".repeat(100));
     expect(lines.join("\n")).toContain("Default width");

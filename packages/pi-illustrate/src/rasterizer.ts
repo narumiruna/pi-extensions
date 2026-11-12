@@ -35,7 +35,7 @@ export function rasterWidth(layout: Pick<DiagramLayout, "width" | "height">, req
   checkGeometry(layout.width, layout.height);
   if (!Number.isFinite(requested) || requested < 1) throw new Error("Invalid raster width.");
   const ratio = layout.width / layout.height;
-  const width = Math.floor(
+  let width = Math.floor(
     Math.min(
       requested,
       LIMITS.maxRasterDimension,
@@ -43,8 +43,18 @@ export function rasterWidth(layout: Pick<DiagramLayout, "width" | "height">, req
       Math.sqrt(LIMITS.maxPixels * ratio),
     ),
   );
-  checkPixels(width, Math.max(1, Math.round(width / ratio)));
+  // Match the worker's arithmetic and integer height, not only the continuous area cap.
+  const heightFor = (width: number) => Math.max(1, Math.round((width * layout.height) / layout.width));
+  while (width > 1 && width * heightFor(width) > LIMITS.maxPixels) width--;
+  checkPixels(width, heightFor(width));
   return width;
+}
+
+export class RenderQueueFullError extends Error {
+  constructor() {
+    super("Diagram render queue is full.");
+    this.name = "RenderQueueFullError";
+  }
 }
 
 function aborted(): Error {
@@ -143,7 +153,7 @@ export class Rasterizer {
   private submit(request: Request, signal?: AbortSignal): Promise<DiagramLayout | RasterResult> {
     if (this.closed) return Promise.reject(new Error("Rasterizer is disposed."));
     if (signal?.aborted) return Promise.reject(aborted());
-    if (this.active >= LIMITS.maxPending) return Promise.reject(new Error("Diagram render queue is full."));
+    if (this.active >= LIMITS.maxPending) return Promise.reject(new RenderQueueFullError());
     return new Promise((resolve, reject) => {
       const job: Job = {
         request,

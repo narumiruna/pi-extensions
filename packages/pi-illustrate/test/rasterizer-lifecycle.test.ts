@@ -34,6 +34,7 @@ class ControlledChild extends EventEmitter {
 
 let Rasterizer: typeof import("../src/rasterizer.js").Rasterizer;
 let LIMITS: typeof import("../src/rasterizer.js").LIMITS;
+let RenderQueueFullError: typeof import("../src/rasterizer.js").RenderQueueFullError;
 const services: import("../src/rasterizer.js").Rasterizer[] = [];
 const source = '<svg width="1" height="1"/>';
 const current = () => ControlledChild.children.at(-1) as ControlledChild;
@@ -51,7 +52,7 @@ beforeEach(async () => {
   vi.doMock("node:child_process", () => ({
     fork: (url: URL, _args: unknown, options: unknown) => new ControlledChild(url, options),
   }));
-  ({ Rasterizer, LIMITS } = await import("../src/rasterizer.js"));
+  ({ Rasterizer, LIMITS, RenderQueueFullError } = await import("../src/rasterizer.js"));
 });
 afterEach(async () => {
   const disposal = services.splice(0).map((renderer) => renderer.dispose());
@@ -145,7 +146,9 @@ it("bounds accepted requests and removes queued cancellation without spawning", 
   const rest = [renderer.layout("svg", source), renderer.layout("svg", source)];
   const restRejected = rest.map((task) => expect(task).rejects.toThrow(/disposed/));
   expect(renderer.active).toBe(LIMITS.maxPending);
-  await expect(renderer.layout("svg", source)).rejects.toThrow(/queue is full/);
+  const overflow = renderer.layout("svg", source);
+  await expect(overflow).rejects.toBeInstanceOf(RenderQueueFullError);
+  await expect(overflow).rejects.toThrow(/queue is full/);
   abort.abort();
   await queuedRejected;
   expect(renderer.active).toBe(3);

@@ -135,7 +135,9 @@ describe("Illustrate manager", () => {
     f.tui.press("tui.select.down");
     f.tui.press("tui.select.confirm");
     await f.tui.waitForOpen();
-    const frame = plain(f.tui.render());
+    const raw = f.tui.render();
+    expect(raw.join("\n")).not.toContain("\x1b[2J");
+    const frame = plain(raw);
     expect(frame).toContain("Kitty available");
     expect(frame).toContain("dark (Pi appearance)");
     expect(frame).toContain("possibly estimated");
