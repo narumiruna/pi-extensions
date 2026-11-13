@@ -13,6 +13,7 @@ export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publish
   ].join("\n"),
   forbiddenEagerInputs: ["src/menu.ts", "src/settings-ui.ts"],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
+  allowedEagerExternals: ["@narumitw/pi-tui-kit/terminal-document"],
 });
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
