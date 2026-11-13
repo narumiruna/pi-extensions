@@ -41,7 +41,7 @@
     "pele": "^1.13.0"
   },
   "devDependencies": {
-    "@types/css-tree": "^2.3.11"
+    "@types/css-tree": "^3.2.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
