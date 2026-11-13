@@ -4,7 +4,7 @@
 
 Reduce repeated terminal UI code in extension packages by adopting existing Pi TUI Kit APIs first. Add a public adapter only if two consumers still need the same behavior after adoption. Preserve native editing, cancellation, mouse routing, persistence, and non-TUI behavior.
 
-Implementation was requested after this draft. Six consumer migrations are implemented and verified on `narumi/refactor/tui-kit-ui-consolidation`, based on `origin/main` at `7fc37d8e`. BTW normalization remains blocked by its published-API and eager-loading boundary; this plan is not complete and must not be deleted. No publication is authorized.
+Status: partially implemented. Six consumer migrations were merged in `94af6604` from implementation commit `168248cc`. BTW normalization remains blocked by its published-API and eager-loading boundary; this plan is not complete and must not be deleted. No publication is authorized.
 
 ## Context
 
@@ -69,9 +69,10 @@ Read all applicable scoped `AGENTS.md` files before editing each consumer. Read 
 
 ### 4. Consolidate configured-key syntax
 
-- [ ] Replace compatible normalization logic in BTW, Notes, and Ticker with `canonicalizeConfiguredKey()` after publication is verified; keep package-specific admission and collision policy. Acceptance: table-driven tests cover aliases, modifier order, literal `+`, invalid strings, legacy collisions, terminal modes, standard-action priority, and the first usable fallback. Retain existing accepted spellings or document a blocking compatibility decision rather than silently changing them.
+- [x] Replace compatible Notes and Ticker normalization with `canonicalizeConfiguredKey()` while retaining local admission and collision policy. Evidence: the migrations and compatibility tests are recorded in `packages/pi-tui-kit/docs/ui-consolidation-audit.md` at `168248cc`.
+- [ ] After the BTW prerequisite in External Handoff is resolved, migrate its synchronous normalizer and retain existing accepted spellings. Acceptance: table-driven tests cover aliases, modifier order, literal `+`, invalid strings, legacy collisions, terminal modes, standard-action priority, and the first usable fallback; generated eager-graph tests still pass.
 
-  **Blocked for BTW:** Notes and Ticker adoption and compatibility tests pass. BTW's synchronous normalizer is in the eager settings graph, but the published helper has no focused export. Its implementation and floor remain unchanged. The retained audit records the required maintainer release or separately reviewed loading change; do not weaken the eager-graph tests or use a private import.
+  **Blocked for BTW:** its normalizer remains in the eager settings graph, and Kit has no focused key-syntax export. Do not weaken eager-graph tests or use a private import. The original migration left BTW's dependency floor unchanged; current floors and resolution must be read from manifests and the lockfile rather than inferred from that historical checkpoint.
 
 ### 5. Consolidate Usage interaction ownership
 
@@ -89,7 +90,7 @@ Read all applicable scoped `AGENTS.md` files before editing each consumer. Read 
 - [x] Run `npm run package:pack -- <unscoped-name>` for each package with metadata or publishing changes and inspect the tarballs; build each changed packaged runtime and smoke it with `pi -e ./packages/pi-<unscoped-name>`. Acceptance: artifacts contain the declared runtime and imports, representative lazy UI boundaries load through Jiti, and offline command cancellation and shutdown work without provider requests. Record any impractical interactive smoke and the exact remaining uncertainty.
 - [x] Prepare a retained handoff with guide audits, contract decisions, check results, registry evidence, deviations, and physical-terminal instructions. Acceptance: external items and release restrictions below are preserved in an appropriate package-owned document before this completed plan is deleted.
 
-Execution evidence and the retained external handoff: `packages/pi-tui-kit/docs/ui-consolidation-audit.md`. Final root gates passed with 772 files and 14,619 tests passing, one file and two tests skipped. Six consumer tarballs and offline Pi package-directory smokes passed. Physical terminal checks remain external; the BTW migration is the unresolved agent-task dependency.
+Execution evidence and the retained external handoff: `packages/pi-tui-kit/docs/ui-consolidation-audit.md`. At implementation commit `168248cc`, final root gates passed with 772 files and 14,619 tests passing, one file and two tests skipped. Six consumer tarballs and offline Pi package-directory smokes passed. Physical terminal checks remain external; the BTW migration is the unresolved agent-task dependency.
 
 ## Completion Checklist
 
@@ -108,6 +109,6 @@ Prefer no new Kit public API. If an adapter is added and published, do not remov
 
 ## External Handoff
 
-**Kit publication:** The maintainer is responsible. Prerequisite: explicit publication approval and the repository release gates. Action: publish any required Kit API through the existing release workflow, then provide registry-visible artifact evidence. Expected result: independently installed consumers resolve the required runtime exports. Until then, registry compatibility is unverified and dependent migrations cannot complete; do not publish dependent packages.
+**BTW prerequisite:** The maintainer must approve either a focused public key-syntax export or a separately reviewed loading change. A new export requires publication approval, the existing release workflow, and exact registry-artifact verification before BTW adopts it. A loading change requires equivalent eager-graph and generated-runtime evidence. Until one path is verified, the BTW migration remains blocked; this restriction does not reopen the six completed migrations.
 
 **Physical terminal verification:** A maintainer or tester with the target terminal is responsible. Prerequisite: passing deterministic tests, built packages, and prepared smoke instructions using synthetic secrets only. Action: check IME placement, hardware/fake cursor visibility, keyboard negotiation, mouse input, resize, and theme changes in regular and fullscreen modes. Expected result: native editing and focus remain correct with no secret disclosure. Simulated-renderer tests do not verify physical-terminal behavior; retain this limitation in release handoff, and resolve any discovered correctness or safety failure before release.

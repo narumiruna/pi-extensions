@@ -4,9 +4,11 @@
 
 Add an independently installable `@narumitw/pi-notify` extension that sends Telegram notifications when Pi stops automatic work. Identify the computer, session, and Git worktree so the user can return to review the result. Provide a menu-first `/notify` command and canonical `pi-notify.json` settings, including an optional inactivity delay.
 
-Implementation and local verification are complete on `narumi/feat/pi-notify`. Live Telegram verification remains blocked because no approved test credentials and chat were supplied. This plan does not authorize publication or live messages and stays open until the remaining acceptance checks are resolved.
+Status: implementation and local verification were merged in PR #1588 (`080bec29`), including review fixes in `23a47dda`. Live Telegram verification remains blocked because no approved test credentials and chat were supplied. This plan does not authorize publication or live messages and stays open until the remaining acceptance checks are resolved.
 
-## Context
+## Context — original Telegram implementation
+
+The scope, implementation decisions, test totals, package contents, and review ledger below describe the original Telegram checkpoints, not current package capabilities or registry state. The current package has ten providers and a generated runtime; use its README and manifest for current installation and configuration. A later change enabled notifications by default, but no destination is selected by default.
 
 Follow `docs/extension-conventions.md`, `docs/extension-settings.md`, and `docs/readme-conventions.md`.
 
@@ -28,7 +30,7 @@ Implement a small provider-neutral delivery boundary, with Telegram as its only 
 
 Expose two modes in `/notify` Settings:
 
-1. `immediate`: attempt notification when the work period settles. This is the default mode; the extension itself remains disabled until explicitly enabled.
+1. `immediate`: attempt notification when the work period settles. This is the default mode; the original implementation defaulted to disabled. Current defaults enable notifications but select no destination.
 2. `after-inactivity`: notify only when the work period has settled and the configured time since the last observed activity has elapsed.
 
 Use a proposed inactivity default of 30 seconds. Offer 30 seconds, 1 minute, 2 minutes, and a custom positive whole-second value. Validate custom values against an implementation-documented finite timer range. Show this setting as inactive when the notification mode is `immediate`.
@@ -140,7 +142,7 @@ Use these canonical paths through `getAgentDir()` and `CONFIG_DIR_NAME`:
 <workspace>/<CONFIG_DIR_NAME>/pi-notify.json
 ```
 
-Defaults are disabled, `immediate` mode, 30-second inactivity time, no destinations, and no selected IDs. Loading defaults must not create files. Proposed user settings:
+Current defaults are enabled, `immediate` mode, 30-second inactivity time, no destinations, and no selected IDs. The original implementation defaulted to disabled. Loading defaults must not create files. Proposed user settings:
 
 ```json
 {
@@ -208,7 +210,8 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 - [x] Implement Telegram as the sole production provider with bounded cancellable delivery. Evidence: mocked HTTP and API success/failure, rate limit, timeout, body limits, redirect rejection, partial destination failure, and redaction tests.
 - [x] Implement `/notify` Telegram setup, test confirmation, Settings, Status, and Help with existing Kit APIs. Evidence: transactional cancel, save rollback, inheritance, masked input, custom inactivity validation, non-default keybindings, constrained rendering, non-TUI behavior, and disposal tests.
 - [x] Document installation, Telegram prerequisites, exact outbound data, inactivity semantics, settings scope, headless fallback, best-effort delivery, and recovery. Evidence: README audit against implementation and applicable guides.
-- [ ] Run root gates, inspect the package tarball, and smoke Pi loading and an approved Telegram notification. Evidence: recorded command results; unavailable external checks remain open until resolved or explicitly accepted.
+- [x] Run root gates, inspect the package tarball, and smoke Pi loading. Evidence: the implementation and review verification records below cover both gates, inspected artifacts, RPC package loading, and lazy Jiti menu loading.
+- [ ] Record approved live Telegram verification or explicit acceptance of the precise gaps in External Handoff; deterministic requests and package loading do not prove live delivery.
 
 ## Completion Checklist
 
@@ -222,15 +225,15 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 - [x] `npm run package:pack -- notify` passes and its inspected tarball contains an independently installable package.
 - [x] `npm --workspace @narumitw/pi-notify run build --if-present` and `pi -e ./packages/pi-notify` pass their applicable runtime smoke paths.
 - [ ] Live Telegram smoke has explicit approval and recorded results, or its absence is accepted with precise unverified paths; stop after one clear external entitlement failure and use deterministic tests.
-- [x] Final diff passes the guides' semantic audit, and handoff names checks, smokes, deviations, and unverified paths; no publication, visibility change, version tag, or release dispatch occurs without explicit approval. Evidence: draft PR #1588 records local verification and the live-smoke blocker.
+- [x] Final diff passes the guides' semantic audit, and handoff names checks, smokes, deviations, and unverified paths; no publication, visibility change, version tag, or release dispatch occurs without explicit approval. Evidence: merged PR #1588 records local verification and the live-smoke blocker.
 
-## Verification evidence
+## Verification evidence — original implementation checkpoint
 
 - `npm install` and `npm ls @narumitw/pi-tui-kit` passed; the new consumer resolves the published Kit floor.
 - `npm run check` passed with builds, Biome, package boundaries, and every workspace typecheck.
 - `npm test` passed: 609 files passed, one skipped; 8,803 tests passed, two skipped. The skipped cases are outside this package. All 121 new package tests passed.
 - `npm run package:pack -- notify` passed. An actual `npm pack --workspace @narumitw/pi-notify` tarball was inspected: 14 intended files, with no tests or credentials.
-- `npm --workspace @narumitw/pi-notify run build --if-present` passed; the source-loaded package has no package build.
+- `npm --workspace @narumitw/pi-notify run build --if-present` passed; at this checkpoint the source-loaded package had no package build. The current manifest declares a generated runtime and build script.
 - Package-directory `pi -e ./packages/pi-notify` was exercised non-interactively through RPC with isolated settings and discovery disabled. Command discovery, two `/notify` notices across session replacement, JSONL integrity, side-effect-free missing settings, and orderly shutdown passed without model or Telegram calls.
 - The Pi `DefaultResourceLoader` test passed through Jiti, including the lazy TUI menu import and repeated cleanup. A fenced-code-aware heading audit passed for all 36 package READMEs.
 - Semantic review covered correctness, fixed-origin credential handling, redaction, per-await ownership, timer/request/subprocess/menu disposal, settings lock order and atomic failure recovery, User/Project isolation, prompt-prefix stability, compatibility, and scope. No model tools, context transformations, extension coupling, or new provider implementations were added.
@@ -238,12 +241,12 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 - Unverified: real Telegram token/chat permissions, private/group/forum delivery, actual terminal focus and mouse behavior through SSH/tmux, and physical terminal interaction. Terminal flows have harness coverage, not a human-operated terminal smoke.
 - Blocked: live Telegram smoke requires an approved Bot token and destination chat. No credentials were searched for and no real Telegram message was sent. Absence of that smoke has not been accepted, so its task and completion criterion remain open.
 - npm registry lookup returned 404 for the new package. Documentation uses local checkout installation until publication; no publication, visibility change, tag creation, or release dispatch was performed.
-- PR: https://github.com/narumiruna/pi-extensions/pull/1588, based on `main`, with original implementation commit `2d539618`. It is ready for review, not draft. The PR records verification, risks, and open live-smoke acceptance. This plan remains saved because that acceptance is still open.
+- PR: https://github.com/narumiruna/pi-extensions/pull/1588, based on `main`, with original implementation commit `2d539618`. It merged in `080bec29`. The PR records verification, risks, and open live-smoke acceptance; merging is not evidence that the gap was accepted. This plan remains saved because that acceptance is still open.
 - A human-operated terminal smoke is impractical in this non-interactive harness. Kit harness and Pi Jiti tests verify loading and interactions but do not establish real terminal focus/mouse delivery.
 
 ## Review ledger — PR #1588
 
-Reviewed head: `e804e1bddc26e311700ae74c26c5e00b23fe1ed1`. The checkout and PR both belong to `narumiruna/pi-extensions`. The PR is open and ready; its prior CI run passed. All REST pages and GraphQL thread/comment pages were fetched. The original implementation diff and relevant instructions are unchanged from the prior review. Source review is reused where unchanged; the reported failure classes are checked again across settings mutations, activity classification, UI, tests, and documentation.
+Reviewed head: `e804e1bddc26e311700ae74c26c5e00b23fe1ed1`. The checkout and PR both belong to `narumiruna/pi-extensions`. At this review checkpoint the PR was open and ready, and its prior CI run passed; it has since merged. All REST pages and GraphQL thread/comment pages were fetched. The original implementation diff and relevant instructions are unchanged from the prior review. Source review is reused where unchanged; the reported failure classes are checked again across settings mutations, activity classification, UI, tests, and documentation.
 
 | Item | Evidence and relation to the goal | Severity | Outcome |
 | --- | --- | --- | --- |
@@ -264,6 +267,12 @@ Touched rules and verification: settings changes MUST protect invalid files, pre
 - The settings mutation paths and all activity claims in this PR were checked. Cleanup and signal ownership are unchanged. Existing package Changeset coverage remains sufficient. No API, settings key, provider, permission, or dependency was added.
 - Live Telegram delivery and physical terminal behavior remain unverified for the reasons already recorded above. They do not prevent responding to these two verified review items.
 - Both review replies were published after validation and push. Both Resolve API calls returned `isResolved: true`. The PR description records the fix commit, current test totals, support limits, and ready status. No review item is deferred or needs clarification.
+
+## External Handoff
+
+**Telegram delivery:** The bot/chat owner must provide an approved disposable destination and credentials outside chat, then authorize one confirmed `/notify` test. Record service acceptance and actual receipt, naming the tested private/group/forum variants. Those variants and token/chat permissions remain unverified; the original live-smoke acceptance criterion stays open until results or explicit acceptance of the gap are recorded.
+
+**Terminal behavior:** A terminal tester must check physical interaction and the documented focus/mouse limitations, including SSH/tmux where applicable. Expected result: only forwarded activity cancels pending reminders. Harness coverage does not establish physical input delivery. Record any defect and release impact before making a compatibility claim. Neither handoff authorizes publication or unapproved external messages.
 
 ## Rollback / Recovery
 

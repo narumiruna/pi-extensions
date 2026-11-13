@@ -292,6 +292,12 @@ The Pi core maintainer owns API design, implementation, tests, and publication a
 A later authorized BTW migration must pass the existing native-dispatch and terminal-restoration regressions before removing the workaround.
 No new Kit API or raised BTW dependency floor was required for that upstream API proposal. The separate shared physical-handoff extraction above must require the Kit release that first contains its API before dependent publication.
 
+## Idle main-submission verification
+
+The idle-submission fix merged as `bab4b678` for issue #1752. Its four manager/direct and left/right readiness regressions failed against the original implementation and passed with the fix; all 751 BTW tests passed at that checkpoint. The Unix local-provider PTY matrix passed all 22 cases, and its original six-case matrix also passed. Native Windows ConPTY passed six right-pane cases at 140-by-40 with default F6, covering regular/fullscreen parents and idle manager, idle direct, and gated-streaming openings. Each main request completed and reached `agent_settled` before BTW closed; restored input and shutdown passed.
+
+That implementation also passed package-directory RPC loading, generated-entry/lazy-boundary tests, pack inspection, and the asynchronous ownership/settings/terminal semantic audit. Its unfiltered root suite had one reproduced unchanged Starship failure; that historical failure was disclosed, not waived. At repository baseline `01525ffe`, sequential `npm run check` and full `npm test` passed: 947 files, 21,379 tests, 34 skips, and no unhandled errors. The completed idle-submission plan is removed; these results retain its evidence without claiming physical-terminal, IME, clipboard, or visual acceptance. The manual terminal handoff below still applies, and publication requires separate approval.
+
 ## Verification and remaining acceptance
 
 From the repository root, build before loading the declared package directory:

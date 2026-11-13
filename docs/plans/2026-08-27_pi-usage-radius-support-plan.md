@@ -4,7 +4,9 @@
 
 Determine when `@narumitw/pi-usage` can safely report Radius organization billing and spending budgets for Pi provider ID `radius`, and enable only the scopes whose data and credential-origin contracts are proven.
 
-The current decision is **blocked**: Radius now exposes a suitable live organization billing summary, but Pi 0.86.0 still does not expose the credential-bound Radius control-plane origin needed to send its bearer safely. Budget remaining has additional unresolved applicability and consumption contracts.
+Status: **blocked** on a credential-bound Radius control-plane origin and approved billing evidence. The historical assessment below found a suitable organization billing endpoint, but budget applicability and consumption remain unresolved. No Radius adapter is implemented.
+
+The installed Pi auth implementation was checked again during plan cleanup: `ModelAuth` still exposes only `apiKey`, `headers`, and `baseUrl`, and Radius `toAuth()` still returns only the bearer. This does not provide the required credential-origin proof. The live Radius API was not queried again.
 
 This plan covers only the Radius portion of [issue #1051](https://github.com/narumiruna/pi-extensions/issues/1051).
 
@@ -108,7 +110,7 @@ Radius remains explicit-query-only. It must not publish statusline usage or sche
 ## Plan
 
 - [x] Revalidate Pi 0.86.0 and the current Radius OpenAPI and operation documents. Evidence: Pi commit [`ecac0a9`](https://github.com/earendil-works/pi/tree/ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc), Radius OpenAPI `1.0.0`, and live operation contracts retrieved on 2026-09-20 establish the billing endpoint, roles, fields, settlement notes, budget limitations, and missing Pi credential-origin metadata recorded above.
-- [ ] Obtain a Pi public runtime contract that exposes the normalized Radius control-plane origin bound to the resolved bearer, separately from inference `baseUrl`; verify the built-in gateway resolves to `https://radius.pi.dev`, custom gateways resolve to their own origin, account or gateway changes invalidate the result, and absent or ambiguous metadata fails closed.
+- [ ] After the upstream prerequisite in External Handoff is available, verify that a Pi public runtime contract exposes the normalized Radius control-plane origin bound to the resolved bearer, separately from inference `baseUrl`; verify the built-in gateway resolves to `https://radius.pi.dev`, custom gateways resolve to their own origin, account or gateway changes invalidate the result, and absent or ambiguous metadata fails closed.
 - [ ] Revalidate the selected Pi release after that contract ships and raise the repository's Pi dependency floor only if the adapter needs it; verify the exact npm version and source commit, run root `npm install`, and confirm all Pi packages resolve to the intended release.
 - [ ] With explicit approval, use a disposable Radius organization to fetch `/v1/billing` through Pi's active credential for owner, admin, and member roles; retain only sanitized response shapes and verify documented balance, current-period, all-time, timestamp, permission, and asynchronous-settlement behavior.
 - [ ] Decide whether floating-point Radius currency values can be normalized without claiming false precision; verify representative decimal, negative available, zero, malformed, oversized, and settlement-in-progress responses.
@@ -123,8 +125,14 @@ Radius remains explicit-query-only. It must not publish statusline usage or sche
 - [ ] If budget discovery succeeds, implement only fixed, pre-reviewed aggregate templates whose complete statements and every CTE are read-only and actor-scoped; verify exact query snapshots, hostile actor identifiers, privacy boundaries, and that no malformed, stale, or inapplicable data creates a remaining amount.
 - [ ] Audit the final implementation diff against `docs/extension-conventions.md`, `docs/readme-conventions.md`, and the non-applicability of `docs/extension-settings.md`, including cancellation, disposal, session replacement, shutdown, stale state after every `await`, origin validation, optional SQL scope, terminal sanitization, secret redaction, and package boundaries.
 - [ ] Run the package build and focused Radius, usage, core, lifecycle, and generated-entry tests, then `npm run check` and plain `npm test`; verify all deterministic gates pass within the repository's 5,000 ms per-test limit.
-- [ ] Run `just pack usage` and `pi --no-extensions --no-skills -e ./packages/pi-usage --list-models`; verify generated imports resolve, the tarball contains only declared files, and Pi loads the package without a Radius billing or analytics request.
+- [ ] Run `npm run package:pack -- usage` and `pi --no-extensions --no-skills -e ./packages/pi-usage --list-models`; verify generated imports resolve, the tarball contains only declared files, and Pi loads the package without a Radius billing or analytics request.
 - [ ] Run one explicitly approved final live smoke against a disposable Radius organization after reviewing the exact read-only request; verify `/usage` displays only proven organization billing values and timestamps, or keep the adapter disabled if the smoke fails.
+
+## External Handoff
+
+**Pi API prerequisite:** The upstream Pi maintainer owns the credential-origin contract. It must expose the normalized Radius control-plane origin bound to the resolved bearer, independently of inference `baseUrl`. Until that API is available and verified, implementation and credentialed requests remain blocked; do not infer the origin from the provider ID or model catalog.
+
+**Radius evidence:** The organization/account owner must approve read-only requests and prepare disposable owner, admin, and member accounts outside chat. After origin verification, the agent can run the approved bounded probes and retain sanitized evidence. Billing, budget applicability, and downstream live behavior remain unverified; keep unsupported scopes disabled and do not make credentialed requests without separate approval.
 
 ## Rollback / Recovery
 

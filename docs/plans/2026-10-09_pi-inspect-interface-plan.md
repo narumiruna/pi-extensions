@@ -4,9 +4,11 @@
 
 Make the browser viewer answer two distinct questions without mixing selection, time, or provenance: **Context: what input was observed for the model?** and **Session: what happened during this session?** Preserve read-only inspection, historical evidence, branch navigation, live execution visibility, and existing privacy and lifecycle guarantees.
 
-Implementation and PR delivery were authorized by the user on 2026-10-09. Publication remains out of scope. Retain this plan until the explicit user walkthrough acceptance and interactive CLI smoke (or accepted substitute) are recorded.
+Status: implementation merged in PR #1525 (`02bfe772`), including review fixes through `b949bace`. Publication is not authorized by this plan. Retain this plan until the explicit user walkthrough acceptance and interactive CLI smoke (or accepted substitute) are recorded.
 
-## Context
+## Context — 2026-10-09 baseline
+
+The following descriptions and execution counts are historical, not current viewer behavior. Current navigation, including later resource tabs, is documented in `packages/pi-inspect/docs/viewer.md`; current runtime loading is defined by the package manifest.
 
 The live viewer was exercised with Playwright on 2026-10-09: Context, Session events, navigator and inspector toggles, entry selection, inspector Prompt/Tools/Context/Skills tabs, List/Timeline, session and context searches, and live-call selection/disclosure. Chrome DevTools was unavailable. Do not store the private viewer URL, token, session contents, or screenshots in this plan or repository.
 
@@ -95,9 +97,10 @@ The browser is not a Pi TUI replacement; TUI theme/keybinding/widget rules are n
 - [x] Replace duplicate live-call result expansion with a Session Captured executions view and selection-owned Details. Acceptance: tests cover running/completed/error/unfinished calls, real nested parentage, repeated raw IDs, eviction fallback, unavailable correlation/anchors, and jumps to recorded entries without duplicate full-result views.
 - [x] Validate responsive layout and asynchronous cleanup across all new views. Acceptance: Playwright covers desktop, narrow/mobile, effective 150% viewport, light/dark, keyboard-only selection/disclosure/drawer dismissal, no horizontal overflow, bounded rendering, selection changes during delayed requests, view exit, unmount, stream termination, replacement, and shutdown.
 - [x] Update `packages/pi-inspect/README.md` and `docs/viewer.md` to describe implemented navigation and source distinctions, and add a package Changeset for the user-visible redesign. Acceptance: capability-map review, README heading/scope audit, and changeset review pass without changing registry visibility or publishing.
-- [ ] Run final verification and perform a rebuilt live-viewer walkthrough; record command results, semantic audit, screenshots from nonsensitive fixtures, and any accepted limitations. Acceptance: all Completion Checklist items below have evidence, including explicit user acceptance of the redesigned reading flow.
+- [x] Run automated final verification and record the semantic audit and nonsensitive fixture walkthrough. Evidence: the implementation-stage results below cover deterministic/browser tests, root gates, pack inspection, and real Pi SDK browser integration.
+- [ ] Record the operator walkthrough, interactive CLI smoke or accepted substitute, and final acceptance handoff described in External Handoff. Acceptance: the explicit original user-acceptance criteria have recorded evidence.
 
-## Execution evidence
+## Execution evidence — implementation and review checkpoints
 
 - Branch: `narumi/feat/inspect-reading-flow`, based on `origin/main` at `ac4bf078`; no unrelated worktree changes were present.
 - Clean-build baseline browser verification passed before editing. The earlier live/source selection discrepancy was not reproduced by the rebuilt fixture; no unsupported source defect was inferred. Rebuilt browser and real Pi lifecycle integration verify the new explicit surface ownership without altering the user's running session.
@@ -128,6 +131,10 @@ All feedback pages were fetched; the informational review/activity summaries con
 The new suite reproduced six failing assertions on the original commit (four History cases plus root and missing-anchor labels); nine complementary cases already passed. All 15 new cases pass after the fixes; the complete browser suite has 81 passing tests. Root check and all 7,997 active tests pass (2 skipped). Final review audited every changed navigation transition and evidence label; no new asynchronous work, collector semantics, settings, loader, model-input, privacy or API changes. The existing minor Changeset covers these same-PR corrections. Publication and thread replies are tracked on PR #1525; original manual acceptance and interactive-smoke criteria remain open.
 
 Repeat-review evidence: five new regressions failed against `2af8c4a2`; all now pass, and the complete rebuilt browser suite has **86 passing tests**. Root check and **7,997 tests** pass (2 skipped). The existing Changeset covers the corrections; no package metadata, settings, API, collector, Pi leaf or request input changed. Native disclosure handlers own only synchronous local state; unmounting closed bodies releases their DOM and image rendering while existing bounded JSON scopes remain reusable. Reveal setters run only after membership succeeds, avoiding retry loops and ordinary-snapshot scroll resets. Prior feedback remains settled; no deferred feedback or missing design decision was introduced.
+
+## External Handoff
+
+**Viewer acceptance:** The user or viewer operator owns the remaining check. Prerequisites: rebuilt package assets, a nonsensitive fixture, and no paid provider requests. Load `pi -e ./packages/pi-inspect` in the appropriate interactive environment, walk through Context/Session/Details, and record explicit acceptance of the reading flow and CLI smoke or the existing SDK/RPC substitute. Expected result: clear provenance, usable selection, and correct lifecycle behavior. Interactive CLI behavior and subjective acceptance remain unverified; keep this plan until the original acceptance conditions and final handoff are recorded. Publication still requires separate approval.
 
 ## Risks
 

@@ -1,5 +1,7 @@
 # Share pi-accounts private-file reads
 
+Status: not implemented. Both private-file readers remain; resolve the path-identity requirement before extracting them.
+
 ## Goal
 
 Use one package-internal implementation for security-sensitive account-file reads without changing storage, migration, permissions, errors, or credential handling.
@@ -8,7 +10,7 @@ Use one package-internal implementation for security-sensitive account-file read
 
 `packages/pi-accounts/src/account-store.ts` and `packages/pi-accounts/src/storage.ts` independently perform the same sequence: `lstat`, reject symlinks and non-files, open with `O_NOFOLLOW`, validate the descriptor with `fstat`, repair permissions to `0600`, read through the descriptor, and close it.
 
-Storage reads use one copy, while legacy migration validation and permission enforcement use the other. The duplication can diverge on a credential-protection invariant.
+Storage reads use one copy, while legacy migration validation and permission enforcement use the other. The duplication can diverge on a credential-protection invariant. The package's `AGENTS.md` also requires path-identity validation. The current readers validate descriptor type but do not compare path and descriptor identity; copying their current sequence alone does not establish compliance.
 
 Applicable rules:
 
@@ -31,7 +33,7 @@ Applicable rules:
 ## Plan
 
 - [ ] Record baseline behavior with `packages/pi-accounts/test/accounts-storage.test.ts`; verify ordinary reads, symlink rejection, permission repair, legacy migration, concurrent migration, interrupted migration, and canonical precedence pass.
-- [ ] Compare both reader implementations operation by operation and record any difference in imported error guards or caller expectations before editing.
+- [ ] Compare both reader implementations operation by operation, including imported error guards, caller expectations, and the package's path-identity requirement. Record how path and descriptor identity must be checked, add a failing regression for that contract, and resolve the security mismatch before accepting an exact-copy extraction.
 - [ ] Add one focused package-internal private-file module containing the exact regular-file read sequence and existing error text; keep it outside public exports.
 - [ ] Replace the duplicate readers in `account-store.ts` and `storage.ts` with imports from the internal module while leaving migration and storage control flow unchanged.
 - [ ] Add or refine focused tests only where needed to prove descriptor validation, `O_NOFOLLOW`, `0600` repair on every read, descriptor closure after failure, and unchanged symlink target contents.

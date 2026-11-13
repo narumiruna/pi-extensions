@@ -4,9 +4,11 @@
 
 Add Microsoft Teams Workflows and LINE Messaging API destinations to `@narumitw/pi-notify`. Users can create, edit, select, remove, and test both through `/notify`, including mixed selections with the eight existing providers. Preserve existing notification policy, settings behavior, privacy boundaries, and cancellation.
 
-This document authorizes no publication or external test messages. LINE was merged in PR #1616 at `b65d8a6e`. Teams implementation continues on `narumi/feat/notify-teams`, based on that updated `origin/main`. The full plan remains open until external acceptance evidence is available.
+Status: LINE merged in PR #1616 (`b65d8a6e`), and Teams merged in `47eb4434` from `bf9de4fd`. Offline implementation is complete; live interoperability and receipt acceptance remain open. This document authorizes no publication or external test messages.
 
 ## Execution status
+
+The following contracts and verification counts describe the staged implementation checkpoints. The two minor Changesets were consumed by the version update `daa90ae2` and are recorded in `packages/pi-notify/CHANGELOG.md`; do not create replacement Changesets for this cleanup. Later changes added a generated runtime, so historical source-loading and tarball statements are not current manifest evidence.
 
 The user requested Teams implementation first, before supplying live test credentials. Proceed with an explicit, conservative offline client policy and deterministic tests; this staged request does not waive actual receipt verification or establish universal Microsoft URL/response behavior. Current Microsoft documentation establishes the Workflows trigger, Anyone authentication, Adaptive Card envelope, literal `RichTextBlock`/`TextRun` rendering, and URL migration. It does not specify every signed-URL or response variant. Do not describe a local supported subset as the complete service contract or infer Teams behavior from a different Logic Apps trigger.
 
@@ -26,7 +28,7 @@ The LINE implementation checkpoint passes local gates without changing the eight
 - The semantic audit covered correctness, secret output, asynchronous ownership, persistence ordering/failure recovery, compatibility, retained existing-provider rollback coverage, and scope. Review removed an inferred C/R hexadecimal alphabet in favor of explicitly bounded opaque printable-ASCII suffixes, and added initial-setup/token-edit recovery tests. No shared transport, coordinator, lifecycle implementation, prompt, tool, or entrypoint changed. The menu remains below 1,000 lines.
 - `npm install` reported three existing high-severity advisories (`@earendil-works/pi-coding-agent`, `brace-expansion`, `minimatch`); manifests' dependency ranges and the lockfile were not changed. Dependency remediation is outside this feature.
 
-These are LINE checkpoint results, not completion evidence for Teams. Repeat affected gates, packing, and smokes after Teams implementation. Keep this plan and the full completion checklist open.
+These are LINE checkpoint results, not completion evidence for Teams. The later Teams checkpoint below records its own repeated gates, packing, and smokes. External acceptance remains open.
 
 ### Teams staged implementation policy
 
@@ -101,7 +103,7 @@ Preserve factory/lifecycle and model-prefix contracts by making no changes to re
 
 ### 1. Resolve external API contracts before implementation
 
-- [ ] Record the Teams workflow endpoint contract in package-owned comments/docs: verify current host, path, signature query, URL length, and authentication requirements from the Microsoft references below; add synthetic valid/invalid fixtures that enumerate each supported URL family and rejected normalization class.
+- [x] Record the documented Teams trigger/authentication facts separately from the explicit local supported URL subset. Evidence: `src/providers/teams.ts`, `docs/settings.md`, and `test/teams.test.ts` under `packages/pi-notify/` document and test host/path/query handling, signature and length bounds, rejected normalization classes, and authentication. These local restrictions do not establish every Microsoft URL/response variant; live compatibility remains open in External Handoff.
 - [x] Define and test the explicit Teams client policy for statuses, empty/text/JSON response handling, card compatibility, encoded payload budget, Markdown/link behavior, and workflow-owned targets using the staged scope above. Distinguish authoritative HTTP/card contracts from the locally supported URL/status subset. Keep live interoperability validation open pending a controlled sample; do not copy Slack's `200`/`ok` contract, assume every 2xx proves delivery, or claim the complete service contract is resolved.
 - [x] Define the LINE contract from the current API reference: record token/header bounds, recipient ID formats, text counting, successful response variants, recipient eligibility, group participation, monthly quotas, HTTP 429 behavior, and revocation. Resolve differences between documented response examples before writing strict response validation.
 
@@ -136,8 +138,14 @@ Provider tests must cover pre-abort, abort during fetch and body read, timeout, 
 - [x] Run `npm run format`, inspect the complete intended diff, and run `npm run check` followed by `npm test` from the repository root; record results and keep every test within the configured 5,000 ms timeout. Do not run root checks concurrently with a separate Kit build/check; the root test script rebuilds workspace output before consumer tests.
 - [x] Run the README guide's fenced-code-aware heading audit and semantic touched-area review; audit secret paths, URL equivalence classes, provider response branches, asynchronous ownership after every changed `await`, settings ordering/recovery, and all eight existing providers. Record deviations near their owner and in the handoff.
 - [x] Run `npm run package:pack -- notify` and inspect the tarball for new source/docs and absence of tests, settings, credentials, and unrelated files; run `npm --workspace @narumitw/pi-notify run build --if-present` and an isolated, finite non-interactive Pi package-load smoke using `pi -e ./packages/pi-notify`. Exercise the lazy menu registration path through the existing loader/test harness; record any TUI-only runtime path that cannot be smoked in the available environment.
-- [ ] With explicit permission and disposable credentials entered outside chat, send one confirmed test to a Teams workflow and one eligible LINE recipient; verify downstream receipt and matching safe Status results. Record credentials, entitlement, or recipient-access blockers without exposing values; stop after one clear external/entitlement failure and use deterministic tests rather than retrying. Missing permission/credentials leave this smoke open and identified as blocked unless the user explicitly accepts the unverified path.
+- [ ] Record the approved Teams and LINE external-smoke results described in External Handoff, including actual receipt and matching safe Status, or explicit user acceptance of the unverified paths. Missing permission, credentials, or recipient access leaves acceptance blocked; retain sanitized failure evidence and stop after one clear external/entitlement failure rather than retrying.
 - [ ] Hand off the changed files, applicable guides, semantic audit results, root gates, pack/load/provider smoke evidence, and any accepted limitations; do not publish, create version tags, or dispatch releases.
+
+## External Handoff
+
+**Teams interoperability:** The workflow owner must prepare an approved disposable Anyone-authenticated workflow and provide credentials outside chat. After separate send approval, verify its generated URL against the supported client subset, run one confirmed test, and inspect both workflow action success and actual Teams receipt. Expected result: accepted trigger, successful post, and matching safe Status. URL interoperability and downstream delivery remain unverified; HTTP 202 alone does not satisfy this check.
+
+**LINE delivery:** The LINE account owner must prepare an authorized token and eligible disposable recipient outside chat, then approve one confirmed test. Verify actual receipt and safe Status, including account/recipient eligibility and quota constraints. HTTP acceptance alone does not establish receipt. Stop after one clear entitlement or access failure; retain the existing live-check or explicit gap-acceptance restriction. Neither handoff authorizes publication.
 
 ## Non-goals
 
