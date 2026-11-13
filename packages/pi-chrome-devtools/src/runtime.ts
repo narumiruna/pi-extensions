@@ -13,7 +13,6 @@ export const DEFAULT_HTTP_TIMEOUT_MS = 1_000;
 export const DEFAULT_ENDPOINT_WAIT_MS = 5_000;
 export const DEFAULT_ENDPOINT_RETRY_MS = 250;
 export const MANAGED_BROWSER_PROFILE_PREFIX = "pi-chrome-devtools-profile-";
-export const DEVTOOLS_ACTIVE_PORT_FILE = "DevToolsActivePort";
 export const BROWSER_SHUTDOWN_WAIT_MS = 1_500;
 
 export interface DevToolsPage {
@@ -43,6 +42,7 @@ export interface ChromeDevToolsState {
   activePageId?: string;
   managedBrowser?: ManagedBrowser;
   launchPromise?: Promise<void>;
+  latestLaunchPromise?: Promise<void>;
   lastLaunchAttempt?: BrowserLaunchAttempt;
   shuttingDown: boolean;
   sessionGeneration: number;
@@ -63,7 +63,7 @@ export interface ManagedBrowser {
 
 export interface BrowserLaunchAttempt {
   candidateLabels: string[];
-  mode: "dynamic-port" | "explicit-port";
+  mode: "automatic-port" | "explicit-port";
   selectedCandidate?: string;
   userDataDir?: string;
   lastError?: string;

@@ -26,8 +26,14 @@ Configure the canonical user file at `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chr
 ```
 
 `browser.endpoint` must be an HTTP origin with an explicit port and no credentials, path, query, or fragment.
-Omitting it keeps attach-first behavior on `127.0.0.1:9222` and lets a managed launch use Chrome's dynamic DevTools port mode (`--remote-debugging-port=0`).
+Omitting it keeps attach-first behavior on `127.0.0.1:9222`; a managed launch selects an available local port and passes that nonzero number to Chrome.
 Saving an explicit endpoint pins managed launches to that port.
+Chrome's port-`0` mode enables `navigator.webdriver`; automatic managed launches avoid that mode without overriding browser properties.
+This does not guarantee access to bot-protected sites, which can use other signals and policies.
+
+A selected port can become occupied before Chrome binds it.
+Startup checks the owned browser's DevTools announcement and browser identity instead of accepting a competing CDP endpoint.
+If startup fails because of a port conflict, retry the operation or configure another explicit endpoint.
 `browser.autoLaunch` defaults to `true`.
 `browser.executablePath` is optional and must be an absolute path; when absent, normal browser discovery applies.
 

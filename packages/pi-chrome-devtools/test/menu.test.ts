@@ -136,7 +136,7 @@ test("browser status distinguishes unobserved, running, exited, and failed state
   state.managedBrowser.exited = true;
   state.lastLaunchAttempt = {
     candidateLabels: ["Chromium"],
-    mode: "dynamic-port",
+    mode: "automatic-port",
     selectedCandidate: "Chromium",
     userDataDir: "/tmp/test-profile",
   };
@@ -147,7 +147,7 @@ test("browser status distinguishes unobserved, running, exited, and failed state
   state.managedBrowser = undefined;
   state.lastLaunchAttempt = {
     candidateLabels: ["Chromium"],
-    mode: "dynamic-port",
+    mode: "automatic-port",
     lastError: "browser unavailable",
   };
   const failed = buildBrowserStatusMessage();
