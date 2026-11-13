@@ -29,7 +29,7 @@ jobs:
       - name: Run zizmor 🌈
         run: uvx "zizmor@${ZIZMOR_VERSION}" --format=sarif . > results.sarif
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
