@@ -35,6 +35,14 @@ export interface UsageMetric {
   currency?: string;
 }
 
+export interface UsageAllowance {
+  kind: "included";
+  scope: { kind: "models"; modelIds: string[] };
+  coverage: "complete" | "partial";
+  bucketIds: string[];
+  authBinding: "runtime" | "unbound";
+}
+
 export interface UsageReport {
   providerId: string;
   providerName: string;
@@ -42,6 +50,7 @@ export interface UsageReport {
   source: string;
   semantics: UsageSemantics;
   accountLabel?: string;
+  allowance?: UsageAllowance;
   buckets: UsageBucket[];
   metrics: UsageMetric[];
   notes?: string[];

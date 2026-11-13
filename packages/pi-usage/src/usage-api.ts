@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { usageAdapters } from "./query.js";
 import type { UsageReport } from "./types.js";
 import type {
+  UsageAllowanceV1,
   UsageApi,
   UsageApiCallbacks,
   UsageBucketV1,
@@ -384,6 +385,60 @@ function strings(value: unknown): string[] {
   return Array.from(value, text);
 }
 
+function copyAllowance(value: UsageAllowanceV1, buckets: UsageBucketV1[]): UsageAllowanceV1 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid usage allowance metadata.");
+  const { kind, scope, coverage, bucketIds: rawBucketIds, authBinding } = value;
+  if (
+    kind !== "included" ||
+    !scope ||
+    typeof scope !== "object" ||
+    Array.isArray(scope) ||
+    !["complete", "partial"].includes(coverage) ||
+    !["runtime", "unbound"].includes(authBinding)
+  )
+    throw new Error("Invalid usage allowance metadata.");
+  const { kind: scopeKind, modelIds: rawModelIds } = scope;
+  if (scopeKind !== "models") throw new Error("Invalid usage allowance scope.");
+  const identifiers = (input: unknown): string[] => {
+    const items = strings(input);
+    if (
+      !items.length ||
+      items.length > 128 ||
+      new Set(items).size !== items.length ||
+      items.some((item) => !item.trim() || item.length > 512)
+    )
+      throw new Error("Invalid usage allowance identifiers.");
+    return items;
+  };
+  const modelIds = identifiers(rawModelIds);
+  const bucketIds = identifiers(rawBucketIds);
+  for (const id of bucketIds) {
+    const matches = buckets.filter((bucket) => bucket.id === id);
+    const bucket = matches[0];
+    if (
+      matches.length !== 1 ||
+      !bucket ||
+      bucket.unit !== "percent" ||
+      bucket.used === undefined ||
+      bucket.remaining === undefined ||
+      bucket.used < 0 ||
+      bucket.used > 100 ||
+      bucket.remaining < 0 ||
+      bucket.remaining > 100 ||
+      Math.abs(bucket.used + bucket.remaining - 100) > 1e-9 ||
+      (bucket.limit !== undefined && bucket.limit !== 100)
+    )
+      throw new Error("Invalid usage allowance bucket.");
+  }
+  return {
+    kind: "included",
+    scope: { kind: "models", modelIds },
+    coverage,
+    bucketIds,
+    authBinding,
+  };
+}
+
 function copyReport(report: UsageReportV1, resetMultiplier: number): UsageReportV1 {
   const kind = report.semantics.kind;
   if (!["consumer-subscription", "api-key", "project"].includes(kind)) throw new Error("Invalid usage semantics.");
@@ -418,6 +473,7 @@ function copyReport(report: UsageReportV1, resetMultiplier: number): UsageReport
     }),
   };
   if (!validProvider(result.providerId)) throw new Error("Invalid usage report provider.");
+  if (report.allowance !== undefined) result.allowance = copyAllowance(report.allowance, result.buckets);
   if (report.accountLabel !== undefined) result.accountLabel = text(report.accountLabel);
   if (report.notes !== undefined) result.notes = strings(report.notes);
   return result;

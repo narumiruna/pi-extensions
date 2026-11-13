@@ -80,67 +80,79 @@ export function createAccountActivation(
     // Reads can wait behind refreshes; only the newest explicit request may publish its selection.
     const generation = (owner.activationRequests.get(providerId) ?? 0) + 1;
     owner.activationRequests.set(providerId, generation);
-    let selectionRevision = owner.selectionRevisions.get(providerId) ?? 0;
-    const isRequestCurrent = () =>
-      owner.activationRequests.get(providerId) === generation &&
-      (owner.selectionRevisions.get(providerId) ?? 0) === selectionRevision;
-    const unavailable = (): AccountActivationResult | undefined => {
-      if (!isOwnerCurrent(owner) || owner.sessionId !== owner.sessionManager.getSessionId())
-        return error("session_unavailable");
-      if (request.signal?.aborted) return error("cancelled");
-      if (!isRequestCurrent()) return error("activation_superseded");
-    };
-    const activationSignal = AbortSignal.any([owner.signal, ...(request.signal ? [request.signal] : [])]);
-    await waitForActivation(owner.ready, activationSignal);
-    const staleAfterStartup = unavailable();
-    if (staleAfterStartup) return staleAfterStartup;
-    if (request.account !== null) {
+    let settle!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    owner.activationTasks ??= new Map();
+    const tasks = owner.activationTasks;
+    tasks.set(providerId, pending);
+    try {
+      let selectionRevision = owner.selectionRevisions.get(providerId) ?? 0;
+      const isRequestCurrent = () =>
+        owner.activationRequests.get(providerId) === generation &&
+        (owner.selectionRevisions.get(providerId) ?? 0) === selectionRevision;
+      const unavailable = (): AccountActivationResult | undefined => {
+        if (!isOwnerCurrent(owner) || owner.sessionId !== owner.sessionManager.getSessionId())
+          return error("session_unavailable");
+        if (request.signal?.aborted) return error("cancelled");
+        if (!isRequestCurrent()) return error("activation_superseded");
+      };
+      const activationSignal = AbortSignal.any([owner.signal, ...(request.signal ? [request.signal] : [])]);
+      await waitForActivation(owner.ready, activationSignal);
+      const staleAfterStartup = unavailable();
+      if (staleAfterStartup) return staleAfterStartup;
+      if (request.account !== null) {
+        try {
+          const data = await store.readAsync(
+            AbortSignal.any([owner.signal, ...(request.signal ? [request.signal] : [])]),
+          );
+          const staleAfterRead = unavailable();
+          if (staleAfterRead) return staleAfterRead;
+          if (!getOwnCredential(data.providers[providerId]?.accounts ?? {}, request.account))
+            return error("account_not_found");
+        } catch {
+          return unavailable() ?? error("store_unavailable");
+        }
+      }
       try {
-        const data = await store.readAsync(
-          AbortSignal.any([owner.signal, ...(request.signal ? [request.signal] : [])]),
-        );
-        const staleAfterRead = unavailable();
-        if (staleAfterRead) return staleAfterRead;
-        if (!getOwnCredential(data.providers[providerId]?.accounts ?? {}, request.account))
-          return error("account_not_found");
+        if (!persistSelection(owner, providerId, request.account, isRequestCurrent))
+          return unavailable() ?? error("session_unavailable");
       } catch {
         return unavailable() ?? error("store_unavailable");
       }
-    }
-    try {
-      if (!persistSelection(owner, providerId, request.account, isRequestCurrent))
-        return unavailable() ?? error("session_unavailable");
-    } catch {
-      return unavailable() ?? error("store_unavailable");
-    }
-    selectionRevision = owner.selectionRevisions.get(providerId) ?? 0;
-    let task = syncProvider(providerId, owner.context, owner, request.signal);
-    let result: EnsureActiveProviderAuthResult;
-    try {
-      // Routine model/turn syncs may replace this task without changing the selection.
-      while (true) {
-        const settled = await waitForActivation(task, activationSignal);
-        const staleAfterSync = unavailable();
-        if (staleAfterSync) return staleAfterSync;
-        if (!settled) return error("activation_failed");
-        result = settled;
-        const latest = owner.syncTasks.get(providerId);
-        if (!latest || latest === task) break;
-        task = latest;
+      selectionRevision = owner.selectionRevisions.get(providerId) ?? 0;
+      let task = syncProvider(providerId, owner.context, owner, request.signal);
+      let result: EnsureActiveProviderAuthResult;
+      try {
+        // Routine model/turn syncs may replace this task without changing the selection.
+        while (true) {
+          const settled = await waitForActivation(task, activationSignal);
+          const staleAfterSync = unavailable();
+          if (staleAfterSync) return staleAfterSync;
+          if (!settled) return error("activation_failed");
+          result = settled;
+          const latest = owner.syncTasks.get(providerId);
+          if (!latest || latest === task) break;
+          task = latest;
+        }
+      } catch {
+        return unavailable() ?? error("activation_failed");
       }
-    } catch {
-      return unavailable() ?? error("activation_failed");
-    }
 
-    if (result.status === "error") return error(result.code ?? "activation_failed");
-    if (result.status === "inactive") {
-      return request.account === null
-        ? { status: "inactive", providerId, accountName: null }
-        : error("activation_failed");
+      if (result.status === "error") return error(result.code ?? "activation_failed");
+      if (result.status === "inactive") {
+        return request.account === null
+          ? { status: "inactive", providerId, accountName: null }
+          : error("activation_failed");
+      }
+      if (result.accountName !== request.account) return error("activation_superseded");
+      if (request.model && !owner.coordinators.get(providerId)?.isModelAvailable(request.model))
+        return error("model_unavailable");
+      return { status: "active", providerId, accountName: result.accountName };
+    } finally {
+      if (tasks.get(providerId) === pending) tasks.delete(providerId);
+      settle();
     }
-    if (result.accountName !== request.account) return error("activation_superseded");
-    if (request.model && !owner.coordinators.get(providerId)?.isModelAvailable(request.model))
-      return error("model_unavailable");
-    return { status: "active", providerId, accountName: result.accountName };
   };
 }

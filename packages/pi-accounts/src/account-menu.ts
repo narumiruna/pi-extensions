@@ -1,6 +1,14 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
-import { type AccountStore, defineOwnMap, getOwnCredential, type StoredCredential } from "./account-store.js";
+import {
+  ACCOUNTS_FILE,
+  type AccountStore,
+  defineOwnMap,
+  getOwnCredential,
+  type StoredCredential,
+} from "./account-store.js";
+import { type FailoverSettings, readFailoverSettings } from "./failover-settings.js";
 import { type AccountProviderAdapter, type AccountProviderId, SUPPORTED_PROVIDER_IDS } from "./oauth.js";
 import type { ProviderAccountSelections } from "./session-selection.js";
 
@@ -33,6 +41,11 @@ type AccountMenuHandlers = {
   remove(adapter: AccountProviderAdapter, name: string, signal: AbortSignal, isCurrent: () => boolean): Promise<void>;
 };
 
+type AccountsMenuState = {
+  changed(providerId: string): Promise<void>;
+  status(providerId: string): string;
+};
+
 type ProviderMenuState = {
   id: AccountProviderId;
   adapter: AccountProviderAdapter;
@@ -40,6 +53,7 @@ type ProviderMenuState = {
   defaultAccount: string | undefined;
   selectionInvalid: boolean;
   accounts: Record<string, StoredCredential>;
+  failover: { settings: FailoverSettings; error?: string };
 };
 
 export async function showAccountsMenu(
@@ -49,6 +63,7 @@ export async function showAccountsMenu(
   session: AccountMenuSession,
   handlers: AccountMenuHandlers,
   owner: AccountMenuOwner,
+  menuState?: AccountsMenuState,
 ): Promise<void> {
   if (!ctx.hasUI) {
     ctx.ui.notify("/accounts requires interactive UI (TUI or RPC mode).", "error");
@@ -71,11 +86,18 @@ export async function showAccountsMenu(
     | "switch-accounts"
     | "default-providers"
     | "default-accounts"
+    | "settings-providers"
+    | "status"
+    | "help"
     | "remove";
   type Action =
     | "default-route"
     | "default-provider"
     | "default-account"
+    | "settings-route"
+    | "settings-provider"
+    | "status-route"
+    | "help-route"
     | "login-route"
     | "api-key-route"
     | "login-provider"
@@ -128,6 +150,14 @@ export async function showAccountsMenu(
               description: "For new sessions only; keeps this session unchanged",
               action: "default-route",
             },
+            {
+              id: "settings",
+              label: "Settings",
+              description: "Provider-local usage failover",
+              action: "settings-route",
+            },
+            { id: "status", label: "Status", action: "status-route" },
+            { id: "help", label: "Help", action: "help-route" },
           ],
           hint: "close",
         };
@@ -178,8 +208,62 @@ export async function showAccountsMenu(
           hint: "back",
         };
       },
-      // One scoped preference uses the existing action picker rather than a separate Settings
-      // manager; current-session status stays in the main summary. No custom key handling.
+      "settings-providers": ({ state }) => ({
+        kind: "actions",
+        title: "Account Settings: select provider",
+        lines: ["User-wide failover policy. Startup defaults and current selections are unchanged."],
+        items: sortedProviderStates(state.states).map((provider) => ({
+          id: provider.id,
+          label: provider.adapter.displayName,
+          description: provider.failover.error
+            ? "Invalid policy; manual repair required"
+            : provider.failover.settings.enabled
+              ? "Failover enabled"
+              : "Failover disabled",
+          action: "settings-provider",
+        })),
+        hint: "back",
+      }),
+      status: ({ state }) => ({
+        kind: "detail",
+        title: "Account Status",
+        lines: [
+          `Effective provider: ${(state.currentProviderId ? state.states.get(state.currentProviderId)?.adapter.displayName : undefined) ?? ctx.model?.provider ?? "none"}`,
+          ...(session.environmentAccount !== undefined || session.environmentError
+            ? ["PI_ACCOUNT is set: automatic failover is disabled. Unset it and restart Pi to enable switching."]
+            : []),
+          ...sortedProviderStates(state.states).flatMap((provider) => {
+            const policy = provider.failover.settings;
+            return [
+              "",
+              `${provider.adapter.displayName}: ${provider.selectionInvalid ? "recovery required" : (provider.active ?? "Pi built-in login")}`,
+              `Failover: ${policy.enabled ? "enabled" : "disabled"}; threshold: ${policy.minRemainingPercent}%`,
+              `Backups (in order): ${policy.accounts.length ? policy.accounts.join(" → ") : "none"}`,
+              ...(provider.failover.error ? [provider.failover.error] : []),
+              sanitizeTerminalText(
+                menuState?.status(provider.id) ??
+                  "No failover decision recorded. Automatic switching requires fresh, verified, applicable usage evidence.",
+              ),
+            ];
+          }),
+        ].map(sanitizeTerminalText),
+        hint: "back",
+      }),
+      help: () => ({
+        kind: "detail",
+        title: "Accounts Help",
+        lines: [
+          "Switch accounts for this session, add or remove saved accounts, or set startup defaults for new sessions.",
+          "Settings configures optional provider-local usage failover. Add ordered backups before enabling it.",
+          "Only fresh, verified, applicable quota evidence can authorize switching. Errors and unavailable usage do not authorize switching.",
+          "A compatible usage service is optional. PI_ACCOUNT prevents automatic switching. Failover does not enable paid usage.",
+          `Manual settings: ${sanitizeTerminalText(join(getAgentDir(), ACCOUNTS_FILE))}`,
+          "Edit providers.<provider-id>.fallback with enabled (boolean), accounts (ordered exact saved names), and minRemainingPercent (default 5; finite, 0 inclusive to 100 exclusive).",
+          "The reserved default target and duplicate names are not allowed. Repair invalid policy manually; credentials remain available.",
+          "UI changes save immediately; Back does not undo them. After manual edits, run /reload. Interactive Settings require TUI; RPC supports this menu, Status, Help, and manual settings instructions.",
+        ],
+        hint: "back",
+      }),
       "default-providers": ({ state }) => ({
         kind: "actions",
         title: "Default accounts for new sessions",
@@ -232,6 +316,25 @@ export async function showAccountsMenu(
       }),
     },
     actions: {
+      "settings-route": async () => ({ kind: "to", screen: "settings-providers" }),
+      "status-route": async () => ({ kind: "to", screen: "status" }),
+      "help-route": async () => ({ kind: "to", screen: "help" }),
+      "settings-provider": async ({ itemId, signal }) => {
+        if (!isAccountProviderId(itemId)) return { kind: "rejected" };
+        const isCurrent = () => owner.isCurrent() && !signal.aborted;
+        const { showFailoverSettings } = await import("./failover-settings-ui.js");
+        if (!isCurrent()) return { kind: "close" };
+        const reason = await showFailoverSettings(
+          ctx,
+          store,
+          itemId,
+          requireAdapter(adapters, itemId).displayName,
+          { signal, isCurrent },
+          menuState?.changed,
+        );
+        if (!isCurrent()) return { kind: "close" };
+        return reason === "back" ? { kind: "stay" } : { kind: "close" };
+      },
       "default-route": async () => ({ kind: "to", screen: "default-providers" }),
       "default-provider": async ({ itemId }) => {
         if (!isAccountProviderId(itemId)) return { kind: "rejected" };
@@ -377,6 +480,7 @@ async function readProviderMenuStates(
         session.environmentError !== undefined ||
         (active !== undefined && !getOwnCredential(state.accounts, active)),
       accounts: state.accounts,
+      failover: readFailoverSettings(state),
     });
   }
   return states;

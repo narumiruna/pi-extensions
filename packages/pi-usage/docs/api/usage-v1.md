@@ -133,9 +133,18 @@ type UsageReportV1 = {
     label: string;
   };
   accountLabel?: string;
+  allowance?: UsageAllowanceV1;
   buckets: UsageBucketV1[];
   metrics: UsageMetricV1[];
   notes?: string[];
+};
+
+type UsageAllowanceV1 = {
+  kind: "included";
+  scope: { kind: "models"; modelIds: string[] };
+  coverage: "complete" | "partial";
+  bucketIds: string[];
+  authBinding: "runtime" | "unbound";
 };
 
 type UsageUnitV1 = "percent" | "usd" | "currency" | "count";
@@ -167,6 +176,21 @@ type UsageMetricV1 = {
 `UsageReportV1` follows the normalized report fields from `src/types.ts`, without importing that internal module. All protocol timestamps are Unix epoch milliseconds. Internal bucket reset times use seconds; the API converts `resetsAt` to milliseconds on a detached copy. Numeric measurements must be finite. Omitted measurements mean unknown, not zero; an absent limit must not be interpreted as unlimited. Currency codes belong to individual metrics. Consumers must preserve provider semantics and must not combine unrelated buckets or infer token totals from percentages.
 
 The outer `source` states how the request was satisfied. `report.source` identifies the provider data source. `providerId` must agree with `report.providerId` and the accepted provider. `capturedAt` is the local report capture time, not a guarantee that the provider's accounting is current. `expiresAt` is the service's cache validity deadline, not a quota reset time. A result is no longer fresh when `Date.now() >= expiresAt`.
+
+### Optional included allowance evidence
+
+`allowance` describes included plan allowance, not a hard request limit or a billing instruction. It is optional. Older reports without it remain valid but provide no machine-readable allowance decision evidence. Existing `modelKeys`, bucket labels, `groupId`, account labels, and provider capability measurements remain display or discovery data; they do not establish exact applicability or authentication identity.
+
+- `kind: "included"` excludes purchased credits, balances, extra spending, and on-demand caps. Low included allowance can coexist with paid usage. Consumers must not claim that requests are impossible or enable billing from this data.
+- `scope.kind: "models"` applies only to the exact raw model IDs in `modelIds`, under `report.providerId`. It is not a prefix, alias, name match, or provider-wide claim.
+- `bucketIds` identifies confirmed applicable percentage constraints. Each ID must refer to exactly one report bucket with `unit: "percent"`, finite `used` and `remaining` values from 0 through 100, their sum equal to 100 within `1e-9`, and an absent or 100-valued `limit`. Model and bucket ID arrays must each contain 1 through 128 unique, nonblank strings of at most 512 characters. Unreferenced buckets are not confirmed constraints for this scope.
+- `coverage: "complete"` means all known included-allowance constraints applicable to this exact scope are represented. `"partial"` means other constraints are unknown. A confirmed low constraint can establish low included allowance; adequate allowance requires complete coverage. Consumers must not average independent windows or treat an omitted constraint as unlimited.
+- `authBinding: "runtime"` means the read used the effective inference authentication for this scope and was revalidated before API publication. It does not identify a named or default account. The consumer must associate the fresh result with its own verified effective authentication and selection generation.
+- `authBinding: "unbound"` explicitly means that the source cannot establish this association. It must not authorize an account decision, regardless of the numbers or coverage.
+
+Consumers that use this metadata must validate the full object and referenced buckets. Unknown additional fields remain compatible; invalid known fields must not authorize a decision. A consumer must require a fresh `source: "refresh"` result for its exact session, provider, selected model, and effective authentication. It must also reject stale, expired, missing, contradictory, or otherwise unproven measurements, including a quota reset that has already passed. `capturedAt`, `expiresAt`, and referenced bucket `resetsAt` remain milliseconds; metadata introduces no additional timestamps.
+
+The current implementation emits runtime-bound evidence only for the exact legacy Codex path in the [Codex evidence audit](../providers/openai-codex.md#included-allowance-evidence). Native OpenAI companion metadata is explicitly `unbound`, even when app registration matches. Companion reports with rounded counters or identifiers that cannot satisfy this optional metadata contract remain valid without the metadata. Other provider/auth/model paths remain display-only. The protocol adds no threshold, account-choice policy, refresh loop, account selection, or new provider support.
 
 ### Cache reads
 
@@ -336,6 +360,8 @@ Named verification coverage lives under `packages/pi-usage/test/`:
 | Test file | Evidence |
 | --- | --- |
 | `usage-api.test.ts` | Payload validation, capabilities, synchronous offers, scoped lifecycle, deadlines, notifications, and report projection |
+| `codex-allowance.test.ts` | Exact included-allowance scope and runtime binding, partial coverage, unproven paths, companion exclusion, malformed metadata, detached projection, millisecond timestamps, and unchanged older clients |
+| `usage-allowance-runtime.test.ts` | Fresh runtime-bound evidence through the extension factory, unchanged network-free cache misses, post-transport auth/model rejection, and no credential or account-ID disclosure |
 | `core.test.ts` | Exact cache expiry, bounded storage, metadata, post-mutation notifications, and synchronous reentry |
 | `usage-api-runtime.test.ts` | Guarded refresh, backoff, no-network cache reads, opt-in preservation, target selection rejection, settings ordering, and all four modes |
 | `usage-api-lifecycle.test.ts` | Cancellation and session/model/auth/target/policy replacement across asynchronous phases |

@@ -8,7 +8,7 @@ import { abortError, errorMessage, fingerprintResolvedAuth, redactUsageError } f
 import { fallbackOAuthCredentialCandidates, type OAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { type AnthropicUsagePayload, normalizeAnthropicUsagePayload } from "./providers/anthropic.js";
 import { normalizeBasetenBillingUsagePayload } from "./providers/baseten.js";
-import { normalizeCodexBackendPayload } from "./providers/codex.js";
+import { codexAllowanceBinding, normalizeCodexBackendPayload } from "./providers/codex.js";
 import { commandCodeOrgId, normalizeCommandCodeUsagePayload } from "./providers/command-code.js";
 import { normalizeDeepSeekBalancePayload } from "./providers/deepseek.js";
 import { createFireworksAdapter } from "./providers/fireworks.js";
@@ -147,8 +147,21 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
       label: "ChatGPT subscription limits",
     },
     async query(auth, signal, timeoutMs) {
-      const payload = await fetchProviderJson(CODEX_USAGE_URL, auth, signal, timeoutMs, "Codex usage endpoint");
-      return normalizeCodexBackendPayload(payload as CodexBackendPayload, Date.now());
+      const binding = codexAllowanceBinding(auth);
+      const requestAuth = binding
+        ? {
+            ...auth,
+            headers: {
+              ...Object.fromEntries(
+                Object.entries(auth.headers).filter(([name]) => name.toLowerCase() !== "chatgpt-account-id"),
+              ),
+              "chatgpt-account-id": binding.accountId,
+            },
+            secrets: [...auth.secrets, binding.accountId],
+          }
+        : auth;
+      const payload = await fetchProviderJson(CODEX_USAGE_URL, requestAuth, signal, timeoutMs, "Codex usage endpoint");
+      return normalizeCodexBackendPayload(payload as CodexBackendPayload, Date.now(), binding?.modelId);
     },
   },
   {

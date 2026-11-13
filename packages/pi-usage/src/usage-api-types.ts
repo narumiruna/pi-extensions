@@ -53,6 +53,13 @@ export type UsageMetricV1 = {
   unit?: UsageUnitV1;
   currency?: string;
 };
+export type UsageAllowanceV1 = {
+  kind: "included";
+  scope: { kind: "models"; modelIds: string[] };
+  coverage: "complete" | "partial";
+  bucketIds: string[];
+  authBinding: "runtime" | "unbound";
+};
 export type UsageReportV1 = {
   providerId: string;
   providerName: string;
@@ -60,6 +67,7 @@ export type UsageReportV1 = {
   source: string;
   semantics: { kind: "consumer-subscription" | "api-key" | "project"; label: string };
   accountLabel?: string;
+  allowance?: UsageAllowanceV1;
   buckets: UsageBucketV1[];
   metrics: UsageMetricV1[];
   notes?: string[];

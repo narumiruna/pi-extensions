@@ -98,7 +98,7 @@ When `PI_ACCOUNT` is set (even to an invalid value), activation requests cannot 
 
 ## Selection notification: `accounts:selection-committed:v1`
 
-After an explicit selection is persisted for a session, the owner emits this notification:
+After a manual, protocol, or opted-in automatic selection is persisted for a session, the owner emits this notification:
 
 ```ts
 pi.events.on("accounts:selection-committed:v1", (event) => {
@@ -112,6 +112,6 @@ The payload contains only the exact `session` object, its `sessionId`, and `prov
 
 Without a compatible responder, neither channel replies. Bound each wait and abort unneeded requests; a timeout is **not** proof that activation did not happen. Never start dependent work without a confirmed result. Late replies must not authorize work in a replacement session. Only one account infrastructure responder should own these channels; a first reply is not proof of exclusivity, so treat detected duplicate replies as a conflict. A callback that throws is ignored by this responder, but consumers should handle callbacks safely.
 
-These channels expose identifiers but no credential material. They do not automatically rotate accounts, fail over, route requests, or report usage. To wait for verified OAuth auth and collect credential material, use [OAuth Credential Readiness v1](oauth-credential-readiness-v1.md) and [OAuth Credential Source v1](oauth-credential-source-v1.md). The latter deliberately offers secrets and requires provider-specific verification.
+These channels expose identifiers but no credential material. The channels do not themselves rotate accounts, fail over, route requests, or report usage. The owner's separately configured usage-driven policy can commit automatic selections and candidate restoration; the same notification remains an invalidation hint, not proof of successful activation. To wait for verified OAuth auth and collect credential material, use [OAuth Credential Readiness v1](oauth-credential-readiness-v1.md) and [OAuth Credential Source v1](oauth-credential-source-v1.md). The latter deliberately offers secrets and requires provider-specific verification.
 
 Pi extensions already share process permissions, including access to user files and memory: install only trusted extensions. Unknown channel versions have no implied compatibility. Pi removes listeners of a stale extension runtime, while the responder invalidates session-owned state on replacement and shutdown.

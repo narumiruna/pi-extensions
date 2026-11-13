@@ -88,13 +88,38 @@ export async function queryOpenAICompanionUsage(
       planBuckets.push(normalizeWindow(window, `plan:${position}`, "chatgpt-plan", "Plan limits"));
   }
   if (planBuckets.length === 0) throw new Error("ChatGPT plan usage returned no displayable windows.");
+  const buckets = [...planBuckets, ...app.buckets];
+  // Display accepts rounded counters. Optional metadata must not turn those
+  // previously valid reports (or a custom model ID) into an API projection error.
+  const evidenceCompatible =
+    auth.model.id.length <= 512 &&
+    auth.model.id.trim().length > 0 &&
+    buckets.length <= 128 &&
+    new Set(buckets.map((bucket) => bucket.id)).size === buckets.length &&
+    buckets.every(
+      (bucket) =>
+        bucket.used !== undefined &&
+        bucket.remaining !== undefined &&
+        Math.abs(bucket.used + bucket.remaining - 100) <= 1e-9,
+    );
   return {
     providerId: "openai",
     providerName: "OpenAI",
     capturedAt: Date.now(),
     source: "openai-chatgpt-companion",
     semantics: { kind: "consumer-subscription", label: "ChatGPT plan and app limits (experimental companion source)" },
-    buckets: [...planBuckets, ...app.buckets],
+    buckets,
+    ...(evidenceCompatible
+      ? {
+          allowance: {
+            kind: "included" as const,
+            scope: { kind: "models" as const, modelIds: [auth.model.id] },
+            coverage: "partial" as const,
+            bucketIds: buckets.map((bucket) => bucket.id),
+            authBinding: "unbound" as const,
+          },
+        }
+      : {}),
     metrics:
       app.allowance === undefined
         ? []

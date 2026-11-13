@@ -146,6 +146,8 @@ Provider-specific unsupported behavior and verification limits are documented in
 Other extensions can use the [read-only usage API v1](./docs/api/usage-v1.md) through `pi.events` to query reports and capabilities or receive invalidation notifications, without importing this extension.
 Use `refresh: true` to obtain a report: cache-only queries currently return `cache-miss` because Pi cannot prove effective runtime auth identity without potentially doing network work. No client helper is exported.
 
+Optional [included-allowance evidence](./docs/providers/openai-codex.md#included-allowance-evidence) currently covers only the exact legacy Codex `gpt-5.6-sol` runtime path. Older reports and other paths remain non-actionable; native OpenAI companion data is explicitly unbound. Low included allowance is not a hard request limit: paid credits can remain. This extension does not choose accounts or enable billing.
+
 ## 🗂️ Package layout
 
 ```text

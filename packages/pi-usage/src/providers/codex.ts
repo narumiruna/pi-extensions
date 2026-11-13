@@ -1,7 +1,49 @@
 import { sanitizeDisplayText } from "../core.js";
-import type { CodexBackendPayload, UsageBucket, UsageMetric, UsageReport } from "../types.js";
+import type {
+  CodexBackendPayload,
+  ResolvedUsageAuth,
+  UsageAllowance,
+  UsageBucket,
+  UsageMetric,
+  UsageReport,
+} from "../types.js";
 
-export function normalizeCodexBackendPayload(payload: CodexBackendPayload, capturedAt: number): UsageReport {
+// Exact ordinary-allowance path, not a model-name heuristic. See the provider guide's evidence audit.
+const ALLOWANCE_MODEL_ID = "gpt-5.6-sol";
+
+/** Match Pi's Codex transport: it derives both final auth headers from apiKey, not model headers. */
+export function codexAllowanceBinding(auth: ResolvedUsageAuth): { modelId: string; accountId: string } | undefined {
+  if (
+    auth.model.provider !== "openai-codex" ||
+    auth.model.id !== ALLOWANCE_MODEL_ID ||
+    auth.model.api !== "openai-codex-responses" ||
+    !auth.apiKey
+  )
+    return;
+  try {
+    if (new URL(auth.model.baseUrl).origin !== "https://chatgpt.com") return;
+    if (auth.effectiveBaseUrl && new URL(auth.effectiveBaseUrl).origin !== "https://chatgpt.com") return;
+    const authorization = Object.entries(auth.headers).filter(([name]) => name.toLowerCase() === "authorization");
+    if (authorization.length !== 1 || authorization[0]?.[1] !== `Bearer ${auth.apiKey}`) return;
+    const parts = auth.apiKey.split(".");
+    if (parts.length !== 3 || !parts[1]) return;
+    const payload = asObject(JSON.parse(atob(parts[1])));
+    const claims = asObject(payload?.["https://api.openai.com/auth"]);
+    const accountId = claims?.chatgpt_account_id;
+    if (typeof accountId !== "string" || !/^[A-Za-z0-9._~-]{1,256}$/u.test(accountId)) return;
+    const accounts = Object.entries(auth.headers).filter(([name]) => name.toLowerCase() === "chatgpt-account-id");
+    if (accounts.length > 1 || (accounts.length === 1 && accounts[0]?.[1] !== accountId)) return;
+    return { modelId: ALLOWANCE_MODEL_ID, accountId };
+  } catch {
+    return;
+  }
+}
+
+export function normalizeCodexBackendPayload(
+  payload: CodexBackendPayload,
+  capturedAt: number,
+  runtimeModelId?: string,
+): UsageReport {
   const buckets: UsageBucket[] = [];
   normalizeRateLimitGroup(buckets, "codex", "Codex", payload.rate_limit, false);
 
@@ -48,6 +90,7 @@ export function normalizeCodexBackendPayload(payload: CodexBackendPayload, captu
   }
 
   const planType = asString(payload.plan_type);
+  const allowance = normalizeAllowance(payload, capturedAt, runtimeModelId, buckets);
   return {
     providerId: "openai-codex",
     providerName: "OpenAI Codex",
@@ -59,7 +102,68 @@ export function normalizeCodexBackendPayload(payload: CodexBackendPayload, captu
     },
     buckets,
     metrics,
+    ...(allowance ? { allowance } : {}),
     ...(planType ? { notes: [`Plan: ${planType}`] } : {}),
+  };
+}
+
+function normalizeAllowance(
+  payload: CodexBackendPayload,
+  capturedAt: number,
+  runtimeModelId: string | undefined,
+  buckets: UsageBucket[],
+): UsageAllowance | undefined {
+  if (runtimeModelId !== ALLOWANCE_MODEL_ID) return;
+  const details = asObject(payload.rate_limit);
+  if (!details) return;
+  const bucketIds: string[] = [];
+  // Null explicitly means no constraint. Missing or malformed windows cannot prove full coverage.
+  let complete = Object.keys(details).every((key) =>
+    ["allowed", "limit_reached", "primary_window", "secondary_window"].includes(key),
+  );
+  for (const position of ["primary", "secondary"] as const) {
+    const window = details[`${position}_window`];
+    if (window === null) continue;
+    const value = asObject(window);
+    const used = value?.used_percent;
+    const remaining = value?.remaining_percent;
+    const seconds = value?.limit_window_seconds;
+    const reset = value?.reset_at;
+    if (
+      typeof used !== "number" ||
+      !Number.isFinite(used) ||
+      used < 0 ||
+      used > 100 ||
+      (remaining !== undefined &&
+        (typeof remaining !== "number" || !Number.isFinite(remaining) || Math.abs(used + remaining - 100) > 1e-9)) ||
+      typeof seconds !== "number" ||
+      !Number.isSafeInteger(seconds) ||
+      seconds <= 0 ||
+      typeof reset !== "number" ||
+      !Number.isSafeInteger(reset) ||
+      reset <= capturedAt / 1_000 ||
+      reset > 8_640_000_000_000 ||
+      buckets.filter((bucket) => bucket.id === `codex:${position}`).length !== 1
+    ) {
+      complete = false;
+      continue;
+    }
+    bucketIds.push(`codex:${position}`);
+  }
+  if (!bucketIds.length) return;
+  // Additional metered features are opaque. They may constrain this model; do not guess from labels.
+  if (
+    payload.additional_rate_limits !== null &&
+    payload.additional_rate_limits !== undefined &&
+    (!Array.isArray(payload.additional_rate_limits) || payload.additional_rate_limits.length > 0)
+  )
+    complete = false;
+  return {
+    kind: "included",
+    scope: { kind: "models", modelIds: [ALLOWANCE_MODEL_ID] },
+    coverage: complete ? "complete" : "partial",
+    bucketIds,
+    authBinding: "runtime",
   };
 }
 

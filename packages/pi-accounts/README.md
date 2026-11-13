@@ -19,6 +19,7 @@ Each Pi session keeps its own selection for every provider, and choosing `defaul
 - Selects an account—or Pi's default login—independently for each provider and Pi session, with an optional `PI_ACCOUNT` override for scripts and concurrent Pi processes.
 - Saves a default account for each provider to use in new sessions without changing existing sessions.
 - Restores session selections after resume or reload while allowing concurrent sessions to use different accounts.
+- Optionally switches to ordered backups when a compatible usage service proves low included allowance for the selected model.
 - Applies provider-specific credentials, endpoints, headers, and model availability through Pi's built-in providers.
 - Refreshes rotating credentials and verifies the effective authentication before reporting success.
 - Starts sessions without waiting for routine account selection or provider activation, while gating each provider's first use on verified authentication.
@@ -90,7 +91,7 @@ Background activation of other providers does not interrupt the active run.
 
 ## 💬 Commands
 
-Run `/accounts` to log in with OAuth, add an API key account, switch provider accounts for the current Pi session, set defaults for new sessions, or remove saved accounts in TUI or RPC mode.
+Run `/accounts` to log in with OAuth, add an API key account, switch provider accounts for the current Pi session, set defaults for new sessions, remove saved accounts, or inspect Settings, Status, and Help in TUI or RPC mode.
 Arguments are ignored for compatibility; print and JSON modes provide no account-manager output.
 Login uses Pi's native OAuth flow, including device codes and cancellation, with equivalent RPC dialogs.
 
@@ -103,6 +104,10 @@ Replacing an existing provider/account name or removing an account requires conf
 Removal returns the current session's affected selection to `default`, but other sessions using the removed shared credential fail closed until they choose another account or `default`; see [Security and privacy](#-security-and-privacy).
 
 ## ⚙️ Settings
+
+Optional usage-driven failover is **Off by default**. Open `/accounts` → **Settings** → provider to set its ordered backups and remaining-allowance threshold (default 5%). Settings save immediately; RPC reports the manual file path. Without a compatible usage service or an enabled policy, account behavior stays unchanged.
+
+The initial verified usage path is OpenAI Codex (legacy) `gpt-5.6-sol` with official runtime authentication; other models/providers and older usage reports remain non-actionable. Usage errors and HTTP 429 never trigger switching. Failover affects only the current session, never changes billing policy, and is disabled by `PI_ACCOUNT`. See [usage failover](./docs/usage-failover.md) for settings, evidence requirements, candidate activation and recovery, pacing, and live-verification limits.
 
 Open `/accounts` → **Set default account**, choose a provider, then select a saved account or **Pi built-in login**. Only providers with saved accounts appear.
 The picker shows the saved default and saves your selection immediately; leaving it before selecting changes nothing.
@@ -160,7 +165,7 @@ Named API key accounts use their saved key directly, without OAuth refresh or co
 It applies the returned API key, headers, and endpoint, then verifies the effective runtime state before reporting success.
 
 If refresh, conversion, provider overlay, or verification fails, the extension installs a non-secret failing runtime credential and aborts turns for that provider.
-It does not silently fall back to Pi's built-in login, an environment API key, or another named account.
+Authentication errors do not authorize fallback to Pi's built-in login, an environment API key, or another named account. Only explicitly enabled usage-driven failover can select a configured backup after verified low allowance; an unverified candidate cannot receive a model request.
 Other providers remain independent and usable.
 Selecting `default` removes the package-owned runtime override and restores the exact provider registration that existed before activation.
 Pi's built-in credentials are never deleted.
@@ -184,7 +189,7 @@ The protocols do not persist or log the offer, which contains neither the accoun
 Consumers must match its access token and provider metadata against freshly resolved runtime authentication.
 Without a compatible consumer, account activation works unchanged and no credential is requested.
 
-After an explicit session selection is persisted, the extension emits `accounts:selection-committed:v1` with the exact session object, session ID, and provider ID. Consumers can use it to invalidate account-derived state, then await credential readiness before querying the selected account. The notification contains no account name or credential. See [Named Account Protocols v1](./docs/api/accounts-v1.md).
+After a manual, protocol, or opted-in automatic session selection is persisted, the extension emits `accounts:selection-committed:v1` with the exact session object, session ID, and provider ID. Consumers can use it to invalidate account-derived state, then await credential readiness before querying the selected account. The notification contains no account name or credential. See [Named Account Protocols v1](./docs/api/accounts-v1.md).
 
 Pi extensions run with the user's process privileges; `pi.events` does not isolate installed extensions.
 Install only trusted extensions because any extension can read user files and process memory.
