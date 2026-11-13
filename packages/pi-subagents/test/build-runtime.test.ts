@@ -8,8 +8,9 @@ import {
   DefaultResourceLoader,
   initTheme,
   SettingsManager,
+  ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, KeybindingsManager, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, KeybindingsManager, setKeybindings, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterAll, describe, test } from "vitest";
 import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
@@ -25,6 +26,7 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "@narumitw/pi-tui-kit/editor-status-publisher",
     "@narumitw/pi-tui-kit/editor-status-view",
     "@narumitw/pi-tui-kit/editor-status-collection",
+    "@narumitw/pi-tui-kit/terminal-document",
   ],
   entries: {
     index: "src/index.ts",
@@ -201,6 +203,10 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
           [...(main?.tools.keys() ?? [])],
           ["subagent_spawn", "subagent_inspect", "subagent_cancel", "subagent_wait", "subagent_send"],
         );
+        for (const tool of main.tools.values()) {
+          assert.equal(typeof tool.definition.renderCall, "function");
+          assert.equal(typeof tool.definition.renderResult, "function");
+        }
         assert.deepEqual(
           Object.keys(
             (main?.tools.get("subagent_send")?.definition.parameters as { properties?: Record<string, unknown> })
@@ -263,7 +269,8 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
             );
             const render = () => stripVTControlCharacters(component.render(100).join("\n"));
             assert.deepEqual(actions, ["app.tools.expand"]);
-            assert.match(render(), /Subagent (?:job completion|message) \(ctrl\+o to expand\)/u);
+            assert.match(render(), /Subagent (?:job completion|message)/u);
+            assert.match(render(), /\(ctrl\+o to expand\)/u);
             assert.doesNotMatch(render(), /Private native child body/u);
 
             bindings.setUserBindings({ "app.tools.expand": ["ctrl+shift+o"] });
@@ -294,6 +301,82 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
         } finally {
           setKeybindings(previous);
         }
+      },
+    );
+  });
+
+  test("generated conversation rows render decoded outcomes through native Pi components", async ({ signal }) => {
+    await ensureFixture();
+    initTheme("dark", false);
+    await loaders.run(
+      () =>
+        new DefaultResourceLoader({
+          cwd: root,
+          agentDir,
+          settingsManager: SettingsManager.inMemory({}),
+          additionalExtensionPaths: [join(output, "index.ts")],
+        }),
+      signal,
+      (loader) => {
+        const loaded = loader.getExtensions();
+        assert.deepEqual(loaded.errors, []);
+        const main = loaded.extensions[0];
+        assert.ok(main);
+        const payload = {
+          jobId: "job_native",
+          state: "partial",
+          timedOut: false,
+          result: "# Native findings\n\n- Decoded result",
+          error: "Verification failed",
+          limitations: ["No live provider"],
+        };
+        const definition = main.tools.get("subagent_wait")?.definition;
+        assert.ok(definition?.renderResult);
+        const renderResult = definition.renderResult;
+        let resultRendered = false;
+        const row = new ToolExecutionComponent(
+          "subagent_wait",
+          "native_wait",
+          { jobId: payload.jobId },
+          undefined,
+          {
+            ...definition,
+            renderResult(...args) {
+              resultRendered = true;
+              return renderResult(...args);
+            },
+          },
+          { requestRender() {} } as TUI,
+          root,
+        );
+        row.updateResult({ content: [{ type: "text", text: '{"truncated' }], details: payload, isError: false });
+        assert.ok(resultRendered);
+        assert.match(stripVTControlCharacters(row.render(100).join("\n")), /job_native · partial/u);
+        row.setExpanded(true);
+        const expanded = stripVTControlCharacters(row.render(100).join("\n"));
+        assert.match(expanded, /Native findings/u);
+        assert.match(expanded, /Decoded result/u);
+        assert.match(expanded, /Verification failed/u);
+        assert.doesNotMatch(expanded, /truncated|\\n/u);
+        const renderer = main.messageRenderers.get("pi-subagents-completion");
+        assert.ok(renderer);
+        const notification = new CustomMessageComponent(
+          {
+            role: "custom",
+            customType: "pi-subagents-completion",
+            content: '{"truncated',
+            details: payload,
+            display: true,
+            timestamp: 0,
+          },
+          renderer,
+        );
+        assert.match(stripVTControlCharacters(notification.render(100).join("\n")), /job_native · partial/u);
+        notification.setExpanded(true);
+        const body = stripVTControlCharacters(notification.render(100).join("\n"));
+        assert.match(body, /Native findings/u);
+        assert.match(body, /Decoded result/u);
+        assert.doesNotMatch(body, /truncated|\\n/u);
       },
     );
   });
