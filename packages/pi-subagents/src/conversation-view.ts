@@ -10,20 +10,24 @@ export interface ConversationResult {
 
 export type JobPayload = Record<string, unknown> & { jobId: string; state: SubagentJobState };
 
-export function boundedView(render: (width: number) => string[]): Component {
+export function boundedView(render: (width: number) => string[], invalidate: () => void = () => {}): Component {
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];
       const columns = Math.floor(width);
       return render(columns).map((line) => truncateToWidth(line, columns, ""));
     },
-    // Styles are evaluated on every render; no themed content is cached.
-    invalidate() {},
+    invalidate,
   };
 }
 
 export function conversationView(children: Component[]): Component {
-  return boundedView((width) => children.flatMap((child) => child.render(width)));
+  return boundedView(
+    (width) => children.flatMap((child) => child.render(width)),
+    () => {
+      for (const child of children) child.invalidate();
+    },
+  );
 }
 
 function singleLine(text: string): string {
@@ -63,8 +67,10 @@ export function displayJson(theme: Theme, value: unknown): Component {
 
 export function displayMarkdown(theme: Theme, text: string, role: ThemeColor = "toolOutput"): Component {
   const safe = sanitizeTerminalDocument(text);
-  return boundedView((width) =>
-    new Markdown(safe, 0, 0, getMarkdownTheme(), { color: (value) => theme.fg(role, value) }).render(width),
+  const markdown = new Markdown(safe, 0, 0, getMarkdownTheme(), { color: (value) => theme.fg(role, value) });
+  return boundedView(
+    (width) => markdown.render(width),
+    () => markdown.invalidate(),
   );
 }
 

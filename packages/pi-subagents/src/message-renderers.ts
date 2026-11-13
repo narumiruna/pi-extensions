@@ -48,12 +48,17 @@ function legacyBrokerDetails(content: string): BrokerDetails | undefined {
 }
 
 function createMessageBox(children: Component[], outputPad: number, background: (text: string) => string): Component {
-  return boundedView((width) => {
-    const padding = Number.isFinite(outputPad) ? Math.max(0, Math.floor(outputPad)) : 0;
-    const box = new Box(Math.min(padding, Math.floor((width - 1) / 2)), 1, background);
-    for (const child of children) box.addChild(child);
-    return box.render(width);
-  });
+  return boundedView(
+    (width) => {
+      const padding = Number.isFinite(outputPad) ? Math.max(0, Math.floor(outputPad)) : 0;
+      const box = new Box(Math.min(padding, Math.floor((width - 1) / 2)), 1, background);
+      for (const child of children) box.addChild(child);
+      return box.render(width);
+    },
+    () => {
+      for (const child of children) child.invalidate();
+    },
+  );
 }
 
 export function registerMessageRenderers(pi: ExtensionAPI): void {

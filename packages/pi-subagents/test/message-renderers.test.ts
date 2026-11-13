@@ -6,7 +6,7 @@ import {
   type MessageRenderOptions,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
 import { createMockPi } from "../../../test/support.js";
 import { BROKER_MESSAGE_TYPE, COMPLETION_MESSAGE_TYPE, registerMessageRenderers } from "../src/message-renderers.js";
@@ -343,6 +343,38 @@ test("unknown broker formats remain generic without parsing embedded child text"
     assert.match(collapsed.text, /Subagent message/u);
     assert.doesNotMatch(collapsed.text, /req_fake|job_fake|needs reply|response received/u);
     assert.ok(rendered(BROKER_MESSAGE_TYPE, raw, details, true).text.includes(raw));
+  }
+});
+
+test("completion boxes retain Markdown caches and forward theme invalidation", () => {
+  const renderer = getRenderer(COMPLETION_MESSAGE_TYPE);
+  const { theme, fg } = createTheme();
+  const payload = { jobId: "job_a", state: "completed", result: "Body marker\n\n```ts\nconst count = 1;\n```" };
+  const message = { ...createMessage(COMPLETION_MESSAGE_TYPE, JSON.stringify(payload)), details: payload };
+  const before = JSON.stringify(message);
+  const modelBefore = JSON.stringify(convertToLlm([message]));
+  const render = vi.spyOn(Markdown.prototype, "render");
+  const invalidate = vi.spyOn(Markdown.prototype, "invalidate");
+  try {
+    fg.mockImplementation((role, text) => (role === "toolOutput" ? `\u001b[31m${text}` : text));
+    const view = renderer(message, { expanded: true, outputPad: 1, keyText: () => "", keyHint: () => "" }, theme);
+    assert.ok(view);
+    const first = view.render(100);
+    assert.deepEqual(view.render(100), first);
+    assert.equal(new Set(render.mock.contexts).size, 1);
+    assert.ok(first.join("\n").includes("\u001b[31mBody marker"));
+    fg.mockImplementation((role, text) => (role === "toolOutput" ? `\u001b[32m${text}` : text));
+    view.invalidate();
+    assert.equal(invalidate.mock.calls.length, 1);
+    const refreshed = view.render(100).join("\n");
+    assert.ok(refreshed.includes("\u001b[32mBody marker"));
+    assert.ok(!refreshed.includes("\u001b[31mBody marker"));
+    assert.equal(new Set(render.mock.contexts).size, 1);
+    assert.equal(JSON.stringify(message), before);
+    assert.equal(JSON.stringify(convertToLlm([message])), modelBefore);
+  } finally {
+    render.mockRestore();
+    invalidate.mockRestore();
   }
 });
 

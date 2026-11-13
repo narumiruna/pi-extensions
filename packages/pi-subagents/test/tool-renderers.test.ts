@@ -10,12 +10,13 @@ import {
   type Component,
   getKeybindings,
   KeybindingsManager,
+  Markdown,
   setKeybindings,
   stripTerminalSequences,
   type TUI,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockPi } from "../../../test/support.js";
 import { subagentToolRenderers } from "../src/tool-renderers.js";
 import { registerSubagentTools } from "../src/tools.js";
@@ -233,6 +234,30 @@ test("wait expansion decodes Markdown and preserves errors, limitations, and met
   assert.doesNotMatch(expanded.text, /\\n|"result"|to expand/u);
   assert.match(expanded.text, /"timedOut": false/u);
   assert.equal(JSON.stringify(value), before);
+});
+
+test("expanded wait results retain Markdown caches and forward invalidation", () => {
+  const render = vi.spyOn(Markdown.prototype, "render");
+  const invalidate = vi.spyOn(Markdown.prototype, "invalidate");
+  try {
+    const value = result({
+      jobId: "job_a",
+      state: "completed",
+      timedOut: false,
+      result: "Body marker\n\n```ts\nconst count = 1;\n```",
+    });
+    const { component } = resultView("wait", value, true);
+    const first = component.render(160);
+    assert.deepEqual(component.render(160), first);
+    assert.equal(new Set(render.mock.contexts).size, 1);
+    component.invalidate();
+    assert.equal(invalidate.mock.calls.length, 1);
+    assert.deepEqual(component.render(160), first);
+    assert.equal(new Set(render.mock.contexts).size, 1);
+  } finally {
+    render.mockRestore();
+    invalidate.mockRestore();
+  }
 });
 
 test("inspect shows counts and prioritizes failures instead of previewing JSON timestamps", () => {
