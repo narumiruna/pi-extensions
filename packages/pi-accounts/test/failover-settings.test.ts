@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { AccountStore, InMemoryAccountStorageBackend, type ProviderAccountsData } from "../src/account-store.js";
-import { type FailoverSettings, readFailoverSettings, saveFailoverSettings } from "../src/failover-settings.js";
+import {
+  type FailoverSettings,
+  readFailoverSettings,
+  saveFailoverSettings,
+  updateFailoverSettings,
+} from "../src/failover-settings.js";
 import { FileAccountStorageBackend, type StorageLockResult } from "../src/storage.js";
 
 const credential = { type: "api_key" as const, key: "fixture-only-secret" };
@@ -159,6 +164,105 @@ test("missing and cross-provider references are rejected; own-property names rem
   await saveFailoverSettings(store, "anthropic", { ...policy, accounts: names });
   assert.deepEqual(readFailoverSettings(await store.readProviderAsync("anthropic")).settings.accounts, names);
   await assert.rejects(saveFailoverSettings(store, "unsupported", defaults), /Unsupported/);
+});
+
+test.each(["disable", "keep-enabled"] as const)(
+  "two deleted backups permit %s and one-reference-at-a-time repair",
+  async (mode) => {
+    const store = await fixture();
+    await saveFailoverSettings(store, "anthropic", { ...policy, accounts: ["spare", "third"] });
+    await store.updateProvider("anthropic", (state) => ({
+      ...state,
+      accounts: { primary: credential },
+      futureProvider: "keep",
+      fallback: { ...(state.fallback as Record<string, unknown>), futurePolicy: { keep: true } },
+    }));
+    const before = await store.readProviderAsync("anthropic");
+    if (mode === "disable") {
+      await updateFailoverSettings(store, "anthropic", (settings) => ({ ...settings, enabled: false }));
+      assert.deepEqual(readFailoverSettings(await store.readProviderAsync("anthropic")).settings.accounts, [
+        "spare",
+        "third",
+      ]);
+    }
+    const first = await updateFailoverSettings(store, "anthropic", (settings) => ({
+      ...settings,
+      accounts: settings.accounts.filter((name) => name !== "spare"),
+    }));
+    assert.deepEqual(first, { enabled: mode === "keep-enabled", accounts: ["third"], minRemainingPercent: 5 });
+    await updateFailoverSettings(store, "anthropic", (settings) => ({ ...settings, enabled: false, accounts: [] }));
+    const after = await store.readProviderAsync("anthropic");
+    assert.deepEqual(readFailoverSettings(after).settings, defaults);
+    assert.deepEqual(after.accounts, before.accounts);
+    assert.equal(after.active, before.active);
+    assert.equal(after.futureProvider, "keep");
+    assert.deepEqual((after.fallback as Record<string, unknown>).futurePolicy, { keep: true });
+  },
+);
+
+test.each([false, true])("new missing references are rejected while enabled is %s", async (enabled) => {
+  const store = await fixture();
+  await saveFailoverSettings(store, "anthropic", { ...policy, enabled, accounts: ["spare"] });
+  await store.updateProvider("anthropic", (state) => ({ ...state, accounts: { primary: credential } }));
+  const before = await store.readAsync();
+  await assert.rejects(
+    saveFailoverSettings(store, "anthropic", { ...policy, enabled, accounts: ["spare", "third"] }),
+    /no longer exists/,
+  );
+  assert.deepEqual(await store.readAsync(), before);
+});
+
+test("enabling retained stale references requires at least one available saved backup", async () => {
+  const store = await fixture();
+  const stale = { ...policy, enabled: false, accounts: ["spare", "third"] };
+  await saveFailoverSettings(store, "anthropic", stale);
+  await store.updateProvider("anthropic", (state) => ({ ...state, accounts: { primary: credential } }));
+  await assert.rejects(saveFailoverSettings(store, "anthropic", { ...stale, enabled: true }), /saved backup/);
+  assert.deepEqual(readFailoverSettings(await store.readProviderAsync("anthropic")).settings, stale);
+  const mixed = { ...stale, enabled: true, accounts: ["third", "primary", "spare"] };
+  await saveFailoverSettings(store, "anthropic", mixed);
+  assert.deepEqual(readFailoverSettings(await store.readProviderAsync("anthropic")).settings, mixed);
+});
+
+test("queued repairs use the locked policy and reject a removed stale reference added back from an old snapshot", async () => {
+  const store = await fixture();
+  const stale = { ...policy, enabled: false, accounts: ["spare", "third"] };
+  await saveFailoverSettings(store, "anthropic", stale);
+  const started = deferred();
+  const release = deferred();
+  const deletion = store.updateProviderAsync("anthropic", async (state) => {
+    started.resolve();
+    await release.promise;
+    return { ...state, accounts: { primary: credential } };
+  });
+  await started.promise;
+  const first = updateFailoverSettings(store, "anthropic", (settings) => ({
+    ...settings,
+    accounts: settings.accounts.filter((name) => name !== "spare"),
+  }));
+  const staleSave = assert.rejects(saveFailoverSettings(store, "anthropic", stale), /no longer exists/);
+  const last = updateFailoverSettings(store, "anthropic", (settings) => ({ ...settings, accounts: [] }));
+  const read = store.readProviderAsync("anthropic");
+  release.resolve();
+  const [, repaired] = await Promise.all([deletion, first, staleSave, last]);
+  assert.deepEqual(repaired, { ...stale, accounts: ["third"] });
+  assert.deepEqual(readFailoverSettings(await read).settings, defaults);
+});
+
+test.each(["accounts", "enabled"] as const)("an in-place %s change cannot bypass delta validation", async (field) => {
+  const store = await fixture();
+  await saveFailoverSettings(store, "anthropic", { ...policy, enabled: false, accounts: ["spare"] });
+  await store.updateProvider("anthropic", (state) => ({ ...state, accounts: { primary: credential } }));
+  const before = await store.readAsync();
+  await assert.rejects(
+    updateFailoverSettings(store, "anthropic", (settings) => {
+      if (field === "accounts") settings.accounts.push("missing");
+      else settings.enabled = true;
+      return settings;
+    }),
+    field === "accounts" ? /no longer exists/ : /saved backup/,
+  );
+  assert.deepEqual(await store.readAsync(), before);
 });
 
 test("queued writes and reads use request order, revalidate removals, and detach caller arrays", async () => {

@@ -108,7 +108,8 @@ export async function showFailoverSettings(
         noMatch: (text: string) => theme.fg("muted", text),
       };
       const notify = (message: string) => {
-        if (!current()) return;
+        // A durable save can fail runtime application after its screen closes.
+        if (!owned()) return;
         try {
           ctx.ui.notify(message, "error");
         } catch {
@@ -155,7 +156,7 @@ export async function showFailoverSettings(
               if (!owned()) return;
               if (current()) effective = next;
             } catch {
-              if (!owned()) return;
+              if (!owned() || (!saved && !current())) return;
               if (saved && before) {
                 try {
                   const expected = saved;
@@ -198,7 +199,9 @@ export async function showFailoverSettings(
               }
             }
           })
-          .catch(notifyFailure);
+          .catch(() => {
+            if (current()) notifyFailure();
+          });
       };
       const selector = (
         title: string,

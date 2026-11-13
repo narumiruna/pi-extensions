@@ -62,12 +62,18 @@ export async function updateFailoverSettings(
       if (current.error) {
         throw new Error("Invalid failover settings. Repair the provider's fallback block manually before saving.");
       }
+      const previousAccounts = new Set(current.settings.accounts);
+      const wasEnabled = current.settings.enabled;
       const next = validate(change(current.settings, state));
       assertCurrent();
+      // Retain stale references for disable and sequential repair, but never add missing accounts.
       for (const name of next.accounts) {
-        if (!Object.hasOwn(state.accounts, name)) {
+        if (!previousAccounts.has(name) && !Object.hasOwn(state.accounts, name)) {
           throw new Error("A backup account no longer exists under this provider. Refresh Settings and try again.");
         }
+      }
+      if (next.enabled && !wasEnabled && !next.accounts.some((name) => Object.hasOwn(state.accounts, name))) {
+        throw new Error("Add at least one available saved backup account before enabling failover.");
       }
       saved = next;
       return { ...state, fallback: { ...(isRecord(state.fallback) ? state.fallback : {}), ...next } };

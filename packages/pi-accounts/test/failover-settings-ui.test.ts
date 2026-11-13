@@ -75,6 +75,23 @@ async function fixture(overrides: Parameters<typeof createTuiHarness>[0] = {}) {
   };
 }
 
+function pauseDurableSave(current: Awaited<ReturnType<typeof fixture>>) {
+  const saved = deferred();
+  const release = deferred();
+  const update = current.store.updateProviderAsync.bind(current.store);
+  let first = true;
+  current.store.updateProviderAsync = async (...args) => {
+    const state = await update(...args);
+    if (first) {
+      first = false;
+      saved.resolve();
+      await release.promise;
+    }
+    return state;
+  };
+  return { saved, release };
+}
+
 test("native rows save immediately in one screen; Enter, Space, threshold input and paste retain native behavior", async () => {
   const current = await fixture();
   const command = current.start();
@@ -399,6 +416,142 @@ test("a closed screen hands a durable save to the current session and drains run
   assert.deepEqual(current.applied, [true]);
 });
 
+test.each([false, true])(
+  "a durable disable failure after close restores enabled settings and reports (notifier throws: %s)",
+  async (notifierThrows) => {
+    const current = await fixture();
+    await saveFailoverSettings(current.store, "anthropic", { ...(await current.settings()), enabled: true });
+    const { saved, release } = pauseDurableSave(current);
+    current.ctx.ui.notify = (message) => {
+      current.notifications.push(message);
+      if (notifierThrows) throw new Error("notifier disposed");
+    };
+    const command = current.start(async () => {
+      const enabled = (await current.settings()).enabled;
+      current.applied.push(enabled);
+      if (!enabled) throw new Error("fixture-only-secret");
+    });
+    await current.tui.waitForOpen();
+    current.tui.send("\r");
+    await saved.promise;
+    assert.equal((await current.settings()).enabled, false);
+    current.tui.press("ctrl+c");
+    const renders = current.tui.requestRenderCount;
+    release.resolve();
+    assert.equal(await command, "close");
+    assert.equal((await current.settings()).enabled, true);
+    assert.deepEqual(current.applied, [false, true]);
+    assert.equal(current.notifications.length, 1);
+    assert.match(current.notifications[0] ?? "", /Previous settings remain effective/);
+    assert.equal(current.notifications.join("\n").includes(credential.key), false);
+    assert.equal(current.tui.requestRenderCount, renders);
+  },
+);
+
+test.each(["storage", "apply", "known-policy", "invalid-policy", "removed-reference"] as const)(
+  "a closed durable disable reports restoration failure after %s without overwriting a conflict",
+  async (failure) => {
+    const current = await fixture();
+    await saveFailoverSettings(current.store, "anthropic", { ...(await current.settings()), enabled: true });
+    const update = current.store.updateProviderAsync.bind(current.store);
+    let writes = 0;
+    current.store.updateProviderAsync = async (...args) => {
+      if (++writes === 2 && failure === "storage") throw new Error("fixture rollback failure");
+      return update(...args);
+    };
+    const { saved, release } = pauseDurableSave(current);
+    let applications = 0;
+    const command = current.start(async () => {
+      if (++applications === 1 && failure.endsWith("policy")) {
+        await update("anthropic", async (state) => ({
+          ...state,
+          fallback:
+            failure === "known-policy"
+              ? { enabled: false, accounts: ["primary"], minRemainingPercent: 30, future: "keep" }
+              : { enabled: "invalid", future: "keep" },
+        }));
+      } else if (failure === "removed-reference") {
+        await update("anthropic", async (state) => ({
+          ...state,
+          accounts: { primary: credential, third: credential },
+        }));
+      }
+      throw new Error("fixture-only-secret");
+    });
+    await current.tui.waitForOpen();
+    current.tui.send("\r");
+    await saved.promise;
+    current.tui.press("ctrl+c");
+    const renders = current.tui.requestRenderCount;
+    release.resolve();
+    assert.equal(await command, "close");
+    const state = await current.store.readProviderAsync("anthropic");
+    if (failure === "invalid-policy") assert.equal((state.fallback as { enabled: unknown }).enabled, "invalid");
+    else assert.equal(readFailoverSettings(state).settings.enabled, failure === "apply");
+    if (failure === "known-policy")
+      assert.deepEqual(state.fallback, {
+        enabled: false,
+        accounts: ["primary"],
+        minRemainingPercent: 30,
+        future: "keep",
+      });
+    if (failure === "removed-reference") assert.equal(Object.hasOwn(state.accounts, "spare"), false);
+    assert.equal(applications, failure === "apply" ? 2 : 1);
+    assert.equal(current.notifications.length, 1);
+    assert.match(current.notifications[0] ?? "", /could not be restored/);
+    assert.equal(current.notifications.join("\n").includes(credential.key), false);
+    assert.equal(current.tui.requestRenderCount, renders);
+  },
+);
+
+test.each(
+  (["apply", "restore", "restored", "reapply"] as const).flatMap((phase) =>
+    (["shutdown", "replace"] as const).map((finish) => ({ phase, finish })),
+  ),
+)("closed recovery during $phase does not publish after session $finish", async ({ phase, finish }) => {
+  const current = await fixture();
+  await saveFailoverSettings(current.store, "anthropic", { ...(await current.settings()), enabled: true });
+  const started = deferred();
+  const release = deferred();
+  const update = current.store.updateProviderAsync.bind(current.store);
+  let writes = 0;
+  current.store.updateProviderAsync = async (...args) => {
+    const restoring = ++writes === 2;
+    if (restoring && phase === "restore") {
+      started.resolve();
+      await release.promise;
+    }
+    const state = await update(...args);
+    if (restoring && phase === "restored") {
+      started.resolve();
+      await release.promise;
+    }
+    return state;
+  };
+  let applications = 0;
+  const command = current.start(async () => {
+    applications++;
+    if ((applications === 1 && phase === "apply") || (applications === 2 && phase === "reapply")) {
+      started.resolve();
+      await release.promise;
+    }
+    throw new Error("fixture application failure");
+  });
+  await current.tui.waitForOpen();
+  current.tui.send("\r");
+  await started.promise;
+  current.tui.press("ctrl+c");
+  const renders = current.tui.requestRenderCount;
+  if (finish === "shutdown") current.controller.abort();
+  else current.stale();
+  release.resolve();
+  assert.equal(await command, "stale");
+  assert.equal((await current.settings()).enabled, phase === "restored" || phase === "reapply");
+  assert.equal(applications, phase === "reapply" ? 2 : 1);
+  assert.deepEqual(current.notifications, []);
+  assert.equal(current.tui.requestRenderCount, renders);
+});
+
 test.each(["shutdown", "replace"] as const)("a durable save does not publish into a %s session", async (finish) => {
   const current = await fixture();
   const saved = deferred();
@@ -549,6 +702,41 @@ test("removing the last enabled backup disables failover", async () => {
   await command;
   assert.deepEqual(await current.settings(), { enabled: false, accounts: [], minRemainingPercent: 5 });
 });
+
+test.each(["disable", "keep-enabled"] as const)(
+  "two deleted backups permit %s and sequential removal in the native UI",
+  async (mode) => {
+    const current = await fixture();
+    await saveFailoverSettings(current.store, "anthropic", { ...(await current.settings()), enabled: true });
+    await current.store.updateProvider("anthropic", (state) => ({ ...state, accounts: { primary: credential } }));
+    const command = current.start();
+    await current.tui.waitForOpen();
+    if (mode === "disable") {
+      current.tui.send("\r");
+      await current.tui.waitForPending();
+      assert.equal((await current.settings()).enabled, false);
+      assert.deepEqual((await current.settings()).accounts, ["spare", "third"]);
+    }
+    current.tui.press("tui.select.down");
+    current.tui.press("tui.select.down");
+    current.tui.send("\r");
+    current.tui.send("\r");
+    current.tui.send("\r");
+    await current.tui.waitForPending();
+    assert.deepEqual((await current.settings()).accounts, ["third"]);
+    assert.equal((await current.settings()).enabled, mode === "keep-enabled");
+    assert.match(plain(current.tui.render()).join("\n"), /1\. third/);
+    current.tui.send("\r");
+    current.tui.send("\r");
+    await current.tui.waitForPending();
+    current.tui.press("ctrl+c");
+    assert.equal(await command, "close");
+    assert.deepEqual(await current.settings(), { enabled: false, accounts: [], minRemainingPercent: 5 });
+    assert.deepEqual(current.applied, mode === "disable" ? [false, false, false] : [true, false]);
+    assert.deepEqual(current.notifications, []);
+    assert.equal((await current.store.readProviderAsync("anthropic")).active, "primary");
+  },
+);
 
 test("backup management and threshold input retain their focused rows at constrained dimensions", async () => {
   const current = await fixture();
