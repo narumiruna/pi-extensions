@@ -73,6 +73,7 @@ export type SessionSelectionOwner = {
   sessionManager: ExtensionContext["sessionManager"] & SessionEntryWriter;
   sessionId: string;
   selections: ProviderAccountSelections;
+  trialSelections: Map<AccountProviderId, string>;
   selectionRevisions: Map<AccountProviderId, number>;
   activationRequests: Map<AccountProviderId, number>;
   activationTasks?: Map<AccountProviderId, Promise<void>>;
@@ -212,6 +213,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       sessionManager: ctx.sessionManager as ExtensionContext["sessionManager"] & SessionEntryWriter,
       sessionId: ctx.sessionManager.getSessionId(),
       selections: cloneAccountSelections(Object.create(null) as ProviderAccountSelections),
+      trialSelections: new Map(),
       environmentAccount: environment.account,
       environmentError: environment.error,
       selectionRevisions: new Map(),
@@ -267,6 +269,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     );
     if (!isOwnerCurrent(owner) || !isCurrent()) return false;
     owner.selections = selections;
+    owner.trialSelections.delete(providerId);
     owner.selectionRevisions.set(providerId, (owner.selectionRevisions.get(providerId) ?? 0) + 1);
     if (!automatic) owner.failover?.explicitSelection(providerId);
     owner.error = undefined;
@@ -318,7 +321,7 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
         : await coordinator.ensureActive(
             ctx,
             store,
-            owner.environmentAccount ?? owner.selections[providerId] ?? null,
+            owner.environmentAccount ?? owner.trialSelections.get(providerId) ?? owner.selections[providerId] ?? null,
             Date.now(),
             signal,
           );

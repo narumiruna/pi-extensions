@@ -19,6 +19,7 @@ const SWITCH_ANOTHER_PROVIDER_ACTION = "Switch another provider’s account";
 
 type AccountMenuSession = {
   selections: ProviderAccountSelections;
+  trialSelections?: ReadonlyMap<AccountProviderId, string>;
   error?: string;
   environmentAccount?: string;
   environmentError?: string;
@@ -407,7 +408,7 @@ export async function showAccountsMenu(
         const latest = await store.readProviderAsync(providerId);
         if (!owner.isCurrent()) return { kind: "close" };
         const accountName = switchAccountOptions(
-          session.selections[providerId] ?? undefined,
+          session.trialSelections?.get(providerId) ?? session.selections[providerId] ?? undefined,
           Object.keys(latest.accounts),
           session.error !== undefined,
         )
@@ -469,7 +470,8 @@ async function readProviderMenuStates(
   const states = new Map<AccountProviderId, ProviderMenuState>();
   for (const id of adapters.keys()) {
     const state = data.providers[id] ?? { accounts: defineOwnMap({}) };
-    const active = session.environmentAccount ?? session.selections[id] ?? undefined;
+    const active =
+      session.environmentAccount ?? session.trialSelections?.get(id) ?? session.selections[id] ?? undefined;
     states.set(id, {
       id,
       adapter: requireAdapter(adapters, id),

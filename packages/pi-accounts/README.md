@@ -107,7 +107,7 @@ Removal returns the current session's affected selection to `default`, but other
 
 Optional usage-driven failover is **Off by default**. Open `/accounts` → **Settings** → provider to set its ordered backups and remaining-allowance threshold (default 5%). Settings save immediately; RPC reports the manual file path. Without a compatible usage service or an enabled policy, account behavior stays unchanged.
 
-The initial verified usage path is OpenAI Codex (legacy) `gpt-5.6-sol` with official runtime authentication; other models/providers and older usage reports remain non-actionable. Usage errors and HTTP 429 never trigger switching. Failover affects only the current session, never changes billing policy, and is disabled by `PI_ACCOUNT`. See [usage failover](./docs/usage-failover.md) for settings, evidence requirements, candidate activation and recovery, pacing, and live-verification limits.
+The initial verified usage path is OpenAI Codex (legacy) `gpt-5.6-sol` with official runtime authentication; other models/providers and older usage reports remain non-actionable. Usage errors and HTTP 429 never trigger switching. Failover affects only the current session, saves only accepted automatic choices, never changes billing policy, and is disabled by `PI_ACCOUNT`. See [usage failover](./docs/usage-failover.md) for settings, evidence requirements, candidate activation and recovery, pacing, and live-verification limits.
 
 Open `/accounts` → **Set default account**, choose a provider, then select a saved account or **Pi built-in login**. Only providers with saved accounts appear.
 The picker shows the saved default and saves your selection immediately; leaving it before selecting changes nothing.

@@ -90,9 +90,14 @@ export class AccountFailover {
     for (const key of this.excluded.keys()) if (key.startsWith(`${provider}\0`)) this.excluded.delete(key);
   }
 
+  cancelTrial(provider: AccountProviderId): void {
+    if (this.owner.trialSelections.has(provider)) this.active?.controller.abort();
+  }
+
   dispose(): void {
     ++this.generation;
     this.active?.controller.abort();
+    this.owner.trialSelections.clear();
     this.recovery.clear();
     this.checks.clear();
     this.excluded.clear();
@@ -173,6 +178,15 @@ export class AccountFailover {
     this.excluded.set(`${provider}\0${account ?? "default"}`, decision.resetsAt);
   }
 
+  private stage(provider: AccountProviderId, account: string | null, isCurrent: () => boolean): boolean {
+    if (!this.current() || !isCurrent()) return false;
+    // Only accepted choices belong in owner.selections and persisted snapshots.
+    if (account === null || account === this.owner.selections[provider]) this.owner.trialSelections.delete(provider);
+    else this.owner.trialSelections.set(provider, account);
+    this.owner.selectionRevisions.set(provider, (this.owner.selectionRevisions.get(provider) ?? 0) + 1);
+    return true;
+  }
+
   private async run(
     ctx: ExtensionContext,
     provider: AccountProviderId,
@@ -241,7 +255,7 @@ export class AccountFailover {
         if (!valid()) break;
         recovery ??= { account: original, revision };
         this.recovery.set(provider, recovery);
-        if (!this.persist(this.owner, provider, candidate, valid, true)) break;
+        if (!this.stage(provider, candidate, valid)) break;
         revision = this.owner.selectionRevisions.get(provider) ?? 0;
         recovery.revision = revision;
         const result = await wait(this.sync(provider, ctx, this.owner, signal, ctx.model, true), signal);
@@ -257,6 +271,9 @@ export class AccountFailover {
         const candidateQuota = await quota();
         if (!valid()) break;
         if (candidateQuota.kind === "adequate") {
+          if (!this.persist(this.owner, provider, candidate, valid, true)) break;
+          revision = this.owner.selectionRevisions.get(provider) ?? 0;
+          recovery.revision = revision;
           this.recovery.delete(provider);
           recovery = undefined;
           this.checks.set(provider, { identity: this.identity(ctx, provider), at: Date.now() });
@@ -301,8 +318,8 @@ export class AccountFailover {
         if (this.recovery.get(provider) === recovery) this.recovery.delete(provider);
         return false;
       }
-      if (this.owner.selections[provider] !== recovery.account) {
-        if (!this.persist(this.owner, provider, recovery.account, owned, true)) return false;
+      if (this.owner.trialSelections.has(provider)) {
+        if (!this.stage(provider, recovery.account, owned)) return false;
         recovery.revision = this.owner.selectionRevisions.get(provider) ?? 0;
       }
       const result = await wait(this.sync(provider, ctx, this.owner, signal, ctx.model, true), signal);

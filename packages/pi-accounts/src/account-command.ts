@@ -252,6 +252,7 @@ async function removeAccount(
     }
     return;
   }
+  if (session.trialSelections.get(adapter.id) === parsed.name) session.failover?.cancelTrial(adapter.id);
   const removedSelection = !session.error && session.selections[adapter.id] === parsed.name;
   if (removedSelection) {
     try {

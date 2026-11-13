@@ -187,6 +187,7 @@ export async function failoverFixture(
     queries,
     emit,
     requests: () => requests,
+    stopService: unsubscribe,
     aborts: () => aborts,
     setIdle(value: boolean) {
       idle = value;
@@ -222,6 +223,11 @@ export async function failoverFixture(
       return new Promise<AccountActivationResult>((reply) => {
         mock.eventBus.emit("accounts:activation:v1", { session: ctx.sessionManager, provider: id, account, reply });
       });
+    },
+    async remove(account: string) {
+      choices.push("Remove account", `${adapter.displayName} · ${account}`);
+      await mock.commands.get("accounts")?.handler("", ctx);
+      assert.deepEqual(choices, []);
     },
     async manual(account: string) {
       choices.push(`Switch ${adapter.displayName} account`, account);

@@ -146,7 +146,7 @@ for (const row of unknownResults) {
         f.queries.map((call) => call.key),
         candidate ? [keyFor("primary"), keyFor("backup")] : [keyFor("primary")],
       );
-      assert.equal(f.selectionEntries().length - initialEntries, candidate ? 2 : 0);
+      assert.equal(f.selectionEntries().length - initialEntries, 0, "unaccepted trials must not enter session history");
       assert.equal(f.aborts(), 0);
     });
   }
@@ -282,21 +282,22 @@ test("a successful automatic selection persists across same-manager reload witho
   );
 });
 
-for (const afterCommit of [false, true]) {
-  test(`run cancellation ${afterCommit ? "after" : "before"} candidate commit releases its query and restores safely`, async () => {
+for (const afterActivation of [false, true]) {
+  test(`run cancellation ${afterActivation ? "after" : "before"} candidate activation releases its query and restores safely`, async () => {
     const f = await failoverFixture({ active: "primary", fallback: enabled() });
     await f.start();
     const entered = Promise.withResolvers<UsageCall>();
     const release = Promise.withResolvers<unknown>();
     f.offer((call) => {
-      if (afterCommit && call.key === keyFor("primary")) return allowance(f.ctx, 0);
+      if (afterActivation && call.key === keyFor("primary")) return allowance(f.ctx, 0);
       entered.resolve(call);
       return release.promise;
     });
     const boundary = f.turn();
     const call = await entered.promise;
     try {
-      assert.equal(f.selection(), afterCommit ? "backup" : "primary");
+      assert.equal(f.selection(), "primary", "a trial is not a saved selection");
+      assert.equal(await f.key(), keyFor(afterActivation ? "backup" : "primary"));
       f.cancel();
       await boundary;
       assert.equal(call.request.signal.aborted, true);
@@ -328,7 +329,8 @@ for (const method of ["manual", "protocol"] as const) {
     const boundary = f.turn();
     const call = await entered.promise;
     try {
-      assert.equal(f.selection(), "backup");
+      assert.equal(f.selection(), "primary");
+      assert.equal(await f.key(), keyFor("backup"));
       if (method === "manual") await f.manual("manual");
       else assert.equal((await f.activate("manual")).status, "active");
       await boundary;
@@ -510,7 +512,7 @@ for (const supersession of ["cancellation", "protocol", "shutdown"] as const) {
     let blocked = false;
     f.adapter.invalidateConnections = async (session) => {
       await cleanup(session);
-      if (f.selection() !== "backup" || blocked) return;
+      if ((await f.key()) !== keyFor("backup") || blocked) return;
       blocked = true;
       entered.resolve();
       await release.promise;
@@ -521,12 +523,13 @@ for (const supersession of ["cancellation", "protocol", "shutdown"] as const) {
     const boundary = f.turn();
     await entered.promise;
     try {
-      assert.equal(f.selection(), "backup", "activation has already committed a candidate selection");
+      assert.equal(f.selection(), "primary", "activation must not persist an unaccepted trial");
+      assert.equal(await f.key(), keyFor("backup"));
       if (supersession === "cancellation") f.cancel();
       else if (supersession === "protocol") assert.equal((await f.activate("manual")).status, "active");
       else await f.shutdown();
       await boundary;
-      const selected = supersession === "protocol" ? "manual" : supersession === "shutdown" ? "backup" : "primary";
+      const selected = supersession === "protocol" ? "manual" : "primary";
       const key = supersession === "shutdown" ? undefined : keyFor(selected);
       assert.equal(f.selection(), selected);
       assert.equal(await f.key(), key);
@@ -558,7 +561,7 @@ test("normal, restoration, and fail-closed waits have a combined 60-second cap",
   assert.ok(cleanup);
   f.adapter.invalidateConnections = async (session) => {
     await cleanup(session);
-    if (f.selection() === "backup") candidateEntered.resolve();
+    if ((await f.key()) === keyFor("backup")) candidateEntered.resolve();
     else recoveryEntered.resolve();
     await releaseCleanup.promise;
   };
@@ -656,7 +659,7 @@ test("failed restoration blocks the request and agent_settled performs verified 
   const cleanup = f.adapter.invalidateConnections;
   assert.ok(cleanup);
   f.adapter.invalidateConnections = async (session) => {
-    if (failed && f.selection() === "primary") throw new Error("Synthetic restoration cleanup failure");
+    if (failed && (await f.key()) === keyFor("primary")) throw new Error("Synthetic restoration cleanup failure");
     await cleanup(session);
   };
   f.offer(({ key }) =>

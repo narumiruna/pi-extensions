@@ -18,7 +18,8 @@ for (const failure of ["missing", "cancelled", "store"] as const) {
     });
     const boundary = f.turn();
     await entered.promise;
-    assert.equal(f.selection(), "backup");
+    assert.equal(f.selection(), "primary", "the pending trial must not change the saved selection");
+    assert.equal(await f.key(), keyFor("backup"));
     const read = f.store.readAsync.bind(f.store);
     const lookup = Promise.withResolvers<void>();
     const controller = new AbortController();

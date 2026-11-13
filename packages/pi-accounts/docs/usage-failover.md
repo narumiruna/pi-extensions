@@ -55,6 +55,7 @@ This fragment belongs under a provider, for example `providers.openai-codex`:
 Use Settings to add, remove, or reorder backups and edit the threshold.
 The current account can appear in the list but is skipped during an attempt.
 A locally removed backup is skipped; an account removed during activation stops the attempt and requires guarded recovery.
+You can disable a policy and remove old missing references one at a time. New references must exist, and enabling a policy requires an available backup.
 The policy never adds an unlisted account or another provider.
 
 Settings saves use the credential store's existing in-process queue, cross-process lock, private atomic replacement, and unknown-field preservation.
@@ -93,7 +94,8 @@ The gate performs these operations in order:
 6. Stop on unknown data or an activation error. If no candidate is accepted, restore the original selection and verify authentication before releasing the request gate.
 
 The usage protocol cannot query an inactive named account.
-Candidate activation is a real selection change, not a read-only probe; it can persist before authentication or quota checks finish.
+Candidate activation changes runtime authentication, not the saved session choice. Trial choices stay in session-owned memory.
+Only an adequately verified backup is saved as the accepted choice. Other provider selections cannot include an unaccepted trial in their saved snapshot.
 No model request is sent under an unverified candidate. There is no automatic replay of a request, completed tools, or an entire agent run.
 The model, provider, prompt, history, and ordered tool definitions do not change. Account changes use Pi's existing session continuation cleanup before the next request.
 
@@ -114,13 +116,15 @@ Other sessions and startup defaults do not change. New sessions keep their exist
 Disabling failover cancels pending decisions. It does not switch back after an already accepted change.
 Use the existing account picker to choose another account explicitly.
 
-Restoration is guarded, not transactional rollback. It must never overwrite a newer manual selection or restore old OAuth token bytes.
-Recovery reads current shared credentials and uses the existing authentication verification and connection cleanup.
+Restoration clears the trial choice and verifies the last accepted account. It must never overwrite a newer manual selection or restore old OAuth token bytes.
+Recovery reads current shared credentials and uses the existing authentication verification and connection cleanup. It does not add a trial or recovery choice to session history.
 If recovery cannot verify authentication, the provider remains blocked and the current run is aborted; select an account from `/accounts` to recover.
 Deferred recovery uses `agent_settled`, not `agent_end`.
 
 Session replacement and shutdown cancel owned work and prevent stale publication or restoration against another session.
-A terminated process can retain its last persisted candidate selection; review that selection explicitly on resume if an attempt was interrupted.
+Reload and process resume restore the last accepted choice, even when the policy is disabled or the usage service is absent. They do not depend on the old owner's cleanup.
+Explicit manual and protocol selections retain their existing persistence-before-activation behavior; the accepted-only rule applies to automatic trials.
+Older development builds did not mark an interrupted trial in saved entries. This change prevents new unaccepted choices from being saved; it cannot infer or rewrite old unmarked choices. Review such a saved choice explicitly when updating from an older development build.
 Reverting this feature does not remove existing session choices or credentials. Disable the policy and select the intended account before rollback.
 
 ## Implementation evidence and external verification
