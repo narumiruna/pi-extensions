@@ -42,6 +42,7 @@ export interface ChromeDevToolsState {
   activePageId?: string;
   managedBrowser?: ManagedBrowser;
   launchPromise?: Promise<void>;
+  latestLaunchPromise?: Promise<void>;
   lastLaunchAttempt?: BrowserLaunchAttempt;
   shuttingDown: boolean;
   sessionGeneration: number;

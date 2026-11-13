@@ -51,6 +51,7 @@ function resetRuntime(overrides: Partial<typeof state> = {}) {
     extensionPathsSource: "user",
     managedBrowser: undefined,
     launchPromise: undefined,
+    latestLaunchPromise: undefined,
     lastLaunchAttempt: undefined,
     shuttingDown: false,
     sessionGeneration: state.sessionGeneration + 1,
@@ -799,6 +800,154 @@ test("an attach probe that overlaps another caller's launch waits for owned-brow
     restore();
   }
 });
+
+test("a failed launch for another owner does not affect an in-flight attach", async () => {
+  resetRuntime({ extensionPaths: [] });
+  const attachingOwner = {};
+  const launchingOwner = {};
+  let markAttach: (() => void) | undefined;
+  let releaseAttach: (() => void) | undefined;
+  const attachStarted = new Promise<void>((resolve) => {
+    markAttach = resolve;
+  });
+  const attachBlocked = new Promise<void>((resolve) => {
+    releaseAttach = resolve;
+  });
+  let probes = 0;
+  const { calls, restore } = successfulOperations({
+    fetch: async (input) => {
+      if (++probes === 1) {
+        markAttach?.();
+        await attachBlocked;
+        return browserVersionResponse(input);
+      }
+      if (new URL(input).port === "9222") throw new Error("connection refused");
+      return browserVersionResponse(input, "competing-browser");
+    },
+  });
+  let attach: Promise<void> | undefined;
+  try {
+    attach = ensureDevToolsEndpoint(1000, undefined, attachingOwner);
+    await attachStarted;
+    await assert.rejects(ensureDevToolsEndpoint(0, undefined, launchingOwner), /does not match/);
+    releaseAttach?.();
+    await attach;
+    assert.equal(calls.spawn.length, 1);
+    assert.equal(managedBrowserForOwner(attachingOwner), undefined);
+    assert.equal(devToolsEndpoint(attachingOwner), "http://127.0.0.1:9222");
+  } finally {
+    releaseAttach?.();
+    await attach?.catch(() => undefined);
+    await shutdownManagedBrowser(undefined, { owner: attachingOwner });
+    await shutdownManagedBrowser(undefined, { owner: launchingOwner });
+    restore();
+  }
+});
+
+for (const scoped of [false, true]) {
+  for (const portConfigured of [false, true]) {
+    for (const launchSucceeds of [false, true]) {
+      test(`attach retry observes a completed ${launchSucceeds ? "successful" : "failed"} launch (${scoped ? "scoped" : "global"}, ${portConfigured ? "explicit" : "automatic"} port)`, async () => {
+        resetRuntime({ extensionPaths: [], portConfigured });
+        const owner = scoped ? {} : undefined;
+        let markAttach: (() => void) | undefined;
+        let releaseAttach: (() => void) | undefined;
+        let markReadiness: (() => void) | undefined;
+        let releaseReadiness: (() => void) | undefined;
+        let markRetry: (() => void) | undefined;
+        let releaseRetry: (() => void) | undefined;
+        const attachStarted = new Promise<void>((resolve) => {
+          markAttach = resolve;
+        });
+        const attachBlocked = new Promise<void>((resolve) => {
+          releaseAttach = resolve;
+        });
+        const readinessStarted = new Promise<void>((resolve) => {
+          markReadiness = resolve;
+        });
+        const readinessBlocked = new Promise<void>((resolve) => {
+          releaseReadiness = resolve;
+        });
+        const retryStarted = new Promise<void>((resolve) => {
+          markRetry = resolve;
+        });
+        const retryBlocked = new Promise<void>((resolve) => {
+          releaseRetry = resolve;
+        });
+        let probes = 0;
+        const { child, calls, restore } = successfulOperations({
+          fetch: async (input) => {
+            switch (++probes) {
+              case 1:
+                markAttach?.();
+                await attachBlocked;
+                return new Response("retry", { status: 503 });
+              case 2:
+                throw new Error("connection refused");
+              case 3:
+                markReadiness?.();
+                await readinessBlocked;
+                return browserVersionResponse(input, launchSucceeds ? "test" : "competing-browser");
+              case 4:
+                markRetry?.();
+                await retryBlocked;
+                return browserVersionResponse(input, launchSucceeds ? "test" : "competing-browser");
+              case 5:
+                return browserVersionResponse(input);
+              default:
+                throw new Error("unexpected endpoint probe");
+            }
+          },
+        });
+        const outcomes: Promise<unknown>[] = [];
+        const outcome = (operation: Promise<void>) =>
+          operation.then(
+            () => ({ success: true as const }),
+            (error: unknown) => ({ success: false as const, error }),
+          );
+        try {
+          const attach = outcome(ensureDevToolsEndpoint(1000, undefined, owner));
+          outcomes.push(attach);
+          await attachStarted;
+          const launch = outcome(ensureDevToolsEndpoint(0, undefined, owner));
+          outcomes.push(launch);
+          await readinessStarted;
+          releaseAttach?.();
+          await retryStarted;
+          assert.equal(calls.fetch[3], `http://127.0.0.1:${portConfigured ? 9222 : 9333}/json/version`);
+          releaseReadiness?.();
+          const launchResult = await launch;
+          assert.equal(launchResult.success, launchSucceeds);
+          assert.equal(managedBrowserForOwner(owner)?.ready ?? false, launchSucceeds);
+          assert.equal(child.killCalls.length, launchSucceeds ? 0 : 1);
+          assert.deepEqual(calls.rm, launchSucceeds ? [] : ["/tmp/test-managed-profile"]);
+          if (!launchSucceeds) assert.equal(devToolsEndpoint(owner), "http://127.0.0.1:9222");
+          releaseRetry?.();
+          const attachResult = await attach;
+          assert.equal(
+            attachResult.success,
+            launchSucceeds,
+            "the attach response is released only after the launch settles and cleanup finishes",
+          );
+          if (!attachResult.success) {
+            assert.match(String(attachResult.error), /does not match/);
+            // A later independent attach must not inherit a past launch failure.
+            await ensureDevToolsEndpoint(0, undefined, owner);
+            assert.equal(calls.fetch[4], "http://127.0.0.1:9222/json/version");
+          }
+          assert.equal(calls.spawn.length, 1);
+        } finally {
+          releaseAttach?.();
+          releaseReadiness?.();
+          releaseRetry?.();
+          await Promise.allSettled(outcomes);
+          await shutdownManagedBrowser(undefined, { owner });
+          restore();
+        }
+      });
+    }
+  }
+}
 
 test("an owned browser that exits during HTTP readiness is never published as ready", async () => {
   resetRuntime();

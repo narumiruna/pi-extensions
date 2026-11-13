@@ -59,6 +59,7 @@ interface ManagedBrowserScope {
   controller: AbortController;
   generation: number;
   launchPromise?: Promise<void>;
+  latestLaunchPromise?: Promise<void>;
   managedBrowser?: ManagedBrowser;
   port: number;
   lastLaunchAttempt?: BrowserLaunchAttempt;
@@ -143,9 +144,15 @@ function launchPromiseForOwner(owner?: object) {
   return owner ? managedBrowserScope(owner).launchPromise : state.launchPromise;
 }
 
+function latestLaunchPromiseForOwner(owner?: object) {
+  return owner ? managedBrowserScope(owner).latestLaunchPromise : state.latestLaunchPromise;
+}
+
 function setLaunchPromise(owner: object | undefined, launchPromise: Promise<void> | undefined) {
-  if (owner) managedBrowserScope(owner).launchPromise = launchPromise;
-  else state.launchPromise = launchPromise;
+  const scope = owner ? managedBrowserScope(owner) : state;
+  scope.launchPromise = launchPromise;
+  // Retain one settled result so attach probes can observe a launch after cleanup.
+  if (launchPromise) scope.latestLaunchPromise = launchPromise;
 }
 
 function managedBrowserPort(owner?: object) {
@@ -203,6 +210,7 @@ export async function ensureDevToolsEndpoint(
     return;
   }
   if (canAutoLaunchBrowser(owner)) {
+    const launchBeforeProbe = latestLaunchPromiseForOwner(owner);
     try {
       await withEndpointRetry(
         () => fetchDevToolsJson<unknown>("/json/version", { signal: callerSignal }, owner),
@@ -216,10 +224,15 @@ export async function ensureDevToolsEndpoint(
       }
       throw error;
     }
-    // An attach probe can finish after another caller starts a managed launch. It must
-    // join that launch instead of bypassing the owned-browser identity check.
-    const concurrentLaunch = launchPromiseForOwner(owner);
-    if (concurrentLaunch) await waitForCaller(concurrentLaunch, callerSignal);
+    // A retry can reach a managed port whose launch has already completed cleanup.
+    // Observe its result even after the active launch promise has been cleared.
+    let observedLaunch = launchBeforeProbe;
+    while (true) {
+      const concurrentLaunch = latestLaunchPromiseForOwner(owner);
+      if (!concurrentLaunch || concurrentLaunch === observedLaunch) break;
+      observedLaunch = concurrentLaunch;
+      await waitForCaller(concurrentLaunch, callerSignal);
+    }
     return;
   }
 
