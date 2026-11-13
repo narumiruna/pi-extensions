@@ -64,6 +64,13 @@ These extensions are part of my daily Pi setup:
 | [`pi-plan-mode`](./packages/pi-plan-mode) | Codex-like, read-only `/plan` collaboration before implementation begins. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`pi-subagents`](./packages/pi-subagents) | Start bounded background Pi jobs with authenticated main-agent messaging. | `pi install npm:@narumitw/pi-subagents` |
 
+### Browser and research
+
+| Package | Use it for | Install |
+| --- | --- | --- |
+| [`pi-chrome-devtools`](./packages/pi-chrome-devtools) | Inspect tabs, navigate pages, evaluate JavaScript, and capture screenshots through Chrome DevTools Protocol. | `pi install npm:@narumitw/pi-chrome-devtools` |
+| [`pi-firecrawl`](./packages/pi-firecrawl) | Scrape pages, crawl websites, discover URLs, and search the web with Firecrawl. | `pi install npm:@narumitw/pi-firecrawl` |
+
 ### Task and workspace workflows
 
 | Package | Use it for | Install |
@@ -259,8 +266,6 @@ The following packages remain available as source references but are excluded fr
 - `pi-codex-accounts` — replaced by [`pi-accounts`](./packages/pi-accounts)
 - [`pi-file-context`](./deprecated/pi-file-context) and [`pi-edit-scope`](./deprecated/pi-edit-scope) — merged into [`pi-files`](./packages/pi-files); follow the [migration guide](./packages/pi-files/docs/migration.md) and do not co-load predecessors with the successor
 - [`pi-cbmem`](./deprecated/pi-cbmem) — deprecated without a replacement because a simple benchmark found insufficient benefit and substantially higher token usage
-- [`pi-chrome-devtools`](./deprecated/pi-chrome-devtools) — replaced by Chrome DevTools MCP through Pi's native MCP support; review the [migration instructions and compatibility differences](./deprecated/pi-chrome-devtools/README.md#-migration-to-native-mcp)
-- [`pi-firecrawl`](./deprecated/pi-firecrawl) — replaced by Firecrawl MCP through Pi's native MCP support; follow the [migration instructions](./deprecated/pi-firecrawl/README.md#-migration-to-native-mcp)
 - `pi-retry` — replaced by Pi's built-in provider retry and timeout behavior
 - `pi-google-genai` — replaced by the `grounding-with-google-genai` agent skill
 - `pi-image-drop` — deprecated without a replacement
