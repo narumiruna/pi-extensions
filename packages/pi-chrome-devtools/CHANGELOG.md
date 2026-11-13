@@ -1,5 +1,12 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.54.1
+
+### Patch Changes
+
+- ae521ac: Select an available nonzero port for default managed browser launches instead of enabling Chrome's port-0 automation signal. Validate startup against the owned browser's DevTools announcement and browser identity, including attach probes that finish after a launch completes, while preserving explicit endpoints, attach-first behavior, and temporary profiles.
+- 956f531: Restore the Chrome DevTools and Firecrawl extensions as maintained packages, update runtime compatibility, and include package changelogs in published files.
+
 ## 0.54.0
 
 ### Minor Changes

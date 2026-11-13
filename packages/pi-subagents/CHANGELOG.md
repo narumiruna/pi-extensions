@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 3.4.4
+
+### Patch Changes
+
+- 49c68d4: Show readable tool summaries and job notifications in the conversation. Keep job identity, state, and message direction visible when collapsed, and render expanded subagent results as Markdown without changing model data or widget behavior.
+
 ## 3.4.3
 
 ### Patch Changes
