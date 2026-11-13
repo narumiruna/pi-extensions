@@ -1,5 +1,11 @@
 # @narumitw/pi-firecrawl
 
+## 0.51.1
+
+### Patch Changes
+
+- 956f531: Restore the Chrome DevTools and Firecrawl extensions as maintained packages, update runtime compatibility, and include package changelogs in published files.
+
 ## 0.51.0
 
 ### Minor Changes

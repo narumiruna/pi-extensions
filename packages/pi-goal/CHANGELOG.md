@@ -1,5 +1,11 @@
 # @narumitw/pi-goal
 
+## 0.55.3
+
+### Patch Changes
+
+- ff27729: Keep the waiting footer short and render `goal_wait` with a compact reason preview, resume guidance, and expandable diagnostic details. Preserve tool payloads and waiting behavior.
+
 ## 0.55.2
 
 ### Patch Changes
