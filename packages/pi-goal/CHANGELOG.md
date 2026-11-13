@@ -1,5 +1,11 @@
 # @narumitw/pi-goal
 
+## 0.55.2
+
+### Patch Changes
+
+- 35d526b: Keep one assistant-usage checkpoint per session so accounting after ordinary tool completions processes only new entries, with constant retained cache state. Recount safely on divergent branches and reloads without changing budget enforcement or goal-state snapshot frequency.
+
 ## 0.55.1
 
 ### Patch Changes

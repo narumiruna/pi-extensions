@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-illustrate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Render SVG and Mermaid diagrams in Pi through Kitty terminal graphics.",
   "type": "module",
   "license": "MIT",
