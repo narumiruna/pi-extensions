@@ -388,6 +388,7 @@ test("a native-classified connection interruption keeps the same goal active thr
     assert.equal(waiting.status, "active");
     assert.equal(waiting.id, originalId);
     assert.match(waiting.waiting?.reason ?? "", /provider retries exhausted/i);
+    assert.equal(fixture.statuses.get("goal"), "waiting");
     assert.equal(waiting.waiting?.resumeAt, undefined);
     assert.equal(waiting.activeStartedAt, undefined);
     assert.equal(aborts, 0);
@@ -446,7 +447,7 @@ test("provider retry waiting state restores without dispatching work", async () 
   assert.equal(restoredGoal.status, "active");
   assert.deepEqual(restoredGoal.waiting, persisted.waiting);
   assert.equal(restored.mock.sentUserMessages.length, 0);
-  assert.match(restored.statuses.get("goal") ?? "", /^waiting /);
+  assert.equal(restored.statuses.get("goal"), "waiting");
 });
 
 test("exhausted compaction recovery remains blocked", async () => {

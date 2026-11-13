@@ -1626,7 +1626,7 @@ export function formatStatus(
   const automatic =
     automaticTurnLimit === null ? "automatic Unlimited" : `automatic ${goal.automaticModelTurns}/${automaticTurnLimit}`;
   if (goal.waiting) {
-    return `waiting ${safeGoalMenuText(goal.waiting.reason)} · ${automatic}`;
+    return "waiting";
   }
   if (goal.status === "paused" && goal.safetyPauseCause === "continuation_limit") {
     if (automaticTurnLimit === null) {

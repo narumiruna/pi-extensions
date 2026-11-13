@@ -41,7 +41,7 @@ test("goal_wait keeps an active goal quiet across agent_end and repeated settlem
   assert.deepEqual((lastGoal(waiting.mock) as { waiting?: unknown } | null)?.waiting, {
     reason: "Waiting for the review monitor",
   });
-  assert.match(waiting.statuses.get("goal") ?? "", /waiting.*review monitor/i);
+  assert.equal(waiting.statuses.get("goal"), "waiting");
 
   const ownedKickoff = waiting.mock.sentUserMessages[0]?.text ?? "";
   waiting.mock.events.get("input")?.[0]?.(

@@ -148,7 +148,7 @@ See [Managing goals](./docs/managing-goals.md) for safety-epoch resets, failed-d
 
 - `goal_complete` records completion only for the exact active goal id, requires an evidence-based summary, and renders an accepted summary as Markdown in the TUI.
 - `goal_blocked` records a true repeated impasse with the exact goal id, reason, evidence, and repeated-turn count.
-- `goal_wait` pauses automatic continuation after the agent arranges an external wake source, with an optional bounded resume deadline.
+- `goal_wait` pauses automatic continuation after the agent arranges an external wake source, with an optional bounded resume deadline and expandable TUI details.
 
 ## 🔁 Session and reload behavior
 
@@ -180,7 +180,7 @@ This version no longer reads that global file, and `/goal clear` removes any leg
 `@narumitw/pi-statusline` adds the default `🎯` icon unless configured otherwise:
 
 - `active 3m · automatic 12/25` — an active goal without a token budget; elapsed time counts only periods when its status is active and not waiting.
-- `waiting review monitor · automatic 12/25` — an active Goal is quiet until non-Goal work or its optional deadline wakes it; the displayed reason is sanitized and bounded.
+- `waiting` — an active Goal is quiet until non-Goal work or its optional deadline wakes it; open `/goal` → **View full status** or use `/goal status` for the reason, deadline, and automatic-work count.
 - `active 18k/100k · automatic 12/25` — an active goal with token usage and budget.
 - `active 3m · automatic Unlimited` — explicit Unlimited automatic work.
 - `paused · automatic limit 25/25` — the automatic-work limit paused the goal; `/goal` opens the recovery preview.
@@ -279,6 +279,11 @@ Requests below 10,000 milliseconds are accepted for compatibility but clamped to
 The tool result reports both the requested and effective values.
 Prefer deadlines measured in minutes instead of repeated short wakes.
 Omitting `resume_after_ms` intentionally permits an indefinite quiet wait.
+
+In the TUI, the tool block shows a reason preview of at most two rows, any absolute safety deadline, and how to resume.
+Use Pi's configured tool-expansion action to read the complete reason, Goal ID, and requested/effective delays when clamping occurs.
+The call header does not repeat raw arguments; rejected calls retain their rejection message.
+Print, JSON, and RPC tool results keep their original content and structured details.
 
 An accepted call keeps the canonical Goal status active, checkpoints active elapsed time, and cancels pending continuation work.
 It persists the reason and optional absolute deadline and terminates the normal single-tool run.

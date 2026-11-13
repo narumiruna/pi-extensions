@@ -29,6 +29,7 @@ import {
   MIN_GOAL_WAIT_DELAY_MS,
   resolveGoalWaitDelay,
 } from "./wait.js";
+import { renderGoalWaitCall, renderGoalWaitResult } from "./wait-renderer.js";
 
 interface GoalCompleteDetails {
   goal: string;
@@ -260,6 +261,8 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalRuntime) {
   const goalWaitTool = defineTool({
     name: GOAL_WAIT_TOOL,
     label: "Goal Wait",
+    renderCall: renderGoalWaitCall,
+    renderResult: renderGoalWaitResult,
     description: `Keep an active /goal quiet only when the latest effective Goal contract explicitly says Goal mode is active, supplies the matching current goal_id, and progress depends on an arranged external wake event or one safety deadline. Tool visibility alone does not activate Goal mode. Call goal_wait alone. Requests below ${MIN_GOAL_WAIT_DELAY_MS}ms are clamped to ${MIN_GOAL_WAIT_DELAY_MS}ms. Never call for ordinary unfinished work.`,
     parameters: Type.Object({
       goal_id: Type.String({
