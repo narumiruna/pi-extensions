@@ -73,10 +73,8 @@ Use messaging only when needed:
 - If `subagent_wait` returns `reason: "subagent_message"`, handle the visible request or response and wait for the job again only when needed.
 - Answer a child-originated request by calling `subagent_send` with its `requestId`.
 
-Completion messages and child requests and responses follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
-Collapsed messages show a summary and the host's configured expansion keys.
-The hint is omitted when the action is unbound or an older host does not supply renderer key formatting.
-Expanded messages show the full content; this display state does not change the content sent to the model.
+Expand tool results and notifications with Pi's `app.tools.expand` binding (`Ctrl+O` by default).
+See [Conversation presentation](./docs/conversation-display.md) for tool summaries, notification details, and expansion behavior.
 
 ## 💬 Commands
 
@@ -337,6 +335,9 @@ packages/pi-subagents/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
 │   ├── subagents.ts                   # Commands and session lifecycle
+│   ├── tool-renderers.ts              # Conversation tool summaries and expanded details
+│   ├── message-renderers.ts           # Conversation completion and broker notifications
+│   ├── conversation-view.ts           # Shared bounded, sanitized conversation rendering
 │   ├── menu.ts                        # Job manager and session-local display controls
 │   ├── widget.ts                      # Retained widget ownership and event policies
 │   ├── widget-renderer.ts             # Bounded rows and active-job summaries

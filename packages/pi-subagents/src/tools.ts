@@ -25,6 +25,7 @@ import {
 } from "./resource-attachments.js";
 import { type RuntimeDependencies, type SubagentModelOverrides, SubagentRuntime } from "./runtime.js";
 import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
+import { subagentToolRenderers } from "./tool-renderers.js";
 import {
   CHILD_CORE_TOOL_NAMES,
   DEFAULT_SUBAGENT_TOOLS,
@@ -205,6 +206,7 @@ export function registerSubagentTools(
   pi.registerTool({
     name: "subagent_spawn",
     label: "Subagent · Spawn",
+    ...subagentToolRenderers("spawn"),
     description:
       "Use subagent_spawn to start one Pi subagent job and return its jobId immediately. The task defines the child's specialization; selected core tools and explicit trusted local skills or extensions define its initial capabilities. The job may ask the main agent questions and publishes one asynchronous completion when terminal.",
     promptSnippet: "Use subagent_spawn to start one Pi subagent job",
@@ -272,6 +274,7 @@ export function registerSubagentTools(
   pi.registerTool({
     name: "subagent_inspect",
     label: "Subagent · Inspect",
+    ...subagentToolRenderers("inspect"),
     description:
       "Use subagent_inspect to return one privacy-filtered snapshot of retained jobs without exposing task text, complete child output, prompts, selected tools, context, credentials, or broker messages.",
     promptSnippet: "Use subagent_inspect to inspect retained subagent jobs",
@@ -286,6 +289,7 @@ export function registerSubagentTools(
   pi.registerTool({
     name: "subagent_cancel",
     label: "Subagent · Cancel",
+    ...subagentToolRenderers("cancel"),
     description:
       "Use subagent_cancel to idempotently cancel one queued or running job and release its process, timer, broker credentials, and temporary resources. Terminal jobs remain unchanged.",
     promptSnippet: "Use subagent_cancel to cancel one active subagent job",
@@ -299,6 +303,7 @@ export function registerSubagentTools(
   pi.registerTool({
     name: "subagent_wait",
     label: "Subagent · Wait",
+    ...subagentToolRenderers("wait"),
     description:
       "Use subagent_wait to wait for one job to become terminal. An incoming child request or response interrupts the wait without cancelling the job. A timeout or caller cancellation stops only this wait.",
     promptSnippet: "Use subagent_wait to wait for one subagent job or incoming message",
@@ -313,6 +318,7 @@ export function registerSubagentTools(
   pi.registerTool({
     name: "subagent_send",
     label: "Subagent · Send",
+    ...subagentToolRenderers("send"),
     description:
       "Use subagent_send to send one request to an active job or answer one pending child request. For a new request, provide recipient and omit requestId. To answer a request, provide requestId and omit recipient. Provide exactly one of recipient or requestId. An accepted new request interrupts any active child response wait so delivery can proceed without consuming the child's original request.",
     promptSnippet: "Use subagent_send to send or answer one subagent message",
