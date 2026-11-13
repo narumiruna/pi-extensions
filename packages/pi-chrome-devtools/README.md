@@ -61,7 +61,8 @@ WebMCP remains disabled until you explicitly enable it.
 
 ## 🌐 Browser setup
 
-By default, the extension attaches to `http://127.0.0.1:9222` or launches an isolated local browser on first use.
+By default, the extension attaches to `http://127.0.0.1:9222` or launches an isolated local browser on an automatically selected nonzero port on first use.
+This avoids Chrome's port-`0` automation signal, but does not guarantee access to bot-protected sites.
 It never closes an external browser.
 Use `/chrome-devtools` → **Browser settings** to change the endpoint, auto-launch policy, or executable.
 
