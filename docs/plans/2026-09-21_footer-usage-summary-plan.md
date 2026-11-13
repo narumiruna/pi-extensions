@@ -1,12 +1,14 @@
 # Share footer usage summarization
 
+Status: not implemented. Both consumers still own their aggregation functions; Kit has no shared usage-summary API.
+
 ## Goal
 
-Replace the byte-identical footer usage implementations in `pi-statusline` and `pi-starship` with one focused Pi TUI Kit API while preserving totals, cache-hit calculations, rendered output, and standalone package compatibility.
+Replace the duplicated footer usage aggregation in `pi-statusline` and `pi-starship` with one focused Pi TUI Kit API while preserving totals, cache-hit calculations, rendered output, and standalone package compatibility.
 
 ## Context
 
-`packages/pi-statusline/src/usage.ts` and `packages/pi-starship/src/usage.ts` are byte-identical, as are their tests. Both aggregate assistant, tool-result, compaction, branch-summary, and explicit usage entries and derive the latest assistant cache-hit rate. Both consumers already depend on `@narumitw/pi-tui-kit`, satisfying the Kit admission rule that a public abstraction have at least two compatible consumers.
+`packages/pi-statusline/src/usage.ts` and `packages/pi-starship/src/usage.ts` still duplicate the aggregation function, but the complete files and tests are no longer identical. Starship also owns `latestTokensPerSecond`; keep that consumer-specific calculation local. Both aggregate assistant, tool-result, compaction, branch-summary, and explicit usage entries and derive the latest assistant cache-hit rate. Preserve current provider-cost provenance and confirmed zero-total behavior. Both consumers already depend on `@narumitw/pi-tui-kit`, satisfying the Kit admission rule that a public abstraction have at least two compatible consumers.
 
 Applicable rules:
 
@@ -54,7 +56,7 @@ flowchart LR
 - [ ] Raise the `pi-statusline` and `pi-starship` Kit dependency floors to the release containing the helper, run root `npm install`, and verify `npm ls @narumitw/pi-tui-kit` resolves the intended version.
 - [ ] Run focused Kit, statusline, and starship usage/rendering/lifecycle tests; verify every usage-bearing entry, zero-token behavior, latest-assistant rate, totals, and visible footer text match the baseline.
 - [ ] Build all three workspaces, run `npm run check` and plain `npm test`, and verify no tracked generated output differs unexpectedly.
-- [ ] Run `npm run package:pack -- pi-tui-kit`, `npm run package:pack -- pi-statusline`, and `npm run package:pack -- pi-starship`; inspect exports, declarations, generated runtimes, dependency floors, and package contents.
+- [ ] Run `npm run package:pack -- tui-kit`, `npm run package:pack -- statusline`, and `npm run package:pack -- starship`; inspect exports, declarations, generated runtimes, dependency floors, and package contents.
 - [ ] Smoke both consumers with Pi's Jiti loader against the packed dependency relationship and record test, pack, resolution, and smoke evidence in the handoff.
 
 ## Rollback / Recovery

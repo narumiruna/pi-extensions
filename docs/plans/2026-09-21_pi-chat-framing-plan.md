@@ -1,5 +1,7 @@
 # Share pi-chat length-prefixed framing
 
+Status: not implemented. Room and directory framing remain separate; symmetric framing coverage is still required.
+
 ## Goal
 
 Use one package-internal implementation for pi-chat's four-byte length-prefixed byte framing without merging room and directory protocols or changing encoded bytes, stream behavior, limits, parsing, or errors.
@@ -48,7 +50,7 @@ The shared module returns complete payload bytes. Protocol modules retain JSON s
 - [ ] Adapt `protocol.ts` to use the framer while retaining room JSON serialization, fatal UTF-8 decoding, message parsing, and exact errors.
 - [ ] Adapt `public-room-directory.ts` to use the framer while retaining directory JSON serialization, fatal UTF-8 decoding, message parsing, and exact errors.
 - [ ] Add symmetric room and directory tests for all framing equivalence classes, especially multiple coalesced frames larger in aggregate than one frame limit and boundaries split at each header byte.
-- [ ] Run pi-chat protocol, directory, network, and directory-network tests; verify encoded bytes and exact failures match the baseline.
+- [ ] Run `packages/pi-chat/test/protocol.test.ts`, `packages/pi-chat/test/directory.test.ts`, and `packages/pi-chat/test/network.test.ts`; directory-session transport coverage is in `directory.test.ts`, not a separate directory-network suite. Verify encoded bytes and exact failures match the baseline.
 - [ ] Audit socket cancellation, close, backpressure, decoder ownership, and untrusted-input handling to confirm the extraction did not alter transport lifecycle.
 - [ ] Build pi-chat, run `npm run check` and plain `npm test`, and verify no tracked generated output differs unexpectedly.
 - [ ] Smoke pi-chat through Pi's Jiti loader and record protocol tests, transport tests, and loader evidence in the handoff.

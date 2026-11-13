@@ -1,8 +1,10 @@
 # Verify ChatGPT OAuth Context Management
 
+Status: the authorized live compaction/replay probe is complete. The previously missing repository gate now passes; the original result-acknowledgement requirement remains open. No further hosted request, credential operation, or publication is authorized by this cleanup.
+
 ## Goal
 
-Determine whether the currently stored official OpenAI ChatGPT OAuth credential can complete remote compaction and checkpoint replay through the existing experimental `context-management` protocol on Pi 1.0.2.
+Retain the result and close acknowledgement of the October 5, 2026 probe: whether the tested official OpenAI ChatGPT OAuth credential could complete remote compaction and checkpoint replay through the experimental `context-management` protocol. The tested Pi release and model are historical evidence, not a current support guarantee.
 
 ## Context
 
@@ -60,7 +62,15 @@ The verification counts above describe the initial execution, not a passing revi
 
 ### Resumed live verification
 
-On October 5, 2026, the probe resumed on `narumi/docs/verify-refreshed-chatgpt-compaction` from `46a05a29` after #1440 merged. Compaction and ordinary checkpoint replay both returned HTTP 200 with Pi 1.0.2, official OpenAI OAuth, and `gpt-6.1-sol`. One validated opaque checkpoint recovered an assistant-only synthetic fact without the original plaintext. The stored token was valid at resolution time, so the approved refresh did not need to run. Exactly two model requests and zero refresh requests were sent; credential data and persistent settings remained unchanged, and temporary files were removed. For this follow-up, `npm run check` passed and all 262 package tests passed. A two-worker full `npm test` run reached the 300-second command deadline without a final result. It reported failures in unchanged `pi-sync` root-storage, Git backend/routes, and settings-management tests, plus `pi-goal` and `pi-statusline` generated-entry tests. Several were 5,000 ms timeouts; the concurrent-settings failure's cause is unverified. No per-test cap was increased or unrelated source changed. The required passing full-suite result remains missing.
+On October 5, 2026, the probe resumed on `narumi/docs/verify-refreshed-chatgpt-compaction` from `46a05a29` after #1440 merged. Compaction and ordinary checkpoint replay both returned HTTP 200 with Pi 1.0.2, official OpenAI OAuth, and `gpt-6.1-sol`. One validated opaque checkpoint recovered an assistant-only synthetic fact without the original plaintext. The stored token was valid at resolution time, so the approved refresh did not need to run. Exactly two model requests and zero refresh requests were sent; credential data and persistent settings remained unchanged, and temporary files were removed. For this follow-up, `npm run check` passed and all 262 package tests passed. A two-worker full `npm test` run reached the 300-second command deadline without a final result. It reported failures in unchanged `pi-sync` root-storage, Git backend/routes, and settings-management tests, plus `pi-goal` and `pi-statusline` generated-entry tests. Several were 5,000 ms timeouts; the concurrent-settings failure's cause is unverified. No per-test cap was increased or unrelated source changed. At that checkpoint the required passing full-suite result was missing; the later Cleanup verification below supersedes that repository-gate blocker.
+
+## Cleanup verification
+
+At repository baseline `01525ffe`, sequential `npm run check` and full `npm test` passed: 947 files, 21,379 tests, 34 skips, and no unhandled errors. This clears the current repository-gate blocker; it does not change the historical failed runs above or revalidate hosted entitlement. The probe outcome and all unverified provider/account paths remain in `docs/implementation-notes/chatgpt-oauth-compaction-verification.md`.
+
+## External Handoff
+
+The user owns the remaining result acknowledgement named by the original completion criterion. Review the retained evidence note and record acknowledgement or a concrete remaining concern. Expected result: a documented disposition of the observed streaming success and separate unary rejection, without a general entitlement claim. Other accounts/models, real-session recall, alternate provider routes, and cache performance remain unverified; no new hosted test is needed or authorized merely to close this plan. Publication remains outside scope.
 
 ## Completion Checklist
 
@@ -69,6 +79,7 @@ On October 5, 2026, the probe resumed on `narumi/docs/verify-refreshed-chatgpt-c
 - [x] A validated Context Management checkpoint and exact synthetic fact recovery were observed with original plaintext omitted. Prior blockers remain historical observations, not current blockers or evidence of protocol failure.
 - [x] The resumed probe dispatches at most two model requests: exactly two streaming Responses requests, zero OAuth refresh requests, and no retries or alternate routes. The original blocked execution dispatched zero.
 - [x] Remove all resumed temporary resources and preserve unrelated changes. Evidence: probe `finally` aborted controllers, cleared deadlines and listeners, restored the fetch wrapper, deleted the temporary directory, and confirmed all credential data was unchanged during the resumed process.
-- [ ] Both required repository gates must pass after subsequent repository changes before declaring those changes complete; retain passing evidence for `npm run check` and `npm test`. The initial execution passed both gates as recorded above; the resumed full-suite gate remains blocked by the reported failures and deadline recorded in Resumed live verification.
+- [x] Both required repository gates have current passing evidence. See Cleanup verification for the complete unfiltered run; historical follow-up failures remain recorded above.
 - [ ] The handoff names applicable guidance, the successful live smoke, verification results, risks, and unverified paths; the user accepts the observed result. The expired-credential blocker was superseded by the authorized resumed test, not accepted as proof of protocol failure.
-- [ ] Delete this plan only after all tasks and preceding completion checks are satisfied, and report its former path. Retained while final verification and result acknowledgement are pending.
+
+Delete this plan only after the remaining result acknowledgement is recorded, preserve the evidence note, and report the former plan path. Do not repeat hosted requests to obtain acknowledgement.

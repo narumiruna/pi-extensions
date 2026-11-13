@@ -1,5 +1,7 @@
 # Share pi-langfuse bounded-text truncation
 
+Status: not implemented. Sanitizer and tracing still own separate UTF-8 truncation helpers.
+
 ## Goal
 
 Use one package-internal UTF-8 byte-bounded truncation implementation for sanitized content and allowlisted response headers without changing suffixes, byte limits, Unicode handling, metadata, or redaction.
@@ -8,7 +10,7 @@ Use one package-internal UTF-8 byte-bounded truncation implementation for saniti
 
 `packages/pi-langfuse/src/sanitizer.ts` and `packages/pi-langfuse/src/tracing.ts` contain the same `truncateString` and UTF-8 byte-length logic. Sanitization uses one copy for bounded content; response metadata uses the other for allowlisted header values.
 
-The implementations represent the same concept and should evolve together, but redaction policy and response-header allowlisting remain distinct responsibilities.
+The implementations represent the same concept and should evolve together, but redaction policy and response-header allowlisting remain distinct responsibilities. Durable tracing now also consumes the sanitizer through `src/durable-projection.ts` and `src/durable-recorder.ts`; preserve that privacy contract during extraction.
 
 ## Non-Goals
 
@@ -31,7 +33,7 @@ The implementations represent the same concept and should evolve together, but r
 - [ ] Replace the duplicate tracing helper with the internal module while preserving header normalization, allowlisting, metadata keys, and maximum header value length.
 - [ ] Add focused tests proving multibyte response headers are truncated to the same byte boundary and suffix as sanitized strings, while disallowed and sensitive headers remain absent.
 - [ ] Audit the diff for secret redaction, bounded work, hostile input, terminal-independent metadata, and unchanged provider-response recording.
-- [ ] Run `npx vitest run packages/pi-langfuse/test/sanitizer.test.ts packages/pi-langfuse/test/recorder.test.ts packages/pi-langfuse/test/runtime.test.ts packages/pi-langfuse/test/extension.test.ts`.
+- [ ] Run `npx vitest run packages/pi-langfuse/test/sanitizer.test.ts packages/pi-langfuse/test/recorder.test.ts packages/pi-langfuse/test/runtime.test.ts packages/pi-langfuse/test/extension.test.ts packages/pi-langfuse/test/durable.test.ts packages/pi-langfuse/test/durable-content.test.ts packages/pi-langfuse/test/durable-review.test.ts`.
 - [ ] Build pi-langfuse, run `npm run check` and plain `npm test`, and verify no tracked generated output differs unexpectedly.
 - [ ] Smoke pi-langfuse through Pi's Jiti loader without making a live provider request and record focused tests, build, and loader evidence in the handoff.
 
