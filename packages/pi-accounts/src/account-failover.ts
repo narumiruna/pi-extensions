@@ -56,6 +56,9 @@ export class AccountFailover {
 
   async reload(): Promise<void> {
     const generation = ++this.generation;
+    // No automatic decision may use cached settings while a reload is pending or failed.
+    this.policies.clear();
+    this.active?.controller.abort();
     const data = await this.store.readAsync(this.owner.signal);
     if (!this.current() || generation !== this.generation) return;
     const policies = new Map<AccountProviderId, Policy>();
@@ -66,7 +69,6 @@ export class AccountFailover {
     this.policies = policies;
     this.checks.clear();
     this.excluded.clear();
-    this.active?.controller.abort();
     for (const [provider, policy] of policies) {
       if (policy.error) this.note(this.owner.context, provider, policy.error);
     }
@@ -107,7 +109,10 @@ export class AccountFailover {
 
   async settled(ctx: ExtensionContext): Promise<void> {
     if (!this.current() || !ctx.isIdle()) return;
-    for (const [provider, recovery] of this.recovery) await this.restore(ctx, provider, recovery);
+    for (const [provider, recovery] of this.recovery) {
+      if (!this.current() || !ctx.isIdle()) return;
+      await this.restore(ctx, provider, recovery);
+    }
   }
 
   async prepare(ctx: ExtensionContext): Promise<void> {
@@ -287,7 +292,7 @@ export class AccountFailover {
         if (candidateQuota.kind !== "low") break;
         this.exclude(provider, candidate, candidateQuota);
       }
-      this.note(ctx, provider, "No verified adequate backup; restoring the original account.");
+      if (owned()) this.note(ctx, provider, "No verified adequate backup; restoring the original account.");
     } catch {
       // Failure is not permission to try another account. Restore only our own selection.
       if (owned())
@@ -298,7 +303,12 @@ export class AccountFailover {
   }
 
   private async restore(ctx: ExtensionContext, provider: AccountProviderId, recovery: Recovery): Promise<boolean> {
-    const owned = () => this.current() && (this.owner.selectionRevisions.get(provider) ?? 0) === recovery.revision;
+    let syncTask: ReturnType<SyncProvider> | undefined;
+    const owned = () =>
+      this.current() &&
+      this.recovery.get(provider) === recovery &&
+      (this.owner.selectionRevisions.get(provider) ?? 0) === recovery.revision &&
+      (!syncTask || this.owner.syncTasks.get(provider) === syncTask);
     if (!owned()) {
       if (this.recovery.get(provider) === recovery) this.recovery.delete(provider);
       return false;
@@ -322,7 +332,8 @@ export class AccountFailover {
         if (!this.stage(provider, recovery.account, owned)) return false;
         recovery.revision = this.owner.selectionRevisions.get(provider) ?? 0;
       }
-      const result = await wait(this.sync(provider, ctx, this.owner, signal, ctx.model, true), signal);
+      syncTask = this.sync(provider, ctx, this.owner, signal, ctx.model, true);
+      const result = await wait(syncTask, signal);
       if (!owned()) return false;
       if (
         result.status === "error" ||
@@ -340,7 +351,7 @@ export class AccountFailover {
         this.owner.abortProviders.add(provider);
         this.owner.pendingInvalidations.add(provider);
         this.note(ctx, provider, "Account recovery failed; requests remain blocked. Select an account from /accounts.");
-        ctx.abort();
+        if (ctx.model?.provider === provider) ctx.abort();
         if (coordinator) {
           const block = new AbortController();
           const deadline = setTimeout(() => block.abort(), BLOCK_MS);

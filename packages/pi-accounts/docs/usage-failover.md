@@ -113,7 +113,8 @@ Manual and protocol selections supersede pending automatic work. A later automat
 Successful switching stays in the current session's existing selection record and survives resume or reload.
 Other sessions and startup defaults do not change. New sessions keep their existing default-snapshot rules.
 
-Disabling failover cancels pending decisions. It does not switch back after an already accepted change.
+Disabling failover cancels pending decisions. Policy reload also suspends automatic decisions before reading storage; a failed read cannot keep an old enabled policy active.
+Disabling does not switch back after an already accepted change.
 Use the existing account picker to choose another account explicitly.
 
 Restoration clears the trial choice and verifies the last accepted account. It must never overwrite a newer manual selection or restore old OAuth token bytes.
@@ -130,7 +131,9 @@ Reverting this feature does not remove existing session choices or credentials. 
 ## Implementation evidence and external verification
 
 The runtime audit covers initial prompts, tool-loop requests, queued continuations, cancellation, and final settlement.
-Installed Pi awaits extension `turn_start` handlers before `prepareRequest` and provider streaming; `agent_end` can precede retries and continuations, while `agent_settled` is idle.
+Installed Pi awaits extension `turn_start` handlers before `prepareRequest` and provider streaming; `agent_end` can precede retries and continuations, while `agent_settled` starts at idle.
+Pi defers prompts submitted during settlement. However, a prompt already waiting in an input hook can start during a settled handler.
+Recovery checks the current recovery record after each wait. Old recovery cannot replace newer verified authentication. The settled loop checks idle state before each provider so it cannot undo a new active trial. A failed recovery blocks its own provider; it does not abort another provider's active run.
 Automatic activation uses the existing account-owned sync with its pre-request cleanup permission, not the public activation protocol's out-of-boundary behavior.
 OAuth readiness waits for authentication sync, not the failover query itself, so usage reads do not create a readiness cycle.
 

@@ -317,8 +317,11 @@ for (const afterActivation of [false, true]) {
 
 for (const method of ["manual", "protocol"] as const) {
   test(`a newer ${method} selection supersedes delayed automatic evidence and cannot be restored over`, async () => {
+    const reload = vi.spyOn(AccountFailover.prototype, "reload");
     const f = await failoverFixture({ active: "primary", fallback: enabled() });
     await f.start();
+    const controller = reload.mock.contexts.at(-1) as InstanceType<typeof AccountFailover> | undefined;
+    assert.ok(controller);
     const entered = Promise.withResolvers<UsageCall>();
     const release = Promise.withResolvers<unknown>();
     f.offer((call) => {
@@ -338,6 +341,8 @@ for (const method of ["manual", "protocol"] as const) {
       assert.equal(call.request.signal.aborted, true);
       assert.equal(f.selection(), "manual");
       assert.equal(await f.key(), keyFor("manual"));
+      assert.ok(!f.notifications.some(({ message }) => message.includes("restoring the original account")));
+      assert.ok(!controller.status(f.id).includes("restoring the original account"));
       assert.ok(!f.queries.some((query) => query.key === keyFor("spare")));
       f.newRun();
       f.offer(() => allowance(f.ctx, 50));

@@ -57,7 +57,7 @@ function normalized(context: TranscriptContext) {
   };
 }
 
-async function runtimeFixture() {
+async function runtimeFixture(onInput?: (text: string) => Promise<void>) {
   const root = await mkdtemp(join(agentDir, "runtime-"));
   const store = new AccountStore(new InMemoryAccountStorageBackend());
   await store.updateProvider("openrouter", () => ({
@@ -106,6 +106,11 @@ async function runtimeFixture() {
     extensionFactories: [
       (pi) => accountsExtension(pi, { store, providers: [adapter] }),
       (pi) => {
+        if (onInput)
+          pi.on("input", async (event) => {
+            await onInput(event.text);
+            return { action: "continue" };
+          });
         pi.on("session_start", (_event, current) => {
           ctx = current;
         });
@@ -438,3 +443,73 @@ for (const result of ["unknown quota", "unavailable model"] as const) {
     }
   });
 }
+
+test("a prompt already in input handling cannot let old settled recovery block newer verified authentication", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const inputEntered = Promise.withResolvers<void>();
+  const releaseInput = Promise.withResolvers<void>();
+  const f = await runtimeFixture(async (text) => {
+    if (text !== "Second prompt") return;
+    inputEntered.resolve();
+    await releaseInput.promise;
+  });
+  const candidateEntered = Promise.withResolvers<void>();
+  const releaseQuota = Promise.withResolvers<unknown>();
+  const recoveryEntered = Promise.withResolvers<void>();
+  const releaseRecovery = Promise.withResolvers<void>();
+  const keys: Array<string | undefined> = [];
+  let queries = 0;
+  let restorations = 0;
+  const cleanup = f.adapter.invalidateConnections;
+  assert.ok(cleanup);
+  f.adapter.invalidateConnections = async (session) => {
+    if (queries >= 2 && (await f.ctx.modelRegistry.getApiKeyForProvider("openrouter")) === keyFor("primary")) {
+      restorations++;
+      if (restorations === 1) throw new Error("Synthetic initial restoration failure");
+      if (restorations === 2) {
+        recoveryEntered.resolve();
+        await releaseRecovery.promise;
+      }
+    }
+    await cleanup(session);
+  };
+  const unsubscribe = f.bus.on("usage:query:v1", (value) => {
+    queries++;
+    if (queries === 1) (value as UsageRequest).respond(allowance(f.ctx, 0));
+    else {
+      candidateEntered.resolve();
+      (value as UsageRequest).respond(releaseQuota.promise);
+    }
+  });
+  f.faux.setResponses([
+    (_context, options) => {
+      keys.push(options?.apiKey);
+      return fauxAssistantMessage("A newer request after verified recovery");
+    },
+  ]);
+  const first = f.session.prompt("First prompt");
+  await candidateEntered.promise;
+  const second = f.session.prompt("Second prompt");
+  await inputEntered.promise;
+  releaseQuota.resolve({ status: "unavailable", providerId: "openrouter", reason: "auth-unavailable" });
+  await recoveryEntered.promise;
+  try {
+    releaseInput.resolve();
+    await second;
+    assert.deepEqual(keys, [keyFor("primary")]);
+    assert.equal(await f.ctx.modelRegistry.getApiKeyForProvider("openrouter"), keyFor("primary"));
+    // The old settled recovery is still waiting for obsolete connection cleanup.
+    await vi.advanceTimersByTimeAsync(14_000);
+    await first;
+    assert.equal(await f.ctx.modelRegistry.getApiKeyForProvider("openrouter"), keyFor("primary"));
+    assert.equal(f.faux.state.callCount, 1);
+    assert.equal(queries, 2);
+  } finally {
+    releaseInput.resolve();
+    releaseRecovery.resolve();
+    releaseQuota.resolve(undefined);
+    await Promise.allSettled([first, second]);
+    unsubscribe();
+    await f.shutdown();
+  }
+});
