@@ -117,6 +117,7 @@ function normalizeAllowance(
   const details = asObject(payload.rate_limit);
   if (!details) return;
   const bucketIds: string[] = [];
+  let exhausted = false;
   // Null explicitly means no constraint. Missing or malformed windows cannot prove full coverage.
   let complete = Object.keys(details).every((key) =>
     ["allowed", "limit_reached", "primary_window", "secondary_window"].includes(key),
@@ -149,8 +150,12 @@ function normalizeAllowance(
       continue;
     }
     bucketIds.push(`codex:${position}`);
+    exhausted ||= used === 100;
   }
   if (!bucketIds.length) return;
+  // The backend requires both booleans. Complete measurement coverage also requires agreement
+  // with the valid windows; permission alone does not change counters or prove a request will fail.
+  if (details.allowed !== !exhausted || details.limit_reached !== exhausted) complete = false;
   // Additional metered features are opaque. They may constrain this model; do not guess from labels.
   if (
     payload.additional_rate_limits !== null &&

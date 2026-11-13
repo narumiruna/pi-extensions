@@ -36,7 +36,7 @@ function window(used = 97) {
 }
 function payload(): CodexBackendPayload {
   return {
-    rate_limit: { primary_window: window(), secondary_window: window(20) },
+    rate_limit: { allowed: true, limit_reached: false, primary_window: window(), secondary_window: window(20) },
     additional_rate_limits: [],
     credits: { has_credits: true, balance: 500 },
   };
@@ -45,6 +45,13 @@ function report() {
   const result = normalizeCodexBackendPayload(payload(), NOW, MODEL.id);
   assert.ok(result.allowance);
   return { ...result, allowance: result.allowance };
+}
+function expectDisplayPreserved(input: CodexBackendPayload, result: UsageReport) {
+  const display = normalizeCodexBackendPayload(input, NOW);
+  const { allowance, ...withoutEvidence } = result;
+  expect(withoutEvidence).toEqual(display);
+  expect(display).not.toHaveProperty("allowance");
+  expect(copyUsageReportForApi(result)).toEqual({ ...copyUsageReportForApi(display), allowance });
 }
 afterEach(() => {
   vi.restoreAllMocks();
@@ -64,6 +71,101 @@ describe("Codex ordinary included allowance", () => {
     expect(result.buckets[0]).toMatchObject({ used: 97, remaining: 3, modelKeys: ["codex", "Codex"] });
     expect(result.metrics).toContainEqual({ id: "credits", label: "Credits", value: 500, unit: "count" });
   });
+
+  describe.each([
+    { allowed: true, limit_reached: false, healthy: "complete", exhausted: "partial" },
+    { allowed: false, limit_reached: true, healthy: "partial", exhausted: "complete" },
+    { allowed: true, limit_reached: true, healthy: "partial", exhausted: "partial" },
+    { allowed: false, limit_reached: false, healthy: "partial", exhausted: "partial" },
+  ])("allowed=$allowed, limit_reached=$limit_reached", ({ allowed, limit_reached, healthy, exhausted }) => {
+    it.each([
+      { name: "unused", primary: 0, secondary: null, coverage: healthy },
+      { name: "healthy", primary: 20, secondary: null, coverage: healthy },
+      { name: "low", primary: 97, secondary: null, coverage: healthy },
+      { name: "nearly exhausted", primary: 99.9, secondary: null, coverage: healthy },
+      { name: "exhausted", primary: 100, secondary: null, coverage: exhausted },
+      { name: "secondary only", primary: null, secondary: 20, coverage: healthy },
+      { name: "healthy multiwindow", primary: 20, secondary: 10, coverage: healthy },
+      { name: "low multiwindow", primary: 20, secondary: 97, coverage: healthy },
+      { name: "exhausted primary", primary: 100, secondary: 20, coverage: exhausted },
+      { name: "exhausted secondary", primary: 20, secondary: 100, coverage: exhausted },
+      { name: "both exhausted", primary: 100, secondary: 100, coverage: exhausted },
+    ])("keeps $name measurements with $coverage coverage", ({ primary, secondary, coverage }) => {
+      const input = {
+        rate_limit: {
+          allowed,
+          limit_reached,
+          primary_window: primary === null ? null : window(primary),
+          secondary_window: secondary === null ? null : window(secondary),
+        },
+      };
+      const result = normalizeCodexBackendPayload(input, NOW, MODEL.id);
+      expect(result.allowance).toMatchObject({
+        coverage,
+        bucketIds: [primary === null ? [] : ["codex:primary"], secondary === null ? [] : ["codex:secondary"]].flat(),
+      });
+      expect(result.buckets.map(({ used, remaining }) => ({ used, remaining }))).toEqual(
+        [primary, secondary].filter((used) => used !== null).map((used) => ({ used, remaining: 100 - used })),
+      );
+      expectDisplayPreserved(input, result);
+    });
+
+    it.each([
+      { name: "missing secondary", constraints: {} },
+      {
+        name: "expired exhausted secondary",
+        constraints: { secondary_window: { ...window(100), reset_at: NOW / 1_000 } },
+      },
+      {
+        name: "malformed exhausted secondary",
+        constraints: { secondary_window: { ...window(100), used_percent: "100" } },
+      },
+      { name: "unknown constraint", constraints: { secondary_window: null, third_window: {} } },
+      { name: "additional constraint", constraints: { secondary_window: null }, additional: [{}] },
+      { name: "malformed additional constraint", constraints: { secondary_window: null }, additional: {} },
+    ])("does not repair $name coverage with flags", ({ constraints, additional }) => {
+      const input = {
+        rate_limit: { allowed, limit_reached, primary_window: window(97), ...constraints },
+        additional_rate_limits: additional,
+      };
+      const result = normalizeCodexBackendPayload(input, NOW, MODEL.id);
+      expect(result.allowance).toMatchObject({ coverage: "partial", bucketIds: ["codex:primary"] });
+      expect(result.buckets[0]).toMatchObject({ used: 97, remaining: 3 });
+      expectDisplayPreserved(input, result);
+    });
+  });
+
+  describe.each(["allowed", "limit_reached"] as const)("required %s boolean", (flag) => {
+    it.each([undefined, null, "true", "false", 0, 1, {}, []])("does not coerce %j into complete coverage", (value) => {
+      for (const used of [20, 97, 100]) {
+        const input = {
+          rate_limit: {
+            allowed: used !== 100,
+            limit_reached: used === 100,
+            [flag]: value,
+            primary_window: window(used),
+            secondary_window: null,
+          },
+        };
+        const result = normalizeCodexBackendPayload(input, NOW, MODEL.id);
+        expect(result.allowance).toMatchObject({ coverage: "partial", bucketIds: ["codex:primary"] });
+        expect(result.buckets[0]).toMatchObject({ used, remaining: 100 - used });
+        expectDisplayPreserved(input, result);
+      }
+    });
+  });
+
+  it.each([{}, { allowed: true }, { allowed: false }, { limit_reached: false }, { limit_reached: true }])(
+    "does not treat omitted flags as permission: %j",
+    (flags) => {
+      for (const used of [20, 97, 100]) {
+        const input = { rate_limit: { ...flags, primary_window: window(used), secondary_window: null } };
+        const result = normalizeCodexBackendPayload(input, NOW, MODEL.id);
+        expect(result.allowance).toMatchObject({ coverage: "partial", bucketIds: ["codex:primary"] });
+        expectDisplayPreserved(input, result);
+      }
+    },
+  );
 
   it.each([undefined, "gpt-reserve", "gpt-5.6-luna", "gpt-6.1-sol", "namespace/gpt-5.6-sol", "GPT-5.6 Sol"])(
     "does not invent exact applicability for %s",
@@ -92,15 +194,27 @@ describe("Codex ordinary included allowance", () => {
 
   it("distinguishes an explicit absent window from incomplete coverage", () => {
     const explicit = normalizeCodexBackendPayload(
-      { rate_limit: { primary_window: window(), secondary_window: null } },
+      { rate_limit: { allowed: true, limit_reached: false, primary_window: window(), secondary_window: null } },
       NOW,
       MODEL.id,
     );
     expect(explicit.allowance).toMatchObject({ coverage: "complete", bucketIds: ["codex:primary"] });
-    const missing = normalizeCodexBackendPayload({ rate_limit: { primary_window: window() } }, NOW, MODEL.id);
+    const missing = normalizeCodexBackendPayload(
+      { rate_limit: { allowed: true, limit_reached: false, primary_window: window() } },
+      NOW,
+      MODEL.id,
+    );
     expect(missing.allowance).toMatchObject({ coverage: "partial", bucketIds: ["codex:primary"] });
     const future = normalizeCodexBackendPayload(
-      { rate_limit: { primary_window: window(), secondary_window: null, third_window: {} } },
+      {
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          primary_window: window(),
+          secondary_window: null,
+          third_window: {},
+        },
+      },
       NOW,
       MODEL.id,
     );
@@ -124,7 +238,14 @@ describe("Codex ordinary included allowance", () => {
     { reset_at: undefined },
   ])("keeps malformed/expired windows display-only: %j", (changes) => {
     const result = normalizeCodexBackendPayload(
-      { rate_limit: { primary_window: { ...window(), ...changes }, secondary_window: window(10) } },
+      {
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          primary_window: { ...window(), ...changes },
+          secondary_window: window(10),
+        },
+      },
       NOW,
       MODEL.id,
     );
@@ -145,10 +266,31 @@ describe("Codex ordinary included allowance", () => {
     expect(() => copyUsageReportForApi(result)).not.toThrow();
   });
 
-  it("does not promote a credits-only result or an empty constraint set", () => {
-    for (const rate_limit of [undefined, null, {}, { primary_window: null, secondary_window: null }]) {
-      expect(normalizeCodexBackendPayload({ ...payload(), rate_limit }, NOW, MODEL.id)).not.toHaveProperty("allowance");
-    }
+  it.each([
+    undefined,
+    null,
+    {},
+    { primary_window: null, secondary_window: null },
+    ...[true, false].flatMap((allowed) =>
+      [true, false].map((limit_reached) => ({
+        allowed,
+        limit_reached,
+        primary_window: null,
+        secondary_window: null,
+      })),
+    ),
+    {
+      allowed: false,
+      limit_reached: true,
+      primary_window: { ...window(), used_percent: "100" },
+      secondary_window: null,
+    },
+  ])("does not promote credits or flags without valid numeric windows: %j", (rate_limit) => {
+    const input = { ...payload(), rate_limit };
+    const result = normalizeCodexBackendPayload(input, NOW, MODEL.id);
+    expect(result).not.toHaveProperty("allowance");
+    expect(result).toEqual(normalizeCodexBackendPayload(input, NOW));
+    expect(copyUsageReportForApi(result)).not.toHaveProperty("allowance");
   });
 });
 

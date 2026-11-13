@@ -17,6 +17,8 @@ function response() {
   return new Response(
     JSON.stringify({
       rate_limit: {
+        allowed: true,
+        limit_reached: false,
         primary_window: {
           used_percent: 98,
           limit_window_seconds: 18_000,
