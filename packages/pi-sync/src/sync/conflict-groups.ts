@@ -30,7 +30,10 @@ export function conflictGroups(plan: Extract<FileMergePlan, { kind: "planned" }>
     else byIdentity.set(value, index);
   });
   const includes = new Set(
-    config.include
+    (config.syncIgnore === undefined
+      ? config.include
+      : paths.filter((value) => value.includes("/")).map((value) => value.split("/")[0] ?? "")
+    )
       .filter((value) => !["settings.json", "AGENTS.md", "sessions"].includes(value))
       .map(mergePathIdentity),
   );

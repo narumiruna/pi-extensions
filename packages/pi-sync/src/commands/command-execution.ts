@@ -271,7 +271,9 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `startup transfer: ${startupTransferSummary(config)}`,
       `autonomous sync: ${config.agentMode ? "On" : "Off"}`,
       `continuous sync: ${config.continuous ? (config.agentMode ? "On" : "paused; Autonomous sync is Off") : "Off"}`,
-      `included content: ${config.include.join(", ") || "none"}`,
+      config.syncIgnore === undefined
+        ? `included content: ${config.include.join(", ") || "none"}`
+        : "content: all non-excluded files · shared .syncignore",
       `sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,
       ...warnings,

@@ -17,6 +17,7 @@ import {
   chooseSetupContent,
   includedContentLines,
   readSetupConnection,
+  setupSyncPolicy,
 } from "./setup-prompts.js";
 import { saveReviewedDraft } from "./setup-review.js";
 import { requiredInput, requiredValueInput } from "./text-input.js";
@@ -77,6 +78,7 @@ export async function showS3Setup(
       saveNewV3Settings(
         {
           setupName: targetName,
+          expectedSyncIgnore: include.syncIgnore,
           connectionName: location.connectionName,
           connection: {
             type: "s3",
@@ -93,7 +95,7 @@ export async function showS3Setup(
               bucket: location.bucket,
               path: location.path,
             },
-            sync: { include: [...include, ...(sessions ? ["sessions"] : [])], automatic },
+            sync: setupSyncPolicy(include, automatic, sessions),
           },
         },
         saveSignal,
@@ -139,7 +141,14 @@ export async function showAddS3Target(
       "The bucket must already exist. Adding this setup does not sync or modify remote data.",
     ],
     "Add sync setup",
-    (saveSignal) => addSyncSetup(name, { storage, sync: { include, automatic } }, saveSignal, connection),
+    (saveSignal) =>
+      addSyncSetup(
+        name,
+        { storage, sync: setupSyncPolicy(include, automatic) },
+        saveSignal,
+        connection,
+        include.syncIgnore,
+      ),
     signal,
   );
   if (!saved || signal?.aborted) return;

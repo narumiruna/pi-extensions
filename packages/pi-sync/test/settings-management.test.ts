@@ -57,9 +57,7 @@ test.each([
       "Cloudflare R2",
       "Use an existing bucket at ./",
       "Store credentials privately",
-      "Recommended Pi settings",
       "Enable automatic sync",
-      "Keep sessions off (recommended)",
       "Save sync setup",
       undefined,
     ];
@@ -121,9 +119,7 @@ test.each(
       preset,
       "Use an existing bucket at ./",
       "Store credentials privately",
-      "Minimal settings",
       "Keep automatic sync off",
-      "Keep sessions off (recommended)",
       "Save sync setup",
     ];
     const inputs = [
@@ -179,9 +175,7 @@ test("generic S3 setup reviews one complete custom storage path", async () => {
       "Other S3-compatible storage",
       "Customize remote location",
       "Store credentials privately",
-      "Minimal settings",
       "Keep automatic sync off",
-      "Keep sessions off (recommended)",
       "Save sync setup",
       undefined,
     ];
@@ -211,7 +205,7 @@ test("generic S3 setup reviews one complete custom storage path", async () => {
   });
 });
 
-test("session inclusion requires privacy acknowledgement before settings publication", async () => {
+test("new setup excludes sessions through shared ignore rules without a separate content list", async () => {
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
     const mock = createMockPi();
@@ -221,9 +215,9 @@ test("session inclusion requires privacy acknowledgement before settings publica
       "Cloudflare R2",
       "Use an existing bucket at ./",
       "Store credentials privately",
-      "Recommended Pi settings",
       "Keep automatic sync off",
-      "Include session conversations",
+      "Save sync setup",
+      undefined,
     ];
     const inputs = ["home", "https://account.r2.cloudflarestorage.com", "existing-bucket", "access-key"];
     let privacyShown = false;
@@ -239,8 +233,9 @@ test("session inclusion requires privacy acknowledgement before settings publica
       custom: secretInput("secret-key"),
     });
     await mock.commands.get("sync")?.handler("", ctx);
-    assert.equal(privacyShown, true);
-    assert.equal(await readLocalConfigObject(), undefined);
+    assert.equal(privacyShown, false);
+    assert.equal((await readLocalConfigObject())?.version, 6);
+    assert.equal((await loadConfig()).include.includes("sessions"), false);
   });
 });
 

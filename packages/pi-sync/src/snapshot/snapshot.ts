@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeniedPath, posixJoin, safeJoin, toPosix } from "../paths.js";
+import { readSyncIgnoreFile } from "../settings/sync-ignore-file.js";
+import { SYNC_IGNORE_NAME, syncIgnoreAllows } from "../sync/sync-ignore.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 
@@ -20,6 +22,7 @@ import {
   normalizeExtraFiles,
   normalizeSyncFiles,
   type SyncSelectionConfig,
+  selectionForConfig,
   selectionForSnapshot,
   snapshotSelectionInclude,
   syncIncludeSelection,
@@ -71,7 +74,7 @@ function snapshotsMatch(left: Snapshot, right: Snapshot) {
   const rightHashes = new Map(right.files.map((file) => [file.path, file.sha256]));
   return (
     left.syncSessions === right.syncSessions &&
-    sameOptionalInclude(snapshotSelectionInclude(left), snapshotSelectionInclude(right)) &&
+    JSON.stringify(left.selection) === JSON.stringify(right.selection) &&
     leftHashes.size === rightHashes.size &&
     [...leftHashes].every(([filePath, hash]) => rightHashes.get(filePath) === hash)
   );
@@ -92,20 +95,28 @@ export function regenerateSnapshotIdentity(snapshot: Snapshot): Snapshot {
 
 export async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
   options.signal?.throwIfAborted();
-  const include = effectiveInclude(options);
+  const include = includeFromSelectionConfig({ ...options, include: effectiveInclude(options) });
   const syncSessions = include.includes("sessions");
   const sessionDir = options.sessionDir ?? (await configuredSessionDir());
   options.signal?.throwIfAborted();
-  const files = await collectFiles(agentDir(), { include, sessionDir, signal: options.signal });
+  const files = await collectFiles(agentDir(), {
+    include,
+    syncIgnore: options.syncIgnore,
+    sessionDir,
+    signal: options.signal,
+  });
+  options.signal?.throwIfAborted();
+  if (options.syncIgnore !== undefined && ((await readSyncIgnoreFile()) ?? "") !== options.syncIgnore)
+    throw new Error(".syncignore changed while collecting files; review the current rules and retry.");
   options.signal?.throwIfAborted();
   return {
-    version: VERSION,
+    version: options.syncIgnore === undefined ? VERSION : 4,
     id: snapshotId(),
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
     profile,
     syncSessions,
-    selection: selectionForSnapshot(include),
+    selection: selectionForConfig({ include, syncIgnore: options.syncIgnore }),
     files,
   };
 }
@@ -125,6 +136,24 @@ export async function collectFiles(root: string, options: SnapshotOptions = {}):
   const results: SnapshotFile[] = [];
   const entries = await fs.readdir(root, { withFileTypes: true });
   signal?.throwIfAborted();
+  if (options.syncIgnore !== undefined) {
+    await collectDirectory(results, root, "", { signal, syncIgnore: options.syncIgnore, skipSessions: true });
+    if (syncIgnoreAllows(options.syncIgnore, "sessions", true)) {
+      try {
+        await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
+          signal,
+          syncIgnore: options.syncIgnore,
+          sessionsOnly: true,
+          virtualPrefix: "sessions",
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    const content = Buffer.from(options.syncIgnore);
+    results.push({ path: SYNC_IGNORE_NAME, contentBase64: content.toString("base64"), sha256: sha256(content) });
+    return results.sort((left, right) => left.path.localeCompare(right.path));
+  }
   const selection = syncIncludeSelection(effectiveInclude(options));
   const selectedFiles = new Set<string>(selection.builtIns);
   for (const entry of entries) {
@@ -178,7 +207,13 @@ async function collectDirectory(
   results: SnapshotFile[],
   root: string,
   relativeDirectory: string,
-  options: { sessionsOnly?: boolean; virtualPrefix?: string; signal?: AbortSignal } = {},
+  options: {
+    sessionsOnly?: boolean;
+    virtualPrefix?: string;
+    signal?: AbortSignal;
+    syncIgnore?: string;
+    skipSessions?: boolean;
+  } = {},
 ) {
   options.signal?.throwIfAborted();
   const absoluteDirectory = path.join(root, relativeDirectory);
@@ -187,6 +222,13 @@ async function collectDirectory(
     const relativePath = relativeDirectory ? posixJoin(relativeDirectory, entry.name) : entry.name;
     const snapshotPath = options.virtualPrefix ? posixJoin(options.virtualPrefix, relativePath) : relativePath;
     if (isDeniedPath(snapshotPath)) continue;
+    if (
+      options.syncIgnore !== undefined &&
+      (snapshotPath === SYNC_IGNORE_NAME ||
+        (options.skipSessions && snapshotPath === "sessions") ||
+        !syncIgnoreAllows(options.syncIgnore, snapshotPath, entry.isDirectory()))
+    )
+      continue;
     if (entry.isDirectory()) {
       await collectDirectory(results, root, relativePath, options);
     } else if (entry.isFile() && (!options.sessionsOnly || isSessionFilePath(snapshotPath))) {
@@ -257,7 +299,7 @@ export function filterSnapshotForConfigPolicy(
   const filtered = {
     ...snapshot,
     syncSessions: include.includes("sessions") ? snapshot.syncSessions : false,
-    selection: selectionForSnapshot(include),
+    selection: selectionForConfig(config),
     files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, includePaths),
   };
   if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
@@ -315,7 +357,7 @@ export function snapshotWithoutSessions(snapshot: Snapshot) {
   if (
     files.length === snapshot.files.length &&
     snapshot.syncSessions !== true &&
-    include?.length === snapshot.selection?.include.length
+    (snapshot.selection?.version !== 1 || include?.length === snapshot.selection.include.length)
   ) {
     return snapshot;
   }
@@ -399,9 +441,4 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
       left.path.localeCompare(right.path),
     ),
   };
-}
-
-function sameOptionalInclude(left: string[] | undefined, right: string[] | undefined) {
-  if (!left || !right) return left === right;
-  return left.length === right.length && left.every((item, index) => item === right[index]);
 }

@@ -14,16 +14,11 @@ import {
 import { v3S3Settings, v3WebDavSettings, withTempHome } from "./helpers.js";
 import { createMockContext } from "./setup-test-context.js";
 
-test("first WebDAV setup stores masked credentials in the exact version 3 shape", async () => {
+test("first WebDAV setup stores masked credentials with shared ignore rules", async () => {
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
     const inputs = ["https://cloud.example.com/remote.php/dav/files/user", "user", "pi-sync/home"];
-    const choices = [
-      "Recommended Pi settings",
-      "Enable automatic sync",
-      "Keep sessions off (recommended)",
-      "Save setup",
-    ];
+    const choices = ["Enable automatic sync", "Save setup"];
     const rendered: string[] = [];
     const { ctx } = createMockContext({
       hasUI: true,

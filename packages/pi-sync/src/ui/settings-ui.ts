@@ -91,11 +91,19 @@ export async function showSyncSettings(
     | "remote-include"
     | "storage-location"
     | "setups"
-    | "connections";
+    | "connections"
+    | "save-ignore";
+  let compareRulesRequested = false;
+  let ignoreReview: Awaited<ReturnType<typeof import("./sync-ignore-ui.js").loadSyncIgnoreReview>> | undefined;
   let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
   // Keep Kit's existing settings adapter: native SettingsList has no async save/rollback
   // contract or injected keybindings. Kit preserves these safety and accessibility behaviors.
-  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, "settings", Action, ExtensionCommandContext>({
+  const menu = defineMenu<
+    Awaited<ReturnType<typeof loadConfig>>,
+    "settings" | "ignore",
+    Action,
+    ExtensionCommandContext
+  >({
     start: "settings",
     screens: {
       settings: ({ state }) => ({
@@ -108,15 +116,15 @@ export async function showSyncSettings(
         items: [
           {
             id: "include",
-            label: "Included paths",
+            label: state.syncIgnore === undefined ? "Included paths" : ".syncignore rules",
             description:
-              "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
-            currentValue: `${state.include.length} paths · Edit`,
+              "All setups: review the shared Git ignore rules and manual edit path. Legacy migration preserves the intersection of all included lists. No transfer is started.",
+            currentValue: state.syncIgnore === undefined ? "Review migration" : "Review",
             action: "include",
           },
           {
             id: "remoteInclude",
-            label: "Compare included paths",
+            label: state.syncIgnore === undefined ? "Compare included paths" : "Compare sync rules",
             description:
               "This setup: compare included-path policies, not file contents. Review before saving either list; no files transfer unless you explicitly Continue.",
             currentValue: "Review",
@@ -252,8 +260,25 @@ export async function showSyncSettings(
           },
         ] satisfies MenuSettingItem<Action>[],
       }),
+      ignore: () => ({
+        kind: "review",
+        title: ignoreReview?.title ?? "Shared .syncignore",
+        content: ignoreReview?.content ?? "Reopen Settings to review current rules.",
+        format: { kind: "text" },
+        viewportSize: "adaptive",
+        hint: "back",
+        ...(ignoreReview?.migration
+          ? { confirm: { id: "save-ignore", label: "Migrate all setups", action: "save-ignore" } }
+          : {}),
+      }),
     },
     actions: {
+      "save-ignore": async ({ signal: actionSignal }) => {
+        const workSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        if (!ignoreReview?.migration || workSignal.aborted) return { kind: "rejected" };
+        await ignoreReview.save(workSignal);
+        return { kind: "back" };
+      },
       "storage-location": async ({ signal: actionSignal }) => {
         const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         await showEditSyncSetupStorage(ctx, setupName, editorSignal);
@@ -298,7 +323,7 @@ export async function showSyncSettings(
               throw new Error("Content policy changed during review.");
             return {
               ...current,
-              version: 5,
+              version: current.version === 6 ? 6 : 5,
               syncSetups: {
                 ...current.syncSetups,
                 [setupName]: { ...setup, sync: { ...setup.sync, mergeContent, partialSync } },
@@ -367,7 +392,7 @@ export async function showSyncSettings(
               throw new Error("Field policy changed while under review; reopen settings.");
             return {
               ...current,
-              version: current.version === 5 ? 5 : 4,
+              version: current.version === 6 ? 6 : current.version === 5 ? 5 : 4,
               syncSetups: {
                 ...current.syncSetups,
                 [setupName]: { ...setup, sync: { ...setup.sync, localFields: fields } },
@@ -542,23 +567,18 @@ export async function showSyncSettings(
       },
       include: async ({ signal: actionSignal }) => {
         const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        await runRoute("files", editorSignal, undefined, setupName);
-        return editorSignal.aborted ? { kind: "rejected" } : { kind: "stay" };
+        const { loadSyncIgnoreReview } = await import("./sync-ignore-ui.js");
+        if (editorSignal.aborted) return { kind: "rejected" };
+        const review = await loadSyncIgnoreReview(ctx, signal);
+        if (editorSignal.aborted) return { kind: "rejected" };
+        ignoreReview = review;
+        return { kind: "to", screen: "ignore" };
       },
-      "remote-include": async ({ signal: actionSignal }) => {
-        const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
-        if (reviewSignal.aborted) return { kind: "rejected" };
-        const review = await showRemoteSelectionReview(ctx, setupName, reviewSignal, undefined, {
-          origin: "settings",
-          runRoute,
-        });
-        if (reviewSignal.aborted) return { kind: "rejected" };
-        if (review.kind === "route-result") {
-          const disposition = await dispatchManagerResult(ctx, review.result, review.route, runRoute, reviewSignal);
-          return disposition.kind === "close" ? exitSettings() : { kind: "stay" };
-        }
-        return review.kind === "closed" || review.kind === "stale" ? exitSettings() : { kind: "stay" };
+      "remote-include": async () => {
+        // Settings owns a persistent custom component. Release it before the
+        // external network/review flow mounts another custom component.
+        compareRulesRequested = true;
+        return { kind: "close" };
       },
     },
   });
@@ -600,12 +620,28 @@ export async function showSyncSettings(
       return { kind: "close" as const };
     }
   }
-  await runMenu({ ...ctx, ui: boundedSettingsUI(ctx) }, menu, {
-    getState: () => loadConfig(setupName),
-    signal,
-    isCurrent: () => !signal?.aborted,
-  });
-  return disposition;
+  for (;;) {
+    compareRulesRequested = false;
+    await runMenu({ ...ctx, ui: boundedSettingsUI(ctx) }, menu, {
+      getState: () => loadConfig(setupName),
+      signal,
+      isCurrent: () => !signal?.aborted,
+    });
+    if (!compareRulesRequested || signal?.aborted) return disposition;
+    const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
+    if (signal?.aborted) return disposition;
+    const review = await showRemoteSelectionReview(ctx, setupName, signal, undefined, { origin: "settings", runRoute });
+    if (signal?.aborted || review.kind === "closed" || review.kind === "stale") return "exit";
+    if (review.kind === "route-result") {
+      const result = await dispatchManagerResult(ctx, review.result, review.route, runRoute, signal);
+      if (result.kind === "close") return "exit";
+    }
+    try {
+      if ((await loadConfig()).setupName !== setupName || signal?.aborted) return "exit";
+    } catch {
+      return "exit";
+    }
+  }
 }
 
 function notifySaveFailure(ctx: ExtensionCommandContext, error: unknown) {

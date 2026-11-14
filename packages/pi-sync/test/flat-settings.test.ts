@@ -345,7 +345,15 @@ test("Settings search handles paste and Backspace, retains saved scope and mouse
       tui.mouse({ type: "click", x: 3, y });
       await tui.waitForPending();
       await tui.waitForOpen();
-      assert.deepEqual(routes, ["files"]);
+      assert.deepEqual(routes, []);
+      assert.match(
+        tui.render().join("\n"),
+        /Migrate all setups to .syncignore/u,
+        JSON.stringify(context.notifications),
+      );
+      tui.press("tui.select.cancel");
+      await tui.waitForPending();
+      await tui.waitForOpen();
       tui.press("ctrl+c");
       await running;
     } finally {

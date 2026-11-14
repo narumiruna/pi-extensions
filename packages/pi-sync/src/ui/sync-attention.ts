@@ -144,7 +144,13 @@ function attentionPresentation(decision: RemoteSelectionDecision) {
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return {
     status: "sync ⇕",
-    lines: [`Setup: ${setupName}`, selectionDifference(comparison), "No transfer performed · Run /sync to review"],
+    lines: [
+      `Setup: ${setupName}`,
+      decision.localIgnore !== undefined || decision.remoteIgnore !== undefined
+        ? "Shared .syncignore policy differs"
+        : selectionDifference(comparison),
+      "No transfer performed · Run /sync to review",
+    ],
   };
 }
 
@@ -160,7 +166,11 @@ function observationPresentation(observation: StartupObservation) {
     status: "sync ⇕",
     lines: [
       `Setup: ${safeTerminalText(observation.setupName)}`,
-      selection?.kind === "different" ? selectionDifference(selection) : observationSummary(observation),
+      selection?.kind === "different"
+        ? selection.localIgnore !== undefined || selection.remoteIgnore !== undefined
+          ? "Shared .syncignore policy differs"
+          : selectionDifference(selection)
+        : observationSummary(observation),
       "No transfer performed · Run /sync to review",
     ],
   };

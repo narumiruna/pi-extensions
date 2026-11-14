@@ -36,7 +36,7 @@ export async function inspectSync(
   return {
     ...freshness,
     head,
-    selectionState: head ? inspectRemoteSelection(config.include, { selection: head.selection, files: [] }) : undefined,
+    selectionState: head ? inspectRemoteSelection(config, { selection: head.selection, files: [] }) : undefined,
     localFiles: local.files.length,
     localChanged: hasLocalChanges(local, state, config),
     remoteChanged: remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)),

@@ -4,6 +4,7 @@ import { loadConfig, syncConfigReviewIdentity, syncSetupReviewIdentity } from ".
 import { configuredSyncSetupNames, updateLocalConfig } from "../settings/settings-store.js";
 import type { OnSwitchAction } from "../settings/settings-types.js";
 import { normalizeOnSwitch } from "../settings/settings-validation.js";
+import { readSyncIgnoreFile } from "../settings/sync-ignore-file.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { throwIfAborted } from "./signals.js";
 import { SetupPullRequiresUiError } from "./sync-errors.js";
@@ -54,7 +55,7 @@ export async function useSyncSetup(
     action: "ask-before-pull",
     switched: false,
   };
-  await updateLocalConfig((current) => {
+  await updateLocalConfig(async (current) => {
     throwIfAborted(signal);
     const setup = current.syncSetups[normalized];
     if (!setup) {
@@ -62,9 +63,12 @@ export async function useSyncSetup(
     }
     const connectionName = setup.storage.connection;
     const connection = current.storageConnections[connectionName];
+    const currentSyncIgnore = current.version === 6 ? ((await readSyncIgnoreFile()) ?? "") : undefined;
+    throwIfAborted(signal);
     if (
       !connection ||
-      syncSetupReviewIdentity(normalized, setup, connectionName, connection) !== reviewedSetupIdentity
+      syncSetupReviewIdentity(normalized, setup, connectionName, connection, currentSyncIgnore) !==
+        reviewedSetupIdentity
     ) {
       throw new Error(
         `Sync setup “${safeTerminalText(normalized)}” changed while the switch preview was open; reopen it and review the current destination.`,

@@ -13,9 +13,11 @@ See [⚙️ Settings](../skills/configure-pi-sync/references/configuration.md#-s
 
 See [Editing in the manager](../skills/configure-pi-sync/references/configuration.md#editing-in-the-manager).
 
-### Complete version 3 example
+<a id="complete-version-3-example"></a>
 
-See [Complete version 3 example](../skills/configure-pi-sync/references/configuration.md#complete-version-3-example).
+### Complete version 6 example
+
+See [Complete version 6 example](../skills/configure-pi-sync/references/configuration.md#complete-version-6-example).
 
 ### Required backend shapes
 

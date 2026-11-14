@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeniedPath, toPosix } from "../paths.js";
 import type { Snapshot, SnapshotSelection } from "../snapshot/snapshot-types.js";
+import { ignorePolicyInclude, normalizeSyncIgnore, syncIgnoreAllows } from "./sync-ignore.js";
 
 export const BUILT_IN_SYNC_ROOTS = [
   "settings.json",
@@ -131,20 +132,30 @@ export function portableSnapshotSelection(value: unknown): SnapshotSelection {
     !selection ||
     typeof selection !== "object" ||
     Array.isArray(selection) ||
-    selection.version !== SNAPSHOT_SELECTION_VERSION ||
-    !Object.hasOwn(selection, "include") ||
-    Object.keys(selection).some((key) => key !== "version" && key !== "include")
+    (selection.version !== SNAPSHOT_SELECTION_VERSION && selection.version !== 2) ||
+    Object.keys(selection).some((key) => key !== "version" && key !== (selection.version === 2 ? "ignore" : "include"))
   ) {
     throw new Error("Invalid snapshot selection policy.");
   }
-  return {
-    version: SNAPSHOT_SELECTION_VERSION,
-    include: normalizeSyncInclude(selection.include),
-  };
+  return selection.version === 2
+    ? { version: 2, ignore: normalizeSyncIgnore(selection.ignore) }
+    : { version: SNAPSHOT_SELECTION_VERSION, include: normalizeSyncInclude(selection.include) };
 }
 
 export function snapshotSelectionInclude(snapshot: Pick<Snapshot, "selection">) {
-  return snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection).include;
+  const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
+  return selection?.version === 1 ? selection.include : undefined;
+}
+
+export function snapshotSelectionIgnore(snapshot: Pick<Snapshot, "selection">) {
+  const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
+  return selection?.version === 2 ? selection.ignore : undefined;
+}
+
+export function selectionForConfig(config: SyncSelectionConfig): SnapshotSelection {
+  return config.syncIgnore !== undefined
+    ? { version: 2, ignore: normalizeSyncIgnore(config.syncIgnore) }
+    : selectionForSnapshot(includeFromSelectionConfig(config));
 }
 
 export function selectionForSnapshot(include: unknown): SnapshotSelection {
@@ -174,23 +185,43 @@ export function compareSyncInclude(local: unknown, remote: unknown) {
 
 export type RemoteSelectionState =
   | { kind: "legacy"; discovered: string[] }
-  | { kind: "same"; include: string[] }
+  | { kind: "same"; include: string[]; remoteSelection?: SnapshotSelection }
   | {
       kind: "different";
       include: string[];
       remoteOnly: string[];
       localOnly: string[];
+      localIgnore?: string;
+      remoteIgnore?: string;
+      remoteSelection?: SnapshotSelection;
     };
 
 export function inspectRemoteSelection(
   localInclude: unknown,
   snapshot: Pick<Snapshot, "selection" | "files">,
 ): RemoteSelectionState {
+  const config = Array.isArray(localInclude) ? { include: localInclude } : (localInclude as SyncSelectionConfig);
+  const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
+  if (config.syncIgnore !== undefined || selection?.version === 2) {
+    const remoteInclude = selection?.version === 1 ? selection.include : [];
+    const local = includeFromSelectionConfig(config);
+    if (config.syncIgnore !== undefined && selection?.version === 2 && config.syncIgnore === selection.ignore)
+      return { kind: "same", include: local, remoteSelection: selection };
+    return {
+      kind: "different",
+      include: remoteInclude,
+      remoteOnly: remoteInclude,
+      localOnly: local,
+      localIgnore: config.syncIgnore,
+      remoteIgnore: selection?.version === 2 ? selection.ignore : undefined,
+      remoteSelection: selection,
+    };
+  }
   const remoteInclude = snapshotSelectionInclude(snapshot);
   if (!remoteInclude) {
     return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
   }
-  const comparison = compareSyncInclude(localInclude, remoteInclude);
+  const comparison = compareSyncInclude(includeFromSelectionConfig(config), remoteInclude);
   return comparison.same
     ? { kind: "same", include: remoteInclude }
     : { kind: "different", include: remoteInclude, ...comparison };
@@ -201,6 +232,9 @@ export interface RemoteSelectionDecision {
   configIdentity: string;
   localInclude: readonly string[];
   remoteInclude: readonly string[];
+  localIgnore?: string;
+  remoteIgnore?: string;
+  remoteSelection?: SnapshotSelection;
 }
 
 export class RemoteSelectionMismatchError extends Error {
@@ -209,34 +243,43 @@ export class RemoteSelectionMismatchError extends Error {
   readonly localInclude: string[];
   readonly remoteInclude: string[];
 
-  constructor(
-    setupName: string,
-    localInclude: unknown,
-    remoteInclude: unknown,
-    configIdentity = JSON.stringify([setupName, normalizeSyncInclude(localInclude)]),
-  ) {
-    const local = normalizeSyncInclude(localInclude);
-    const remote = normalizeSyncInclude(remoteInclude);
-    super(formatRemoteSelectionMismatch(setupName, local, remote));
+  constructor(setupName: string, localInclude: unknown, remoteInclude: unknown, configIdentity?: string) {
+    const config = Array.isArray(localInclude) ? { include: localInclude } : (localInclude as SyncSelectionConfig);
+    const remotePolicy = Array.isArray(remoteInclude)
+      ? selectionForSnapshot(remoteInclude)
+      : remoteInclude === undefined
+        ? undefined
+        : portableSnapshotSelection(remoteInclude);
+    const local = includeFromSelectionConfig(config);
+    const remote = remotePolicy?.version === 1 ? remotePolicy.include : [];
+    const ignoreMode = config.syncIgnore !== undefined || remotePolicy?.version === 2;
+    super(
+      ignoreMode
+        ? `Sync policy differs for sync setup “${stripTerminalControls(setupName)}”. Review .syncignore in /sync before transferring. Nothing was changed.`
+        : formatRemoteSelectionMismatch(setupName, local, remote),
+    );
     this.name = "RemoteSelectionMismatchError";
     this.setupName = setupName;
     this.localInclude = local;
     this.remoteInclude = remote;
     this.decision = {
       setupName,
-      configIdentity,
+      configIdentity: configIdentity ?? JSON.stringify([setupName, local, config.syncIgnore]),
       localInclude: [...local],
       remoteInclude: [...remote],
+      ...(config.syncIgnore !== undefined ? { localIgnore: config.syncIgnore } : {}),
+      ...(remotePolicy?.version === 2 ? { remoteIgnore: remotePolicy.ignore } : {}),
+      remoteSelection: remotePolicy,
     };
   }
 }
 
 export function remoteSelectionMismatch(
-  config: { setupName: string; include: unknown },
+  config: { setupName: string; include: unknown; syncIgnore?: string },
   remoteInclude: unknown,
   configIdentity?: string,
 ) {
-  return new RemoteSelectionMismatchError(config.setupName, config.include, remoteInclude, configIdentity);
+  return new RemoteSelectionMismatchError(config.setupName, config, remoteInclude, configIdentity);
 }
 
 export function formatRemoteSelectionMismatch(
@@ -320,6 +363,7 @@ export function customIncludePathsByLower(value: unknown) {
 }
 
 export interface SyncSelectionConfig {
+  syncIgnore?: string;
   include?: unknown;
   syncFiles?: unknown;
   syncSessions?: boolean;
@@ -327,6 +371,7 @@ export interface SyncSelectionConfig {
 }
 
 export function includeFromSelectionConfig(config: SyncSelectionConfig) {
+  if (config.syncIgnore !== undefined) return ignorePolicyInclude(config.syncIgnore);
   if (config.include !== undefined) return normalizeSyncInclude(config.include);
   return [
     ...normalizeSyncFiles(config.syncFiles),
@@ -341,6 +386,7 @@ export function isConfiguredSnapshotPath(
   _legacyExtraFiles?: Set<string>,
 ) {
   const normalized = toPosix(relativePath);
+  if (config.syncIgnore !== undefined) return syncIgnoreAllows(config.syncIgnore, normalized);
   const selection = syncIncludeSelection(includeFromSelectionConfig(config));
   if (normalized.startsWith("sessions/")) return selection.sessions;
   const lower = normalized.toLowerCase();

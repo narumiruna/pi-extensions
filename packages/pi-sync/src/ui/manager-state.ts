@@ -78,7 +78,7 @@ export async function describeManagerState(
   }
   const configuredTargets = ownRecord(raw.syncSetups);
   if (
-    (raw.version === 3 || raw.version === 4 || raw.version === 5) &&
+    (raw.version === 3 || raw.version === 4 || raw.version === 5 || raw.version === 6) &&
     configuredTargets &&
     Object.keys(configuredTargets).length === 0
   ) {
@@ -162,7 +162,9 @@ export async function describeManagerState(
               "Check-time observation only; synchronization rechecks current content.",
             ]
           : ["Remote status: Not checked"]),
-      `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
+      config.syncIgnore !== undefined
+        ? "Content: all non-excluded files · shared .syncignore"
+        : `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
       `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
       `Startup transfer: ${startupTransferSummary(config)}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,

@@ -43,7 +43,9 @@ export async function saveAgentMode(
       `Storage path: ${safeTerminalText(setup.storage.path)}`,
       ...(setup.storage.bucket ? [`Bucket: ${safeTerminalText(String(setup.storage.bucket))}`] : []),
       ...(setup.storage.branch ? [`Branch: ${safeTerminalText(String(setup.storage.branch))}`] : []),
-      `Included paths: ${setup.sync.include.map(safeTerminalText).join(", ")}`,
+      settings.version === 6
+        ? "Content: shared .syncignore rules (all non-excluded files)"
+        : `Included paths: ${setup.sync.include?.map(safeTerminalText).join(", ")}`,
       continuous ? CONTINUOUS_DESCRIPTION : AGENT_MODE_DESCRIPTION,
       ...(continuous
         ? [

@@ -3,9 +3,13 @@ import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import { normalizeGitBranch, normalizeGitDirectory, normalizeGitRemote } from "../backends/git/git-config.js";
 import { normalizeWebDavPath, normalizeWebDavUrl } from "../backends/webdav/webdav-config.js";
 import { normalizeLocalFields } from "../sync/local-field-policy.js";
+import { ignorePolicyInclude } from "../sync/sync-ignore.js";
 import { normalizeSyncInclude } from "../sync/sync-policy.js";
-import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "./config-file.js";
-import { requireSettings } from "./settings-store.js";
+import {
+  localConfigPath,
+  readActiveLocalConfigDocumentForRepair,
+  readMigratingLocalConfigDocument,
+} from "./config-file.js";
 import type {
   AnySyncConfig,
   OnSwitchAction,
@@ -26,20 +30,31 @@ import {
   validateConfigName,
   validateSettingsDocument,
 } from "./settings-validation.js";
+import { readSyncIgnoreFile } from "./sync-ignore-file.js";
 
 export async function loadConfig(setupName?: string): Promise<AnySyncConfig> {
-  return configFromSettings(await requireSettings(), setupName);
+  let syncIgnore: string | undefined;
+  const document = await readMigratingLocalConfigDocument(validateSettingsDocument, async (document) => {
+    if (document?.parsed.version === 6) syncIgnore = (await readSyncIgnoreFile()) ?? "";
+  });
+  if (!document)
+    throw new Error(`Missing pi-sync settings. Open /sync and choose Set up sync, or create ${localConfigPath()}.`);
+  const settings = validateSettingsDocument(document.parsed);
+  return configFromSettings(settings, setupName, syncIgnore);
 }
 
 /** A background freshness read must never trigger legacy-file publication. */
 export async function loadConfigForCheck(): Promise<AnySyncConfig> {
-  const document = await readActiveLocalConfigDocumentForRepair();
+  let syncIgnore: string | undefined;
+  const document = await readActiveLocalConfigDocumentForRepair(async (document) => {
+    if (document?.parsed.version === 6) syncIgnore = (await readSyncIgnoreFile()) ?? "";
+  });
   if (!document) throw new Error(`Missing pi-sync settings: ${localConfigPath()}`);
   validateSettingsDocument(document.parsed);
-  return configFromSettings(document.parsed as PiSyncSettingsV3);
+  return configFromSettings(document.parsed as PiSyncSettingsV3, undefined, syncIgnore);
 }
 
-export function configFromSettings(settings: PiSyncSettingsV3, setupName?: string): AnySyncConfig {
+export function configFromSettings(settings: PiSyncSettingsV3, setupName?: string, syncIgnore?: string): AnySyncConfig {
   const selectedName = setupName ?? settings.activeSyncSetup;
   if (!selectedName) throw new Error("No sync setups are configured.");
   validateConfigName(selectedName, "sync setup");
@@ -61,6 +76,7 @@ export function configFromSettings(settings: PiSyncSettingsV3, setupName?: strin
       settings.onSwitch,
       settings.skipSecretScan ?? false,
       settings.showStatus ?? true,
+      settings.version === 6 ? (syncIgnore ?? "") : undefined,
     ),
     debug: settings.debug ?? false,
   };
@@ -78,6 +94,7 @@ export async function loadPartialConfig(setupName?: string): Promise<PartialConf
     setupName: config.setupName,
     ...storageReviewFromConfig(config),
     include: [...config.include],
+    syncIgnore: config.syncIgnore,
     automatic: config.automatic,
     automaticTransfer: config.automaticTransfer ?? false,
     agentMode: config.agentMode ?? false,
@@ -103,9 +120,10 @@ export function syncSetupReviewIdentity(
   setup: SyncSetupSettings,
   connectionName: string,
   connection: StorageConnectionSettings,
+  syncIgnore?: string,
 ) {
   return syncConfigReviewIdentity(
-    resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH, false, true),
+    resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH, false, true, syncIgnore),
   );
 }
 
@@ -115,6 +133,7 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
     config.connectionName,
     backendIdentityCoordinates(config),
     config.include,
+    ...(config.syncIgnore === undefined ? [] : ["syncIgnore", config.syncIgnore]),
     config.automatic,
     config.automaticTransfer ?? false,
     config.agentMode ?? false,
@@ -159,16 +178,19 @@ function resolveSyncConfig(
   onSwitch: OnSwitchAction,
   skipSecretScan: boolean,
   showStatus: boolean,
+  syncIgnore?: string,
 ): AnySyncConfig {
   const storagePath = normalizeStoragePath(setup.storage.path);
   const namespace = storagePath === "./" ? "root" : storagePath.slice(storagePath.lastIndexOf("/") + 1);
-  const include = normalizeSyncInclude(setup.sync.include);
+  const include =
+    syncIgnore === undefined ? normalizeSyncInclude(setup.sync.include ?? []) : ignorePolicyInclude(syncIgnore);
   const common = {
     setupName,
     connectionName,
     storagePath,
     snapshotIdentity: namespace,
     include,
+    syncIgnore,
     automatic: setup.sync.automatic,
     automaticTransfer: setup.sync.automaticTransfer ?? false,
     agentMode: setup.sync.agentMode ?? false,

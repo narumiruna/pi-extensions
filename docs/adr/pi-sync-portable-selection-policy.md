@@ -4,6 +4,8 @@
 
 Accepted.
 The policy is implemented by Pi Sync snapshots, orchestration, and review and recovery flows.
+Settings version 6 adds shared `.syncignore` selection version 2; the include-list decision below remains the legacy versions 3–5 contract.
+See the [current rule and migration reference](../../packages/pi-sync/skills/configure-pi-sync/references/configuration.md#shared-syncignore-rules) for the version 6 contract.
 
 ## Context
 

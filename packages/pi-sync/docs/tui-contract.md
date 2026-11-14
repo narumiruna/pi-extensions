@@ -4,12 +4,12 @@ This reference records the setting and transfer contracts used by the TUI. It do
 
 ## Settings
 
-All settings are private to this device. There are no project overrides. Defaults and validation are defined in `src/settings/settings-validation.ts` and `src/settings/config.ts`; mutation is owned by `settings-management.ts` and `settings-store.ts`.
+Storage credentials and behavior settings are private to this device; version 6 shares `.syncignore` through portable snapshots. There are no project overrides. Defaults and validation are defined in `src/settings/settings-validation.ts` and `src/settings/config.ts`; mutation is owned by `settings-management.ts` and `settings-store.ts`.
 
 | Row | Persisted fields and default | Scope | Save and effective time |
 | --- | --- | --- | --- |
-| Included paths | `sync.include`, explicit array | Current setup | Draft, then exact Save/Discard review; subsequent operations |
-| Compare included paths | `sync.include` | Current setup | Review remote policy and fresh head before save; does not transfer files without explicit Continue |
+| .syncignore rules (legacy: Included paths) | Agent-root `.syncignore`; no JSON include list in version 6 | Every setup | Read-only exact rule review and manual edit path; legacy action confirms conservative all-setup migration |
+| Compare sync rules (legacy: Compare included paths) | `.syncignore` (legacy: `sync.include`) | Every setup in ignore mode | Exact remote-policy and fresh-head review before adoption; saves rules only, with a separate Continue for file transfers |
 | Machine-local fields | `sync.localFields`, absent | Current setup | Input and compatibility review; subsequent snapshots exclude whole settings.json root fields; directional migration required |
 | Automatic sync | `sync.automatic`, explicit boolean; setup proposes Off | Current setup | Immediate save; next session start checks once; subsequent shutdown pushes all selected content only if sessions included; reload skips shutdown push |
 | Startup transfer | `sync.automaticTransfer`, false | Current setup | Immediate save; enabling schedules next session start; independent of Automatic sync |
@@ -31,13 +31,13 @@ Writers queue the complete read-modify-write operation, hold the cross-process l
 
 ## Presentation decisions
 
-Selecting **Settings** in `/sync` opens **Pi Sync Settings** directly as one searchable flat list, with all 16 rows in their existing order and no category navigation or headings. Row values, descriptions, actions, reviews, and save behavior are unchanged. Typing searches the list. Back returns directly to the manager; hard Ctrl+C closes the flow. No `/ Search` hint is added because slash is ordinary search text.
+Selecting **Settings** in `/sync` opens **Pi Sync Settings** directly as one searchable flat list, with all 16 rows in their existing order and no category navigation or headings. The first two rows adapt to shared ignore mode; legacy Included paths now offers reviewed migration. Other preferences retain their save behavior. Typing searches the list. Back returns directly to the manager; hard Ctrl+C closes the flow. No `/ Search` hint is added because slash is ordinary search text.
 
 The existing public Kit settings adapter is retained rather than adding a second selector or accessing private Pi fields. Installed `SettingsList` provides `updateValue()` and `selectItem()`, but has no injected keybinding or awaited-save/rejection contract and does not expose search focus. Kit already owns ordered pending changes, rollback, retained search/selection, IME focus, bounded frames, and clipped mouse coordinates. This is an intentional existing deviation from the literal native-component convention. No new Kit API, dependency floor, or release is required. A package-owned public rendering boundary returns no lines at zero width and retains the selected row (or search when nothing matches) below five content rows; compact mouse events map back to the original rendered row. It does not access private component state or add key handlers. Search placeholder and position-footer relocation remain unsupported by that public API; the existing native-style hints and position indicator are retained rather than patched through private fields.
 
 Last applied shows a compact opaque snapshot ID and explicitly states that application time is unavailable. History retains the full recorded ID even when the remote history no longer lists that snapshot. Snapshot `createdAt` is not a local application time; opening the manager performs no remote timestamp fetch.
 
-Startup transfer summaries report the preference and prerequisites, not a claim that a transfer is eligible now. Runtime evidence in `merged-sync.ts` and `s3/s3-backend.ts` permits Git, conditional WebDAV, and R2/S3 with verified conditional writes. `read-check-write-verify` publication is refused for automatic operations. Baseline, matching authoritative include policy, idle ownership, and conflict/secret checks remain mandatory. This corrects the earlier settings reference's manual-only R2/S3 statement without expanding backend authorization.
+Startup transfer summaries report the preference and prerequisites, not a claim that a transfer is eligible now. Runtime evidence in `merged-sync.ts` and `s3/s3-backend.ts` permits Git, conditional WebDAV, and R2/S3 with verified conditional writes. `read-check-write-verify` publication is refused for automatic operations. Baseline, matching authoritative selection policy, idle ownership, and conflict/secret checks remain mandatory. This corrects the earlier settings reference's manual-only R2/S3 statement without expanding backend authorization.
 
 ## Transfer review matrix
 

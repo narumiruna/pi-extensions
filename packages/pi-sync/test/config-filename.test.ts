@@ -216,7 +216,7 @@ test("malformed, unsupported, and symlinked settings are never overwritten", asy
 
     const unsupported = Buffer.from('{"version":2,"secret":"hidden"}\n');
     writeFileSync(localConfigPath(), unsupported, { mode: 0o600 });
-    await assert.rejects(readLocalConfigObject(), /version 3 or 4 or 5 is required/u);
+    await assert.rejects(readLocalConfigObject(), /version 3 or 4 or 5 or 6 is required/u);
     assert.deepEqual(readFileSync(localConfigPath()), unsupported);
   });
 

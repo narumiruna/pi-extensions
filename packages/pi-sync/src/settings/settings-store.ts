@@ -43,6 +43,9 @@ export async function readLocalConfigObject(): Promise<PiSyncSettingsV3 | undefi
   return (await readLocalConfigDocument())?.parsed as PiSyncSettingsV3 | undefined;
 }
 
-export function updateLocalConfig(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3, signal?: AbortSignal) {
+export function updateLocalConfig(
+  update: (current: PiSyncSettingsV3) => PiSyncSettingsV3 | Promise<PiSyncSettingsV3>,
+  signal?: AbortSignal,
+) {
   return updateLocalConfigDocument(localConfigTemplate(), update, validateSettingsDocument, signal);
 }

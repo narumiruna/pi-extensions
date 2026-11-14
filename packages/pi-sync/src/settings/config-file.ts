@@ -146,26 +146,33 @@ export function consumeLocalConfigMigrationNotice() {
   return notice;
 }
 
-export async function readActiveLocalConfigDocumentForRepair(): Promise<LocalConfigDocument | undefined> {
+export async function readActiveLocalConfigDocumentForRepair(
+  readRelated?: (document: LocalConfigDocument | undefined) => Promise<void>,
+): Promise<LocalConfigDocument | undefined> {
   const canonicalPath = localConfigPath();
   const legacyPath = legacyLocalConfigPath();
   return queueConfigOperation(() =>
     withLocalConfigReadLockIfNeeded(async () => {
       const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyPath;
       const snapshot = await readConfigSnapshotIfExists(filePath);
-      return snapshot ? { path: filePath, ...snapshot } : undefined;
+      const document = snapshot ? { path: filePath, ...snapshot } : undefined;
+      await readRelated?.(document);
+      return document;
     }),
   );
 }
 
 export async function readMigratingLocalConfigDocument(
   validateForMigration: (settings: Record<string, unknown>) => void,
+  readRelated?: (document: LocalConfigDocument | undefined) => Promise<void>,
 ): Promise<LocalConfigDocument | undefined> {
   return queueConfigOperation(() =>
     withLocalConfigReadLockIfNeeded(async () => {
       const configPath = await prepareLocalConfigPath(validateForMigration);
       const snapshot = await readConfigSnapshotIfExists(configPath);
-      return snapshot ? { path: configPath, ...snapshot } : undefined;
+      const document = snapshot ? { path: configPath, ...snapshot } : undefined;
+      await readRelated?.(document);
+      return document;
     }),
   );
 }
@@ -192,7 +199,7 @@ function queueConfigOperation<T>(run: () => Promise<T>): Promise<T> {
 
 export function updateLocalConfigDocument<T extends Record<string, unknown>>(
   defaultValue: T,
-  update: (current: T) => T,
+  update: (current: T) => T | Promise<T>,
   validate: (value: Record<string, unknown>) => void,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -206,7 +213,8 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
       signal?.throwIfAborted();
       const document = snapshot ? { path: configPath, ...snapshot } : undefined;
       const current = document ? (structuredClone(document.parsed) as T) : structuredClone(defaultValue);
-      const next = update(current);
+      if (document) validate(current);
+      const next = await update(current);
       validate(next);
       signal?.throwIfAborted();
       if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;

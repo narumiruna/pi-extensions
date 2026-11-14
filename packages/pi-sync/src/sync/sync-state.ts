@@ -114,6 +114,7 @@ export function shouldRefreshSyncedState(
 }
 
 function syncIncludeChanged(state: SyncState, config: SyncPolicyConfig) {
+  if (config.syncIgnore !== undefined || state.syncIgnore !== undefined) return config.syncIgnore !== state.syncIgnore;
   const stored = state.include ? normalizeSyncInclude(state.include) : includeFromSelectionConfig(state);
   const current = includeFromSelectionConfig(config);
   return stored.length !== current.length || stored.some((item, index) => item !== current[index]);

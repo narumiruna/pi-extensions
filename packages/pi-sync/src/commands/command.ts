@@ -11,7 +11,7 @@ export const SYNC_COMMANDS = [
   { name: "use", description: "Switch the current sync setup", usageSuffix: " <setup>" },
   { name: "init", description: "Create local config template" },
   { name: "config", description: "Show resolved configuration" },
-  { name: "files", description: "Choose included content" },
+  { name: "files", description: "Review shared .syncignore rules (legacy: choose included content)" },
   { name: "status", description: "Show sync status" },
   { name: "diff", description: "Show local/remote diff" },
   { name: "conflicts", description: "Review private unresolved conflict groups" },

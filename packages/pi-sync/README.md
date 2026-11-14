@@ -3,13 +3,13 @@
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sync)](https://www.npmjs.com/package/@narumitw/pi-sync) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Pi Sync synchronizes selected Pi settings and content across machines through Git, WebDAV, Cloudflare R2, or another S3-compatible store.
-Reusable storage connections hold credentials, while named sync setups define exactly what to sync, where to store it, and whether to sync automatically.
+Reusable storage connections hold credentials, named sync setups define where and when to sync, and one shared `.syncignore` excludes content across all setups.
 
 ## ✨ Features
 
 - Manages Git, WebDAV, Cloudflare R2, and general S3-compatible storage through `/sync`.
 - Separates reusable storage connections from named setups with exact reviewed remote paths.
-- Uses one ordered list for Pi roots, safe agent-relative paths, and privacy-sensitive sessions.
+- Discovers new files automatically and excludes content with Git-style `.syncignore` rules shared across machines.
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Keeps snapshot selection portable and free of credentials.
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
@@ -52,8 +52,8 @@ All new setups default to storage path `./`: the Git repository root, the WebDAV
 Git also suggests branch `main`.
 Use different folders or prefixes for independent setups sharing a WebDAV collection or bucket; existing settings and paths are unchanged.
 If another configured setup already uses the chosen location, setup asks for a different path before the content selection and review; Git requires a different branch, even when the directory differs.
-Every new setup asks for included content and automatic sync; automatic sync is off unless you enable it. Recommended includes nine Pi roots; Minimal includes `settings.json` and `AGENTS.md`. Sessions stay off unless explicitly included with a privacy acknowledgement.
-Before saving, scroll through the exact destination, every included path, automatic-sync choice, and hidden-credential summary. R2/S3 always asks for an existing bucket; an example bucket name is not a default.
+New installations use all non-excluded files below the Pi agent directory, with one shared `.syncignore` and automatic sync Off. The initial rules exclude `/sessions/`; credentials and internal state have mandatory exclusions. Review all other private files before enabling a transfer. Existing legacy setups retain their include lists until you explicitly migrate them in Settings.
+Before saving, scroll through the exact destination, shared ignore rules, automatic-sync choice, and hidden-credential summary. R2/S3 always asks for an existing bucket; an example bucket name is not a default.
 
 Invalid fields ask for a correction without restarting setup. A temporary local save failure keeps the review for another Save; changed settings require reopening and reviewing the current values. Saving only changes local settings, not remote data. A connection saved through **Add a new storage connection…** remains saved if you later cancel the setup.
 
@@ -70,7 +70,7 @@ The `/sync` manager shows local state without contacting remote storage:
 ```text
 Current sync setup: home
 Storage: Cloudflare R2 · r2 · personal-pi
-Included: 5 built-in groups · 0 extra files · Sessions off
+Content: all non-excluded files · shared .syncignore
 Automatic sync: On (startup check; shutdown pushes selected content if sessions included)
 Remote status: Not checked
 ```
@@ -82,7 +82,7 @@ The main summary separates current state from actions and uses local state and c
 After Pi Sync detects an included-content mismatch, the manager shows **Sync status: Review needed** and puts **Review synced content (recommended)** first.
 **Sync now** remains unavailable until you review the mismatch.
 Opening the manager does not make another remote request.
-**Settings** opens **Pi Sync Settings** directly: one searchable flat list with all 16 rows in their existing order and no category navigation or headings. **Compare included paths** sits beside **Included paths** and compares path policies, not file contents. **Storage location** edits only the current setup's bucket, branch, or path; it does not change the connection or included content. **Manage sync setups** and **Manage storage connections** open the existing catalogs. Connections hold reusable server addresses and sign-in details, and edits show every affected setup. Make another setup current before changing its preferences. Each description identifies the setup, device-wide, or shared-connection scope. Simple preferences report saving and durable save results; Back does not undo saved changes. Complex editors and risky changes retain their reviews. RPC reports the manual settings path and preserves catalog management without opening the TUI preference editor.
+**Settings** opens **Pi Sync Settings** directly as one searchable flat list. **.syncignore rules** shows the shared rules and manual edit path; **Compare sync rules** compares policies, not file contents. Legacy setups show **Included paths** for reviewed migration and **Compare included paths** for the retained legacy comparison. **Storage location** edits only the current setup's bucket, branch, or path; it does not change the connection or included content. **Manage sync setups** and **Manage storage connections** open the existing catalogs. Connections hold reusable server addresses and sign-in details, and edits show every affected setup. Make another setup current before changing its preferences. Each description identifies the setup, device-wide, or shared-connection scope. Simple preferences report saving and durable save results; Back does not undo saved changes. Complex editors and risky changes retain their reviews. RPC reports the manual settings path and preserves catalog management without opening the TUI preference editor.
 
 **Diagnostics** (also `/sync doctor`) reports configuration and backend-specific access checks. S3/R2 performs a read-only request: success does not prove write access or snapshot validity, and an ambiguous 404 does not prove a bucket is missing. Check the indicated credentials, address, bucket, or path before retrying. Git checks remote reads and the local cache, not write access. WebDAV uses an isolated write/cleanup probe and repairs the active snapshot's history entry if missing. **History** opens the snapshot list directly for reviewed rollback. Recorded unresolved groups have a separate **Review unresolved conflicts** action.
 
@@ -121,7 +121,11 @@ After the same no-other-sync verification, `/sync unlock --stale` provides a det
 When **Sync now**, **Pull from remote…**, or **Push to remote…** requires a direction choice, the manager opens **Resolve sync conflict**.
 The flow names the current setup and explains whether local content, remote content, or the included-content policy changed.
 
-An explicit remote content-list mismatch opens **Synced content differs** in the same manager flow.
+In `.syncignore` mode, **Synced content differs** offers **Review both policies (recommended)**, **Use remote .syncignore**, and a separately reviewed local-policy force push. Adoption affects every setup, saves rules only, and never pulls files implicitly. Different policy formats require legacy migration before adoption. See [shared rules and migration](./skills/configure-pi-sync/references/configuration.md#shared-syncignore-rules).
+
+#### Legacy content-list review
+
+For retained legacy include-mode setups, an explicit remote content-list mismatch opens **Synced content differs** in the same manager flow.
 Nothing changes until you choose an action.
 Choose **Review all paths (recommended)** first to compare exact remote-only paths, device-only paths, and both ordered lists.
 If membership matches but order differs, the review says that only ordering differs.
@@ -133,6 +137,8 @@ Then choose one action:
 - **Keep this device's content list and update remote…** opens the existing `push --force` preparation and exact confirmation without `--yes`.
   Cancelling preparation or confirmation returns to the content-list choice without changing remote data.
 - **Cancel** returns to the manager without changing settings, files, remote data, or sync state.
+
+#### File-direction review
 
 Choose **Review differences (recommended)** in an ordinary file-direction conflict to inspect the exact affected paths without changing local files, remote data, or sync state.
 Then choose one reviewed direction:
@@ -165,6 +171,25 @@ Print and JSON modes do not support `/sync` because UI output is not observable 
 Run `/sync` → **Set up sync** to create the canonical private user file at `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`).
 Use **Settings** to manage an existing setup.
 Missing settings stay unconfigured without creating files or locks.
+
+### Shared `.syncignore`
+
+New setups use settings version 6: `pi-sync.json` keeps storage and behavior settings but rejects `sync.include`.
+Edit `<getAgentDir()>/.syncignore` (normally `~/.pi/agent/.syncignore`) to exclude files; rules apply to every setup at the next operation without reload.
+The file itself is always synchronized. Only this root file supplies rules.
+
+```gitignore
+/sessions/
+*.log
+/prompts/private/*
+!/prompts/private/example.md
+```
+
+**Warning:** an empty or missing file permits all non-denied content, including private conversations and extension settings. New setup creates an initial `/sessions/` exclusion only after Save. Keep sensitive files excluded; common-pattern secret scanning is not a complete privacy check.
+Ignored local files are left untouched; remote history is not erased. Credentials, Pi Sync settings/state, `node_modules`, and `.git` remain forcibly excluded.
+
+Existing settings versions 3–5 keep their behavior until **Settings → Included paths** reviews migration of all setups. Migration creates conservative intersection rules and a private settings backup, then removes JSON include lists. It does not transfer files or silently enable new scope. A differing remote policy blocks normal and automatic transfers until reviewed, even for forced pull.
+See [rule syntax, exact policy review, migration and recovery](./skills/configure-pi-sync/references/configuration.md#shared-syncignore-rules).
 
 ### Debug startup timings
 
@@ -222,9 +247,9 @@ Successful transfers show one summary. They do not reload resources, activate ex
 
 **Settings → Merge settings fields** controls the per-setup `sync.mergeSettings` opt-in, default **Off**. It combines independent global `settings.json` fields, not arbitrary JSON or keybindings. Missing/corrupt ancestors, unsupported syntax, and incompatible fields retain whole-transfer review. Sensitive accepted content is cached privately under the denied state root; disabling does not delete evidence.
 
-**Settings → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. Enabling rules opts into settings version 4 / snapshot version 2, which older clients must refuse. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./skills/configure-pi-sync/references/configuration.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
+**Settings → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. Legacy setups opt into settings version 4 / snapshot version 2; ignore-mode setups retain settings version 6 / snapshot version 4. Older clients must refuse incompatible formats. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./skills/configure-pi-sync/references/configuration.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
 
-**Settings → Content merge / partial progress** controls independent `sync.mergeContent` and `sync.partialSync` opt-ins, both default **Off**. Saving opts into settings version 5; partial publications use snapshot version 3, rejected by older readers. Supported Markdown/plain-text resources merge bounded independent line edits without Git or conflict markers. Diff grids and hunk comparisons share an eight-million-work-unit budget across the operation and its retries; exhausted paths remain conflicts for review. Same-session reconciliation only accepts validated complete byte-prefix extensions; divergent histories and the loaded session require review. A syntactically clean text merge is **not a semantic correctness guarantee**.
+**Settings → Content merge / partial progress** controls independent `sync.mergeContent` and `sync.partialSync` opt-ins, both default **Off**. Legacy settings upgrade to version 5 and partial publications use snapshot version 3; ignore-mode setups retain settings version 6 and snapshot version 4. Older readers reject incompatible formats. Supported Markdown/plain-text resources merge bounded independent line edits without Git or conflict markers. Diff grids and hunk comparisons share an eight-million-work-unit budget across the operation and its retries; exhausted paths remain conflicts for review. Same-session reconciliation only accepts validated complete byte-prefix extensions; divergent histories and the loaded session require review. A syntactically clean text merge is **not a semantic correctness guarantee**.
 
 Partial sync keeps each side's unresolved versions, preserves their previous accepted hashes/ancestors, and advances only independent paths. Resource/collision dependency groups are withheld together, including local-only files, never represented as deletion. The conditional **Review unresolved conflicts** action, or `/sync conflicts`, opens exact private versions on request and resolves one freshly validated whole group. Automatic pushes, non-forced push/pull, and rollback refuse unresolved groups; use group review or an explicit manual push/pull force direction instead. Artifacts remain below the denied state root, with stable conflict identity and at most 32 proven-completed records retained; unresolved or unrecognized evidence is never automatically pruned. Failed attempts release only newly created artifacts whose inode/content ownership and lack of state/journal references are verified. See [content merge and partial recovery](./docs/content-merge-audit.md).
 
@@ -239,7 +264,7 @@ A minimal Git setup uses an existing private remote and keeps automatic sync off
 
 ```json
 {
-  "version": 3,
+  "version": 6,
   "activeSyncSetup": "home",
   "onSwitch": "ask-before-pull",
   "skipSecretScan": false,
@@ -258,7 +283,6 @@ A minimal Git setup uses an existing private remote and keeps automatic sync off
         "path": "pi-sync/home"
       },
       "sync": {
-        "include": ["settings.json", "AGENTS.md"],
         "automatic": false
       }
     }
@@ -271,7 +295,7 @@ Do not save from a lock-unaware editor during a pi-sync settings operation.
 Malformed, invalid, unsupported, symlinked, or concurrently changed documents remain untouched.
 Version 1, version 2, and non-empty unversioned settings require manual recovery rather than automatic migration.
 
-Adding `sessions` can upload prompts, tool output, paths, images, and secrets; interactive flows require a privacy acknowledgement.
+Allowing `sessions/` can upload prompts, tool output, paths, images, and secrets; remote-rule adoption that enables sessions requires a privacy acknowledgement.
 Startup checks report included-content differences without changing anything. Transfers retain their existing included-content policy checks instead of silently expanding local scope.
 
 Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, included-content rules, legacy paths, and recovery steps.
@@ -293,7 +317,7 @@ Read the [settings reference](./skills/configure-pi-sync/references/configuratio
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
 | `/sync config` | Show resolved configuration. |
-| `/sync files` | List included local files. |
+| `/sync files` | Review shared `.syncignore` rules and the manual edit path; legacy mode retains its include editor. |
 | `/sync status` | Compare local and remote snapshot state. |
 | `/sync diff` | Show local and remote differences. |
 | `/sync conflicts` | Review private unresolved dependency groups and choose local or remote group versions after fresh validation. |
@@ -359,7 +383,7 @@ Preserve both roots before manual recovery; with every Pi process closed and no 
 
 ## 🔒 Security and privacy
 
-- Canonical, legacy, temporary, and recovery settings paths are denied from snapshots; both `pi-sync/` and `.pisync/` state roots are permanently denied.
+- `auth.json` and its dot-suffixed backups, plus canonical, legacy, temporary, and recovery Pi Sync settings paths, are denied from snapshots; both `pi-sync/` and `.pisync/` state roots are permanently denied.
 - Push scans managed local content for common secret patterns unless the user explicitly enables **Skip secret scan**; `/sync doctor` always retains the diagnostic scan.
 - Remote snapshot references, checksums, paths, manifests, response sizes, and publication revisions are validated.
 - Symlink parents, path escapes, duplicate paths, and unsafe file/directory replacement fail before local mutation.
