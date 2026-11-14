@@ -381,7 +381,7 @@ test("sequential publishing reports a failure and continues with later packages"
     const failuresPath = path.join(fixture, "publish-failures.ndjson");
     const publishedPackagesPath = path.join(fixture, "published-packages.ndjson");
     const callsPath = path.join(fixture, "publish-calls.ndjson");
-    const script = path.join(repositoryRoot, "scripts/publish-packages-sequentially.mjs");
+    const script = path.join(repositoryRoot, ".github/scripts/publish-packages-sequentially.mjs");
     const result = spawnSync(process.execPath, [script], {
       cwd: fixture,
       encoding: "utf8",

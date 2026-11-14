@@ -79,8 +79,8 @@
     "changeset": "changeset",
     "changeset:status": "changeset status --verbose",
     "version-packages": "changeset version && npm install --package-lock-only --ignore-scripts",
-    "publish-packages": "node ./scripts/publish-packed-packages.mjs",
-    "publish-packages:sequential": "node ./scripts/publish-packages-sequentially.mjs"
+    "publish-packages": "node ./.github/scripts/publish-packed-packages.mjs",
+    "publish-packages:sequential": "node ./.github/scripts/publish-packages-sequentially.mjs"
   },
   "dependencies": {
     "esbuild": "0.28.2"

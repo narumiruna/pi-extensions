@@ -143,6 +143,33 @@ test("the existing affected-test selector retains reverse-dependent behavior", (
   assert.deepEqual(selection.workspaceDirectories, ["app", "feature"]);
 });
 
+test("GitHub Actions scripts retain full test selection", () => {
+  for (const name of [
+    "check-version-plan.mjs",
+    "publish-command.mjs",
+    "publish-packages-sequentially.mjs",
+    "publish-packed-packages.mjs",
+  ]) {
+    const script = `.github/scripts/${name}`;
+    for (const changedFiles of [[script], ["packages/feature/src/index.ts", script]]) {
+      const selection = testSelector.selectAffectedTests(fixtureRoot, changedFiles);
+      assert.equal(selection.mode, "full", changedFiles.join(", "));
+      assert.equal(selection.includeRootTests, true);
+      assert.deepEqual(selection.workspaceDirectories, ["app", "feature", "library", "registry-consumer", "unrelated"]);
+    }
+  }
+});
+
+test("workflow-only changes retain skipped test selection", () => {
+  const selection = testSelector.selectAffectedTests(fixtureRoot, [
+    ".github/workflows/ci.yml",
+    ".github/workflows/publish.yml",
+  ]);
+  assert.equal(selection.mode, "skip");
+  assert.equal(selection.includeRootTests, false);
+  assert.deepEqual(selection.workspaceDirectories, []);
+});
+
 test("shared root test support selects all workspaces regardless of change order", () => {
   for (const sharedPath of [
     "test/generated-runtime-fixture.ts",

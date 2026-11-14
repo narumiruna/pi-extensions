@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "vitest";
 import { fixture, integrity, nativeOptions, type Release } from "./packed-publish-fixture.js";
 
-const script = "../scripts/publish-packed-packages.mjs";
+const script = "../.github/scripts/publish-packed-packages.mjs";
 const { publishPackedPackages } = await import(script);
 
 for (const status of [200, 404]) {
