@@ -6,6 +6,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { afterEach, test, vi } from "vitest";
 import type { RexSnapshot } from "../src/rex-snapshot.js";
 import { pane } from "./fixtures.js";
+import { navigationFixture } from "./navigation-fixture.js";
 
 vi.stubEnv("PI_CODING_AGENT_DIR", join(tmpdir(), "pi-rex-lifecycle-tests"));
 const { default: rex, POLL_INTERVAL_MS, WIDGET_KEY } = await import("../src/rex.js");
@@ -29,10 +30,12 @@ function context(mode: ExtensionContext["mode"] = "tui") {
   const writes: [string, unknown][] = [];
   const requestRender = vi.fn();
   const notify = vi.fn();
+  const select = vi.fn<ExtensionContext["ui"]["select"]>().mockResolvedValue(undefined);
   const tui = { terminal: { rows: 36 }, requestRender } as unknown as TUI;
   const ui = {
     theme,
     notify,
+    select,
     setWidget(key: string, content: Parameters<ExtensionContext["ui"]["setWidget"]>[1]) {
       writes.push([key, content]);
       mounted?.dispose?.();
@@ -65,7 +68,7 @@ function context(mode: ExtensionContext["mode"] = "tui") {
 function harness(read = vi.fn<(signal: AbortSignal) => Promise<RexSnapshot>>().mockResolvedValue(snapshot)) {
   const handlers = new Map<string, Handler>();
   let command: Command | undefined;
-  const exec = vi.fn();
+  const exec = vi.fn<ExtensionAPI["exec"]>();
   const pi = {
     on(event: string, handler: Handler) {
       handlers.set(event, handler);
@@ -139,9 +142,13 @@ test("rejects unknown and trailing command input without discovery", async () =>
   const current = context();
   for (const args of ["status", "refresh", "refresh extra", "help"]) {
     await app.invoke(current.ctx, args);
-    assert.equal(current.notify.mock.calls.at(-1)?.[0], "Usage: /rex (no arguments)");
+    assert.equal(current.notify.mock.calls.at(-1)?.[0], "Usage: /rex [switch|cancel]");
   }
-  assert.equal(app.command.getArgumentCompletions?.(""), null);
+  assert.deepEqual(
+    (await app.command.getArgumentCompletions?.("sw"))?.map((item) => item.value),
+    ["switch"],
+  );
+  assert.equal(app.command.getArgumentCompletions?.("switch extra"), null);
   assert.equal(app.read.mock.calls.length, 0);
   await assert.rejects(app.invoke(context("print").ctx, "bad"), /Usage/u);
 });
@@ -343,4 +350,191 @@ test("a cleanup failure still aborts and joins the active read", async () => {
   pending.resolve(snapshot);
   await assert.rejects(closing, /clear failed/u);
   assert.equal(reader.mock.calls.length, 1);
+});
+
+function attachNavigation(app: ReturnType<typeof harness>) {
+  const navigation = navigationFixture();
+  app.exec.mockImplementation(async (_command, allArgs, options) => {
+    const args = allArgs.slice(5);
+    const signal = options?.signal ?? new AbortController().signal;
+    const result =
+      args[0] === "focus" || args[2] === "do"
+        ? await navigation.run(args, signal)
+        : await navigation.query(args, signal);
+    return {
+      stdout: typeof result === "string" ? result : JSON.stringify(result),
+      stderr: "",
+      code: 0,
+      killed: false,
+      truncated: false,
+    };
+  });
+  return navigation;
+}
+
+test("keyboard switching uses the native picker and preserves the no-argument refresh route", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  const navigation = attachNavigation(app);
+  assert.equal(app.current.ui.select.mock.calls.length, 0);
+  app.current.ui.select.mockImplementation(async (_title, labels) => labels[0]);
+  await app.invoke(app.current.ctx, "switch");
+  assert.equal(app.current.ui.select.mock.calls[0]?.[0], "Switch to Rex agent");
+  assert.equal(navigation.mutations.length, 2);
+  assert.deepEqual(
+    (await app.command.getArgumentCompletions?.(""))?.map((item) => item.value),
+    ["switch", "cancel"],
+  );
+});
+
+test("body clicks navigate without collapsing or opening the agent picker", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  const navigation = attachNavigation(app);
+  const widget = app.current.mounted;
+  assert.ok(widget?.handleMouse);
+  widget.render(80);
+  const event = {
+    type: "press" as const,
+    button: "left" as const,
+    x: 3,
+    y: 1,
+    screenX: 3,
+    screenY: 1,
+    width: 80,
+    height: 2,
+    shift: false,
+    ctrl: false,
+    alt: false,
+  };
+  widget.handleMouse(event);
+  assert.deepEqual(widget.handleMouse({ ...event, type: "click" }), { handled: true });
+  await app.invoke(app.current.ctx, "switch"); // Joins the active click, rather than queuing another switch.
+  assert.equal(navigation.mutations.length, 2);
+  assert.equal(app.current.ui.select.mock.calls.length, 0);
+  assert.equal(widget.render(80).length, 2);
+});
+
+test("picker cancellation and stale snapshots do not send navigation commands", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  attachNavigation(app);
+  await app.invoke(app.current.ctx, "switch");
+  assert.equal(app.exec.mock.calls.length, 0);
+  app.read.mockRejectedValueOnce(new Error("offline"));
+  await app.invoke(app.current.ctx, "switch");
+  assert.equal(app.exec.mock.calls.length, 0);
+  assert.match(app.current.notify.mock.calls.at(-1)?.[0] ?? "", /snapshot is unavailable/u);
+});
+
+test("shutdown cancels and joins a pending picker before accepting any later result", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  attachNavigation(app);
+  const pending = Promise.withResolvers<string | undefined>();
+  const opened = Promise.withResolvers<void>();
+  let signal: AbortSignal | undefined;
+  let choice: string | undefined;
+  app.current.ui.select.mockImplementation((_title, labels, options) => {
+    signal = options?.signal;
+    choice = labels[0];
+    opened.resolve();
+    return pending.promise;
+  });
+  const switching = app.invoke(app.current.ctx, "switch");
+  await opened.promise;
+  const closing = app.emit("session_shutdown", app.current.ctx);
+  assert.equal(signal?.aborted, true);
+  pending.resolve(choice);
+  await Promise.all([switching, closing]);
+  assert.equal(app.exec.mock.calls.length, 0);
+});
+
+test("widget disposal cancels the multi-client selector before any focus request", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  const navigation = attachNavigation(app);
+  navigation.model.clients.push(navigation.connected("client:00000000-0000-0000-0000-000000000099"));
+  const pending = Promise.withResolvers<string | undefined>();
+  const opened = Promise.withResolvers<void>();
+  let signal: AbortSignal | undefined;
+  app.current.ui.select.mockImplementation(async (title, labels, options) => {
+    if (title === "Switch to Rex agent") return labels[0];
+    signal = options?.signal;
+    opened.resolve();
+    return pending.promise;
+  });
+  const switching = app.invoke(app.current.ctx, "switch");
+  await opened.promise;
+  app.current.mounted?.dispose?.();
+  assert.equal(signal?.aborted, true);
+  pending.resolve(undefined);
+  await switching;
+  assert.deepEqual(navigation.mutations, []);
+});
+
+test("explicit cancellation aborts navigation I/O without stopping session polling", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  const navigation = attachNavigation(app);
+  const opened = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<void>();
+  let signal: AbortSignal | undefined;
+  const original = navigation.query.getMockImplementation();
+  navigation.query.mockImplementation(async (args, s) => {
+    if (args[0] === "client") {
+      signal = s;
+      opened.resolve();
+      await pending.promise;
+    }
+    return original?.(args, s);
+  });
+  app.current.ui.select.mockImplementation(async (_title, labels) => labels[0]);
+  const switching = app.invoke(app.current.ctx, "switch");
+  await opened.promise;
+  await app.invoke(app.current.ctx, "cancel");
+  assert.equal(signal?.aborted, true);
+  pending.resolve();
+  await switching;
+  assert.deepEqual(navigation.mutations, []);
+  const reads = app.read.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+  assert.ok(app.read.mock.calls.length > reads);
+});
+
+test("shutdown after server focus prevents app selection and stale notifications", async () => {
+  vi.useFakeTimers();
+  const app = await started();
+  const navigation = attachNavigation(app);
+  const opened = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<void>();
+  const original = navigation.query.getMockImplementation();
+  navigation.query.mockImplementation(async (args, signal) => {
+    if (args[0] === "block" && args[1] === "inspect" && navigation.model.focused) {
+      opened.resolve();
+      await pending.promise;
+    }
+    return original?.(args, signal);
+  });
+  app.current.ui.select.mockImplementation(async (_title, labels) => labels[0]);
+  const switching = app.invoke(app.current.ctx, "switch");
+  await opened.promise;
+  const closing = app.emit("session_shutdown", app.current.ctx);
+  pending.resolve();
+  await Promise.all([switching, closing]);
+  assert.equal(navigation.mutations.length, 1);
+  assert.equal(app.current.notify.mock.calls.length, 0);
+});
+
+test.each(["rpc", "print", "json"] as const)("switch and cancel routes reject %s before UI or I/O", async (mode) => {
+  const app = harness();
+  const current = context(mode);
+  for (const route of ["switch", "cancel"]) {
+    if (mode === "rpc") {
+      await app.invoke(current.ctx, route);
+      assert.match(current.notify.mock.calls.at(-1)?.[0] ?? "", /requires Pi TUI/u);
+    } else await assert.rejects(app.invoke(current.ctx, route), /requires Pi TUI/u);
+  }
+  assert.equal(current.ui.select.mock.calls.length, 0);
+  assert.equal(app.exec.mock.calls.length, 0);
 });

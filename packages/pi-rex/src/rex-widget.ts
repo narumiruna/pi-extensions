@@ -52,13 +52,13 @@ function paneLine(entry: PiPane, theme: Theme, width: number, here: RexLocation,
   return truncateToWidth(line, width);
 }
 
-export function renderRexWidget(
+export function layoutRexWidget(
   display: RexDisplay,
   theme: Theme,
   width: number,
   rows: number,
   here: RexLocation = {},
-): string[] {
+): { lines: string[]; targets: (PiPane | undefined)[] } {
   const columns = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
   // Reserve most terminal rows for Pi's transcript, editor, and other widgets.
   const budget = Math.max(1, Math.min(8, Number.isFinite(rows) ? Math.floor(rows / 4) : 8));
@@ -75,7 +75,9 @@ export function renderRexWidget(
   }
   const available = Math.max(0, budget - 1 - body.length);
   const shown = Math.min(display.entries.length, Math.max(0, available - (display.entries.length > available ? 1 : 0)));
+  const targets: (PiPane | undefined)[] = Array.from({ length: body.length + 1 }, () => undefined);
   for (const entry of display.entries.slice(0, shown)) {
+    targets.push(display.error || display.loading ? undefined : entry);
     body.push(paneLine(entry, theme, columns, here, Boolean(display.error)));
   }
   const omitted = display.entries.length - shown;
@@ -84,8 +86,19 @@ export function renderRexWidget(
   if (!display.loading && !display.error && !display.warnings.length && !display.entries.length) {
     body.push(theme.fg("muted", "No Pi sessions found in Rex"));
   }
-  return new EditorStatusWidget({
+  const lines = new EditorStatusWidget({
     theme,
     renderBody: () => body.slice(0, Math.max(0, budget - 1)),
   }).render(columns);
+  return { lines, targets: targets.slice(0, lines.length) };
+}
+
+export function renderRexWidget(
+  display: RexDisplay,
+  theme: Theme,
+  width: number,
+  rows: number,
+  here: RexLocation = {},
+): string[] {
+  return layoutRexWidget(display, theme, width, rows, here).lines;
 }

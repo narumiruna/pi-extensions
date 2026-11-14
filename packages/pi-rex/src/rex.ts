@@ -1,8 +1,19 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createEditorStatusPublisher, type EditorStatusPublisher } from "@narumitw/pi-tui-kit/editor-status-publisher";
+import type { TUI } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
-import { createRexQuery, errorText, type RexSnapshot, readRexSnapshot } from "./rex-snapshot.js";
-import { type RexDisplay, renderRexWidget, rexSummary } from "./rex-widget.js";
+import { RexAgentWidget } from "./rex-agent-widget.js";
+import { navigateRexPane, paneChoice } from "./rex-navigation.js";
+import {
+  createRexCommand,
+  createRexQuery,
+  errorText,
+  type PiPane,
+  type RexCommand,
+  type RexQuery,
+  type RexSnapshot,
+  readRexSnapshot,
+} from "./rex-snapshot.js";
+import type { RexDisplay } from "./rex-widget.js";
 
 export const WIDGET_KEY = "rex";
 export const POLL_INTERVAL_MS = 2000;
@@ -10,7 +21,11 @@ type ReadSnapshot = (signal: AbortSignal) => Promise<RexSnapshot>;
 
 class RexMonitor {
   private readonly controller = new AbortController();
-  private readonly publisher: EditorStatusPublisher<RexDisplay>;
+  private readonly widgetState = { collapsed: false };
+  private mount?: { widget?: RexAgentWidget; tui?: TUI };
+  private needsClear = false;
+  private navigation?: AbortController;
+  private navigationTask?: Promise<void>;
   private display: RexDisplay = { entries: [], warnings: [], loading: true };
   private timer?: ReturnType<typeof setTimeout>;
   private task?: Promise<void>;
@@ -22,25 +37,128 @@ class RexMonitor {
     private readonly ctx: ExtensionContext,
     private readonly isCurrent: () => boolean,
     private readonly read: ReadSnapshot,
-  ) {
-    const here = { sessionId: process.env.REX_SESSION, blockId: process.env.REX_BLOCK };
-    this.publisher = createEditorStatusPublisher({
-      key: WIDGET_KEY,
-      name: "Rex",
-      context: ctx,
-      isCurrent,
-      summary: rexSummary,
-      render: (snapshot, theme, width, rows) => renderRexWidget(snapshot, theme, width, rows, here),
-    });
-  }
+    private readonly query: RexQuery,
+    private readonly run: RexCommand,
+  ) {}
 
   start() {
-    this.publisher.publish(this.display);
+    this.publish();
     this.backgroundRefresh();
   }
 
   expand() {
-    if (this.current()) this.publisher.setCollapsed(false);
+    if (!this.current()) return;
+    this.widgetState.collapsed = false;
+    this.mount?.widget?.invalidate();
+    this.mount?.tui?.requestRender();
+  }
+
+  private clearWidget() {
+    this.mount = undefined;
+    if (!this.needsClear || !this.isCurrent()) return;
+    this.ctx.ui.setWidget(WIDGET_KEY, undefined);
+    this.needsClear = false;
+  }
+
+  private publish() {
+    if (!this.current()) return;
+    if (this.mount) {
+      this.mount.widget?.invalidate();
+      this.mount.tui?.requestRender();
+      return;
+    }
+    const token: NonNullable<RexMonitor["mount"]> = {};
+    this.mount = token;
+    this.needsClear = true;
+    try {
+      this.ctx.ui.setWidget(
+        WIDGET_KEY,
+        (tui) => {
+          token.tui = tui;
+          token.widget = new RexAgentWidget({
+            display: () => this.display,
+            theme: () => this.ctx.ui.theme,
+            rows: () => tui.terminal.rows,
+            isCurrent: () => this.current() && this.mount === token,
+            state: this.widgetState,
+            here: { sessionId: process.env.REX_SESSION, blockId: process.env.REX_BLOCK },
+            navigate: (target) => {
+              void this.switchPane(target);
+            },
+            disposed: () => {
+              if (this.mount !== token) return;
+              this.mount = undefined;
+              this.needsClear = false;
+              this.navigation?.abort();
+            },
+          });
+          return token.widget;
+        },
+        { placement: "aboveEditor" },
+      );
+    } catch (error) {
+      try {
+        this.clearWidget();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "Rex widget publication and cleanup failed");
+      }
+      throw error;
+    }
+  }
+
+  cancelSwitch() {
+    if (!this.current()) return;
+    this.navigation?.abort();
+    this.ctx.ui.notify(
+      this.navigation ? "Rex switch cancelled; server focus may already have changed" : "No Rex switch is in progress",
+      "info",
+    );
+  }
+
+  switchPane(target?: PiPane): Promise<void> {
+    if (!this.current()) return Promise.resolve();
+    if (this.navigationTask) return this.navigationTask;
+    const controller = new AbortController();
+    this.navigation = controller;
+    const signal = AbortSignal.any([controller.signal, this.controller.signal]);
+    this.navigationTask = Promise.resolve()
+      .then(async () => {
+        signal.throwIfAborted();
+        if (!target) {
+          await this.refresh();
+          signal.throwIfAborted();
+          if (!this.current()) return;
+          if (this.display.error || this.display.loading)
+            throw new Error("Rex snapshot is unavailable; refresh before switching");
+          const entries = this.display.entries;
+          if (!entries.length) throw new Error("No Pi sessions found in Rex");
+          const labels = entries.map(paneChoice);
+          const choice = await this.ctx.ui.select("Switch to Rex agent", labels, { signal });
+          signal.throwIfAborted();
+          if (!this.current() || choice === undefined) return;
+          target = entries[labels.indexOf(choice)];
+          if (!target) throw new Error("Invalid Rex agent selection");
+        }
+        signal.throwIfAborted();
+        if (!this.current()) return;
+        if (this.display.error || this.display.loading)
+          throw new Error("Rex snapshot is unavailable; refresh before switching");
+        await navigateRexPane(this.query, this.run, target, this.ctx.ui.select.bind(this.ctx.ui), signal);
+        signal.throwIfAborted();
+      })
+      .catch((error: unknown) => {
+        if (!this.current() || signal.aborted) return;
+        try {
+          this.ctx.ui.notify(`Rex switch failed: ${sanitizeTerminalText(errorText(error))}`, "error");
+        } catch (notificationError) {
+          this.notificationError = notificationError;
+        }
+      })
+      .finally(() => {
+        this.navigation = undefined;
+        this.navigationTask = undefined;
+      });
+    return this.navigationTask;
   }
 
   private current() {
@@ -65,8 +183,10 @@ class RexMonitor {
         }
         if (!this.current() || this.controller.signal.aborted) return;
         const changed = JSON.stringify(next) !== JSON.stringify(this.display);
-        this.display = next;
-        if (changed) this.publisher.publish(next);
+        if (changed) {
+          this.display = next;
+          this.publish();
+        }
       })
       .finally(() => {
         this.task = undefined;
@@ -100,14 +220,15 @@ class RexMonitor {
     clearTimeout(this.timer);
     this.timer = undefined;
     this.controller.abort();
+    this.navigation?.abort();
     let cleanupError: unknown;
     try {
-      this.publisher.dispose();
+      this.clearWidget();
     } catch (error) {
       cleanupError = error;
     }
     this.cleanup = (async () => {
-      await this.task?.catch(() => undefined);
+      await Promise.allSettled([this.task, this.navigationTask]);
       if (cleanupError !== undefined || this.notificationError !== undefined) {
         this.cleanup = undefined;
         throw cleanupError ?? this.notificationError;
@@ -139,7 +260,13 @@ export default function rex(
     ownerToken = marker;
     const next = {
       manager: ctx.sessionManager,
-      monitor: new RexMonitor(ctx, () => ownerToken === marker, read),
+      monitor: new RexMonitor(
+        ctx,
+        () => ownerToken === marker,
+        read,
+        createRexQuery(pi.exec),
+        createRexCommand(pi.exec),
+      ),
     };
     owner = next;
     try {
@@ -177,19 +304,28 @@ export default function rex(
   });
 
   pi.registerCommand("rex", {
-    description: "Refresh and expand the Rex Pi session widget",
-    getArgumentCompletions: () => null,
+    description: "Refresh the Rex widget or switch to a Rex agent",
+    getArgumentCompletions: (prefix) => {
+      const values = ["switch", "cancel"].filter((value) => value.startsWith(prefix));
+      return values.length ? values.map((value) => ({ value, label: value })) : null;
+    },
     handler: async (args, ctx) => {
       const reject = (message: string) => {
         if (ctx.hasUI) ctx.ui.notify(message, "error");
         else throw new Error(message);
       };
-      if (args.trim()) return reject("Usage: /rex (no arguments)");
+      const route = args.trim();
+      if (route && route !== "switch" && route !== "cancel") return reject("Usage: /rex [switch|cancel]");
       if (ctx.mode !== "tui") return reject("/rex requires Pi TUI mode");
       const current = owner;
       if (!current || current.manager !== ctx.sessionManager) return reject("Rex widget is not active");
+      if (route === "cancel") {
+        current.monitor.cancelSwitch();
+        return;
+      }
       current.monitor.expand();
-      await current.monitor.refresh();
+      if (route === "switch") await current.monitor.switchPane();
+      else await current.monitor.refresh();
     },
   });
 }

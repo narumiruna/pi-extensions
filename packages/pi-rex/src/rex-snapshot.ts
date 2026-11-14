@@ -23,13 +23,14 @@ export interface RexSnapshot {
 
 type RecordValue = Record<string, unknown>;
 export type RexQuery = (args: string[], signal: AbortSignal) => Promise<unknown>;
+export type RexCommand = (args: string[], signal: AbortSignal) => Promise<string>;
 
 export function object(value: unknown): RecordValue {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Rex object");
   return value as RecordValue;
 }
 
-function list(value: unknown, key: string, limit = 4096): RecordValue[] {
+export function list(value: unknown, key: string, limit = 4096): RecordValue[] {
   const items = object(value)[key];
   if (!Array.isArray(items) || items.length > limit) throw new Error(`Invalid Rex ${key} array`);
   return items.map(object);
@@ -39,9 +40,10 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function id(value: unknown, kind: string): string {
+export function id(value: unknown, kind: string): string {
   if (
     typeof value !== "string" ||
+    !value.startsWith(`${kind}:`) ||
     !new RegExp(`^${kind}:[a-f\\d]{8}(?:-[a-f\\d]{4}){3}-[a-f\\d]{12}$`, "iu").test(value)
   ) {
     throw new Error(`Missing or invalid Rex ${kind} ID`);
@@ -53,7 +55,7 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function createRexQuery(exec: ExtensionAPI["exec"]): RexQuery {
+export function createRexCommand(exec: ExtensionAPI["exec"]): RexCommand {
   return async (args, signal) => {
     signal.throwIfAborted();
     const result = await exec("rex", ["--autostart=false", "--timeout", "3s", "--color", "never", ...args], {
@@ -65,8 +67,17 @@ export function createRexQuery(exec: ExtensionAPI["exec"]): RexQuery {
     if (result.truncated) throw new Error("Rex response exceeded 1 MiB");
     if (result.killed) throw new Error("Rex request timed out or was cancelled");
     if (result.code !== 0) throw new Error(result.stderr.trim() || `Rex exited with code ${result.code}`);
+    return result.stdout;
+  };
+}
+
+export function createRexQuery(exec: ExtensionAPI["exec"]): RexQuery {
+  const run = createRexCommand(exec);
+  return async (args, signal) => {
+    const stdout = await run(args, signal);
+    signal.throwIfAborted();
     try {
-      return JSON.parse(result.stdout) as unknown;
+      return JSON.parse(stdout) as unknown;
     } catch {
       throw new Error("Invalid JSON from Rex");
     }
@@ -102,7 +113,7 @@ export function piStatus(value: unknown): RexState | undefined {
   return state;
 }
 
-function foregroundPi(value: RecordValue): boolean {
+export function foregroundPi(value: RecordValue): boolean {
   const foreground = value.foreground;
   if (foreground === null || foreground === undefined) return false;
   const process = object(foreground);
