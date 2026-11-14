@@ -25,7 +25,7 @@ import {
 } from "./resource-attachments.js";
 import { type RuntimeDependencies, type SubagentModelOverrides, SubagentRuntime } from "./runtime.js";
 import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
-import { subagentToolRenderers } from "./tool-renderers.js";
+import { subagentToolProgress, subagentToolRenderers } from "./tool-renderers.js";
 import {
   CHILD_CORE_TOOL_NAMES,
   DEFAULT_SUBAGENT_TOOLS,
@@ -212,7 +212,7 @@ export function registerSubagentTools(
     promptSnippet: "Use subagent_spawn to start one Pi subagent job",
     parameters: SpawnParameters,
     prepareArguments: prepareSpawnArguments,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       throwIfAborted(signal, "Subagent spawn was cancelled");
       assertNotNested();
       const task = validateTask(params.task, "subagent_spawn");
@@ -220,6 +220,7 @@ export function registerSubagentTools(
       const cwd = ctx.cwd;
       const projectTrusted = ctx.isProjectTrusted();
       const sessionGeneration = runtime.getSessionGeneration();
+      onUpdate?.(subagentToolProgress("spawn"));
       const attachments = await resolveResourceAttachments(
         { skills: params.skills, extensions: params.extensions },
         { cwd, projectTrusted, coreTools: tools, signal },
@@ -279,8 +280,9 @@ export function registerSubagentTools(
       "Use subagent_inspect to return one privacy-filtered snapshot of retained jobs without exposing task text, complete child output, prompts, selected tools, context, credentials, or broker messages.",
     promptSnippet: "Use subagent_inspect to inspect retained subagent jobs",
     parameters: InspectParameters,
-    async execute(_toolCallId, _params, signal) {
+    async execute(_toolCallId, _params, signal, onUpdate) {
       throwIfAborted(signal, "Subagent inspection was cancelled");
+      onUpdate?.(subagentToolProgress("inspect"));
       const jobs = runtime.inspectJobs();
       return toolResult({ jobs: jobs.jobs, omitted: { jobs: jobs.omitted } });
     },
@@ -294,8 +296,9 @@ export function registerSubagentTools(
       "Use subagent_cancel to idempotently cancel one queued or running job and release its process, timer, broker credentials, and temporary resources. Terminal jobs remain unchanged.",
     promptSnippet: "Use subagent_cancel to cancel one active subagent job",
     parameters: CancelParameters,
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, onUpdate) {
       throwIfAborted(signal, "Subagent cancellation was cancelled");
+      onUpdate?.(subagentToolProgress("cancel"));
       return toolResult(await runtime.cancel(requiredIdentifier(params.jobId, "jobId")));
     },
   });
@@ -309,8 +312,9 @@ export function registerSubagentTools(
     promptSnippet: "Use subagent_wait to wait for one subagent job or incoming message",
     parameters: WaitParameters,
     prepareArguments: prepareWaitArguments,
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, onUpdate) {
       const timeoutMs = resolveTimeoutMs(params.timeout);
+      onUpdate?.(subagentToolProgress("wait"));
       return toolResult(await runtime.wait(requiredIdentifier(params.jobId, "jobId"), timeoutMs, signal));
     },
   });
@@ -323,9 +327,10 @@ export function registerSubagentTools(
       "Use subagent_send to send one request to an active job or answer one pending child request. For a new request, provide recipient and omit requestId. To answer a request, provide requestId and omit recipient. Provide exactly one of recipient or requestId. An accepted new request interrupts any active child response wait so delivery can proceed without consuming the child's original request.",
     promptSnippet: "Use subagent_send to send or answer one subagent message",
     parameters: SendParameters,
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, onUpdate) {
       throwIfAborted(signal, "Subagent send was cancelled");
       const selection = resolveMainSendArguments(params);
+      onUpdate?.(subagentToolProgress("send"));
       if (selection.kind === "request") {
         if (selection.recipient === "main") {
           throw new Error('The main agent must use an active job ID as recipient, not "main".');

@@ -145,7 +145,7 @@ for (const action of ["spawn", "inspect", "cancel", "wait", "send"] as const) {
   });
 }
 
-test("call summaries show targets and previews, while expanded calls preserve full arguments", () => {
+test("call summaries show targets and previews, while expanded pending calls preserve full arguments", () => {
   const { theme } = createTheme();
   const fixtures = [
     {
@@ -169,7 +169,7 @@ test("call summaries show targets and previews, while expanded calls preserve fu
     const before = JSON.stringify(args);
     const collapsed = renderer(args, theme, context()).render(120).join("\n");
     assert.doesNotMatch(collapsed, /recipient=|task=|timeout|provider|undefined/u);
-    const expanded = renderer(args, theme, context({ expanded: true }))
+    const expanded = renderer(args, theme, context({ expanded: true, isPartial: true }))
       .render(120)
       .join("\n");
     for (const key of Object.keys(args)) assert.ok(expanded.includes(`${key}:`));

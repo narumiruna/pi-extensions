@@ -1,4 +1,4 @@
-import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
   asRecord,
@@ -31,6 +31,10 @@ const PENDING = {
 const INSPECT_PREVIEW_JOBS = 5;
 const STATE_PRIORITY = { failed: 0, timed_out: 1, partial: 2, running: 3, queued: 4, cancelled: 5, completed: 6 };
 
+export function subagentToolProgress(action: SubagentToolAction): AgentToolResult<undefined> {
+  return { content: [{ type: "text", text: PENDING[action] }], details: undefined };
+}
+
 // Pi owns the default shell. Its minimum content cell and padding can exceed a
 // viewport narrower than three cells; these renderers bound their inner content.
 export function subagentToolRenderers(action: SubagentToolAction): ToolRenderers {
@@ -49,13 +53,8 @@ export function subagentToolRenderers(action: SubagentToolAction): ToolRenderers
             : "";
       const children = [displayHeading(theme, `Subagent · ${LABELS[action]}`, target)];
       if (context.expanded) {
-        for (const [key, value] of Object.entries(args)) {
-          if (typeof value === "string") {
-            children.push(displayDocument(theme, `${key}: ${value}`, "muted"));
-          } else if (value !== undefined) {
-            children.push(displayLine(theme, `${key}:`, "muted"), displayJson(theme, value));
-          }
-        }
+        // Final arguments move to the result slot, which HTML exports can expand.
+        if (context.isPartial) children.push(...argumentDetails(theme, args));
       } else {
         const preview = action === "spawn" ? args.task : action === "send" ? args.message : undefined;
         if (typeof preview === "string") children.push(displayLine(theme, preview, "muted"));
@@ -64,7 +63,7 @@ export function subagentToolRenderers(action: SubagentToolAction): ToolRenderers
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const raw = textContent(result.content);
-      const children: Component[] = [];
+      const children: Component[] = expanded ? argumentDetails(theme, context.args) : [];
       if (context.isError) {
         children.push(
           displayLine(theme, `${LABELS[action]} failed`, "error"),
@@ -111,6 +110,18 @@ export function subagentToolRenderers(action: SubagentToolAction): ToolRenderers
       return conversationView(children);
     },
   };
+}
+
+function argumentDetails(theme: Theme, input: unknown): Component[] {
+  const children: Component[] = [];
+  for (const [key, value] of Object.entries(asRecord(input) ?? {})) {
+    if (typeof value === "string") {
+      children.push(displayDocument(theme, `${key}: ${value}`, "muted"));
+    } else if (value !== undefined) {
+      children.push(displayLine(theme, `${key}:`, "muted"), displayJson(theme, value));
+    }
+  }
+  return children;
 }
 
 function toolPayload(action: SubagentToolAction, result: ConversationResult): Record<string, unknown> | undefined {
