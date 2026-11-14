@@ -89,7 +89,7 @@
     "esbuild": "0.28.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.5",
+    "@biomejs/biome": "2.6.6",
     "@changesets/cli": "3.0.3",
     "@earendil-works/chord": "1.5.0",
     "@earendil-works/pi-agent-core": "1.5.0",
