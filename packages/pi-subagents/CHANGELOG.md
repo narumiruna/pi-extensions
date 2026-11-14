@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 3.4.5
+
+### Patch Changes
+
+- b216ebc: Preserve complete tool arguments in expanded HTML exports and show pending progress during main-session tool execution without changing final tool results.
+
 ## 3.4.4
 
 ### Patch Changes
