@@ -64,7 +64,11 @@ export function selectAffectedTests(root, changedFiles) {
       continue;
     }
 
-    if (ROOT_FULL_TEST_FILES.has(normalized) || normalized.startsWith("scripts/")) {
+    if (
+      ROOT_FULL_TEST_FILES.has(normalized) ||
+      normalized.startsWith("scripts/") ||
+      normalized.startsWith(".github/scripts/")
+    ) {
       fullReason = `shared test input changed: ${normalized}`;
       break;
     }

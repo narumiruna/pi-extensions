@@ -7,7 +7,7 @@ import { afterEach, test } from "vitest";
 
 const repositoryRoot = process.cwd();
 const cli = path.join(repositoryRoot, "node_modules/@changesets/cli/bin.js");
-const guard = path.join(repositoryRoot, "scripts/check-version-plan.mjs");
+const guard = path.join(repositoryRoot, ".github/scripts/check-version-plan.mjs");
 const publicName = "@fixture/public";
 const privateName = "@fixture/private";
 const fixtures: string[] = [];

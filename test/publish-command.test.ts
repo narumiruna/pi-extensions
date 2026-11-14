@@ -12,7 +12,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...original, spawn: vi.fn(original.spawn) };
 });
 
-const script = "../scripts/publish-command.mjs";
+const script = "../.github/scripts/publish-command.mjs";
 const { runPublishCommand } = await import(script);
 const spawnMock = vi.mocked(spawn);
 const nativeSetTimeout = setTimeout;

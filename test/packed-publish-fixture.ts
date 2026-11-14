@@ -14,7 +14,7 @@ export function nativeOptions(args: string[]) {
   return parser.parse([process.execPath, "changeset", "publish", ...args], { run: false }).options;
 }
 
-const script = "../scripts/publish-packed-packages.mjs";
+const script = "../.github/scripts/publish-packed-packages.mjs";
 const { publishPackedPackages } = await import(script);
 const temporary: string[] = [];
 afterEach(async () => {

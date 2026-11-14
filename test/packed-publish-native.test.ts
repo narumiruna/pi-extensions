@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "vitest";
 
-const guard = new URL("../scripts/publish-packed-packages.mjs", import.meta.url).href;
+const guard = new URL("../.github/scripts/publish-packed-packages.mjs", import.meta.url).href;
 const temporary: string[] = [];
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));

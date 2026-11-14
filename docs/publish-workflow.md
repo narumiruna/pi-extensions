@@ -38,7 +38,7 @@ flowchart TD
 
 Each non-CI job checks out the repository, sets up Node.js, and runs `npm ci`. The publish job does not repeat CI checks or tests.
 
-Before the version action, `scripts/check-version-plan.mjs` reads the CLI's `changeset status --output` plan. The action runs only when at least one planned `newVersion` differs from its `oldVersion`. This prevents empty release PRs when pending changesets target only private or ignored packages that Changesets will not version. Plan errors fail the job. A skipped plan leaves changesets pending and does not enable publishing.
+Before the version action, `.github/scripts/check-version-plan.mjs` reads the CLI's `changeset status --output` plan. The action runs only when at least one planned `newVersion` differs from its `oldVersion`. This prevents empty release PRs when pending changesets target only private or ignored packages that Changesets will not version. Plan errors fail the job. A skipped plan leaves changesets pending and does not enable publishing.
 
 The pack job completes `npm run build` before packing. Only the **Pack packages** step sets `NPM_CONFIG_IGNORE_SCRIPTS=true`, so native Changesets packs the existing output without running `prepack`, `prepare`, or `postpack` hooks. Changesets can pack dependencies and consumers concurrently; a second Kit build can delete `dist` while a consumer compiles against it. Dependency installation and the explicit build keep their normal script behavior. Package-level hooks remain available for direct `npm pack` commands.
 

@@ -249,7 +249,8 @@ consumer together.
 packages/                Extension packages and reusable libraries
 deprecated/              Reference packages excluded from active workspace scripts
 docs/                    Repository conventions and plans
-scripts/                 Shared checks, tests, versioning, and release helpers
+.github/scripts/         GitHub Actions versioning and publishing helpers
+scripts/                 Shared builds, checks, tests, and local workflow helpers
 test/                    Root integration and repository tests
 ```
 

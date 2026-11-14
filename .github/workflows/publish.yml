@@ -74,7 +74,7 @@ jobs:
 
       - name: Check for package version changes
         id: release-plan
-        run: node ./scripts/check-version-plan.mjs
+        run: node ./.github/scripts/check-version-plan.mjs
 
       - name: Create or update version pull request
         if: steps.release-plan.outputs.has-releases == 'true'

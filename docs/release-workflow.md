@@ -16,7 +16,7 @@ flowchart TD
     Publish --> Reports[Action pushes tags and creates releases from native reports]
 ```
 
-Changesets selects `version` when there are non-empty pending changesets, including changesets for packages excluded from versioning. Before the Version PR action, `scripts/check-version-plan.mjs` runs `changeset status --output` and permits the action only if the plan changes a package version. Private-only changesets with `privatePackages.version: false`, ignored-only changesets, and other no-op plans skip PR creation and updates. Plan failures fail the job instead of permitting a PR. Skipped changesets remain pending; the guard does not switch to publishing.
+Changesets selects `version` when there are non-empty pending changesets, including changesets for packages excluded from versioning. Before the Version PR action, `.github/scripts/check-version-plan.mjs` runs `changeset status --output` and permits the action only if the plan changes a package version. Private-only changesets with `privatePackages.version: false`, ignored-only changesets, and other no-op plans skip PR creation and updates. Plan failures fail the job instead of permitting a PR. Skipped changesets remain pending; the guard does not switch to publishing.
 
 Merging a Version PR consumes its versioned changesets and updates manifests, changelogs, and the lockfile. The next main push selects `publish` if no pending changesets remain and unpublished package versions exist. Empty-only changesets or no unpublished versions select `none`. CI failure blocks all release jobs.
 
