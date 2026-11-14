@@ -103,7 +103,7 @@
     "husky": "9.1.7",
     "npm-check-updates": "23.1.1",
     "semver": "7.8.6",
-    "typebox": "^1.4.4",
+    "typebox": "^1.4.5",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   },

@@ -47,7 +47,7 @@
     "@earendil-works/pi-tui": "1.5.0",
     "@types/node": "26.6.6",
     "esbuild": "0.28.2",
-    "typebox": "1.4.4",
+    "typebox": "1.4.5",
     "typescript": "7.0.2"
   },
   "repository": {
