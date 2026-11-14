@@ -36,6 +36,7 @@
       "./packages/pi-notify/src/index.ts",
       "./packages/pi-plan-mode/src/index.ts",
       "./packages/pi-recall/src/index.ts",
+      "./packages/pi-rex/src/index.ts",
       "./packages/pi-stamp/src/index.ts",
       "./packages/pi-starship/src/index.ts",
       "./packages/pi-statusline/src/index.ts",

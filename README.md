@@ -113,6 +113,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | [`pi-inspect`](./packages/pi-inspect) | Inspect current session context and live tool calls in a private, read-only browser viewer with `/inspect`. | `pi install ./packages/pi-inspect` |
 | [`pi-langfuse`](./packages/pi-langfuse) | Send agent runs, generations, token usage, costs, and tool activity to Langfuse. | `pi install npm:@narumitw/pi-langfuse` |
 | [`pi-notify`](./packages/pi-notify) | Send Telegram reminders when Pi settles, with optional inactivity timing and computer/session/worktree details. | `pi install ./packages/pi-notify` |
+| [`pi-rex`](./packages/pi-rex) | Show Pi sessions in Rex with status, working directories, and terminal locations above the editor. | `pi install ./packages/pi-rex`; not yet published |
 | [`pi-stamp`](./packages/pi-stamp) | Show configurable timestamps with opt-in assistant metadata, response timing, and tool timing in the TUI transcript. | `pi install npm:@narumitw/pi-stamp` |
 | [`pi-starship`](./packages/pi-starship) | Use a native Starship-style TOML footer with Pi-specific modules and no Starship binary dependency. | `pi install npm:@narumitw/pi-starship` |
 | [`pi-statusline`](./packages/pi-statusline) | Show model, tools, Git state, context usage, tokens, cost, and time in a preset or JSON-configured footer. | `pi install npm:@narumitw/pi-statusline` |
