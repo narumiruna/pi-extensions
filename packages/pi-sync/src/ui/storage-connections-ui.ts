@@ -137,14 +137,14 @@ async function loadStorageMenuState(selectedName: string | undefined, signal?: A
   const profile = selectedName ? ownRecord(profiles[selectedName]) : undefined;
   if (!selectedName || !profile) {
     return {
-      supportedVersion: raw?.version === 3 || raw?.version === 4 || raw?.version === 5,
+      supportedVersion: raw?.version === 3 || raw?.version === 4 || raw?.version === 5 || raw?.version === 6,
       profiles,
       selected: undefined,
     };
   }
   const usedBy = referencingSetups(raw, selectedName);
   return {
-    supportedVersion: raw?.version === 3 || raw?.version === 4 || raw?.version === 5,
+    supportedVersion: raw?.version === 3 || raw?.version === 4 || raw?.version === 5 || raw?.version === 6,
     profiles,
     selected: {
       name: selectedName,

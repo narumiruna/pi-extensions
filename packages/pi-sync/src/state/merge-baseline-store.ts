@@ -37,6 +37,7 @@ function identity(config: AnySyncConfig) {
     config.setupName,
     backendIdentityCoordinates(config),
     config.include,
+    ...(config.syncIgnore === undefined ? [] : ["syncIgnore", config.syncIgnore]),
     config.localFields ?? [],
   ]);
 }

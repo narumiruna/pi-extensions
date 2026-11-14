@@ -211,6 +211,7 @@ test("old settings URLs retain all original fragments and link to current refere
     "Unsupported old settings and recovery",
   ];
   const renamedHeadings = new Map([
+    ["Complete version 3 example", "Complete version 6 example"],
     ["Experimental Agent mode", "Autonomous sync"],
     ["Experimental Continuous sync", "Continuous sync"],
   ]);
@@ -262,11 +263,11 @@ test("the published example validates Git, WebDAV, and R2/S3 with required per-s
     ["git", "s3", "webdav"],
   );
   for (const setup of Object.values(settings.syncSetups)) {
-    assert.ok(Array.isArray(setup.sync.include));
+    assert.equal(setup.sync.include, undefined);
     assert.equal(typeof setup.sync.automatic, "boolean");
     assert.ok(setup.storage.path);
   }
-  assert.equal(example.version, 3);
+  assert.equal(example.version, 6);
 });
 
 for (const [version, policy] of [
@@ -277,6 +278,7 @@ for (const [version, policy] of [
   test(`documented version ${version} accepts ${JSON.stringify(policy)} without accepting a downgrade`, () => {
     const settings = validateSettingsDocument(configurationExample());
     settings.version = version;
+    for (const setup of Object.values(settings.syncSetups)) setup.sync.include = ["settings.json"];
     assert.ok(settings.syncSetups.home);
     Object.assign(settings.syncSetups.home.sync, policy);
     validateSettingsDocument(settings);
@@ -285,7 +287,7 @@ for (const [version, policy] of [
   });
 }
 
-for (const version of [undefined, 1, 2, 6]) {
+for (const version of [undefined, 1, 2, 7]) {
   test(`unsupported settings version ${String(version)} is not interpreted as a supported example`, () => {
     const settings = configurationExample();
     settings.version = version;
@@ -294,7 +296,12 @@ for (const version of [undefined, 1, 2, 6]) {
 }
 
 for (const [label, mutate] of [
-  ["missing include", (setup: Record<string, unknown>) => delete setup.include],
+  [
+    "unexpected include",
+    (setup: Record<string, unknown>) => {
+      setup.include = [];
+    },
+  ],
   ["missing automatic", (setup: Record<string, unknown>) => delete setup.automatic],
   [
     "string automatic",

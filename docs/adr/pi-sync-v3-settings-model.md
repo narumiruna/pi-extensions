@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted. Version 3 is the only active non-empty settings schema.
+Accepted as the legacy storage-connection and setup model.
+Settings versions 3–5 retain per-setup include lists until explicit migration; version 6 replaces file selection with one shared `.syncignore` while retaining storage connections and setup behavior.
+See the [current settings reference](../../packages/pi-sync/skills/configure-pi-sync/references/configuration.md#shared-syncignore-rules).
 
 ## Context
 

@@ -46,6 +46,7 @@ export async function writeStateForConfig(
   validate: () => void = () => {},
 ) {
   validate();
+  state = { ...state, ...(config.syncIgnore !== undefined ? { syncIgnore: config.syncIgnore } : {}) };
   if (snapshot) {
     const { stageMergeBaseline } = await import("./merge-baseline-store.js");
     validate();

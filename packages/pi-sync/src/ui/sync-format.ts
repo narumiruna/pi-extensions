@@ -56,8 +56,12 @@ export function formatPushSummary(
     `Sessions: ${upload.syncSessions ? "included — may contain private conversations" : "not included"}`,
     head ? `Remote latest: ${safeTerminalText(head.snapshotId)}` : "Remote latest: empty",
     "Publication effect: the backend's active head will reference the new immutable snapshot. Removed paths leave the active snapshot; retained history is not erased.",
-    ...(remote && inspectRemoteSelection(config.include, remote).kind === "different"
-      ? ["Included-content policy effect: replace the differing remote selection with this setup's local selection."]
+    ...(remote && inspectRemoteSelection(config, remote).kind === "different"
+      ? [
+          config.syncIgnore === undefined
+            ? "Included-content policy effect: replace the differing remote selection with this setup's local selection."
+            : "Sync policy effect: replace the differing remote selection with this device's shared .syncignore. Rules apply to all setups.",
+        ]
       : []),
     formatPublicationPreview(remote, upload),
     config.skipSecretScan

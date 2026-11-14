@@ -4,10 +4,9 @@ export interface SnapshotFile {
   sha256: string;
 }
 
-export interface SnapshotSelection {
-  version: 1;
-  include: string[];
-}
+export type SnapshotSelection =
+  | { version: 1; include: string[]; ignore?: never }
+  | { version: 2; ignore: string; include?: never };
 
 export interface Snapshot {
   version: number;
@@ -17,7 +16,7 @@ export interface Snapshot {
   /** Backend-scoped remote identity retained in the snapshot wire format. */
   profile: string;
   syncSessions?: boolean;
-  /** Portable, credential-free included-content intent. Absent on legacy snapshots. */
+  /** Portable, credential-free file-selection intent. Absent on legacy snapshots. */
   selection?: SnapshotSelection;
   localFields?: string[];
   files: SnapshotFile[];
@@ -30,6 +29,8 @@ export interface SnapshotOptions {
   /** Reviewed regular-file preimages; null means the path was absent. Checked under mutation queues. */
   expectedFileHashes?: Readonly<Record<string, string | null>>;
   include?: string[];
+  /** Defined only for agent-root .syncignore mode; empty text means no user exclusions. */
+  syncIgnore?: string;
   sessionDir?: string;
   /** Temporary internal projections while snapshot storage remains wire-compatible. */
   syncFiles?: string[];

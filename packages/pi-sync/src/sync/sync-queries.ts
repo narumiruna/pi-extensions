@@ -49,7 +49,9 @@ export async function status(
       `storage connection: ${config.connectionName}`,
       `storage location: ${safeTerminalText(destination)}`,
       `publication safety: ${publicationCapabilityDescription(capability)}`,
-      `included content: ${config.include.join(", ") || "none"}`,
+      config.syncIgnore === undefined
+        ? `included content: ${config.include.join(", ") || "none"}`
+        : "content: all non-excluded files · shared .syncignore",
       `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
       ...continuous,
       remoteText,
@@ -88,7 +90,9 @@ export async function diff(
     `sync setup: ${config.setupName}`,
     `storage connection: ${config.connectionName}`,
     `storage location: ${safeTerminalText(backend.destination)}`,
-    `included content: ${config.include.join(", ") || "none"}`,
+    config.syncIgnore === undefined
+      ? `included content: ${config.include.join(", ") || "none"}`
+      : "content: all non-excluded files · shared .syncignore",
     `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
     formatRemoteSelectionStatus(selectionState),
     ...warnings,
@@ -122,7 +126,9 @@ export async function doctor(
     snapshotOptions = snapshotOptionsForContext(ctx, config);
     messages.push(
       `config: ok (sync setup ${config.setupName})`,
-      `included content: ${config.include.join(", ") || "none"}`,
+      config.syncIgnore === undefined
+        ? `included content: ${config.include.join(", ") || "none"}`
+        : "content: all non-excluded files · shared .syncignore",
       `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
     );
     backendSummary = [

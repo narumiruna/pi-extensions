@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { DEFAULT_SYNC_IGNORE } from "../sync/sync-ignore.js";
 import { normalizeSyncInclude } from "../sync/sync-policy.js";
 import {
   configFromSettings,
@@ -10,6 +11,7 @@ import { localConfigPath } from "./config-file.js";
 import { updateLocalConfig } from "./settings-store.js";
 import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
 import { effectiveSyncSetupRemoteIdentity, validateConfigName } from "./settings-validation.js";
+import { initializeSyncIgnore, readSyncIgnoreFile } from "./sync-ignore-file.js";
 
 export class SyncSetupReviewChangedError extends Error {
   constructor(message: string) {
@@ -24,13 +26,14 @@ export async function saveNewV3Settings(
     connectionName: string;
     connection: StorageConnectionSettings;
     setup: SyncSetupSettings;
+    expectedSyncIgnore?: string;
   },
   signal?: AbortSignal,
 ) {
   validateConfigName(input.setupName, "sync setup");
   validateConfigName(input.connectionName, "storage connection");
   const settings: PiSyncSettingsV3 = {
-    version: 3,
+    version: input.setup.sync.include === undefined ? 6 : 3,
     activeSyncSetup: input.setupName,
     onSwitch: "ask-before-pull",
     skipSecretScan: false,
@@ -42,9 +45,17 @@ export async function saveNewV3Settings(
       },
     },
   };
-  return updateLocalConfig((current) => {
+  return updateLocalConfig(async (current) => {
     if (Object.keys(current.storageConnections).length || Object.keys(current.syncSetups).length) {
       throw new Error(`Settings already exist: ${localConfigPath()}`);
+    }
+    if (settings.version === 6) {
+      if (
+        input.expectedSyncIgnore !== undefined &&
+        ((await readSyncIgnoreFile()) ?? DEFAULT_SYNC_IGNORE) !== input.expectedSyncIgnore
+      )
+        throw new SyncSetupReviewChangedError(".syncignore changed during setup; reopen the review.");
+      await initializeSyncIgnore(signal);
     }
     return { ...current, ...settings };
   }, signal);
@@ -94,9 +105,10 @@ export async function addSyncSetup(
   setup: SyncSetupSettings,
   signal?: AbortSignal,
   expectedConnection?: StorageConnectionSettings,
+  expectedSyncIgnore?: string,
 ) {
   validateConfigName(name, "sync setup");
-  await updateSettings((settings) => {
+  await updateSettings(async (settings) => {
     if (Object.hasOwn(settings.syncSetups, name)) throw new Error(`Sync setup already exists: ${name}`);
     if (!Object.hasOwn(settings.storageConnections, setup.storage.connection)) {
       throw new Error(`Storage connection not found: ${setup.storage.connection}`);
@@ -107,10 +119,21 @@ export async function addSyncSetup(
     ) {
       throw new SyncSetupReviewChangedError("Storage connection changed while the setup review was open; reopen it.");
     }
+    const ignoreMode =
+      settings.version === 6 || (Object.keys(settings.syncSetups).length === 0 && setup.sync.include === undefined);
+    if (ignoreMode) {
+      if (
+        expectedSyncIgnore !== undefined &&
+        ((await readSyncIgnoreFile()) ?? DEFAULT_SYNC_IGNORE) !== expectedSyncIgnore
+      )
+        throw new SyncSetupReviewChangedError(".syncignore changed during setup; reopen the review.");
+      await initializeSyncIgnore(signal);
+    }
     const nextSetups = { ...settings.syncSetups, [name]: structuredClone(setup) };
     assertUniqueLocations(nextSetups, settings.storageConnections);
     return {
       ...settings,
+      version: ignoreMode ? 6 : settings.version,
       syncSetups: nextSetups,
       ...(settings.activeSyncSetup ? {} : { activeSyncSetup: name }),
     };
@@ -129,12 +152,14 @@ export async function updateSyncSetup(
   } = {},
 ) {
   validateConfigName(name, "sync setup");
-  await updateSettings((settings) => {
+  await updateSettings(async (settings) => {
     const setup = settings.syncSetups[name];
     if (!setup) throw new Error(`Sync setup not found: ${name}`);
     if (
       options.expectedConfigFingerprint !== undefined &&
-      syncCheckConfigFingerprint(configFromSettings(settings, name)) !== options.expectedConfigFingerprint
+      syncCheckConfigFingerprint(
+        configFromSettings(settings, name, settings.version === 6 ? ((await readSyncIgnoreFile()) ?? "") : undefined),
+      ) !== options.expectedConfigFingerprint
     ) {
       throw new SyncSetupReviewChangedError(
         `Sync setup “${name}” changed while it was open; reopen it and review the current configuration.`,
@@ -205,10 +230,13 @@ export async function removeStorageConnection(name: string, signal?: AbortSignal
   }, signal);
 }
 
-async function updateSettings(update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3, signal?: AbortSignal) {
+async function updateSettings(
+  update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3 | Promise<PiSyncSettingsV3>,
+  signal?: AbortSignal,
+) {
   return updateLocalConfig((settings) => {
-    if (settings.version !== 3 && settings.version !== 4 && settings.version !== 5) {
-      throw new Error("Storage connections and sync setups require version 3 or 4 or 5 pi-sync settings.");
+    if (settings.version !== 3 && settings.version !== 4 && settings.version !== 5 && settings.version !== 6) {
+      throw new Error("Storage connections and sync setups require version 3, 4, 5, or 6 pi-sync settings.");
     }
     return update(settings);
   }, signal);

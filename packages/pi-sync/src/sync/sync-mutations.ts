@@ -132,7 +132,7 @@ export async function push(
     !options.force &&
     !remoteForUpload &&
     head?.selection &&
-    inspectRemoteSelection(config.include, { selection: head.selection, files: [] }).kind === "different"
+    inspectRemoteSelection(config, { selection: head.selection, files: [] }).kind === "different"
   ) {
     remoteForUpload = await readSnapshotForHead(backend, head, options.signal);
   }
@@ -235,6 +235,7 @@ export async function push(
         lastRemoteRevision: result.head.revision,
         lastFileHashes: fileHashMap(local),
         include: [...config.include],
+        syncIgnore: config.syncIgnore,
         ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
       },
       local,
@@ -380,6 +381,7 @@ export async function pull(
   options.onCommit?.();
   const lastFileHashes = await applySnapshot(physical, protectedSessionPaths(ctx), {
     include: config.include,
+    syncIgnore: config.syncIgnore,
     sessionDir: applySessionDir,
     signal: options.signal,
     validateMutation,
@@ -400,6 +402,7 @@ export async function pull(
         ? { ...lastFileHashes, "settings.json": fileHashMap(logical)["settings.json"] }
         : lastFileHashes,
       include: [...config.include],
+      syncIgnore: config.syncIgnore,
       ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
     },
     logical,
@@ -481,6 +484,7 @@ export async function syncBoth(
         lastRemoteRevision: head?.revision,
         lastFileHashes: fileHashMap(accepted),
         include: [...config.include],
+        syncIgnore: config.syncIgnore,
         ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
       },
       accepted,
@@ -639,6 +643,7 @@ export async function rollback(
   options.onCommit?.();
   const lastFileHashes = await applySnapshot(physical, protectedSessionPaths(ctx), {
     include: config.include,
+    syncIgnore: config.syncIgnore,
     sessionDir: applySessionDir,
     signal: options.signal,
     validateMutation,
@@ -671,6 +676,7 @@ export async function rollback(
           ? { ...lastFileHashes, "settings.json": fileHashMap(remote)["settings.json"] }
           : lastFileHashes,
         include: [...config.include],
+        syncIgnore: config.syncIgnore,
         ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
       },
       remote,

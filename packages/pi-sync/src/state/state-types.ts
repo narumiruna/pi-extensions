@@ -6,6 +6,7 @@ export interface SyncState {
   lastRemoteEtag?: string;
   lastFileHashes: Record<string, string>;
   include?: string[];
+  syncIgnore?: string;
   localFields?: string[];
   lastObservedSnapshot?: string;
   lastObservedRevision?: string;

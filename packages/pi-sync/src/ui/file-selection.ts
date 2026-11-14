@@ -26,6 +26,11 @@ interface SelectionDraft {
 export async function showFileSelection(ctx: ExtensionCommandContext, setupName?: string, signal?: AbortSignal) {
   const config = await loadConfig(setupName);
   if (signal?.aborted) return;
+  if (config.syncIgnore !== undefined) {
+    const { showSyncIgnoreSettings } = await import("./sync-ignore-ui.js");
+    if (signal?.aborted) return;
+    return showSyncIgnoreSettings(ctx, signal);
+  }
   const selection = syncIncludeSelection(config.include);
   const original: SelectionDraft = {
     builtIns: new Set(selection.builtIns),

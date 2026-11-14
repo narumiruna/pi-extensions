@@ -16,6 +16,11 @@ export function isDeniedPath(relativePath: string) {
     base.endsWith(".env") ||
     base.includes("secret") ||
     base.includes("token") ||
+    base === "auth.json" ||
+    base.startsWith("auth.json.") ||
+    base.startsWith(".auth.json.") ||
+    base === ".syncignore.lock" ||
+    base.startsWith(".syncignore.tmp-") ||
     base === "pi-sync.json" ||
     base.startsWith("pi-sync.json.") ||
     base.startsWith(".pi-sync.json.") ||

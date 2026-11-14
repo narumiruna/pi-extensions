@@ -34,9 +34,9 @@ export function normalizeOnSwitch(value: unknown): OnSwitchAction {
 }
 
 export function validateSettingsDocument(value: Record<string, unknown>): PiSyncSettingsV3 {
-  if (value.version !== 3 && value.version !== 4 && value.version !== 5) {
+  if (value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6) {
     throw new Error(
-      `Unsupported pi-sync settings: version 3 or 4 or 5 is required. Keep the existing ${path.basename(localConfigPath())} for recovery and use a compatible pi-sync client or review a separate supported setup; do not downgrade portable field policies. pi-sync will not migrate or overwrite unsupported settings.`,
+      `Unsupported pi-sync settings: version 3 or 4 or 5 or 6 is required. Keep the existing ${path.basename(localConfigPath())} for recovery and use a compatible pi-sync client or review a separate supported setup; do not downgrade portable field policies. pi-sync will not migrate or overwrite unsupported settings.`,
     );
   }
   rejectLegacyFields(
@@ -88,6 +88,7 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
       name,
       requireOwnObject(syncSetups, name, "sync setup") as Record<string, unknown>,
       storageConnections,
+      value.version as number,
     );
   }
   const names = Object.keys(syncSetups);
@@ -101,12 +102,12 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
   }
   for (const setup of Object.values(syncSetups)) {
     const policy = (setup as SyncSetupSettings).sync;
-    if (policy.localFields !== undefined && value.version !== 4 && value.version !== 5)
+    if (policy.localFields !== undefined && value.version !== 4 && value.version !== 5 && value.version !== 6)
       throw new Error("localFields requires explicit settings version 4; older binaries must refuse portable state.");
   }
   for (const setup of Object.values(syncSetups)) {
     const policy = (setup as SyncSetupSettings).sync;
-    if ((policy.mergeContent || policy.partialSync) && value.version !== 5)
+    if ((policy.mergeContent || policy.partialSync) && value.version !== 5 && value.version !== 6)
       throw new Error("Content/partial sync requires explicit settings version 5.");
   }
   validateUniqueRemoteSyncSetups(syncSetups, storageConnections);
@@ -162,7 +163,12 @@ function validateStorageConnection(name: string, value: Record<string, unknown>)
   }
 }
 
-function validateSyncSetup(name: string, value: Record<string, unknown>, connections: Record<string, unknown>) {
+function validateSyncSetup(
+  name: string,
+  value: Record<string, unknown>,
+  connections: Record<string, unknown>,
+  version: number,
+) {
   rejectLegacyFields(
     value,
     [
@@ -212,12 +218,14 @@ function validateSyncSetup(name: string, value: Record<string, unknown>, connect
       mixedSetupError("WebDAV", name);
     }
   }
-  if (!Object.hasOwn(sync, "include")) {
+  if (version === 6 && Object.hasOwn(sync, "include"))
+    throw new Error("Settings version 6 uses .syncignore; remove sync.include only through reviewed migration.");
+  if (version !== 6 && !Object.hasOwn(sync, "include")) {
     throw new Error(`Invalid pi-sync settings: sync setup “${name}” is missing sync.include.`);
   }
-  const include = normalizeSyncInclude(sync.include);
+  const include = version === 6 ? undefined : normalizeSyncInclude(sync.include);
   const localFields = normalizeLocalFields(sync.localFields);
-  if (localFields.length > 0 && !include.includes("settings.json"))
+  if (localFields.length > 0 && include && !include.includes("settings.json"))
     throw new Error("Nonempty localFields requires settings.json in sync.include.");
   for (const key of ["mergeContent", "partialSync", "agentMode", "continuous"])
     if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`${key} must be boolean.`);

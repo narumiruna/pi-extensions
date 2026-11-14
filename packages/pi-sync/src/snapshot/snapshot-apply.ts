@@ -30,6 +30,7 @@ export async function applySnapshot(
   options: Pick<
     SnapshotOptions,
     | "include"
+    | "syncIgnore"
     | "sessionDir"
     | "syncFiles"
     | "syncSessions"

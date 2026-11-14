@@ -58,7 +58,7 @@ test.each(["first", "add", "edit"])(
       ];
       const choices =
         flow === "first"
-          ? ["Minimal settings", "Keep automatic sync off", "Keep sessions off (recommended)", "Save setup"]
+          ? ["Keep automatic sync off", "Save setup"]
           : flow === "add"
             ? ["Add storage connection"]
             : ["Keep current password", "Save storage connection"];

@@ -205,7 +205,7 @@ export async function mergeSync(
         !state.unresolved?.length &&
         head.snapshotId === state.lastAppliedSnapshot &&
         backend.sameRevision(head.revision, state.lastRemoteRevision) &&
-        inspectRemoteSelection(config.include, { selection: head.selection, files: [] }).kind === "same" &&
+        inspectRemoteSelection(config, { selection: head.selection, files: [] }).kind === "same" &&
         matchesAcceptedState(state, config, head, local)
       ) {
         const unchanged = await timings.measure("transfer unchanged verification", async () => {
@@ -288,7 +288,7 @@ export async function mergeSync(
         throw review("Included content changed; review the selection before merging.", "remote-or-policy-changed");
       if (!head || !remote || !rawRemote)
         throw review("The established remote is missing; choose an explicit recovery direction.", "remote-empty");
-      const selectionState = inspectRemoteSelection(config.include, rawRemote);
+      const selectionState = inspectRemoteSelection(config, rawRemote);
       const selectionCompatible = selectionState.kind === "same";
       let plan = await timings.measure("transfer merge planning", () =>
         planFileMerge({
@@ -454,7 +454,7 @@ export async function mergeSync(
       if (config.include.includes("sessions")) requireStableMergeSessionRoot(localRaw, after);
       const publication = regenerateSnapshotIdentity({
         ...accepted,
-        version: config.partialSync ? 3 : accepted.version,
+        version: accepted.version === 4 ? 4 : config.partialSync ? 3 : accepted.version,
         files: [
           ...accepted.files.filter((file) => !withheld.has(file.path)),
           ...remote.files.filter((file) => withheld.has(file.path)),
@@ -463,7 +463,7 @@ export async function mergeSync(
       const upload = mergeRemotePreservedFiles(publication, rawRemote, config);
       const publish =
         !sameHashes(fileHashMap(publication), fileHashMap(remote)) ||
-        Boolean(config.partialSync && rawRemote.version !== 3);
+        Boolean(config.partialSync && rawRemote.version !== (config.syncIgnore === undefined ? 3 : 4));
       const apply = !sameHashes(fileHashMap(localRaw), fileHashMap(after));
       if (!publish && !apply) {
         const beforeEvidence = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
@@ -810,7 +810,7 @@ async function completeJournal(
   if (syncStateFingerprint(state) !== journal.stateIdentity) {
     throw new Error("Sync baseline changed after the interrupted merge; preserve its journal and review recovery.");
   }
-  if (inspectRemoteSelection(config.include, observed).kind !== "same")
+  if (inspectRemoteSelection(config, observed).kind !== "same")
     throw new Error(
       "Pending merge has unavailable remote selection metadata; preserve its journal and choose a reviewed explicit direction.",
     );
@@ -894,6 +894,7 @@ function acceptedState(
     lastRemoteRevision: head.revision,
     lastFileHashes: fileHashMap(canonical ? portableSnapshot(snapshot, config.localFields) : snapshot),
     include: [...config.include],
+    syncIgnore: config.syncIgnore,
     ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
   };
 }

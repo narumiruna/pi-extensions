@@ -5,9 +5,11 @@ import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
 import { loadConfig, syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
 import { SyncSetupReviewChangedError, updateSyncSetup } from "../settings/settings-management.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
+import { readSyncIgnoreFile, saveSyncIgnore } from "../settings/sync-ignore-settings.js";
 import { readSnapshotForHead } from "../sync/remote-snapshot.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { errorMessage } from "../sync/sync-errors.js";
+import { ignorePolicyInclude } from "../sync/sync-ignore.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import {
   compareSyncInclude,
@@ -22,6 +24,7 @@ import {
   runCancellableOperation,
   runCancellableTask,
 } from "./cancellable-operation.js";
+import { confirmMergeReview } from "./merge-review.js";
 import { setSyncStatus } from "./sync-status.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -185,19 +188,25 @@ async function showSelectionDifference(
         items: [
           {
             id: "review",
-            label: "Review all paths (recommended)",
-            description: "Compare exact remote-only, device-only, and ordered lists.",
+            label: hasIgnorePolicy(state.decision)
+              ? "Review both policies (recommended)"
+              : "Review all paths (recommended)",
+            description: "Compare exact local and remote selection policies.",
             to: "review",
           },
           {
             id: "adopt",
-            label: "Use remote content list",
-            description: "Save the reviewed list on this device without pulling files.",
+            label: hasIgnorePolicy(state.decision) ? "Use remote .syncignore" : "Use remote content list",
+            description: hasIgnorePolicy(state.decision)
+              ? "Save shared rules for ALL setups without pulling files. Both sides must use .syncignore mode."
+              : "Save the reviewed list on this device without pulling files.",
             action: "adopt",
           },
           {
             id: "keep",
-            label: "Keep this device's content list and update remote…",
+            label: hasIgnorePolicy(state.decision)
+              ? "Keep this device's policy and update remote…"
+              : "Keep this device's content list and update remote…",
             description: "Open the existing exact force-push preview without skipping confirmation.",
             action: "keep",
           },
@@ -215,10 +224,12 @@ async function showSelectionDifference(
       }),
       saved: ({ state }) => ({
         kind: "actions",
-        title: "Remote content list saved",
+        title: hasIgnorePolicy(state.decision) ? "Remote .syncignore saved" : "Remote content list saved",
         lines: [
           `Sync setup: ${safeTerminalText(state.decision.setupName)}`,
-          "Only the included-content setting was saved.",
+          hasIgnorePolicy(state.decision)
+            ? "Only the shared .syncignore was saved; it applies to ALL setups."
+            : "Only the included-content setting was saved.",
           "No files were pulled and sync state was not changed.",
         ],
         items: [
@@ -241,6 +252,22 @@ async function showSelectionDifference(
       adopt: async ({ state, signal: actionSignal }) => {
         const signal = combineSignals(sessionSignal, actionSignal);
         try {
+          if (hasIgnorePolicy(state.decision)) {
+            if (state.decision.localIgnore === undefined || state.decision.remoteIgnore === undefined)
+              throw new Error("Migrate legacy settings before adopting .syncignore; no settings were changed.");
+            const summary = formatSelectionDifference(state.decision);
+            const approved = await confirmMergeReview(
+              ctx,
+              "Save remote .syncignore for all setups?",
+              summary,
+              signal,
+              isCurrent,
+              "save shared rules",
+              summary.split("\n"),
+            );
+            if (signal.aborted || !isCurrent()) return { kind: "close" as const };
+            if (!approved) return { kind: "stay" as const };
+          }
           const adoption = await runCancellableTask(
             ctx,
             "Checking and saving remote content list…",
@@ -250,7 +277,18 @@ async function showSelectionDifference(
               ownedSignal.throwIfAborted();
               validateOwner();
               assertLocalSelectionCurrent(currentConfig, state.decision);
-              if (!currentConfig.include.includes("sessions") && state.decision.remoteInclude.includes("sessions")) {
+              if (
+                hasIgnorePolicy(state.decision) &&
+                (currentConfig.syncIgnore === undefined || state.decision.remoteIgnore === undefined)
+              )
+                throw new Error(
+                  "Both sides must use .syncignore mode. Migrate legacy settings first, or review a force push of this device’s policy. No settings were changed.",
+                );
+              const remoteIncludesSessions =
+                state.decision.remoteIgnore === undefined
+                  ? state.decision.remoteInclude.includes("sessions")
+                  : ignorePolicyInclude(state.decision.remoteIgnore).includes("sessions");
+              if (!currentConfig.include.includes("sessions") && remoteIncludesSessions) {
                 onDialog?.(true);
                 let acknowledged: boolean;
                 try {
@@ -287,7 +325,11 @@ async function showSelectionDifference(
           options.onSelectionResolved?.();
           continuationFingerprint = syncCheckConfigFingerprint({
             ...adoption.value.config,
-            include: [...state.decision.remoteInclude],
+            include:
+              state.decision.remoteIgnore === undefined
+                ? [...state.decision.remoteInclude]
+                : ignorePolicyInclude(state.decision.remoteIgnore),
+            syncIgnore: state.decision.remoteIgnore,
           });
           flowState = { decision: state.decision, saved: true };
           return { kind: "to" as const, screen: "saved" as const };
@@ -435,8 +477,8 @@ async function loadAdoptionReview(
   const snapshot = await readSnapshotForHead(backend, reviewedHead, signal);
   throwIfAborted(signal);
   validateOwner();
-  const state = inspectRemoteSelection(config.include, snapshot);
-  if (state.kind !== "different" || !sameSyncInclude(state.include, decision.remoteInclude)) {
+  const state = inspectRemoteSelection(config, snapshot);
+  if (state.kind !== "different" || !sameReviewedPolicy(state, decision)) {
     throw new StaleRemoteSelectionReviewError("Remote synced content changed while the comparison was open.");
   }
   return { config, backend, reviewedHead };
@@ -457,10 +499,21 @@ async function revalidateAndAdopt(
   const currentSnapshot = await readSnapshotForHead(review.backend, currentHead, signal);
   throwIfAborted(signal);
   validateOwner();
-  const currentState = inspectRemoteSelection(review.config.include, currentSnapshot);
-  if (currentState.kind !== "different" || !sameSyncInclude(currentState.include, decision.remoteInclude)) {
+  const currentState = inspectRemoteSelection(review.config, currentSnapshot);
+  if (currentState.kind !== "different" || !sameReviewedPolicy(currentState, decision)) {
     throw new StaleRemoteSelectionReviewError("Remote synced content changed while the comparison was open.");
   }
+  if (decision.remoteIgnore !== undefined && review.config.syncIgnore !== undefined) {
+    const expected = await readSyncIgnoreFile();
+    throwIfAborted(signal);
+    validateOwner();
+    if ((expected ?? "") !== review.config.syncIgnore)
+      throw new StaleRemoteSelectionReviewError(".syncignore changed during review.");
+    await saveSyncIgnore(decision.remoteIgnore, expected, signal, review.config);
+    return;
+  }
+  if (hasIgnorePolicy(decision))
+    throw new Error("Migrate legacy settings before adopting .syncignore; no settings were changed.");
   await updateSyncSetup(
     decision.setupName,
     (setup) => {
@@ -503,7 +556,7 @@ async function inspectConfiguredRemoteSelection(
   return {
     kind: "selection",
     config,
-    state: inspectRemoteSelection(config.include, snapshot),
+    state: inspectRemoteSelection(config, snapshot),
   };
 }
 
@@ -556,6 +609,17 @@ async function showLegacyDiscovery(
 }
 
 function selectionSummaryLines(decision: RemoteSelectionDecision) {
+  if (hasIgnorePolicy(decision))
+    return [
+      `Sync setup: ${safeTerminalText(decision.setupName)}`,
+      "The shared .syncignore policy differs. Nothing changed.",
+      "Adopting rules affects ALL setups and can expand eligible content. Review both policies first.",
+      ...(decision.localIgnore === undefined || decision.remoteIgnore === undefined
+        ? [
+            "One side uses a legacy include policy; migrate before adoption, or explicitly force-push your reviewed local policy.",
+          ]
+        : []),
+    ];
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     `Sync setup: ${safeTerminalText(decision.setupName)}`,
@@ -567,6 +631,20 @@ function selectionSummaryLines(decision: RemoteSelectionDecision) {
 }
 
 function formatSelectionDifference(decision: RemoteSelectionDecision) {
+  if (hasIgnorePolicy(decision))
+    return [
+      "Remote policy:",
+      decision.remoteIgnore ?? `Legacy include list: ${safeList(decision.remoteInclude)}`,
+      "",
+      "This device policy:",
+      decision.localIgnore ?? `Legacy include list: ${safeList(decision.localInclude)}`,
+      "",
+      "Rules are shared by all setups. Adoption saves .syncignore only; it does not pull files or change the sync baseline.",
+      "Ignored local files remain untouched. Remote history is not erased.",
+    ]
+      .flatMap((line) => line.split("\n"))
+      .map(safeTerminalText)
+      .join("\n");
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     ...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
@@ -597,6 +675,8 @@ function formatSelectionDifference(decision: RemoteSelectionDecision) {
 }
 
 function formatRemoteSelectionSummary(decision: RemoteSelectionDecision) {
+  if (hasIgnorePolicy(decision))
+    return `${selectionSummaryLines(decision).join("\n")}\n${formatSelectionDifference(decision)}\nRun /sync in TUI; RPC review is read-only.`;
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     `Synced content for “${safeTerminalText(decision.setupName)}” differs from this device.`,
@@ -626,19 +706,34 @@ function decisionFromState(
     configIdentity: syncConfigReviewFingerprint(config),
     localInclude: [...config.include],
     remoteInclude: [...state.include],
+    localIgnore: config.syncIgnore,
+    remoteIgnore: state.remoteIgnore,
+    remoteSelection: state.remoteSelection,
   };
 }
 
 function assertLocalSelectionCurrent(config: AnySyncConfig, decision: RemoteSelectionDecision) {
   if (
     syncConfigReviewFingerprint(config) === decision.configIdentity &&
-    sameSyncInclude(config.include, decision.localInclude)
+    sameSyncInclude(config.include, decision.localInclude) &&
+    config.syncIgnore === decision.localIgnore
   ) {
     return;
   }
   throw new StaleRemoteSelectionReviewError(
     `Sync setup “${safeTerminalText(config.setupName)}” changed while the comparison was open.`,
   );
+}
+
+function hasIgnorePolicy(decision: RemoteSelectionDecision) {
+  return decision.localIgnore !== undefined || decision.remoteIgnore !== undefined;
+}
+
+function sameReviewedPolicy(
+  state: Extract<RemoteSelectionState, { kind: "different" }>,
+  decision: RemoteSelectionDecision,
+) {
+  return state.remoteIgnore === decision.remoteIgnore && sameSyncInclude(state.include, decision.remoteInclude);
 }
 
 function continueLabel(origin: RemoteSelectionOrigin) {

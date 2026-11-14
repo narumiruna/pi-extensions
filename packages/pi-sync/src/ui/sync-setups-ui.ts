@@ -189,7 +189,9 @@ async function loadSetupMenuState(selectedName: string | undefined, signal?: Abo
       `Storage connection: ${safeTerminalText(config.connectionName)}`,
       `Endpoint: ${storageEndpoint(config)}`,
       `Storage location: ${storageLocation(config)}`,
-      `Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`,
+      config.syncIgnore === undefined
+        ? `Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`
+        : "Content: all non-excluded files · shared .syncignore",
       `Sessions: ${selection.sessions ? "On — privacy-sensitive" : "Off"}`,
       `Automatic sync: ${config.automatic ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,

@@ -105,6 +105,7 @@ export function snapshotOptionsForContext(
 ): SnapshotOptions {
   return {
     include: config.include,
+    ...(config.syncIgnore !== undefined ? { syncIgnore: config.syncIgnore } : {}),
     sessionDir: sessionDirFromContext(ctx),
   };
 }

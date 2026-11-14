@@ -18,7 +18,7 @@ const fixtures = [
   {
     preset: "Git",
     inputs: ["", "git@github.com:owner/private-pi-sync.git", "", ""],
-    choices: ["Recommended Pi settings", "Keep automatic sync off", "Save setup"],
+    choices: ["Keep automatic sync off", "Save setup"],
     path: "./",
     hints: [
       "git@github.com:owner/private-pi-sync.git (SSH)",
@@ -32,7 +32,7 @@ const fixtures = [
   {
     preset: "WebDAV",
     inputs: ["", "https://cloud.example.com/dav", "user", ""],
-    choices: ["Minimal settings", "Keep automatic sync off", "Keep sessions off (recommended)", "Save setup"],
+    choices: ["Keep automatic sync off", "Save setup"],
     path: "./",
     hints: [
       "Example: https://cloud.example.com/remote.php/dav/files/user",
@@ -51,14 +51,7 @@ const fixtures = [
       "",
       "access-key",
     ],
-    choices: [
-      "Customize remote location",
-      "Store credentials privately",
-      "Minimal settings",
-      "Keep automatic sync off",
-      "Keep sessions off (recommended)",
-      "Save sync setup",
-    ],
+    choices: ["Customize remote location", "Store credentials privately", "Keep automatic sync off", "Save sync setup"],
     path: "./",
     hints: [
       "Example: https://",
@@ -109,22 +102,10 @@ for (const fixture of fixtures) {
           ? /Automatic sync: On \(startup check; shutdown pushes selected content if sessions included\)/u
           : /Automatic sync: Off/u,
       );
-      const expected =
-        fixture.preset === "Git"
-          ? [
-              "settings.json",
-              "keybindings.json",
-              "models.json",
-              "AGENTS.md",
-              "APPEND_SYSTEM.md",
-              "skills",
-              "prompts",
-              "themes",
-              "extensions",
-            ]
-          : ["settings.json", "AGENTS.md"];
-      assert.deepEqual(config.include, expected);
-      for (const path of expected) assert.ok(frames.join("\n").includes(path));
+      assert.equal(typeof config.syncIgnore, "string");
+      assert.match(config.syncIgnore ?? "", /\/sessions\//u);
+      assert.match(frames.join("\n"), /All setups share .syncignore/u);
+      assert.match(frames.join("\n"), /all non-excluded files/u);
     });
   });
   test(`${fixture.preset} setup renders examples and accepts defaults with one name`, async () => {
@@ -234,7 +215,7 @@ for (const fixture of fixtures) {
 }
 
 test.each(fixtures.filter((fixture) => fixture.preset !== "Git"))(
-  "$preset reviews the sessions path only after explicit privacy acknowledgement",
+  "$preset uses shared ignore rules and excludes sessions by default",
   async (fixture) => {
     await withTempHome(async () => {
       const choices = [fixture.preset, ...fixture.choices];
@@ -257,11 +238,11 @@ test.each(fixtures.filter((fixture) => fixture.preset !== "Git"))(
         },
       });
       assert.equal(await showSetupWizard(ctx), true);
-      assert.equal(acknowledged, true);
-      assert.deepEqual((await loadConfig()).include, ["settings.json", "AGENTS.md", "sessions"]);
-      const review = frames.find((frame) => frame.includes("privacy warning acknowledged")) ?? "";
-      assert.match(review, /Included content: 3 paths/u);
-      assert.match(review, /\n\s+sessions\s*\n/u);
+      assert.equal(acknowledged, false);
+      assert.equal((await loadConfig()).include.includes("sessions"), false);
+      const review = frames.find((frame) => frame.includes("Exact .syncignore rules:")) ?? "";
+      assert.match(review, /\/sessions\//u);
+      assert.match(review, /All setups share .syncignore/u);
     });
   },
 );

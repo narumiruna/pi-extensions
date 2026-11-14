@@ -23,6 +23,7 @@ import {
   includedContentLines,
   promptResourceName,
   readSetupConnection,
+  setupSyncPolicy,
 } from "./setup-prompts.js";
 import { saveReviewedDraft } from "./setup-review.js";
 import { promptTextInput } from "./text-input.js";
@@ -62,11 +63,12 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
       saveNewV3Settings(
         {
           setupName: targetName,
+          expectedSyncIgnore: include.syncIgnore,
           connectionName: targetName,
           connection: { type: "webdav", url, credentials: { username, password } },
           setup: {
             storage: { connection: targetName, path: remotePath },
-            sync: { include: [...include, ...(sessions ? ["sessions"] : [])], automatic },
+            sync: setupSyncPolicy(include, automatic, sessions),
           },
         },
         saveSignal,
@@ -107,7 +109,14 @@ export async function showAddWebDavTarget(
       "Adding this setup does not sync or modify remote data.",
     ],
     "Add sync setup",
-    (saveSignal) => addSyncSetup(name, { storage, sync: { include, automatic } }, saveSignal, connection),
+    (saveSignal) =>
+      addSyncSetup(
+        name,
+        { storage, sync: setupSyncPolicy(include, automatic) },
+        saveSignal,
+        connection,
+        include.syncIgnore,
+      ),
     signal,
   );
   if (saved && !signal?.aborted) ctx.ui.notify(`Added sync setup “${safe(name)}”.`, "info");

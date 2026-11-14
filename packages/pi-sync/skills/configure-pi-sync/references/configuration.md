@@ -3,7 +3,8 @@
 This is the authoritative public settings reference for Pi Sync.
 The configuration skill provides guidance only; the user performs settings changes and reviewed operations.
 
-- [Complete version 3 example](#complete-version-3-example)
+- [Shared .syncignore rules](#shared-syncignore-rules)
+- [Complete version 6 example](#complete-version-6-example)
 - [Required backend shapes](#required-backend-shapes)
 - [Status display](#status-display)
 - [Secret scanning](#secret-scanning)
@@ -40,21 +41,23 @@ Do not delete recovery evidence or accept defaults to bypass this check.
 ### Settings ownership and required fields
 
 Storage connections hold reusable server addresses and credentials.
-Sync setups hold a connection reference, exact storage coordinates, included paths, and behavior for that setup.
+Sync setups hold a connection reference, exact storage coordinates, and behavior for that setup.
+Settings version 6 uses one agent-root `.syncignore` for every setup; only legacy settings versions 3–5 store per-setup included paths.
 Changing a shared connection affects every setup that references it.
 Global settings apply to all setups on this device; they are not remote policy.
 
 | Scope | Fields | Required values and defaults |
 | --- | --- | --- |
-| Document | `version`, `onSwitch`, `storageConnections`, `syncSetups` | All are required in a manually written document; supported versions are 3, 4, and 5. |
+| Document | `version`, `onSwitch`, `storageConnections`, `syncSetups` | All are required in a manually written document; supported versions are 3, 4, 5, and 6; new setups use 6. |
 | Current setup | `activeSyncSetup` | Required when setups exist; absent when the setup catalog is empty. |
 | Global preferences | `skipSecretScan`, `showStatus`, `debug` | Optional booleans; defaults are false, true, and false. |
-| Setup selection | `sync.include`, `sync.automatic` | Both are required; the manager starts with automatic sync Off. |
+| Setup behavior | `sync.automatic` | Required boolean; the manager starts with automatic sync Off. |
+| File selection | `<agent-dir>/.syncignore` | Version 6: shared Git ignore rules; `sync.include` is rejected. Legacy versions 3–5 require `sync.include`. |
 | Setup behavior | `sync.automaticTransfer`, `sync.agentMode`, `sync.continuous`, `sync.mergeSettings`, `sync.mergeContent`, `sync.partialSync` | Optional booleans; all default to false. |
-| Portable policy | `sync.localFields` | Optional array; any explicit array, including `[]`, requires version 4 or 5. |
-| Content/partial policy | `sync.mergeContent`, `sync.partialSync` | Enabling either requires version 5. |
+| Portable policy | `sync.localFields` | Optional array; any explicit array, including `[]`, requires version 4, 5, or 6. |
+| Content/partial policy | `sync.mergeContent`, `sync.partialSync` | Enabling either requires version 5 or 6. |
 
-Do not downgrade version 4 or 5 merely because an option is turned off.
+Do not downgrade settings merely because an option is turned off; version 6 must not be opened with an older client.
 The four automatic controls have separate effects:
 
 - **Automatic sync** (`sync.automatic`) enables startup observation and selected-content shutdown pushes when sessions are included.
@@ -68,7 +71,9 @@ None of these controls is enabled by invoking the configuration skill.
 
 Open `/sync` → **Settings** to go directly to **Pi Sync Settings**.
 The screen has one searchable flat list with all 16 rows in their existing order and no category navigation or headings.
-**Included paths** and **Compare included paths** are adjacent; the latter compares path policies, not file contents.
+**.syncignore rules** shows the shared rules and their manual edit path; **Compare sync rules** reviews policy differences, not file contents.
+For legacy setups, **Included paths** opens a reviewed migration of all setups, and **Compare included paths** retains the old policy comparison.
+The compatibility `/sync files` route still edits a legacy include list until migration; in version 6 it opens the shared rule review.
 **Storage location** edits the current setup's coordinates, while **Manage sync setups** and **Manage storage connections** retain the catalog and affected-setup reviews.
 Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
 
@@ -76,7 +81,7 @@ Descriptions identify the owner: this setup, all setups on this device, or share
 Simple choices report Saving and the durable Saved or failed/rejected result, preserve the selected row and search during refresh, and restore their previous value if saving fails.
 Escape closes the screen without undoing successful saves.
 Complex values retain their input/review flows.
-This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.
+Simple preference changes retain their existing automatic-sync authorization and explicit opt-ins; shared-rule migration has its own compatibility review.
 
 The manager separates current state from transfer, inspection, and management actions.
 **Check remote status** and **View differences** invoke the existing read/check routes only when selected.
@@ -88,11 +93,70 @@ RPC reports the manual settings path and offers the existing setup/connection ca
 Print/JSON do not support `/sync`; use the private settings file directly.
 Main-menu summaries remain cached observations; `/sync status`, `/sync diff`, and `/sync help` remain available through the visible command hints.
 
-### Complete version 3 example
+### Shared .syncignore rules
+
+Version 6 synchronizes every eligible regular file below Pi's agent directory unless `<agent-dir>/.syncignore` excludes it.
+All setups share this file, and the file itself always travels with the snapshot, even if a pattern matches it.
+Only the root file supplies rules; nested `.syncignore`, `.gitignore`, and `.dockerignore` files do not change selection.
+Symlinks are not followed.
+New setup creates these initial rules only after the final save review:
+
+```gitignore
+# Paths are relative to the Pi agent directory.
+# Session conversations can contain private data.
+/sessions/
+```
+
+Edit this file manually; changes take effect at the next manual or automatic operation without `/reload`.
+A missing file means empty rules, not default exclusions; reads never create it.
+An empty file permits all non-denied content, including session conversations.
+Review credentials, private extension settings, conversations, images, and other sensitive files before removing exclusions or using an empty file.
+Secret scanning detects common patterns only; it is not a guarantee that content is safe to upload.
+
+Rules use Git ignore matching through the `ignore` library: `#` comments, blank lines, `*`, `?`, `**`, character classes, root-anchored `/`, directory-only trailing `/`, backslash escapes, and ordered `!` exceptions.
+Matching is case-sensitive.
+An exception cannot re-include a file under an excluded parent directory; exclude a directory's contents instead when exceptions are needed:
+
+```gitignore
+/prompts/private/*
+!/prompts/private/example.md
+*.log
+```
+
+Rules must be valid UTF-8 text without NUL and no larger than 256 KiB.
+Unreadable, symlinked, oversized, or invalid files stop synchronization rather than silently permitting everything.
+Pi Sync rule saves share the ordered cross-process settings lock and use private same-directory temporary files plus rename.
+A failed publication restores the previous rules or absence only while the installed bytes are still owned.
+If recovery is unsafe, retained `.syncignore.tmp-*.previous` evidence blocks further reads and sync; close every Pi process, preserve the evidence, and review the current and previous rules before manually restoring a valid file and retiring only the reviewed recovery evidence.
+Lock-unaware editors remain outside the cross-process lock and must not edit rules during a Pi Sync save.
+Mandatory exclusions cannot be overridden with `!`: `auth.json` and its dot-suffixed backups; Pi Sync settings, temporary and recovery settings; `pi-sync/`, `.pisync/`, and migration state; `node_modules/`, `.git/`; and the existing environment/secret/token-name safety rules.
+Ignoring a file leaves its local bytes unmanaged and preserves eligible unmanaged remote files when publishing; it does not erase retained remote history.
+
+Snapshots in this mode use format 4 and `selection: { version: 2, ignore: <exact text> }`.
+The snapshot's `.syncignore` file must contain the same text and checksum.
+Exact policy differences, including comments and line endings, stop ordinary push, sync, and pull, including forced pull and automatic work.
+`Compare sync rules` provides an exact review, a shared-rule adoption, or a separately confirmed force push of this device's policy.
+Adoption revalidates the immutable snapshot, current head, reviewed setup and current local rules, then saves only `.syncignore` for all setups; it neither pulls files nor updates the baseline.
+Enabling sessions by remote adoption requires a privacy acknowledgement.
+A separate Continue starts a fresh operation; remote and local policy must both use ignore mode before adoption.
+RPC review is read-only.
+
+Legacy versions 3–5 keep their include behavior until `/sync` → **Settings** → **Included paths** explicitly migrates all setups.
+Migration reviews a conservative policy representing the intersection of every legacy include list, so it cannot silently enable new paths or session scope.
+It retains a private `pi-sync.json.<hash>.before-syncignore` backup, publishes the rules first, and then atomically saves settings version 6 without any `sync.include` fields.
+Unknown JSON fields and behavior preferences are preserved.
+If JSON publication fails, legacy selection remains active and the conservative rule file stays inert; repeat the review to retry.
+A pre-existing unrelated `.syncignore` blocks migration rather than being overwritten.
+Do not replace an existing legacy JSON document manually with the version 6 example: review migration first, then edit the generated rules if a broader scope is intended.
+Legacy remote snapshots require an explicit reviewed force push of the new local policy before normal transfers resume.
+
+<a id="complete-version-3-example"></a>
+
+### Complete version 6 example
 
 ```json
 {
-  "version": 3,
+  "version": 6,
   "activeSyncSetup": "home",
   "onSwitch": "ask-before-pull",
   "skipSecretScan": false,
@@ -128,7 +192,6 @@ Main-menu summaries remain cached observations; `/sync status`, `/sync diff`, an
         "path": "pi-sync/home"
       },
       "sync": {
-        "include": ["settings.json", "AGENTS.md", "skills", "prompts", "themes"],
         "automatic": true
       }
     },
@@ -139,7 +202,6 @@ Main-menu summaries remain cached observations; `/sync status`, `/sync diff`, an
         "path": "pi-sync/home"
       },
       "sync": {
-        "include": ["settings.json", "AGENTS.md"],
         "automatic": false
       }
     },
@@ -149,7 +211,6 @@ Main-menu summaries remain cached observations; `/sync status`, `/sync diff`, an
         "path": "pi-sync/home"
       },
       "sync": {
-        "include": ["settings.json", "sessions"],
         "automatic": false
       }
     }
@@ -182,7 +243,7 @@ When adding a setup, locally configured destinations are checked before content 
 An occupied destination requires an explicit different path; Git requires a different branch because directories do not isolate publications on one branch.
 This check does not contact the server or discover setups configured only on other machines.
 
-Every setup requires `sync.include` and explicit `sync.automatic`.
+Every setup requires explicit `sync.automatic`; only legacy settings versions 3–5 require `sync.include`.
 Setup asks for automatic sync with Off first; existing values are not rewritten.
 When enabled, the current setup receives one background startup check in TUI/RPC, including reload/new/resume/fork.
 Automatic sync alone does not perform startup transfers or open dialogs; review changes through `/sync`.
@@ -197,8 +258,8 @@ The check deadline is 30 seconds plus bounded cleanup, with manual retry through
 Continuous sync is a separate opt-in.
 See [Background startup checks](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/README.md#background-startup-checks) for recovery and Git cache exceptions.
 
-Recommended includes the nine non-session Pi roots listed below; Minimal includes `settings.json` and `AGENTS.md`.
-The save review lists every selected path and the full backend destination.
+New version 6 setup reviews the exact shared ignore rules and full backend destination.
+Adding a setup to a legacy document retains Recommended/Minimal include choices until the document is explicitly migrated.
 R2/S3 requires an explicitly entered existing bucket and never creates one.
 Saving setup or connection settings does not contact remote storage.
 
@@ -289,6 +350,9 @@ WebDAV retains its isolated conditional-write/cleanup probe and repair of a miss
 
 ### Included content
 
+Use [Shared .syncignore rules](#shared-syncignore-rules) for version 6.
+The remainder of this section documents the retained legacy versions 3–5 behavior.
+
 `sync.include` is ordered and duplicate-free.
 Supported Pi roots are:
 
@@ -338,7 +402,7 @@ Set it through **/sync → Settings → Startup transfer**.
 It is separate from `sync.automatic`: the legacy setting retains observation and selected-content shutdown behavior.
 
 When explicitly enabled, one startup transfer waits for an idle boundary in TUI/RPC.
-It requires an accepted baseline and a matching authoritative remote include list, retains all-or-nothing conflict review, checks secrets unless the global scan override is enabled, and never reloads resources.
+It requires an accepted baseline and a matching authoritative remote selection policy, retains all-or-nothing conflict review, checks secrets unless the global scan override is enabled, and never reloads resources.
 Git, verified conditional WebDAV, and R2/S3 with verified conditional writes support this policy.
 A saved On preference is not proof of eligibility: baseline, remote policy, idle ownership, conflicts, secrets, and publication capability are checked again at execution.
 Print/JSON skip automatic startup transfer.
@@ -600,10 +664,13 @@ Field merging and nonempty portable projections also refuse unsafe integers, non
 `sync.localFields` is an explicit sorted string array of whole global `settings.json` root field names, not a heuristic or project override.
 Example: `"localFields": ["shellPath"]`.
 Coupled fields must be excluded together.
-Nonempty rules require `settings.json` in `sync.include`; absent or explicitly empty rules remain valid for other selections.
-Saving nonempty rules in Settings confirms an upgrade to settings version 4; manual edits must declare version 4 too.
+In legacy include mode, nonempty rules require `settings.json` in `sync.include`; absent or explicitly empty rules remain valid for other selections.
+Version 6 applies field rules only when `.syncignore` permits `settings.json`.
+For legacy setups, saving nonempty rules in Settings confirms an upgrade to settings version 4; manual edits must declare a compatible version too.
+Ignore-mode setups retain settings version 6 and snapshot version 4 when field rules change.
 Absent rules keep a setup nonportable, including unrelated setups in a version-4 document.
-An explicit array opts that setup into snapshot version 2; `[]` after rule removal retains this reviewed opt-in and differs from absence.
+In legacy include mode an explicit array opts that setup into snapshot version 2; `[]` after rule removal retains this reviewed opt-in and differs from absence.
+Ignore mode always uses snapshot version 4, with the same portable field semantics.
 Older clients must refuse portable data rather than replace local-only values.
 
 Portable projections normalize remote JSON deterministically while local overlay preserves unaffected local member/value bytes and excluded values or absence.
@@ -640,8 +707,9 @@ Never reinterpret portable snapshots with an old binary.
 ### Content merge and partial progress
 
 `sync.mergeContent` and `sync.partialSync` are independent opt-in booleans, both default `false`.
-The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit settings-version-5 upgrade.
-Manual configuration must also declare version 5.
+The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms a compatibility review.
+Legacy settings upgrade to version 5; ignore-mode settings remain version 6 and publish snapshot version 4, including partial publications.
+Manual configuration must also declare a compatible version.
 Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration.
 Disabling options retains the schema and recovery evidence.
 
@@ -686,13 +754,13 @@ See the [implementation and recovery audit](https://github.com/narumiruna/pi-ext
 
 Version 1, version 2, and non-empty unversioned documents are unsupported after the version 3 schema reset.
 Pi Sync does **not** migrate, partially interpret, downgrade, or overwrite them.
-Automatic sync pauses and reports an actionable version 3 error without displaying secrets.
+Automatic sync pauses and reports an actionable supported-settings error without displaying secrets.
 
 Recovery:
 
 1. retain the old file byte-for-byte;
 2. move it aside manually;
-3. create a new version 3 document or run the setup manager;
+3. create a new version 6 document with reviewed `.syncignore` rules, or run the setup manager;
 4. run `/sync doctor`, inspect the exact storage path, and review the first pull or push;
 5. restore the retained file and a compatible older package only if rolling back.
 

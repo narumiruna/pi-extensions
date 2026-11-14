@@ -1,6 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { readLocalConfigObject } from "../../settings/settings-store.js";
+import type { SyncPolicySettings } from "../../settings/settings-types.js";
 import { validateConfigName } from "../../settings/settings-validation.js";
+import { readSyncIgnoreFile } from "../../settings/sync-ignore-file.js";
+import { DEFAULT_SYNC_IGNORE } from "../../sync/sync-ignore.js";
 import { DEFAULT_SYNC_INCLUDE } from "../../sync/sync-policy.js";
 import { AUTOMATIC_SYNC_DESCRIPTION } from "../sync-behavior.js";
 import { safeTerminalText } from "../terminal-text.js";
@@ -16,7 +19,19 @@ export async function readSetupConnection(name: string, signal?: AbortSignal) {
   return connection;
 }
 
-export async function chooseSetupContent(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+export type SetupContent = { include: string[]; syncIgnore?: never } | { syncIgnore: string; include?: never };
+
+export async function chooseSetupContent(
+  ctx: ExtensionCommandContext,
+  signal?: AbortSignal,
+): Promise<SetupContent | undefined> {
+  const settings = await readLocalConfigObject();
+  signal?.throwIfAborted();
+  if (!settings || settings.version === 6 || Object.keys(settings.syncSetups).length === 0) {
+    const text = (await readSyncIgnoreFile()) ?? DEFAULT_SYNC_IGNORE;
+    signal?.throwIfAborted();
+    return { syncIgnore: text };
+  }
   const choice = await ctx.ui.select(
     "Choose included content\n\nRecommended: Pi settings, instructions, skills, prompts, themes, and extensions.\nMinimal: settings.json and AGENTS.md.\nReview the exact paths before saving.",
     ["Recommended Pi settings", "Minimal settings", "Cancel"],
@@ -24,7 +39,7 @@ export async function chooseSetupContent(ctx: ExtensionCommandContext, signal?: 
   );
   signal?.throwIfAborted();
   if (!choice || choice === "Cancel") return undefined;
-  return choice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_INCLUDE];
+  return { include: choice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_INCLUDE] };
 }
 
 export async function chooseAutomaticSync(ctx: ExtensionCommandContext, signal?: AbortSignal) {
@@ -38,6 +53,9 @@ export async function chooseAutomaticSync(ctx: ExtensionCommandContext, signal?:
 }
 
 export async function chooseSessions(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+  const settings = await readLocalConfigObject();
+  signal?.throwIfAborted();
+  if (!settings || settings.version === 6 || Object.keys(settings.syncSetups).length === 0) return false;
   const choice = await ctx.ui.select(
     "Session conversations\n\nSessions can contain prompts, tool output, paths, screenshots, and secrets.",
     ["Keep sessions off (recommended)", "Include session conversations", "Cancel"],
@@ -55,7 +73,22 @@ export async function chooseSessions(ctx: ExtensionCommandContext, signal?: Abor
   return confirmed ? true : undefined;
 }
 
-export function includedContentLines(include: readonly string[], sessions = false) {
+export function setupSyncPolicy(content: SetupContent, automatic: boolean, sessions = false): SyncPolicySettings {
+  return content.syncIgnore !== undefined
+    ? { automatic }
+    : { include: [...content.include, ...(sessions ? ["sessions"] : [])], automatic };
+}
+
+export function includedContentLines(content: SetupContent, sessions = false) {
+  if (content.syncIgnore !== undefined)
+    return [
+      "Content: all non-excluded files under the Pi agent directory.",
+      "All setups share .syncignore, which is also synchronized.",
+      "Credentials and internal state are always excluded. Rules can authorize private session conversations.",
+      "Exact .syncignore rules:",
+      ...(content.syncIgnore || "(empty — no user exclusions)").split("\n").map(safeTerminalText),
+    ];
+  const include = content.include;
   const paths = [...include, ...(sessions && !include.includes("sessions") ? ["sessions"] : [])];
   return [
     `Included content: ${paths.length} paths`,
