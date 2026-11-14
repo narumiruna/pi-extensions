@@ -94,12 +94,15 @@ for (const { action, args } of [
         isError,
       );
       assert.ok(output);
-      const expanded = output.expanded.replace(/<\/div>/gu, "\n").replace(/<[^>]*>/gu, "");
+      const expanded = output.expanded;
       for (const [key, value] of Object.entries(input)) {
         assert.ok(expanded.includes(`${key}:`), `${key} must remain inspectable in the exported result`);
         if (typeof value === "string") assert.ok(expanded.includes(value.split("\n").at(-1) ?? value));
       }
-      if (action === "spawn" || action === "wait") assert.match(expanded, /timeout:\s*123/u);
+      if (action === "spawn" || action === "wait") {
+        assert.ok(expanded.includes("timeout:"));
+        assert.ok(expanded.includes(">123<"));
+      }
       if (action === "spawn") {
         assert.match(expanded, /model_override/u);
         assert.match(expanded, /\/trusted\/skill/u);
@@ -111,6 +114,28 @@ for (const { action, args } of [
     });
   }
 }
+
+test.each(["spawn", "send"] as const)("HTML %s arguments retain escaped markup", async (action) => {
+  const field = action === "spawn" ? "task" : "message";
+  const markup = "<script>alert(1)</script>";
+  const input: ToolCall["arguments"] = { [field]: markup };
+  const renderer = await htmlRenderer(action);
+  renderer.renderCall("markup", `subagent_${action}`, input);
+  const payload =
+    action === "spawn" ? { jobId: "job_a", state: "queued" } : { requestId: "req_a", accepted: true, duplicate: false };
+  const output = renderer.renderResult(
+    "markup",
+    `subagent_${action}`,
+    [{ type: "text", text: JSON.stringify(payload) }],
+    payload,
+    false,
+  );
+  assert.ok(output);
+  assert.ok(output.expanded.includes("&lt;script&gt;"));
+  assert.ok(output.expanded.includes("&lt;/script&gt;"));
+  assert.ok(!output.expanded.includes("<script>"));
+  assert.equal(input[field], markup);
+});
 
 for (const { action, args, pending } of fixtures) {
   test(`${action} execution reaches Pi's pending renderer and settles without duplicate arguments`, async () => {
