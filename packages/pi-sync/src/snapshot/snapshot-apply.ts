@@ -53,10 +53,12 @@ export async function applySnapshot(
     validateMutation: options.validateMutation,
     protectedTargets: [...protectedRelativePaths].map((relative) => snapshotTarget(root, relative, sessionDir)),
     expectedPreimages: new Map(
-      Object.entries(options.expectedFileHashes ?? {}).map(([relative, hash]) => [
-        snapshotTarget(root, relative, sessionDir),
-        hash === null ? "missing" : `file:${hash}`,
-      ]),
+      Object.entries(options.expectedFileHashes ?? {})
+        .filter(([relative]) => !excluded(relative))
+        .map(([relative, hash]) => [
+          snapshotTarget(root, relative, sessionDir),
+          hash === null ? "missing" : `file:${hash}`,
+        ]),
     ),
   };
   options.validateMutation?.();

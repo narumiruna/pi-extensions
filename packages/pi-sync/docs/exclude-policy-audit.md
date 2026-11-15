@@ -32,7 +32,7 @@ Excluded content is absent from future portable publications, not erased from hi
 ## Execution evidence
 
 - `npm run format` and `npm run check`: passed, including builds, Biome, package boundaries and all workspace typechecks.
-- `npm test`: 22,938 passed, 18 existing platform/conditional skips, 1,003 passing files and one skipped macOS-only file; no failed tests or unhandled errors.
+- `npm test`: 22,957 passed, 18 existing platform/conditional skips, 1,005 passing files and one skipped macOS-only file; no failed tests or unhandled errors.
 - Shared backend contracts: version-4 snapshot/head round trips and excluded-payload rejection passed for S3, WebDAV, and both Git publication paths.
 - Actual base-client smoke at `ff7d07be`: archived original settings validation, object codec and Git manifest reader all refused the new formats before apply.
 - Package build and `npm run package:pack -- sync`: passed. A real temporary tarball declared the matcher dependency and contained its entrypoint, notices, docs and skill; all relative imports in 83 generated modules resolved.
@@ -42,6 +42,12 @@ Excluded content is absent from future portable publications, not erased from hi
 - Complete-diff semantic review: settings ordering/failure/atomicity, full-policy freshness, legacy formats and identities, all transfer/recovery directions, field/partial/model composition, terminal sanitization, cancellation/disposal/session replacement/shutdown, and generated package boundaries checked against the guides above. No essential acceptance criteria were waived.
 
 The review also caught and corrected the whole-session exclusion class: root pruning, zero-segment trailing globstars, effective-session summaries/root guards, and the legacy shutdown push now agree. A legacy state without an explicit include list retains its original refresh behavior. Native abortable Input and Kit reviews are reused; no custom editing or key-matching implementation was added.
+
+## Review follow-up
+
+The [review ledger](./exclude-review-ledger.md) records each review item, its evidence and its final outcome.
+Excluded paths are also omitted from apply preimage assertions; included-file stale checks remain active.
+The manager reports include and exclusion differences without calling an exclusion-only change an order change, and its Sessions label uses effective selection.
 
 ## External handoff
 
