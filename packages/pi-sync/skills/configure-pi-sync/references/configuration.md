@@ -109,12 +109,16 @@ New setup creates these initial rules only after the final save review:
 
 Edit this file manually; changes take effect at the next manual or automatic operation without `/reload`.
 A missing file means empty rules, not default exclusions; reads never create it.
+Adding another setup preserves those empty rules. Invalid setup changes do not create the file.
 An empty file permits all non-denied content, including session conversations.
 Review credentials, private extension settings, conversations, images, and other sensitive files before removing exclusions or using an empty file.
 Secret scanning detects common patterns only; it is not a guarantee that content is safe to upload.
 
 Rules use Git ignore matching through the `ignore` library: `#` comments, blank lines, `*`, `?`, `**`, character classes, root-anchored `/`, directory-only trailing `/`, backslash escapes, and ordered `!` exceptions.
-Matching is case-sensitive.
+Matching is case-sensitive. Allowed names retain their exact case, including built-in filenames.
+Files whose names differ only by case stay distinct on case-sensitive filesystems; an unsafe physical alias is refused rather than overwritten.
+The configured physical session store is excluded from ordinary traversal, even inside the agent directory under another name.
+Its conversation files enter snapshots only through virtual `sessions/` paths and their rules; other files in that store are not collected.
 An exception cannot re-include a file under an excluded parent directory; exclude a directory's contents instead when exceptions are needed:
 
 ```gitignore
@@ -127,16 +131,20 @@ Rules must be valid UTF-8 text without NUL and no larger than 256 KiB.
 Unreadable, symlinked, oversized, or invalid files stop synchronization rather than silently permitting everything.
 Pi Sync rule saves share the ordered cross-process settings lock and use private same-directory temporary files plus rename.
 A failed publication restores the previous rules or absence only while the installed bytes are still owned.
+The recovery marker remains until the restored directory state is durable, including when a second directory sync fails.
 If recovery is unsafe, retained `.syncignore.tmp-*.previous` evidence blocks further reads and sync; close every Pi process, preserve the evidence, and review the current and previous rules before manually restoring a valid file and retiring only the reviewed recovery evidence.
 Lock-unaware editors remain outside the cross-process lock and must not edit rules during a Pi Sync save.
 Mandatory exclusions cannot be overridden with `!`: `auth.json` and its dot-suffixed backups; Pi Sync settings, temporary and recovery settings; `pi-sync/`, `.pisync/`, and migration state; `node_modules/`, `.git/`; and the existing environment/secret/token-name safety rules.
 Ignoring a file leaves its local bytes unmanaged and preserves eligible unmanaged remote files when publishing; it does not erase retained remote history.
+Replacing a directory with a file is refused if the directory contains ignored or unselected descendants, or if its verified contents change during transaction preparation.
 
 Snapshots in this mode use format 4 and `selection: { version: 2, ignore: <exact text> }`.
 The snapshot's `.syncignore` file must contain the same text and checksum.
 Exact policy differences, including comments and line endings, stop ordinary push, sync, and pull, including forced pull and automatic work.
+Rollback also requires matching historical rules. Legacy or differing policy history is refused before local files, remote state, or the baseline change; review the shared rules first and choose matching history.
 `Compare sync rules` provides an exact review, a shared-rule adoption, or a separately confirmed force push of this device's policy.
 Adoption revalidates the immutable snapshot, current head, reviewed setup and current local rules, then saves only `.syncignore` for all setups; it neither pulls files nor updates the baseline.
+Cancellation before atomic publication leaves the rules unchanged. Once publication starts, the flow drains the save and reports the saved state instead of claiming cancellation; closing or replacing the session does not undo a completed save.
 Enabling sessions by remote adoption requires a privacy acknowledgement.
 A separate Continue starts a fresh operation; remote and local policy must both use ignore mode before adoption.
 RPC review is read-only.

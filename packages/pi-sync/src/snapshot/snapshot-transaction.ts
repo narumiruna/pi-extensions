@@ -716,6 +716,9 @@ async function beforeImage(directory: string, entry: TransactionEntry) {
   if (value === "missing") throw new Error("Transaction backup is missing; preserve evidence for review.");
   return value;
 }
+
+export { image as snapshotPathImage };
+
 async function image(target: string, durable = false): Promise<string> {
   let stat: Stats;
   try {

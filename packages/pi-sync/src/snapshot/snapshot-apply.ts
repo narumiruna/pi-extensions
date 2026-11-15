@@ -13,6 +13,7 @@ import {
   snapshotIncludesSessions,
   snapshotTarget,
 } from "./snapshot.js";
+import { selectedSnapshotPreimages } from "./snapshot-selection-guards.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
 
@@ -70,7 +71,11 @@ export async function applySnapshot(
       sessionDir,
     ),
     snapshot,
+    options,
   );
+  const selectedPreimages = await selectedSnapshotPreimages(root, plan, current, options);
+  for (const [target, image] of selectedPreimages)
+    if (!transactionOptions.expectedPreimages.has(target)) transactionOptions.expectedPreimages.set(target, image);
   await preflightSnapshotMutations(root, plan, sessionDir, options);
   await applySnapshotTransaction(plan, transactionOptions);
   return appliedFileHashMap(snapshot, current, protectedRelativePaths);
@@ -141,8 +146,11 @@ export function protectSnapshotApplyPlan(
 export async function addTopLevelCaseVariantDeletes(
   root: string,
   plan: SnapshotApplyPlan,
-  snapshot: Pick<Snapshot, "files">,
+  snapshot: Pick<Snapshot, "files" | "selection">,
+  options: Pick<SnapshotOptions, "syncIgnore"> = {},
 ): Promise<SnapshotApplyPlan> {
+  // Ignore-mode paths are exact identities, not legacy case-insensitive aliases.
+  if (options.syncIgnore !== undefined || snapshot.selection?.version === 2) return plan;
   const topLevelPaths = new Map<string, string>();
   for (const file of snapshot.files) {
     const normalized = toPosix(file.path);

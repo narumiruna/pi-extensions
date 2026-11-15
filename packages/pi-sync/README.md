@@ -186,9 +186,9 @@ The file itself is always synchronized. Only this root file supplies rules.
 ```
 
 **Warning:** an empty or missing file permits all non-denied content, including private conversations and extension settings. New setup creates an initial `/sessions/` exclusion only after Save. Keep sensitive files excluded; common-pattern secret scanning is not a complete privacy check.
-Ignored local files are left untouched; remote history is not erased. Credentials, Pi Sync settings/state, `node_modules`, and `.git` remain forcibly excluded.
+Ignored local files are left untouched, including case variants and files inside a directory selected for replacement. Unsafe replacements are refused; remote history is not erased. Configured session storage is collected only through the policy-controlled `sessions/` namespace. Credentials, Pi Sync settings/state, `node_modules`, and `.git` remain forcibly excluded.
 
-Existing settings versions 3–5 keep their behavior until **Settings → Included paths** reviews migration of all setups. Migration creates conservative intersection rules and a private settings backup, then removes JSON include lists. It does not transfer files or silently enable new scope. A differing remote policy blocks normal and automatic transfers until reviewed, even for forced pull.
+Existing settings versions 3–5 keep their behavior until **Settings → Included paths** reviews migration of all setups. Migration creates conservative intersection rules and a private settings backup, then removes JSON include lists. It does not transfer files or silently enable new scope. A differing remote policy blocks normal and automatic transfers until reviewed, even for forced pull. Rollback refuses legacy or differing historical rules before changing files.
 See [rule syntax, exact policy review, migration and recovery](./skills/configure-pi-sync/references/configuration.md#shared-syncignore-rules).
 
 ### Debug startup timings

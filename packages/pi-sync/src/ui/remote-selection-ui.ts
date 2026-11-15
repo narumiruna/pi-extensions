@@ -271,7 +271,7 @@ async function showSelectionDifference(
           const adoption = await runCancellableTask(
             ctx,
             "Checking and saving remote content list…",
-            async (workSignal, _onCommit, onDialog) => {
+            async (workSignal, onCommit, onDialog) => {
               const ownedSignal = workSignal ?? signal;
               const currentConfig = await loadConfig(state.decision.setupName);
               ownedSignal.throwIfAborted();
@@ -308,7 +308,7 @@ async function showSelectionDifference(
                 const loaded = await loadAdoptionReview(state.decision, ownedSignal, factory, validateOwner);
                 ownedSignal.throwIfAborted();
                 validateOwner();
-                await revalidateAndAdopt(loaded, state.decision, ownedSignal, validateOwner);
+                await revalidateAndAdopt(loaded, state.decision, ownedSignal, validateOwner, onCommit);
                 return loaded;
               });
             },
@@ -316,6 +316,7 @@ async function showSelectionDifference(
               signal,
               isCurrent,
               cancelAcrossDialogs: true,
+              commitAware: true,
               cancelledMessage: "Remote content-list adoption cancelled.",
             },
           );
@@ -489,6 +490,7 @@ async function revalidateAndAdopt(
   decision: RemoteSelectionDecision,
   signal: AbortSignal,
   validateOwner: () => void,
+  onCommit?: () => void,
 ) {
   const currentHead = await review.backend.readHead(signal);
   throwIfAborted(signal);
@@ -509,7 +511,7 @@ async function revalidateAndAdopt(
     validateOwner();
     if ((expected ?? "") !== review.config.syncIgnore)
       throw new StaleRemoteSelectionReviewError(".syncignore changed during review.");
-    await saveSyncIgnore(decision.remoteIgnore, expected, signal, review.config);
+    await saveSyncIgnore(decision.remoteIgnore, expected, signal, review.config, onCommit);
     return;
   }
   if (hasIgnorePolicy(decision))

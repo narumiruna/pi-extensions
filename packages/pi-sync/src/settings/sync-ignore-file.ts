@@ -61,7 +61,12 @@ async function readSyncIgnoreText(): Promise<string | undefined> {
 }
 
 /** Caller holds the settings cross-process lock; Pi file queues also serialize snapshot apply. */
-export async function publishSyncIgnore(text: string, expected: string | undefined, signal?: AbortSignal) {
+export async function publishSyncIgnore(
+  text: string,
+  expected: string | undefined,
+  signal?: AbortSignal,
+  onCommit?: () => void,
+) {
   normalizeSyncIgnore(text);
   return withFileMutationQueue(syncIgnorePath(), async () => {
     signal?.throwIfAborted();
@@ -92,6 +97,8 @@ export async function publishSyncIgnore(text: string, expected: string | undefin
       }
       signal?.throwIfAborted();
       if ((await readSyncIgnoreText()) !== expected) throw new Error(".syncignore changed; no rules were replaced.");
+      signal?.throwIfAborted();
+      onCommit?.();
       await fs.rename(temporary, destination);
       published = true;
       await afterPublication();
@@ -110,7 +117,16 @@ export async function publishSyncIgnore(text: string, expected: string | undefin
               ".syncignore changed after publication; preserve recovery evidence and review the current file.",
             );
           if (expected === undefined) await fs.unlink(destination);
-          else await fs.rename(recovery, destination);
+          else {
+            const restore = await fs.open(temporary, "wx", 0o600);
+            try {
+              await restore.writeFile(expected, "utf8");
+              await restore.sync();
+            } finally {
+              await restore.close();
+            }
+            await fs.rename(temporary, destination);
+          }
           await syncDirectory(path.dirname(destination));
         } catch (rollbackError) {
           retainRecovery = true;

@@ -7,6 +7,7 @@ import { configFromSettings, syncCheckConfigFingerprint } from "./config.js";
 import { localConfigPath } from "./config-file.js";
 import { updateLocalConfig } from "./settings-store.js";
 import type { AnySyncConfig, PiSyncSettingsV3 } from "./settings-types.js";
+import { validateSettingsDocument } from "./settings-validation.js";
 import { publishSyncIgnore, readSyncIgnoreFile } from "./sync-ignore-file.js";
 
 export { readSyncIgnoreFile, syncIgnorePath } from "./sync-ignore-file.js";
@@ -31,6 +32,14 @@ export function migrateToSyncIgnore(
       throw new Error(
         "An existing .syncignore differs from the migration. Preserve it elsewhere before migrating; no files were changed.",
       );
+    const syncSetups = Object.fromEntries(
+      Object.entries(current.syncSetups).map(([name, setup]) => {
+        const { include: _include, ...sync } = setup.sync;
+        return [name, { ...setup, sync }];
+      }),
+    );
+    const next: PiSyncSettingsV3 = { ...current, version: 6, syncSetups };
+    validateSettingsDocument(next);
     const original = `${JSON.stringify(current, null, 2)}\n`;
     const backup = `${localConfigPath()}.${createHash("sha256").update(original).digest("hex").slice(0, 16)}.before-syncignore`;
     try {
@@ -50,13 +59,7 @@ export function migrateToSyncIgnore(
     await publishSyncIgnore(text, expectedIgnore, signal);
     // Nothing after policy publication may silently expand legacy scope. The conservative
     // rules can remain inert if JSON publication fails and a retry can reuse them.
-    const syncSetups = Object.fromEntries(
-      Object.entries(current.syncSetups).map(([name, setup]) => {
-        const { include: _include, ...sync } = setup.sync;
-        return [name, { ...setup, sync }];
-      }),
-    );
-    return { ...current, version: 6, syncSetups };
+    return next;
   }, signal);
 }
 
@@ -66,6 +69,7 @@ export function saveSyncIgnore(
   expected: string | undefined,
   signal?: AbortSignal,
   expectedConfig?: AnySyncConfig,
+  onCommit?: () => void,
 ) {
   normalizeSyncIgnore(text);
   return updateLocalConfig(async (current) => {
@@ -77,7 +81,7 @@ export function saveSyncIgnore(
       ) !== syncCheckConfigFingerprint(expectedConfig)
     )
       throw new Error("Sync setup changed; reopen the remote-policy review.");
-    await publishSyncIgnore(text, expected, signal);
+    await publishSyncIgnore(text, expected, signal, onCommit);
     return current;
   }, signal);
 }

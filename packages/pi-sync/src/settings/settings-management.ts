@@ -10,7 +10,11 @@ import {
 import { localConfigPath } from "./config-file.js";
 import { updateLocalConfig } from "./settings-store.js";
 import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
-import { effectiveSyncSetupRemoteIdentity, validateConfigName } from "./settings-validation.js";
+import {
+  effectiveSyncSetupRemoteIdentity,
+  validateConfigName,
+  validateSettingsDocument,
+} from "./settings-validation.js";
 import { initializeSyncIgnore, readSyncIgnoreFile } from "./sync-ignore-file.js";
 
 export class SyncSetupReviewChangedError extends Error {
@@ -49,6 +53,8 @@ export async function saveNewV3Settings(
     if (Object.keys(current.storageConnections).length || Object.keys(current.syncSetups).length) {
       throw new Error(`Settings already exist: ${localConfigPath()}`);
     }
+    const next = { ...current, ...settings };
+    validateSettingsDocument(next);
     if (settings.version === 6) {
       if (
         input.expectedSyncIgnore !== undefined &&
@@ -57,7 +63,7 @@ export async function saveNewV3Settings(
         throw new SyncSetupReviewChangedError(".syncignore changed during setup; reopen the review.");
       await initializeSyncIgnore(signal);
     }
-    return { ...current, ...settings };
+    return next;
   }, signal);
 }
 
@@ -121,22 +127,23 @@ export async function addSyncSetup(
     }
     const ignoreMode =
       settings.version === 6 || (Object.keys(settings.syncSetups).length === 0 && setup.sync.include === undefined);
-    if (ignoreMode) {
-      if (
-        expectedSyncIgnore !== undefined &&
-        ((await readSyncIgnoreFile()) ?? DEFAULT_SYNC_IGNORE) !== expectedSyncIgnore
-      )
-        throw new SyncSetupReviewChangedError(".syncignore changed during setup; reopen the review.");
-      await initializeSyncIgnore(signal);
-    }
     const nextSetups = { ...settings.syncSetups, [name]: structuredClone(setup) };
     assertUniqueLocations(nextSetups, settings.storageConnections);
-    return {
+    const next: PiSyncSettingsV3 = {
       ...settings,
       version: ignoreMode ? 6 : settings.version,
       syncSetups: nextSetups,
       ...(settings.activeSyncSetup ? {} : { activeSyncSetup: name }),
     };
+    validateSettingsDocument(next);
+    if (ignoreMode) {
+      const firstSetup = Object.keys(settings.syncSetups).length === 0;
+      const rules = (await readSyncIgnoreFile()) ?? (firstSetup ? DEFAULT_SYNC_IGNORE : "");
+      if (expectedSyncIgnore !== undefined && rules !== expectedSyncIgnore)
+        throw new SyncSetupReviewChangedError(".syncignore changed during setup; reopen the review.");
+      if (firstSetup) await initializeSyncIgnore(signal);
+    }
+    return next;
   }, signal);
 }
 

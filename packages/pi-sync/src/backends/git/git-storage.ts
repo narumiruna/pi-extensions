@@ -137,7 +137,7 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
     snapshot.profile !== manifest.profile ||
     snapshot.syncSessions !== manifest.snapshotSyncSessions ||
     syncSessions !== manifest.syncSessions ||
-    JSON.stringify(snapshot.selection) !==
+    JSON.stringify(snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection)) !==
       JSON.stringify(manifest.selection === undefined ? undefined : portableSnapshotSelection(manifest.selection)) ||
     prepared.length !== manifest.files.length ||
     prepared.some((file, index) => {

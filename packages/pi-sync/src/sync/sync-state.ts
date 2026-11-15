@@ -70,7 +70,10 @@ function stateHashMapForConfig(state: SyncState, config: SyncPolicyConfig) {
   return Object.fromEntries(
     Object.entries(state.lastFileHashes)
       .filter(([filePath]) => isConfiguredSnapshotPath(filePath, config))
-      .map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, includePaths), hash]),
+      .map(([filePath, hash]) => [
+        config.syncIgnore === undefined ? canonicalSnapshotPathForConfig(filePath, includePaths) : filePath,
+        hash,
+      ]),
   );
 }
 

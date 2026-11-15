@@ -28,7 +28,9 @@ export async function chooseSetupContent(
   const settings = await readLocalConfigObject();
   signal?.throwIfAborted();
   if (!settings || settings.version === 6 || Object.keys(settings.syncSetups).length === 0) {
-    const text = (await readSyncIgnoreFile()) ?? DEFAULT_SYNC_IGNORE;
+    const text =
+      (await readSyncIgnoreFile()) ??
+      (settings && Object.keys(settings.syncSetups).length > 0 ? "" : DEFAULT_SYNC_IGNORE);
     signal?.throwIfAborted();
     return { syncIgnore: text };
   }

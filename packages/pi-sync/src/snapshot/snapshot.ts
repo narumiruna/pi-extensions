@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isDeniedPath, posixJoin, safeJoin, toPosix } from "../paths.js";
+import { isDeniedPath, isPathInside, posixJoin, safeJoin, toPosix } from "../paths.js";
 import { readSyncIgnoreFile } from "../settings/sync-ignore-file.js";
 import { SYNC_IGNORE_NAME, syncIgnoreAllows } from "../sync/sync-ignore.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
@@ -21,6 +21,7 @@ import {
   isPreservableUnmanagedSnapshotPath,
   normalizeExtraFiles,
   normalizeSyncFiles,
+  portableSnapshotSelection,
   type SyncSelectionConfig,
   selectionForConfig,
   selectionForSnapshot,
@@ -74,7 +75,8 @@ function snapshotsMatch(left: Snapshot, right: Snapshot) {
   const rightHashes = new Map(right.files.map((file) => [file.path, file.sha256]));
   return (
     left.syncSessions === right.syncSessions &&
-    JSON.stringify(left.selection) === JSON.stringify(right.selection) &&
+    JSON.stringify(left.selection === undefined ? undefined : portableSnapshotSelection(left.selection)) ===
+      JSON.stringify(right.selection === undefined ? undefined : portableSnapshotSelection(right.selection)) &&
     leftHashes.size === rightHashes.size &&
     [...leftHashes].every(([filePath, hash]) => rightHashes.get(filePath) === hash)
   );
@@ -137,7 +139,22 @@ export async function collectFiles(root: string, options: SnapshotOptions = {}):
   const entries = await fs.readdir(root, { withFileTypes: true });
   signal?.throwIfAborted();
   if (options.syncIgnore !== undefined) {
-    await collectDirectory(results, root, "", { signal, syncIgnore: options.syncIgnore, skipSessions: true });
+    const canonicalRoot = await fs.realpath(root);
+    const sessionRoot = sessionStorageRoot(root, options.sessionDir);
+    let physicalSessionRoot: string;
+    try {
+      physicalSessionRoot = await fs.realpath(sessionRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      physicalSessionRoot = path.resolve(sessionRoot);
+    }
+    signal?.throwIfAborted();
+    await collectDirectory(results, canonicalRoot, "", {
+      signal,
+      syncIgnore: options.syncIgnore,
+      skipSessions: true,
+      excludedSessionRoot: physicalSessionRoot,
+    });
     if (syncIgnoreAllows(options.syncIgnore, "sessions", true)) {
       try {
         await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
@@ -213,10 +230,12 @@ async function collectDirectory(
     signal?: AbortSignal;
     syncIgnore?: string;
     skipSessions?: boolean;
+    excludedSessionRoot?: string;
   } = {},
 ) {
   options.signal?.throwIfAborted();
   const absoluteDirectory = path.join(root, relativeDirectory);
+  if (options.excludedSessionRoot && isPathInside(options.excludedSessionRoot, absoluteDirectory)) return;
   for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
     options.signal?.throwIfAborted();
     const relativePath = relativeDirectory ? posixJoin(relativeDirectory, entry.name) : entry.name;
@@ -323,7 +342,7 @@ function canonicalizeSnapshotFilesForConfig(
     if (!isSafeSnapshotPath(file.path) || !isConfiguredSnapshotPath(normalized, config)) {
       continue;
     }
-    if (normalized.includes("/")) {
+    if (config.syncIgnore !== undefined || normalized.includes("/")) {
       configuredFiles.push(normalized === file.path ? file : { ...file, path: normalized });
       continue;
     }
@@ -389,11 +408,12 @@ export function scanSnapshot(snapshot: Snapshot) {
 }
 
 export function mergeRemotePreservedFiles(local: Snapshot, remote: Snapshot, config: SyncSelectionConfig) {
-  const localPathNames = new Set(local.files.map((file) => file.path.toLowerCase()));
+  const identity = (filePath: string) => (config.syncIgnore === undefined ? filePath.toLowerCase() : filePath);
+  const localPathNames = new Set(local.files.map((file) => identity(file.path)));
   const preservedPathNames = new Set<string>();
   const preserved = remote.files.filter((file) => {
     const normalized = toPosix(file.path);
-    const lower = normalized.toLowerCase();
+    const lower = identity(normalized);
     if (
       localPathNames.has(lower) ||
       preservedPathNames.has(lower) ||

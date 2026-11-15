@@ -586,11 +586,19 @@ export async function rollback(
     throw new Error(
       "Rollback requires the historical snapshot local-field policy to match the configured rules. Review push --force from current local bytes to migrate policy first; choose matching history afterward.",
     );
+  if (
+    (config.syncIgnore !== undefined || decoded.selection?.version === 2) &&
+    inspectRemoteSelection(config, decoded).kind !== "same"
+  )
+    throw new Error(
+      "Rollback requires the historical .syncignore policy to match the current shared rules. Review the shared rules first and choose matching history; no files were changed.",
+    );
   const selected = filterSnapshotForConfigPolicy(
     config.include.includes("sessions") ? decoded : snapshotWithoutSessions(decoded),
     config,
   );
   const remote = portableSnapshot(regenerateSnapshotIdentity(selected), config.localFields);
+  validatePortableSnapshot(remote);
   const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
   const expectedHead = await backend.readHead(options.signal);
   const currentRemote = expectedHead ? await readSnapshotForHead(backend, expectedHead, options.signal) : undefined;
