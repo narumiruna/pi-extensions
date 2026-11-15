@@ -29,7 +29,12 @@ selection: {
 }
 ```
 
-The include list uses the same normalization and safety rules as local `sync.include`. It contains no
+The include list uses the same normalization and safety rules as local `sync.include`.
+Exclude-enabled setups instead publish snapshot version 4 and `selection: { version: 2, include, exclude }`, behind explicit settings version 6.
+The outer snapshot boundary protects readers predating selection metadata as well as current older readers.
+Selection version 1 means no exclusions; existing non-exclude setups keep their wire format.
+Exclude rules are a canonical set, while include order remains significant.
+The package-owned [Excluded paths reference](../../packages/pi-sync/skills/configure-pi-sync/references/configuration.md#excluded-paths) defines matching, limits, scope, and recovery. It contains no
 setup name, storage location, credentials, automatic-sync preference, or switch behavior. Selection
 intent is separate from `files`, so selected-but-missing paths remain portable.
 
@@ -51,10 +56,17 @@ Deterministic `--yes` routes report exact remote-only, device-only, or order-onl
 Automatic shutdown remains warning-only, RPC review remains read-only, and print and JSON command behavior remains rejected.
 
 A force push is the explicit keep-local publication path.
-Its confirmation says that the local selection will replace the differing remote policy, while preserved unmanaged remote files remain subject to the existing preservation rules.
+Its confirmation says that the local selection will replace the differing remote policy.
+Explicitly excluded remote files are omitted from the new publication; other eligible unmanaged files retain the existing preservation rules.
+Neither action erases retained history.
 
 Read-only diff remains available and labels policy state. A legacy snapshot without policy preserves
 prior sync behavior because no authoritative remote intent exists.
+
+Excluded local paths remain unmanaged across pull, merge, and historical rollback, including protection against destructive ancestor replacement.
+State, review freshness, accepted ancestors, model authorization, and recovery identities bind exclusions; changed-policy recovery fails closed.
+Adopting explicit remote exclusions reviews the settings-version upgrade; clearing exclusions retains the opt-in versions.
+Head and immutable-snapshot integrity checks compare the complete versioned selection, not just includes.
 
 ### Review and adoption
 
@@ -62,7 +74,7 @@ Interactive mismatch entry points and **Settings → Compare synced content** sh
 The first screen is **Synced content differs**, says that nothing changed, and offers:
 
 - **Review all paths (recommended)** — show exact remote-only paths, device-only paths, and both ordered lists;
-- **Use remote content list** — revalidate the reviewed remote head and immutable snapshot, then save only local `sync.include` through the existing cross-process lock, expected-storage/include checks, unknown-field preservation, and atomic publication;
+- **Use remote content list** — revalidate the reviewed remote head and immutable snapshot, then save local `sync.include` and exclusion rules together through the existing cross-process lock, expected-full-configuration checks, unknown-field preservation, and atomic publication;
 - **Keep this device's content list and update remote…** — open the existing `push --force` route for the captured setup without `--yes`; and
 - **Cancel** — make no change.
 

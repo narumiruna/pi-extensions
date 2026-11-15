@@ -10,17 +10,20 @@ import { sessionStorageRoot } from "./snapshot-paths.js";
 export { isDeniedPath } from "../paths.js";
 export { sessionStorageRoot } from "./snapshot-paths.js";
 
+import { compileSyncExclude } from "../sync/exclude-policy.js";
 import {
   canonicalSnapshotPathForConfig,
+  configuredSnapshotPathMatcher,
   customIncludePathsByLower,
   DEFAULT_SYNC_INCLUDE,
   includeFromSelectionConfig,
-  isConfiguredSnapshotPath,
   isPreservableUnmanagedSnapshotPath,
   normalizeExtraFiles,
   normalizeSyncFiles,
   type SyncSelectionConfig,
+  sameSnapshotSelection,
   selectionForSnapshot,
+  snapshotSelectionExclude,
   snapshotSelectionInclude,
   syncIncludeSelection,
 } from "../sync/sync-policy.js";
@@ -71,7 +74,7 @@ function snapshotsMatch(left: Snapshot, right: Snapshot) {
   const rightHashes = new Map(right.files.map((file) => [file.path, file.sha256]));
   return (
     left.syncSessions === right.syncSessions &&
-    sameOptionalInclude(snapshotSelectionInclude(left), snapshotSelectionInclude(right)) &&
+    sameSnapshotSelection(left.selection, right.selection) &&
     leftHashes.size === rightHashes.size &&
     [...leftHashes].every(([filePath, hash]) => rightHashes.get(filePath) === hash)
   );
@@ -93,19 +96,30 @@ export function regenerateSnapshotIdentity(snapshot: Snapshot): Snapshot {
 export async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
   options.signal?.throwIfAborted();
   const include = effectiveInclude(options);
-  const syncSessions = include.includes("sessions");
-  const sessionDir = options.sessionDir ?? (await configuredSessionDir());
+  const excluded = compileSyncExclude(options.exclude);
+  const syncSessions = include.includes("sessions") && !excluded("sessions");
+  const needsSessionConfig = syncSessions || !excluded("settings.json");
+  const sessionDir = options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir() : undefined);
   options.signal?.throwIfAborted();
-  const files = await collectFiles(agentDir(), { include, sessionDir, signal: options.signal });
+  const files = await collectFiles(
+    agentDir(),
+    {
+      include,
+      exclude: options.exclude,
+      sessionDir,
+      signal: options.signal,
+    },
+    excluded,
+  );
   options.signal?.throwIfAborted();
   return {
-    version: VERSION,
+    version: options.exclude === undefined ? VERSION : 4,
     id: snapshotId(),
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
     profile,
     syncSessions,
-    selection: selectionForSnapshot(include),
+    selection: selectionForSnapshot(include, options.exclude),
     files,
   };
 }
@@ -119,7 +133,11 @@ function effectiveInclude(options: SnapshotOptions) {
   ];
 }
 
-export async function collectFiles(root: string, options: SnapshotOptions = {}): Promise<SnapshotFile[]> {
+export async function collectFiles(
+  root: string,
+  options: SnapshotOptions = {},
+  excluded = compileSyncExclude(options.exclude),
+): Promise<SnapshotFile[]> {
   const signal = options.signal;
   signal?.throwIfAborted();
   const results: SnapshotFile[] = [];
@@ -128,22 +146,28 @@ export async function collectFiles(root: string, options: SnapshotOptions = {}):
   const selection = syncIncludeSelection(effectiveInclude(options));
   const selectedFiles = new Set<string>(selection.builtIns);
   for (const entry of entries) {
-    if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name) && selectedFiles.has(entry.name)) {
-      await collectDirectory(results, root, entry.name, { signal });
+    if (
+      entry.isDirectory() &&
+      TOP_LEVEL_DIRS.has(entry.name) &&
+      selectedFiles.has(entry.name) &&
+      !excluded(entry.name)
+    ) {
+      await collectDirectory(results, root, entry.name, { signal, excluded });
     }
   }
   for (const fileName of TOP_LEVEL_FILES) {
-    if (!selectedFiles.has(fileName)) continue;
+    if (!selectedFiles.has(fileName) || excluded(fileName)) continue;
     const entry = selectTopLevelFileEntry(entries, fileName);
     if (entry) await addFile(results, root, entry.name, fileName, signal);
   }
   for (const relativePath of selection.custom) {
-    await collectIncludedPath(results, root, relativePath, signal);
+    if (!excluded(relativePath)) await collectIncludedPath(results, root, relativePath, signal, excluded);
   }
-  if (selection.sessions) {
+  if (selection.sessions && !excluded("sessions")) {
     try {
       await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
         sessionsOnly: true,
+        excluded,
         virtualPrefix: "sessions",
         signal,
       });
@@ -155,14 +179,20 @@ export async function collectFiles(root: string, options: SnapshotOptions = {}):
   return results.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-async function collectIncludedPath(results: SnapshotFile[], root: string, relativePath: string, signal?: AbortSignal) {
+async function collectIncludedPath(
+  results: SnapshotFile[],
+  root: string,
+  relativePath: string,
+  signal?: AbortSignal,
+  excluded?: (relativePath: string) => boolean,
+) {
   signal?.throwIfAborted();
   const absolutePath = safeJoin(root, relativePath);
   try {
     const stat = await fs.lstat(absolutePath);
     signal?.throwIfAborted();
     if (stat.isFile()) await addFile(results, root, relativePath, relativePath, signal);
-    else if (stat.isDirectory()) await collectDirectory(results, root, relativePath, { signal });
+    else if (stat.isDirectory()) await collectDirectory(results, root, relativePath, { signal, excluded });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     if (!relativePath.includes("/")) {
@@ -178,7 +208,12 @@ async function collectDirectory(
   results: SnapshotFile[],
   root: string,
   relativeDirectory: string,
-  options: { sessionsOnly?: boolean; virtualPrefix?: string; signal?: AbortSignal } = {},
+  options: {
+    sessionsOnly?: boolean;
+    virtualPrefix?: string;
+    signal?: AbortSignal;
+    excluded?: (relativePath: string) => boolean;
+  } = {},
 ) {
   options.signal?.throwIfAborted();
   const absoluteDirectory = path.join(root, relativeDirectory);
@@ -186,7 +221,7 @@ async function collectDirectory(
     options.signal?.throwIfAborted();
     const relativePath = relativeDirectory ? posixJoin(relativeDirectory, entry.name) : entry.name;
     const snapshotPath = options.virtualPrefix ? posixJoin(options.virtualPrefix, relativePath) : relativePath;
-    if (isDeniedPath(snapshotPath)) continue;
+    if (isDeniedPath(snapshotPath) || options.excluded?.(snapshotPath)) continue;
     if (entry.isDirectory()) {
       await collectDirectory(results, root, relativePath, options);
     } else if (entry.isFile() && (!options.sessionsOnly || isSessionFilePath(snapshotPath))) {
@@ -242,7 +277,8 @@ export function snapshotTarget(root: string, relativePath: string, configuredSes
 export function snapshotIncludesSessions(snapshot: Snapshot) {
   return (
     snapshot.syncSessions === true ||
-    snapshotSelectionInclude(snapshot)?.includes("sessions") === true ||
+    (snapshotSelectionInclude(snapshot)?.includes("sessions") === true &&
+      !compileSyncExclude(snapshotSelectionExclude(snapshot))("sessions")) ||
     snapshot.files.some((file) => isSessionPath(file.path))
   );
 }
@@ -254,10 +290,13 @@ export function filterSnapshotForConfigPolicy(
 ) {
   const include = includeFromSelectionConfig(config);
   const includePaths = customIncludePathsByLower(include);
+  const exclude = config.exclude ?? (snapshot.version === 4 ? [] : undefined);
   const filtered = {
     ...snapshot,
-    syncSessions: include.includes("sessions") ? snapshot.syncSessions : false,
-    selection: selectionForSnapshot(include),
+    version: exclude === undefined ? snapshot.version : 4,
+    syncSessions:
+      include.includes("sessions") && !compileSyncExclude(exclude)("sessions") ? snapshot.syncSessions : false,
+    selection: selectionForSnapshot(include, exclude),
     files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, includePaths),
   };
   if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
@@ -276,9 +315,10 @@ function canonicalizeSnapshotFilesForConfig(
 ) {
   const configuredFiles: SnapshotFile[] = [];
   const extraCandidates = new Map<string, { exact: boolean; file: SnapshotFile; originalPath: string }>();
+  const configured = configuredSnapshotPathMatcher(config);
   for (const file of files) {
     const normalized = toPosix(file.path);
-    if (!isSafeSnapshotPath(file.path) || !isConfiguredSnapshotPath(normalized, config)) {
+    if (!isSafeSnapshotPath(file.path) || !configured(normalized)) {
       continue;
     }
     if (normalized.includes("/")) {
@@ -325,7 +365,7 @@ export function snapshotWithoutSessions(snapshot: Snapshot) {
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
     syncSessions: false,
-    ...(include ? { selection: selectionForSnapshot(include) } : {}),
+    ...(include ? { selection: selectionForSnapshot(include, snapshotSelectionExclude(snapshot)) } : {}),
     files,
   };
 }
@@ -349,6 +389,8 @@ export function scanSnapshot(snapshot: Snapshot) {
 export function mergeRemotePreservedFiles(local: Snapshot, remote: Snapshot, config: SyncSelectionConfig) {
   const localPathNames = new Set(local.files.map((file) => file.path.toLowerCase()));
   const preservedPathNames = new Set<string>();
+  const configured = configuredSnapshotPathMatcher(config);
+  const excluded = compileSyncExclude(config.exclude);
   const preserved = remote.files.filter((file) => {
     const normalized = toPosix(file.path);
     const lower = normalized.toLowerCase();
@@ -356,7 +398,8 @@ export function mergeRemotePreservedFiles(local: Snapshot, remote: Snapshot, con
       localPathNames.has(lower) ||
       preservedPathNames.has(lower) ||
       !isSafeSnapshotPath(file.path) ||
-      isConfiguredSnapshotPath(normalized, config) ||
+      configured(normalized) ||
+      excluded(normalized) ||
       !isPreservableUnmanagedSnapshotPath(normalized)
     ) {
       return false;
@@ -370,15 +413,17 @@ export function mergeRemotePreservedFiles(local: Snapshot, remote: Snapshot, con
     id: snapshotId(),
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
-    syncSessions: snapshotIncludesSessions(local) || snapshotIncludesSessions(remote),
+    syncSessions: !excluded("sessions") && (snapshotIncludesSessions(local) || snapshotIncludesSessions(remote)),
     files: [...local.files, ...preserved].sort((left, right) => left.path.localeCompare(right.path)),
   };
 }
 
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
+  const excluded = compileSyncExclude(snapshotSelectionExclude(local));
+  if (excluded("sessions")) return local;
   const remoteSessions = remote.files.filter((file) => {
     const normalized = toPosix(file.path);
-    return isSessionFilePath(normalized) && isSafeSnapshotPath(file.path);
+    return isSessionFilePath(normalized) && isSafeSnapshotPath(file.path) && !excluded(normalized);
   });
   if (remoteSessions.length === 0 && !snapshotIncludesSessions(remote)) return local;
   const localInclude = snapshotSelectionInclude(local);
@@ -392,6 +437,7 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
       ? {
           selection: selectionForSnapshot(
             localInclude.includes("sessions") ? localInclude : [...localInclude, "sessions"],
+            snapshotSelectionExclude(local),
           ),
         }
       : {}),
@@ -399,9 +445,4 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
       left.path.localeCompare(right.path),
     ),
   };
-}
-
-function sameOptionalInclude(left: string[] | undefined, right: string[] | undefined) {
-  if (!left || !right) return left === right;
-  return left.length === right.length && left.every((item, index) => item === right[index]);
 }

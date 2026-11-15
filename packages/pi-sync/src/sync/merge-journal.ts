@@ -6,6 +6,7 @@ import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { readJsonIfExists, syncDirectory, writeJson } from "../state/json-file.js";
 import { statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { normalizeSyncExclude } from "./exclude-policy.js";
 import { planFileMerge } from "./file-merge-planner.js";
 import {
   portableSnapshot,
@@ -36,7 +37,15 @@ export interface MergeJournal {
 }
 
 export function mergeJournalIdentity(config: AnySyncConfig, backendIdentity: string) {
-  return JSON.stringify([config.setupName, backendIdentity, [...config.include].sort(), config.localFields ?? null]);
+  return JSON.stringify([
+    config.setupName,
+    backendIdentity,
+    [...config.include].sort(),
+    config.localFields ?? null,
+    ...(config.exclude === undefined
+      ? []
+      : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
+  ]);
 }
 
 export function mergeJournalPath(config: AnySyncConfig) {
@@ -95,7 +104,7 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
     ]) {
       validateSnapshotFieldPolicy(snapshot);
       if (
-        (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3) ||
+        (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3 && snapshot.version !== 4) ||
         typeof snapshot.id !== "string" ||
         typeof snapshot.profile !== "string" ||
         snapshot.files.length > 16_384 ||
@@ -115,7 +124,7 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
         throw new Error("Invalid journal collision group.");
     }
     validatePortableSnapshot(journal.upload);
-    if ((journal.upload.version === 2 || journal.upload.version === 3) && !journal.accepted)
+    if (journal.upload.version >= 2 && !journal.accepted)
       throw new Error("Portable merge journal requires an explicit accepted projection.");
     if (journal.accepted) validatePortableSnapshot(journal.accepted);
   } catch {

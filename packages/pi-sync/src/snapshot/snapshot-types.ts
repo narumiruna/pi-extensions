@@ -4,10 +4,9 @@ export interface SnapshotFile {
   sha256: string;
 }
 
-export interface SnapshotSelection {
-  version: 1;
-  include: string[];
-}
+export type SnapshotSelection =
+  | { version: 1; include: string[]; exclude?: never }
+  | { version: 2; include: string[]; exclude: string[] };
 
 export interface Snapshot {
   version: number;
@@ -30,6 +29,7 @@ export interface SnapshotOptions {
   /** Reviewed regular-file preimages; null means the path was absent. Checked under mutation queues. */
   expectedFileHashes?: Readonly<Record<string, string | null>>;
   include?: string[];
+  exclude?: string[];
   sessionDir?: string;
   /** Temporary internal projections while snapshot storage remains wire-compatible. */
   syncFiles?: string[];

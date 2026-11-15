@@ -28,6 +28,8 @@ export interface SyncDecision {
   };
   previousInclude?: readonly string[];
   currentInclude: readonly string[];
+  previousExclude?: readonly string[];
+  currentExclude?: readonly string[];
   review: string;
   directions: readonly SyncResolutionDirection[];
   directMessage: string;
@@ -80,7 +82,13 @@ export function createSyncDecision(options: CreateSyncDecisionOptions) {
     "Why a decision is required:",
     ...causeLines,
     ...(policyChanged
-      ? ["", `Previously included: ${safeList(previousInclude)}`, `Currently included: ${safeList(currentInclude)}`]
+      ? [
+          "",
+          `Previously included: ${safeList(previousInclude)}`,
+          `Currently included: ${safeList(currentInclude)}`,
+          `Previously excluded: ${safeList(state.exclude ?? [])}`,
+          `Currently excluded: ${safeList(config.exclude ?? [])}`,
+        ]
       : []),
     "",
     "Observed differences:",
@@ -93,6 +101,8 @@ export function createSyncDecision(options: CreateSyncDecisionOptions) {
     causes,
     ...(policyChanged ? { previousInclude: [...previousInclude] } : {}),
     currentInclude,
+    ...(policyChanged && state.exclude !== undefined ? { previousExclude: [...state.exclude] } : {}),
+    ...(config.exclude === undefined ? {} : { currentExclude: [...config.exclude] }),
     review,
     directions: kind === "remote-empty" ? ["push"] : ["push", "pull"],
     directMessage: options.directMessage,

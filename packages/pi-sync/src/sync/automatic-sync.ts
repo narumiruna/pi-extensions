@@ -18,6 +18,7 @@ import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
+import { syncSessionsSelected } from "./sync-policy.js";
 
 const AUTO_SYNC_OPTIONS: CommandOptions = {
   yes: true,
@@ -52,7 +53,11 @@ export async function startSession(
       // Normal startup needs only the directory probe, not the recovery/snapshot graph.
       const { recoverSnapshotTransactionsOnStartup } = await import("../snapshot/snapshot-transaction.js");
       validateMutation();
+      const recoverySettings = await readLocalConfigObject();
+      validateMutation();
+      const recoverySetup = recoverySettings?.activeSyncSetup;
       await recoverSnapshotTransactionsOnStartup({
+        exclude: recoverySetup ? recoverySettings.syncSetups[recoverySetup]?.sync.exclude : undefined,
         signal,
         sessionDir: sessionDirFromContext(ctx),
         protectedTargets: currentFile ? [currentFile] : [],
@@ -98,12 +103,12 @@ export async function autoPushSessions(ctx: ExtensionContext, signal: AbortSigna
     const partial = await loadPartialConfig();
     throwIfAborted(signal);
     if (!partial.automatic) return;
-    if (!partial.include.includes("sessions")) return;
+    if (!syncSessionsSelected(partial)) return;
     await ensureStateDir();
     throwIfAborted(signal);
     const config = await loadConfig();
     throwIfAborted(signal);
-    if (!config.include.includes("sessions")) return;
+    if (!syncSessionsSelected(config)) return;
     const [operations, snapshotModule, syncStateModule] = await Promise.all([
       loaders.operations(),
       loaders.snapshot(),

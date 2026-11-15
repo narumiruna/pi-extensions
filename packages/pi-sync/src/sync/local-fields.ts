@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { regenerateSnapshotIdentity } from "../snapshot/snapshot.js";
 import type { Snapshot, SnapshotFile } from "../snapshot/snapshot-types.js";
+import { compileSyncExclude } from "./exclude-policy.js";
 import {
   type JsonDocument,
   type JsonNode,
@@ -9,16 +10,17 @@ import {
   renderSettingsMembers,
 } from "./json-document.js";
 import { normalizeLocalFields } from "./local-field-policy.js";
+import { snapshotSelectionExclude, validateSnapshotSelection } from "./sync-policy.js";
 
 export { normalizeLocalFields } from "./local-field-policy.js";
 
 /** Shared transport contract: older snapshots cannot carry portable policy metadata. */
 export function validateSnapshotFieldPolicy(snapshot: Pick<Snapshot, "version" | "localFields">) {
-  if (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3)
+  if (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3 && snapshot.version !== 4)
     throw new Error("Unsupported snapshot format.");
   if (snapshot.version === 1 && snapshot.localFields !== undefined)
     throw new Error("Portable field policy requires snapshot version 2.");
-  if (snapshot.version === 2 || snapshot.version === 3) {
+  if (snapshot.version === 2 || snapshot.version === 3 || snapshot.version === 4) {
     if (snapshot.version === 2 && snapshot.localFields === undefined)
       throw new Error("Snapshot version 2 requires explicit localFields rules.");
     normalizeLocalFields(snapshot.localFields);
@@ -27,7 +29,11 @@ export function validateSnapshotFieldPolicy(snapshot: Pick<Snapshot, "version" |
 /** Portable transport images must not carry values declared machine-local. Physical journal images are different. */
 export function validatePortableSnapshot(snapshot: Snapshot) {
   validateSnapshotFieldPolicy(snapshot);
-  if ((snapshot.version !== 2 && snapshot.version !== 3) || !snapshot.localFields?.length) return;
+  validateSnapshotSelection(snapshot);
+  const excludedPath = compileSyncExclude(snapshotSelectionExclude(snapshot));
+  if (snapshot.files.some((file) => excludedPath(file.path)))
+    throw new Error("Portable snapshot retains excluded paths.");
+  if (snapshot.version === 1 || !snapshot.localFields?.length) return;
   try {
     for (const entry of snapshot.files) {
       if (typeof entry?.path !== "string" || entry.path.toLowerCase() !== "settings.json") continue;
@@ -70,7 +76,12 @@ export function portableSnapshot(snapshot: Snapshot, fields: string[] | undefine
           : value;
     return file(Buffer.from(`${JSON.stringify(canonical(object))}\n`));
   });
-  return regenerateSnapshotIdentity({ ...snapshot, version: 2, localFields: [...excluded], files });
+  return regenerateSnapshotIdentity({
+    ...snapshot,
+    version: snapshot.version === 4 ? 4 : 2,
+    localFields: [...excluded],
+    files,
+  });
 }
 export function overlayLocalFields(portable: Snapshot, local: Snapshot, fields: string[] | undefined): Snapshot {
   if (!fields?.length) return portable;

@@ -44,7 +44,7 @@ import { createSyncDecision } from "./sync-decision.js";
 import { errorMessage } from "./sync-errors.js";
 
 import { backupLocal, captureMutationOwner, protectedSessionPaths } from "./sync-local.js";
-import { inspectRemoteSelection } from "./sync-policy.js";
+import { inspectRemoteSelection, syncSessionsSelected } from "./sync-policy.js";
 import {
   canPullRemoteSessionsOnFirstSync,
   canPullRemoteSettingsOnFirstSync,
@@ -132,7 +132,8 @@ export async function push(
     !options.force &&
     !remoteForUpload &&
     head?.selection &&
-    inspectRemoteSelection(config.include, { selection: head.selection, files: [] }).kind === "different"
+    inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude).kind ===
+      "different"
   ) {
     remoteForUpload = await readSnapshotForHead(backend, head, options.signal);
   }
@@ -235,6 +236,7 @@ export async function push(
         lastRemoteRevision: result.head.revision,
         lastFileHashes: fileHashMap(local),
         include: [...config.include],
+        ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
         ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
       },
       local,
@@ -380,6 +382,7 @@ export async function pull(
   options.onCommit?.();
   const lastFileHashes = await applySnapshot(physical, protectedSessionPaths(ctx), {
     include: config.include,
+    ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
     sessionDir: applySessionDir,
     signal: options.signal,
     validateMutation,
@@ -400,6 +403,7 @@ export async function pull(
         ? { ...lastFileHashes, "settings.json": fileHashMap(logical)["settings.json"] }
         : lastFileHashes,
       include: [...config.include],
+      ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
       ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
     },
     logical,
@@ -412,7 +416,7 @@ export async function pull(
   setSyncStatus(ctx, undefined);
   if (!options.silent) {
     ctx.ui.notify(`Pulled ${remote.files.length} files from ${remote.id}. Backup: ${backup}`, "info");
-  } else if (options.auto && config.include.includes("sessions") && snapshotIncludesSessions(remote)) {
+  } else if (options.auto && syncSessionsSelected(config) && snapshotIncludesSessions(remote)) {
     ctx.ui.notify(
       "Pulled Pi sessions after startup selected the current session. Restart Pi or resume a pulled session to use newly synced conversations.",
       "warning",
@@ -481,6 +485,7 @@ export async function syncBoth(
         lastRemoteRevision: head?.revision,
         lastFileHashes: fileHashMap(accepted),
         include: [...config.include],
+        ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
         ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
       },
       accepted,
@@ -583,7 +588,7 @@ export async function rollback(
       "Rollback requires the historical snapshot local-field policy to match the configured rules. Review push --force from current local bytes to migrate policy first; choose matching history afterward.",
     );
   const selected = filterSnapshotForConfigPolicy(
-    config.include.includes("sessions") ? decoded : snapshotWithoutSessions(decoded),
+    syncSessionsSelected(config) ? decoded : snapshotWithoutSessions(decoded),
     config,
   );
   const remote = portableSnapshot(regenerateSnapshotIdentity(selected), config.localFields);
@@ -639,6 +644,7 @@ export async function rollback(
   options.onCommit?.();
   const lastFileHashes = await applySnapshot(physical, protectedSessionPaths(ctx), {
     include: config.include,
+    ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
     sessionDir: applySessionDir,
     signal: options.signal,
     validateMutation,
@@ -671,6 +677,7 @@ export async function rollback(
           ? { ...lastFileHashes, "settings.json": fileHashMap(remote)["settings.json"] }
           : lastFileHashes,
         include: [...config.include],
+        ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
         ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
       },
       remote,

@@ -3,7 +3,7 @@ import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { createGunzip, gzip } from "node:zlib";
 import { throwIfAborted } from "../sync/signals.js";
-import { snapshotSelectionInclude } from "../sync/sync-policy.js";
+import { snapshotSelectionInclude, validateSnapshotSelection } from "../sync/sync-policy.js";
 import type { Snapshot } from "./snapshot-types.js";
 
 const VERSION = 1;
@@ -12,6 +12,11 @@ const gzipAsync = promisify(gzip);
 
 export async function encodeSnapshot(snapshot: Snapshot) {
   snapshotSelectionInclude(snapshot);
+  validateSnapshotSelection(snapshot);
+  if (snapshot.version === 4) {
+    const { validatePortableSnapshot } = await import("../sync/local-fields.js");
+    validatePortableSnapshot(snapshot);
+  }
   return gzipAsync(Buffer.from(JSON.stringify(snapshot), "utf8"));
 }
 
@@ -37,10 +42,14 @@ export async function decodeSnapshot(
   await pipeline(Readable.from([buffer]), createGunzip(), sink, { signal: options.signal });
   throwIfAborted(options.signal);
   const parsed = JSON.parse(Buffer.concat(chunks, total).toString("utf8")) as Snapshot;
-  if ((parsed.version !== VERSION && parsed.version !== 2 && parsed.version !== 3) || !Array.isArray(parsed.files)) {
+  if (
+    (parsed.version !== VERSION && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4) ||
+    !Array.isArray(parsed.files)
+  ) {
     throw new Error("Unsupported snapshot format.");
   }
-  if (parsed.version === 2 || parsed.version === 3) {
+  validateSnapshotSelection(parsed);
+  if (parsed.version === 2 || parsed.version === 3 || parsed.version === 4) {
     const { normalizeLocalFields, validatePortableSnapshot } = await import("../sync/local-fields.js");
     validatePortableSnapshot(parsed);
     if (parsed.localFields !== undefined) parsed.localFields = normalizeLocalFields(parsed.localFields);

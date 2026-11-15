@@ -2,8 +2,9 @@ import { type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isDeniedPath } from "../paths.js";
+import { isDeniedPath, toPosix } from "../paths.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
+import { compileSyncExclude } from "./exclude-policy.js";
 
 /** Hints only. The scheduler's periodic snapshot scan remains required. */
 export async function watchContinuous(
@@ -12,6 +13,7 @@ export async function watchContinuous(
 ): Promise<() => void> {
   const root = getAgentDir();
   const watchers: FSWatcher[] = [];
+  const excluded = compileSyncExclude(config.exclude);
   const selected = config.include.map((item) => path.resolve(root, item));
   const relevant = (target: string) =>
     selected.some(
@@ -25,7 +27,7 @@ export async function watchContinuous(
         const target = path.resolve(directory, String(file));
         if (target === path.join(root, "pi-sync.json")) changed(true);
         else if (isDeniedPath(path.relative(root, target))) return;
-        else if (relevant(target)) changed(false);
+        else if (!excluded(toPosix(path.relative(root, target))) && relevant(target)) changed(false);
       });
       watcher.on("error", () => watcher.close());
       watchers.push(watcher);

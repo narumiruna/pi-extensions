@@ -88,6 +88,31 @@ export function registerSyncBackendContractSuite(name: string, create: BackendFa
       });
     }
 
+  test(`${name} contract: exclude-enabled snapshot and head round trip`, async () => {
+    await withBackend(create, async (backend) => {
+      const image = {
+        ...snapshot([{ path: "skills/public.md", content: Buffer.from("public") }]),
+        version: 4,
+        selection: { version: 2 as const, include: ["skills"], exclude: ["skills/private"] },
+      };
+      const published = await backend.publishSnapshot(image, { kind: "missing" });
+      assert.deepEqual(published.head.selection, image.selection);
+      assert.deepEqual(await backend.readSnapshot(published.head.snapshotRef), image);
+      await assert.rejects(
+        backend.publishSnapshot(
+          {
+            ...image,
+            id: "excluded-bytes",
+            files: snapshot([{ path: "skills/private/a.md", content: Buffer.from("private") }]).files,
+          },
+          expectedRemoteHead(published.head),
+        ),
+        /excluded paths/,
+      );
+      assert.equal((await backend.readHead())?.snapshotId, image.id);
+    });
+  });
+
   test(`${name} contract: excluded root values never enter portable storage`, async () => {
     await withBackend(create, async (backend) => {
       const clean = {

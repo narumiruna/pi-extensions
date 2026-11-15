@@ -105,6 +105,7 @@ export function snapshotOptionsForContext(
 ): SnapshotOptions {
   return {
     include: config.include,
+    ...(config.exclude === undefined ? {} : { exclude: config.exclude }),
     sessionDir: sessionDirFromContext(ctx),
   };
 }

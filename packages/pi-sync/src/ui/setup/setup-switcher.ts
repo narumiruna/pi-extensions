@@ -6,6 +6,7 @@ import type { AnySyncConfig } from "../../settings/settings-types.js";
 import { ownRecord } from "../../settings/settings-validation.js";
 import { useSyncSetup } from "../../sync/setup-switch.js";
 import { errorMessage } from "../../sync/sync-errors.js";
+import { syncSessionsSelected } from "../../sync/sync-policy.js";
 import { automaticSyncSummary } from "../automatic-sync-summary.js";
 import { type RunRoute, runCancellableOperation } from "../cancellable-operation.js";
 import { dispatchManagerResult } from "../manager-result-dispatcher.js";
@@ -78,7 +79,7 @@ export async function showSetupSwitcher(
 ) {
   const raw = await readLocalConfigObject();
   if (signal?.aborted) return false;
-  if (raw?.version !== 3 && raw?.version !== 4 && raw?.version !== 5) {
+  if (raw?.version !== 3 && raw?.version !== 4 && raw?.version !== 5 && raw?.version !== 6) {
     ctx.ui.notify("Add a second sync setup before switching setups.", "info");
     return false;
   }
@@ -127,7 +128,7 @@ export async function showSetupSwitcher(
       `To: ${safeTerminalText(name)}`,
       `Storage: ${backendStorageDescription(config)}`,
       `Included content: ${config.include.length} paths`,
-      `Automatic sync: ${automaticSyncSummary(config.automatic)} · Sessions: ${config.include.includes("sessions") ? "On" : "Off"}`,
+      `Automatic sync: ${automaticSyncSummary(config.automatic)} · Sessions: ${syncSessionsSelected(config) ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,
       `Continuous sync: ${config.continuous ? (config.agentMode ? "On (recurring requests and transfers)" : "Saved On; paused until Autonomous sync is enabled") : "Off"}`,

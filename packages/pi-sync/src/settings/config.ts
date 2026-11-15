@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import { normalizeGitBranch, normalizeGitDirectory, normalizeGitRemote } from "../backends/git/git-config.js";
 import { normalizeWebDavPath, normalizeWebDavUrl } from "../backends/webdav/webdav-config.js";
+import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { normalizeLocalFields } from "../sync/local-field-policy.js";
-import { normalizeSyncInclude } from "../sync/sync-policy.js";
+import { normalizeSyncInclude, syncSessionsSelected } from "../sync/sync-policy.js";
 import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "./config-file.js";
 import { requireSettings } from "./settings-store.js";
 import type {
@@ -78,6 +79,7 @@ export async function loadPartialConfig(setupName?: string): Promise<PartialConf
     setupName: config.setupName,
     ...storageReviewFromConfig(config),
     include: [...config.include],
+    ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
     automatic: config.automatic,
     automaticTransfer: config.automaticTransfer ?? false,
     agentMode: config.agentMode ?? false,
@@ -124,6 +126,9 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
     config.partialSync ?? false,
     // Preserve existing Off identities and cached candidates across the upgrade.
     ...(config.continuous ? ["continuous"] : []),
+    ...(config.exclude === undefined
+      ? []
+      : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
   ]);
 }
 
@@ -169,6 +174,7 @@ function resolveSyncConfig(
     storagePath,
     snapshotIdentity: namespace,
     include,
+    ...(setup.sync.exclude === undefined ? {} : { exclude: normalizeSyncExclude(setup.sync.exclude) }),
     automatic: setup.sync.automatic,
     automaticTransfer: setup.sync.automaticTransfer ?? false,
     agentMode: setup.sync.agentMode ?? false,
@@ -238,8 +244,8 @@ export function sessionTokenWarnings(config: { endpoint?: string; sessionToken?:
   ];
 }
 
-export function syncSessionsWarnings(config: { include: readonly string[] }) {
-  if (!config.include.includes("sessions")) return [];
+export function syncSessionsWarnings(config: { include: readonly string[]; exclude?: readonly string[] }) {
+  if (!syncSessionsSelected(config)) return [];
   return [
     "sessions: included; Pi session JSONL can contain prompts, tool output, file paths, images, and secrets. Sync sessions only to storage you trust.",
   ];

@@ -5,6 +5,7 @@ import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
 import { loadConfig, syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
 import { SyncSetupReviewChangedError, updateSyncSetup } from "../settings/settings-management.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
+import { sameSyncExclude } from "../sync/exclude-policy.js";
 import { readSnapshotForHead } from "../sync/remote-snapshot.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { errorMessage } from "../sync/sync-errors.js";
@@ -266,6 +267,22 @@ async function showSelectionDifference(
                 validateOwner();
                 if (!acknowledged) return undefined;
               }
+              if (state.decision.remoteExclude !== undefined && currentConfig.exclude === undefined) {
+                onDialog?.(true);
+                let confirmed: boolean;
+                try {
+                  confirmed = await ctx.ui.confirm(
+                    "Adopt excluded paths?",
+                    "This upgrades settings to version 6 / snapshots to version 4. Older clients must refuse them. Both content lists are saved; no files transfer and old history is not erased.",
+                    { signal: ownedSignal },
+                  );
+                } finally {
+                  onDialog?.(false);
+                }
+                ownedSignal.throwIfAborted();
+                validateOwner();
+                if (!confirmed) return undefined;
+              }
               return runWithOptionalStateAccess(options, async () => {
                 const loaded = await loadAdoptionReview(state.decision, ownedSignal, factory, validateOwner);
                 ownedSignal.throwIfAborted();
@@ -288,6 +305,7 @@ async function showSelectionDifference(
           continuationFingerprint = syncCheckConfigFingerprint({
             ...adoption.value.config,
             include: [...state.decision.remoteInclude],
+            exclude: adoptedExclude(state.decision),
           });
           flowState = { decision: state.decision, saved: true };
           return { kind: "to" as const, screen: "saved" as const };
@@ -435,8 +453,12 @@ async function loadAdoptionReview(
   const snapshot = await readSnapshotForHead(backend, reviewedHead, signal);
   throwIfAborted(signal);
   validateOwner();
-  const state = inspectRemoteSelection(config.include, snapshot);
-  if (state.kind !== "different" || !sameSyncInclude(state.include, decision.remoteInclude)) {
+  const state = inspectRemoteSelection(config.include, snapshot, config.exclude);
+  if (
+    state.kind !== "different" ||
+    !sameSyncInclude(state.include, decision.remoteInclude) ||
+    !sameSyncExclude(state.exclude, decision.remoteExclude)
+  ) {
     throw new StaleRemoteSelectionReviewError("Remote synced content changed while the comparison was open.");
   }
   return { config, backend, reviewedHead };
@@ -457,19 +479,31 @@ async function revalidateAndAdopt(
   const currentSnapshot = await readSnapshotForHead(review.backend, currentHead, signal);
   throwIfAborted(signal);
   validateOwner();
-  const currentState = inspectRemoteSelection(review.config.include, currentSnapshot);
-  if (currentState.kind !== "different" || !sameSyncInclude(currentState.include, decision.remoteInclude)) {
+  const currentState = inspectRemoteSelection(review.config.include, currentSnapshot, review.config.exclude);
+  if (
+    currentState.kind !== "different" ||
+    !sameSyncInclude(currentState.include, decision.remoteInclude) ||
+    !sameSyncExclude(currentState.exclude, decision.remoteExclude)
+  ) {
     throw new StaleRemoteSelectionReviewError("Remote synced content changed while the comparison was open.");
   }
   await updateSyncSetup(
     decision.setupName,
     (setup) => {
       validateOwner();
-      return { ...setup, sync: { ...setup.sync, include: [...decision.remoteInclude] } };
+      return {
+        ...setup,
+        sync: {
+          ...setup.sync,
+          include: [...decision.remoteInclude],
+          ...(adoptedExclude(decision) === undefined ? {} : { exclude: adoptedExclude(decision) }),
+        },
+      };
     },
     {
       expectedConfigFingerprint: syncCheckConfigFingerprint(review.config),
       expectedInclude: decision.localInclude,
+      upgradeExclude: adoptedExclude(decision) !== undefined,
       signal,
     },
   );
@@ -503,7 +537,7 @@ async function inspectConfiguredRemoteSelection(
   return {
     kind: "selection",
     config,
-    state: inspectRemoteSelection(config.include, snapshot),
+    state: inspectRemoteSelection(config.include, snapshot, config.exclude),
   };
 }
 
@@ -555,12 +589,23 @@ async function showLegacyDiscovery(
   });
 }
 
+function adoptedExclude(decision: RemoteSelectionDecision) {
+  return decision.remoteExclude === undefined
+    ? decision.localExclude === undefined
+      ? undefined
+      : []
+    : [...decision.remoteExclude];
+}
+
 function selectionSummaryLines(decision: RemoteSelectionDecision) {
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     `Sync setup: ${safeTerminalText(decision.setupName)}`,
     "Nothing changed. Review both lists before choosing what happens next.",
-    ...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+    ...excludeReviewLines(decision),
+    ...(comparison.remoteOnly.length === 0 &&
+    comparison.localOnly.length === 0 &&
+    sameSyncExclude(decision.localExclude, decision.remoteExclude)
       ? ["Only the ordering differs; membership is the same."]
       : [`Remote-only paths: ${comparison.remoteOnly.length} · Device-only paths: ${comparison.localOnly.length}`]),
   ];
@@ -569,7 +614,9 @@ function selectionSummaryLines(decision: RemoteSelectionDecision) {
 function formatSelectionDifference(decision: RemoteSelectionDecision) {
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
-    ...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+    ...(comparison.remoteOnly.length === 0 &&
+    comparison.localOnly.length === 0 &&
+    sameSyncExclude(decision.localExclude, decision.remoteExclude)
       ? ["Only ordering differs; both lists contain the same paths.", ""]
       : []),
     "Remote-only paths:",
@@ -592,6 +639,7 @@ function formatSelectionDifference(decision: RemoteSelectionDecision) {
       ? decision.localInclude.map((item, index) => `${index + 1}. ${safeTerminalText(item)}`)
       : ["(none)"]),
     "",
+    ...excludeReviewLines(decision),
     "Using the remote list saves settings only and does not pull files.",
   ].join("\n");
 }
@@ -602,15 +650,27 @@ function formatRemoteSelectionSummary(decision: RemoteSelectionDecision) {
     `Synced content for “${safeTerminalText(decision.setupName)}” differs from this device.`,
     `Remote-only: ${safeList(comparison.remoteOnly)}`,
     `Device-only: ${safeList(comparison.localOnly)}`,
-    ...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+    ...(comparison.remoteOnly.length === 0 &&
+    comparison.localOnly.length === 0 &&
+    sameSyncExclude(decision.localExclude, decision.remoteExclude)
       ? [
           "Only ordering differs.",
           `Remote order: ${safeList(decision.remoteInclude)}`,
           `Device order: ${safeList(decision.localInclude)}`,
         ]
       : []),
+    ...excludeReviewLines(decision),
     "Run /sync in TUI to choose a content list; RPC review is read-only.",
   ].join("\n");
+}
+
+function excludeReviewLines(decision: RemoteSelectionDecision) {
+  if (decision.localExclude === undefined && decision.remoteExclude === undefined) return [];
+  return [
+    `Remote excluded paths: ${safeList(decision.remoteExclude ?? [])}`,
+    `This device excluded paths: ${safeList(decision.localExclude ?? [])}`,
+    "Removed exclusions can expose or replace content; old history is not erased.",
+  ];
 }
 
 function formatLegacySummary(config: AnySyncConfig, discovered: readonly string[]) {
@@ -626,13 +686,16 @@ function decisionFromState(
     configIdentity: syncConfigReviewFingerprint(config),
     localInclude: [...config.include],
     remoteInclude: [...state.include],
+    ...(config.exclude === undefined ? {} : { localExclude: [...config.exclude] }),
+    ...(state.exclude === undefined ? {} : { remoteExclude: [...state.exclude] }),
   };
 }
 
 function assertLocalSelectionCurrent(config: AnySyncConfig, decision: RemoteSelectionDecision) {
   if (
     syncConfigReviewFingerprint(config) === decision.configIdentity &&
-    sameSyncInclude(config.include, decision.localInclude)
+    sameSyncInclude(config.include, decision.localInclude) &&
+    sameSyncExclude(config.exclude, decision.localExclude)
   ) {
     return;
   }

@@ -10,6 +10,7 @@ The configuration skill provides guidance only; the user performs settings chang
 - [Autonomous sync](#autonomous-sync)
 - [Continuous sync](#continuous-sync)
 - [Included content](#included-content)
+- [Excluded paths](#excluded-paths)
 - [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
 
 ## ⚙️ Settings
@@ -46,15 +47,16 @@ Global settings apply to all setups on this device; they are not remote policy.
 
 | Scope | Fields | Required values and defaults |
 | --- | --- | --- |
-| Document | `version`, `onSwitch`, `storageConnections`, `syncSetups` | All are required in a manually written document; supported versions are 3, 4, and 5. |
+| Document | `version`, `onSwitch`, `storageConnections`, `syncSetups` | All are required in a manually written document; supported versions are 3, 4, 5, and 6. |
 | Current setup | `activeSyncSetup` | Required when setups exist; absent when the setup catalog is empty. |
 | Global preferences | `skipSecretScan`, `showStatus`, `debug` | Optional booleans; defaults are false, true, and false. |
 | Setup selection | `sync.include`, `sync.automatic` | Both are required; the manager starts with automatic sync Off. |
 | Setup behavior | `sync.automaticTransfer`, `sync.agentMode`, `sync.continuous`, `sync.mergeSettings`, `sync.mergeContent`, `sync.partialSync` | Optional booleans; all default to false. |
-| Portable policy | `sync.localFields` | Optional array; any explicit array, including `[]`, requires version 4 or 5. |
-| Content/partial policy | `sync.mergeContent`, `sync.partialSync` | Enabling either requires version 5. |
+| Portable policy | `sync.localFields` | Optional array; any explicit array, including `[]`, requires version 4, 5, or 6. |
+| Content/partial policy | `sync.mergeContent`, `sync.partialSync` | Enabling either requires version 5 or 6. |
+| Path exclusions | `sync.exclude` | Optional array; an explicit array, including `[]`, requires version 6. |
 
-Do not downgrade version 4 or 5 merely because an option is turned off.
+Do not downgrade version 4, 5, or 6 merely because an option is turned off.
 The four automatic controls have separate effects:
 
 - **Automatic sync** (`sync.automatic`) enables startup observation and selected-content shutdown pushes when sessions are included.
@@ -67,8 +69,8 @@ None of these controls is enabled by invoking the configuration skill.
 ### Editing in the manager
 
 Open `/sync` → **Settings** to go directly to **Pi Sync Settings**.
-The screen has one searchable flat list with all 16 rows in their existing order and no category navigation or headings.
-**Included paths** and **Compare included paths** are adjacent; the latter compares path policies, not file contents.
+The screen has one searchable flat list with 17 rows and no category navigation or headings.
+**Included paths**, **Excluded paths**, and **Compare included paths** keep content policy together; comparison covers both rule lists, not file contents.
 **Storage location** edits the current setup's coordinates, while **Manage sync setups** and **Manage storage connections** retain the catalog and affected-setup reviews.
 Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
 
@@ -316,7 +318,8 @@ This preserves selected-but-missing paths without syncing `pi-sync.json`, storag
 Adoption revalidates the remote head, immutable snapshot, and complete reviewed setup configuration, including the shared connection and credentials, before one atomic settings update.
 Cancelling the network check leaves the content list unchanged.
 A settings save that has started its atomic replacement can still finish; later cancellation does not undo it.
-The saved state changes only `sync.include`, preserves unknown settings fields, and never pulls files or writes sync state.
+The saved state changes `sync.include` and exclusion rules together, preserves unknown settings fields, and never pulls files or writes sync state.
+Adopting an explicit remote exclude policy also reviews the version-6 upgrade; adopting a legacy no-exclude list clears existing rules to `[]` without downgrading.
 Its explicit Continue action starts a fresh **Sync now** route, while **Done** leaves the reviewed settings change saved without implying a file operation.
 Keeping this device's list opens the reviewed force-push path and explicitly replaces the remote policy while preserving eligible unmanaged remote files.
 
@@ -330,6 +333,59 @@ Use **Add custom path…** for any needed path.
 Adding `sessions` requires a privacy acknowledgement in interactive flows.
 Session JSONL can contain prompts, tool output, file paths, images, and secrets.
 Pull protects the currently open session file; restart Pi or resume a pulled session to use newly synchronized conversations.
+
+### Excluded paths
+
+`sync.exclude` is an optional per-setup array of relative paths or basic glob patterns; absence means no rules.
+An explicit array requires settings version 6 and publishes snapshot version 4 with selection policy version 2.
+Other setups without an explicit array keep their existing snapshot format.
+New clients still read old settings and snapshots; older clients must refuse the opted-in formats.
+
+For an existing setup in a version-6 document, the `sync` object can contain:
+
+```json
+{
+  "include": ["settings.json", "skills", "extensions"],
+  "exclude": ["skills/private", "extensions/**/*.test.ts"],
+  "automatic": false
+}
+```
+
+Rules win over includes and are anchored to the logical snapshot root, with `/` separators on every platform.
+Literal paths match themselves and their descendants; `skills/private` does not match `skills/private-copy`.
+`*` and `?` match within one segment; whole-segment `**` matches zero or more segments.
+A matching directory excludes its whole subtree, including hidden files.
+Matching is case-insensitive, includes dotfiles, and combines rules with OR, independent of rule order.
+Use `**/*.log` for a filename pattern at any depth; `*.log` matches only at the root.
+Sessions use virtual `sessions/...` paths even when stored in a custom physical directory.
+A trailing `/**` also excludes its root; excluding `sessions` or `sessions/**` disables the legacy sessions-enabled shutdown push before state/backend work.
+
+Negation/re-inclusion, comments, braces, character classes, extglobs, absolute/drive/UNC paths, traversal, backslashes, controls, empty rules, and case-equivalent duplicates are rejected.
+The limits are 1,024 rules, 4,096 UTF-8 bytes per rule, and 256 KiB total.
+Overlapping rules and rules for currently absent or unselected paths are allowed.
+This syntax is not Git ignore compatibility and does not load an ignore file.
+
+**Settings → Excluded paths** uses a JSON-array draft and an exact **Save changes**, **Discard changes**, or **Continue editing** review.
+Empty input keeps the current draft; `[]` clears rules.
+Only Save writes settings and upgrades to version 6; cancelling or a stale/failed save leaves the previous valid settings intact.
+Changes apply to subsequent operations and do not start a transfer.
+The canonical user file is the only scope; no project override or environment-variable mirror is added.
+RPC remains read-only and shows the manual settings path.
+
+Collection skips excluded content before reading its bytes and prunes excluded directories.
+Pi's own session-directory configuration may still need to be read to resolve a session root; exclusions do not replace Pi configuration resolution.
+Push, pull, merged/automatic sync, previews, rollback, accepted hashes, conflict/model evidence, and watcher hints honor the same rules.
+Excluded local files are not overwritten or deleted; ancestor replacements that would remove excluded descendants are refused.
+New publications omit matching remote files even if those files were previously preserved, while other unselected remote content retains its preservation behavior.
+Old history and backups are **not erased**.
+
+Comparison and adoption include both lists, even when no matching file exists.
+Ordinary and automatic transfers, including forced pull, pause on a remote-policy difference.
+Review the rules and use the existing confirmed force push to publish this device's authoritative policy.
+Removing a rule can expose local content or permit remote replacement.
+Clearing rules retains `[]` and the newer versions; never downgrade in place.
+A pending transaction or merge journal under different rules remains available for reviewed recovery rather than replaying old writes.
+To return to an older client, stop automatic work, resolve pending recovery with a compatible client, preserve backups, and create a separate reviewed legacy-compatible setup/location.
 
 ### Automatic startup transfer
 
@@ -366,7 +422,7 @@ Unknown fields remain preserved and malformed/invalid files block saves, just as
 
 ### Autonomous sync
 
-Autonomous sync uses the unchanged `sync.agentMode` key, an optional per-setup boolean, default `false`, in settings versions 3, 4, and 5.
+Autonomous sync uses the unchanged `sync.agentMode` key, an optional per-setup boolean, default `false`, in settings versions 3, 4, 5, and 6.
 Open **Settings → Autonomous sync** and review the setup, destination, selected paths, transfer authorization, model disclosure, costs, and autonomous writes before enabling.
 RPC users can explicitly set the same field in the private settings file.
 Setting it to `true` is authorization, not just a display preference.
@@ -467,7 +523,7 @@ No Pi core changes or other extension are required.
 
 ### Continuous sync
 
-`sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3, 4 and 5.
+`sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3, 4, 5 and 6.
 Open **Settings → Continuous sync** after enabling Autonomous sync.
 RPC users can set the field explicitly in the private settings file.
 Existing Autonomous sync consent does not enable recurring requests.
@@ -601,9 +657,11 @@ Field merging and nonempty portable projections also refuse unsafe integers, non
 Example: `"localFields": ["shellPath"]`.
 Coupled fields must be excluded together.
 Nonempty rules require `settings.json` in `sync.include`; absent or explicitly empty rules remain valid for other selections.
-Saving nonempty rules in Settings confirms an upgrade to settings version 4; manual edits must declare version 4 too.
+Saving nonempty rules in Settings confirms an upgrade to at least settings version 4; manual edits must declare version 4 or newer.
+Existing version-5/6 settings are never downgraded by a field-policy edit.
 Absent rules keep a setup nonportable, including unrelated setups in a version-4 document.
-An explicit array opts that setup into snapshot version 2; `[]` after rule removal retains this reviewed opt-in and differs from absence.
+An explicit array opts that setup into at least snapshot version 2; exclude-enabled setups retain version 4.
+`[]` after rule removal retains this reviewed opt-in and differs from absence.
 Older clients must refuse portable data rather than replace local-only values.
 
 Portable projections normalize remote JSON deterministically while local overlay preserves unaffected local member/value bytes and excluded values or absence.
@@ -640,8 +698,9 @@ Never reinterpret portable snapshots with an old binary.
 ### Content merge and partial progress
 
 `sync.mergeContent` and `sync.partialSync` are independent opt-in booleans, both default `false`.
-The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit settings-version-5 upgrade.
-Manual configuration must also declare version 5.
+The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit upgrade to at least settings version 5.
+Manual configuration must also declare version 5 or 6.
+Exclude-enabled partial publications retain snapshot version 4 instead of downgrading to version 3.
 Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration.
 Disabling options retains the schema and recovery evidence.
 

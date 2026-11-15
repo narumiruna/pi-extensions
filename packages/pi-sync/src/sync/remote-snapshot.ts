@@ -10,8 +10,7 @@ import {
   inspectRemoteSelection,
   type RemoteSelectionState,
   remoteSelectionMismatch,
-  sameSyncInclude,
-  snapshotSelectionInclude,
+  sameSnapshotSelection,
 } from "./sync-policy.js";
 
 export async function readSnapshotForHead(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {
@@ -22,8 +21,7 @@ export async function readSnapshotForHead(backend: SyncBackend, head: RemoteHead
     throw new Error(`Remote head ${head.snapshotId} resolved to unexpected snapshot ${snapshot.id}.`);
   }
   if (head.selection) {
-    const snapshotInclude = snapshotSelectionInclude(snapshot);
-    if (!snapshotInclude || !sameSyncInclude(head.selection.include, snapshotInclude)) {
+    if (!sameSnapshotSelection(head.selection, snapshot.selection)) {
       throw new Error("Remote head selection does not match its immutable snapshot.");
     }
   }
@@ -35,9 +33,9 @@ export function requireCompatibleRemoteSelection(config: AnySyncConfig, snapshot
     throw new Error(
       "Remote local-field policy differs; confirm a reviewed directional migration. Old history is not erased.",
     );
-  const state = inspectRemoteSelection(config.include, snapshot);
+  const state = inspectRemoteSelection(config.include, snapshot, config.exclude);
   if (state.kind === "different") {
-    throw remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config));
+    throw remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config), state.exclude);
   }
 }
 
@@ -51,6 +49,7 @@ export function formatRemoteSelectionStatus(state: RemoteSelectionState | undefi
     "remote included content: differs from this setup",
     `remote-only selection: ${safeList(state.remoteOnly)}`,
     `local-only selection: ${safeList(state.localOnly)}`,
+    `remote excluded paths: ${safeList(state.exclude ?? [])}`,
   ].join("\n");
 }
 
@@ -67,10 +66,10 @@ export async function readRemoteSnapshot(
   const head = await backend.readHead(signal);
   if (!head) return { head: undefined, snapshot: undefined, selectionState: undefined };
   const snapshot = await readSnapshotForHead(backend, head, signal);
-  const selectionState = inspectRemoteSelection(config.include, snapshot);
+  const selectionState = inspectRemoteSelection(config.include, snapshot, config.exclude);
   if (!options.allowSelectionDifference && selectionState.kind === "different") {
     const configIdentity = syncConfigReviewFingerprint(config);
-    throw remoteSelectionMismatch(config, selectionState.include, configIdentity);
+    throw remoteSelectionMismatch(config, selectionState.include, configIdentity, selectionState.exclude);
   }
   return {
     head,
