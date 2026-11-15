@@ -45,6 +45,8 @@ export interface HerdrWidgetObserver {
   shutdown(ctx: ExtensionContext): Promise<void>;
 }
 
+const MAX_CONSECUTIVE_DISCARDS = 2;
+
 class HerdrTopologyChangedError extends Error {}
 class HerdrCleanupError extends AggregateError {}
 
@@ -214,6 +216,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         const subscribedFingerprint = subscriptionFingerprint(discovered.currentPane, discovered.panes);
         const model = new HerdrWidgetModel();
         let dirty = true;
+        let consecutiveDiscards = 0;
 
         subscription = await subscribe(
           options.environment.socketEndpoint,
@@ -249,12 +252,18 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
           dirty = false;
           const refreshed = await loadPaneSet(ctx, expectedGeneration, signal);
           if (!refreshed || signal.aborted) break;
-          // Events and reads have no common sequence boundary. Never replay event
-          // payloads over a read, or publish a read invalidated while in flight.
-          if (dirty) continue;
           if (subscriptionFingerprint(refreshed.currentPane, refreshed.panes) !== subscribedFingerprint) {
             throw new HerdrTopologyChangedError();
           }
+          // Events and reads have no common sequence boundary. Discard short
+          // bursts, but bound discards so continuous events cannot starve rows.
+          // Publish only complete reads, never event payloads; dirty below makes
+          // the next refresh immediate after a bounded best-effort publication.
+          if (dirty && consecutiveDiscards < MAX_CONSECUTIVE_DISCARDS) {
+            consecutiveDiscards += 1;
+            continue;
+          }
+          consecutiveDiscards = 0;
           model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspaces);
           publish(ctx, model, expectedGeneration);
           await new Promise<void>((resolve) => {

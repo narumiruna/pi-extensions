@@ -161,7 +161,9 @@ Its separator is named **Herdr**. In fullscreen TUI mode, click anywhere in the 
 Opening `/herdr` in TUI mode also restores disclosure when the widget is enabled, without changing or saving the enable setting.
 Disclosure survives updates, temporary absence, and host remounts; session start or restarting the observer resets it. Collapse does not change Herdr data, reporting, subscriptions, or saved settings.
 The extension discovers the current pane, session-wide pane list, workspace labels, and agent names, opens pane-scoped status subscriptions plus pane and workspace subscriptions, and then reloads those identities.
-Events trigger serialized, coalesced reads rather than replacing current state with event payloads. If an event arrives during a read, the extension reads again before publishing that result.
+Events trigger serialized, coalesced reads rather than replacing current state with event payloads.
+If events arrive during reads, the extension discards up to two consecutive reads. On the third invalidated read, it publishes that complete snapshot and immediately reads again, so sustained events cannot prevent updates.
+Snapshots can briefly lag newer events; changes to the current pane or recognized-agent subscription set are reconciled before publication.
 Agent names, workspace labels, and cleared presentation fields update from these authoritative reads.
 Changes to the current pane, workspace, or recognized-agent set rebuild the pane-scoped subscriptions without consuming the bounded failure retry.
 Unexpected disconnection or `events_lost` clears the widget before one bounded reconnect attempt, and a second failure leaves it hidden until the next Pi session or `/reload`.
