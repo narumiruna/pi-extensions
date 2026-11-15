@@ -2,6 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
@@ -10,6 +11,7 @@ import { readWorkspaces } from "./workspace-graph.mjs";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function dependencyProblems({ root = repositoryRoot, env = process.env, execute = spawnSync } = {}) {
+  root = path.resolve(root);
   const failures = [];
   const manifests = [
     "package.json",
@@ -18,12 +20,30 @@ export function dependencyProblems({ root = repositoryRoot, env = process.env, e
   for (const file of manifests) {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, file), "utf8"));
     for (const [name, peer] of Object.entries(manifest.peerDependencies ?? {})) {
+      const peerRange = typeof peer === "string" ? semver.validRange(peer) : null;
+      if (peerRange === null) continue;
       const dev = manifest.devDependencies?.[name];
-      // Non-registry dev sources are checked at their resolved version by npm below.
-      if (typeof dev !== "string" || !semver.validRange(dev) || !semver.validRange(peer)) continue;
-      if (!semver.subset(dev, peer)) {
+      if (typeof dev === "string" && semver.validRange(dev) && !semver.subset(dev, peer)) {
         failures.push(
           `${file}: devDependencies["${name}"] (${dev}) must be within peerDependencies["${name}"] (${peer}); align the tested version and supported peer range.`,
+        );
+      }
+      // npm replaces peer edges with same-name prod, optional, and dev edges.
+      // Check the peer contract separately, regardless of the source of the installed package.
+      const installed = findInstalledPeer(root, file, name);
+      if (!installed) {
+        if (manifest.peerDependenciesMeta?.[name]?.optional !== true) {
+          failures.push(
+            `${file}: ${name} required peer (${peer}) is missing; run npm install and retry npm run check:dependencies.`,
+          );
+        }
+      } else if (
+        !semver.valid(installed.version) ||
+        // npm accepts prereleases for an unrestricted * peer, but not for other ranges by default.
+        (peerRange !== "*" && !semver.satisfies(installed.version, peer))
+      ) {
+        failures.push(
+          `${file}: ${name} installed version (${installed.version ?? "missing"}) from ${installed.file} does not satisfy peerDependencies (${peer}); align the installed version and supported peer range.`,
         );
       }
     }
@@ -70,6 +90,23 @@ export function dependencyProblems({ root = repositoryRoot, env = process.env, e
     for (const problem of problems) failures.push(String(problem));
   }
   return failures;
+}
+
+function findInstalledPeer(root, owner, name) {
+  const lookupPaths = createRequire(path.join(root, owner)).resolve.paths(name) ?? [];
+  for (const directory of lookupPaths) {
+    const relative = path.relative(root, directory);
+    // Do not use another install scope or Node's global fallback paths.
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    const file = path.join(directory, name, "package.json");
+    if (!fs.existsSync(path.dirname(file))) continue;
+    try {
+      // Use Node's lookup paths, not package exports: package.json can be private.
+      return { version: JSON.parse(fs.readFileSync(file, "utf8")).version, file: path.relative(root, file) };
+    } catch (error) {
+      throw new Error(`${path.relative(root, file)}: cannot read installed peer metadata.`, { cause: error });
+    }
+  }
 }
 
 if (import.meta.main) {

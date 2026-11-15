@@ -44,16 +44,18 @@ test("the root dependency command exits nonzero for a mismatch and succeeds afte
         [...(npm ? [npm] : []), "run", "check:dependencies"],
         { cwd: root, env: process.env, encoding: "utf8" },
       );
-    for (const [peer, valid] of [
-      ["1.0.4", false],
-      ["^1.2.0", true],
+    for (const [dev, peer, valid] of [
+      ["1.2.0", "1.0.4", false],
+      ["1.2.0", "^1.2.0", true],
+      ["npm:companion@1.2.0", "^2.0.0", false],
+      ["npm:companion@1.2.0", "^1.0.0", true],
     ] as const) {
       await json(root, "package.json", {
         name: "fixture",
         private: true,
         version: "1.0.0",
         scripts: { "check:dependencies": manifest.scripts["check:dependencies"] },
-        devDependencies: { companion: "1.2.0" },
+        devDependencies: { companion: dev },
         peerDependencies: { companion: peer },
       });
       const result = check();
@@ -62,7 +64,7 @@ test("the root dependency command exits nonzero for a mismatch and succeeds afte
         assert.match(result.stdout, /Dependency compatibility check passed/u);
       } else {
         assert.notEqual(result.status, 0);
-        assert.match(result.stderr, /package\.json:.*devDependencies.*companion.*peerDependencies.*align/u);
+        assert.match(result.stderr, /package\.json:.*companion.*peer.*align/u);
       }
     }
   });
@@ -175,6 +177,204 @@ test("dev ranges must stay within the supported peer range even when the install
       await json(root, "node_modules/companion/package.json", { name: "companion", version: "1.2.0" });
       assert.equal(dependencyProblems({ root }).length === 0, valid, `${dev} / ${peer}`);
     }
+  });
+});
+
+for (const field of ["dependencies", "optionalDependencies", "devDependencies"]) {
+  test(`installed peers are checked when ${field} hides the peer edge from npm`, async () => {
+    await fixture(async (root) => {
+      await json(root, "package.json", {
+        name: "fixture",
+        private: true,
+        version: "1.0.0",
+        [field]: { companion: "npm:companion@2.0.0" },
+        peerDependencies: { companion: "^1.0.0" },
+      });
+      await json(root, "node_modules/companion/package.json", { name: "companion", version: "2.0.0" });
+      assert.ok(
+        dependencyProblems({ root }).some((problem) =>
+          /package\.json:.*companion.*installed.*2\.0\.0.*peer.*\^1\.0\.0/u.test(problem),
+        ),
+      );
+    });
+  });
+}
+
+for (const source of ["alias", "renamed-alias", "tag", "remote", "git", "directory"] as const) {
+  test(`non-SemVer ${source} sources are checked against the installed peer version`, async () => {
+    await fixture(async (root) => {
+      for (const [version, valid] of [
+        ["2.0.0", false],
+        ["1.2.0", true],
+      ] as const) {
+        const tarball = "https://example.invalid/companion.tgz";
+        const git = "git+https://example.invalid/companion.git";
+        const spec =
+          source === "alias"
+            ? `npm:companion@${version}`
+            : source === "renamed-alias"
+              ? `npm:other-companion@${version}`
+              : source === "tag"
+                ? "latest"
+                : source === "remote"
+                  ? tarball
+                  : source === "git"
+                    ? `${git}#main`
+                    : "file:./fixtures/companion";
+        await json(root, "package.json", {
+          name: "fixture",
+          private: true,
+          version: "1.0.0",
+          devDependencies: { companion: spec },
+          peerDependencies: { companion: "^1.0.0" },
+        });
+        const metadata = {
+          name: source === "renamed-alias" ? "other-companion" : "companion",
+          version,
+          // Reading package metadata must not depend on a public package.json export.
+          exports: { ".": "./index.js" },
+        };
+        if (source === "directory") {
+          await json(root, "fixtures/companion/package.json", metadata);
+          await mkdir(join(root, "node_modules"), { recursive: true });
+          await rm(join(root, "node_modules/companion"), { force: true, recursive: true });
+          await symlink(join(root, "fixtures/companion"), join(root, "node_modules/companion"), "dir");
+        } else await json(root, "node_modules/companion/package.json", metadata);
+        if (source === "tag" || source === "remote" || source === "git") {
+          await json(root, "package-lock.json", {
+            name: "fixture",
+            version: "1.0.0",
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                name: "fixture",
+                version: "1.0.0",
+                devDependencies: { companion: spec },
+                peerDependencies: { companion: "^1.0.0" },
+              },
+              "node_modules/companion": { version, resolved: source === "git" ? `${git}#${"a".repeat(40)}` : tarball },
+            },
+          });
+        }
+        const problems = dependencyProblems({ root });
+        assert.equal(problems.length === 0, valid, problems.join("\n") || `${source} ${version} passed unexpectedly`);
+        if (!valid) assert.ok(problems.some((problem) => /installed.*2\.0\.0.*peer/u.test(problem)));
+      }
+    });
+  });
+}
+
+test("an absent optional dependency cannot hide a required peer", async () => {
+  await fixture(async (root) => {
+    for (const optional of [true, false]) {
+      await json(root, "package.json", {
+        name: "fixture",
+        private: true,
+        version: "1.0.0",
+        optionalDependencies: { companion: "npm:companion@1.2.0" },
+        peerDependencies: { companion: "^1.0.0" },
+        peerDependenciesMeta: { companion: { optional } },
+      });
+      const problems = dependencyProblems({ root });
+      assert.equal(problems.length === 0, optional);
+      if (!optional) assert.ok(problems.some((problem) => /companion.*required peer.*missing/u.test(problem)));
+    }
+  });
+});
+
+test("workspace peers use the nearest installed scoped package, then the hoisted copy", async () => {
+  await fixture(async (root) => {
+    const name = "@fixture/companion";
+    const workspacePath = "packages/pi-fixture/package.json";
+    await json(root, "package.json", {
+      name: "fixture",
+      private: true,
+      version: "1.0.0",
+      workspaces: ["packages/*"],
+      dependencies: { [name]: "1.2.0" },
+    });
+    await json(root, "node_modules/@fixture/companion/package.json", { name, version: "1.2.0" });
+    await mkdir(join(root, "node_modules/@narumitw"), { recursive: true });
+    await mkdir(join(root, "packages/pi-fixture"), { recursive: true });
+    await symlink(join(root, "packages/pi-fixture"), join(root, "node_modules/@narumitw/pi-fixture"), "dir");
+    await json(root, workspacePath, {
+      name: "@narumitw/pi-fixture",
+      version: "1.0.0",
+      devDependencies: { [name]: "npm:@fixture/companion@2.0.0" },
+      peerDependencies: { [name]: "^1.0.0" },
+    });
+    await json(root, "packages/pi-fixture/node_modules/@fixture/companion/package.json", { name, version: "2.0.0" });
+    const problems = dependencyProblems({ root });
+    assert.ok(
+      problems.some((problem) => /packages\/pi-fixture\/package\.json:.*installed.*2\.0\.0.*peer/u.test(problem)),
+    );
+    await rm(join(root, "packages/pi-fixture/node_modules"), { recursive: true });
+    await json(root, workspacePath, {
+      name: "@narumitw/pi-fixture",
+      version: "1.0.0",
+      devDependencies: { [name]: "npm:@fixture/companion@1.2.0" },
+      peerDependencies: { [name]: "^1.0.0" },
+    });
+    assert.deepEqual(dependencyProblems({ root }), []);
+  });
+});
+
+test("unrestricted peers accept prereleases while bounded ranges retain their prerelease rules", async () => {
+  await fixture(async (root) => {
+    const version = "1.2.0-rc.1";
+    await json(root, "node_modules/companion/package.json", { name: "companion", version });
+    for (const [peer, valid] of [
+      ["*", true],
+      ["^1.0.0", false],
+      [">=1.2.0-rc.1 <2", true],
+    ] as const) {
+      await json(root, "package.json", {
+        name: "fixture",
+        private: true,
+        version: "1.0.0",
+        devDependencies: { companion: `npm:companion@${version}` },
+        peerDependencies: { companion: peer },
+      });
+      assert.equal(dependencyProblems({ root }).length === 0, valid, peer);
+    }
+  });
+});
+
+test("invalid installed peer metadata fails instead of falling back to a hoisted copy", async () => {
+  await fixture(async (root) => {
+    await json(root, "packages/pi-fixture/package.json", {
+      name: "@narumitw/pi-fixture",
+      version: "1.0.0",
+      devDependencies: { companion: "npm:companion@*" },
+      peerDependencies: { companion: "^1.0.0" },
+    });
+    await json(root, "node_modules/companion/package.json", { name: "companion", version: "1.2.0" });
+    const file = "packages/pi-fixture/node_modules/companion/package.json";
+    await mkdir(dirname(join(root, file)), { recursive: true });
+    for (const malformed of [false, true]) {
+      if (malformed) await writeFile(join(root, file), "{invalid");
+      assert.throws(
+        () => dependencyProblems({ root }),
+        /packages[/\\\\]pi-fixture[/\\\\]node_modules[/\\\\]companion[/\\\\]package\.json: cannot read installed peer metadata/u,
+      );
+    }
+  });
+});
+
+test("peer lookup does not use a package from outside the checked install scope", async () => {
+  await fixture(async (root) => {
+    await json(root, "node_modules/companion/package.json", { name: "companion", version: "1.2.0" });
+    await json(root, "separate-scope/package.json", {
+      name: "fixture",
+      private: true,
+      version: "1.0.0",
+      peerDependencies: { companion: "^1.0.0" },
+    });
+    const problems = dependencyProblems({
+      root: join(root, "separate-scope"),
+      execute: () => ({ status: 0, stdout: "{}" }),
+    });
+    assert.ok(problems.some((problem) => /companion.*required peer.*missing/u.test(problem)));
   });
 });
 

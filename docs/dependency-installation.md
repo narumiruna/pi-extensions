@@ -34,7 +34,11 @@ For an urgent patch, prefer an eligible fixed version where possible. Otherwise 
 SemVer dev dependency range fits inside its declared peer range and that npm's actual installed tree
 has no missing or invalid required dependencies or peers. Optional peers can be absent, but installed
 peers must satisfy their ranges. Extraneous packages alone do not fail this compatibility check.
-Non-SemVer dev sources are checked at their resolved versions rather than compared as ranges.
+The check also compares each installed root/workspace peer with its declared SemVer range, even when
+npm replaces that peer edge with a same-name regular, optional, or dev dependency. Non-SemVer sources,
+such as npm aliases, Git sources, and local directories, use their installed package version rather
+than a range comparison. Peer lookup uses the owning package's local or hoisted copy, without relying
+on a public `package.json` export or packages outside the repository install scope.
 
 Update peer support and test dependencies together when changing compatibility. If the check fails,
 align the named manifest ranges, run `npm install`, and inspect the lockfile diff before retrying.
