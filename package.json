@@ -5,7 +5,6 @@
   "description": "Monorepo for @narumitw pi extension packages.",
   "type": "module",
   "workspaces": [
-    "packages/pi-tui-kit",
     "packages/*"
   ],
   "pi": {
@@ -55,7 +54,7 @@
   },
   "scripts": {
     "dev": "npm install && npm run build && PI_TIMING=1 PI_CODING_AGENT_DIR=.pi/agent pi",
-    "build": "npm --workspaces --if-present run build",
+    "build": "node ./scripts/run-builds.mjs",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "typecheck": "node ./scripts/run-typechecks.mjs",
@@ -63,6 +62,7 @@
     "check": "npm run build && node ./scripts/run-checks.mjs",
     "check:biome": "biome check . --error-on-warnings",
     "check:boundaries": "node ./scripts/check-extension-boundaries.mjs",
+    "check:dependencies": "node ./scripts/check-dependencies.mjs",
     "prepare": "node scripts/prepare.mjs",
     "benchmark:codex-compact": "node ./packages/pi-codex-compact/benchmark/run.mjs",
     "benchmark:extension-startup": "node ./scripts/benchmark-extension-startup.mjs",

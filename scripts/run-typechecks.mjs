@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runBuilds } from "./run-builds.mjs";
 import { selectStagedTypechecks, stagedFiles } from "./select-staged-typechecks.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,7 +38,8 @@ console.log(
   `Running affected workspace typechecks for ${selection.workspaceDirectories.join(", ")}: ${selection.reason}.`,
 );
 if (process.env.PI_EXTENSIONS_BUILD_READY !== "1" && selection.buildWorkspaceNames.length > 0) {
-  runWorkspaceScript("build", selection.buildWorkspaceNames, true);
+  const status = runBuilds({ root, workspaceNames: selection.buildWorkspaceNames });
+  if (status !== 0) process.exit(status);
 }
 runWorkspaceScript("typecheck", selection.workspaceNames);
 
@@ -49,9 +51,8 @@ function runFullTypechecks() {
   runNpm(["--workspaces", "run", "typecheck"]);
 }
 
-function runWorkspaceScript(script, workspaceNames, ifPresent = false) {
+function runWorkspaceScript(script, workspaceNames) {
   const workspaceArgs = workspaceNames.flatMap((workspaceName) => ["--workspace", workspaceName]);
-  if (ifPresent) workspaceArgs.push("--if-present");
   runNpm([...workspaceArgs, "run", script]);
 }
 

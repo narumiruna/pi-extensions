@@ -67,7 +67,12 @@ export function orderDependenciesFirst(workspaces, workspaceNames) {
   const ordered = [];
 
   function visit(name) {
-    if (visited.has(name) || visiting.has(name)) return;
+    if (visiting.has(name)) {
+      throw new Error(
+        `Workspace dependency cycle: ${[...visiting, name].join(" -> ")}; fix dependencies in the named package.json files.`,
+      );
+    }
+    if (visited.has(name)) return;
     visiting.add(name);
     const workspace = workspaceByName.get(name);
     if (workspace) {
