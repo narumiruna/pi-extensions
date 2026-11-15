@@ -1,5 +1,12 @@
 # @narumitw/pi-herdr
 
+## 0.5.0
+
+### Minor Changes
+
+- 97fdd84: Show sibling agents across all workspaces in the connected Herdr session, with each workspace's label and live status, name, and topology updates. Keep the widget updating during sustained events with bounded read discards and immediate catch-up.
+- 2735f56: Remove the bundled `herdr` and `hc` bootstrap skills. Install operating skills separately if needed; this package no longer provides `/skill:herdr` or `/skill:hc`. Keep lifecycle reporting, pane metadata, the agent widget, and `/herdr` unchanged.
+
 ## 0.4.1
 
 ### Patch Changes
