@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   ci:
+    name: ci
     runs-on: ubuntu-latest
 
     steps:
