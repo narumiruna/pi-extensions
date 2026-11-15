@@ -1,17 +1,23 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, type ExtensionCommandContext, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DaemonConnection, ensureDaemon, modelSignature } from "sync-daemon";
 import { afterAll, test } from "vitest";
 import { createSyncBackend } from "../src/backends/backend-factory.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { sessionDirFromContext } from "../src/snapshot/session-paths.js";
 import { regenerateSnapshotIdentity } from "../src/snapshot/snapshot.js";
 import { push } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { snapshot, v3WebDavSettings, withTempHome } from "./helpers.js";
 import { mergeOptions } from "./merge-options.js";
+import { MockResolverServer } from "./mock-resolver-server.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
 type LoadedExtensions = ReturnType<DefaultResourceLoader["getExtensions"]>;
@@ -42,20 +48,24 @@ afterAll(async () => {
   if (fixtureRoot) await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
-for (const trigger of ["command", "startup", "continuous", "retry"] as const)
+for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"] as const)
   test(`generated Jiti runtime resolves a real WebDAV conflict via ${trigger}`, async ({ signal }) => {
     // A timeout can leave an uncancellable build or reload pending; do not overlap HOME scopes.
     await scenarioReady.catch(() => {});
     signal.throwIfAborted();
     scenarioReady = withTempHome(async (agentDir) => {
       let server: MockWebDavServer | undefined;
+      let resolver: MockResolverServer | undefined;
       let buildDir: string | undefined;
       let loader: DefaultResourceLoader | undefined;
       let extension: LoadedExtensions["extensions"][number] | undefined;
       let shutdown: Promise<void> | undefined;
       let done: (() => void) | undefined;
       let replies = 0;
-      const mock = agentContext((units) =>
+      let watcher: FSWatcher | undefined;
+      const mock = agentContext(selectRemote);
+      mock.ctx.isIdle = () => trigger !== "command" && trigger !== "retry" && trigger !== "after-exit";
+      resolver = new MockResolverServer(({ units }) =>
         trigger === "retry" && ++replies === 1
           ? JSON.stringify({ version: 1, results: units.map((unit) => ({ id: unit.id, refuse: true })) })
           : selectRemote(units),
@@ -65,7 +75,7 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
         const current = extension;
         shutdown ??= (async () => {
           for (const handler of current.handlers.get("session_shutdown") ?? [])
-            await handler({ type: "session_shutdown", reason: "reload" }, mock.ctx);
+            await handler({ type: "session_shutdown", reason: trigger === "after-exit" ? "quit" : "reload" }, mock.ctx);
         })();
         return shutdown;
       };
@@ -88,12 +98,14 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
         await server.start();
         signal.throwIfAborted();
         await fs.mkdir(agentDir, { recursive: true });
+        await resolver.start();
+        await resolver.configure(agentDir, mock.ctx);
         signal.throwIfAborted();
         const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
         settings.storageConnections.dav.url = server.url;
         Object.assign(settings.syncSetups.home.sync, {
           agentMode: true,
-          ...(trigger === "continuous" ? { continuous: true } : {}),
+          ...(["continuous", "after-exit"].includes(trigger) ? { continuous: true } : {}),
         });
         await fs.writeFile(localConfigPath(), JSON.stringify(settings));
         signal.throwIfAborted();
@@ -121,6 +133,8 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
         signal.throwIfAborted();
         await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
         signal.throwIfAborted();
+        await adoptFixtureRoot(agentDir);
+        signal.throwIfAborted();
         const entry = path.join(buildDir, "dist/index.ts");
         loader = new DefaultResourceLoader({
           cwd: buildDir,
@@ -138,12 +152,15 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
         assert.ok(extension);
         assert.equal(extension.resolvedPath, entry);
         if (trigger === "command" || trigger === "retry") {
+          for (const start of extension.handlers.get("session_start") ?? [])
+            await start({ type: "session_start", reason: "startup" }, mock.ctx);
+          signal.throwIfAborted();
           const command = extension.commands.get("sync");
           assert.ok(command);
           await command.handler("sync", mock.ctx as ExtensionCommandContext);
           signal.throwIfAborted();
           if (trigger === "retry") {
-            assert.equal(mock.requests.length, 1);
+            assert.equal(resolver.requests.length, 1);
             assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
             const choices = ["Retry refused model result…", "Yes, Send one fresh request", undefined];
             mock.ctx.ui.select = async () => choices.shift();
@@ -153,6 +170,63 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
             const candidates = await fs.readdir(path.join(agentDir, "pi-sync/agent-resolver"));
             assert.ok(candidates.some((name) => name.includes(".refusal-")));
           }
+        } else if (trigger === "after-exit") {
+          for (const start of extension.handlers.get("session_start") ?? [])
+            await start({ type: "session_start", reason: "startup" }, mock.ctx);
+          const owner = await ensureDaemon(agentDir);
+          assert.ok(mock.ctx.model);
+          const client = await new DaemonConnection(
+            owner.paths,
+            owner.identity,
+            {
+              id: randomUUID(),
+              generation: randomUUID(),
+              pid: process.pid,
+              cwd: mock.ctx.cwd,
+              mode: "rpc",
+              hasUI: true,
+              idle: false,
+              ready: false,
+              sessionDir: sessionDirFromContext(mock.ctx),
+              model: {
+                provider: mock.ctx.model.provider,
+                id: mock.ctx.model.id,
+                signature: modelSignature(mock.ctx.model),
+                authSource: "models_json_key",
+              },
+            },
+            {
+              callback: async (callback) => {
+                if (callback.kind !== "confirm") throw new Error("Unexpected unattended approval.");
+                return true;
+              },
+            },
+          ).attach();
+          try {
+            const policy = (await client.run("daemon.policy", undefined)) as { fingerprint: string };
+            await client.run("daemon.authorize", { ...policy, afterExit: true });
+          } finally {
+            await client.dispose();
+          }
+          assert.equal(resolver.requests.length, 0, "Busy clients cannot authorize a background request.");
+          const applied = new Promise<void>((resolve, reject) => {
+            done = resolve;
+            watcher = watch(agentDir, (_event, name) => {
+              if (name === "AGENTS.md")
+                void fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8").then((content) => {
+                  if (content === "remote\n") resolve();
+                }, reject);
+            });
+            watcher.on("error", reject);
+          });
+          await stop();
+          assert.equal(
+            JSON.parse(await fs.readFile(path.join(agentDir, "pi-sync/daemon.json"), "utf8")).setups.home.afterExit,
+            true,
+            "Closing clients must not revoke matching reviewed unattended bindings.",
+          );
+          await applied;
+          signal.throwIfAborted();
         } else {
           const complete = new Promise<void>((resolve) => {
             done = resolve;
@@ -172,7 +246,8 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
         }
         await stop();
         signal.throwIfAborted();
-        assert.equal(mock.requests.length, trigger === "retry" ? 2 : 1, JSON.stringify(mock.notifications));
+        assert.equal(resolver.requests.length, trigger === "retry" ? 2 : 1, JSON.stringify(mock.notifications));
+        assert.equal(mock.requests.length, 0, "The parent transport must not be captured by the daemon.");
         assert.equal(
           await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"),
           "remote\n",
@@ -182,6 +257,7 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
         assert.equal(mock.statuses.get("sync"), undefined);
       } finally {
         signal.removeEventListener("abort", cancel);
+        watcher?.close();
         try {
           await stop();
         } finally {
@@ -189,6 +265,7 @@ for (const trigger of ["command", "startup", "continuous", "retry"] as const)
             loader?.getExtensions().runtime.invalidate("agent Jiti test complete");
           } finally {
             try {
+              await resolver?.close();
               await server?.close();
             } finally {
               if (buildDir) await fs.rm(buildDir, { recursive: true, force: true });

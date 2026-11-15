@@ -15,7 +15,7 @@ This skill provides guidance only, even when the request asks you to apply a cha
 Read the relevant headings in the [settings reference](references/configuration.md), not the user's private settings file.
 Use **Settings ownership and required fields**, **Complete version 3 example**, and **Required backend shapes** for schema, backend, and destination questions.
 Use **Included content** and **Excluded paths** for path selection, exclusions, schema compatibility, and session privacy.
-Use **Required backend shapes**, **Automatic startup transfer**, **Autonomous sync**, and **Continuous sync** to distinguish automatic controls.
+Use **Required backend shapes**, **Automatic startup transfer**, **Autonomous sync**, **Continuous sync**, and **Daemon lifetime and unattended permission** to distinguish automatic controls and separate service lifetime from transfer/model consent.
 Use **Settings field merge and machine-local fields**, **Content merge and partial progress**, and **Excluded paths** for the explicit version boundaries.
 Use **Diagnostics** and **Unsupported old settings and recovery** for diagnostic side effects and recovery boundaries.
 If the reference does not establish an answer, state the missing evidence instead of inventing a field, default, migration, or compatibility guarantee.

@@ -17,7 +17,7 @@ for (const replacement of ["inode", "token"] as const)
       const binding = "e".repeat(64);
       await build({
         stdin: {
-          contents: `import {acquireContinuousLease} from ${JSON.stringify(path.resolve("packages/pi-sync/src/sync/continuous-lease.ts"))}; const lease=await acquireContinuousLease(${JSON.stringify(binding)}); if(!lease)throw Error("no lease"); process.on("message",()=>process.exit(0)); process.send({ready:true});`,
+          contents: `import ${JSON.stringify(path.resolve("packages/pi-sync/test/engine-process-host.ts"))}; import {acquireContinuousLease} from ${JSON.stringify(path.resolve("packages/pi-sync/src/sync/continuous-lease.ts"))}; const lease=await acquireContinuousLease(${JSON.stringify(binding)}); if(!lease)throw Error("no lease"); process.on("message",()=>process.exit(0)); process.send({ready:true});`,
           resolveDir: process.cwd(),
         },
         outfile: output,

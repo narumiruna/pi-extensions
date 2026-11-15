@@ -248,7 +248,11 @@ test("all settings documents expose current headings and invisible legacy fragme
       assert.ok(fragmentIds(document).has(legacyFragment), `${label}: ${legacyFragment}`);
     }
     const visibleText = document.replace(/<a\s+id="[^"]+"\s*><\/a>/gu, "");
-    assert.doesNotMatch(visibleText, /experimental|agent[ -]mode/iu, label);
+    assert.doesNotMatch(
+      visibleText,
+      /experimental\s+(?:agent[ -]mode|autonomous sync|continuous sync)|\bagent[ -]mode\b/iu,
+      label,
+    );
     assert.doesNotMatch(document, /\]\([^)\n]*#experimental-(?:agent-mode|continuous-sync)\)/u, label);
   }
   assert.match(skillText, /\*\*Autonomous sync\*\*/u);

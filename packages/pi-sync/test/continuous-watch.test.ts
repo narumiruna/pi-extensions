@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { watchContinuous } from "sync-daemon/engine/sync/continuous-watch";
 import { test, vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
-import { watchContinuous } from "../src/sync/continuous-watch.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 const native = vi.hoisted(() => ({

@@ -14,7 +14,7 @@ import { continuousLoaders } from "./continuous-test-helpers.js";
 import { RecoveryClock as Clock, recoveryFixture, waitRecoveryStatus as waitStatus } from "./recovery-test-helpers.js";
 
 // Tests drive periodic polls, not host filesystem watcher timing.
-vi.mock("../src/sync/continuous-watch.js", () => ({ watchContinuous: async () => () => {} }));
+vi.mock("sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
 
 const fixture = recoveryFixture();
 
@@ -40,7 +40,7 @@ for (const phase of ["review", "journal", "baseline"] as const) {
       const service = createContinuousSync(
         continuousLoaders(f.backend, {
           loadSyncOperations: async () => ({
-            ...(await import("../src/sync/sync-operations.js")),
+            ...(await import("sync-daemon/engine/sync/sync-operations")),
             syncBoth: async (ctx, options) => {
               cycles++;
               const timings = createStartupTimings();
@@ -129,7 +129,7 @@ test("no-transfer acceptance rejects a late remote revision after checking local
   const service = createContinuousSync(
     continuousLoaders(f.backend, {
       loadSyncOperations: async () => ({
-        ...(await import("../src/sync/sync-operations.js")),
+        ...(await import("sync-daemon/engine/sync/sync-operations")),
         syncBoth: (ctx, options) => {
           let reads = 0;
           const timings = createStartupTimings();
@@ -176,7 +176,7 @@ test("apply-only remote race safely retires journal and the next poll applies on
   const service = createContinuousSync(
     continuousLoaders(f.backend, {
       loadSyncOperations: async () => ({
-        ...(await import("../src/sync/sync-operations.js")),
+        ...(await import("sync-daemon/engine/sync/sync-operations")),
         syncBoth: (ctx, options) => {
           const timings = createStartupTimings();
           const measure = timings.measure;

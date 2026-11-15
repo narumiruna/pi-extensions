@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { saveOnSwitch, useSyncSetup } from "../src/sync/setup-switch.js";
 import { showSyncSetups } from "../src/ui/sync-setups-ui.js";
+import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 for (const url of ["https://cloud.example.com/dav/owner-a/", "https://cloud.example.com/dav/owner-b/"]) {
@@ -81,7 +83,7 @@ for (const originalPolicy of ["switch-only", "ask-before-pull", "pull-after-swit
       const { default: sync } = await import("../src/sync.js");
       const mock = createMockPi();
       sync(mock.pi);
-      await mock.commands.get("sync")?.handler("config", ctx);
+      await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
       assert.ok(notifications.some(({ message }) => message.includes("sync setup: work")));
       const selections: string[][] = [];
       const menuContext = createMockContext({

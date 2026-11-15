@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { HorizontalRule } from "@narumitw/pi-tui-kit";
+import type { StartupObservation, SyncInspection } from "sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import type { StartupObservation, SyncInspection } from "../src/sync/sync-inspection.js";
 import {
   classifyObservation,
   createSyncAttentionController,

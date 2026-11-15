@@ -1,11 +1,9 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
 import { loadConfig, sessionTokenWarnings, syncSessionsWarnings } from "../settings/config.js";
 import { activeLocalConfigPath, createLocalConfigDocument, localConfigPath } from "../settings/config-file.js";
 import { localConfigTemplate, readLocalConfigObject } from "../settings/settings-store.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import { unlock, withLock } from "../state/lock.js";
-import { migrateLegacyStateDirectory, stateDirectoryMigrationNotice } from "../state/state-directory.js";
-import { withAgentSyncLock } from "../sync/agent-sync.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
@@ -43,14 +41,14 @@ export async function executeRecoveryCommand(
     const operations = await loaders.operations();
     throwIfAborted(options.signal);
     if (subcommand === "push") {
-      const outcome = await withLock("push", () => operations.push(ctx, options));
+      const outcome = await operations.push(ctx, options);
       return { kind: "completed", ...(outcome ? { outcome } : {}) };
     }
     if (subcommand === "pull") {
-      const outcome = await withLock("pull", () => operations.pull(ctx, options));
+      const outcome = await operations.pull(ctx, options);
       return { kind: "completed", ...(outcome ? { outcome } : {}) };
     }
-    await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
+    await operations.syncBoth(ctx, options);
     return { kind: "completed" };
   } catch (error) {
     if (signal?.aborted) return { kind: "failed" };
@@ -92,6 +90,28 @@ export async function executeCommand(
     }
 
     switch (subcommand) {
+      case "daemon": {
+        const client = piDaemonClient(ctx);
+        const action = options.args[0] ?? "status";
+        if (action === "handover") {
+          await client.run("daemon.handover", {}, options.signal);
+        } else if (action === "allow-after-exit" || action === "revoke-after-exit") {
+          await client.run("daemon.handover", {}, options.signal);
+          const policy = (await client.run("daemon.policy", {}, options.signal)) as { fingerprint: string };
+          await client.run(
+            "daemon.authorize",
+            { fingerprint: policy.fingerprint, afterExit: action === "allow-after-exit" },
+            options.signal,
+          );
+        } else if (action === "status") {
+          const connection = await client.connect();
+          ctx.ui.notify(
+            `sync-daemon: connected\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\nUse sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.`,
+            "info",
+          );
+        } else throw new Error("Use /sync daemon status|handover|allow-after-exit|revoke-after-exit.");
+        return { kind: "completed" };
+      }
       case "help":
         ctx.ui.notify(usage(), "info");
         return { kind: "completed" };
@@ -104,7 +124,7 @@ export async function executeCommand(
           async (selectedSetup) => {
             const operations = await loaders.operations();
             throwIfAborted(options.signal);
-            return withLock("pull", () => operations.pull(ctx, { ...options, setup: selectedSetup }));
+            return operations.pull(ctx, { ...options, setup: selectedSetup });
           },
           undefined,
           options.signal,
@@ -138,7 +158,7 @@ export async function executeCommand(
       case "conflicts": {
         const { showConflicts } = await import("../sync/conflict-review.js");
         throwIfAborted(options.signal);
-        await withLock("sync", () => showConflicts(ctx, options));
+        await showConflicts(ctx, options);
         return { kind: "completed" };
       }
       case "doctor": {
@@ -150,19 +170,19 @@ export async function executeCommand(
       case "push": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        const outcome = await withLock("push", () => operations.push(ctx, options));
+        const outcome = await operations.push(ctx, options);
         return { kind: "completed", ...(outcome ? { outcome } : {}) };
       }
       case "pull": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        const outcome = await withLock("pull", () => operations.pull(ctx, options));
+        const outcome = await operations.pull(ctx, options);
         return { kind: "completed", ...(outcome ? { outcome } : {}) };
       }
       case "sync": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        const outcome = await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
+        const outcome = await operations.syncBoth(ctx, options);
         return { kind: "completed", ...(retryRefusal && outcome ? { outcome } : {}) };
       }
       case "history": {
@@ -174,14 +194,14 @@ export async function executeCommand(
       case "rollback": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        await withLock("rollback", () => operations.rollback(ctx, options));
+        await operations.rollback(ctx, options);
         return { kind: "completed" };
       }
       case "migrate-state":
         await migrateStateDirectory(ctx, options);
         return { kind: "completed" };
       case "unlock":
-        await unlock(ctx, options);
+        await remoteOperation(ctx, "unlock", options);
         return { kind: "completed" };
       default:
         ctx.ui.notify(`Unknown /sync command: ${subcommand}\n\n${usage()}`, "warning");
@@ -203,30 +223,14 @@ export async function executeCommand(
 }
 
 async function migrateStateDirectory(ctx: ExtensionCommandContext, options: CommandOptions) {
-  const notice = stateDirectoryMigrationNotice();
-  if (!notice) {
-    ctx.ui.notify("pi-sync already uses the canonical pi-sync/ state directory.", "info");
-    return;
-  }
-  if (
-    !options.yes &&
-    !(await ctx.ui.confirm(
-      "Migrate pi-sync state directory",
-      "Confirm that every other Pi process is closed. pi-sync will atomically rename .pisync/ to pi-sync/ without merging or deleting either root.",
-      { signal: options.signal },
-    ))
-  ) {
-    ctx.ui.notify("pi-sync state migration cancelled.", "info");
-    return;
-  }
+  const result = (await remoteOperation(ctx, "migrate-state", options)) as
+    | { status: string; message?: string }
+    | undefined;
   throwIfAborted(options.signal);
-  const result = await migrateLegacyStateDirectory();
-  throwIfAborted(options.signal);
-  if (result.status === "ready") {
-    ctx.ui.notify("pi-sync already uses the canonical pi-sync/ state directory.", "info");
-    return;
-  }
-  ctx.ui.notify(result.message, result.status === "migrated" ? "info" : "warning");
+  ctx.ui.notify(
+    result?.message ?? "pi-sync already uses the canonical pi-sync/ state directory.",
+    result?.status === "deferred" ? "warning" : "info",
+  );
 }
 
 async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {

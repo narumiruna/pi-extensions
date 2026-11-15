@@ -1,113 +1,169 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
+import { pushSessionsOnShutdown } from "sync-daemon/engine/sync/session-push";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import sync from "../src/sync.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3S3Settings, v3WebDavSettings, withTempHome } from "./helpers.js";
 import { S3ProbeHarness } from "./s3-probe-harness.js";
-import { observeCheckCompletion } from "./startup-check-helpers.js";
+import { deferred, observeCheckCompletion } from "./startup-check-helpers.js";
 
-test("session replacement aborts an in-flight backend operation owned by the old session", async () => {
-  await withPendingStatusOperation("session_start");
-});
-
-test("session shutdown aborts an in-flight backend operation", async () => {
-  await withPendingStatusOperation("session_shutdown");
-});
-
-test("WebDAV lifecycle ignores deprecated S3 auto-sync environment overrides", async () => {
+async function pendingStatus(event: "session_start" | "session_shutdown", webdav = false) {
   await withTempHome(async (agentDir) => {
+    const entered = deferred();
+    const disconnected = deferred();
+    let aborted = false;
+    const server = createServer((_request, response) => {
+      entered.resolve();
+      response.on("close", () => {
+        if (!response.writableEnded) {
+          aborted = true;
+          disconnected.resolve();
+        }
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
     mkdirSync(agentDir, { recursive: true });
-    writeFileSync(localConfigPath(), JSON.stringify(v3WebDavSettings({ automatic: true })));
-    const originalFetch = globalThis.fetch;
-    let requests = 0;
-    globalThis.fetch = (async () => {
-      requests += 1;
-      return new Response("denied", { status: 401 });
-    }) as typeof globalThis.fetch;
-    process.env.PI_SYNC_AUTO_SYNC = "false";
+    const settings = webdav ? v3WebDavSettings() : v3S3Settings();
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    if ("dav" in settings.storageConnections) settings.storageConnections.dav.url = `${endpoint}/dav`;
+    else settings.storageConnections.r2.endpoint = endpoint;
+    writeFileSync(localConfigPath(), JSON.stringify(settings));
+    const mock = createMockPi();
+    sync(mock.pi);
+    const context = createMockContext({ mode: "rpc" });
+    const replacement = createMockContext({ mode: "rpc" });
+    let operation: Promise<unknown> | undefined;
     try {
-      const mock = createMockPi();
-      sync(mock.pi);
-      const { ctx } = createMockContext({ hasUI: true });
-      const completion = observeCheckCompletion(ctx);
-      await mock.events.get("session_start")?.[0]?.({}, ctx);
-      await completion.completed;
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
-      assert.ok(requests > 0);
+      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      operation = Promise.resolve(mock.commands.get("sync")?.handler("status", context.ctx));
+      void operation.catch(() => {});
+      await entered.promise;
+      await mock.events.get(event)?.[0]?.(
+        { reason: event === "session_start" ? "new" : "reload" },
+        event === "session_start" ? replacement.ctx : context.ctx,
+      );
+      await operation;
+      await disconnected.promise;
+      assert.equal(aborted, true);
     } finally {
-      delete process.env.PI_SYNC_AUTO_SYNC;
-      globalThis.fetch = originalFetch;
+      server.closeAllConnections();
+      await mock.events.get("session_shutdown")?.[0]?.(
+        { reason: "reload" },
+        event === "session_start" ? replacement.ctx : context.ctx,
+      );
+      await operation?.catch(() => {});
+      server.close();
+      await once(server, "close");
     }
   });
-});
+}
+test("session replacement aborts an actual in-flight S3 backend operation", () => pendingStatus("session_start"));
+test("session shutdown aborts an actual in-flight S3 backend operation", () => pendingStatus("session_shutdown"));
+test("session replacement aborts an actual in-flight WebDAV backend operation", () =>
+  pendingStatus("session_start", true));
 
-test("session replacement aborts an in-flight WebDAV backend operation", async () => {
-  await withPendingStatusOperation("session_start", v3WebDavSettings());
-});
-
-test("session replacement cancels a still-preparing shutdown publication", async () => {
-  await withTempHome(async (agentDir) => {
-    mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
-    writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
-    writeFileSync(path.join(agentDir, "sessions", "--project--", "session.jsonl"), "{}\n");
-    const enabled = v3S3Settings({ automatic: true, include: ["settings.json", "sessions"] });
-    writeFileSync(localConfigPath(), JSON.stringify(enabled));
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
+test("WebDAV lifecycle ignores deprecated S3 auto-sync environment overrides", () =>
+  withTempHome(async (agentDir) => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.writeHead(401);
+      response.end("denied");
     });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    mkdirSync(agentDir, { recursive: true });
+    const settings = v3WebDavSettings({ automatic: true });
+    settings.storageConnections.dav.url = `http://127.0.0.1:${address.port}/dav`;
+    writeFileSync(localConfigPath(), JSON.stringify(settings));
+    const previous = process.env.PI_SYNC_AUTO_SYNC;
+    process.env.PI_SYNC_AUTO_SYNC = "false";
+    const mock = createMockPi();
+    const context = createMockContext({ mode: "rpc" });
+    try {
+      await adoptFixtureRoot(agentDir);
+      sync(mock.pi);
+      const completion = observeCheckCompletion(context.ctx);
+      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      await completion.completed;
+      assert.ok(requests > 0);
+    } finally {
+      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+      if (previous === undefined) delete process.env.PI_SYNC_AUTO_SYNC;
+      else process.env.PI_SYNC_AUTO_SYNC = previous;
+      server.closeAllConnections();
+      server.close();
+      await once(server, "close");
+    }
+  }));
+
+const shutdownOptions = { args: [], yes: true, force: false, stale: false, silent: true, reload: false, auto: true };
+function prepareSessions(agentDir: string) {
+  mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
+  writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
+  writeFileSync(path.join(agentDir, "sessions", "--project--", "session.jsonl"), "{}\n");
+  writeFileSync(
+    localConfigPath(),
+    JSON.stringify(v3S3Settings({ automatic: true, include: ["settings.json", "sessions"] })),
+  );
+}
+test("replacement cancellation drains an engine-owned still-preparing shutdown publication", () =>
+  withTempHome(async (agentDir) => {
+    prepareSessions(agentDir);
+    const entered = deferred();
     let aborted = false;
-    const originalFetch = globalThis.fetch;
+    const owner = new AbortController();
+    const original = globalThis.fetch;
     globalThis.fetch = ((_input, init) => {
-      markStarted?.();
-      return new Promise<Response>((_resolve, reject) => {
+      entered.resolve();
+      return new Promise<Response>((_resolve, reject) =>
         init?.signal?.addEventListener(
           "abort",
           () => {
             aborted = true;
-            reject(new DOMException("Aborted", "AbortError"));
+            reject(init.signal?.reason);
           },
           { once: true },
-        );
-      });
-    }) as typeof globalThis.fetch;
-    try {
-      const mock = createMockPi();
-      sync(mock.pi);
-      const { ctx: shutdownCtx } = createMockContext({ hasUI: true });
-      const shutdown = mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, shutdownCtx);
-      await started;
-      writeFileSync(
-        localConfigPath(),
-        JSON.stringify(v3S3Settings({ automatic: false, include: ["settings.json", "sessions"] })),
+        ),
       );
-      const { ctx: replacementCtx } = createMockContext({ hasUI: true });
-      await mock.events.get("session_start")?.[0]?.({}, replacementCtx);
-      await shutdown;
-
+    }) as typeof fetch;
+    const context = createMockContext({ mode: "rpc" });
+    const shutdown = pushSessionsOnShutdown(context.ctx, {
+      ...shutdownOptions,
+      signal: AbortSignal.any([owner.signal, AbortSignal.timeout(30_000)]),
+    });
+    void shutdown.catch(() => {});
+    try {
+      await entered.promise;
+      writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings({ include: ["settings.json", "sessions"] })));
+      owner.abort(new DOMException("Session replaced", "AbortError"));
+      await assert.rejects(shutdown);
       assert.equal(aborted, true);
     } finally {
-      globalThis.fetch = originalFetch;
+      owner.abort();
+      await shutdown.catch(() => {});
+      globalThis.fetch = original;
     }
-  });
-});
+  }));
 
-test("session shutdown owns an opt-in session publication with a bounded signal", async () => {
-  await withTempHome(async (agentDir) => {
-    mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
-    writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
-    writeFileSync(path.join(agentDir, "sessions", "--project--", "session.jsonl"), "{}\n");
-    writeFileSync(
-      localConfigPath(),
-      JSON.stringify(v3S3Settings({ automatic: true, include: ["settings.json", "sessions"] })),
-    );
-    let activePointer: Record<string, unknown> | undefined;
+test("engine shutdown owns an opt-in session publication with a bounded signal", () =>
+  withTempHome(async (agentDir) => {
+    prepareSessions(agentDir);
+    let active: Record<string, unknown> | undefined;
     let snapshotSignal: AbortSignal | null | undefined;
     let latestPuts = 0;
-    const originalFetch = globalThis.fetch;
+    const original = globalThis.fetch;
     const probes = new S3ProbeHarness();
     globalThis.fetch = (async (input, init) => {
       const probe = probes.handle(input, init);
@@ -120,85 +176,27 @@ test("session shutdown owns an opt-in session publication with a bounded signal"
       }
       if (url.pathname.endsWith("/latest.json")) {
         if (method === "PUT") {
-          latestPuts += 1;
-          activePointer = parseJsonBody(init?.body);
+          latestPuts++;
+          active = parseJsonBody(init?.body);
           return new Response(null, { status: 200 });
         }
-        return activePointer ? Response.json(activePointer) : new Response(null, { status: 404 });
+        return active ? Response.json(active) : new Response(null, { status: 404 });
       }
-      if (url.pathname.endsWith("/history.json")) {
-        return method === "PUT" ? new Response(null, { status: 200 }) : new Response(null, { status: 404 });
-      }
+      if (url.pathname.endsWith("/history.json")) return new Response(null, { status: method === "PUT" ? 200 : 404 });
       throw new Error(`Unexpected request: ${method} ${url.pathname}`);
-    }) as typeof globalThis.fetch;
+    }) as typeof fetch;
     try {
-      const mock = createMockPi();
-      sync(mock.pi);
-      const { ctx } = createMockContext({ hasUI: true });
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, ctx);
-
+      const context = createMockContext({ mode: "rpc" });
+      await pushSessionsOnShutdown(context.ctx, { ...shutdownOptions, signal: AbortSignal.timeout(30_000) });
       assert.equal(latestPuts, 1);
       assert.ok(snapshotSignal);
       assert.equal(snapshotSignal.aborted, false);
     } finally {
-      globalThis.fetch = originalFetch;
+      globalThis.fetch = original;
     }
-  });
-});
-
-async function withPendingStatusOperation(
-  event: "session_start" | "session_shutdown",
-  settings: Record<string, unknown> = v3S3Settings(),
-) {
-  await withTempHome(async (agentDir) => {
-    mkdirSync(agentDir, { recursive: true });
-    writeFileSync(localConfigPath(), JSON.stringify(settings));
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    let aborted = false;
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = ((_input, init) => {
-      markStarted?.();
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => {
-            aborted = true;
-            reject(new DOMException("Aborted", "AbortError"));
-          },
-          { once: true },
-        );
-      });
-    }) as typeof globalThis.fetch;
-    try {
-      const mock = createMockPi();
-      sync(mock.pi);
-      const { ctx } = createMockContext({ hasUI: true });
-      const operation = mock.commands.get("sync")?.handler("status", ctx);
-      await started;
-
-      const { ctx: lifecycleCtx } = createMockContext({ hasUI: true });
-      if (event === "session_start") {
-        await mock.events.get(event)?.[0]?.({}, lifecycleCtx);
-      } else {
-        await mock.events.get(event)?.[0]?.({ reason: "reload" }, lifecycleCtx);
-      }
-      await operation;
-
-      assert.equal(aborted, true);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-}
-
+  }));
 function parseJsonBody(body: BodyInit | null | undefined) {
-  if (!body) throw new Error("Expected request body");
   if (typeof body === "string") return JSON.parse(body) as Record<string, unknown>;
-  if (body instanceof Uint8Array) {
-    return JSON.parse(Buffer.from(body).toString("utf8")) as Record<string, unknown>;
-  }
-  throw new Error("Unexpected request body");
+  if (body instanceof Uint8Array) return JSON.parse(Buffer.from(body).toString("utf8")) as Record<string, unknown>;
+  throw new Error("Expected request body");
 }

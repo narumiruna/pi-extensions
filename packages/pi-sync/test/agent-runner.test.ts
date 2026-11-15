@@ -34,7 +34,7 @@ test("SDK runner has no discovered resources/tools, one request and no disk sess
       validations++;
     });
     assert.equal(JSON.parse(output).results[0].content, "right");
-    assert.equal(validations, 2);
+    assert.equal(validations, 3);
     assert.equal(mock.requests.length, 1);
     assert.deepEqual(mock.requests[0]?.tools ?? [], []);
     assert.equal(mock.ctx.model, model);

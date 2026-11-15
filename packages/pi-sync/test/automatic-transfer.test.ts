@@ -7,28 +7,34 @@ import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { updateSyncSetup } from "../src/settings/settings-management.js";
 import { readLocalConfigObject } from "../src/settings/settings-store.js";
-import sync from "../src/sync-extension.js";
+
+let sync: typeof import("../src/sync-extension.js")["default"];
+
+import { withPiDaemonClient } from "../src/daemon/pi-client.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { contextUi, deferred, inspectionFixture, observeCheckCompletion } from "./startup-check-helpers.js";
 
-async function configure(agentDir: string) {
+async function configure(agentDir: string, daemon = false) {
   await fs.mkdir(agentDir, { recursive: true });
   const settings = v3S3Settings({ automatic: false });
   Object.assign(settings.syncSetups.home.sync, { automaticTransfer: true, futurePolicy: { keep: true } });
   await fs.writeFile(localConfigPath(), JSON.stringify(settings));
   await fs.writeFile(path.join(agentDir, "settings.json"), "{}\n");
+  sync = (await import("../src/sync-extension.js")).default;
+  if (daemon) await adoptFixtureRoot(agentDir);
 }
 
 for (const mode of ["tui", "rpc", "print", "json"] as const)
   test(`automatic-transfer ${mode} is explicit and never opens a modal`, async () =>
     withTempHome(async (agentDir) => {
-      await configure(agentDir);
+      await configure(agentDir, true);
       const mock = createMockPi();
       let transfers = 0;
       sync(mock.pi, {
         loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
         loadSyncOperations: async () => ({
-          ...(await import("../src/sync/sync-operations.js")),
+          ...(await import("sync-daemon/engine/sync/sync-operations")),
           syncBoth: async (_ctx, options) => {
             assert.equal(options.auto, true);
             assert.equal(options.yes, true);
@@ -54,7 +60,7 @@ for (const mode of ["tui", "rpc", "print", "json"] as const)
 
 test("busy startup queues one attempt until agent_settled, not agent_end", async () =>
   withTempHome(async (agentDir) => {
-    await configure(agentDir);
+    await configure(agentDir, true);
     const mock = createMockPi();
     let idle = false;
     let inspections = 0;
@@ -67,7 +73,7 @@ test("busy startup queues one attempt until agent_settled, not agent_end", async
         },
       }),
       loadSyncOperations: async () => ({
-        ...(await import("../src/sync/sync-operations.js")),
+        ...(await import("sync-daemon/engine/sync/sync-operations")),
         syncBoth: async () => {
           transfers++;
           return "applied";
@@ -91,7 +97,7 @@ test("busy startup queues one attempt until agent_settled, not agent_end", async
 for (const event of ["foreground", "agent_start", "replacement", "shutdown"] as const)
   test(`${event} cancels and drains automatic work before continuing`, async () =>
     withTempHome(async (agentDir) => {
-      await configure(agentDir);
+      await configure(agentDir, true);
       const mock = createMockPi();
       const entered = deferred();
       const aborted = deferred();
@@ -99,7 +105,7 @@ for (const event of ["foreground", "agent_start", "replacement", "shutdown"] as 
       sync(mock.pi, {
         loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
         loadSyncOperations: async () => ({
-          ...(await import("../src/sync/sync-operations.js")),
+          ...(await import("sync-daemon/engine/sync/sync-operations")),
           syncBoth: async (_ctx, options) => {
             entered.resolve();
             await new Promise<void>((resolve) =>
@@ -133,7 +139,9 @@ for (const event of ["foreground", "agent_start", "replacement", "shutdown"] as 
       await aborted.promise;
       assert.equal(completed, false);
       if (event === "replacement")
-        await updateSyncSetup("home", (setup) => ({ ...setup, sync: { ...setup.sync, automaticTransfer: false } }));
+        await withPiDaemonClient(context.ctx, () =>
+          updateSyncSetup("home", (setup) => ({ ...setup, sync: { ...setup.sync, automaticTransfer: false } })),
+        );
       cleanup.resolve();
       await drain;
       assert.equal(context.statuses.get("sync"), undefined, "cancellation clears progress before shutdown");
@@ -156,7 +164,7 @@ for (const mode of ["tui", "rpc"] as const)
           createSyncLoaders({
             loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
             loadSyncOperations: async () => ({
-              ...(await import("../src/sync/sync-operations.js")),
+              ...(await import("sync-daemon/engine/sync/sync-operations")),
               syncBoth: async (_ctx, options) => {
                 entered.resolve();
                 await new Promise<void>((resolve) =>
@@ -232,7 +240,7 @@ for (const mode of ["tui", "rpc"] as const)
                   throw new Error("settings changed during loading");
                 }
                 return {
-                  ...(await import("../src/sync/sync-operations.js")),
+                  ...(await import("sync-daemon/engine/sync/sync-operations")),
                   syncBoth: async () => {
                     await invalidate();
                     if (phase === "failure") throw new Error("settings changed before commit");
@@ -284,7 +292,7 @@ for (const cancellation of ["stop", "replacement"] as const)
         createSyncLoaders({
           loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
           loadSyncOperations: async () => ({
-            ...(await import("../src/sync/sync-operations.js")),
+            ...(await import("sync-daemon/engine/sync/sync-operations")),
             syncBoth: async () => {
               finalizing = true;
               return "cancelled" as const;
@@ -335,7 +343,7 @@ for (const committed of [false, true])
         createSyncLoaders({
           loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
           loadSyncOperations: async () => ({
-            ...(await import("../src/sync/sync-operations.js")),
+            ...(await import("sync-daemon/engine/sync/sync-operations")),
             syncBoth: async (_ctx, options) => {
               if (committed) options.onCommit?.();
               throw new Error("injected transfer failure");
@@ -356,7 +364,7 @@ for (const committed of [false, true])
 
 test("turning off a queued policy before idle performs no transfer", async () =>
   withTempHome(async (agentDir) => {
-    await configure(agentDir);
+    await configure(agentDir, true);
     const mock = createMockPi();
     let idle = false;
     let transfers = 0;
@@ -369,7 +377,9 @@ test("turning off a queued policy before idle performs no transfer", async () =>
     });
     const context = createMockContext({ mode: "rpc", isIdle: () => idle });
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-    await updateSyncSetup("home", (setup) => ({ ...setup, sync: { ...setup.sync, automaticTransfer: false } }));
+    await withPiDaemonClient(context.ctx, () =>
+      updateSyncSetup("home", (setup) => ({ ...setup, sync: { ...setup.sync, automaticTransfer: false } })),
+    );
     idle = true;
     const done = observeCheckCompletion(context.ctx);
     await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
@@ -383,7 +393,7 @@ for (const mode of ["tui", "rpc"] as const)
     for (const change of ["none", "local", "remote"] as const)
       test(`${mode} legacy ${change} observation with transfer=${automaticTransfer} explains its review barrier`, async () =>
         withTempHome(async (agentDir) => {
-          await configure(agentDir);
+          await configure(agentDir, true);
           const settings = JSON.parse(await fs.readFile(localConfigPath(), "utf8"));
           settings.syncSetups.home.sync.automatic = true;
           settings.syncSetups.home.sync.automaticTransfer = automaticTransfer;
@@ -424,7 +434,7 @@ for (const mode of ["tui", "rpc"] as const)
 for (const barrier of ["firstSync", "missingRemote", "selection"] as const)
   test(`${barrier} remains a startup review barrier`, async () =>
     withTempHome(async (agentDir) => {
-      await configure(agentDir);
+      await configure(agentDir, true);
       const mock = createMockPi();
       let transfers = 0;
       sync(mock.pi, {

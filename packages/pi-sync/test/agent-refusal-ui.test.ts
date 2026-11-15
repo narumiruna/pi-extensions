@@ -8,12 +8,16 @@ import { afterAll, beforeAll, describe, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { completeSyncArguments, parseOptions, usage } from "../src/commands/command.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { withStateDirectoryAccess } from "../src/state/state-directory.js";
+import { withAgentSyncLock } from "../src/sync/agent-sync.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
 import type { RunRoute } from "../src/ui/cancellable-operation.js";
 import { describeManagerState } from "../src/ui/manager-state.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { refusalFixture } from "./agent-refusal-test-helpers.js";
 import { selectRemote } from "./agent-test-helpers.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
+import { withEngineFixtureHost } from "./engine-host.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
 
@@ -45,6 +49,19 @@ function refusalTui(remapped = false, width = 120, rows = 80) {
 }
 
 type RefusalFixture = Awaited<ReturnType<typeof refusalFixture>>;
+
+async function startRegistered(
+  parent: ReturnType<typeof createMockPi>,
+  ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
+) {
+  const idle = ctx.isIdle;
+  ctx.isIdle = () => false;
+  try {
+    for (const handler of parent.events.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+  } finally {
+    ctx.isIdle = idle;
+  }
+}
 
 function refusalTest(name: string, run: (fixture: RefusalFixture, agentDir: string) => Promise<void>) {
   describe(name, () => {
@@ -426,78 +443,88 @@ for (const end of ["Ctrl+C", "dispose", "session replacement"] as const) {
     }));
 }
 
-refusalTest("registered manager retries only after review and preserves the parent prefix and tools", async (f) => {
-  const tools = [
-    { name: "read", description: "Read a file", parameters: { type: "object", properties: {} } },
-    { name: "bash", description: "Execute a command", parameters: { type: "object", properties: {} } },
-  ];
-  const parentMessages = [
-    { role: "user", content: "Keep this parent conversation private", timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: "Parent response" }], timestamp: 2 },
-  ];
-  const branch = parentMessages.map((message, index) => ({ type: "message", id: String(index), message }));
-  const systemPrompt = "Stable parent system instructions";
-  Object.assign(f.mock.ctx, { getSystemPrompt: () => systemPrompt });
-  f.mock.ctx.sessionManager = {
-    ...f.mock.ctx.sessionManager,
-    getBranch: () => branch as never,
-    getEntries: () => branch as never,
-  };
-  const parent = createMockPi({ activeTools: ["read", "bash"], allTools: tools });
-  const normalizedParent = () =>
-    JSON.stringify({
-      systemPrompt: f.mock.ctx.getSystemPrompt(),
-      activeTools: parent.rawPi.getActiveTools(),
-      definitions: parent.rawPi.getAllTools(),
-      messages: f.mock.ctx.sessionManager.getBranch(),
+refusalTest(
+  "registered manager retries only after review and preserves the parent prefix and tools",
+  async (f, agentDir) => {
+    const tools = [
+      { name: "read", description: "Read a file", parameters: { type: "object", properties: {} } },
+      { name: "bash", description: "Execute a command", parameters: { type: "object", properties: {} } },
+    ];
+    const parentMessages = [
+      { role: "user", content: "Keep this parent conversation private", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "Parent response" }], timestamp: 2 },
+    ];
+    const branch = parentMessages.map((message, index) => ({ type: "message", id: String(index), message }));
+    const systemPrompt = "Stable parent system instructions";
+    Object.assign(f.mock.ctx, { getSystemPrompt: () => systemPrompt });
+    f.mock.ctx.sessionManager = {
+      ...f.mock.ctx.sessionManager,
+      getBranch: () => branch as never,
+      getEntries: () => branch as never,
+    };
+    const parent = createMockPi({ activeTools: ["read", "bash"], allTools: tools });
+    const normalizedParent = () =>
+      JSON.stringify({
+        systemPrompt: f.mock.ctx.getSystemPrompt(),
+        activeTools: parent.rawPi.getActiveTools(),
+        definitions: parent.rawPi.getAllTools(),
+        messages: f.mock.ctx.sessionManager.getBranch(),
+      });
+    const before = normalizedParent();
+    const choices = ["Sync now", retryLabel, approval, undefined];
+    const dialogs: Array<{ title: string; requests: number }> = [];
+    f.mock.ctx.ui.select = async (title) => {
+      dialogs.push({ title, requests: f.mock.requests.length });
+      return choices.shift();
+    };
+    f.answer();
+    await adoptFixtureRoot(agentDir);
+    const { default: extension } = await import("../src/sync-extension.js");
+    extension(parent.pi, {
+      loadSyncOperations: async () => ({
+        ...(await import("sync-daemon/engine/sync/sync-operations")),
+        syncBoth: (ctx, options) =>
+          withEngineFixtureHost(() =>
+            withStateDirectoryAccess(() =>
+              withAgentSyncLock(ctx, options, (current) => syncBoth(ctx, current, () => f.backend)),
+            ),
+          ),
+      }),
     });
-  const before = normalizedParent();
-  const choices = ["Sync now", retryLabel, approval, undefined];
-  const dialogs: Array<{ title: string; requests: number }> = [];
-  f.mock.ctx.ui.select = async (title) => {
-    dialogs.push({ title, requests: f.mock.requests.length });
-    return choices.shift();
-  };
-  f.answer();
-  const { default: extension } = await import("../src/sync-extension.js");
-  extension(parent.pi, {
-    loadSyncOperations: async () => ({
-      ...(await import("../src/sync/sync-operations.js")),
-      syncBoth: (ctx, options) => syncBoth(ctx, options, () => f.backend),
-    }),
-  });
-  const command = parent.commands.get("sync");
-  assert.ok(command);
-  await command.handler("", f.mock.ctx as ExtensionCommandContext);
-  assert.equal(choices.length, 0);
-  assert.equal(f.mock.requests.length, 2);
-  assert.ok(f.mock.notifications.some((item) => /refused/.test(item.message)));
-  const review = dialogs.find((dialog) => /Retry refused model result\?/.test(dialog.title));
-  assert.ok(review);
-  assert.equal(review.requests, 1, "ordinary Sync now must reuse the refusal without inference");
-  assert.equal(normalizedParent(), before);
-  assert.deepEqual(parent.sentMessages, []);
-  assert.deepEqual(parent.sentUserMessages, []);
-  assert.deepEqual(parent.entries, []);
-  assert.equal(parent.events.has("context"), false);
-  assert.equal(parent.events.has("before_agent_start"), false);
-  assert.equal(parent.events.has("before_provider_request"), false);
-  const resolverInputs = f.mock.requests.map((request) => ({
-    systemPrompt: request.systemPrompt,
-    tools: request.tools ?? [],
-    messages: request.messages.map((message) => ({ role: message.role, content: message.content })),
-  }));
-  assert.deepEqual(resolverInputs[1], resolverInputs[0]);
-  for (const request of f.mock.requests) {
-    assert.deepEqual(request.tools ?? [], []);
-    assert.equal(request.messages.filter((message) => message.role === "user").length, 1);
-    assert.doesNotMatch(
-      JSON.stringify(request),
-      /Stable parent system|Keep this parent conversation private|Parent response/,
-    );
-  }
-  await parent.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, f.mock.ctx);
-});
+    await startRegistered(parent, f.mock.ctx);
+    const command = parent.commands.get("sync");
+    assert.ok(command);
+    await command.handler("", f.mock.ctx as ExtensionCommandContext);
+    assert.equal(choices.length, 0);
+    assert.equal(f.mock.requests.length, 2);
+    assert.ok(f.mock.notifications.some((item) => /refused/.test(item.message)));
+    const review = dialogs.find((dialog) => /Retry refused model result\?/.test(dialog.title));
+    assert.ok(review);
+    assert.equal(review.requests, 1, "ordinary Sync now must reuse the refusal without inference");
+    assert.equal(normalizedParent(), before);
+    assert.deepEqual(parent.sentMessages, []);
+    assert.deepEqual(parent.sentUserMessages, []);
+    assert.deepEqual(parent.entries, []);
+    assert.equal(parent.events.has("context"), false);
+    assert.equal(parent.events.has("before_agent_start"), false);
+    assert.equal(parent.events.has("before_provider_request"), false);
+    const resolverInputs = f.mock.requests.map((request) => ({
+      systemPrompt: request.systemPrompt,
+      tools: request.tools ?? [],
+      messages: request.messages.map((message) => ({ role: message.role, content: message.content })),
+    }));
+    assert.deepEqual(resolverInputs[1], resolverInputs[0]);
+    for (const request of f.mock.requests) {
+      assert.deepEqual(request.tools ?? [], []);
+      assert.equal(request.messages.filter((message) => message.role === "user").length, 1);
+      assert.doesNotMatch(
+        JSON.stringify(request),
+        /Stable parent system|Keep this parent conversation private|Parent response/,
+      );
+    }
+    await parent.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, f.mock.ctx);
+  },
+);
 
 for (const boundary of ["confirmation", "request"] as const) {
   refusalTest(`registered manager session replacement drains refusal retry during ${boundary}`, async (f, agentDir) => {
@@ -517,13 +544,20 @@ for (const boundary of ["confirmation", "request"] as const) {
       ready.resolve();
       return finish.promise;
     });
+    await adoptFixtureRoot(agentDir);
     const { default: extension } = await import("../src/sync-extension.js");
     extension(parent.pi, {
       loadSyncOperations: async () => ({
-        ...(await import("../src/sync/sync-operations.js")),
-        syncBoth: (ctx, options) => syncBoth(ctx, options, () => f.backend),
+        ...(await import("sync-daemon/engine/sync/sync-operations")),
+        syncBoth: (ctx, options) =>
+          withEngineFixtureHost(() =>
+            withStateDirectoryAccess(() =>
+              withAgentSyncLock(ctx, options, (current) => syncBoth(ctx, current, () => f.backend)),
+            ),
+          ),
       }),
     });
+    await startRegistered(parent, f.mock.ctx);
     const command = parent.commands.get("sync");
     assert.ok(command);
     const running = Promise.resolve(command.handler("", f.mock.ctx as ExtensionCommandContext));

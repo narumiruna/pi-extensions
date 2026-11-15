@@ -97,6 +97,8 @@ build/Release
 
 # Dependency directories
 node_modules/
+packages/*/.workspace-runtime-staging-*/
+packages/*/.workspace-runtime-backup-*/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)

@@ -1,25 +1,2 @@
-import {
-  mkdir,
-  mkdirSync,
-  realpath,
-  realpathSync,
-  rmdir,
-  rmdirSync,
-  stat,
-  statSync,
-  utimes,
-  utimesSync,
-} from "node:fs";
-
-export const LOCKFILE_FS_ADAPTER = {
-  mkdir,
-  mkdirSync,
-  realpath,
-  realpathSync,
-  rmdir,
-  rmdirSync,
-  stat,
-  statSync,
-  utimes,
-  utimesSync,
-};
+export type * from "sync-daemon/engine/state/lockfile-fs";
+export { LOCKFILE_FS_ADAPTER } from "sync-daemon/engine/state/lockfile-fs";

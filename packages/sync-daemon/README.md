@@ -1,0 +1,90 @@
+# 🔄 sync-daemon — A local synchronization owner
+
+[![npm](https://img.shields.io/npm/v/sync-daemon)](https://www.npmjs.com/package/sync-daemon)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+`sync-daemon` runs the existing Pi Sync engine in a separate Node.js process. Pi remains the interface for setup, exact reviews, commands, and live-session integration.
+
+> **Experimental and not release-ready.** Complete the migration and verification gates before using this checkout with real data. The unscoped npm name is not reserved or published by this change. Installation runs code with your user permissions.
+
+## ✨ Features
+
+- One authenticated local owner per canonical agent directory, shared by multiple Pi clients.
+- Existing Git, WebDAV, S3, and Cloudflare R2 engine formats and recovery evidence.
+- Separate process lifetime, transfer permission, and isolated-model permission.
+- Explicit lifecycle control without an OS service, supervisor, database, or public TCP listener.
+
+## 📦 Install
+
+The Pi client declares this service as a normal dependency; do not add it to `pi.extensions` or load it with `pi -e`. The exact unscoped package and executable name is `sync-daemon`.
+
+For a local checkout, run from the repository root:
+
+```sh
+npm install
+npm --workspace sync-daemon run build
+```
+
+The build emits JavaScript, declarations, and an executable under `dist/`. A global npm installation is not required for the Pi client to locate its dependency. Registry installation remains blocked until the exact name and dependency-first release are approved.
+
+## 🚀 Quick start
+
+Use an existing disposable directory for the first smoke:
+
+```sh
+mkdir -p /tmp/my-sync-daemon-smoke
+node packages/sync-daemon/dist/cli.js start --root /tmp/my-sync-daemon-smoke
+node packages/sync-daemon/dist/cli.js status --root /tmp/my-sync-daemon-smoke
+node packages/sync-daemon/dist/cli.js stop --root /tmp/my-sync-daemon-smoke
+```
+
+`start` reports the same instance when a compatible service already owns the directory. Connecting alone does not configure a backend or authorize transfers. Use the Pi client's reviewed setup flow for synchronization.
+
+## 💬 Commands
+
+`sync-daemon <start|status|stop|restart|serve> --root <agent-directory>` uses an explicit root. `status` and `stop` never launch an absent service. `restart` drains the compatible owner before replacement; an incompatible or unreachable live owner fails closed. `serve` is the internal foreground launch target, not an OS registration command.
+
+Pi starts the service only after configured interactive synchronization is needed or an explicit setup/command authorizes it. Closing Pi detaches that client, not the shared service. `/new` and `/reload` attach a new session generation. Use `/sync daemon` for status, reviewed old-process handover, and setup-bound unattended authorization.
+
+## ⚙️ Settings
+
+Existing `pi-sync.json`, canonical `pi-sync/`, and legacy `.pisync/` remain in the selected agent directory. There is no second backend or credential configuration format. The daemon is the authoritative Pi Sync settings writer; stale reviews must reopen rather than overwrite a newer document.
+
+Automatic, Autonomous, and Continuous defaults remain unchanged. Old permission for work while Pi is open does not permit work after the last client exits. `/sync daemon allow-after-exit` reviews that extra permission for the current setup and selected independently reproducible provider/model; `/sync daemon revoke-after-exit` revokes it. Setup changes invalidate the saved digest. Changes to an interactive client’s model, working directory, or session-directory binding revoke older unattended grants, including across restart. Print/JSON never launch a service; passive attachment to an existing service protects their sessions and pauses automatic work. An idle service can remain alive without unattended permission.
+
+## 🔒 Security and privacy
+
+IPC uses a private root-bound Unix socket on POSIX or a user/root-bound named pipe on Windows. Requests negotiate protocol, instance, root, and a private capability token. Do not share runtime identity files. The service has the same filesystem and network permissions as your user.
+
+Sync content, session conversations, storage credentials, and conflict evidence can be sensitive. Keep the existing secret scan, session inclusion review, exclusions, backups, and journals. A model receives isolated conflict evidence, not the parent conversation or tools. Parent-only provider registrations and runtime keys are not copied; unavailable capabilities preserve conflicts instead of selecting a fallback.
+
+## 🚧 Limitations
+
+A daemon does not lock every editor or shell command. Cooperating Pi clients reserve their actual public mutation queues; unregistered writers still require freshness checks and can cause safe refusal. Active sessions remain protected when contact is lost but their process is still alive. A heartbeat timeout is not proof of process exit.
+
+Pi core's missing-`settings.json` write branch cannot be made safe with the existing file lock alone. The daemon refuses to create that file while a participating Pi is alive; create it through Pi first. Existing-file writes use the actual Pi settings-file lock.
+
+Close or upgrade every old Pi process before reviewed handover. An absent operation lock does not prove an idle old process is absent. Native Windows/macOS process and permission guarantees require native evidence; see the retained [migration and release restrictions](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md).
+
+## Recovery and development
+
+Stop the service before package updates, local rebuilds, or rollback, verify owner exit, and preserve pending journals and backups. A compatible connection does not upgrade a running implementation; restart explicitly after installation. Do not downgrade over pending/newer recovery evidence or restore old settings over newer bytes. Expired or old-instance operation IDs must reconcile existing journals rather than replay a possible commit. The bounded per-instance result ledger requires an explicit drained restart when full.
+
+CLI `status` reports the private lifecycle-log path. It retains at most 8 KiB of timestamps and lifecycle phases, not exception text, credentials, model output, or sync content; older entries roll over. It is diagnostic evidence, not a recovery journal. Child stdio is detached and discarded.
+
+The source-linked [architecture and safety contract](docs/architecture.md) defines ownership, resolver capability checks, write coordination, and the decision matrix. It distinguishes required checks from completed evidence.
+
+## 🗂️ Package layout
+
+- `src/`: lightweight public client, Node CLI, private IPC, service host, and extracted engine.
+- `dist/`: emitted JavaScript and declarations published to npm.
+- `docs/`: architecture, protocol, ownership, and safety guidance.
+- `test/`: deterministic API, process, provider, and failure tests; not published.
+
+## 🔎 Keywords
+
+Pi, synchronization, daemon, local IPC, TypeScript, Git, WebDAV, S3, Cloudflare R2, conflict resolution.
+
+## 📄 License
+
+[MIT](LICENSE).

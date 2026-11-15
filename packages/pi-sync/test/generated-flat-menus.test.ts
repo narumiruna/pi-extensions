@@ -10,6 +10,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { stopDaemon } from "sync-daemon";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { v3S3Settings } from "./helpers.js";
@@ -30,6 +31,7 @@ test("package-directory Jiti smoke exercises flat Settings, manager, cancelled P
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   let loaded: ReturnType<DefaultResourceLoader["getExtensions"]> | undefined;
+  let activeContext: ExtensionCommandContext | undefined;
   try {
     await mkdir(agentDir);
     const settings = v3S3Settings();
@@ -53,6 +55,7 @@ test("package-directory Jiti smoke exercises flat Settings, manager, cancelled P
     const frames: string[] = [];
     const choices: (string | undefined)[] = ["Settings", "Pull from remote…", "Push to remote…", undefined];
     const context = createMockContext({ hasUI: true, mode: "tui" });
+    activeContext = context.ctx as ExtensionCommandContext;
     (context.ctx as ExtensionCommandContext).ui.custom = (async (factory) => {
       // Separate hosts support nested manager/edit flows without probing a factory twice.
       const tui = createTuiHarness({ width: 100, rows: 28 });
@@ -111,6 +114,9 @@ test("package-directory Jiti smoke exercises flat Settings, manager, cancelled P
 
     const rpcChoices = ["History", undefined];
     const rpc = createMockContext({ mode: "rpc", select: async () => rpcChoices.shift() });
+    activeContext = rpc.ctx as ExtensionCommandContext;
+    for (const handler of extension.handlers.get("session_start") ?? [])
+      await handler({ type: "session_start", reason: "new" }, rpc.ctx);
     await command.handler("", rpc.ctx);
     assert.equal(rpcChoices.length, 0);
     assert.ok(
@@ -126,6 +132,10 @@ test("package-directory Jiti smoke exercises flat Settings, manager, cancelled P
     for (const handler of extension.handlers.get("session_shutdown") ?? [])
       await handler({ type: "session_shutdown", reason: "quit" }, rpc.ctx);
   } finally {
+    if (activeContext)
+      for (const handler of loaded?.extensions[0]?.handlers.get("session_shutdown") ?? [])
+        await handler({ type: "session_shutdown", reason: "reload" }, activeContext);
+    await stopDaemon(agentDir);
     loaded?.runtime.invalidate("flat menu package-directory smoke complete");
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

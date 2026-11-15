@@ -1,3 +1,4 @@
+import "./engine-process-host.js";
 import { loadConfigForCheck } from "../src/settings/config.js";
 import {
   withConfigPublicationReadyHookForTest,

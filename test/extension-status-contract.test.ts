@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { createEventBus, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { stopDaemon } from "sync-daemon";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { MockResolverServer } from "../packages/pi-sync/test/mock-resolver-server.js";
+import { MockWebDavServer } from "../packages/pi-sync/test/mock-webdav-server.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 // Public wire shapes, not either participant's private implementation types.
@@ -33,6 +36,8 @@ type FooterFactory = (
 let root: string;
 let agentDir: string;
 let previousAgentDir: string | undefined;
+let storage: MockWebDavServer;
+let resolver: MockResolverServer;
 let sync: typeof import("../packages/pi-sync/src/index.js").default;
 let statusline: typeof import("../packages/pi-statusline/src/index.js").default;
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -41,6 +46,11 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "pi-extension-status-contract-"));
   agentDir = join(root, "agent");
   await mkdir(agentDir);
+  storage = await new MockWebDavServer({ username: "test", password: "test" }).start();
+  resolver = new MockResolverServer(() => {
+    throw new Error("Status display must never request a model.");
+  });
+  await resolver.start();
   previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   vi.resetModules();
@@ -51,21 +61,32 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  try {
-    const failures: unknown[] = [];
-    for (const dispose of cleanup.splice(0).reverse()) {
-      try {
-        await dispose();
-      } catch (error) {
-        failures.push(error);
-      }
+  const failures: unknown[] = [];
+  for (const dispose of cleanup.splice(0).reverse()) {
+    try {
+      await dispose();
+    } catch (error) {
+      failures.push(error);
     }
-    if (failures.length) throw new AggregateError(failures, "Extension status cleanup failed");
-  } finally {
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(root, { recursive: true, force: true });
   }
+  let stopped = false;
+  try {
+    await stopDaemon(agentDir);
+    stopped = true;
+  } catch (error) {
+    failures.push(error);
+  }
+  for (const close of [() => resolver.close(), () => storage.close()]) {
+    try {
+      await close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  if (stopped) await rm(root, { recursive: true, force: true });
+  if (failures.length) throw new AggregateError(failures, "Extension status cleanup failed");
 });
 
 function deferred() {
@@ -85,17 +106,44 @@ async function configure(showStatus = true) {
       onSwitch: "ask-before-pull",
       showStatus,
       storageConnections: {
-        offline: { type: "webdav", url: "http://127.0.0.1:1/dav", credentials: { username: "test", password: "test" } },
+        offline: { type: "webdav", url: storage.url, credentials: { username: "test", password: "test" } },
       },
       syncSetups: {
         offline: {
           storage: { connection: "offline", path: showStatus ? "status-contract" : "status-contract-disabled" },
-          sync: { include: ["settings.json"], automatic: false, agentMode: true, continuous: true },
+          sync: { include: ["AGENTS.md"], automatic: false, agentMode: true, continuous: true },
         },
       },
     }),
     { mode: 0o600 },
   );
+  const { installEngineFixtureHost } = await import("../packages/pi-sync/test/engine-host.js");
+  const { installPiDaemonHost } = await import("../packages/pi-sync/src/daemon/pi-client.js");
+  const { push } = await import("sync-daemon/engine/sync/sync-operations");
+  storage.options.password = "test";
+  await writeFile(join(agentDir, "AGENTS.md"), "Test-owned stable content.\n");
+  installEngineFixtureHost();
+  try {
+    await push(createMockContext({ mode: "rpc", cwd: root }).ctx, {
+      args: [],
+      yes: true,
+      force: true,
+      stale: false,
+      auto: false,
+      silent: true,
+      reload: false,
+    });
+  } finally {
+    installPiDaemonHost();
+  }
+  const { adoptFixtureRoot } = await import("../packages/pi-sync/test/daemon-test-helpers.js");
+  await adoptFixtureRoot(agentDir);
+}
+
+async function makeContext() {
+  const value = createMockContext({ mode: "tui", cwd: root });
+  await resolver.configure(agentDir, value.ctx);
+  return value;
 }
 
 function mockOn(bus: ReturnType<typeof createEventBus>) {
@@ -165,30 +213,6 @@ const unusedLoaders = {
   loadCommandHandler: unexpectedLoader,
 };
 
-function unchangedInspection(include: string[]) {
-  return {
-    head: {
-      snapshotRef: "offline",
-      snapshotId: "offline",
-      revision: "offline",
-      createdAt: "2026-11-08T00:00:00.000Z",
-      machine: "test",
-      syncSessions: false,
-      selection: { version: 1 as const, include },
-    },
-    selectionState: { kind: "same" as const, include },
-    localFiles: 0,
-    localChanged: false,
-    remoteChanged: false,
-    firstSync: false,
-    emptyInclude: false,
-    stateIdentity: "offline",
-    localIdentity: "offline",
-    destination: "offline storage",
-    capability: "read-check-write-verify" as const,
-  };
-}
-
 for (const order of ["sync-first", "statusline-first"] as const) {
   test(`${order}: real factories share live activity and read-only snapshots without hiding raw standby`, async () => {
     await configure();
@@ -201,25 +225,23 @@ for (const order of ["sync-first", "statusline-first"] as const) {
     const release = deferred();
     const entered = deferred();
     let inspections = 0;
-    const registerProducer = () =>
-      sync(producer.pi, {
-        ...unusedLoaders,
-        loadSyncInspection: async () => ({
-          inspectSync: async (config, _options, signal) => {
-            inspections++;
-            entered.resolve();
-            await Promise.race([
-              release.promise,
-              new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true })),
-            ]);
-            return unchangedInspection(config.include);
-          },
+    storage.options.beforeRequest = async (request, signal) => {
+      if (request.method !== "GET" || !request.path.endsWith("/latest.json")) return;
+      inspections++;
+      entered.resolve();
+      await Promise.race([
+        release.promise,
+        new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
         }),
-      });
+      ]);
+    };
+    const registerProducer = () => sync(producer.pi, { ...unusedLoaders, loadSyncInspection: unexpectedLoader });
     if (order === "statusline-first") statusline(consumer.pi);
     registerProducer();
     if (order === "sync-first") statusline(consumer.pi);
-    const context = createMockContext({ mode: "tui", cwd: root });
+    const context = await makeContext();
     cleanup.push(() => emit(producer, "session_shutdown", context.ctx));
     cleanup.push(() => emit(consumer, "session_shutdown", context.ctx));
     const checking = nextActivity(bus, "checking");
@@ -293,16 +315,10 @@ test("actual blocked publication retains its reason; Show sync status Off suppre
   const updates = observe(bus);
   const producer = mockOn(bus);
   const consumer = mockOn(bus);
-  sync(producer.pi, {
-    ...unusedLoaders,
-    loadSyncInspection: async () => ({
-      inspectSync: async () => {
-        throw Object.assign(new Error("synthetic authentication failure"), { status: 401 });
-      },
-    }),
-  });
+  storage.options.password = "invalid";
+  sync(producer.pi, { ...unusedLoaders, loadSyncInspection: unexpectedLoader });
   statusline(consumer.pi);
-  const context = createMockContext({ mode: "tui", cwd: root });
+  const context = await makeContext();
   cleanup.push(() => emit(producer, "session_shutdown", context.ctx));
   cleanup.push(() => emit(consumer, "session_shutdown", context.ctx));
   await emit(consumer, "session_start", context.ctx);
@@ -317,8 +333,9 @@ test("actual blocked publication retains its reason; Show sync status Off suppre
   // The existing preference is read again on session start; no private settings API is used.
   await emit(producer, "session_shutdown", context.ctx);
   await configure(false);
+  storage.options.password = "invalid";
   const blockedNotice = deferred();
-  const disabled = createMockContext({ mode: "tui", cwd: root });
+  const disabled = await makeContext();
   const disabledCtx = disabled.ctx as ExtensionCommandContext;
   const notify = disabledCtx.ui.notify.bind(disabledCtx.ui);
   disabledCtx.ui.notify = (message, level) => {
@@ -341,6 +358,7 @@ test("actual blocked publication retains its reason; Show sync status Off suppre
   assert.equal(disabledSnapshot.value, undefined);
 
   await configure();
+  storage.options.password = "invalid";
   const reenabled = nextActivity(bus, "blocked");
   await emit(producer, "session_start", disabled.ctx);
   await reenabled;

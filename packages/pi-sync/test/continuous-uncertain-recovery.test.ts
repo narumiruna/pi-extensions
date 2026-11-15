@@ -9,7 +9,7 @@ import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { continuousLoaders } from "./continuous-test-helpers.js";
 import { RecoveryClock as Clock, recoveryFixture, waitRecoveryStatus as waitStatus } from "./recovery-test-helpers.js";
 
-vi.mock("../src/sync/continuous-watch.js", () => ({ watchContinuous: async () => () => {} }));
+vi.mock("sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
 
 const fixture = recoveryFixture();
 

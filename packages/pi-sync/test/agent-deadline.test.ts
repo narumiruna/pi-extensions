@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import type { AgentEvidence } from "../src/sync/agent-candidate.js";
 import { AGENT_TIMEOUT_MS } from "../src/sync/agent-policy.js";
 import { runAgentResolver } from "../src/sync/agent-runner.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
+import { engineSdk } from "./engine-sdk.js";
 import { deferred } from "./startup-check-helpers.js";
 
 const evidence: AgentEvidence = {
@@ -16,6 +16,7 @@ const evidence: AgentEvidence = {
 for (const boundary of ["validation", "reservation", "reserved-validation", "postresponse"] as const)
   for (const cancellation of ["deadline", "caller"] as const)
     test(`${cancellation} drains ${boundary} before resolver disposal and prevents late acceptance`, async () => {
+      const { AgentSession } = await engineSdk();
       vi.useFakeTimers();
       const dispose = vi.spyOn(AgentSession.prototype, "dispose");
       const entered = deferred();
@@ -45,7 +46,11 @@ for (const boundary of ["validation", "reservation", "reserved-validation", "pos
         async (signal) => {
           validations++;
           const target = boundary === "validation" ? 1 : boundary === "reserved-validation" ? 2 : 3;
-          if (boundary !== "reservation" && validations === target) await block(signal);
+          if (
+            (boundary === "postresponse" && mock.requests.length > 0) ||
+            (boundary !== "reservation" && boundary !== "postresponse" && validations === target)
+          )
+            await block(signal);
         },
         caller.signal,
         async (signal) => {
@@ -87,7 +92,7 @@ for (const boundary of ["validation", "reservation", "reserved-validation", "pos
         assert.equal(mock.requests.length, boundary === "postresponse" ? 1 : 0);
         assert.equal(
           validations,
-          boundary === "validation" || boundary === "reservation" ? 1 : boundary === "reserved-validation" ? 2 : 3,
+          boundary === "validation" || boundary === "reservation" ? 1 : boundary === "reserved-validation" ? 2 : 4,
         );
         assert.equal(reservations, boundary === "validation" ? 0 : 1, "spent reservations are not rolled back");
         assert.equal(mock.notifications.length, 0, "cancelled output must not be announced");
@@ -117,7 +122,7 @@ test("all validation, reservation and transport calls share one live owned signa
     },
   );
   assert.equal(JSON.parse(output).results[0].content, "remote");
-  assert.equal(signals.length, 4);
+  assert.equal(signals.length, 5);
   const transportSignal = (mock.requestOptions[0] as { signal: AbortSignal }).signal;
   assert.notEqual(transportSignal, caller.signal);
   assert.equal(transportSignal.aborted, false);

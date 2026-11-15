@@ -6,6 +6,7 @@
   "type": "module",
   "workspaces": [
     "packages/pi-tui-kit",
+    "packages/sync-daemon",
     "packages/*"
   ],
   "pi": {

@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { AgentEvidence } from "../src/sync/agent-candidate.js";
 import { AgentResolutionRequired } from "../src/sync/agent-request.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
-import { continuousDependencies, enableContinuous, fakeContinuousTime } from "./continuous-test-helpers.js";
+import { continuousLoaders, enableContinuous, fakeContinuousTime } from "./continuous-test-helpers.js";
+import { engineSdk } from "./engine-sdk.js";
 import { withTempHome } from "./helpers.js";
 import { createMergeFixture } from "./merged-sync-fixture.js";
 import { deferred } from "./startup-check-helpers.js";
@@ -47,13 +46,11 @@ for (const prerequisite of ["validation", "reservation", "postresponse"] as cons
           }
         };
         const context = agentContext(selectRemote, { isIdle: () => idle });
-        const mock = createMockPi();
-        const { default: extension } = await import("../src/sync-extension.js");
-        extension(
-          mock.pi,
-          continuousDependencies(fixture.backend, {
+        const { createContinuousSync } = await import("../src/sync/continuous-sync.js");
+        const service = createContinuousSync(
+          continuousLoaders(fixture.backend, {
             loadSyncOperations: async () => ({
-              ...(await import("../src/sync/sync-operations.js")),
+              ...(await import("sync-daemon/engine/sync/sync-operations")),
               syncBoth: async (_ctx, options) => {
                 if (options.agentAcceptance) {
                   commits++;
@@ -69,8 +66,11 @@ for (const prerequisite of ["validation", "reservation", "postresponse"] as cons
                 }
                 throw new AgentResolutionRequired("a".repeat(64), evidence, async (signal) => {
                   validations++;
-                  // One outer validation precedes the resolver's three validation calls.
-                  if (validations === (prerequisite === "validation" ? 2 : prerequisite === "postresponse" ? 4 : -1))
+                  // Observe transport completion, not the SDK's validation-call count.
+                  if (
+                    (prerequisite === "validation" && validations === 2) ||
+                    (prerequisite === "postresponse" && context.requests.length > 0)
+                  )
                     await block(signal);
                 });
               },
@@ -78,28 +78,22 @@ for (const prerequisite of ["validation", "reservation", "postresponse"] as cons
           }),
         );
         fakeContinuousTime();
+        const { AgentSession } = await engineSdk();
         const dispose = vi.spyOn(AgentSession.prototype, "dispose");
         let interruption: Promise<unknown> | undefined;
-        let cleanupContext = context.ctx;
+        const lifetime = new AbortController();
         try {
-          await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+          service.start(context.ctx, lifetime.signal);
           await entered.promise;
           assert.ok(received, "the lifecycle-owned prerequisite must receive the resolver signal");
           assert.equal(received.aborted, false);
           assert.equal(dispose.mock.calls.length, 0);
           idle = false;
           let interrupted = false;
-          if (boundary === "foreground")
-            interruption = Promise.resolve(mock.commands.get("sync")?.handler("help", context.ctx));
-          else if (boundary === "session_start") {
-            const replacement = createMockContext({ mode: "rpc", isIdle: () => false });
-            cleanupContext = replacement.ctx;
-            interruption = Promise.resolve(mock.events.get("session_start")?.[0]?.({ reason: "new" }, replacement.ctx));
-          } else {
-            const event = boundary === "agent_start" ? "agent_start" : "session_shutdown";
-            const reason = boundary === "shutdown" ? "quit" : "reload";
-            interruption = Promise.resolve(mock.events.get(event)?.[0]?.({ reason }, context.ctx));
-          }
+          // The daemon now owns this controller; Pi requests pause/stop over IPC.
+          // Actual new/reload/fork/resume dispatch is covered by daemon-rpc.test.ts.
+          if (boundary === "session_start" || boundary === "reload" || boundary === "shutdown") lifetime.abort();
+          interruption = service.stop(context.ctx.sessionManager);
           const completed = Promise.resolve(interruption).then(() => {
             interrupted = true;
           });
@@ -119,13 +113,13 @@ for (const prerequisite of ["validation", "reservation", "postresponse"] as cons
           assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
           for (const owned of ["agent-resolver/claim.json", "continuous/scheduler.lock", "lock", "lock.guard"])
             await assert.rejects(fs.stat(path.join(agentDir, "pi-sync", owned)), /ENOENT/);
-          await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-          await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+          await service.stop(context.ctx.sessionManager);
+          await service.stop(context.ctx.sessionManager);
           assert.equal(dispose.mock.calls.length, 1, "repeated cleanup must not dispose again");
         } finally {
           release.resolve();
           await interruption;
-          await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, cleanupContext);
+          await service.stop();
           dispose.mockRestore();
           vi.useRealTimers();
         }

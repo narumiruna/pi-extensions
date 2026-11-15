@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { initializeSync } from "sync-daemon/engine/sync/initialization";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { type createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { localConfigTemplate, updateLocalConfig } from "../src/settings/settings-store.js";
 import { type ContinuousClock, createContinuousSync } from "../src/sync/continuous-sync.js";
-import { STARTUP_TIMING_ENTRY, type StartupTimingEntry } from "../src/ui/startup-timings-entry.js";
+import {
+  registerStartupTimings,
+  STARTUP_TIMING_ENTRY,
+  type StartupTimingEntry,
+} from "../src/ui/startup-timings-entry.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import {
   continuousDependencies,
@@ -30,6 +35,15 @@ function reports(
       .map((entry) => (entry.data as StartupTimingEntry).report) ?? []),
   ].filter((message) => message.startsWith("pi-sync debug: continuous startup"));
 }
+function reporting(loaders: ReturnType<typeof continuousLoaders>, mock: ReturnType<typeof createMockPi>) {
+  const publish = registerStartupTimings(mock.pi);
+  const service = createContinuousSync(loaders, undefined, publish);
+  return {
+    service,
+    initialize: (ctx: ReturnType<typeof agentContext>["ctx"], signal: AbortSignal) =>
+      initializeSync(ctx, signal, publish),
+  };
+}
 
 for (const [debug, mode] of [
   [true, "tui"],
@@ -38,7 +52,7 @@ for (const [debug, mode] of [
   [false, "rpc"],
   [true, "print"],
   [true, "json"],
-] as const) {
+] as const)
   test(`continuous startup debug=${debug} in ${mode} reports only through supported UI`, async () =>
     withTempHome(async (agentDir) => {
       const f = await createMergeFixture(agentDir);
@@ -47,12 +61,13 @@ for (const [debug, mode] of [
       const before = await fs.readFile(localConfigPath());
       const mock = createMockPi();
       const context = agentContext(selectRemote, { mode });
-      const { default: extension } = await import("../src/sync-extension.js");
-      extension(mock.pi, continuousDependencies(f.backend));
+      const fixture = reporting(continuousLoaders(f.backend), mock);
+      const lifetime = new AbortController();
       try {
-        await mock.events.get("session_start")?.[0]?.({ reason: "reload" }, context.ctx);
+        const initialized = await fixture.initialize(context.ctx, lifetime.signal);
+        fixture.service.start(context.ctx, lifetime.signal, false, initialized.debug);
         const supported = mode === "tui" || mode === "rpc";
-        if (supported) await waitStatus(context.statuses, /waiting for changes/);
+        if (supported) await waitStatus(context.statuses, /waiting for changes/u);
         const output = reports(context, mock);
         assert.equal(output.length, debug && supported ? 1 : 0);
         assert.equal(mock.entries.length, debug && mode === "tui" ? 2 : 0);
@@ -74,10 +89,10 @@ for (const [debug, mode] of [
         assert.deepEqual(mock.sentUserMessages, []);
         assert.equal(context.requests.length, 0);
       } finally {
-        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+        lifetime.abort();
+        await fixture.service.stop();
       }
     }));
-}
 
 test("idle resumes and foreground pauses do not repeat a session's continuous startup report", async () =>
   withTempHome(async (agentDir) => {
@@ -86,24 +101,23 @@ test("idle resumes and foreground pauses do not repeat a session's continuous st
     await updateLocalConfig((settings) => ({ ...settings, debug: true }));
     const mock = createMockPi();
     const context = agentContext(selectRemote, { mode: "tui" });
-    const { default: extension } = await import("../src/sync-extension.js");
-    extension(mock.pi, continuousDependencies(f.backend));
+    const fixture = reporting(continuousLoaders(f.backend), mock);
+    const lifetime = new AbortController();
     try {
-      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-      await waitStatus(context.statuses, /waiting for changes/);
-      assert.equal(reports(context, mock).length, 1);
-      await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
-      await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-      await waitStatus(context.statuses, /waiting for changes/);
-      await mock.commands.get("sync")?.handler("help", context.ctx);
-      await waitStatus(context.statuses, /waiting for changes/);
-      assert.equal(reports(context, mock).length, 1);
+      const initialized = await fixture.initialize(context.ctx, lifetime.signal);
+      for (let cycle = 0; cycle < 3; cycle++) {
+        fixture.service.start(context.ctx, lifetime.signal, false, initialized.debug);
+        await waitStatus(context.statuses, /waiting for changes/u);
+        assert.equal(reports(context, mock).length, 1);
+        await fixture.service.stop(context.ctx.sessionManager);
+      }
     } finally {
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+      lifetime.abort();
+      await fixture.service.stop();
     }
   }));
 
-for (const initialDebug of [false, true]) {
+for (const initialDebug of [false, true])
   test(`first same-session Continuous activation retains startup debug=${initialDebug}`, async () =>
     withTempHome(async (agentDir) => {
       const f = await createMergeFixture(agentDir);
@@ -120,26 +134,26 @@ for (const initialDebug of [false, true]) {
       });
       const mock = createMockPi();
       const context = agentContext(selectRemote);
-      const { default: extension } = await import("../src/sync-extension.js");
-      extension(mock.pi, continuousDependencies(f.backend));
+      const fixture = reporting(continuousLoaders(f.backend), mock);
+      const lifetime = new AbortController();
       try {
-        await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+        const initialized = await fixture.initialize(context.ctx, lifetime.signal);
         assert.equal(context.notifications.length, initialDebug ? 1 : 0, "only local initialization runs while Off");
         await updateLocalConfig((settings) => {
           settings.debug = !initialDebug;
           Object.assign(requiredHome(settings).sync, { agentMode: true, continuous: true });
           return settings;
         });
-        await mock.commands.get("sync")?.handler("help", context.ctx);
-        await waitStatus(context.statuses, /waiting for changes/);
+        fixture.service.start(context.ctx, lifetime.signal, false, initialized.debug);
+        await waitStatus(context.statuses, /waiting for changes/u);
         assert.equal(reports(context).length, initialDebug ? 1 : 0);
       } finally {
-        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+        lifetime.abort();
+        await fixture.service.stop();
       }
     }));
-}
 
-for (const initialDebug of [false, true]) {
+for (const initialDebug of [false, true])
   test(`an empty startup catalog retains debug=${initialDebug} when its first Continuous setup is added`, async () =>
     withTempHome(async (agentDir) => {
       const f = await createMergeFixture(agentDir);
@@ -148,20 +162,20 @@ for (const initialDebug of [false, true]) {
       await updateLocalConfig(() => ({ ...localConfigTemplate(), debug: initialDebug }));
       const mock = createMockPi();
       const context = agentContext(selectRemote);
-      const { default: extension } = await import("../src/sync-extension.js");
-      extension(mock.pi, continuousDependencies(f.backend));
+      const fixture = reporting(continuousLoaders(f.backend), mock);
+      const lifetime = new AbortController();
       try {
-        await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+        const initialized = await fixture.initialize(context.ctx, lifetime.signal);
         assert.equal(context.notifications.length, initialDebug ? 1 : 0);
         await updateLocalConfig(() => ({ ...configured, debug: !initialDebug }));
-        await mock.commands.get("sync")?.handler("help", context.ctx);
-        await waitStatus(context.statuses, /waiting for changes/);
+        fixture.service.start(context.ctx, lifetime.signal, false, initialized.debug);
+        await waitStatus(context.statuses, /waiting for changes/u);
         assert.equal(reports(context).length, initialDebug ? 1 : 0);
       } finally {
-        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+        lifetime.abort();
+        await fixture.service.stop();
       }
     }));
-}
 
 test("debug stays latched for idle resumes and a replacement session reads its new value", async () =>
   withTempHome(async (agentDir) => {
@@ -171,25 +185,32 @@ test("debug stays latched for idle resumes and a replacement session reads its n
     const mock = createMockPi();
     const first = agentContext(selectRemote);
     const next = agentContext(selectRemote);
-    const { default: extension } = await import("../src/sync-extension.js");
-    extension(mock.pi, continuousDependencies(f.backend));
+    const fixture = reporting(continuousLoaders(f.backend), mock);
+    const lifetime = new AbortController();
+    const replacement = new AbortController();
     try {
-      await mock.events.get("session_start")?.[0]?.({}, first.ctx);
-      await waitStatus(first.statuses, /waiting for changes/);
-      await mock.events.get("agent_start")?.[0]?.({}, first.ctx);
+      const initial = await fixture.initialize(first.ctx, lifetime.signal);
+      fixture.service.start(first.ctx, lifetime.signal, false, initial.debug);
+      await waitStatus(first.statuses, /waiting for changes/u);
+      await fixture.service.stop();
       await updateLocalConfig((settings) => ({ ...settings, debug: true }));
-      await mock.events.get("agent_settled")?.[0]?.({}, first.ctx);
-      await waitStatus(first.statuses, /waiting for changes/);
+      fixture.service.start(first.ctx, lifetime.signal, false, initial.debug);
+      await waitStatus(first.statuses, /waiting for changes/u);
       assert.equal(reports(first).length, 0);
-      await mock.events.get("session_start")?.[0]?.({ reason: "new" }, next.ctx);
-      await waitStatus(next.statuses, /waiting for changes/);
+      lifetime.abort();
+      await fixture.service.stop();
+      const updated = await fixture.initialize(next.ctx, replacement.signal);
+      fixture.service.start(next.ctx, replacement.signal, false, updated.debug);
+      await waitStatus(next.statuses, /waiting for changes/u);
       assert.equal(reports(next).length, 1);
     } finally {
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, next.ctx);
+      lifetime.abort();
+      replacement.abort();
+      await fixture.service.stop();
     }
   }));
 
-for (const fail of [false, true]) {
+for (const fail of [false, true])
   test(`continuous startup transfer ${fail ? "failure" : "completion"} includes nested timings`, async () =>
     withTempHome(async (agentDir) => {
       const f = await createMergeFixture(agentDir);
@@ -198,15 +219,13 @@ for (const fail of [false, true]) {
       await f.remoteEdit("AGENTS.md", "remote edit\n");
       const mock = createMockPi();
       const context = agentContext(selectRemote);
-      const { default: extension } = await import("../src/sync-extension.js");
-      extension(
-        mock.pi,
-        continuousDependencies(
+      const fixture = reporting(
+        continuousLoaders(
           f.backend,
           fail
             ? {
                 loadSyncOperations: async () => ({
-                  ...(await import("../src/sync/sync-operations.js")),
+                  ...(await import("sync-daemon/engine/sync/sync-operations")),
                   syncBoth: async (_ctx, options) => {
                     assert.ok(options.startupTimings);
                     return options.startupTimings.measure("transfer remote head", () => {
@@ -217,10 +236,13 @@ for (const fail of [false, true]) {
               }
             : {},
         ),
+        mock,
       );
+      const lifetime = new AbortController();
       try {
-        await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-        await waitStatus(context.statuses, fail ? /blocked|retry/ : /waiting for changes/);
+        const initialized = await fixture.initialize(context.ctx, lifetime.signal);
+        fixture.service.start(context.ctx, lifetime.signal, false, initialized.debug);
+        await waitStatus(context.statuses, fail ? /blocked|retry/u : /waiting for changes/u);
         const output = reports(context);
         assert.equal(output.length, 1);
         assert.match(output[0] ?? "", /operations import:.*automatic transfer:/su);
@@ -230,12 +252,12 @@ for (const fail of [false, true]) {
         assert.doesNotMatch(output[0] ?? "", /private|credential/u);
         if (!fail) assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "remote edit\n");
       } finally {
-        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+        lifetime.abort();
+        await fixture.service.stop();
       }
     }));
-}
 
-for (const boundary of ["agent_start", "session_start", "session_shutdown", "foreground"] as const) {
+for (const boundary of ["agent_start", "session_start", "session_shutdown", "foreground"] as const)
   test(`late continuous startup reports are suppressed after ${boundary}`, async () =>
     withTempHome(async (agentDir) => {
       const f = await createMergeFixture(agentDir);
@@ -246,37 +268,36 @@ for (const boundary of ["agent_start", "session_start", "session_shutdown", "for
       let idle = true;
       const mock = createMockPi();
       const context = agentContext(selectRemote, { mode: "tui", isIdle: () => idle });
-      const next = createMockContext({ mode: "tui", isIdle: () => false });
-      const { default: extension } = await import("../src/sync-extension.js");
+      const next = agentContext(selectRemote, { mode: "tui", isIdle: () => false });
       const dependencies = continuousDependencies(f.backend);
-      const loadInspection = dependencies.loadSyncInspection;
-      assert.ok(loadInspection);
-      extension(mock.pi, {
-        ...dependencies,
-        loadSyncInspection: async () => {
-          const inspection = await loadInspection();
-          return {
-            inspectSync: async (...args) => {
-              entered.resolve();
-              await release.promise;
-              return inspection.inspectSync(...args);
-            },
-          };
-        },
-      });
+      const load = dependencies.loadSyncInspection;
+      assert.ok(load);
+      const fixture = reporting(
+        continuousLoaders(f.backend, {
+          loadSyncInspection: async () => {
+            const module = await load();
+            return {
+              inspectSync: async (...args) => {
+                entered.resolve();
+                await release.promise;
+                return module.inspectSync(...args);
+              },
+            };
+          },
+        }),
+        mock,
+      );
+      const lifetime = new AbortController();
       try {
-        await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+        const initialized = await fixture.initialize(context.ctx, lifetime.signal);
+        fixture.service.start(context.ctx, lifetime.signal, false, initialized.debug);
         await entered.promise;
         idle = false;
-        const ending =
-          boundary === "foreground"
-            ? mock.commands.get("sync")?.handler("help", context.ctx)
-            : mock.events.get(boundary)?.[0]?.(
-                { reason: "reload" },
-                boundary === "session_start" ? next.ctx : context.ctx,
-              );
+        if (boundary === "session_start" || boundary === "session_shutdown") lifetime.abort();
+        const ending = fixture.service.stop(context.ctx.sessionManager);
         release.resolve();
         await ending;
+        if (boundary === "session_start") await fixture.initialize(next.ctx, new AbortController().signal);
         assert.equal(reports(context, mock).length, 0);
         assert.equal(
           mock.entries.length,
@@ -285,13 +306,10 @@ for (const boundary of ["agent_start", "session_start", "session_shutdown", "for
         );
       } finally {
         release.resolve();
-        await mock.events.get("session_shutdown")?.[0]?.(
-          { reason: "reload" },
-          boundary === "session_start" ? next.ctx : context.ctx,
-        );
+        lifetime.abort();
+        await fixture.service.stop();
       }
     }));
-}
 
 test("a timed-out initial continuous check reports stopped once; subsequent polls stay silent", async () =>
   withTempHome(async (agentDir) => {

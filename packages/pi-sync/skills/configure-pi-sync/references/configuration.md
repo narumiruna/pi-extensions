@@ -9,6 +9,7 @@ The configuration skill provides guidance only; the user performs settings chang
 - [Secret scanning](#secret-scanning)
 - [Autonomous sync](#autonomous-sync)
 - [Continuous sync](#continuous-sync)
+- [Daemon lifetime and unattended permission](#daemon-lifetime-and-unattended-permission)
 - [Included content](#included-content)
 - [Excluded paths](#excluded-paths)
 - [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
@@ -191,7 +192,7 @@ Automatic sync alone does not perform startup transfers or open dialogs; review 
 Print/JSON skip startup checks.
 Checks compare local hashes and remote metadata against the last sync baseline, so revision changes and missing baselines require review rather than proving a file conflict.
 
-The setting still permits automatic shutdown pushes of selected content when `sessions` is included, in all modes; this is not limited to uploading session files.
+The setting still permits automatic shutdown pushes of selected content when `sessions` is included; this is not limited to uploading session files. Print/JSON require an already running, reviewed service and never launch one for shutdown.
 Reload skips shutdown push.
 Settings changes apply to subsequent operations; changing this setting does not schedule another startup check until the next session start.
 Foreground `/sync` cancels a pending check before opening Settings.
@@ -521,6 +522,18 @@ No Pi core changes or other extension are required.
 
 <a id="experimental-continuous-sync"></a>
 
+### Daemon lifetime and unattended permission
+
+Pi starts or connects to `sync-daemon` only for configured interactive work or an explicit setup/command. The service is a normal dependency, not another Pi extension. Unconfigured reads create no service or settings. Closing Pi releases its tasks, not the daemon; no OS service is installed.
+
+Before the first daemon-owned mutation, close or upgrade older Pi processes and review `/sync daemon handover`. An absent lock does not prove that an idle older process is absent. Settings and existing state/snapshot formats remain authoritative in the same locations; Pi proposes settings changes and the daemon serializes their publication.
+
+Existing Automatic, Autonomous, and Continuous consent does not authorize zero-client work. `/sync daemon allow-after-exit` requires Autonomous and Continuous to be enabled, then separately reviews the setup, selected private content, recurring costs, and independently available provider/model. `/sync daemon revoke-after-exit` stops new unattended work. Setup changes invalidate the saved digest. Changing an interactive client’s model, working directory, or session-directory binding revokes older unattended grants; reverting that binding does not restore them. Reopen the review to grant permission again.
+
+The standalone model host uses the agent-root `auth.json`/`models.json` through public Pi SDK APIs and the environment captured at service launch. Credential commands run non-interactively from the canonical agent root. Parent-only providers/accounts and runtime keys are not copied; unavailable capabilities retain conflicts rather than selecting a fallback. Restart after changing the service environment. Neither the parent conversation nor its tools are sent to the resolver.
+
+A failed consent write blocks automatic work in that service instance. Repair persistence and revoke permission before an explicit restart; do not assume a failed write changed the retained consent file. `stop` and `restart` drain compatible work and never replace an uncertain or incompatible live owner silently. See [migration, diagnostics, and rollback](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md).
+
 ### Continuous sync
 
 `sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3, 4, 5 and 6.
@@ -529,7 +542,7 @@ RPC users can set the field explicitly in the private settings file.
 Existing Autonomous sync consent does not enable recurring requests.
 
 The separate review names the setup, storage connection, destination, included paths, recurring costs and automatic writes.
-An elected idle session uses its selected Pi model; a different session can use a different provider/model.
+The service uses the participating idle clients’ matching independently reproducible model binding; differing bindings pause automatic work.
 The save uses the existing atomic settings writer.
 Cancellation after the final publication check cannot undo a committed save.
 Reopen Settings to read the saved value.
@@ -543,13 +556,13 @@ Turning Autonomous sync off also stops monitoring; a saved Continuous sync On va
 
 A control-file change during monitoring is detected by a watcher or the five-second local control check.
 If monitoring is already off, external enablement requires the next session start or a foreground `/sync` command.
-Print/JSON create no continuous resources.
-No daemon remains after Pi exits.
+Print/JSON do not launch a service. If one already exists, they attach passive session facts and pause its automatic work until that client leaves.
+The service survives ordinary Pi exit; work with zero clients needs the separate permission below.
 
 Upgrade all Pi processes sharing an agent directory before enabling Continuous sync.
 Older releases do not implement its election or automatic accounting.
-One scheduler lease coordinates participating sessions/processes sharing the same canonical agent directory.
-Standbys only check local eligibility/ownership; they do not duplicate remote polling, watchers or inference.
+One detached service coordinates participating clients sharing the same canonical agent directory and reuses the engine’s scheduler lease, watchers, and request accounting.
+Clients do not run a second transfer scheduler.
 Each computer has a separate scheduler.
 Remote conditional publication and revision checks remain authoritative across computers.
 The lease does not exclude arbitrary editors or writers in other Pi processes.

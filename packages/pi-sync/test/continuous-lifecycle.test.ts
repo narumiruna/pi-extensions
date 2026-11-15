@@ -3,14 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { piDaemonClient } from "../src/daemon/pi-client.js";
+import { createContinuousSync } from "../src/sync/continuous-sync.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
-import { continuousDependencies, enableContinuous, fakeContinuousTime, waitStatus } from "./continuous-test-helpers.js";
+import { continuousLoaders, enableContinuous, fakeContinuousTime, waitStatus } from "./continuous-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { createMergeFixture } from "./merged-sync-fixture.js";
 import { deferred } from "./startup-check-helpers.js";
 
 for (const boundary of ["agent_start", "session_start", "session_shutdown", "foreground"] as const)
-  test(`continuous resolver drains and releases ownership at ${boundary}`, async () =>
+  test(`daemon controller drains and releases ownership at ${boundary}`, async () =>
     withTempHome(async (agentDir) => {
       const f = await createMergeFixture(agentDir);
       await enableContinuous();
@@ -25,49 +27,42 @@ for (const boundary of ["agent_start", "session_start", "session_shutdown", "for
         },
         { isIdle: () => idle },
       );
-      const mock = createMockPi();
-      const { default: extension } = await import("../src/sync-extension.js");
-      extension(mock.pi, continuousDependencies(f.backend));
+      const service = createContinuousSync(continuousLoaders(f.backend));
+      const lifetime = new AbortController();
       fakeContinuousTime();
       try {
-        await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+        service.start(context.ctx, lifetime.signal);
         await ready.promise;
         const options = context.requestOptions[0] as { signal: AbortSignal };
         assert.equal(options.signal.aborted, false);
         const sibling = createMockContext({ mode: "rpc" });
-        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, sibling.ctx);
-        assert.equal(options.signal.aborted, false, "unrelated manager cannot stop the owner");
+        await service.stop((sibling.ctx as import("@earendil-works/pi-coding-agent").ExtensionContext).sessionManager);
+        assert.equal(options.signal.aborted, false, "an unrelated manager cannot stop the owner");
         idle = false;
-        if (boundary === "foreground") await mock.commands.get("sync")?.handler("help", context.ctx);
-        else if (boundary === "session_start") {
-          const replacement = createMockContext({ mode: "rpc", isIdle: () => false });
-          await mock.events.get("session_start")?.[0]?.({ reason: "new" }, replacement.ctx);
-          await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, replacement.ctx);
-        } else await mock.events.get(boundary)?.[0]?.({ reason: "reload" }, context.ctx);
+        if (boundary === "session_start" || boundary === "session_shutdown") lifetime.abort();
+        await service.stop(context.ctx.sessionManager);
         assert.equal(options.signal.aborted, true);
         assert.equal(context.requests.length, 1);
-        await assert.rejects(fs.stat(path.join(agentDir, "pi-sync/continuous/scheduler.lock")), /ENOENT/);
-        await assert.rejects(fs.stat(path.join(agentDir, "pi-sync/agent-resolver/claim.json")), /ENOENT/);
+        for (const owned of ["continuous/scheduler.lock", "agent-resolver/claim.json"])
+          await assert.rejects(fs.stat(path.join(agentDir, "pi-sync", owned)), /ENOENT/u);
         assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
       } finally {
-        if (boundary !== "session_start")
-          await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+        lifetime.abort();
+        await service.stop();
         vi.useRealTimers();
       }
     }));
 
-test("one startup cycle, foreground pause and idle resume use fresh authorization", async () =>
+test("one daemon cycle per start and fresh authorization on each idle resume", async () =>
   withTempHome(async (agentDir) => {
     const f = await createMergeFixture(agentDir);
     await enableContinuous();
-    const mock = createMockPi();
     const context = agentContext(selectRemote);
-    const dependencies = continuousDependencies(f.backend);
     let checks = 0;
-    const original = dependencies.loadSyncInspection;
-    assert.ok(original);
-    dependencies.loadSyncInspection = async () => {
-      const module = await original();
+    const loaders = continuousLoaders(f.backend);
+    const inspection = loaders.inspection;
+    loaders.inspection = async () => {
+      const module = await inspection();
       return {
         inspectSync: (...args) => {
           checks++;
@@ -75,55 +70,43 @@ test("one startup cycle, foreground pause and idle resume use fresh authorizatio
         },
       };
     };
-    const { default: extension } = await import("../src/sync-extension.js");
-    extension(mock.pi, dependencies);
+    const service = createContinuousSync(loaders);
+    const signal = new AbortController().signal;
     fakeContinuousTime();
     try {
-      await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-      await waitStatus(context.statuses, /waiting for changes/);
-      assert.equal(checks, 1, "continuous startup did not also run the one-shot check");
-      await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
-      assert.equal(context.statuses.get("sync"), undefined);
-      await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-      await waitStatus(context.statuses, /waiting for changes/);
-      assert.equal(checks, 2);
-      await mock.commands.get("sync")?.handler("help", context.ctx);
-      await waitStatus(context.statuses, /waiting for changes/);
-      assert.equal(checks, 3);
+      for (let cycle = 1; cycle <= 3; cycle++) {
+        service.start(context.ctx, signal);
+        await waitStatus(context.statuses, /waiting for changes/u);
+        assert.equal(checks, cycle);
+        await service.stop(context.ctx.sessionManager);
+        assert.equal(context.statuses.get("sync"), undefined);
+      }
       assert.equal(context.requests.length, 0);
     } finally {
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+      await service.stop();
       assert.equal(vi.getTimerCount(), 0);
       vi.useRealTimers();
     }
   }));
 
-test("Help cannot bypass a failed startup recovery barrier", async () =>
+test("Help cannot bypass a failed startup recovery barrier or mark its IPC client ready", async () =>
   withTempHome(async (agentDir) => {
-    const f = await createMergeFixture(agentDir);
+    await createMergeFixture(agentDir);
     await enableContinuous();
     await fs.mkdir(path.join(agentDir, ".pisync"));
     const context = agentContext(selectRemote);
     const mock = createMockPi();
     const { default: extension } = await import("../src/sync-extension.js");
-    extension(mock.pi, continuousDependencies(f.backend));
-    fakeContinuousTime();
+    extension(mock.pi);
     try {
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
       assert.ok(context.notifications.some((item) => item.message.startsWith("pi-sync recovery required")));
       await mock.commands.get("sync")?.handler("help", context.ctx);
-      const { advanceContinuous } = await import("./continuous-test-helpers.js");
-      await advanceContinuous(6000);
+      assert.equal((await piDaemonClient(context.ctx).connect()).facts.ready, false);
       assert.equal(context.requests.length, 0);
-      assert.equal(
-        context.notifications.some((item) => item.message.startsWith("Continuous sync")),
-        false,
-      );
-      assert.equal(vi.getTimerCount(), 0);
+      await assert.rejects(fs.stat(path.join(agentDir, "pi-sync/continuous/scheduler.lock")), /ENOENT/u);
     } finally {
       await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-      vi.useRealTimers();
     }
   }));
 

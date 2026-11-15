@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SyncInspection } from "sync-daemon/engine/sync/sync-inspection";
 import type { AnySyncConfig } from "../src/settings/settings-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../src/state/sync-state-store.js";
-import type { SyncInspection } from "../src/sync/sync-inspection.js";
 
 export function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

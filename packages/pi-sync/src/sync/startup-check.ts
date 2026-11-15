@@ -3,7 +3,6 @@ import { loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/conf
 import { isMissingConfigError } from "../settings/config-errors.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { snapshotOptionsForContext } from "../snapshot/session-paths.js";
-import { withLock } from "../state/lock.js";
 import { withStateDirectoryAccess } from "../state/state-directory.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import type { SyncAttentionController } from "../ui/sync-attention.js";
@@ -90,16 +89,9 @@ export function createStartupCheck(
             const currentConfig = await loadConfigForCheck();
             throwIfAborted(signal);
             if (syncCheckConfigFingerprint(currentConfig) !== identity) return;
-            // Lock order: state migration guard → sync operation → backend cache.
-            // Read heads may write only private cache data. Never call doctor/syncBoth.
+            // The daemon owns the operation and cache guards.
             const inspection = await timings.measure("inspection and guards", () =>
-              withStateDirectoryAccess(() => {
-                throwIfAborted(signal);
-                return withLock("startup-check", () => {
-                  throwIfAborted(signal);
-                  return inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal, undefined, timings);
-                });
-              }),
+              inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal, undefined, timings),
             );
             throwIfAborted(signal);
             const latest = await loadConfigForCheck();
@@ -121,9 +113,7 @@ export function createStartupCheck(
               inspection.head &&
               inspection.selectionState?.kind === "same"
             ) {
-              const [operations, { withAgentSyncLock }] = await timings.measure("operations import", () =>
-                Promise.all([loaders.operations(), import("./agent-sync.js")]),
-              );
+              const operations = await timings.measure("operations import", () => loaders.operations());
               throwIfAborted(signal);
               if (!isCurrent()) return;
               if (!ctx.isIdle()) {
@@ -131,24 +121,18 @@ export function createStartupCheck(
                 return;
               }
               await timings.measure("automatic transfer", () =>
-                withStateDirectoryAccess(() =>
-                  withAgentSyncLock(
-                    ctx,
-                    {
-                      args: [],
-                      yes: true,
-                      force: false,
-                      stale: false,
-                      silent: true,
-                      reload: false,
-                      auto: true,
-                      signal,
-                      startupTimings: timings,
-                      onCommit: () => attention.clearObservation(),
-                    },
-                    (options) => operations.syncBoth(ctx, options),
-                  ),
-                ),
+                operations.syncBoth(ctx, {
+                  args: [],
+                  yes: true,
+                  force: false,
+                  stale: false,
+                  silent: true,
+                  reload: false,
+                  auto: true,
+                  signal,
+                  startupTimings: timings,
+                  onCommit: () => attention.clearObservation(),
+                }),
               );
               throwIfAborted(signal);
               if (!isCurrent()) return;

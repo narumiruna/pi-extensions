@@ -2,5 +2,7 @@
 // Prepare workspace runtime dependencies and Inspector assets before optional development hooks.
 const { prepareKitRuntime } = await import("./prepare-kit-runtime.mjs");
 await prepareKitRuntime();
+const { prepareDaemonRuntime } = await import("./prepare-daemon-runtime.mjs");
+await prepareDaemonRuntime();
 await import("../packages/pi-inspect/scripts/build.mjs");
 await import("../.husky/install.mjs");

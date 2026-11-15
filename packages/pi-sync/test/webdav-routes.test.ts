@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { diff, doctor, history, pull, push, rollback, status, syncBoth } from "sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { CommandOptions } from "../src/commands/command-types.js";
 import { localConfigPath } from "../src/settings/config-file.js";
-import { diff, doctor, history, pull, push, rollback, status, syncBoth } from "../src/sync/sync-operations.js";
 import syncExtension from "../src/sync.js";
+import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
@@ -66,7 +68,7 @@ test("all backend-neutral sync routes operate against a WebDAV target", async ()
       await rollback(ctx, options([pointer.snapshot]));
       const mock = createMockPi();
       syncExtension(mock.pi);
-      await mock.commands.get("sync")?.handler("config", ctx);
+      await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
       const configOutput = notifications.at(-1)?.message ?? "";
       assert.match(configOutput, /kind: webdav/);
       assert.match(configOutput, /password: configured/);

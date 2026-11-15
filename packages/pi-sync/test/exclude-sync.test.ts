@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { SyncLoaders } from "sync-daemon/engine/sync/sync-loaders";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { loadConfig } from "../src/settings/config.js";
@@ -10,7 +11,6 @@ import { withStateDirectoryAccess } from "../src/state/state-directory.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { withAgentSyncLock } from "../src/sync/agent-sync.js";
 import { readMergeJournal } from "../src/sync/merge-journal.js";
-import type { SyncLoaders } from "../src/sync/sync-loaders.js";
 import { pull, push, rollback, syncBoth } from "../src/sync/sync-mutations.js";
 import { RemoteSelectionMismatchError, selectionForSnapshot } from "../src/sync/sync-policy.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
@@ -48,7 +48,7 @@ test("excluding the entire sessions tree disables the legacy shutdown push befor
       });
       return current;
     });
-    const { autoPushSessions } = await import("../src/sync/automatic-sync.js");
+    const { pushSessionsOnShutdown } = await import("sync-daemon/engine/sync/session-push");
     let loaded = 0;
     const loaders = new Proxy(
       {},
@@ -59,7 +59,7 @@ test("excluding the entire sessions tree disables the legacy shutdown push befor
         },
       },
     ) as SyncLoaders;
-    await autoPushSessions(ctx, new AbortController().signal, loaders);
+    await pushSessionsOnShutdown(ctx, { ...mergeOptions, signal: new AbortController().signal }, loaders);
     assert.equal(loaded, 0);
     assert.deepEqual(notifications, []);
     await assert.rejects(fs.stat(path.join(root, "pi-sync")), { code: "ENOENT" });

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { stopDaemon } from "sync-daemon";
 import { afterAll, describe, test } from "vitest";
 import {
   type BuildMetadata,
@@ -10,6 +12,7 @@ import {
   registerRuntimeBuilderContract,
 } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3WebDavSettings } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
 
@@ -18,26 +21,9 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   forbiddenEagerInputs: [
     "src/commands/command-handler.ts",
     "src/commands/command-execution.ts",
-    "src/snapshot/snapshot.ts",
-    "src/snapshot/snapshot-codec.ts",
-    "src/snapshot/snapshot-transaction.ts",
-    "src/sync/sync-local.ts",
-    "src/sync/local-fields.ts",
-    "src/sync/json-document.ts",
-    "src/sync/agent-sync.ts",
-    "src/sync/continuous-sync.ts",
-    "src/sync/continuous-record.ts",
-    "src/sync/continuous-lease.ts",
-    "src/sync/continuous-watch.ts",
-    "src/sync/agent-runner.ts",
-    "src/sync/agent-plan.ts",
-    "src/sync/agent-candidate.ts",
-    "src/sync/agent-store.ts",
     "src/sync/setup-switch.ts",
     "src/sync/sync-operations.ts",
-    "src/sync/sync-queries.ts",
     "src/sync/sync-inspection.ts",
-    "src/sync/sync-mutations.ts",
     "src/ui/manager-ui.ts",
     "src/ui/setup/setup-wizard.ts",
     "src/ui/setup/setup-switcher.ts",
@@ -47,9 +33,6 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "src/ui/manager-result-dispatcher.ts",
     "src/ui/file-selection.ts",
     "src/ui/remote-selection-ui.ts",
-    "src/backends/s3/s3-backend.ts",
-    "src/backends/webdav/webdav-backend.ts",
-    "src/backends/git/git-backend.ts",
   ],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit", "fast-xml-parser"],
   includeDynamicExternals: true,
@@ -65,18 +48,9 @@ test("generated runtime preserves every first-use import boundary", async () => 
     for (const lazyInput of [
       "src/commands/command-handler.ts",
       "src/commands/command-execution.ts",
-      "src/snapshot/snapshot.ts",
-      "src/snapshot/snapshot-codec.ts",
-      "src/snapshot/snapshot-transaction.ts",
-      "src/sync/sync-local.ts",
-      "src/sync/local-fields.ts",
-      "src/sync/json-document.ts",
-      "src/sync/agent-sync.ts",
       "src/sync/setup-switch.ts",
       "src/sync/sync-operations.ts",
-      "src/sync/sync-queries.ts",
       "src/sync/sync-inspection.ts",
-      "src/sync/sync-mutations.ts",
       "src/ui/manager-ui.ts",
       "src/ui/setup/setup-wizard.ts",
       "src/ui/setup/setup-switcher.ts",
@@ -86,9 +60,6 @@ test("generated runtime preserves every first-use import boundary", async () => 
       "src/ui/manager-result-dispatcher.ts",
       "src/ui/file-selection.ts",
       "src/ui/remote-selection-ui.ts",
-      "src/backends/s3/s3-backend.ts",
-      "src/backends/webdav/webdav-backend.ts",
-      "src/backends/git/git-backend.ts",
     ]) {
       assert.equal(
         [...eagerInputs].some((input) => input.endsWith(`/${lazyInput}`)),
@@ -96,7 +67,7 @@ test("generated runtime preserves every first-use import boundary", async () => 
         `${lazyInput} became eager`,
       );
     }
-    const protectedInput = "src/sync/sync-mutations.ts";
+    const protectedInput = "src/sync/sync-operations.ts";
     const missing = structuredClone(metadata);
     for (const output of Object.values(missing.outputs ?? {})) {
       if (output.inputs) delete output.inputs[protectedInput];
@@ -194,6 +165,7 @@ test("generated runtime is mapped, external, self-contained, and loadable by Pi"
           ],
         }),
       );
+      await adoptFixtureRoot(agentDir);
       for (const reason of ["startup", "new"]) {
         statuses.set("sync", "stale");
         for (const handler of starts ?? []) await handler({ type: "session_start", reason }, ctx);
@@ -214,7 +186,8 @@ test("generated runtime is mapped, external, self-contained, and loadable by Pi"
         (error: NodeJS.ErrnoException) => error.code === "ENOENT",
       );
       for (const reason of ["reload", "quit", "quit"]) {
-        statuses.set("sync", "stale");
+        // Closed owners are idempotent; do not manufacture a newer owner's raw status.
+        if (reason === "reload") statuses.set("sync", "stale");
         for (const handler of shutdowns ?? []) {
           await handler({ type: "session_shutdown", reason }, ctx);
         }
@@ -226,6 +199,7 @@ test("generated runtime is mapped, external, self-contained, and loadable by Pi"
       loaded.runtime.invalidate("generated setup smoke complete");
     }
   } finally {
+    await stopDaemon(agentDir);
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     await rm(root, { force: true, recursive: true });
@@ -240,6 +214,11 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
   let reloadReady: Promise<void> | undefined;
   let foregroundReady = Promise.resolve();
   let loaded: ReturnType<DefaultResourceLoader["getExtensions"]> | undefined;
+  let backend: Server | undefined;
+  const requested = deferred();
+  const responseClosed = deferred();
+  let requests = 0;
+  let aborted = false;
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 
   function ensureFixture(): Promise<void> {
@@ -249,7 +228,23 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
       agentDir = join(root, "agent");
       await builder.buildRuntime({ outputDirectory: join(root, "dist") });
       await mkdir(agentDir);
-      await writeFile(join(agentDir, "pi-sync.json"), JSON.stringify(v3WebDavSettings({ automatic: true })));
+      const listener = createServer((_request, response) => {
+        requests++;
+        requested.resolve();
+        response.on("close", () => {
+          aborted = true;
+          responseClosed.resolve();
+        });
+        // Keep the actual daemon request pending until foreground cancellation.
+      });
+      backend = listener;
+      await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+      const address = listener.address();
+      assert.ok(address && typeof address !== "string");
+      const settings = v3WebDavSettings({ automatic: true });
+      settings.storageConnections.dav.url = `http://127.0.0.1:${address.port}/dav`;
+      await writeFile(join(agentDir, "pi-sync.json"), JSON.stringify(settings));
+      await adoptFixtureRoot(agentDir);
       await writeFile(join(agentDir, "settings.json"), "{}\n");
       process.env.PI_CODING_AGENT_DIR = agentDir;
     })();
@@ -264,6 +259,12 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
     await reloadReady?.catch(() => {});
     await foregroundReady.catch(() => {});
     loaded?.runtime.invalidate("generated background check smoke complete");
+    if (agentDir) await stopDaemon(agentDir);
+    if (backend) {
+      const listener = backend;
+      listener.closeAllConnections();
+      await new Promise<void>((resolve) => listener.close(() => resolve()));
+    }
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     if (root) await rm(root, { force: true, recursive: true });
@@ -302,28 +303,9 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
 
   async function exerciseForegroundHelp(signal: AbortSignal): Promise<void> {
     await ensureLoaded(signal);
-    const previousFetch = globalThis.fetch;
-    const requested = deferred();
-    let aborted = false;
-    let requests = 0;
     const extension = loaded?.extensions[0];
     assert.ok(extension);
     const context = createMockContext({ mode: "rpc" });
-    globalThis.fetch = (async (_input, init) => {
-      assert.equal(init?.method, "GET");
-      requests++;
-      requested.resolve();
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => {
-            aborted = true;
-            reject(new DOMException("Aborted", "AbortError"));
-          },
-          { once: true },
-        );
-      });
-    }) as typeof fetch;
     const cancelWait = () => requested.resolve();
     signal.addEventListener("abort", cancelWait, { once: true });
     try {
@@ -336,6 +318,8 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
       assert.equal(aborted, false);
       await extension.commands.get("sync")?.handler("help", context.ctx);
       signal.throwIfAborted();
+      await responseClosed.promise;
+      signal.throwIfAborted();
       assert.equal(aborted, true);
       assert.equal(requests, 1);
       assert.ok(context.notifications.some((n) => n.message.includes("/sync")));
@@ -346,7 +330,6 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
           await handler({ type: "session_shutdown", reason: "reload" }, context.ctx);
       } finally {
         signal.removeEventListener("abort", cancelWait);
-        globalThis.fetch = previousFetch;
       }
     }
   }

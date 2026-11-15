@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pushSessionsOnShutdown } from "sync-daemon/engine/sync/session-push";
 import { test, vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { readStateForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
-import { autoPushSessions } from "../src/sync/automatic-sync.js";
 import { conflictDirectory } from "../src/sync/conflict-artifacts.js";
 import { mergeSync } from "../src/sync/merged-sync.js";
-import { createSyncLoaders } from "../src/sync/sync-loaders.js";
 import { pull, push, rollback } from "../src/sync/sync-mutations.js";
+import { createEngineTestLoaders as createSyncLoaders } from "./engine-loaders.js";
 import { withTempHome } from "./helpers.js";
 import { fixture, options } from "./partial-sync-fixture.js";
 
@@ -114,7 +114,7 @@ test("shutdown session push keeps local-only conflicts even when remote accepted
     const f = await pendingFixture(root);
     const head = await f.backend.readHead();
     const publish = vi.spyOn(f.backend, "publishSnapshot");
-    const operations = await import("../src/sync/sync-operations.js");
+    const operations = await import("sync-daemon/engine/sync/sync-operations");
     const loaders = createSyncLoaders({
       loadSyncOperations: async () => ({
         ...operations,
@@ -122,11 +122,13 @@ test("shutdown session push keeps local-only conflicts even when remote accepted
           push(ctx, command, input ? { ...input, backend: f.backend } : undefined, () => f.backend),
       }),
     });
-    await autoPushSessions(f.context.ctx, new AbortController().signal, loaders);
+    await assert.rejects(
+      pushSessionsOnShutdown(f.context.ctx, { ...options, signal: new AbortController().signal }, loaders),
+      /Unresolved partial conflicts/u,
+    );
     assert.equal(publish.mock.calls.length, 0);
     assert.deepEqual(await f.backend.readHead(), head);
     assert.deepEqual(await readStateForConfig(f.config), f.state);
-    assert.ok(f.context.notifications.some(({ message }) => /Unresolved partial conflicts/.test(message)));
   }));
 
 test("push rechecks unresolved progress added during its remote observation", async () =>

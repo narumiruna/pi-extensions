@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { inspectSync } from "sync-daemon/engine/sync/sync-inspection";
 import { test } from "vitest";
 import type { RemoteHead, SyncBackend } from "../src/backends/sync-backend.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { statePathForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
 import { classifyObservation } from "../src/ui/sync-attention.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 

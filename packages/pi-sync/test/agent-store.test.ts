@@ -167,7 +167,7 @@ test("separate processes exclude duplicate inference and reclaim only a dead own
     const output = path.join(directory, `${randomUUID()}.mjs`);
     await build({
       stdin: {
-        contents: `import { withAgentClaim } from ${JSON.stringify(entry)}; import { withStateDirectoryAccess } from ${JSON.stringify(state)}; await withStateDirectoryAccess(() => withAgentClaim(async () => { process.on("message", () => {}); process.send({ready:true}); await new Promise(() => {}); }));`,
+        contents: `import ${JSON.stringify(path.resolve("packages/pi-sync/test/engine-process-host.ts"))}; import { withAgentClaim } from ${JSON.stringify(entry)}; import { withStateDirectoryAccess } from ${JSON.stringify(state)}; await withStateDirectoryAccess(() => withAgentClaim(async () => { process.on("message", () => {}); process.send({ready:true}); await new Promise(() => {}); }));`,
         resolveDir: process.cwd(),
       },
       outfile: output,

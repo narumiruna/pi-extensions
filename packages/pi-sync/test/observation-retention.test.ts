@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as operations from "sync-daemon/engine/sync/sync-operations";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { SyncBackend } from "../src/backends/sync-backend.js";
@@ -10,7 +11,6 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import { withLock } from "../src/state/lock.js";
 import { statePathForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
 import { createSyncLoaders } from "../src/sync/sync-loaders.js";
-import * as operations from "../src/sync/sync-operations.js";
 import * as dispatcher from "../src/ui/manager-result-dispatcher.js";
 import * as selectionReview from "../src/ui/remote-selection-ui.js";
 import { createSyncAttentionController } from "../src/ui/sync-attention.js";
@@ -72,7 +72,11 @@ test("cancelling a real push confirmation preserves the hint and all content wit
       createSyncLoaders({
         loadSyncOperations: async () => ({
           ...operations,
-          push: (ctx, options, input) => operations.push(ctx, options, input, async () => backend),
+          push: (
+            ctx: Parameters<typeof operations.push>[0],
+            options: Parameters<typeof operations.push>[1],
+            input?: Parameters<typeof operations.push>[2],
+          ) => operations.push(ctx, options, input, async () => backend),
         }),
       }),
       attention,
