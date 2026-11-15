@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-herdr)](https://www.npmjs.com/package/@narumitw/pi-herdr) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Connect Pi's interactive lifecycle to Herdr and load operating guidance from the installed Herdr and Herdr Core CLIs.
+Connect Pi's interactive lifecycle to Herdr, publish pane metadata, and show sibling agent status.
 
 ## ✨ Features
 
@@ -12,9 +12,6 @@ Connect Pi's interactive lifecycle to Herdr and load operating guidance from the
 - Refreshes the widget on Herdr pane, workspace-name, and agent-status updates without polling the CLI.
 - Coalesces rapid state changes and retries short-lived local socket failures without interrupting Pi.
 - Derives blocked state from Pi's public `ui_prompt_start` and `ui_prompt_end` lifecycle events.
-- Bundles thin `herdr` and `hc` bootstrap skills for explicit inspection and control requests.
-- Loads version-matched operating guidance from `herdr --skill` or `hc --skill`.
-- Keeps extension and skill installation in one Pi package.
 
 ## 📦 Install
 
@@ -39,40 +36,23 @@ pi --no-extensions -e ./packages/pi-herdr
 
 An unbuilt local checkout has no generated entrypoint and cannot be loaded by package directory.
 
-Pi extensions and skills run with your user permissions.
-Install only trusted packages, and review the source and bundled instructions before loading this package.
+Pi extensions run with your user permissions.
+Install only trusted packages, and review the source before loading this package.
 
 ## 🚀 Quick start
 
 Start Pi inside a Herdr-managed pane after installing the package.
 The extension activates automatically when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present.
 When any workspace in the connected Herdr session contains another recognized agent, Pi shows its state and workspace in a widget above the editor.
-Ask Pi to use Herdr, or invoke `/skill:herdr`, when you want it to inspect or control the current Herdr session.
-Before the first control command, the bootstrap loads `herdr --skill` once and reuses those instructions while they remain in the current context.
-For Herdr Core terminals, invoke `/skill:hc` instead; it loads `hc --skill` without requiring a Herdr-managed pane.
+Operating skills are not included; install them separately if you need `/skill:herdr` or `/skill:hc`.
 
-If the standalone integration and skill are already installed, remove them after installing this package to avoid duplicate state reports and skill-name collisions:
+If the standalone integration is already installed, remove it after installing this package to avoid duplicate state reports:
 
 ```bash
 rm ~/.pi/agent/extensions/herdr-agent-state.ts
-rm -rf ~/.agents/skills/herdr
 ```
 
 Run `/reload` or restart Pi after changing the installed resources.
-
-## 🧠 Skills
-
-The bundled skills load CLI-owned guidance once and reuse it while it remains in the current context:
-
-- [`herdr`](./skills/herdr/SKILL.md), invoked with `/skill:herdr`, loads `herdr --skill` for legacy Herdr panes and requires `HERDR_ENV=1`.
-- [`hc`](./skills/hc/SKILL.md), invoked with `/skill:hc`, loads `hc --skill` for Herdr Core persistent terminals and agents; it requires neither `HERDR_ENV=1` nor `HC_TERMINAL_ID`.
-
-Both skills apply only after an explicit request for their CLI, not merely because a task could use background work or delegation.
-The CLIs are separate; neither skill substitutes the other CLI when its command fails.
-
-The `herdr` skill treats panes created for background work as temporary and attempts to close them after collecting the required output.
-Ask Pi explicitly to keep a pane open after the task when you want to inspect or use it later.
-Automatic cleanup runs only when the installed Herdr guidance provides a conditional close that atomically confirms the recorded pane ownership and acceptable agent or shell state; otherwise Pi leaves the pane open and reports the limitation.
 
 ## 💬 Commands
 
@@ -181,12 +161,6 @@ Events from every workspace in the connected Herdr session can refresh the widge
 The extension strips terminal controls at the display boundary and never reads sibling terminal output for the widget.
 The package does not authenticate the endpoint, so trust the environment that launches Pi and controls these variables.
 
-The bundled skills load operating guidance from the local CLI only after an explicit request for Herdr or Herdr Core.
-The returned CLI-owned instructions can direct Pi to inspect terminals, create panes or persistent terminals, start agents, send input, and run local or remote commands.
-Those commands execute with the same user permissions as Pi and can affect live terminal sessions.
-Both bootstraps stop when their CLI is unavailable or its `--skill` command fails; the `herdr` bootstrap also stops when `HERDR_ENV` is not `1`.
-Command recipes, approval handling, and other operating safety rules come from the selected CLI's installed version instead of being duplicated by this package.
-
 ## 🚧 Limitations
 
 - Lifecycle reporting, metadata reporting, and the agent widget are disabled in RPC, JSON, and print modes.
@@ -196,10 +170,8 @@ Command recipes, approval handling, and other operating safety rules come from t
 - The widget requires compatible pane and workspace subscriptions; unsupported subscriptions hide the widget without disabling lifecycle or metadata reporting.
 - A pane-label change appears on its next update event or authoritative refresh; an agent rename emits a pane-update event.
 - Integration requires a running compatible Herdr session and valid injected environment variables.
-- Each skill requires its matching CLI with `--skill` support; `hc` does not enable the legacy Herdr lifecycle reports or widget.
 - Socket failures are intentionally silent after the bounded retry.
-- Skill cleanup tracking exists only in the active model context, so compaction, session replacement, `/reload`, or shutdown can leave temporary panes open.
-- The package does not install, start, update, or configure Herdr or Herdr Core itself.
+- The package does not install, start, update, or configure Herdr itself.
 
 ## 🗂️ Package layout
 
@@ -210,13 +182,12 @@ packages/pi-herdr/
 │   └── herdr-agent-state.ts           # Herdr lifecycle integration
 ├── dist/                              # Generated TypeScript runtime loaded by Pi
 ├── scripts/                           # Deterministic runtime builder
-├── skills/                            # Published herdr and hc bootstraps for CLI-owned guidance
 └── test/                              # Behavior and lifecycle coverage
 ```
 
 ## 🔎 Keywords
 
-Pi, Herdr, Herdr Core, hc, terminal multiplexer, persistent terminals, coding agents, agent orchestration, lifecycle state.
+Pi, Herdr, terminal multiplexer, coding agents, agent status, lifecycle state, pane metadata.
 
 ## 📄 License
 

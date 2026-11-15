@@ -4,25 +4,24 @@
 
 Make `pi-herdr` the lightweight bridge that lets Pi and Herdr share live context in both directions without replacing Herdr's TUI, duplicating its CLI, or distracting users when no coordination needs attention.
 
-**Current roadmap status:** The Phase 1 agent widget, Phase 2 bounded pane metadata, and Phase 4 skill bootstrap are delivered and verified, while the optional footer summary and remaining Phases 3–4 work remain planned.
+**Current roadmap status:** The Phase 1 agent widget and Phase 2 bounded pane metadata are delivered and verified, while the optional footer summary and remaining Phases 3–4 work remain planned. Bundled operating skills have been removed; install them separately when needed.
 
 ## Objectives
 
 - **Make nearby agent activity visible in Pi** — Success after Phase 1: a responsive editor widget accurately reflects relevant sibling-agent state from Herdr, starts no steady-state CLI polling, and leaves no UI or socket resource after session shutdown.
 - **Give Herdr useful Pi context** — Success after Phase 2: Herdr can display bounded, current Pi session and model metadata without exposing conversation content or allowing stale sessions to publish updates.
 - **Make inspection and coordination deliberate** — Success after Phase 3: users can inspect current Herdr context and invoke a small set of explicit, accurately labelled actions without requiring model interpretation.
-- **Keep the skill and runtime compatible** — Success throughout: unsupported Herdr protocols degrade without interrupting Pi, and the bundled bootstrap loads version-matched operating guidance from the installed Herdr CLI.
+- **Keep the runtime compatible** — Success throughout: unsupported Herdr protocols degrade without interrupting Pi, without requiring a bundled operating skill.
 
 ## Current State
 
 - `packages/pi-herdr/src/herdr-agent-state.ts` reports the current interactive Pi session plus `working`, `blocked`, and `idle` state to the Herdr socket.
 - The extension coalesces state changes, retries bounded delivery failures, guards session generations, and aborts reporting during shutdown.
-- The bundled `herdr` skill is a thin, explicit bootstrap that loads CLI-owned operating guidance on demand through `herdr --skill`.
+- The package exposes only the extension; `herdr` and `hc` operating skills must be installed separately.
 - The extension now renders a terminal-safe, event-driven widget with one state, agent, pane, and workspace row per recognized sibling and maintains pane-scoped status subscriptions with bounded failure recovery.
 - The extension publishes bounded `model`, `provider`, `thinking`, `session`, and `context_usage` pane tokens with full-patch clearing, sequence ordering, a one-hour TTL, and a session-owned refresh.
 - The extension still has no footer status, `/herdr` command, autocomplete, or watch notification.
 - The installed Herdr 0.8.2 protocol 20 API exposes `pane.current`, `pane.list`, `events.subscribe`, pane lifecycle and agent-status events, `pane.report_metadata`, and protocol metadata through its public schema.
-- The bundled bootstrap retains only discovery, environment, failure, and context-reuse contracts, while the installed Herdr version owns command syntax and operating safety rules.
 - The repository has no telemetry or grounded adoption baseline, so usage and delivery targets remain unknown.
 
 ## Guiding Principles
@@ -77,8 +76,8 @@ Make `pi-herdr` the lightweight bridge that lets Pi and Herdr share live context
 - [ ] Agent or pane autocomplete is delivered only if a stable insertion syntax and target identity improve a demonstrated workflow without intercepting ordinary `@` or path completion.
 - [ ] Opt-in watch notifications distinguish `blocked` from unseen `done`, avoid notifying for every idle transition, and can be cancelled or cleared with the owning session.
 - [ ] A documented decision either retains skill-plus-`bash` as the model control surface or introduces a narrowly scoped typed tool only when it provides measurable safety or reliability beyond the CLI guidance.
-- [x] The bundled skill delegates version-sensitive command syntax and operating safety rules to one retained `herdr --skill` result instead of duplicating CLI recipes.
-  Evidence: focused bootstrap contract tests and a live installed-CLI smoke verify the environment gate, one-call load, context reuse, and authoritative output path.
+- [x] Operating skills are separate from the extension package rather than a bundled model control surface.
+  Evidence: package-resource tests verify that Pi loads one extension and no skills, and manifests no longer publish or register the former skill paths.
 
 **Outcome:** Higher-frequency workflows become easier to discover while model prompt weight, notification noise, and duplicated command semantics remain controlled.
 
@@ -91,7 +90,7 @@ Make `pi-herdr` the lightweight bridge that lets Pi and Herdr share live context
 | Rendered widget lines exceeding available width | 0 in deterministic coverage | 0 | Narrow-width and untrusted-input tests |
 | Session-owned resources remaining after shutdown | 0 in deterministic coverage | 0 subscriptions, retry tasks, widgets, or statuses | Lifecycle tests |
 | Stale session metadata accepted after replacement | 0 in deterministic delayed-send coverage | 0 | Sequence, replacement, and shutdown-clear tests |
-| Duplicated CLI command recipes in the bundled skill | Full operating guide previously duplicated the installed CLI skill | 0 beyond the `herdr --skill` bootstrap command | Deterministic bootstrap contract test and live `herdr --skill` smoke |
+| Operating skills bundled with the extension | None | 0 | Package-resource tests and tarball inspection |
 | Adoption and coordination task completion | Unknown | TBD if privacy-compatible evidence becomes available | No current measurement source |
 
 ## Risks and Dependencies
@@ -99,7 +98,6 @@ Make `pi-herdr` the lightweight bridge that lets Pi and Herdr share live context
 | Risk or dependency | Impact | Mitigation or decision |
 | --- | --- | --- |
 | Herdr socket protocol or event schemas change across versions | Reverse state could fail or become misleading | Structurally validate narrow workspace reads and events, reject invalid frames, test supported fixtures, and preserve outbound reporting when reverse features are disabled. |
-| The installed Herdr CLI is missing or does not support `herdr --skill` | Pi cannot load model operating guidance | Keep the bootstrap failure observable, stop before control commands, and document the compatible-CLI requirement. |
 | A long-lived subscription adds reconnect and shutdown complexity | Reloads or replacement sessions could leak work or repaint stale UI | Give each session one abortable owner, use bounded backoff, revalidate generation after every await, and clear exact UI keys during all teardown paths. |
 | Persistent widgets consume scarce terminal rows | Ambient status could distract more than it helps | Default to current-workspace siblings, bound rows, collapse overflow, and hide when no useful state exists. |
 | Herdr-derived terminal text is untrusted | Titles, paths, or state labels could inject controls or break layout | Sanitize at the display boundary before presentation sorting or truncation while preserving raw protocol data internally. |
@@ -110,6 +108,7 @@ Make `pi-herdr` the lightweight bridge that lets Pi and Herdr share live context
 
 ## Decisions and Changes
 
+- **Remove bundled operating skills:** keep lifecycle reporting, pane metadata, the widget, and `/herdr` in this package; install `herdr` and `hc` skills separately when needed. This supersedes the earlier bundled-bootstrap decision.
 - **2026-08-30 — Put the widget first:** reverse ambient observability closes the largest gap between the existing outbound extension and on-demand skill.
 - **2026-08-30 — Prefer a widget over editor replacement:** `ctx.ui.setWidget()` preserves editor composition, keybindings, paste behavior, and compatibility with other editor extensions.
 - **2026-08-30 — Prefer subscription over polling:** authoritative workspace reads plus topology and pane-scoped status subscriptions provide a lower-overhead and more truthful source than recurring `herdr agent list` subprocesses.
