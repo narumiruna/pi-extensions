@@ -44,7 +44,6 @@ Install only trusted packages, and review the source before loading this package
 Start Pi inside a Herdr-managed pane after installing the package.
 The extension activates automatically when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present.
 When any workspace in the connected Herdr session contains another recognized agent, Pi shows its state and workspace in a widget above the editor.
-Operating skills are not included; install them separately if you need `/skill:herdr` or `/skill:hc`.
 
 If the standalone integration is already installed, remove it after installing this package to avoid duplicate state reports:
 
