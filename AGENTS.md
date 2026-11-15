@@ -119,6 +119,12 @@
 - Keep worktrees outside the repository because root Biome checks reject nested worktrees with another `biome.json`.
 - Stop after one clear external or entitlement failure in a live-provider smoke and fall back to deterministic tests unless the user asks to retry.
 
+### Enforced repeat-mistake rules
+
+| Rule | Enforcement |
+| --- | --- |
+| Derive workspace build order from package dependencies, not the root workspace list. | `scripts/run-builds.mjs` and `scripts/workspace-graph.mjs`; cold-build, historical-failure, cycle, and fail-fast tests in `test/workspace-build-order.test.ts` through `npm test`; CI runs `npm run check` and `npm test`. |
+
 ## Publishing and release safety
 
 - Get explicit user approval before publishing, changing npm visibility, creating version tags, or dispatching release workflows.

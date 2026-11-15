@@ -182,7 +182,10 @@ npm test
 npm run check
 ```
 
-`npm test` typechecks the test sources and runs the root and workspace suites with Vitest.
+`npm test` builds prerequisites, typechecks the test sources, and runs the root and workspace suites with Vitest.
+`npm run build` derives dependency-first order from workspace manifests, builds each prerequisite once,
+and stops before consumers if a prerequisite fails; workspace-list order is not a build contract.
+Staged typechecks use the same build planner.
 See [test performance and isolation](./docs/test-performance.md) for package timing reports,
 cache behavior, and the reviewed shared-module test boundary.
 CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.
