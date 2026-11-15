@@ -4,6 +4,7 @@ import path from "node:path";
 import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { Snapshot, SnapshotFile } from "../snapshot/snapshot-types.js";
+import { compileSyncExclude, normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { collidingPaths, planFileMerge } from "../sync/file-merge-planner.js";
 import { parseSettingsDocument } from "../sync/json-document.js";
 import { validateSession } from "../sync/session-merge.js";
@@ -38,6 +39,9 @@ function identity(config: AnySyncConfig) {
     backendIdentityCoordinates(config),
     config.include,
     config.localFields ?? [],
+    ...(config.exclude === undefined
+      ? []
+      : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
   ]);
 }
 function directory(config: AnySyncConfig) {
@@ -62,8 +66,10 @@ export async function stageMergeBaseline(
   previous?: SyncState,
 ) {
   const collisions = collidingPaths(snapshot.files.map((file) => file.path));
+  const excluded = compileSyncExclude(config.exclude);
   const files = snapshot.files.filter((file) => {
     return (
+      !excluded(file.path) &&
       !collisions.has(file.path) &&
       accepted.lastFileHashes[file.path] === file.sha256 &&
       (file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) &&
@@ -80,6 +86,7 @@ export async function stageMergeBaseline(
     }
     for (const ancestor of ancestors)
       if (
+        !excluded(ancestor.path) &&
         !collisions.has(ancestor.path) &&
         accepted.lastFileHashes[ancestor.path] === ancestor.sha256 &&
         !stagedPaths.has(ancestor.path)
@@ -143,7 +150,8 @@ export async function readMergeAncestors(config: AnySyncConfig, state: SyncState
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new Error("Merge ancestor is invalid; preserve its private cache and review the conflict.");
   }
-  return record.files;
+  const excluded = compileSyncExclude(config.exclude);
+  return record.files.filter((file) => !excluded(file.path));
 }
 /** A no-op must not skip seeding or repairing ancestors required by later merges. */
 export async function hasCurrentMergeBaseline(config: AnySyncConfig, snapshot: Snapshot, state: SyncState) {

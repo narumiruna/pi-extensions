@@ -14,9 +14,9 @@ This skill provides guidance only, even when the request asks you to apply a cha
 
 Read the relevant headings in the [settings reference](references/configuration.md), not the user's private settings file.
 Use **Settings ownership and required fields**, **Complete version 3 example**, and **Required backend shapes** for schema, backend, and destination questions.
-Use **Included content** for path selection and session privacy.
+Use **Included content** and **Excluded paths** for path selection, exclusions, schema compatibility, and session privacy.
 Use **Required backend shapes**, **Automatic startup transfer**, **Autonomous sync**, and **Continuous sync** to distinguish automatic controls.
-Use **Settings field merge and machine-local fields** and **Content merge and partial progress** for versions 4 and 5.
+Use **Settings field merge and machine-local fields**, **Content merge and partial progress**, and **Excluded paths** for the explicit version boundaries.
 Use **Diagnostics** and **Unsupported old settings and recovery** for diagnostic side effects and recovery boundaries.
 If the reference does not establish an answer, state the missing evidence instead of inventing a field, default, migration, or compatibility guarantee.
 
@@ -46,7 +46,8 @@ Explain session privacy, secret-scan bypass, autonomous writes, provider disclos
 Do not infer consent for one option from consent for another.
 Review the exact branch, bucket or collection, path, and included content in the proposed guidance before handing it off.
 Warn that Git owns the whole selected branch and that saving setup settings does not create a bucket/repository or transfer data.
-Keep first-source choice, changed include/local-field policies, conflicts, and force-direction migrations in their existing user-reviewed flows.
+Keep first-source choice, changed include/exclude/local-field policies, conflicts, and force-direction migrations in their existing user-reviewed flows.
+Explain that exclusions protect local files and omit matching paths from new publications, not retained history; removing rules can expose or replace content.
 
 ## Stop and hand off
 

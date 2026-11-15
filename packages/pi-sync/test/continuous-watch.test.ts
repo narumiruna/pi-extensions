@@ -76,6 +76,34 @@ test("watch hints follow selected roots, survive replacement, and exclude privat
     assert.ok(native.watchers.every((item) => item.closed));
   }));
 
+test("excluded content produces no hints, but ancestor and settings changes still do", async () =>
+  withTempHome(async (agentDir) => {
+    native.watchers.length = 0;
+    native.fail = false;
+    await fs.mkdir(path.join(agentDir, "skills"), { recursive: true });
+    const settings = v3S3Settings({ include: ["skills"] });
+    settings.version = 6;
+    Object.assign(settings.syncSetups.home.sync, { exclude: ["skills/private", "**/*.log"] });
+    await fs.writeFile(localConfigPath(), JSON.stringify(settings));
+    const hints: boolean[] = [];
+    const close = await watchContinuous(await loadConfig(), (settings) => hints.push(settings));
+    try {
+      const root = native.watchers.find((item) => item.root === agentDir);
+      const skills = native.watchers.find((item) => item.root.endsWith("skills"));
+      assert.ok(root);
+      assert.ok(skills);
+      skills.change("change", "private/a.md");
+      skills.change("change", ".hidden.log");
+      skills.change("change", "public.md");
+      root.change("rename", "skills");
+      root.change("change", "pi-sync.json");
+      assert.deepEqual(hints, [false, false, true]);
+    } finally {
+      close();
+    }
+    assert.ok(native.watchers.every((item) => item.closed));
+  }));
+
 test("unsupported watching and missing roots leave periodic fallback available", async () =>
   withTempHome(async (agentDir) => {
     native.watchers.length = 0;

@@ -1,26 +1,25 @@
 import type { RemoteHead } from "../backends/sync-backend.js";
 import { toPosix } from "../paths.js";
-import {
-  canonicalSnapshotPathForConfig,
-  filterSnapshotForConfigPolicy,
-  isConfiguredSnapshotPath,
-  isSessionPath,
-} from "../snapshot/snapshot.js";
+import { canonicalSnapshotPathForConfig, filterSnapshotForConfigPolicy, isSessionPath } from "../snapshot/snapshot.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import type { SyncState } from "../state/state-types.js";
+import { sameSyncExclude } from "./exclude-policy.js";
 import { portableSnapshot, sameLocalFields } from "./local-fields.js";
 import {
+  configuredSnapshotPathMatcher,
   customIncludePathsByLower,
   includeFromSelectionConfig,
   normalizeSyncInclude,
   type SyncSelectionConfig,
+  syncSessionsSelected,
 } from "./sync-policy.js";
 
 type SyncPolicyConfig = SyncSelectionConfig & { localFields?: string[] };
 
 export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncPolicyConfig) {
   return (
-    (Boolean(state.lastAppliedSnapshot) && !sameLocalFields(state.localFields, config.localFields)) ||
+    (Boolean(state.lastAppliedSnapshot) &&
+      (!sameLocalFields(state.localFields, config.localFields) || !sameSyncExclude(state.exclude, config.exclude))) ||
     !sameHashes(fileHashMap(portableSnapshot(local, config.localFields)), stateHashMapForConfig(state, config))
   );
 }
@@ -36,7 +35,9 @@ export function remoteChangedSinceState(
   if (state.lastRemoteRevision && !sameRevision(head.revision, state.lastRemoteRevision)) return true;
   if (syncPolicyChanged(state, config)) return true;
   return (
-    includeFromSelectionConfig(config).includes("sessions") && !state.include?.includes("sessions") && head.syncSessions
+    syncSessionsSelected(config) &&
+    (!state.include?.includes("sessions") || !syncSessionsSelected(state)) &&
+    head.syncSessions
   );
 }
 
@@ -67,9 +68,10 @@ export function fileHashMap(snapshot: Snapshot) {
 
 function stateHashMapForConfig(state: SyncState, config: SyncPolicyConfig) {
   const includePaths = customIncludePathsByLower(includeFromSelectionConfig(config));
+  const configured = configuredSnapshotPathMatcher(config);
   return Object.fromEntries(
     Object.entries(state.lastFileHashes)
-      .filter(([filePath]) => isConfiguredSnapshotPath(filePath, config))
+      .filter(([filePath]) => configured(filePath))
       .map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, includePaths), hash]),
   );
 }
@@ -96,7 +98,11 @@ function withoutHashPaths(hashes: Record<string, string>, ignoredPaths: Set<stri
 }
 
 export function syncPolicyChanged(state: SyncState, config: SyncPolicyConfig) {
-  return syncIncludeChanged(state, config) || !sameLocalFields(state.localFields, config.localFields);
+  return (
+    syncIncludeChanged(state, config) ||
+    !sameSyncExclude(state.exclude, config.exclude) ||
+    !sameLocalFields(state.localFields, config.localFields)
+  );
 }
 
 export function shouldRefreshSyncedState(

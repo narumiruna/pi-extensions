@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig } from "../settings/config.js";
+import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { localConfigPath } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { agentDir } from "../snapshot/session-paths.js";
@@ -40,7 +40,10 @@ export async function showFileSelection(ctx: ExtensionCommandContext, setupName?
       [
         `pi-sync included content for sync setup ${safeTerminalText(config.setupName)}:`,
         `include: ${config.include.map(safeTerminalText).join(", ") || "none"}`,
-        `Edit sync.include in ${safeTerminalText(localConfigPath())}.`,
+        ...(config.exclude === undefined
+          ? []
+          : [`exclude: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
+        `Edit sync.include and sync.exclude in ${safeTerminalText(localConfigPath())}.`,
       ].join("\n"),
       "info",
     );
@@ -82,7 +85,7 @@ export async function showFileSelection(ctx: ExtensionCommandContext, setupName?
           ...setup,
           sync: { ...setup.sync, include },
         }),
-        { expectedInclude: config.include, signal },
+        { expectedConfigFingerprint: syncCheckConfigFingerprint(config), expectedInclude: config.include, signal },
       );
       if (signal?.aborted) return;
       ctx.ui.notify(

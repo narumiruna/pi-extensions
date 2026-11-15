@@ -125,6 +125,7 @@ export async function updateSyncSetup(
     expectedInclude?: readonly string[];
     expectedConnection?: StorageConnectionSettings;
     expectedConfigFingerprint?: string;
+    upgradeExclude?: boolean;
     signal?: AbortSignal;
   } = {},
 ) {
@@ -169,7 +170,7 @@ export async function updateSyncSetup(
     }
     const nextSetups = { ...settings.syncSetups, [name]: nextSetup };
     assertUniqueLocations(nextSetups, settings.storageConnections);
-    return { ...settings, syncSetups: nextSetups };
+    return { ...settings, ...(options.upgradeExclude ? { version: 6 as const } : {}), syncSetups: nextSetups };
   }, options.signal);
 }
 
@@ -207,8 +208,8 @@ export async function removeStorageConnection(name: string, signal?: AbortSignal
 
 async function updateSettings(update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3, signal?: AbortSignal) {
   return updateLocalConfig((settings) => {
-    if (settings.version !== 3 && settings.version !== 4 && settings.version !== 5) {
-      throw new Error("Storage connections and sync setups require version 3 or 4 or 5 pi-sync settings.");
+    if (settings.version !== 3 && settings.version !== 4 && settings.version !== 5 && settings.version !== 6) {
+      throw new Error("Storage connections and sync setups require version 3, 4, 5 or 6 pi-sync settings.");
     }
     return update(settings);
   }, signal);

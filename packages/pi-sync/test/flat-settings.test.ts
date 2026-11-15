@@ -102,8 +102,11 @@ for (const [before, expected] of [
       assert.equal(reviews.length, 1);
       assert.equal(reviews[0]?.title, "Save content policy?");
       const review = reviews[0]?.body ?? "";
-      assert.match(review, /upgrades settings to version 5/);
-      assert.match(review, /partial snapshots use version 3 and older clients must refuse them/);
+      assert.match(review, /upgrades settings to at least version 5/);
+      assert.match(
+        review,
+        /partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them/,
+      );
       assert.match(review, /Partial sync preserves withheld versions and old baselines/);
       assert.match(review, /Disabling does not clear unresolved groups or recovery evidence/);
       assert.match(review, /Review a directional migration first/);
@@ -113,6 +116,7 @@ for (const [before, expected] of [
 
 const settingLabels = [
   "Included paths",
+  "Excluded paths",
   "Compare included paths",
   "Machine-local fields",
   "Storage location",

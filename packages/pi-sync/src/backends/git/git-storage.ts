@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Snapshot, SnapshotSelection } from "../../snapshot/snapshot-types.js";
 import { sameLocalFields, validatePortableSnapshot, validateSnapshotFieldPolicy } from "../../sync/local-fields.js";
-import { portableSnapshotSelection, snapshotSelectionInclude } from "../../sync/sync-policy.js";
+import {
+  portableSnapshotSelection,
+  sameSnapshotSelection,
+  snapshotSelectionInclude,
+  validateSnapshotSelection,
+} from "../../sync/sync-policy.js";
 
 export const GIT_MANIFEST_VERSION = 2;
 export const MAX_GIT_MANIFEST_BYTES = 1024 * 1024;
@@ -56,7 +61,10 @@ export function requireGitManifest(value: unknown): GitManifest {
   }
   if (
     manifest.version !== GIT_MANIFEST_VERSION ||
-    (manifest.snapshotVersion !== 1 && manifest.snapshotVersion !== 2 && manifest.snapshotVersion !== 3) ||
+    (manifest.snapshotVersion !== 1 &&
+      manifest.snapshotVersion !== 2 &&
+      manifest.snapshotVersion !== 3 &&
+      manifest.snapshotVersion !== 4) ||
     typeof manifest.snapshotId !== "string" ||
     manifest.snapshotId.length > 512 ||
     !/^[A-Za-z0-9._-]+$/u.test(manifest.snapshotId) ||
@@ -92,6 +100,7 @@ export function requireGitManifest(value: unknown): GitManifest {
   }
   validateSnapshotFieldPolicy({ version: manifest.snapshotVersion, localFields: manifest.localFields });
   if (manifest.selection !== undefined) portableSnapshotSelection(manifest.selection);
+  validateSnapshotSelection({ version: manifest.snapshotVersion, selection: manifest.selection });
   let total = 0;
   const paths = new Set<string>();
   for (const rawFile of manifest.files) {
@@ -133,10 +142,7 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
     snapshot.profile !== manifest.profile ||
     snapshot.syncSessions !== manifest.snapshotSyncSessions ||
     syncSessions !== manifest.syncSessions ||
-    !sameOptionalInclude(
-      snapshotSelectionInclude(snapshot),
-      manifest.selection === undefined ? undefined : portableSnapshotSelection(manifest.selection).include,
-    ) ||
+    !sameSnapshotSelection(snapshot.selection, manifest.selection) ||
     prepared.length !== manifest.files.length ||
     prepared.some((file, index) => {
       const expected = manifest.files[index];
@@ -244,11 +250,6 @@ export function validateGitPublicationTree(
     }
   }
   return manifest.files.map((file) => byPath.get(filePath(file.path)) as GitTreeEntry);
-}
-
-function sameOptionalInclude(left: string[] | undefined, right: string[] | undefined) {
-  if (!left || !right) return left === right;
-  return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function isSafeSnapshotPath(value: unknown): value is string {

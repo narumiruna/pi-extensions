@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeniedPath, toPosix } from "../paths.js";
 import type { Snapshot, SnapshotSelection } from "../snapshot/snapshot-types.js";
+import { compileSyncExclude, normalizeSyncExclude, sameSyncExclude } from "./exclude-policy.js";
 
 export const BUILT_IN_SYNC_ROOTS = [
   "settings.json",
@@ -16,7 +17,6 @@ export const BUILT_IN_SYNC_ROOTS = [
 
 export const DEFAULT_SYNC_INCLUDE = [...BUILT_IN_SYNC_ROOTS] as const;
 export type BuiltInSyncFile = (typeof BUILT_IN_SYNC_ROOTS)[number];
-const SNAPSHOT_SELECTION_VERSION = 1;
 const MAX_SYNC_INCLUDE_ITEMS = 1_024;
 const MAX_SYNC_INCLUDE_PATH_BYTES = 4_096;
 const MAX_SYNC_INCLUDE_TOTAL_BYTES = 256 * 1_024;
@@ -131,24 +131,47 @@ export function portableSnapshotSelection(value: unknown): SnapshotSelection {
     !selection ||
     typeof selection !== "object" ||
     Array.isArray(selection) ||
-    selection.version !== SNAPSHOT_SELECTION_VERSION ||
+    (selection.version !== 1 && selection.version !== 2) ||
     !Object.hasOwn(selection, "include") ||
-    Object.keys(selection).some((key) => key !== "version" && key !== "include")
-  ) {
+    (selection.version === 2 && !Object.hasOwn(selection, "exclude")) ||
+    Object.keys(selection).some(
+      (key) => key !== "version" && key !== "include" && !(selection.version === 2 && key === "exclude"),
+    )
+  )
     throw new Error("Invalid snapshot selection policy.");
-  }
-  return {
-    version: SNAPSHOT_SELECTION_VERSION,
-    include: normalizeSyncInclude(selection.include),
-  };
+  const include = normalizeSyncInclude(selection.include);
+  if (selection.version === 1) return { version: 1, include };
+  if (!Array.isArray(selection.exclude)) throw new Error("Invalid snapshot exclude policy.");
+  return { version: 2, include, exclude: normalizeSyncExclude(selection.exclude) };
 }
 
 export function snapshotSelectionInclude(snapshot: Pick<Snapshot, "selection">) {
   return snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection).include;
 }
 
-export function selectionForSnapshot(include: unknown): SnapshotSelection {
-  return { version: SNAPSHOT_SELECTION_VERSION, include: normalizeSyncInclude(include) };
+export function snapshotSelectionExclude(snapshot: Pick<Snapshot, "selection">) {
+  return snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection).exclude;
+}
+
+export function selectionForSnapshot(include: unknown, exclude?: unknown): SnapshotSelection {
+  const normalized = normalizeSyncInclude(include);
+  return exclude === undefined
+    ? { version: 1, include: normalized }
+    : { version: 2, include: normalized, exclude: normalizeSyncExclude(exclude) };
+}
+
+/** Metadata equality, not policy compatibility: bind the whole projection to its immutable image. */
+export function sameSnapshotSelection(left: SnapshotSelection | undefined, right: SnapshotSelection | undefined) {
+  return (
+    JSON.stringify(left === undefined ? null : portableSnapshotSelection(left)) ===
+    JSON.stringify(right === undefined ? null : portableSnapshotSelection(right))
+  );
+}
+
+export function validateSnapshotSelection(snapshot: Pick<Snapshot, "version" | "selection">) {
+  const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
+  if ((snapshot.version === 4) !== (selection?.version === 2))
+    throw new Error("Exclude policy requires snapshot version 4 and selection version 2.");
 }
 
 export function sameSyncInclude(left: unknown, right: unknown) {
@@ -174,26 +197,35 @@ export function compareSyncInclude(local: unknown, remote: unknown) {
 
 export type RemoteSelectionState =
   | { kind: "legacy"; discovered: string[] }
-  | { kind: "same"; include: string[] }
+  | { kind: "same"; include: string[]; exclude?: string[] }
   | {
       kind: "different";
       include: string[];
+      exclude?: string[];
       remoteOnly: string[];
       localOnly: string[];
+      excludeChanged?: boolean;
     };
 
 export function inspectRemoteSelection(
   localInclude: unknown,
   snapshot: Pick<Snapshot, "selection" | "files">,
+  localExclude?: unknown,
 ): RemoteSelectionState {
   const remoteInclude = snapshotSelectionInclude(snapshot);
-  if (!remoteInclude) {
-    return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
-  }
+  if (!remoteInclude) return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
+  const exclude = snapshotSelectionExclude(snapshot);
   const comparison = compareSyncInclude(localInclude, remoteInclude);
-  return comparison.same
-    ? { kind: "same", include: remoteInclude }
-    : { kind: "different", include: remoteInclude, ...comparison };
+  const rules = exclude === undefined ? {} : { exclude };
+  return comparison.same && sameSyncExclude(localExclude, exclude)
+    ? { kind: "same", include: remoteInclude, ...rules }
+    : {
+        kind: "different",
+        include: remoteInclude,
+        ...comparison,
+        ...rules,
+        ...(!sameSyncExclude(localExclude, exclude) ? { excludeChanged: true } : {}),
+      };
 }
 
 export interface RemoteSelectionDecision {
@@ -201,6 +233,8 @@ export interface RemoteSelectionDecision {
   configIdentity: string;
   localInclude: readonly string[];
   remoteInclude: readonly string[];
+  localExclude?: readonly string[];
+  remoteExclude?: readonly string[];
 }
 
 export class RemoteSelectionMismatchError extends Error {
@@ -214,10 +248,12 @@ export class RemoteSelectionMismatchError extends Error {
     localInclude: unknown,
     remoteInclude: unknown,
     configIdentity = JSON.stringify([setupName, normalizeSyncInclude(localInclude)]),
+    localExclude?: string[],
+    remoteExclude?: string[],
   ) {
     const local = normalizeSyncInclude(localInclude);
     const remote = normalizeSyncInclude(remoteInclude);
-    super(formatRemoteSelectionMismatch(setupName, local, remote));
+    super(formatRemoteSelectionMismatch(setupName, local, remote, localExclude, remoteExclude));
     this.name = "RemoteSelectionMismatchError";
     this.setupName = setupName;
     this.localInclude = local;
@@ -227,22 +263,34 @@ export class RemoteSelectionMismatchError extends Error {
       configIdentity,
       localInclude: [...local],
       remoteInclude: [...remote],
+      ...(localExclude === undefined ? {} : { localExclude: normalizeSyncExclude(localExclude) }),
+      ...(remoteExclude === undefined ? {} : { remoteExclude: normalizeSyncExclude(remoteExclude) }),
     };
   }
 }
 
 export function remoteSelectionMismatch(
-  config: { setupName: string; include: unknown },
+  config: { setupName: string; include: unknown; exclude?: string[] },
   remoteInclude: unknown,
   configIdentity?: string,
+  remoteExclude?: string[],
 ) {
-  return new RemoteSelectionMismatchError(config.setupName, config.include, remoteInclude, configIdentity);
+  return new RemoteSelectionMismatchError(
+    config.setupName,
+    config.include,
+    remoteInclude,
+    configIdentity,
+    config.exclude,
+    remoteExclude,
+  );
 }
 
 export function formatRemoteSelectionMismatch(
   setupName: string,
   localInclude: readonly string[],
   remoteInclude: readonly string[],
+  localExclude?: readonly string[],
+  remoteExclude?: readonly string[],
 ) {
   const comparison = compareSyncInclude(localInclude, remoteInclude);
   const lines = [
@@ -250,7 +298,12 @@ export function formatRemoteSelectionMismatch(
     `Remote-only: ${comparison.remoteOnly.join(", ") || "none"}`,
     `This-device-only: ${comparison.localOnly.join(", ") || "none"}`,
   ];
-  if (comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0) {
+  if (!sameSyncExclude(localExclude, remoteExclude)) {
+    lines.push(
+      `Remote excluded paths: ${normalizeSyncExclude(remoteExclude).join(", ") || "none"}`,
+      `This device excluded paths: ${normalizeSyncExclude(localExclude).join(", ") || "none"}`,
+    );
+  } else if (comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0) {
     lines.push(
       "Only ordering differs.",
       `Remote order: ${remoteInclude.join(", ") || "none"}`,
@@ -321,6 +374,7 @@ export function customIncludePathsByLower(value: unknown) {
 
 export interface SyncSelectionConfig {
   include?: unknown;
+  exclude?: unknown;
   syncFiles?: unknown;
   syncSessions?: boolean;
   extraFiles?: unknown;
@@ -335,27 +389,37 @@ export function includeFromSelectionConfig(config: SyncSelectionConfig) {
   ];
 }
 
+export function syncSessionsSelected(config: SyncSelectionConfig) {
+  return includeFromSelectionConfig(config).includes("sessions") && !compileSyncExclude(config.exclude)("sessions");
+}
+
 export function isConfiguredSnapshotPath(
   relativePath: string,
   config: SyncSelectionConfig,
   _legacyExtraFiles?: Set<string>,
 ) {
-  const normalized = toPosix(relativePath);
+  return configuredSnapshotPathMatcher(config)(relativePath);
+}
+
+export function configuredSnapshotPathMatcher(config: SyncSelectionConfig) {
   const selection = syncIncludeSelection(includeFromSelectionConfig(config));
-  if (normalized.startsWith("sessions/")) return selection.sessions;
-  const lower = normalized.toLowerCase();
-  if (!normalized.includes("/")) {
-    const builtIn = BUILT_IN_BY_LOWER.get(lower);
-    if (builtIn) return selection.builtIns.includes(builtIn) && !TOP_LEVEL_DIRS.has(builtIn);
-  }
-  const topLevel = normalized.slice(0, normalized.indexOf("/"));
-  if (selection.builtIns.includes(topLevel as BuiltInSyncFile) && TOP_LEVEL_DIRS.has(topLevel)) {
-    return true;
-  }
-  return selection.custom.some((candidate) => {
-    const candidateLower = candidate.toLowerCase();
-    return lower === candidateLower || lower.startsWith(`${candidateLower}/`);
-  });
+  const excluded = compileSyncExclude(config.exclude);
+  return (relativePath: string) => {
+    const normalized = toPosix(relativePath);
+    if (excluded(normalized)) return false;
+    if (normalized.startsWith("sessions/")) return selection.sessions;
+    const lower = normalized.toLowerCase();
+    if (!normalized.includes("/")) {
+      const builtIn = BUILT_IN_BY_LOWER.get(lower);
+      if (builtIn) return selection.builtIns.includes(builtIn) && !TOP_LEVEL_DIRS.has(builtIn);
+    }
+    const topLevel = normalized.slice(0, normalized.indexOf("/"));
+    if (selection.builtIns.includes(topLevel as BuiltInSyncFile) && TOP_LEVEL_DIRS.has(topLevel)) return true;
+    return selection.custom.some((candidate) => {
+      const key = candidate.toLowerCase();
+      return lower === key || lower.startsWith(`${key}/`);
+    });
+  };
 }
 
 export function canonicalSnapshotPathForConfig(relativePath: string, includePaths: Map<string, string>) {

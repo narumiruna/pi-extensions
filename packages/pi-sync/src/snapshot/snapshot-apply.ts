@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertWithinRoot, isDeniedPath, isPathInside, parentPaths, safeJoin, toPosix } from "../paths.js";
 import { syncDirectory } from "../state/json-file.js";
+import { compileSyncExclude } from "../sync/exclude-policy.js";
 import { agentDir } from "./session-paths.js";
 import {
   createSnapshot,
@@ -13,6 +14,7 @@ import {
   snapshotIncludesSessions,
   snapshotTarget,
 } from "./snapshot.js";
+import { assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
 
@@ -30,6 +32,7 @@ export async function applySnapshot(
   options: Pick<
     SnapshotOptions,
     | "include"
+    | "exclude"
     | "sessionDir"
     | "syncFiles"
     | "syncSessions"
@@ -41,16 +44,21 @@ export async function applySnapshot(
 ) {
   const root = agentDir();
   const { sessionDir } = options;
+  const excluded = compileSyncExclude(options.exclude);
+  snapshot = { ...snapshot, files: snapshot.files.filter((file) => !excluded(file.path)) };
   const transactionOptions = {
     sessionDir,
+    exclude: options.exclude,
     signal: options.signal,
     validateMutation: options.validateMutation,
     protectedTargets: [...protectedRelativePaths].map((relative) => snapshotTarget(root, relative, sessionDir)),
     expectedPreimages: new Map(
-      Object.entries(options.expectedFileHashes ?? {}).map(([relative, hash]) => [
-        snapshotTarget(root, relative, sessionDir),
-        hash === null ? "missing" : `file:${hash}`,
-      ]),
+      Object.entries(options.expectedFileHashes ?? {})
+        .filter(([relative]) => !excluded(relative))
+        .map(([relative, hash]) => [
+          snapshotTarget(root, relative, sessionDir),
+          hash === null ? "missing" : `file:${hash}`,
+        ]),
     ),
   };
   options.validateMutation?.();
@@ -64,7 +72,7 @@ export async function applySnapshot(
     root,
     protectSnapshotApplyPlan(
       root,
-      preflightSnapshotApply(root, snapshot, current, { sessionDir }),
+      preflightSnapshotApply(root, snapshot, current, { sessionDir, exclude: options.exclude }),
       protectedRelativePaths,
       sessionDir,
     ),
@@ -79,12 +87,13 @@ export function preflightSnapshotApply(
   root: string,
   snapshot: Snapshot,
   current: Snapshot,
-  options: { sessionDir?: string } = {},
+  options: { sessionDir?: string; exclude?: string[] } = {},
 ): SnapshotApplyPlan {
   const seenPaths = new Set<string>();
   const remotePaths = new Set<string>();
   const writes: Array<{ target: string; content: Buffer }> = [];
   const deletes: string[] = [];
+  const excluded = compileSyncExclude(options.exclude);
 
   for (const file of snapshot.files) {
     const normalized = toPosix(file.path);
@@ -94,6 +103,7 @@ export function preflightSnapshotApply(
     if (isSessionPath(normalized) && !isSessionFilePath(normalized)) {
       throw new Error(`Unsafe session path in snapshot: ${file.path}`);
     }
+    if (excluded(normalized)) continue;
     if (seenPaths.has(normalized)) throw new Error(`Duplicate path in snapshot: ${normalized}`);
     seenPaths.add(normalized);
     remotePaths.add(normalized);
@@ -107,6 +117,7 @@ export function preflightSnapshotApply(
   const deletePaths = new Set<string>();
   for (const file of current.files) {
     const normalized = toPosix(file.path);
+    if (excluded(normalized)) continue;
     if (!remotePaths.has(normalized)) {
       deletePaths.add(snapshotTarget(root, normalized, options.sessionDir));
     }
@@ -205,7 +216,7 @@ function decodeBase64Strict(value: string, filePath: string) {
   return Buffer.from(value, "base64");
 }
 
-type MutationGuards = Pick<SnapshotOptions, "signal" | "validateMutation">;
+type MutationGuards = Pick<SnapshotOptions, "signal" | "validateMutation" | "exclude">;
 
 export async function preflightSnapshotMutations(
   root: string,
@@ -213,6 +224,11 @@ export async function preflightSnapshotMutations(
   sessionDir?: string,
   options: MutationGuards = {},
 ) {
+  assertMutationCurrent(options);
+  await assertUnexcludedTargets(root, [...plan.deletes, ...plan.writes.map((item) => item.target)], {
+    ...options,
+    sessionDir,
+  });
   assertMutationCurrent(options);
   const deletePaths = new Set(plan.deletes);
   for (const target of plan.deletes) {

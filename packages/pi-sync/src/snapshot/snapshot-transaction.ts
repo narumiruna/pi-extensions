@@ -7,9 +7,11 @@ import { syncDirectory, writeJson } from "../state/json-file.js";
 import { withLock } from "../state/lock.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
 import { stateDir } from "../state/state-directory.js";
+import { normalizeSyncExclude, sameSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
 import { caseReplacementSpelling, coalesceCaseReplacements, isCaseReplacement } from "./snapshot-case-replacement.js";
+import { assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { withMissingTargetQueues, withTargetQueues } from "./snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import {
@@ -42,6 +44,7 @@ interface TransactionEntry {
 }
 interface TransactionJournal {
   version: number;
+  exclude?: string[];
   /** Version 6: durable files are accepted; surviving evidence permits cleanup only. */
   completed?: boolean;
   root: string;
@@ -52,6 +55,7 @@ interface TransactionJournal {
 }
 interface TransactionOptions {
   sessionDir?: string;
+  exclude?: readonly string[];
   signal?: AbortSignal;
   validateMutation?: () => void;
   protectedTargets?: readonly string[];
@@ -70,6 +74,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
   if (targets.length > 16_384)
     throw new Error("Snapshot transaction exceeds its target bound; review a smaller transfer.");
   return withTargetQueues(targets, options, async (heldKeys) => {
+    await assertUnexcludedTargets(agentDir(), targets, options);
     options.signal?.throwIfAborted();
     if (
       targets.some((target) =>
@@ -291,6 +296,8 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
       options.signal?.throwIfAborted();
     }
     validateJournal(directory, journal, sessionDir);
+    if (!journal.completed && !sameSyncExclude(journal.exclude, options.exclude))
+      throw new Error("Pending transaction has a different exclude policy; preserve its backup for reviewed recovery.");
     if (journal.completed) {
       await removeTransaction(directory);
       continue;
@@ -385,6 +392,7 @@ async function prepareTransaction(
   const journal: TransactionJournal = {
     version: sessionRootTransition ? 7 : replacements.size ? 5 : JOURNAL_VERSION,
     root,
+    ...(options.exclude === undefined ? {} : { exclude: normalizeSyncExclude(options.exclude) }),
     sessionRoot: sessionRootTransition ? effectiveRoot : sessionRoot,
     sessionRootTransition,
     entries,
@@ -611,6 +619,7 @@ async function removeOwnedTarget(
   options: TransactionOptions,
   restoringBefore?: string,
 ) {
+  await assertUnexcludedTargets(journal.root, [entry.target], options);
   const current = await verifyTarget(directory, entry, journal);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
@@ -790,6 +799,9 @@ function validateJournal(directory: string, journal: TransactionJournal, session
     journal.entries.length > 16_384
   )
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
+  if (journal.exclude !== undefined && !Array.isArray(journal.exclude))
+    throw new Error("Invalid transaction exclude policy; preserve evidence.");
+  normalizeSyncExclude(journal.exclude);
   if (journal.completed !== undefined && (![6, 7].includes(journal.version) || journal.completed !== true))
     throw new Error("Invalid transaction completion evidence.");
   const root = path.resolve(agentDir());

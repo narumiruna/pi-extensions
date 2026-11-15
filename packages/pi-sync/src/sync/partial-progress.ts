@@ -46,6 +46,7 @@ export function progressState(
     profile: config.snapshotIdentity,
     lastFileHashes: hashes,
     include: [...config.include],
+    exclude: config.exclude === undefined ? undefined : [...config.exclude],
     localFields: config.localFields,
     lastObservedSnapshot: head.snapshotId,
     lastObservedRevision: head.revision,

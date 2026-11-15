@@ -5,6 +5,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { agentDir } from "../snapshot/session-paths.js";
 import { createSnapshot, snapshotTarget } from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
+import { assertUnexcludedTargets } from "../snapshot/snapshot-exclude-safety.js";
 import { assertCanonicalMutationTargets } from "../snapshot/snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "../snapshot/snapshot-paths.js";
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
@@ -25,6 +26,11 @@ export async function preflightMergedTargets(
   const afterHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(after));
   const paths = [...new Set([...Object.keys(beforeHashes), ...Object.keys(afterHashes)])].sort();
   const changed = new Set(paths.filter((item) => beforeHashes[item] !== afterHashes[item]));
+  await assertUnexcludedTargets(
+    root,
+    [...changed].map((item) => snapshotTarget(root, item, options.sessionDir)),
+    options,
+  );
   await assertCanonicalMergedTargets(root, changed, options);
   await assertDistinctMergedTargets(root, paths, changed, options, protectedTarget, new Set(Object.keys(afterHashes)));
   const removed = replacementPaths(
@@ -138,7 +144,6 @@ async function assertReviewedTree(directory: string, relative: string, beforeHas
           .update(await fs.readFile(child))
           .digest("hex")
     ) {
-      continue;
     } else {
       throw new Error("Reviewed directory contains unknown or changed files; publication refused.");
     }

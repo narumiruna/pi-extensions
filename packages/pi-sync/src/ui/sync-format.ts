@@ -54,9 +54,10 @@ export function formatPushSummary(
     `Direction: Local → Remote. Source: ${safeTerminalText(agentDir())}.`,
     `Publish a snapshot containing ${upload.files.length} files; unchanged and preserved files are not counted as changes.`,
     `Sessions: ${upload.syncSessions ? "included — may contain private conversations" : "not included"}`,
+    ...excludedPolicyLines(config),
     head ? `Remote latest: ${safeTerminalText(head.snapshotId)}` : "Remote latest: empty",
     "Publication effect: the backend's active head will reference the new immutable snapshot. Removed paths leave the active snapshot; retained history is not erased.",
-    ...(remote && inspectRemoteSelection(config.include, remote).kind === "different"
+    ...(remote && inspectRemoteSelection(config.include, remote, config.exclude).kind === "different"
       ? ["Included-content policy effect: replace the differing remote selection with this setup's local selection."]
       : []),
     formatPublicationPreview(remote, upload),
@@ -66,6 +67,15 @@ export function formatPushSummary(
         ? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
         : "Possible secrets were scanned before this prompt.",
   ].join("\n");
+}
+
+function excludedPolicyLines(config: CommonSyncConfig) {
+  return config.exclude === undefined
+    ? []
+    : [
+        `Excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`,
+        "Excluded local files remain untouched; matching paths are omitted from new publications, not erased from history.",
+      ];
 }
 
 export function formatApplyPreview(
@@ -100,6 +110,7 @@ export function formatPullSummary(
     `Storage location: ${safeTerminalText(destination)}`,
     "Direction: Remote → Local.",
     `Snapshot: ${safeTerminalText(remote.id)}`,
+    ...excludedPolicyLines(config),
     `Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
     `Protected live sessions: ${protectedPaths.size || "none"}`,
     formatApplyPreview(local, remote, protectedPaths, additionalRemovals),
@@ -124,6 +135,7 @@ export function formatRollbackSummary(
     `Storage location: ${safeTerminalText(destination)}`,
     "Direction: Historical snapshot → Local and remote active head.",
     `Snapshot: ${safeTerminalText(requestedSnapshot)}`,
+    ...excludedPolicyLines(config),
     `Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
     `Protected live sessions: ${protectedPaths.size || "none"}`,
     formatApplyPreview(local, remote, protectedPaths, additionalRemovals),

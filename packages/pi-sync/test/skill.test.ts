@@ -56,9 +56,13 @@ function fragmentIds(markdown: string): Set<string> {
 }
 
 function configurationExample(): Record<string, unknown> {
-  const examples = [...reference.matchAll(/```json\n([\s\S]*?)\n```/gu)];
+  const examples = [...reference.matchAll(/```json\n([\s\S]*?)\n```/gu)]
+    .map((match) => JSON.parse(match[1] ?? "") as Record<string, unknown>)
+    .filter((example) => Object.hasOwn(example, "storageConnections"));
   assert.equal(examples.length, 1, "keep one authoritative complete example");
-  return JSON.parse(examples[0]?.[1] ?? "");
+  const example = examples[0];
+  assert.ok(example);
+  return example;
 }
 
 test("manifest publishes one manual-only skill without changing the extension entrypoint", () => {
@@ -273,6 +277,7 @@ for (const [version, policy] of [
   [4, { localFields: [] }],
   [4, { localFields: ["shellPath"] }],
   [5, { localFields: ["shellPath"], mergeContent: true, partialSync: true }],
+  [6, { exclude: ["skills/private"] }],
 ] as const) {
   test(`documented version ${version} accepts ${JSON.stringify(policy)} without accepting a downgrade`, () => {
     const settings = validateSettingsDocument(configurationExample());
@@ -285,7 +290,20 @@ for (const [version, policy] of [
   });
 }
 
-for (const version of [undefined, 1, 2, 6]) {
+test("the exclusion policy fragment validates inside a version-6 setup", () => {
+  const fragments = [...reference.matchAll(/```json\n([\s\S]*?)\n```/gu)]
+    .map((match) => JSON.parse(match[1] ?? "") as Record<string, unknown>)
+    .filter((value) => Object.hasOwn(value, "exclude"));
+  assert.equal(fragments.length, 1);
+  const settings = validateSettingsDocument(configurationExample());
+  settings.version = 6;
+  const setup = settings.syncSetups.home;
+  assert.ok(setup);
+  Object.assign(setup.sync, fragments[0]);
+  validateSettingsDocument(settings);
+});
+
+for (const version of [undefined, 1, 2, 7]) {
   test(`unsupported settings version ${String(version)} is not interpreted as a supported example`, () => {
     const settings = configurationExample();
     settings.version = version;

@@ -9,7 +9,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 
 - Manages Git, WebDAV, Cloudflare R2, and general S3-compatible storage through `/sync`.
 - Separates reusable storage connections from named setups with exact reviewed remote paths.
-- Uses one ordered list for Pi roots, safe agent-relative paths, and privacy-sensitive sessions.
+- Uses one ordered include list for Pi roots, safe agent-relative paths, and privacy-sensitive sessions, with optional path/glob exclusions.
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Keeps snapshot selection portable and free of credentials.
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
@@ -82,7 +82,7 @@ The main summary separates current state from actions and uses local state and c
 After Pi Sync detects an included-content mismatch, the manager shows **Sync status: Review needed** and puts **Review synced content (recommended)** first.
 **Sync now** remains unavailable until you review the mismatch.
 Opening the manager does not make another remote request.
-**Settings** opens **Pi Sync Settings** directly: one searchable flat list with all 16 rows in their existing order and no category navigation or headings. **Compare included paths** sits beside **Included paths** and compares path policies, not file contents. **Storage location** edits only the current setup's bucket, branch, or path; it does not change the connection or included content. **Manage sync setups** and **Manage storage connections** open the existing catalogs. Connections hold reusable server addresses and sign-in details, and edits show every affected setup. Make another setup current before changing its preferences. Each description identifies the setup, device-wide, or shared-connection scope. Simple preferences report saving and durable save results; Back does not undo saved changes. Complex editors and risky changes retain their reviews. RPC reports the manual settings path and preserves catalog management without opening the TUI preference editor.
+**Settings** opens **Pi Sync Settings** directly: one searchable flat list with 17 rows and no category navigation or headings. **Included paths**, **Excluded paths**, and **Compare included paths** keep content policy together; comparison covers include/exclude rules, not file contents. **Storage location** edits only the current setup's bucket, branch, or path; it does not change the connection or included content. **Manage sync setups** and **Manage storage connections** open the existing catalogs. Connections hold reusable server addresses and sign-in details, and edits show every affected setup. Make another setup current before changing its preferences. Each description identifies the setup, device-wide, or shared-connection scope. Simple preferences report saving and durable save results; Back does not undo saved changes. Complex editors and risky changes retain their reviews. RPC reports the manual settings path and preserves catalog management without opening the TUI preference editor.
 
 **Diagnostics** (also `/sync doctor`) reports configuration and backend-specific access checks. S3/R2 performs a read-only request: success does not prove write access or snapshot validity, and an ambiguous 404 does not prove a bucket is missing. Check the indicated credentials, address, bucket, or path before retrying. Git checks remote reads and the local cache, not write access. WebDAV uses an isolated write/cleanup probe and repairs the active snapshot's history entry if missing. **History** opens the snapshot list directly for reviewed rollback. Recorded unresolved groups have a separate **Review unresolved conflicts** action.
 
@@ -127,7 +127,7 @@ Choose **Review all paths (recommended)** first to compare exact remote-only pat
 If membership matches but order differs, the review says that only ordering differs.
 Then choose one action:
 
-- **Use remote content list** revalidates the remote snapshot and reviewed local setup before saving only `sync.include`.
+- **Use remote content list** revalidates the remote snapshot and reviewed local setup before saving `sync.include` and the reviewed exclusion rules together.
   **Remote content list saved** confirms that no files were pulled and offers a separate **Continue Sync/Pull/Push now…** action plus **Done**.
   Continue starts a fresh operation and exact preview for the captured setup rather than resuming stale work.
 - **Keep this device's content list and update remote…** opens the existing `push --force` preparation and exact confirmation without `--yes`.
@@ -224,7 +224,7 @@ Successful transfers show one summary. They do not reload resources, activate ex
 
 **Settings → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. Enabling rules opts into settings version 4 / snapshot version 2, which older clients must refuse. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./skills/configure-pi-sync/references/configuration.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
 
-**Settings → Content merge / partial progress** controls independent `sync.mergeContent` and `sync.partialSync` opt-ins, both default **Off**. Saving opts into settings version 5; partial publications use snapshot version 3, rejected by older readers. Supported Markdown/plain-text resources merge bounded independent line edits without Git or conflict markers. Diff grids and hunk comparisons share an eight-million-work-unit budget across the operation and its retries; exhausted paths remain conflicts for review. Same-session reconciliation only accepts validated complete byte-prefix extensions; divergent histories and the loaded session require review. A syntactically clean text merge is **not a semantic correctness guarantee**.
+**Settings → Content merge / partial progress** controls independent `sync.mergeContent` and `sync.partialSync` opt-ins, both default **Off**. Saving opts into at least settings version 5; partial publications use snapshot version 3, or version 4 with exclusions, rejected by older readers. Supported Markdown/plain-text resources merge bounded independent line edits without Git or conflict markers. Diff grids and hunk comparisons share an eight-million-work-unit budget across the operation and its retries; exhausted paths remain conflicts for review. Same-session reconciliation only accepts validated complete byte-prefix extensions; divergent histories and the loaded session require review. A syntactically clean text merge is **not a semantic correctness guarantee**.
 
 Partial sync keeps each side's unresolved versions, preserves their previous accepted hashes/ancestors, and advances only independent paths. Resource/collision dependency groups are withheld together, including local-only files, never represented as deletion. The conditional **Review unresolved conflicts** action, or `/sync conflicts`, opens exact private versions on request and resolves one freshly validated whole group. Automatic pushes, non-forced push/pull, and rollback refuse unresolved groups; use group review or an explicit manual push/pull force direction instead. Artifacts remain below the denied state root, with stable conflict identity and at most 32 proven-completed records retained; unresolved or unrecognized evidence is never automatically pruned. Failed attempts release only newly created artifacts whose inode/content ownership and lack of state/journal references are verified. See [content merge and partial recovery](./docs/content-merge-audit.md).
 
@@ -274,7 +274,9 @@ Version 1, version 2, and non-empty unversioned settings require manual recovery
 Adding `sessions` can upload prompts, tool output, paths, images, and secrets; interactive flows require a privacy acknowledgement.
 Startup checks report included-content differences without changing anything. Transfers retain their existing included-content policy checks instead of silently expanding local scope.
 
-Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, included-content rules, legacy paths, and recovery steps.
+**Settings → Excluded paths** edits optional per-setup `sync.exclude` rules, for example `["skills/private", "extensions/**/*.test.ts"]`. Rules win over includes and apply to future transfers; excluded local files remain untouched, including on rollback. Saving opts into settings version 6 / snapshot version 4, which older clients must refuse. New publications omit matching remote paths, but old history is **not erased**. Removing rules can expose or replace content. See [Excluded paths](./skills/configure-pi-sync/references/configuration.md#excluded-paths) for syntax, review, and recovery.
+
+Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, content policy, legacy paths, and recovery steps.
 
 ## 🧠 Skills
 
@@ -395,6 +397,8 @@ packages/pi-sync/
 ├── skills/configure-pi-sync/           # Manual-only guidance and authoritative settings reference
 └── test/                              # Behavior and lifecycle coverage
 ```
+
+The [exclude policy safety audit](./docs/exclude-policy-audit.md) maps implementation boundaries to regression coverage.
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
 Internal modules use direct imports from their owners; `src/sync.ts` and `src/types.ts` retain compatibility exports.

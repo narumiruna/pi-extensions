@@ -918,7 +918,10 @@ test("included-content save preserves a concurrent include change", async () => 
     });
     await showFileSelection(ctx, "home");
     assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, ["models.json"]);
-    assert.match(notifications.at(-1)?.message ?? "", /included content changed.*reopen/iu);
+    assert.match(
+      notifications.at(-1)?.message ?? "",
+      /Sync setup “home” changed while it was open; reopen it and review the current configuration/iu,
+    );
   });
 });
 

@@ -11,9 +11,10 @@ import {
   operationCanRecover,
 } from "../state/operation-availability.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { sameSyncExclude } from "../sync/exclude-policy.js";
 import { errorMessage } from "../sync/sync-errors.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
-import { compareSyncInclude, syncIncludeSelection } from "../sync/sync-policy.js";
+import { compareSyncInclude, syncIncludeSelection, syncSessionsSelected } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "./automatic-sync-summary.js";
 import {
   observationMatchesConfig,
@@ -78,7 +79,7 @@ export async function describeManagerState(
   }
   const configuredTargets = ownRecord(raw.syncSetups);
   if (
-    (raw.version === 3 || raw.version === 4 || raw.version === 5) &&
+    (raw.version === 3 || raw.version === 4 || raw.version === 5 || raw.version === 6) &&
     configuredTargets &&
     Object.keys(configuredTargets).length === 0
   ) {
@@ -113,6 +114,9 @@ export async function describeManagerState(
     const attentionComparison = currentAttention
       ? compareSyncInclude(currentAttention.decision.localInclude, currentAttention.decision.remoteInclude)
       : undefined;
+    const attentionExclusionsDiffer = currentAttention
+      ? !sameSyncExclude(currentAttention.decision.localExclude, currentAttention.decision.remoteExclude)
+      : false;
     const noSyncedContent = config.include.length === 0;
     const syncState = changesBlocked ? undefined : await readStateForConfig(config).catch(() => undefined);
     const currentObservation =
@@ -152,8 +156,10 @@ export async function describeManagerState(
               ? "Sync status: Review needed"
               : `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
             attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
-              ? "Only the synced-content order differs."
-              : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}`,
+              ? attentionExclusionsDiffer
+                ? "Synced-content exclusion rules differ."
+                : "Only the synced-content order differs."
+              : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
             "Nothing has been changed.",
           ]
         : currentObservation
@@ -162,7 +168,7 @@ export async function describeManagerState(
               "Check-time observation only; synchronization rechecks current content.",
             ]
           : ["Remote status: Not checked"]),
-      `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
+      `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${syncSessionsSelected(config) ? "on" : "off"}`,
       `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
       `Startup transfer: ${startupTransferSummary(config)}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,

@@ -3,6 +3,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
+import { sameSyncExclude } from "../sync/exclude-policy.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
 import { compareSyncInclude, type RemoteSelectionDecision, sameSyncInclude } from "../sync/sync-policy.js";
 import { setSyncStatus } from "./sync-status.js";
@@ -22,7 +23,8 @@ export function syncAttentionMatchesConfig(attention: SyncAttentionState, config
   return (
     attention.decision.setupName === config.setupName &&
     attention.decision.configIdentity === syncConfigReviewFingerprint(config) &&
-    sameSyncInclude(attention.decision.localInclude, config.include)
+    sameSyncInclude(attention.decision.localInclude, config.include) &&
+    sameSyncExclude(attention.decision.localExclude, config.exclude)
   );
 }
 
@@ -144,11 +146,23 @@ function attentionPresentation(decision: RemoteSelectionDecision) {
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return {
     status: "sync ⇕",
-    lines: [`Setup: ${setupName}`, selectionDifference(comparison), "No transfer performed · Run /sync to review"],
+    lines: [
+      `Setup: ${setupName}`,
+      selectionDifference({
+        ...comparison,
+        excludeChanged: !sameSyncExclude(decision.localExclude, decision.remoteExclude),
+      }),
+      "No transfer performed · Run /sync to review",
+    ],
   };
 }
 
-function selectionDifference(comparison: { remoteOnly: readonly string[]; localOnly: readonly string[] }) {
+function selectionDifference(comparison: {
+  remoteOnly: readonly string[];
+  localOnly: readonly string[];
+  excludeChanged?: boolean;
+}) {
+  if (comparison.excludeChanged) return "Selection: excluded paths differ; review needed";
   return comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
     ? "Selection: only list order differs"
     : `Selection: ${comparison.remoteOnly.length} remote-only · ${comparison.localOnly.length} device-only`;

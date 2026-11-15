@@ -19,6 +19,7 @@ import {
   saveContinuousMode,
 } from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
+import { showExcludedPaths } from "./excluded-paths-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
@@ -88,6 +89,7 @@ export async function showSyncSettings(
     | "debug"
     | "on-switch"
     | "include"
+    | "exclude"
     | "remote-include"
     | "storage-location"
     | "setups"
@@ -115,10 +117,18 @@ export async function showSyncSettings(
             action: "include",
           },
           {
+            id: "exclude",
+            label: "Excluded paths",
+            description:
+              "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
+            currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
+            action: "exclude",
+          },
+          {
             id: "remoteInclude",
             label: "Compare included paths",
             description:
-              "This setup: compare included-path policies, not file contents. Review before saving either list; no files transfer unless you explicitly Continue.",
+              "This setup: compare include and exclude policies, not file contents. Review before saving both lists; no files transfer unless you explicitly Continue.",
             currentValue: "Review",
             action: "remote-include",
           },
@@ -280,7 +290,7 @@ export async function showSyncSettings(
           if (
             !(await ctx.ui.confirm(
               "Save content policy?",
-              "This explicitly upgrades settings to version 5; partial snapshots use version 3 and older clients must refuse them. Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.",
+              "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them. Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.",
               { signal: mutationSignal },
             ))
           )
@@ -298,7 +308,7 @@ export async function showSyncSettings(
               throw new Error("Content policy changed during review.");
             return {
               ...current,
-              version: 5,
+              version: current.version === 6 ? 6 : 5,
               syncSetups: {
                 ...current.syncSetups,
                 [setupName]: { ...setup, sync: { ...setup.sync, mergeContent, partialSync } },
@@ -354,7 +364,7 @@ export async function showSyncSettings(
           if (sameLocalFields(previous.localFields, fields)) return { kind: "stay" };
           const confirmed = await ctx.ui.confirm(
             "Save portable field policy?",
-            "This opts into settings/snapshot version 4/2; older clients must refuse them. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.",
+            "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain 6/4. Older clients must refuse them. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.",
             { signal: mutationSignal },
           );
           validate();
@@ -367,7 +377,7 @@ export async function showSyncSettings(
               throw new Error("Field policy changed while under review; reopen settings.");
             return {
               ...current,
-              version: current.version === 5 ? 5 : 4,
+              version: current.version >= 5 ? current.version : 4,
               syncSetups: {
                 ...current.syncSetups,
                 [setupName]: { ...setup, sync: { ...setup.sync, localFields: fields } },
@@ -544,6 +554,11 @@ export async function showSyncSettings(
         const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         await runRoute("files", editorSignal, undefined, setupName);
         return editorSignal.aborted ? { kind: "rejected" } : { kind: "stay" };
+      },
+      exclude: async ({ signal: actionSignal }) => {
+        const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        await showExcludedPaths(ctx, setupName, editorSignal);
+        return resumeSettings(editorSignal);
       },
       "remote-include": async ({ signal: actionSignal }) => {
         const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;

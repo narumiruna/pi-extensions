@@ -17,6 +17,7 @@ import { throwIfAborted } from "./signals.js";
 import { errorMessage } from "./sync-errors.js";
 import { inspectSync } from "./sync-inspection.js";
 import { rollback } from "./sync-mutations.js";
+import { syncSessionsSelected } from "./sync-policy.js";
 
 const DEFAULT_PROFILE = "default";
 
@@ -50,7 +51,10 @@ export async function status(
       `storage location: ${safeTerminalText(destination)}`,
       `publication safety: ${publicationCapabilityDescription(capability)}`,
       `included content: ${config.include.join(", ") || "none"}`,
-      `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
+      ...(config.exclude === undefined
+        ? []
+        : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
+      `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
       ...continuous,
       remoteText,
       formatRemoteSelectionStatus(selectionState),
@@ -89,7 +93,10 @@ export async function diff(
     `storage connection: ${config.connectionName}`,
     `storage location: ${safeTerminalText(backend.destination)}`,
     `included content: ${config.include.join(", ") || "none"}`,
-    `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
+    ...(config.exclude === undefined
+      ? []
+      : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
+    `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
     formatRemoteSelectionStatus(selectionState),
     ...warnings,
   ].join("\n");
@@ -123,7 +130,10 @@ export async function doctor(
     messages.push(
       `config: ok (sync setup ${config.setupName})`,
       `included content: ${config.include.join(", ") || "none"}`,
-      `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
+      ...(config.exclude === undefined
+        ? []
+        : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
+      `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
     );
     backendSummary = [
       `storage location: ${safeTerminalText(backend.destination)}`,

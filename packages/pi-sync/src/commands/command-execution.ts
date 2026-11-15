@@ -10,7 +10,7 @@ import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
 import type { SyncLoaders } from "../sync/sync-loaders.js";
-import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
+import { RemoteSelectionMismatchError, syncSessionsSelected } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
 import type { RunRouteResult } from "../ui/cancellable-operation.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
@@ -272,7 +272,7 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `autonomous sync: ${config.agentMode ? "On" : "Off"}`,
       `continuous sync: ${config.continuous ? (config.agentMode ? "On" : "paused; Autonomous sync is Off") : "Off"}`,
       `included content: ${config.include.join(", ") || "none"}`,
-      `sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
+      `sessions: ${syncSessionsSelected(config) ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,
       ...warnings,
     ].join("\n"),
