@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-rex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Show Pi sessions in Rex above the editor and switch to their terminal panes.",
   "type": "module",
   "license": "MIT",
