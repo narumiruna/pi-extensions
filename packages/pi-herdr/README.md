@@ -8,7 +8,7 @@ Connect Pi's interactive lifecycle to Herdr and load operating guidance from the
 
 - Reports Pi session identity and `working`, `blocked`, and `idle` lifecycle states to the current Herdr pane.
 - Publishes bounded `model`, `provider`, `thinking`, `session`, and `context_usage` tokens for Herdr sidebar rows.
-- Shows recognized sibling agents from the current Herdr workspace in a passive widget above Pi's editor, with a saved visibility toggle in `/herdr`.
+- Shows recognized sibling agents across all workspaces in the connected Herdr session in a passive widget above Pi's editor, with a saved visibility toggle in `/herdr`.
 - Refreshes the widget on Herdr pane, workspace-name, and agent-status updates without polling the CLI.
 - Coalesces rapid state changes and retries short-lived local socket failures without interrupting Pi.
 - Derives blocked state from Pi's public `ui_prompt_start` and `ui_prompt_end` lifecycle events.
@@ -46,7 +46,7 @@ Install only trusted packages, and review the source and bundled instructions be
 
 Start Pi inside a Herdr-managed pane after installing the package.
 The extension activates automatically when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present.
-When the current Herdr workspace contains another recognized agent, Pi shows its state in a widget above the editor.
+When any workspace in the connected Herdr session contains another recognized agent, Pi shows its state and workspace in a widget above the editor.
 Ask Pi to use Herdr, or invoke `/skill:herdr`, when you want it to inspect or control the current Herdr session.
 Before the first control command, the bootstrap loads `herdr --skill` once and reuses those instructions while they remain in the current context.
 For Herdr Core terminals, invoke `/skill:hc` instead; it loads `hc --skill` without requiring a Herdr-managed pane.
@@ -146,7 +146,7 @@ rows = [
 
 ## 🐑 Agent widget
 
-The widget lists only recognized agents in the current Herdr workspace and excludes the pane running the current Pi session.
+The widget lists recognized agents across all workspaces in the connected Herdr session and excludes the pane running the current Pi session.
 Each row presents state, agent, pane, and workspace in that order, using theme hierarchy instead of repeating field labels.
 State icons follow Herdr's distinct static symbols: `×` blocked, `◐` working, `✓` done, `○` idle, and `·` unknown.
 Pi theme roles map blocked to `error`, working to `warning`, done to `accent`, idle to `success`, and unknown to `dim` without hard-coded terminal colors.
@@ -160,8 +160,10 @@ The widget does not focus panes, read terminal output, send prompts, or mark a b
 Its separator is named **Herdr**. In fullscreen TUI mode, click anywhere in the widget, including blank columns, to collapse it to that separator. Click the separator to restore the latest agents without moving keyboard focus.
 Opening `/herdr` in TUI mode also restores disclosure when the widget is enabled, without changing or saving the enable setting.
 Disclosure survives updates, temporary absence, and host remounts; session start or restarting the observer resets it. Collapse does not change Herdr data, reporting, subscriptions, or saved settings.
-The extension discovers the current workspace, pane list, and agent names, opens pane-scoped status subscriptions plus pane-update and workspace-name subscriptions, and then reloads those identities.
-Events trigger serialized, coalesced reads rather than replacing current state with event payloads. If an event arrives during a read, the extension reads again before publishing that result.
+The extension discovers the current pane, session-wide pane list, workspace labels, and agent names, opens pane-scoped status subscriptions plus pane and workspace subscriptions, and then reloads those identities.
+Events trigger serialized, coalesced reads rather than replacing current state with event payloads.
+If events arrive during reads, the extension discards up to two consecutive reads. On the third invalidated read, it publishes that complete snapshot and immediately reads again, so sustained events cannot prevent updates.
+Snapshots can briefly lag newer events; changes to the current pane or recognized-agent subscription set are reconciled before publication.
 Agent names, workspace labels, and cleared presentation fields update from these authoritative reads.
 Changes to the current pane, workspace, or recognized-agent set rebuild the pane-scoped subscriptions without consuming the bounded failure retry.
 Unexpected disconnection or `events_lost` clears the widget before one bounded reconnect attempt, and a second failure leaves it hidden until the next Pi session or `/reload`.
@@ -172,11 +174,11 @@ Session replacement and shutdown abort the subscription, pending reads, reconnec
 The extension connects only to the Unix socket or Windows named pipe provided by `HERDR_SOCKET_PATH`.
 Lifecycle reporting sends the current Herdr pane ID, Pi session path or ID, lifecycle state, session start reason, and blocked label to that endpoint.
 Metadata reporting sends the current Herdr pane ID plus only the selected model ID, provider ID, effective Thinking level, explicit Pi session name, and rounded context-usage percentage.
-For the widget, it reads the canonical current pane, current workspace metadata, current workspace pane list, and session agent list, then subscribes to pane creation, updates, closure, movement, exit, agent detection, agent-status changes, and workspace renames.
-The session agent list can contain agent metadata from other workspaces, but the extension retains names only for panes in the current workspace list.
+For the widget, it reads the canonical current pane and session-wide pane, workspace, and agent lists, then subscribes to pane creation, updates, closure, movement, exit, agent detection, agent-status changes, and workspace creation, closure, and renames.
+Agent names are joined only to matching pane and workspace identities in the session-wide pane list.
 Widget fields can include workspace, tab, pane, terminal, agent, display, name, title, label, state-label, and lifecycle identifiers supplied by Herdr.
-The subscription can deliver matching pane events from other workspaces in the same Herdr session, and the extension ignores them after resolving the current workspace.
-The extension filters presentation to the current workspace, strips terminal controls at the display boundary, and never reads sibling terminal output for the widget.
+Events from every workspace in the connected Herdr session can refresh the widget.
+The extension strips terminal controls at the display boundary and never reads sibling terminal output for the widget.
 The package does not authenticate the endpoint, so trust the environment that launches Pi and controls these variables.
 
 The bundled skills load operating guidance from the local CLI only after an explicit request for Herdr or Herdr Core.
@@ -188,9 +190,10 @@ Command recipes, approval handling, and other operating safety rules come from t
 ## 🚧 Limitations
 
 - Lifecycle reporting, metadata reporting, and the agent widget are disabled in RPC, JSON, and print modes.
-- The widget has no settings for placement, workspace scope, or row count.
+- The widget has no settings for placement, workspace scope, or row count; it does not discover other Herdr sessions or saved machines.
+- After loading an updated build, a terminal operator should check cross-workspace labels, regular/fullscreen appearance, and mouse disclosure; automated tests cannot verify physical terminal behavior.
 - The widget cannot show blocked prompt text because Herdr does not expose it through public pane responses.
-- The widget requires compatible pane-update and workspace-name subscriptions; unsupported subscriptions hide the widget without disabling lifecycle or metadata reporting.
+- The widget requires compatible pane and workspace subscriptions; unsupported subscriptions hide the widget without disabling lifecycle or metadata reporting.
 - A pane-label change appears on its next update event or authoritative refresh; an agent rename emits a pane-update event.
 - Integration requires a running compatible Herdr session and valid injected environment variables.
 - Each skill requires its matching CLI with `--skill` support; `hc` does not enable the legacy Herdr lifecycle reports or widget.

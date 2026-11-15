@@ -96,7 +96,7 @@ function fixture() {
       if (request.method === "pane.current") return { type: "pane_current", pane: panes[0] };
       if (request.method === "pane.list") return { type: "pane_list", panes };
       if (request.method === "agent.list") return { type: "agent_list", agents: panes };
-      return { type: "workspace_info", workspace: { workspace_id: "w1" } };
+      return { type: "workspace_list", workspaces: [{ workspace_id: "w1" }] };
     },
     async subscribe(_endpoint, _request, signal, onEvent) {
       state.subscriptions += 1;

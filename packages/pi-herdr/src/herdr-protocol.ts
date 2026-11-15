@@ -31,7 +31,7 @@ export type HerdrPaneEvent =
       paneId: string;
       workspaceId: string;
     }
-  | { type: "workspace_renamed"; workspaceId: string }
+  | { type: "workspace_created" | "workspace_closed" | "workspace_renamed"; workspaceId: string }
   | {
       type: "moved";
       pane: HerdrPane;
@@ -40,6 +40,8 @@ export type HerdrPaneEvent =
     };
 
 const HERDR_WIDGET_TOPOLOGY_SUBSCRIPTIONS = [
+  { type: "workspace.created" },
+  { type: "workspace.closed" },
   { type: "pane.created" },
   { type: "pane.updated" },
   { type: "workspace.renamed" },
@@ -152,13 +154,16 @@ export function parseAgentListResult(value: unknown): HerdrPane[] {
   });
 }
 
-export function parseWorkspaceGetResult(value: unknown): HerdrWorkspace {
-  if (!isRecord(value) || value.type !== "workspace_info" || !isRecord(value.workspace)) {
-    throw new Error("Herdr returned an invalid workspace response");
+export function parseWorkspaceListResult(value: unknown): HerdrWorkspace[] {
+  if (!isRecord(value) || value.type !== "workspace_list" || !Array.isArray(value.workspaces)) {
+    throw new Error("Herdr returned an invalid workspace-list response");
   }
-  const workspaceId = requiredString(value.workspace.workspace_id);
-  if (!workspaceId) throw new Error("Herdr returned an invalid workspace identity");
-  return { workspaceId, label: optionalString(value.workspace.label) };
+  return value.workspaces.map((workspace: unknown) => {
+    if (!isRecord(workspace)) throw new Error("Herdr returned an invalid workspace");
+    const workspaceId = requiredString(workspace.workspace_id);
+    if (!workspaceId) throw new Error("Herdr returned an invalid workspace identity");
+    return { workspaceId, label: optionalString(workspace.label) };
+  });
 }
 
 export function parseHerdrPaneEvent(value: unknown): HerdrPaneEvent | undefined {
@@ -167,6 +172,14 @@ export function parseHerdrPaneEvent(value: unknown): HerdrPaneEvent | undefined 
   }
   const data = value.data;
 
+  if (value.event === "workspace_created") {
+    const workspaceId = isRecord(data.workspace) ? requiredString(data.workspace.workspace_id) : undefined;
+    return workspaceId ? { type: "workspace_created", workspaceId } : undefined;
+  }
+  if (value.event === "workspace_closed") {
+    const workspaceId = requiredString(data.workspace_id);
+    return workspaceId ? { type: "workspace_closed", workspaceId } : undefined;
+  }
   if (value.event === "workspace_renamed") {
     const workspaceId = requiredString(data.workspace_id);
     if (!workspaceId || typeof data.label !== "string") return undefined;
