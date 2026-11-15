@@ -106,46 +106,26 @@ function immutableSnapshot(rows: HerdrWidgetRow[]): HerdrWidgetSnapshot | undefi
 
 export class HerdrWidgetModel {
   private currentPaneId: string | undefined;
-  private currentWorkspaceId: string | undefined;
-  private workspace: HerdrWorkspace | undefined;
+  private workspaces = new Map<string, HerdrWorkspace>();
   private panes = new Map<string, ObservedPane>();
 
-  reset(
-    currentPane: HerdrPane,
-    panes: readonly HerdrPane[],
-    workspace: HerdrWorkspace = { workspaceId: currentPane.workspaceId },
-  ): void {
+  reset(currentPane: HerdrPane, panes: readonly HerdrPane[], workspaces: readonly HerdrWorkspace[] = []): void {
     this.currentPaneId = currentPane.paneId;
-    this.currentWorkspaceId = currentPane.workspaceId;
-    this.workspace = { ...workspace };
+    this.workspaces = new Map(workspaces.map((workspace) => [workspace.workspaceId, { ...workspace }]));
     this.panes = new Map(panes.map((pane) => [pane.paneId, observedPane(pane)]));
   }
 
   clear(): void {
     this.currentPaneId = undefined;
-    this.currentWorkspaceId = undefined;
-    this.workspace = undefined;
+    this.workspaces.clear();
     this.panes.clear();
   }
 
-  isCurrentPane(paneId: string): boolean {
-    return this.currentPaneId === paneId;
-  }
-
-  isCurrentWorkspace(workspaceId: string): boolean {
-    return this.currentWorkspaceId === workspaceId;
-  }
-
   snapshot(): HerdrWidgetSnapshot | undefined {
-    if (!this.currentPaneId || !this.currentWorkspaceId || !this.workspace) return undefined;
+    if (!this.currentPaneId) return undefined;
     const rows = [...this.panes.values()]
-      .filter(
-        (pane) =>
-          pane.workspaceId === this.currentWorkspaceId &&
-          pane.paneId !== this.currentPaneId &&
-          pane.agent !== undefined,
-      )
-      .map((pane) => rowForPane(pane, this.workspace as HerdrWorkspace));
+      .filter((pane) => pane.paneId !== this.currentPaneId && pane.agent !== undefined)
+      .map((pane) => rowForPane(pane, this.workspaces.get(pane.workspaceId) ?? { workspaceId: pane.workspaceId }));
     rows.sort(
       (left, right) =>
         STATE_ORDER[left.state] - STATE_ORDER[right.state] ||

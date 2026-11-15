@@ -94,8 +94,8 @@ function fixture(retryDelayMs = 0) {
             : request.method === "agent.list"
               ? { type: "agent_list", agents: state.panes.map((entry) => ({ ...entry, name: state.name })) }
               : {
-                  type: "workspace_info",
-                  workspace: { workspace_id: state.current.workspace_id, label: state.workspaceLabel },
+                  type: "workspace_list",
+                  workspaces: [{ workspace_id: state.current.workspace_id, label: state.workspaceLabel }],
                 };
       try {
         return await (state.override?.(request, result, signal) ?? result);
@@ -269,7 +269,8 @@ test("pane and workspace invalidations refresh names and clear null or omitted p
     f.emit({ event: "pane_updated", data: { pane: pane("w2:p1", { workspace_id: "w2" }) } });
     f.emit({ event: "workspace_renamed", data: { workspace_id: "w2", label: "other" } });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(f.state.reads, reads);
+    await until(() => f.state.reads > reads && f.state.activeLists === 0);
+    assert.doesNotMatch(f.text(), /other/);
   } finally {
     await f.observer.shutdown(f.ctx);
   }

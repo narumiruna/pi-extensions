@@ -16,7 +16,7 @@ export function createHerdrMenu(options: {
           {
             id: "widget",
             label: `Agent widget: ${options.isEnabled() ? "On" : "Off"}`,
-            description: "Show or hide sibling agents above the editor",
+            description: "Show or hide agents across all workspaces above the editor",
             action: "toggle",
           },
           { id: "status", label: "Status", to: "status" },
@@ -31,6 +31,7 @@ export function createHerdrMenu(options: {
         lines: [
           `Agent widget setting: ${options.isEnabled() ? "on" : "off"}`,
           "The widget appears only in TUI mode with recognized sibling agents.",
+          "Scope: all workspaces in the connected Herdr session.",
           "Lifecycle and metadata reporting are independent of this setting.",
           `User settings file: ${options.settingsPath}`,
         ],

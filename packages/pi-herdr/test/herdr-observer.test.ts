@@ -47,8 +47,8 @@ function agentList(panes: ReturnType<typeof wirePane>[]) {
   return { type: "agent_list", agents: panes };
 }
 
-function workspaceInfo(workspaceId = "w1", label = "space") {
-  return { type: "workspace_info", workspace: { workspace_id: workspaceId, label } };
+function workspaceList(workspaceId = "w1", label = "space") {
+  return { type: "workspace_list", workspaces: [{ workspace_id: workspaceId, label }] };
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
@@ -134,7 +134,7 @@ test("publishes initial siblings and refreshes live status and exit invalidation
       if (request.method === "agent.list") {
         return agentList(panes.map((pane) => ({ ...pane, name: pane.pane_id === "w1:p1" ? "current" : "reviewer" })));
       }
-      if (request.method === "workspace.get") return workspaceInfo();
+      if (request.method === "workspace.list") return workspaceList();
       return { type: "pane_list", panes };
     },
   });
@@ -197,7 +197,7 @@ test("reconciles topology invalidations without replay or a resubscribe loop", a
         return { type: "pane_current", pane: wirePane("w1:p1") };
       }
       if (request.method === "agent.list") return agentList(panes);
-      if (request.method === "workspace.get") return workspaceInfo();
+      if (request.method === "workspace.list") return workspaceList();
       return { type: "pane_list", panes };
     },
   });
@@ -228,7 +228,7 @@ test("re-reads initialization invalidations and rejects stale delayed publicatio
       }
       const panes = [wirePane("w1:p1", "working"), wirePane("w1:p2", "idle")];
       if (request.method === "agent.list") return agentList(panes);
-      if (request.method === "workspace.get") return workspaceInfo();
+      if (request.method === "workspace.list") return workspaceList();
       return { type: "pane_list", panes };
     },
   });
@@ -296,7 +296,7 @@ test("clears stale state before one reconnect and stops after exhaustion", async
       }
       const panes = [wirePane("w1:p1"), wirePane("w1:p2", "working")];
       if (request.method === "agent.list") return agentList(panes);
-      if (request.method === "workspace.get") return workspaceInfo();
+      if (request.method === "workspace.list") return workspaceList();
       return { type: "pane_list", panes };
     },
   });
@@ -348,8 +348,8 @@ test("reconnects and reloads the workspace after the current pane moves", async 
         return { type: "pane_current", pane: panes[0] };
       }
       if (request.method === "agent.list") return agentList(panes);
-      if (request.method === "workspace.get") {
-        return workspaceInfo(moved ? "w2" : "w1", moved ? "destination-space" : "space");
+      if (request.method === "workspace.list") {
+        return workspaceList(moved ? "w2" : "w1", moved ? "destination-space" : "space");
       }
       return { type: "pane_list", panes };
     },
@@ -393,7 +393,7 @@ test("an older delayed shutdown cannot clear a replacement session", async () =>
         return { type: "pane_current", pane: wirePane("w1:p1") };
       }
       if (request.method === "agent.list") return agentList(panes);
-      if (request.method === "workspace.get") return workspaceInfo();
+      if (request.method === "workspace.list") return workspaceList();
       return { type: "pane_list", panes };
     },
   });

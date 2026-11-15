@@ -3,14 +3,13 @@ import { createEditorStatusPublisher, type EditorStatusPublisher } from "@narumi
 import { type HerdrRequest, type HerdrSubscription, openHerdrSubscription, requestHerdr } from "./herdr-client.js";
 import {
   type HerdrPane,
-  type HerdrPaneEvent,
   type HerdrWorkspace,
   herdrWidgetSubscriptions,
   parseAgentListResult,
   parseHerdrPaneEvent,
   parsePaneCurrentResult,
   parsePaneListResult,
-  parseWorkspaceGetResult,
+  parseWorkspaceListResult,
 } from "./herdr-protocol.js";
 import {
   createHerdrWidget,
@@ -51,20 +50,6 @@ class HerdrCleanupError extends AggregateError {}
 
 function renderHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme, width: number): readonly string[] {
   return createHerdrWidget(snapshot, theme, false).render(width);
-}
-
-function isRelevantEvent(model: HerdrWidgetModel, event: HerdrPaneEvent): boolean {
-  if (event.type === "created" || event.type === "updated") {
-    return model.isCurrentWorkspace(event.pane.workspaceId);
-  }
-  if (event.type === "moved") {
-    return (
-      model.isCurrentPane(event.previousPaneId) ||
-      model.isCurrentWorkspace(event.previousWorkspaceId) ||
-      model.isCurrentWorkspace(event.pane.workspaceId)
-    );
-  }
-  return "workspaceId" in event && model.isCurrentWorkspace(event.workspaceId);
 }
 
 function subscriptionFingerprint(currentPane: HerdrPane, panes: readonly HerdrPane[]): string {
@@ -132,7 +117,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     ctx: ExtensionContext,
     expectedGeneration: number,
     signal: AbortSignal,
-  ): Promise<{ currentPane: HerdrPane; panes: HerdrPane[]; workspace: HerdrWorkspace } | undefined> => {
+  ): Promise<{ currentPane: HerdrPane; panes: HerdrPane[]; workspaces: HerdrWorkspace[] } | undefined> => {
     const currentResult = await request(
       options.environment.socketEndpoint,
       {
@@ -150,7 +135,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         {
           id: requestId("list"),
           method: "pane.list",
-          params: { workspace_id: currentPane.workspaceId },
+          params: {},
         },
         signal,
       ),
@@ -163,32 +148,28 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         options.environment.socketEndpoint,
         {
           id: requestId("workspace"),
-          method: "workspace.get",
-          params: { workspace_id: currentPane.workspaceId },
+          method: "workspace.list",
+          params: {},
         },
         signal,
       ),
     ]);
     if (!owns(ctx, expectedGeneration) || signal.aborted) return undefined;
     const panes = parsePaneListResult(listResult);
-    const paneIds = new Set(panes.map((pane) => pane.paneId));
+    const panesById = new Map(panes.map((pane) => [pane.paneId, pane]));
     const namesByPane = new Map(
       parseAgentListResult(agentResult)
-        .filter((pane) => pane.workspaceId === currentPane.workspaceId && paneIds.has(pane.paneId))
+        .filter((pane) => panesById.get(pane.paneId)?.workspaceId === pane.workspaceId)
         .map((pane) => [pane.paneId, pane.agentName]),
     );
     const withAgentName = (pane: HerdrPane): HerdrPane => ({
       ...pane,
       agentName: namesByPane.get(pane.paneId) ?? pane.agentName,
     });
-    const workspace = parseWorkspaceGetResult(workspaceResult);
-    if (workspace.workspaceId !== currentPane.workspaceId) {
-      throw new Error("Herdr returned a mismatched workspace");
-    }
     return {
       currentPane: withAgentName(currentPane),
       panes: panes.map(withAgentName),
-      workspace,
+      workspaces: parseWorkspaceListResult(workspaceResult),
     };
   };
 
@@ -232,7 +213,6 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         if (!discovered) return;
         const subscribedFingerprint = subscriptionFingerprint(discovered.currentPane, discovered.panes);
         const model = new HerdrWidgetModel();
-        model.reset(discovered.currentPane, discovered.panes, discovered.workspace);
         let dirty = true;
 
         subscription = await subscribe(
@@ -246,7 +226,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
           (frame) => {
             if (!attemptActive || !owns(ctx, expectedGeneration) || signal.aborted) return;
             const event = parseHerdrPaneEvent(frame);
-            if (!event || !isRelevantEvent(model, event)) return;
+            if (!event) return;
             dirty = true;
             wakeRefresh();
           },
@@ -275,7 +255,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
           if (subscriptionFingerprint(refreshed.currentPane, refreshed.panes) !== subscribedFingerprint) {
             throw new HerdrTopologyChangedError();
           }
-          model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspace);
+          model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspaces);
           publish(ctx, model, expectedGeneration);
           await new Promise<void>((resolve) => {
             wake = resolve;
