@@ -319,15 +319,40 @@ test("workspace peers use the nearest installed scoped package, then the hoisted
   });
 });
 
-test("unrestricted peers accept prereleases while bounded ranges retain their prerelease rules", async () => {
-  await fixture(async (root) => {
+for (const [peer, valid] of [
+  ["*", true],
+  [" * ", true],
+  ["", true],
+  ["   ", false],
+  ["x", false],
+  ["X", false],
+  [">=0", false],
+  [">=0.0.0", false],
+  [">=0.0.0 || ^1.0.0", false],
+  ["* || ^1.0.0", false],
+  ["^1.0.0", false],
+  [">=1.2.0-rc.1 <2", true],
+] as const) {
+  test(`prerelease peer ${JSON.stringify(peer)} matches npm's unshadowed peer check`, async () => {
     const version = "1.2.0-rc.1";
-    await json(root, "node_modules/companion/package.json", { name: "companion", version });
-    for (const [peer, valid] of [
-      ["*", true],
-      ["^1.0.0", false],
-      [">=1.2.0-rc.1 <2", true],
-    ] as const) {
+    // Native npm checks this transitive peer because no same-name edge replaces it.
+    await fixture(async (root) => {
+      await json(root, "package.json", {
+        name: "fixture",
+        private: true,
+        version: "1.0.0",
+        dependencies: { plugin: "1.0.0", companion: version },
+      });
+      await json(root, "node_modules/companion/package.json", { name: "companion", version });
+      await json(root, "node_modules/plugin/package.json", {
+        name: "plugin",
+        version: "1.0.0",
+        peerDependencies: { companion: peer },
+      });
+      assert.equal(dependencyProblems({ root }).length === 0, valid, `npm peer ${JSON.stringify(peer)}`);
+    });
+    // Keep this fixture separate so npm cannot mask a broken direct-peer check.
+    await fixture(async (root) => {
       await json(root, "package.json", {
         name: "fixture",
         private: true,
@@ -335,10 +360,11 @@ test("unrestricted peers accept prereleases while bounded ranges retain their pr
         devDependencies: { companion: `npm:companion@${version}` },
         peerDependencies: { companion: peer },
       });
-      assert.equal(dependencyProblems({ root }).length === 0, valid, peer);
-    }
+      await json(root, "node_modules/companion/package.json", { name: "companion", version });
+      assert.equal(dependencyProblems({ root }).length === 0, valid, `direct peer ${JSON.stringify(peer)}`);
+    });
   });
-});
+}
 
 test("invalid installed peer metadata fails instead of falling back to a hoisted copy", async () => {
   await fixture(async (root) => {

@@ -39,8 +39,8 @@ export function dependencyProblems({ root = repositoryRoot, env = process.env, e
         }
       } else if (
         !semver.valid(installed.version) ||
-        // npm accepts prereleases for an unrestricted * peer, but not for other ranges by default.
-        (peerRange !== "*" && !semver.satisfies(installed.version, peer))
+        // npm uses the trimmed original spec for its wildcard exception, not a normalized range.
+        ((peer || "*").trim() !== "*" && !semver.satisfies(installed.version, peer))
       ) {
         failures.push(
           `${file}: ${name} installed version (${installed.version ?? "missing"}) from ${installed.file} does not satisfy peerDependencies (${peer}); align the installed version and supported peer range.`,
