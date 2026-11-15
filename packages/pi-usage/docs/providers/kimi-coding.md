@@ -4,15 +4,20 @@
 
 - Provider ID: `kimi-coding`
 - Semantics: Kimi Coding Plan request windows plus a separate Extra Usage booster wallet
-- Source: `GET https://api.kimi.com/coding/v1/usages` using Pi's freshly resolved runtime Bearer credential
+- Source: `GET https://api.kimi.com/coding/v1/usages` using Pi's freshly resolved runtime Bearer credential, or the dedicated `PI_USAGE_KIMI_CODING_API_KEY` credential for proxy selections
 - Displayed plan data: count-based weekly summaries and returned sub-windows, plus reported ratio-based five-hour, weekly, or monthly quotas and valid reset times
 - Displayed wallet data: balance, monthly spend, and monthly charge limit when the wallet supplies consistent currency and amounts
 - Statusline examples: `kimi 77% ↻ 2h52m · 87% ↻ 29d20h`, `kimi 77% ↻ 2h52m · mo:87%`, or static fallback `kimi 1d:95%`
 
 This provider-owned managed-usage endpoint may change without notice.
 Both Pi API-key credentials and Pi OAuth credentials are accepted because current Pi resolves each form as Bearer authorization for the same official Kimi inference origin.
-The extension queries the fixed usage endpoint only when both the selected model origin and the effective resolved-auth origin are `https://api.kimi.com`.
-Custom and proxy origins fail before network access, redirects are rejected, and the credential is never sent to an override from Kimi Code's environment-specific development path.
+By default, the extension queries the fixed usage endpoint only when both the selected model origin and the effective resolved-auth origin are `https://api.kimi.com`; custom and proxy origins fail closed before network access, redirects are rejected, and no credential is sent to an override from Kimi Code's environment-specific development path.
+
+### Using a local inference proxy
+
+Inference routing and usage authentication can be separated explicitly. When the selected Kimi model resolves to a custom or local proxy origin, set `PI_USAGE_KIMI_CODING_API_KEY` to the **official Kimi Coding credential for the account whose plan should be displayed**, and the usage query sends only that dedicated Bearer credential to the fixed `https://api.kimi.com/coding/v1/usages` endpoint while inference keeps using the proxy.
+The variable is re-read on every resolution, so changing it re-fingerprints the credential and clearing it restores the default fail-closed behavior; blank or whitespace-only values count as absent.
+The override never reads or sends the proxy caller credential, never honors a custom usage URL, is ignored entirely for official direct selections, and applies only to the `kimi-coding` provider. Do not set it to the local proxy's caller key. Restart Pi after changing its shell environment so new values reach the process.
 
 Count-based plan buckets remain integer request counts and are rendered with their source-defined windows.
 Live responses omit both `used` and `remaining` on untouched rows and may report only `remaining` once usage starts, so a row with a positive `limit` and no counters means zero usage, and when only one counter is present the other is derived from `limit`.

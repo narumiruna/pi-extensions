@@ -71,7 +71,10 @@ const GITHUB_COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
 const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 const VERCEL_AI_GATEWAY_CREDITS_URL = "https://ai-gateway.vercel.sh/v1/credits";
 const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
-const KIMI_CODING_USAGE_URL = "https://api.kimi.com/coding/v1/usages";
+const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding";
+const KIMI_CODING_USAGE_URL = `${KIMI_CODING_BASE_URL}/v1/usages`;
+const KIMI_CODING_USAGE_API_KEY_ENV = "PI_USAGE_KIMI_CODING_API_KEY";
+const KIMI_CODING_PROXY_USAGE_SOURCE = "kimi-proxy-usage-override";
 const MINIMAX_API_ROOTS = Object.freeze({
   minimax: "https://api.minimax.io",
   "minimax-cn": "https://api.minimaxi.com",
@@ -437,10 +440,15 @@ export async function resolveUsageAuth(
   candidateReader?: OAuthCredentialCandidateReader,
   /** @deprecated This historical companion argument is ignored; use options instead. */
   _openaiCompanionUsage?: boolean,
-  options: UsageAuthLifecycle & { openaiUseCodexUsage?: boolean } = {},
+  options: UsageAuthLifecycle & {
+    openaiUseCodexUsage?: boolean;
+    /** Injected for deterministic tests; defaults to the live process environment. */
+    envReader?: UsageEnvReader;
+  } = {},
 ): Promise<ResolvedUsageAuth | undefined> {
   const guard = createUsageAuthGuard(options);
   guard.check();
+  const envReader = options.envReader ?? readUsageEnv;
   const selectedModel = ctx.model?.provider === adapter.id ? ctx.model : undefined;
   // Pi's virtual catalog entries use this API marker and an empty URL. The predicate
   // is characterized against real registration; Pi does not export its own helper.
@@ -463,9 +471,18 @@ export async function resolveUsageAuth(
   };
   checkVirtualSelection();
   if (selectedModel && !virtualModel && !hasOfficialOrigin(selectedModel, adapter.id)) {
-    throw new Error(
-      `${adapter.displayName} usage cannot send a custom provider base URL credential to the official usage endpoint.`,
-    );
+    // A proxy-selected Kimi model can still authorize the fixed official usage endpoint through an
+    // explicit dedicated credential; every other proxy origin fails closed before network access.
+    const proxyUsageAuth =
+      adapter.id === "kimi-coding"
+        ? await resolveKimiProxyUsageOverride(ctx, adapter, selectedModel, salt, candidateReader, guard, envReader)
+        : undefined;
+    if (!proxyUsageAuth) {
+      throw new Error(
+        `${adapter.displayName} usage cannot send a custom provider base URL credential to the official usage endpoint.`,
+      );
+    }
+    return proxyUsageAuth;
   }
 
   let model =
@@ -555,40 +572,20 @@ export async function resolveUsageAuth(
   }
   const auth = modelAuth ?? providerResult?.auth;
   if (!auth) return undefined;
-  const finalize = (resolved: ResolvedUsageAuth): ResolvedUsageAuth => {
-    const preservedAuth = { ...(providerResult?.auth ?? auth) };
-    const env = providerResult?.env ?? modelAuth?.env;
-    const source = providerResult?.source;
-    const effectiveBaseUrl = virtualModel
-      ? model.baseUrl
-      : (modelAuth?.baseUrl ?? providerResult?.auth.baseUrl ?? provider?.baseUrl ?? model.baseUrl);
-    const redactionInputs = [
-      preservedAuth.apiKey,
-      ...Object.values(preservedAuth.headers ?? {}),
-      ...Object.values(env ?? {}),
-      modelAuth?.apiKey,
-      ...Object.values(modelAuth?.headers ?? {}),
-    ].filter((value): value is string => typeof value === "string" && value.length > 0);
-    return {
-      ...resolved,
-      auth: preservedAuth,
-      ...(env ? { env: { ...env } } : {}),
-      ...(source ? { source } : {}),
-      effectiveBaseUrl,
-      secrets: [...new Set([...resolved.secrets, ...redactionInputs])],
-      fingerprint: fingerprintResolvedAuth(
-        {
-          apiKey: resolved.apiKey,
-          headers: resolved.headers,
-          baseUrl: effectiveBaseUrl,
-          env,
-          source,
-          providerAuth: preservedAuth,
-        },
-        salt,
-      ),
-    };
-  };
+  const finalize = (resolved: ResolvedUsageAuth): ResolvedUsageAuth =>
+    finalizeResolvedAuth(
+      resolved,
+      {
+        providerAuth: providerResult?.auth,
+        providerEnv: providerResult?.env,
+        providerSource: providerResult?.source,
+        modelAuth,
+        model,
+        providerBaseUrl: provider?.baseUrl,
+        virtualModel: virtualModel !== undefined,
+      },
+      salt,
+    );
   if (adapter.id === "anthropic") {
     if (!providerResult) return undefined;
     const offered = await guard.wait(() =>
@@ -672,6 +669,124 @@ export async function resolveUsageAuth(
     secrets,
     model,
   });
+}
+
+type UsageEnvReader = () => Record<string, string | undefined>;
+
+const readUsageEnv: UsageEnvReader = () => process.env;
+
+/**
+ * Shared redaction, fingerprint, and effective-origin assembly for resolved usage credentials.
+ * The main resolution flow and the Kimi proxy override both terminate here so neither can ship
+ * an unredacted or un-fingerprinted credential.
+ */
+function finalizeResolvedAuth(
+  // `fingerprint` is always recomputed here, so callers may pass a credential without one.
+  resolved: Pick<ResolvedUsageAuth, "apiKey" | "headers" | "secrets" | "model"> & Partial<ResolvedUsageAuth>,
+  context: {
+    providerAuth?: RequestAuth;
+    providerEnv?: Record<string, string>;
+    providerSource?: string;
+    modelAuth?: RequestAuth;
+    model: PiModel;
+    providerBaseUrl?: string;
+    virtualModel: boolean;
+  },
+  salt: Uint8Array,
+): ResolvedUsageAuth {
+  const preservedAuth = { ...(context.providerAuth ?? resolved.auth) };
+  const env = context.providerEnv ?? context.modelAuth?.env;
+  const source = context.providerSource;
+  const effectiveBaseUrl = context.virtualModel
+    ? context.model.baseUrl
+    : (context.modelAuth?.baseUrl ?? context.providerAuth?.baseUrl ?? context.providerBaseUrl ?? context.model.baseUrl);
+  const redactionInputs = [
+    preservedAuth.apiKey,
+    ...Object.values(preservedAuth.headers ?? {}),
+    ...Object.values(env ?? {}),
+    context.modelAuth?.apiKey,
+    ...Object.values(context.modelAuth?.headers ?? {}),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  return {
+    ...resolved,
+    auth: preservedAuth,
+    ...(env ? { env: { ...env } } : {}),
+    ...(source ? { source } : {}),
+    effectiveBaseUrl,
+    secrets: [...new Set([...resolved.secrets, ...redactionInputs])],
+    fingerprint: fingerprintResolvedAuth(
+      {
+        apiKey: resolved.apiKey,
+        headers: resolved.headers,
+        baseUrl: effectiveBaseUrl,
+        env,
+        source,
+        providerAuth: preservedAuth,
+      },
+      salt,
+    ),
+  };
+}
+
+/**
+ * A proxy-selected Kimi model can still display official plan usage when the user supplies an
+ * explicit dedicated credential through `PI_USAGE_KIMI_CODING_API_KEY`. The override authorizes
+ * only the fixed official usage endpoint: proxy credentials are never read on this path (no model
+ * or provider auth resolution), inference keeps the proxy origin, official direct selections never
+ * consult the variable, and no custom usage URL is accepted. Guard-protected like the main flow:
+ * credential readiness is awaited, and the selection and provider registration are revalidated
+ * after every await so a mid-resolution switch cannot ship a stale credential.
+ */
+async function resolveKimiProxyUsageOverride(
+  ctx: ExtensionContext,
+  adapter: UsageProviderAdapter,
+  selectedModel: PiModel,
+  salt: Uint8Array,
+  candidateReader: OAuthCredentialCandidateReader | undefined,
+  guard: ReturnType<typeof createUsageAuthGuard>,
+  envReader: UsageEnvReader,
+): Promise<ResolvedUsageAuth | undefined> {
+  // Blank or whitespace-only values keep failing closed; `undefined` returns to the caller's
+  // original fail-closed error instead of inventing a custom endpoint.
+  const overrideApiKey = envReader()[KIMI_CODING_USAGE_API_KEY_ENV]?.trim();
+  if (!overrideApiKey || !selectedModel.baseUrl) return undefined;
+  // SAFETY: Pi exposes the required auth methods at runtime, and checks below narrow them before use.
+  const registry = ctx.modelRegistry as unknown as UsageAuthRegistry;
+  // Pending activation can replace runtime credentials or provider origins even without an OAuth
+  // credential offer; like the main flow, the override observes the settled selection.
+  if (candidateReader?.waitUntilReady && !(await guard.wait(() => candidateReader.waitUntilReady?.(ctx, adapter.id)))) {
+    throw new Error(`${adapter.displayName} OAuth credential readiness failed closed.`);
+  }
+  const provider = registry.getProvider?.(adapter.id);
+  const providerBaseUrl = provider?.baseUrl;
+  const revalidate = () => {
+    if (
+      ctx.model !== selectedModel ||
+      !selectedModel.baseUrl ||
+      hasOfficialOrigin(selectedModel, adapter.id) ||
+      registry.getProvider?.(adapter.id) !== provider ||
+      provider?.baseUrl !== providerBaseUrl
+    ) {
+      throw abortError();
+    }
+  };
+  revalidate();
+  // The usage-local clone supplies the official usage origin without changing Pi's selection,
+  // mirroring the virtual-model pattern. Proxy credentials stay unread, so nothing proxy-derived
+  // can reach the official endpoint, and the proxy and official origins stay isolated.
+  const model = { ...selectedModel, baseUrl: KIMI_CODING_BASE_URL };
+  const headers = { Authorization: `Bearer ${overrideApiKey}` };
+  guard.check();
+  return finalizeResolvedAuth(
+    { apiKey: overrideApiKey, headers, secrets: [overrideApiKey, headers.Authorization], model },
+    {
+      providerEnv: { [KIMI_CODING_USAGE_API_KEY_ENV]: overrideApiKey },
+      providerSource: KIMI_CODING_PROXY_USAGE_SOURCE,
+      model,
+      virtualModel: false,
+    },
+    salt,
+  );
 }
 
 export async function queryProviderUsage(
