@@ -63,6 +63,7 @@
     "check": "npm run build && node ./scripts/run-checks.mjs",
     "check:biome": "biome check . --error-on-warnings",
     "check:boundaries": "node ./scripts/check-extension-boundaries.mjs",
+    "check:dependencies": "node ./scripts/check-dependencies.mjs",
     "prepare": "node scripts/prepare.mjs",
     "benchmark:codex-compact": "node ./packages/pi-codex-compact/benchmark/run.mjs",
     "benchmark:extension-startup": "node ./scripts/benchmark-extension-startup.mjs",

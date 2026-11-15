@@ -50,8 +50,9 @@ it is not an API reference.
   imported at runtime—`@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`,
   `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`—in `peerDependencies`
   with version `"*"`; do not rely on `devDependencies` being installed with a production package.
-  **Verification:** `Review` of imports and package metadata, plus an npm pack dry run for dependency
-  or publishing changes.
+  **Verification:** `Validator` via `npm run check:dependencies` for declared dev/peer range alignment
+  and installed dependency compatibility; `Review` of imports and package metadata, plus an npm pack
+  dry run for dependency or publishing changes.
 - **MUST:** Treat installed extension code as fully privileged and load only trusted sources.
   **Verification:** `Review` of installation documentation and any code-loading path.
 
