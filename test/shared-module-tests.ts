@@ -58,7 +58,6 @@ export const sharedModuleTests = [
   "packages/pi-goal/test/wait-timer.test.ts",
   "packages/pi-herdr/test/build-runtime.test.ts",
   "packages/pi-herdr/test/herdr-metadata.test.ts",
-  "packages/pi-herdr/test/herdr-skill.test.ts",
   "packages/pi-herdr/test/herdr-widget.test.ts",
   "packages/pi-herdr/test/settings.test.ts",
   "packages/pi-inspect/test/context.test.ts",

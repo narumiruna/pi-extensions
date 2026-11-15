@@ -796,12 +796,12 @@ test("a disabled widget does not disable lifecycle or metadata reporting", async
   await emit(mock, "session_shutdown", {}, ctx);
 });
 
-test("package resources load one extension and the bundled herdr skill", async () => {
+test("package resources load one extension without bundled skills", async () => {
   const loader = new DefaultResourceLoader({
     cwd: agentDir,
     agentDir,
-    settingsManager: SettingsManager.inMemory({ packages: [packageRoot] }),
-    additionalSkillPaths: [join(packageRoot, "skills", "herdr", "SKILL.md")],
+    settingsManager: SettingsManager.inMemory({}),
+    additionalExtensionPaths: [packageRoot],
     noSkills: true,
     noContextFiles: true,
   });
@@ -812,8 +812,5 @@ test("package resources load one extension and the bundled herdr skill", async (
   assert.equal(extensions.extensions.length, 1);
   const skills = loader.getSkills();
   assert.deepEqual(skills.diagnostics, []);
-  assert.deepEqual(
-    skills.skills.map(({ name }) => name),
-    ["herdr"],
-  );
+  assert.deepEqual(skills.skills, []);
 });
