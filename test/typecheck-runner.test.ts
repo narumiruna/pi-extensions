@@ -6,7 +6,6 @@ import path from "node:path";
 import { test } from "vitest";
 
 interface Options {
-  rust?: boolean;
   staged?: boolean;
   ready?: boolean;
   mode?: "affected" | "full" | "skip";
@@ -67,7 +66,6 @@ function run(options: Options = {}) {
     const tracePath = path.join(root, "trace.jsonl");
     const args = ["scripts/run-typechecks.mjs"];
     if (options.staged !== false) args.push("--staged");
-    if (options.rust) args.push("--tsc-rs");
     const result = spawnSync(process.execPath, args, {
       cwd: root,
       encoding: "utf8",
@@ -101,101 +99,94 @@ function run(options: Options = {}) {
   }
 }
 
-function checkArgs(root: string, rust: boolean, selected = false) {
+function checkArgs(root: string, selected = false) {
   const workspaces = selected ? workspaceNames.flatMap((name) => ["--workspace", name]) : ["--workspaces"];
   return [
     ...workspaces,
-    ...(rust
-      ? [
-          "exec",
-          "--",
-          path.join(root, "node_modules/.bin", process.platform === "win32" ? "tsc-rs.cmd" : "tsc-rs"),
-          "--noEmit",
-        ]
-      : ["run", "typecheck"]),
+    "exec",
+    "--",
+    path.join(root, "node_modules/.bin", process.platform === "win32" ? "tsc-rs.cmd" : "tsc-rs"),
+    "--noEmit",
   ];
 }
 
-for (const rust of [false, true]) {
-  const compiler = rust ? "tsc-rs" : "official TypeScript";
-  for (const ready of [false, true]) {
-    test(`${compiler} ${ready ? "reuses ready full prerequisites" : "builds full prerequisites before checking"}`, () => {
-      const { root, result, entries } = run({ rust, staged: false, ready, discoveryFailure: "staged" });
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(
-        entries.map(({ args }) => args),
-        [...(ready ? [] : [["run", "build"]]), checkArgs(root, rust)],
-      );
-      assert.equal(entries.at(-1)?.ready, "1");
-    });
-
-    test(`${compiler} ${ready ? "reuses ready affected prerequisites" : "builds selected prerequisites before checking"}`, () => {
-      const { root, result, entries } = run({ rust, ready });
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(entries, [
-        ...(ready ? [] : [{ kind: "selected-build", workspaceNames: buildNames }]),
-        { kind: "npm", args: checkArgs(root, rust, true), ready: ready ? "1" : "" },
-      ]);
-    });
-  }
-
-  test(`${compiler} skips documentation-only staged changes`, () => {
-    const { result, entries } = run({ rust, mode: "skip" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(entries, []);
-    assert.match(result.stdout, /Skipping workspace typechecks/u);
-  });
-
-  test(`${compiler} checks affected workspaces without unnecessary builds`, () => {
-    const { root, result, entries } = run({ rust, emptyBuilds: true });
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(entries, [{ kind: "npm", args: checkArgs(root, rust, true), ready: "" }]);
-  });
-
-  test(`${compiler} preserves full selection for staged shared inputs`, () => {
-    const { root, result, entries } = run({ rust, mode: "full" });
+for (const ready of [false, true]) {
+  test(`tsc-rs ${ready ? "reuses ready full prerequisites" : "builds full prerequisites before checking"}`, () => {
+    const { root, result, entries } = run({ staged: false, ready, discoveryFailure: "staged" });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(
       entries.map(({ args }) => args),
-      [["run", "build"], checkArgs(root, rust)],
+      [...(ready ? [] : [["run", "build"]]), checkArgs(root)],
     );
+    assert.equal(entries.at(-1)?.ready, "1");
   });
 
-  for (const discoveryFailure of ["staged", "selection"] as const) {
-    test(`${compiler} falls back to full checks after ${discoveryFailure} failure`, () => {
-      const { root, result, entries } = run({ rust, ready: true, discoveryFailure });
-      assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stderr, /falling back to all workspaces/u);
-      assert.deepEqual(entries, [{ kind: "npm", args: checkArgs(root, rust), ready: "1" }]);
-    });
-  }
-
-  test(`${compiler} stops after a selected prerequisite fails`, () => {
-    const { result, entries } = run({ rust, buildStatus: 7 });
-    assert.equal(result.status, 7);
-    assert.deepEqual(entries, [{ kind: "selected-build", workspaceNames: buildNames }]);
-  });
-
-  test(`${compiler} stops after a full prerequisite build fails`, () => {
-    const { result, entries } = run({ rust, staged: false, npmFailure: "build" });
-    assert.equal(result.status, 9);
-    assert.deepEqual(entries, [{ kind: "npm", args: ["run", "build"], ready: "" }]);
-  });
-
-  test(`${compiler} preserves a compiler failure exit status`, () => {
-    const { result } = run({ rust, ready: true, npmFailure: "check" });
-    assert.equal(result.status, 2);
-  });
-
-  test(`${compiler} rejects an npm spawn failure`, () => {
-    const { result, entries } = run({ rust, ready: true, missingNpm: true });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /ENOENT/u);
-    assert.deepEqual(entries, []);
-  });
-
-  test(`${compiler} rejects a signalled checker`, () => {
-    const { result } = run({ rust, ready: true, npmFailure: "signal" });
-    assert.equal(result.status, 1);
+  test(`tsc-rs ${ready ? "reuses ready affected prerequisites" : "builds selected prerequisites before checking"}`, () => {
+    const { root, result, entries } = run({ ready });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(entries, [
+      ...(ready ? [] : [{ kind: "selected-build", workspaceNames: buildNames }]),
+      { kind: "npm", args: checkArgs(root, true), ready: ready ? "1" : "" },
+    ]);
   });
 }
+
+test("tsc-rs skips documentation-only staged changes", () => {
+  const { result, entries } = run({ mode: "skip" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(entries, []);
+  assert.match(result.stdout, /Skipping workspace typechecks/u);
+});
+
+test("tsc-rs checks affected workspaces without unnecessary builds", () => {
+  const { root, result, entries } = run({ emptyBuilds: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(entries, [{ kind: "npm", args: checkArgs(root, true), ready: "" }]);
+});
+
+test("tsc-rs preserves full selection for staged shared inputs", () => {
+  const { root, result, entries } = run({ mode: "full" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    entries.map(({ args }) => args),
+    [["run", "build"], checkArgs(root)],
+  );
+});
+
+for (const discoveryFailure of ["staged", "selection"] as const) {
+  test(`tsc-rs falls back to full checks after ${discoveryFailure} failure`, () => {
+    const { root, result, entries } = run({ ready: true, discoveryFailure });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /falling back to all workspaces/u);
+    assert.deepEqual(entries, [{ kind: "npm", args: checkArgs(root), ready: "1" }]);
+  });
+}
+
+test("tsc-rs stops after a selected prerequisite fails", () => {
+  const { result, entries } = run({ buildStatus: 7 });
+  assert.equal(result.status, 7);
+  assert.deepEqual(entries, [{ kind: "selected-build", workspaceNames: buildNames }]);
+});
+
+test("tsc-rs stops after a full prerequisite build fails", () => {
+  const { result, entries } = run({ staged: false, npmFailure: "build" });
+  assert.equal(result.status, 9);
+  assert.deepEqual(entries, [{ kind: "npm", args: ["run", "build"], ready: "" }]);
+});
+
+test("tsc-rs preserves a compiler failure exit status", () => {
+  const { result } = run({ ready: true, npmFailure: "check" });
+  assert.equal(result.status, 2);
+});
+
+test("tsc-rs rejects an npm spawn failure", () => {
+  const { result, entries } = run({ ready: true, missingNpm: true });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /ENOENT/u);
+  assert.deepEqual(entries, []);
+});
+
+test("tsc-rs rejects a signalled checker", () => {
+  const { result } = run({ ready: true, npmFailure: "signal" });
+  assert.equal(result.status, 1);
+});

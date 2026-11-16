@@ -7,9 +7,7 @@ import { runBuilds } from "./run-builds.mjs";
 import { selectStagedTypechecks, stagedFiles } from "./select-staged-typechecks.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const args = process.argv.slice(2);
-const stagedOnly = args.includes("--staged");
-const useRust = args.includes("--tsc-rs");
+const stagedOnly = process.argv.slice(2).includes("--staged");
 
 if (!stagedOnly) {
   runFullTypechecks();
@@ -57,15 +55,13 @@ function runWorkspaceTypechecks(workspaceNames) {
   const workspaceArgs = workspaceNames
     ? workspaceNames.flatMap((workspaceName) => ["--workspace", workspaceName])
     : ["--workspaces"];
-  const checkArgs = useRust
-    ? [
-        "exec",
-        "--",
-        path.join(root, "node_modules", ".bin", process.platform === "win32" ? "tsc-rs.cmd" : "tsc-rs"),
-        "--noEmit",
-      ]
-    : ["run", "typecheck"];
-  runNpm([...workspaceArgs, ...checkArgs]);
+  runNpm([
+    ...workspaceArgs,
+    "exec",
+    "--",
+    path.join(root, "node_modules", ".bin", process.platform === "win32" ? "tsc-rs.cmd" : "tsc-rs"),
+    "--noEmit",
+  ]);
 }
 
 function runNpm(args) {

@@ -36,7 +36,7 @@ priority = 2
 [[repos.hooks]]
 id = "typecheck-staged"
 name = "Typecheck staged changes with tsc-rs"
-entry = "npm run typecheck -- --staged --tsc-rs"
+entry = "npm run typecheck -- --staged"
 language = "system"
 pass_filenames = false
 always_run = true

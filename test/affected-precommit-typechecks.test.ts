@@ -271,7 +271,7 @@ test("file-scoped Biome checks preserve ordered repository gates", () => {
     ["biome-migrate", "npx @biomejs/biome migrate --write"],
     ["biome-check", "npx @biomejs/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched"],
     ["zizmor", "uvx zizmor --pedantic .github"],
-    ["typecheck-staged", "npm run typecheck -- --staged --tsc-rs"],
+    ["typecheck-staged", "npm run typecheck -- --staged"],
   ] as const;
 
   assert.match(settings ?? "", /^fail_fast = true$/mu);

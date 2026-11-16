@@ -10,7 +10,7 @@ Root `package.json#allowScripts` is the reviewed policy. Required third-party in
 
 Review the actual artifact and install-time behavior, not only its manifest name or registry metadata. npm matches registry approvals against resolved name/version identity. Registry-style approvals do not authorize a similarly named file, remote tarball, or Git dependency. Broad semver ranges and dist-tags are not valid version-scoped approvals. Denial wins when entries conflict.
 
-The reviewed `tsc-rs` postinstall validates its packaged native compiler version and optimizes its own POSIX launcher; unsupported environments retain the Node launcher. Its exact-version approval lives in the root manifest. Pre-commit opts into Rust workspace checks, while normal checks and test/declaration emission retain official TypeScript.
+The reviewed `tsc-rs` postinstall validates its packaged native compiler version and optimizes its own POSIX launcher; unsupported environments retain the Node launcher. Its exact-version approval lives in the root manifest. Root `npm run typecheck` and pre-commit use `tsc-rs` for workspace `--noEmit` checks by default, while test compilation and JavaScript/declaration builds retain official TypeScript.
 
 `fsevents` installation scripts are denied. Its reviewed artifact includes a native binary and no install lifecycle script or `binding.gyp`, although registry metadata and the lockfile indicate installation scripts. CI does not run a dedicated macOS installation job. Run the native smoke below on macOS after a clean install when validating platform compatibility; Linux skips this optional dependency and cannot establish macOS compatibility. A native smoke failure must be investigated, not fixed by automatically approving metadata scripts.
 
