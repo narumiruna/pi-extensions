@@ -593,14 +593,19 @@ test("cross-process settings mutations serialize under one read-modify-write loc
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
     writeSettings();
-    const configModule = "sync-daemon/engine/settings/settings-store";
     const mutate = (field: string) =>
       execFileAsync(
         process.execPath,
         [
           "--input-type=module",
           "--eval",
-          `import { configureEngineHost } from "sync-daemon/engine/host"; configureEngineHost({ root: () => ${JSON.stringify(agentDir)} }); const { updateLocalConfig } = await import(${JSON.stringify(configModule)}); await updateLocalConfig((settings) => ({ ...settings, ${field}: true }));`,
+          `import { configureEngineHost } from "sync-daemon/engine/host";
+           import { updateLocalConfig } from "sync-daemon/engine/settings/settings-store";
+           const [root, field] = process.argv.slice(1);
+           configureEngineHost({ root: () => root });
+           await updateLocalConfig((settings) => ({ ...settings, [field]: true }));`,
+          agentDir,
+          field,
         ],
         { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir } },
       );

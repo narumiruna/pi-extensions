@@ -25,7 +25,8 @@ test.skipIf(process.platform === "win32")(
           await exec(process.execPath, [
             "--input-type=module",
             "--eval",
-            `await import(${JSON.stringify(new URL("../dist/cli.js", import.meta.url).href)});`,
+            "await import(process.argv[1]);",
+            new URL("../dist/cli.js", import.meta.url).href,
           ])
         ).stdout,
         "",
