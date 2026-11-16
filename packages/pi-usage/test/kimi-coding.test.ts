@@ -901,6 +901,40 @@ test("Kimi proxy override keeps credential readiness and registry-provider prote
   assert.equal(readyAuth?.source, "kimi-proxy-usage-override");
 });
 
+test("Kimi proxy override re-reads the dedicated credential after readiness", async () => {
+  const env: Record<string, string | undefined> = { [OVERRIDE_ENV]: "official-usage-key" };
+  const { ctx: rotatedCtx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  const rotatingReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => {
+      env[OVERRIDE_ENV] = "rotated-usage-key";
+      return true;
+    },
+  });
+  const rotated = await resolveUsageAuth(rotatedCtx, adapter, undefined, undefined, rotatingReader, undefined, {
+    envReader: () => env,
+  });
+  assert.ok(rotated);
+  assert.equal(rotated.apiKey, "rotated-usage-key");
+  assert.equal(rotated.headers.Authorization, "Bearer rotated-usage-key");
+  assert.equal(rotated.env?.[OVERRIDE_ENV], "rotated-usage-key");
+  assert.ok(!rotated.secrets.includes("official-usage-key"));
+
+  const { ctx: clearedCtx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  const clearingReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => {
+      env[OVERRIDE_ENV] = "   ";
+      return true;
+    },
+  });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(clearedCtx, adapter, undefined, undefined, clearingReader, undefined, {
+        envReader: () => env,
+      }),
+    /custom provider base URL credential/iu,
+  );
+});
+
 test("Kimi proxy override fingerprints track the live override variable", async () => {
   const env: Record<string, string | undefined> = { [OVERRIDE_ENV]: "official-usage-key" };
   const { ctx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });

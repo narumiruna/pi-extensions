@@ -748,8 +748,7 @@ async function resolveKimiProxyUsageOverride(
 ): Promise<ResolvedUsageAuth | undefined> {
   // Blank or whitespace-only values keep failing closed; `undefined` returns to the caller's
   // original fail-closed error instead of inventing a custom endpoint.
-  const overrideApiKey = envReader()[KIMI_CODING_USAGE_API_KEY_ENV]?.trim();
-  if (!overrideApiKey || !selectedModel.baseUrl) return undefined;
+  if (!selectedModel.baseUrl || !envReader()[KIMI_CODING_USAGE_API_KEY_ENV]?.trim()) return undefined;
   // SAFETY: Pi exposes the required auth methods at runtime, and checks below narrow them before use.
   const registry = ctx.modelRegistry as unknown as UsageAuthRegistry;
   // Pending activation can replace runtime credentials or provider origins even without an OAuth
@@ -757,6 +756,9 @@ async function resolveKimiProxyUsageOverride(
   if (candidateReader?.waitUntilReady && !(await guard.wait(() => candidateReader.waitUntilReady?.(ctx, adapter.id)))) {
     throw new Error(`${adapter.displayName} OAuth credential readiness failed closed.`);
   }
+  // Read after the readiness wait so rotation or removal while pending cannot authorize a stale key.
+  const overrideApiKey = envReader()[KIMI_CODING_USAGE_API_KEY_ENV]?.trim();
+  if (!overrideApiKey) return undefined;
   const provider = registry.getProvider?.(adapter.id);
   const providerBaseUrl = provider?.baseUrl;
   const revalidate = () => {
