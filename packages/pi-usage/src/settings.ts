@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { chmod, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { normalizeKimiUsageApiKey } from "./kimi-usage-credential.js";
 import { isFireworksAccountId } from "./providers/fireworks.js";
 import {
   DEFAULT_STATUSLINE_DISPLAY,
@@ -18,6 +19,7 @@ export const MAX_USAGE_SETTINGS_BYTES = 64 * 1024;
 export type CodexStatusPercentage = "remaining" | "used";
 
 export interface UsageSettings {
+  kimiCodingUsageApiKey?: string;
   anthropicExtraUsage: boolean;
   openaiUseCodexUsage: boolean;
   codexFastMode: boolean;
@@ -76,6 +78,12 @@ export function usageSettingsPath(): string {
 
 export function normalizeUsageSettings(value: unknown): UsageSettings | undefined {
   if (!isRecord(value)) return undefined;
+  let kimiCodingUsageApiKey: string | undefined;
+  if (Object.hasOwn(value, "kimiCodingUsageApiKey")) {
+    if (typeof value.kimiCodingUsageApiKey !== "string") return undefined;
+    kimiCodingUsageApiKey = normalizeKimiUsageApiKey(value.kimiCodingUsageApiKey);
+    if (value.kimiCodingUsageApiKey.trim() && !kimiCodingUsageApiKey) return undefined;
+  }
   if (statuslineDisplayIssue(value.statuslineDisplay)) return undefined;
   if (Object.hasOwn(value, "anthropicExtraUsage") && typeof value.anthropicExtraUsage !== "boolean") return undefined;
   if (Object.hasOwn(value, "openaiUseCodexUsage") && typeof value.openaiUseCodexUsage !== "boolean") return undefined;
@@ -102,6 +110,7 @@ export function normalizeUsageSettings(value: unknown): UsageSettings | undefine
     effectiveTargets.fireworks = value.fireworksAccountId;
   }
   return {
+    ...(kimiCodingUsageApiKey ? { kimiCodingUsageApiKey } : {}),
     anthropicExtraUsage: value.anthropicExtraUsage === true,
     openaiUseCodexUsage: value.openaiUseCodexUsage === true,
     codexFastMode:
@@ -134,7 +143,12 @@ export async function loadUsageSettings(path = usageSettingsPath(), signal?: Abo
       await handle.close();
     }
     throwIfAborted(signal);
-    const document = JSON.parse(text) as unknown;
+    let document: unknown;
+    try {
+      document = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error("invalid settings JSON");
+    }
     const settings = normalizeUsageSettings(document);
     if (!settings || !isRecord(document)) {
       throw new Error(
@@ -294,12 +308,18 @@ async function saveUsageSettingsDocument(
   mutate(document);
   const settings = normalizeUsageSettings(document);
   if (!settings) throw new Error("Refusing to save invalid pi-usage settings");
+  if (settings.kimiCodingUsageApiKey) document.kimiCodingUsageApiKey = settings.kimiCodingUsageApiKey;
+  else delete document.kimiCodingUsageApiKey;
+  const serialized = `${JSON.stringify(document, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_USAGE_SETTINGS_BYTES) {
+    throw new Error("Refusing to save pi-usage settings larger than 64 KiB");
+  }
   const directory = dirname(path);
   const temporaryPath = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   throwIfAborted(signal);
   try {
-    await operations.writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, {
+    await operations.writeFile(temporaryPath, serialized, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,

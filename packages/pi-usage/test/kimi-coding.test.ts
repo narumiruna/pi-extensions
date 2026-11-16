@@ -550,7 +550,10 @@ test("Kimi runtime auth accepts fresh OAuth and API-key bearers only at the offi
         getAll: () => [model],
       },
     });
-    await assert.rejects(() => resolveUsageAuth(ctx, adapter), pattern);
+    await assert.rejects(
+      () => resolveUsageAuth(ctx, adapter, undefined, undefined, undefined, undefined, { envReader: () => ({}) }),
+      pattern,
+    );
   }
 
   const { ctx: missingContext } = createMockContext({
@@ -645,4 +648,334 @@ test("Kimi transport bounds timeout, cancellation, bodies, JSON, and redacted er
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+const PROXY_MODEL = { ...KIMI_MODEL, baseUrl: "http://127.0.0.1:8712/v1" };
+const OVERRIDE_ENV = "PI_USAGE_KIMI_CODING_API_KEY";
+
+function proxyRegistry(model: Record<string, unknown> = PROXY_MODEL) {
+  // Pi resolves a stable provider registration object, so capture and revalidation compare equal.
+  const provider = { baseUrl: model.baseUrl };
+  return {
+    getProvider: vi.fn(() => provider),
+    getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "proxy-caller-key", headers: { "X-Proxy": "no" } })),
+    getProviderAuth: vi.fn(async () => ({ auth: { apiKey: "proxy-caller-key", baseUrl: model.baseUrl } })),
+    getAvailable: () => [model],
+    getAll: () => [model],
+  };
+}
+
+test("Kimi proxy override queries the fixed official endpoint with only the dedicated credential", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ url: String(input), init });
+    return new Response(JSON.stringify(combinedPlanFixture()), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const registry = proxyRegistry();
+  const { ctx } = createMockContext({ model: PROXY_MODEL, modelRegistry: registry });
+  try {
+    const auth = await resolveUsageAuth(ctx, adapter, undefined, undefined, undefined, undefined, {
+      envReader: () => ({ [OVERRIDE_ENV]: " official-usage-key " }),
+    });
+    assert.ok(auth);
+    // A blank-padded variable is trimmed to the credential that is actually authorized and tracked.
+    assert.equal(auth.source, "kimi-proxy-usage-override");
+    assert.deepEqual(auth.headers, { Authorization: "Bearer official-usage-key" });
+    assert.equal(auth.apiKey, "official-usage-key");
+    assert.deepEqual(auth.env, { [OVERRIDE_ENV]: "official-usage-key" });
+    assert.equal(auth.effectiveBaseUrl, "https://api.kimi.com/coding");
+    assert.equal(auth.model.baseUrl, "https://api.kimi.com/coding");
+    assert.ok(auth.secrets.includes("official-usage-key"));
+    assert.ok(auth.secrets.includes("Bearer official-usage-key"));
+    // Proxy credentials stay unread: no model or provider auth resolution may run on this path.
+    assert.equal(registry.getApiKeyAndHeaders.mock.calls.length, 0);
+    assert.equal(registry.getProviderAuth.mock.calls.length, 0);
+
+    const report = await queryProviderUsage(adapter, auth, new AbortController().signal, 1_000);
+    assert.equal(report.providerId, "kimi-coding");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.url, "https://api.kimi.com/coding/v1/usages");
+    assert.equal(requests[0]?.init?.method, "GET");
+    assert.equal(requests[0]?.init?.redirect, "error");
+    assert.deepEqual(requests[0]?.init?.headers, {
+      Authorization: "Bearer official-usage-key",
+      "User-Agent": "pi-usage",
+    });
+
+    const redirected = new Response("{}", { status: 200 });
+    Object.defineProperty(redirected, "redirected", { value: true });
+    fetchMock.mockResolvedValueOnce(redirected);
+    await assert.rejects(
+      () => queryProviderUsage(adapter, auth, new AbortController().signal, 1_000),
+      /refused a redirected response/iu,
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("Kimi proxy override fails closed without a non-blank dedicated credential or a proxy selection", async () => {
+  const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    for (const value of [undefined, "", "   ", "\t\n"]) {
+      const { ctx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+      await assert.rejects(
+        () =>
+          resolveUsageAuth(ctx, adapter, undefined, undefined, undefined, undefined, {
+            envReader: () => ({ [OVERRIDE_ENV]: value }),
+          }),
+        /custom provider base URL credential/iu,
+      );
+    }
+    assert.equal(fetchMock.mock.calls.length, 0);
+
+    // The override requires a proxy-selected Kimi model; an env variable alone never authorizes a query.
+    const { ctx: unselected } = createMockContext({ model: undefined, modelRegistry: proxyRegistry() });
+    assert.equal(
+      await resolveUsageAuth(unselected, adapter, undefined, undefined, undefined, undefined, {
+        envReader: () => ({ [OVERRIDE_ENV]: "official-usage-key" }),
+      }),
+      undefined,
+    );
+    assert.equal(fetchMock.mock.calls.length, 0);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("Kimi official direct selection ignores the proxy usage override", async () => {
+  const registry = {
+    getApiKeyAndHeaders: vi.fn(async () => ({
+      ok: true,
+      headers: { Authorization: "Bearer oauth-access", "X-Private": "do-not-send" },
+    })),
+    getProviderAuth: vi.fn(async () => ({ auth: { apiKey: "provider-default", baseUrl: KIMI_MODEL.baseUrl } })),
+    getAvailable: () => [KIMI_MODEL],
+    getAll: () => [KIMI_MODEL],
+  };
+  const { ctx } = createMockContext({ model: KIMI_MODEL, modelRegistry: registry });
+  const auth = await resolveUsageAuth(ctx, adapter, undefined, undefined, undefined, undefined, {
+    envReader: () => ({ [OVERRIDE_ENV]: "official-usage-key" }),
+  });
+  assert.deepEqual(auth?.headers, { Authorization: "Bearer oauth-access" });
+  assert.notEqual(auth?.headers.Authorization, "Bearer official-usage-key");
+  assert.equal(auth?.source, undefined);
+  assert.deepEqual(auth?.env, undefined);
+
+  const { ctx: withoutOverride } = createMockContext({ model: KIMI_MODEL, modelRegistry: registry });
+  const plain = await resolveUsageAuth(withoutOverride, adapter);
+  assert.equal(plain?.fingerprint, auth?.fingerprint);
+  assert.equal(registry.getApiKeyAndHeaders.mock.calls.length, 2);
+});
+
+test("Kimi proxy override redacts the dedicated credential and never resolves proxy credentials", async () => {
+  const fetchMock = vi.fn(
+    async () =>
+      new Response("Bearer official-usage-key rejected", {
+        status: 401,
+        statusText: "Unauthorized",
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const registry = proxyRegistry();
+  const { ctx } = createMockContext({ model: PROXY_MODEL, modelRegistry: registry });
+  try {
+    const auth = await resolveUsageAuth(ctx, adapter, undefined, undefined, undefined, undefined, {
+      envReader: () => ({ [OVERRIDE_ENV]: "official-usage-key" }),
+    });
+    assert.ok(auth);
+    await assert.rejects(
+      () => queryProviderUsage(adapter, auth, new AbortController().signal, 1_000),
+      (error: unknown) =>
+        error instanceof Error &&
+        !error.message.includes("official-usage-key") &&
+        !error.message.includes("proxy-caller-key"),
+    );
+    assert.equal(registry.getApiKeyAndHeaders.mock.calls.length, 0);
+    assert.equal(registry.getProviderAuth.mock.calls.length, 0);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("Kimi proxy override aborts when the selection, origin, or provider registration changes mid-resolution", async () => {
+  const env = { [OVERRIDE_ENV]: "official-usage-key" };
+  const stale = (error: unknown) => error instanceof Error && error.name === "AbortError";
+
+  // The selection was replaced while credential readiness was awaited.
+  const replaced = { ...KIMI_MODEL, baseUrl: "http://127.0.0.1:8712/v1" };
+  const { ctx: replacedCtx } = createMockContext({
+    model: replaced,
+    modelRegistry: proxyRegistry(replaced),
+  });
+  const replacingReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => {
+      // The mock ctx is typed `never`; widen it once to replace the selection like a session switch.
+      (replacedCtx as unknown as { model: unknown }).model = { ...KIMI_MODEL };
+      return true;
+    },
+  });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(replacedCtx, adapter, undefined, undefined, replacingReader, undefined, {
+        envReader: () => env,
+      }),
+    stale,
+  );
+
+  // The proxy origin flipped to the official origin in place during readiness.
+  const flipping = { ...KIMI_MODEL, baseUrl: "http://127.0.0.1:8712/v1" };
+  const { ctx: flippingCtx } = createMockContext({ model: flipping, modelRegistry: proxyRegistry(flipping) });
+  const flippingReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => {
+      flipping.baseUrl = KIMI_MODEL.baseUrl;
+      return true;
+    },
+  });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(flippingCtx, adapter, undefined, undefined, flippingReader, undefined, { envReader: () => env }),
+    stale,
+  );
+
+  // The provider registration changed between capture and revalidation.
+  const shifting = { ...KIMI_MODEL, baseUrl: "http://127.0.0.1:8712/v1" };
+  const shiftingRegistry = proxyRegistry(shifting);
+  shiftingRegistry.getProvider = vi
+    .fn()
+    .mockReturnValueOnce({ baseUrl: shifting.baseUrl })
+    .mockReturnValue({ baseUrl: "https://other.proxy.example.test/v1" });
+  const { ctx: shiftingCtx } = createMockContext({ model: shifting, modelRegistry: shiftingRegistry });
+  await assert.rejects(
+    () => resolveUsageAuth(shiftingCtx, adapter, undefined, undefined, undefined, undefined, { envReader: () => env }),
+    stale,
+  );
+
+  // An already-aborted lifecycle signal cancels before any state is read.
+  const controller = new AbortController();
+  controller.abort();
+  const { ctx: cancelledCtx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(cancelledCtx, adapter, undefined, undefined, undefined, undefined, {
+        envReader: () => env,
+        signal: controller.signal,
+      }),
+    stale,
+  );
+});
+
+test("Kimi proxy override keeps credential readiness and registry-provider protections", async () => {
+  const env = { [OVERRIDE_ENV]: "official-usage-key" };
+
+  // Unsettled credential readiness fails closed instead of authorizing with a stale registry view.
+  const { ctx: unreadyCtx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  const unreadyReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => false,
+  });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(unreadyCtx, adapter, undefined, undefined, unreadyReader, undefined, { envReader: () => env }),
+    /OAuth credential readiness failed closed\./iu,
+  );
+
+  // A settled readiness pass lets the override proceed, including when the registered provider is
+  // official while the selected model proxies: no provider credential is read either way.
+  const officialProvider = { baseUrl: KIMI_MODEL.baseUrl };
+  const { ctx: readyCtx } = createMockContext({
+    model: PROXY_MODEL,
+    modelRegistry: {
+      getProvider: () => officialProvider,
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "proxy-caller-key" }),
+      getProviderAuth: async () => ({ auth: { apiKey: "proxy-caller-key", baseUrl: PROXY_MODEL.baseUrl } }),
+      getAvailable: () => [PROXY_MODEL],
+      getAll: () => [PROXY_MODEL],
+    },
+  });
+  const readyReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => true,
+  });
+  const readyAuth = await resolveUsageAuth(readyCtx, adapter, undefined, undefined, readyReader, undefined, {
+    envReader: () => env,
+  });
+  assert.equal(readyAuth?.headers.Authorization, "Bearer official-usage-key");
+  assert.equal(readyAuth?.source, "kimi-proxy-usage-override");
+});
+
+test("Kimi proxy override re-reads the dedicated credential after readiness", async () => {
+  const env: Record<string, string | undefined> = { [OVERRIDE_ENV]: "official-usage-key" };
+  const { ctx: rotatedCtx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  const rotatingReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => {
+      env[OVERRIDE_ENV] = "rotated-usage-key";
+      return true;
+    },
+  });
+  const rotated = await resolveUsageAuth(rotatedCtx, adapter, undefined, undefined, rotatingReader, undefined, {
+    envReader: () => env,
+  });
+  assert.ok(rotated);
+  assert.equal(rotated.apiKey, "rotated-usage-key");
+  assert.equal(rotated.headers.Authorization, "Bearer rotated-usage-key");
+  assert.equal(rotated.env?.[OVERRIDE_ENV], "rotated-usage-key");
+  assert.ok(!rotated.secrets.includes("official-usage-key"));
+
+  const { ctx: clearedCtx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  const clearingReader = Object.assign(async () => ({ ok: true as const, candidates: [] }), {
+    waitUntilReady: async () => {
+      env[OVERRIDE_ENV] = "   ";
+      return true;
+    },
+  });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(clearedCtx, adapter, undefined, undefined, clearingReader, undefined, {
+        envReader: () => env,
+      }),
+    /custom provider base URL credential/iu,
+  );
+});
+
+test("Kimi proxy override fingerprints track the live override variable", async () => {
+  const env: Record<string, string | undefined> = { [OVERRIDE_ENV]: "official-usage-key" };
+  const { ctx } = createMockContext({ model: PROXY_MODEL, modelRegistry: proxyRegistry() });
+  const resolve = () =>
+    resolveUsageAuth(ctx, adapter, undefined, undefined, undefined, undefined, { envReader: () => env });
+  const initial = await resolve();
+  env[OVERRIDE_ENV] = "rotated-usage-key";
+  const rotated = await resolve();
+  assert.ok(initial && rotated);
+  assert.notEqual(initial.fingerprint, rotated.fingerprint);
+  assert.equal(rotated.headers.Authorization, "Bearer rotated-usage-key");
+  assert.notEqual(rotated.headers.Authorization, initial.headers.Authorization);
+  env[OVERRIDE_ENV] = "   ";
+  await assert.rejects(() => resolve(), /custom provider base URL credential/iu);
+});
+
+test("Other providers keep failing closed on proxy origins even with the Kimi override set", async () => {
+  const deepseek = SUPPORTED_ADAPTERS.find((candidate) => candidate.id === "deepseek");
+  assert.ok(deepseek);
+  const model = {
+    id: "deepseek-chat",
+    name: "DeepSeek",
+    provider: "deepseek",
+    baseUrl: "https://proxy.example.test/v1",
+  };
+  const registry = {
+    getProvider: () => ({ baseUrl: model.baseUrl }),
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "proxy-caller-key" }),
+    getProviderAuth: async () => ({ auth: { apiKey: "proxy-caller-key", baseUrl: model.baseUrl } }),
+    getAvailable: () => [model],
+    getAll: () => [model],
+  };
+  const { ctx } = createMockContext({ model, modelRegistry: registry });
+  await assert.rejects(
+    () =>
+      resolveUsageAuth(ctx, deepseek, undefined, undefined, undefined, undefined, {
+        envReader: () => ({ [OVERRIDE_ENV]: "official-usage-key" }),
+      }),
+    /custom provider base URL credential/iu,
+  );
 });

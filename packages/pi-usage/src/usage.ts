@@ -80,6 +80,8 @@ function staleUsageQuery(): Error {
   return Object.assign(new Error("Usage query ownership changed."), { name: "UsageStaleContextError" });
 }
 
+type UsagePolicyProviderId = "openai" | "anthropic" | "kimi-coding";
+
 type QueryOutcome = {
   state: ProviderUsageState;
   cacheFingerprint?: string;
@@ -87,7 +89,7 @@ type QueryOutcome = {
   fingerprint?: string;
   authState?: "unavailable" | "unsupported" | "failed";
   rememberedTargetId?: string;
-  usagePolicy?: { providerId: "openai" | "anthropic"; generation: number; enabled: boolean };
+  usagePolicy?: { providerId: UsagePolicyProviderId; generation: number; enabled: boolean };
 };
 
 function isUnsupportedUsageAuthError(error: unknown): boolean {
@@ -108,14 +110,19 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const credentialCandidates = createOAuthCredentialCandidateReader(pi, credentialReader);
   const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
   const settingsRuntime = dependencies.settingsRuntime ?? createUsageSettingsRuntime();
-  const usageGenerations = { openai: 0, anthropic: 0 };
+  const usageGenerations = { openai: 0, anthropic: 0, "kimi-coding": 0 };
   const usagePolicy = (providerId: string): QueryOutcome["usagePolicy"] => {
-    if (providerId !== "openai" && providerId !== "anthropic") return undefined;
+    if (providerId !== "openai" && providerId !== "anthropic" && providerId !== "kimi-coding") return undefined;
     const settings = settingsRuntime.get().settings;
     return {
       providerId,
       generation: usageGenerations[providerId],
-      enabled: providerId === "openai" ? settings.openaiUseCodexUsage : settings.anthropicExtraUsage,
+      enabled:
+        providerId === "openai"
+          ? settings.openaiUseCodexUsage
+          : providerId === "anthropic"
+            ? settings.anthropicExtraUsage
+            : true,
     };
   };
   const usagePolicyIsCurrent = (policy: QueryOutcome["usagePolicy"]) => {
@@ -158,6 +165,8 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     try {
       const auth = await resolveRuntimeUsageAuth(ctx, adapter, salt, reader, candidates, undefined, {
         openaiUseCodexUsage: policy?.providerId === "openai" ? policy.enabled : undefined,
+        kimiCodingUsageApiKeyReader: () => settingsRuntime.get().settings.kimiCodingUsageApiKey,
+        envReader: options?.envReader,
         signal,
         ...(policy || options?.checkCurrent ? { checkCurrent } : {}),
       });
@@ -180,8 +189,8 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const presentationQueries = new Map<string, Set<Promise<QueryOutcome>>>();
   const providerIdentities = new Map<string, string>();
   const activeControllers = new Set<AbortController>();
-  const policyQueryControllers = new Map<AbortController, "openai" | "anthropic">();
-  const cancelPolicyQueries = (providerId?: "openai" | "anthropic") => {
+  const policyQueryControllers = new Map<AbortController, UsagePolicyProviderId>();
+  const cancelPolicyQueries = (providerId?: UsagePolicyProviderId) => {
     for (const [controller, owner] of policyQueryControllers) {
       if (providerId === undefined || owner === providerId) controller.abort();
     }
@@ -435,6 +444,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         "baseten",
         "command-code",
         "deepseek",
+        "kimi-coding",
         "minimax",
         "minimax-cn",
         "moonshotai",
@@ -744,6 +754,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       JSON.stringify({
         openai: usagePolicy("openai"),
         anthropic: usagePolicy("anthropic"),
+        kimi: usagePolicy("kimi-coding"),
         targets: settingsRuntime.get().settings.selectedTargets,
       }),
     refresh: async (ctx, providerId, signal, deadlineAt, checkCurrent): Promise<UsageQueryResultV1> => {
@@ -1459,11 +1470,16 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
               controller.signal,
               () => statusGeneration === menuGeneration && !controller.signal.aborted,
               (id, uiClosed) => {
-                if (id === "openaiUseCodexUsage" || id === "anthropicExtraUsage") {
+                if (id === "openaiUseCodexUsage" || id === "anthropicExtraUsage" || id === "kimiCodingUsageApiKey") {
                   // A completed rename can outlive UI cancellation. Invalidate owned work
                   // after durable publication, but never touch a replacement session's UI.
                   if (menuSessionGeneration !== sessionGeneration) return;
-                  const providerId = id === "openaiUseCodexUsage" ? "openai" : "anthropic";
+                  const providerId =
+                    id === "openaiUseCodexUsage"
+                      ? "openai"
+                      : id === "anthropicExtraUsage"
+                        ? "anthropic"
+                        : "kimi-coding";
                   usageGenerations[providerId] += 1;
                   cancelPolicyQueries(providerId);
                   invalidateProviderState(providerId);

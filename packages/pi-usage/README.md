@@ -7,12 +7,12 @@ The extension keeps each provider's quota, allowance, balance, and spending sema
 
 ## ✨ Features
 
-- Shows active-account usage and next actions through `/usage`.
+- Shows usage for the selected account and next actions through `/usage`.
 - Reports subscription allowances, API balances, and spending without mixing provider billing semantics.
 - Toggles persistent Codex Fast routing and redeems eligible resets after explicit confirmation.
 - Refreshes one or all configured providers with bounded concurrency while preserving partial results.
-- Scopes statusline and cache data to the active provider and runtime account.
-- Matches Pi's resolved credentials and effective provider endpoint before sending usage requests.
+- Scopes statusline and cache data to the active provider and effective usage credential.
+- Matches Pi's resolved credentials and effective provider endpoint, with an explicit dedicated-account option for Kimi proxies.
 
 ## 📦 Install
 
@@ -57,7 +57,7 @@ See the [provider guides](./docs/providers/README.md) for supported providers, l
 
 Both commands support TUI and RPC, accept no arguments, and reject print and JSON modes.
 Cross-provider queries require an explicit interactive choice; there are no provider-ID, `--refresh`, or `--all` arguments.
-Requests use the matched provider credentials; see [Security and privacy](#-security-and-privacy).
+Requests normally use matched Pi credentials; the explicit [Kimi proxy option](./docs/providers/kimi-coding.md#using-a-local-inference-proxy) uses a dedicated account instead.
 
 Fast mode uses more plan allowance; see [Codex Fast mode](./docs/providers/openai-codex.md#codex-fast-mode) for eligibility and when changes apply.
 Codex reset redemption requires a freshly matched current OAuth account and explicit confirmation; **after confirmation, its progress view cannot cancel the reset**.
@@ -71,6 +71,9 @@ RPC mode reports the active manual settings path instead of opening terminal UI.
 Preferences live in `pi-usage.json` under Pi's user agent directory, normally `~/.pi/agent/pi-usage.json`; there is no project override.
 The extension reloads this file at every session start and does not create it until the first successful save.
 Settings-screen changes apply immediately after a successful save. For manual file edits, run `/reload`.
+
+For the selected Kimi proxy model, **Kimi proxy usage key** offers masked set/update and explicit clear for the optional user-only `kimiCodingUsageApiKey` credential.
+The file stores this secret as plaintext; see the [Kimi proxy guide](./docs/providers/kimi-coding.md#using-a-local-inference-proxy) for setup, permissions, environment precedence, and validation.
 
 Within one Pi process, changes save immediately in invocation order.
 Saves preserve unknown JSON fields and publish through a private temporary file plus rename.
@@ -95,7 +98,8 @@ The [provider index](./docs/providers/README.md) lists supported providers and l
 
 ## 🧭 Current and configured accounts
 
-`Current` identifies the provider and credential used by Pi's selected model.
+`Current` normally identifies the provider and credential used by Pi's selected model.
+The deliberate [Kimi proxy exception](./docs/providers/kimi-coding.md#using-a-local-inference-proxy) displays the explicitly configured official Kimi account, not the proxy's caller account.
 For [Z.AI virtual selections](./docs/providers/zai.md#virtual-models), it identifies the configured listing provider's account, not the router's dispatched account.
 `Configured` identifies runtime auth for another supported provider, not an active provider.
 
@@ -104,7 +108,7 @@ A compatible credential owner may offer the verified active named account throug
 When that owner is still activating the requested provider in the current session, `/usage` waits through the extension-neutral `oauth:credential-readiness:v1` protocol before collecting the synchronous credential offer.
 Without such an owner, `pi-usage` retains its standalone Pi `auth.json` behavior.
 An older or incompatible owner degrades to the existing authentication-unavailable result when the stored login does not match runtime auth.
-After the active runtime credential changes, the next command, turn, or scheduled refresh resolves auth again and cannot reuse another account's cached report.
+After the effective usage credential changes, the next command, turn, or scheduled refresh resolves auth again and cannot reuse another account's cached report.
 
 ## 📊 Statusline behavior
 
@@ -118,10 +122,14 @@ See the [provider guides](./docs/providers/README.md) for each provider's values
 
 ## 🔒 Security and privacy
 
-Credential candidates are collected synchronously in memory after any compatible readiness promises settle, and are not cached, persisted, logged, formatted, or appended to the Pi session.
+Protocol credential candidates are collected synchronously in memory after any compatible readiness promises settle, and are not cached, persisted, logged, formatted, or appended to the Pi session.
 The protocols carry no account name or extension identity.
-Only the selected provider's exact runtime match is used, and secrets are sent only to its validated official origin.
-Credentials resolved for custom provider base URLs are never forwarded to the providers' official usage endpoints.
+Usage requests normally require an exact Pi runtime credential match and send secrets only to the provider's validated official origin.
+Credentials resolved for custom provider base URLs are never forwarded to official usage endpoints.
+
+The explicit [Kimi proxy option](./docs/providers/kimi-coding.md#using-a-local-inference-proxy) instead uses a dedicated official-account credential from the user settings file or retained environment override.
+It never reads the proxy caller credential or changes inference routing; official direct selections ignore this option.
+Settings-file credentials remain plaintext secrets, are never displayed, and are written atomically with `0600` permissions on POSIX; protect manually created files the same way.
 
 Native OpenAI tokens are never forwarded to ChatGPT backend endpoints; optional companion requests use only the independently validated Codex login.
 See the [provider guides](./docs/providers/README.md) for provider-specific credential and destination boundaries.
@@ -133,7 +141,7 @@ An absent or incompatible peer preserves standalone fallback and fail-closed mis
 
 ## 🚧 Limitations
 
-- Numerical usage requires a meaningful provider usage source and verifiable Pi runtime auth.
+- Numerical usage requires a meaningful provider usage source and either verifiable Pi runtime auth or the explicit dedicated Kimi proxy credential.
 - Provider reports are snapshots and may themselves be delayed by the provider.
 - A provider may not return a safe human-readable account identity. In that case the provider and runtime credential state remain visible without exposing secrets.
 - Immediate account-change events are not available from Pi; auth is re-resolved before commands, turns, and scheduled refreshes.

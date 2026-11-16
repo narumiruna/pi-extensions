@@ -125,7 +125,7 @@ test.each([false, true])("Usage outer list captures viewport input and pages (re
     await tui.waitForOpen();
     assert.equal(component?.capturesViewportInput, true);
     tui.send(remapped ? "\u0016" : "\u001b[6~");
-    assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ Claude extra usage/u);
+    assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ Kimi proxy usage key/u);
     tui.send(remapped ? "\u0002" : "\u001b[5~");
     assert.match(stripVTControlCharacters(tui.render().join("\n")), /→ Codex Fast mode/u);
     tui.press("ctrl+c");
