@@ -85,6 +85,8 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Config/model/consent changes during unattended review | Reject before publication, preserving new data | Consent tests |
 | Interactive model/cwd/session-root changes after grant | Durably revoke older grants; reverting or restarting does not restore permission | Consent restart tests |
 | Legacy continuous/agent options Off | Remain Off; service lifetime does not change policy | Policy regression suites |
+| Validated foreground sync for the active setup | Retry a persistent Continuous block once without resetting calls or candidate attempts | Actual Pi RPC authentication-repair test; typed-failure accounting tests |
+| Other setup / cancelled or replaced origin / disabled policy / shutdown | Never force an unrelated or stale retry; retain intent while only busy | Monitor lifecycle and setup-scope tests |
 
 The source-linked matrix is the audit contract, not a list of already completed checks. The implementation plan records actual results separately.
 
@@ -101,6 +103,12 @@ A queue grant coordinates access; it does not authorize a filesystem write. The 
 Pi core's settings storage has separate existing-file and missing-file branches (`FileSettingsStorage.withLock()` in the installed SDK). Existing files lock before reading. Missing files compute the update before acquiring the file lock and do not reread afterward. Therefore creation with live Pi clients is refused, rather than claiming that the shared lock repairs this branch.
 
 These guarantees cover cooperating registered clients. Unregistered old Pi versions, external editors, shell commands, and arbitrary extensions remain independent writers. Preserve conservative preimage checks, recovery evidence, and explicit upgrade preconditions.
+
+## Explicit Continuous retry
+
+Validated `/sync sync` and manager **Sync now** requests record the requesting client's last target setup. Startup transfers, status reads, and separate refusal retries do not set this intent. Keep intents separate across clients, and retain them while another client is busy. Cancellation, session-generation replacement, disabled Continuous policy, and service shutdown cannot carry an old intent into a later activation.
+
+At the next eligible monitor start, recheck the origin, generation, and cancellation signal, then consume the intents once. Pass a matching setup name to the existing Continuous instance. The engine checks that name after its own settings read and lease acquisition, so an intervening setup change cannot force another binding. This bypasses a repaired persistent failure, not request accounting: existing calls, candidate attempts, leases, consent, and budget limits remain authoritative.
 
 ## Native runtime boundaries
 

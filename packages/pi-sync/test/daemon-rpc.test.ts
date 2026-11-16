@@ -5,10 +5,11 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { findDaemon, stopDaemon } from "@narumitw/sync-daemon";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { configFromSettings } from "../src/settings/config.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
+import type { ContinuousRecord } from "../src/sync/continuous-record.js";
 import { SyncRpc } from "./daemon-rpc-helpers.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { snapshot, v3WebDavSettings } from "./helpers.js";
@@ -200,6 +201,48 @@ for (const transition of [false, true])
         ),
       );
     }));
+
+test("a real explicit sync resumes Continuous after repaired authentication without resetting accounting", () =>
+  fixture(async ({ agent, connect, requests, storage }) => {
+    const settingsFile = path.join(agent, "pi-sync.json");
+    const settings = JSON.parse(await fs.readFile(settingsFile, "utf8"));
+    Object.assign(settings.syncSetups.home.sync, { continuous: true, agentMode: true });
+    await fs.writeFile(settingsFile, JSON.stringify(settings));
+    await adoptFixtureRoot(agent);
+    const client = connect();
+    await client.start();
+    const directory = path.join(agent, "pi-sync", "continuous");
+    const record = async () => {
+      const names = (await fs.readdir(directory)).filter((name) => /^[a-f0-9]{64}\.json$/u.test(name));
+      assert.equal(names.length, 1);
+      const name = names[0];
+      assert.ok(name);
+      return JSON.parse(await fs.readFile(path.join(directory, name), "utf8")) as ContinuousRecord;
+    };
+    const phase = async (stage: string, expected: ContinuousRecord["phase"], error?: string) =>
+      vi.waitFor(
+        async () => {
+          const current = await record();
+          assert.equal(current.phase, expected, `${stage}: ${JSON.stringify(current)}`);
+          assert.equal(current.error, error);
+        },
+        { timeout: 1_000, interval: 5 },
+      );
+    await client.command("/sync push --yes", () => false);
+    await phase("accepted baseline", "waiting");
+    storage.options.deny = true;
+    await client.command("/sync status", () => false);
+    await phase("backend failure", "blocked", "authentication");
+    const before = await record();
+    storage.options.deny = false;
+    await client.command("/sync sync", () => false);
+    await phase("explicit retry", "waiting");
+    const after = await record();
+    assert.deepEqual(after.calls, before.calls);
+    assert.deepEqual(after.attempts, before.attempts);
+    assert.equal(after.binding, before.binding);
+    assert.equal(requests.length, 0);
+  }));
 
 test("sync status preserves real Pi request prefixes and ordered tools; fork and resume reattach", () =>
   fixture(async ({ agent, connect, requests, storage }) => {

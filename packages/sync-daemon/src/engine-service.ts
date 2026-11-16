@@ -218,6 +218,7 @@ export function createEngineService(root: string) {
             const { loadConfig } = await import("./engine/settings/config.js");
             const config = await loadConfig(options.setup);
             execution.validate();
+            if (operation === "sync" && !options.agentRetryRefusal) monitor.explicitSync(config.setupName, execution);
             const binding = JSON.stringify(execution.facts()?.model);
             const resolver = await prepareResolverHost(
               root,

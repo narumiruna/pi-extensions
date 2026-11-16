@@ -62,7 +62,8 @@ export function createContinuousSync(
     | { owner: ExtensionContext["sessionManager"]; controller: AbortController; promise: Promise<void>; clear(): void }
     | undefined;
   return {
-    start(ctx: ExtensionContext, sessionSignal: AbortSignal, explicitRetry = false, debug = false) {
+    // A setup name binds retry to the configuration loaded after asynchronous eligibility checks.
+    start(ctx: ExtensionContext, sessionSignal: AbortSignal, explicitRetry: boolean | string = false, debug = false) {
       if (
         (!ctx.backgroundAuthorized?.() && (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc"))) ||
         sessionSignal.aborted ||
@@ -138,7 +139,12 @@ export function createContinuousSync(
     },
   };
 
-  async function run(ctx: ExtensionContext, signal: AbortSignal, explicitRetry: boolean, startup: ContinuousStartup) {
+  async function run(
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+    explicitRetry: boolean | string,
+    startup: ContinuousStartup,
+  ) {
     const validateOwner = captureMutationOwner(ctx, signal);
     try {
       while (!signal.aborted) {
@@ -159,7 +165,8 @@ export function createContinuousSync(
                 validateOwner();
               });
               if (lease) {
-                await monitor(ctx, config, binding, lease, signal, explicitRetry, startup);
+                const retry = typeof explicitRetry === "string" ? explicitRetry === config.setupName : explicitRetry;
+                await monitor(ctx, config, binding, lease, signal, retry, startup);
                 explicitRetry = false;
               } else setSyncStatus(ctx, "sync waiting: another local owner", { activity: "idle" });
             } finally {

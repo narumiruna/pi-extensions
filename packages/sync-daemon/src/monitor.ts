@@ -19,6 +19,8 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
   let closed = false;
   let authorizationFailed = false;
   let scheduled = false;
+  // Keep each client's last validated route, not its Pi context or completed execution.
+  const retries = new Map<string, { setup: string; generation: string; signal: AbortSignal }>();
   let epoch:
     | {
         key: string;
@@ -50,13 +52,19 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
   }
   async function start() {
     const service = server;
-    if (closed || authorizationFailed || task || !service?.isIdle()) return;
+    if (!service) return;
+    const available = () => !closed && !authorizationFailed && !task && server === service && service.isIdle();
+    if (!available()) return;
     const consent = readConsent(root);
     if (!consent) return;
     const config = await loadConfigForCheck();
-    if (closed || task || !service.isIdle() || !config.continuous || !config.agentMode) return;
+    if (!available()) return;
+    if (!config.continuous || !config.agentMode) {
+      retries.clear();
+      return;
+    }
     const { pendingTransactionEntries } = await import("./engine/snapshot/snapshot-transaction-directory.js");
-    if ((await pendingTransactionEntries()).some((entry) => entry.isDirectory())) return;
+    if ((await pendingTransactionEntries()).some((entry) => entry.isDirectory()) || !available()) return;
     const fingerprint = consentFingerprint(root, config);
     const peers = service.participants();
     if (peers.some((peer) => !peer.idle || peer.ready !== true)) return;
@@ -65,6 +73,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     if (!selected && (!authorized?.afterExit || authorized.fingerprint !== fingerprint)) return;
     if (!continuous) {
       const { createContinuousSync } = await import("./engine/sync/continuous-sync.js");
+      if (!available()) return;
       continuous = createContinuousSync(loaders, undefined, (ctx, report) =>
         timingOwners.get(ctx)?.emit("timings", { report }),
       );
@@ -108,7 +117,8 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     };
     const execution: Execution = { ...original, facts: () => stableFacts };
     const allowed = (currentConfig = config) => {
-      if (closed || controller.signal.aborted || !readConsent(root)) return false;
+      if (closed || authorizationFailed || server !== service || controller.signal.aborted || !readConsent(root))
+        return false;
       const current = service.participants();
       if (current.length)
         return current.every(
@@ -171,7 +181,12 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
               if (!allowed()) throw new Error("Daemon authorization changed during model validation.");
             }
           };
-          activeContinuous.start(ctx, sessionSignal, false, debug);
+          const explicitRetry = service.participants().some((peer) => {
+            const retry = retries.get(peer.id);
+            return retry?.setup === config.setupName && retry.generation === peer.generation && !retry.signal.aborted;
+          });
+          retries.clear();
+          activeContinuous.start(ctx, sessionSignal, explicitRetry ? config.setupName : false, debug);
           await new Promise<void>((resolve) => {
             if (controller.signal.aborted) resolve();
             else controller.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -194,6 +209,10 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       schedule();
     },
     schedule,
+    explicitSync(setup: string, execution: Execution) {
+      const peer = execution.facts();
+      if (!closed && peer) retries.set(peer.id, { setup, generation: peer.generation, signal: execution.signal });
+    },
     async pause() {
       transition = transition.then(stop);
       await transition;
@@ -201,9 +220,16 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     async factsChanged() {
       let failure: unknown;
       try {
-        if (server) revokeChangedBindings(root, server.participants());
+        if (server) {
+          const peers = server.participants();
+          for (const [id, retry] of retries)
+            if (retry.signal.aborted || !peers.some((peer) => peer.id === id && peer.generation === retry.generation))
+              retries.delete(id);
+          revokeChangedBindings(root, peers);
+        }
       } catch (error) {
         authorizationFailed = true;
+        retries.clear();
         // Recovery barriers must not prevent passive clients from registering protection.
         if (error instanceof ConsentPublicationError) failure = error;
       }
@@ -218,6 +244,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     },
     async close() {
       closed = true;
+      retries.clear();
       transition = transition.then(stop);
       await transition;
       epoch?.controller.abort();
