@@ -45,7 +45,6 @@ The review also caught and corrected the whole-session exclusion class: root pru
 
 ## Review follow-up
 
-The [review ledger](./exclude-review-ledger.md) records each review item, its evidence and its final outcome.
 Excluded paths are also omitted from apply preimage assertions; included-file stale checks remain active.
 The manager reports include and exclusion differences without calling an exclusion-only change an order change, and its Sessions label uses effective selection.
 

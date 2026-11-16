@@ -101,7 +101,7 @@ npm test
 
 Root checks build and typecheck this workspace; root tests include its deterministic tests. Browser tests run separately. The smoke exercises package-directory loading, trusted source discovery, command-mode rejection, reload, replacement and orderly shutdown without a paid provider request. The production Git-install smoke starts with an asset-free source checkout, runs Pi's production npm install flags, and verifies generated assets, loopback serving and Pi loading. Browser bundles preserve third-party license comments.
 
-[Historical verification](./docs/VERIFICATION.md) and [review evidence](./docs/REVIEW.md) retain earlier implementation audits; their old project-local paths describe that earlier revision.
+[Historical verification](./docs/VERIFICATION.md) retains earlier implementation audits; its old project-local paths describe that earlier revision.
 
 ## 🗂️ Package layout
 
