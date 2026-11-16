@@ -2,6 +2,18 @@
 
 This reference records the setting and transfer contracts used by the TUI. It does not add a settings format or change transfer authorization.
 
+## Action palette
+
+The `/sync` TUI manager uses Kit's public searchable `ChoiceScreen` with at most five visible choices. Ordinary rows contain only labels; the selected action's short description appears below the list and is included in search. Search and selection survive a cancelled operation. Navigation, confirmation, cancellation, paste, focus, scrolling and constrained-height framing remain Kit-owned. RPC keeps an unfiltered list with the established **Sync now** label and a **Done** exit; TUI displays **Sync…** for that same action.
+
+The homepage shows setup/storage, cached remote observations, last applied state and relevant automatic-transfer permissions. It does not render scheduler owners, leases, request accounting or candidate limits. Recorded background phases and successful background-transfer timestamps are explicitly historical; neither replaces a fresh remote check. Missing records show **not yet observed**, and unreadable or invalid records show **Unknown**. Last applied does not invent a timestamp or direction.
+
+When Continuous sync is configured, **Diagnostics** opens a scrollable, read-only local report before offering **Continue to backend checks…**. Back returns to the palette; hard Ctrl+C closes the manager. Continuing still requires the existing backend-probe consent and setup-fingerprint recheck. The direct `/sync doctor` route remains unchanged.
+
+The attention widget retains its labeled muted separator and one body row: **Open /sync to review** with the setup name. It remains passive, preserves collapse state and observation classification, and exposes detailed reasons through the manager and existing notifications. Session replacement, shutdown and stale asynchronous publication retain their existing cleanup guards.
+
+Verification follows `docs/extension-conventions.md`, `docs/extension-settings.md`, and `docs/readme-conventions.md`. Palette tests cover bounded rendering, stable normal-height navigation, selected-action help, search/paste, non-default bindings, RPC and owner cancellation; existing transfer and stale-setup tests remain applicable. Physical-terminal appearance with the target font and pane sizes requires maintainer inspection. Live provider/backend behavior, Windows and Android were not newly verified by this presentation change. No settings schema, Kit API, transfer authorization or model-visible prefix changes are intended.
+
 ## Settings
 
 All settings are private to this device. There are no project overrides. Defaults and validation are defined in `src/settings/settings-validation.ts` and `src/settings/config.ts`; mutation is owned by `settings-management.ts` and `settings-store.ts`.

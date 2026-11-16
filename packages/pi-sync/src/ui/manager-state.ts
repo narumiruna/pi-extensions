@@ -14,15 +14,13 @@ import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-st
 import { sameSyncExclude } from "../sync/exclude-policy.js";
 import { errorMessage } from "../sync/sync-errors.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
-import { compareSyncInclude, syncIncludeSelection, syncSessionsSelected } from "../sync/sync-policy.js";
-import { automaticSyncSummary } from "./automatic-sync-summary.js";
+import { compareSyncInclude, syncSessionsSelected } from "../sync/sync-policy.js";
 import {
   observationMatchesConfig,
   observationSummary,
   type SyncAttentionState,
   syncAttentionMatchesConfig,
 } from "./sync-attention.js";
-import { startupTransferSummary } from "./sync-behavior.js";
 import { countValidSyncSetups } from "./sync-setups-ui.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -99,7 +97,6 @@ export async function describeManagerState(
     const config = await loadConfig();
     const operation = await inspectOperation();
     const changesBlocked = operationBlocksChanges(operation);
-    const selection = syncIncludeSelection(config.include);
     let currentAttention: SyncAttentionState | undefined;
     if (attention) {
       try {
@@ -129,7 +126,7 @@ export async function describeManagerState(
     const lastAppliedSnapshot = changesBlocked
       ? "Unavailable while operations are locked"
       : syncState?.lastAppliedSnapshot
-        ? `${truncateToWidth(safeTerminalText(syncState.lastAppliedSnapshot), 20, "…")} (application time unavailable; full ID in History)`
+        ? `${truncateToWidth(safeTerminalText(syncState.lastAppliedSnapshot), 12, "…")} · application time unavailable`
         : syncState
           ? "Never synced"
           : "Unavailable";
@@ -138,17 +135,14 @@ export async function describeManagerState(
     if (config.agentMode && !noSyncedContent) mainActions.splice(1, 0, "Retry refused model result…");
     if (canSwitch) mainActions.push("Switch sync setup");
     if (syncState?.unresolved?.length) mainActions.unshift("Review unresolved conflicts");
+    const background = changesBlocked ? [] : await backgroundSummary(config);
+    signal?.throwIfAborted();
     const ordinaryTitle = [
       "Manage sync",
-      "",
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
       `Storage: ${backendStorageDescription(config)}`,
-      "CURRENT STATE",
       ...(syncState?.unresolved?.length
-        ? [
-            `Unresolved: ${syncState.unresolved.length} dependency groups · choose Review unresolved conflicts`,
-            `Last observed: ${safeTerminalText(syncState.lastObservedSnapshot ?? "unknown")}`,
-          ]
+        ? [`Unresolved: ${syncState.unresolved.length} dependency groups · review needed`]
         : []),
       ...(currentAttention
         ? [
@@ -160,25 +154,20 @@ export async function describeManagerState(
                 ? "Synced-content exclusion rules differ."
                 : "Only the synced-content order differs."
               : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
-            "Nothing has been changed.",
           ]
         : currentObservation
-          ? [
-              `Startup check (${safeTerminalText(currentObservation.checkedAt)}): ${observationSummary(currentObservation)}`,
-              "Check-time observation only; synchronization rechecks current content.",
-            ]
+          ? [`Observed ${safeTerminalText(currentObservation.checkedAt)}: ${observationSummary(currentObservation)}`]
           : ["Remote status: Not checked"]),
-      `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${syncSessionsSelected(config) ? "on" : "off"}`,
-      `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
-      `Startup transfer: ${startupTransferSummary(config)}`,
-      `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,
-      ...(config.continuous ? await (await import("../sync/continuous-record.js")).continuousStatusLines(config) : []),
       `Last applied: ${lastAppliedSnapshot}`,
+      ...(config.agentMode
+        ? ["Auto-apply: On · AI requests may incur costs"]
+        : config.automaticTransfer || (config.automatic && syncSessionsSelected(config))
+          ? ["Automatic transfer permission: On · see Settings"]
+          : []),
+      ...background,
       ...(noSyncedContent
         ? ["", "No included content is selected. Choose included content in Settings before syncing."]
         : []),
-      "",
-      "ACTIONS · transfer, inspect, or manage",
     ];
     return {
       title: (changesBlocked ? ["Manage sync", ...operationStatusLines(operation)] : ordinaryTitle).join("\n"),
@@ -209,6 +198,29 @@ export async function describeManagerState(
       ].join("\n"),
       actions: ["Sync setups…", "Storage connections…", "History", "Help"],
     };
+  }
+}
+
+async function backgroundSummary(config: AnySyncConfig): Promise<string[]> {
+  if (!config.continuous) return [];
+  if (!config.agentMode) return ["Background sync: Paused · enable Autonomous sync"];
+  try {
+    const { continuousBinding, readContinuousPrivateDocument } = await import("../sync/continuous-storage.js");
+    const recordApi: typeof import("../sync/continuous-record.js") = await import("../sync/continuous-record.js");
+    const binding = await continuousBinding(config);
+    const document = await readContinuousPrivateDocument(`${binding}.json`);
+    if (!document) return ["Background sync: Enabled · not yet observed"];
+    recordApi.validateContinuousRecord(document.value, binding);
+    const record = document.value;
+    const phases = { waiting: "Waiting", syncing: "Syncing", retry: "Retry", blocked: "Blocked" };
+    return [
+      `Background sync (recorded): ${phases[record.phase]}${record.error ? ` · ${record.error}` : ""}`,
+      ...(record.transferred === undefined
+        ? []
+        : [`Last background transfer: Success · ${new Date(record.transferred).toISOString()}`]),
+    ];
+  } catch {
+    return ["Background sync: Unknown · open Diagnostics"];
   }
 }
 

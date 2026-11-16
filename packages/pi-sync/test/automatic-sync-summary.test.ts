@@ -68,8 +68,9 @@ for (const agentMode of [false, true])
         assert.ok(review.includes(`Autonomous sync: ${autonomous}`), review);
         assert.ok(review.includes(`Continuous sync: ${continuous}`), review);
       }
-      assert.ok(manager.title.includes(`Autonomous sync: ${autonomous}`));
-      if (!agentMode) assert.match(manager.title, /Continuous sync: paused; enable Autonomous sync first/);
+      assert.equal(manager.title.includes("Auto-apply: On · AI requests may incur costs"), agentMode);
+      if (!agentMode) assert.match(manager.title, /Background sync: Paused · enable Autonomous sync/);
+      assert.doesNotMatch(manager.title, /Scheduler|Automatic requests|Accounting:/);
       assert.match(config, new RegExp(`^autonomous sync: ${agentMode ? "On" : "Off"}$`, "m"));
       assert.match(config, /^settings field merge: On$/m);
       assert.ok(config.includes(`continuous sync: ${agentMode ? "On" : "paused; Autonomous sync is Off"}`));
@@ -94,8 +95,8 @@ for (const automatic of [false, true]) {
         Object.assign(settings.syncSetups.home.sync, { automaticTransfer });
         await fs.writeFile(localConfigPath(), JSON.stringify(settings));
         const state = await describeManagerState();
-        assert.match(state.title, new RegExp(`Automatic sync: ${automatic ? "On" : "Off"}`));
-        assert.match(state.title, new RegExp(`Startup transfer: ${automaticTransfer ? "On" : "Off"}`));
+        assert.equal(state.title.includes("Automatic transfer permission: On"), automaticTransfer);
+        assert.doesNotMatch(state.title, /Auto-apply: On/);
         for (const type of ["s3", "git", "webdav"] as const) {
           const text = startupTransferSummary({ automaticTransfer, backend: { type } });
           assert.equal(text === "Off", !automaticTransfer);
@@ -130,7 +131,10 @@ for (const automatic of [false, true]) {
         const expected = automatic
           ? "On (startup check; shutdown pushes selected content if sessions included)"
           : "Off";
-        assert.ok((await describeManagerState()).title.includes(`Automatic sync: ${expected}`));
+        assert.equal(
+          (await describeManagerState()).title.includes("Automatic transfer permission: On"),
+          automatic && sessions,
+        );
         let confirmation = "";
         const context = createMockContext({
           mode: "rpc",

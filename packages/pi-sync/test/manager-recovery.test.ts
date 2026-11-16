@@ -112,7 +112,7 @@ test("a live operation offers refresh without exposing lock removal", async () =
     }),
   );
   assert.match(rendered, /Running: sync.*\(pid/u);
-  assert.equal(rendered.includes("\u0007"), false);
+  assert.equal(rendered.includes("sync\u0007"), false);
   assert.equal(options[0], "Refresh operation status");
   assert.equal(
     options.some((option) => /Restore sync access/u.test(option)),

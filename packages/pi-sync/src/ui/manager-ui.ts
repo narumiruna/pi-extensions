@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { type ActionMenuItem, defineMenu, type MenuDefinition, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
@@ -42,6 +42,7 @@ export async function showSyncManager(
   };
   type Screen = "main";
   type Action =
+    | "activate"
     | "review-attention"
     | "retry-refusal"
     | "sync"
@@ -63,29 +64,45 @@ export async function showSyncManager(
   interface State {
     manager: Awaited<ReturnType<typeof describeManagerState>>;
   }
-  const menu = defineMenu<State, Screen, Action, ExtensionCommandContext>({
+  const menuItems = (manager: State["manager"]) => {
+    const attentionItems = attentionMainMenuItems(manager);
+    const managerItems = manager.actions.map((label) => blockedSyncMenuItem(label, manager) ?? syncMainMenuItem(label));
+    const operationFirst = manager.operation !== undefined && manager.operation.kind !== "free";
+    return operationFirst ? [...managerItems, ...attentionItems] : [...attentionItems, ...managerItems];
+  };
+  const menu: MenuDefinition<State, Screen, Action, ExtensionCommandContext> = defineMenu<
+    State,
+    Screen,
+    Action,
+    ExtensionCommandContext
+  >({
     start: "main",
     screens: {
-      main: ({ state }) => {
-        const attentionItems = attentionMainMenuItems(state.manager);
-        const managerItems = state.manager.actions.map(
-          (label) => blockedSyncMenuItem(label, state.manager) ?? syncMainMenuItem(label),
-        );
-        const operationFirst = state.manager.operation !== undefined && state.manager.operation.kind !== "free";
-        return {
-          kind: "actions",
-          title: "Manage sync",
-          // Frequent transfers stay visible; status is advisory and Help remains a direct route.
-          lines: [
-            ...state.manager.title.split("\n").slice(1),
-            "Help: /sync help · Fresh status: /sync status · Differences: /sync diff",
-          ],
-          items: operationFirst ? [...managerItems, ...attentionItems] : [...attentionItems, ...managerItems],
-          hint: "close",
-        };
-      },
+      main: ({ state }) => ({
+        kind: "choice",
+        title: "Manage sync",
+        lines: state.manager.title.split("\n").slice(1),
+        items: menuItems(state.manager).map((item) => ({
+          id: item.id,
+          label: ctx.mode === "tui" && item.id === "sync" ? "Sync…" : item.label,
+          details: [item.description ?? "Review synced content."],
+          searchText: `${item.label} ${item.description ?? ""}`,
+          disabled: item.disabled,
+          disabledReason: item.disabledReason,
+        })),
+        action: "activate",
+        enableSearch: true,
+        viewportSize: 5,
+        hint: "close",
+      }),
     },
     actions: {
+      activate: async (invocation) => {
+        const item = menuItems(invocation.state.manager).find((candidate) => candidate.id === invocation.itemId);
+        if (!item || item.disabled || !("action" in item) || !item.action) return { kind: "stay" };
+        // Forward through the handlers below after their setup-ownership guards are installed.
+        return menu.actions[item.action](invocation);
+      },
       "review-attention": async ({ state }) => {
         const attention = state.manager.attention;
         if (attention && options.getAttention?.() !== attention) return { kind: "stay" };
@@ -224,6 +241,30 @@ export async function showSyncManager(
         const validate = captureMutationOwner(ctx, signal);
         const config = await loadConfig(state.manager.configReview?.setupName);
         validate();
+        if (config.continuous) {
+          const { continuousStatusLines } = await import("../sync/continuous-record.js");
+          validate();
+          const lines = await continuousStatusLines(config);
+          validate();
+          const review = await runDocumentReview(ctx, {
+            title: "Sync diagnostics",
+            lines: [`Setup: ${safeTerminalText(config.setupName)} · local observations only`],
+            content: lines.join("\n"),
+            confirmation: { label: "Continue to backend checks…" },
+            hint: "back",
+            signal,
+            isCurrent,
+          });
+          validate();
+          if (review.kind === "cancelled") return { kind: review.reason === "close" ? "close" : "stay" };
+          if (review.kind !== "confirmed") return { kind: "stay" };
+          const current = await loadConfig();
+          validate();
+          if (syncCheckConfigFingerprint(config) !== syncCheckConfigFingerprint(current)) {
+            ctx.ui.notify("Setup changed during diagnostics review; reopen Diagnostics.", "warning");
+            return { kind: "stay" };
+          }
+        }
         const confirmed = await ctx.ui.confirm(
           "Run diagnostics?",
           `Setup: ${safeTerminalText(config.setupName)}\nStorage: ${backendStorageDescription(config)}\nS3/R2 reads the latest pointer without writing. Git reads remote snapshots and checks its cache. WebDAV probes conditional writes and cleanup, and can repair a missing history entry. Possible-secret checks still run. This is not the read-only Check remote status action.`,
@@ -397,21 +438,24 @@ function syncMainMenuItem(
     id: action,
     label,
     action,
-    description:
-      action === "retry-refusal"
-        ? "Transfer: confirm one fresh model request for a current cached refusal; may incur costs."
-        : action === "doctor"
-          ? "Manage: review backend checks before running."
-          : action === "settings" || action === "history" || action === "switch"
-            ? "Manage"
-            : action === "sync"
-              ? "Transfer: choose a safe direction or review conflicts."
-              : action === "pull"
-                ? "Transfer: remote → local; review writes and removals."
-                : action === "push"
-                  ? "Transfer: local → remote active snapshot; review publication."
-                  : action === "status" || action === "diff"
-                    ? "Inspect: read current local and remote state without transferring files."
-                    : undefined,
+    description: {
+      sync: "Merge changes on both sides.",
+      "retry-refusal": "Retry model; may incur costs.",
+      pull: "Remote → this device.",
+      push: "This device → remote snapshot.",
+      diff: "Inspect changes; no transfer.",
+      status: "Check remote; no transfer.",
+      settings: "Change sync settings.",
+      history: "Review snapshots and rollback.",
+      doctor: "Review backend diagnostics.",
+      switch: "Choose another sync setup.",
+      conflicts: "Review unresolved file groups.",
+      recover: "Review local lock recovery.",
+      refresh: "Recheck the operation lock.",
+      setups: "Manage sync setups.",
+      connections: "Manage storage connections.",
+      help: "Read sync commands and safety.",
+      init: "Configure a sync setup.",
+    }[action],
   };
 }
