@@ -29,9 +29,10 @@ export default defineConfig({
     ],
     globalSetup: ["./test/vitest.global-setup.ts"],
     // Integration files spawn Git, LSP, and MCP children in addition to their workers.
-    // Two fork workers leave room for cold Jiti loads and their child processes
-    // without enlarging the five-second per-test budget. CLI overrides remain available.
-    maxWorkers: Math.min(2, availableParallelism()),
+    // Four forks improved the matched local median without enlarging the five-second
+    // per-test budget. Cap smaller hosts by CPU availability; keep CLI overrides available.
+    // Measurements and hosted-runner limits: docs/test-performance.md.
+    maxWorkers: Math.min(4, availableParallelism()),
     pool: "forks",
     reporters: ["default", "./test/vitest.timing-reporter.ts"],
     runner: "./test/vitest.runner.ts",

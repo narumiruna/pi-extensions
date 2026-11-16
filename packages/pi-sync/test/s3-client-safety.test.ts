@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { S3Client } from "../src/backends/s3/s3-client.js";
-import { requiredConfig } from "./helpers.js";
+import { requiredConfig } from "./data-fixtures.js";
 
 test("S3 reads request a signed identity representation without changing mutation headers", async () => {
   const seen: Array<{ method: string; encoding: string | null; authorization: string }> = [];

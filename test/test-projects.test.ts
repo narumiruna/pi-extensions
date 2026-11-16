@@ -52,7 +52,7 @@ test("every source test belongs to exactly one project and new tests default to 
 test("both projects inherit the same bounded fork pool and timeout safeguards", () => {
   assert.equal(projects.length, 2);
   assert.equal(config.test?.pool, "forks");
-  assert.ok(Number(config.test?.maxWorkers) <= 2);
+  assert.ok(Number(config.test?.maxWorkers) <= 4);
   assert.equal(config.test?.testTimeout, 5_000);
   assert.equal(config.test?.runner, "./test/vitest.runner.ts");
   assert.deepEqual(config.test?.setupFiles, ["./test/vitest.setup.ts"]);

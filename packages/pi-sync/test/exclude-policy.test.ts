@@ -7,7 +7,7 @@ import {
   selectionForSnapshot,
   validateSnapshotSelection,
 } from "../src/sync/sync-policy.js";
-import { snapshot } from "./helpers.js";
+import { snapshot } from "./data-fixtures.js";
 
 for (const [rule, relative, expected] of [
   ["skills/private", "skills/private", true],
