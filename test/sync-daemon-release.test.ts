@@ -10,7 +10,7 @@ const repositoryRoot = process.cwd();
 const cli = path.join(repositoryRoot, "node_modules/.bin/changeset");
 const read = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 
-test("the real scoped daemon Changeset updates Pi Sync's floor and plans a public dependency-first release", () => {
+test("scoped daemon versioning updates Pi Sync's floor and plans a public dependency-first release", () => {
   const daemon = read(path.join(repositoryRoot, "packages/sync-daemon/package.json"));
   const client = read(path.join(repositoryRoot, "packages/pi-sync/package.json"));
   assert.equal(daemon.name, "@narumitw/sync-daemon");
@@ -33,8 +33,12 @@ test("the real scoped daemon Changeset updates Pi Sync's floor and plans a publi
       dependencies: { [daemon.name]: client.dependencies[daemon.name] },
     });
     mkdirSync(path.join(root, ".changeset"));
-    for (const file of ["config.json", "calm-sync-owner.md"])
-      copyFileSync(path.join(repositoryRoot, ".changeset", file), path.join(root, ".changeset", file));
+    copyFileSync(path.join(repositoryRoot, ".changeset/config.json"), path.join(root, ".changeset/config.json"));
+    // Versioning consumes pending Changesets, so keep the release input local to this fixture.
+    writeFileSync(
+      path.join(root, ".changeset/scoped-daemon.md"),
+      `---\n"${daemon.name}": minor\n"${client.name}": minor\n---\n\nRelease the scoped daemon and Pi Sync.\n`,
+    );
     execFileSync(process.execPath, [cli, "version"], { cwd: root, stdio: "pipe" });
     const versionedDaemon = read(path.join(root, "packages/sync-daemon/package.json"));
     const versionedClient = read(path.join(root, "packages/pi-sync/package.json"));
