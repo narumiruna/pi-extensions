@@ -23,6 +23,7 @@ import { validateSettingsDocument } from "sync-daemon/engine/settings/settings-v
 import { sessionDirFromContext } from "sync-daemon/engine/snapshot/session-paths";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { StartupTimingPublisher } from "../sync/startup-timings.js";
+import { SyncDecisionRequiredError } from "../sync/sync-errors.js";
 import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
 import { type SyncStatusPresentation, setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -422,12 +423,20 @@ export class PiDaemonClient {
         onCommit,
       );
     } catch (error) {
-      if (error instanceof DaemonError && error.name === "RemoteSelectionMismatchError") {
-        const restored = Object.create(RemoteSelectionMismatchError.prototype) as Error;
-        Object.assign(restored, { name: error.name, message: error.message }, error.remote.properties);
-        throw restored;
+      if (error instanceof DaemonError) {
+        const prototype =
+          error.name === "RemoteSelectionMismatchError"
+            ? RemoteSelectionMismatchError.prototype
+            : error.name === "SyncDecisionRequiredError"
+              ? SyncDecisionRequiredError.prototype
+              : undefined;
+        if (prototype) {
+          const restored = Object.create(prototype) as Error;
+          Object.assign(restored, error.remote.properties, { name: error.name, message: error.message });
+          throw restored;
+        }
+        Object.assign(error, error.remote.properties);
       }
-      if (error instanceof DaemonError) Object.assign(error, error.remote.properties);
       throw error;
     } finally {
       this.uiContext = this.ctx;

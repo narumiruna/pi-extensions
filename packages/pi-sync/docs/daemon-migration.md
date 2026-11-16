@@ -24,7 +24,7 @@ Headless print/JSON startup never launches a persistent service. It passively at
 
 The service owns synchronization scheduling and execution, not every writer on the machine. Participating Pi clients hold their actual public file-mutation queues through apply and acknowledge release. Pi core settings updates use a separate authoritative file lock, which the daemon must also hold. Creating an absent `settings.json` with a live Pi is refused because the Pi missing-file branch does not reread after acquiring its lock.
 
-Protect the union of participating active sessions, including an ambiguously disconnected live client's session. A contact timeout revokes work; it is not permission to overwrite that session or release an acquired mutation grant. An uncertain grant remains quarantined until explicit release or confirmed daemon exit. Unregistered editors, shell commands, older clients, and extensions remain independent writers; preimages, conditional publication, backups, and journal recovery are still required.
+Protect the union of all registered live-PID sessions, including ambiguously disconnected and orderly retired clients. Retired clients cannot authorize work or hold back zero-client scheduling, but their protection survives another attach and daemon restart until confirmed PID exit. A contact timeout revokes work; it is not permission to overwrite that session or release an acquired mutation grant. An uncertain grant remains quarantined until explicit release or confirmed daemon exit. Unregistered editors, shell commands, older clients, and extensions remain independent writers; preimages, conditional publication, backups, and journal recovery are still required.
 
 ## Diagnostics and rollback
 
@@ -47,11 +47,12 @@ Operation retries are instance-bound and deduplicated. An expired result or old 
 
 Completed on disposable roots and synthetic loopback endpoints:
 
-- `npm run format` and `npm run check`: builds, Biome, package boundaries, and workspace types.
-- `npm test`: 1,027 passing files, one skipped file; 23,186 passing tests, 18 skipped, no failures or unhandled errors; the configured five-second case timeout is unchanged.
+- `npm run format` and `npm run check`: builds, Biome, package boundaries, dependency compatibility, and workspace types.
+- `npm test`: 1,030 passing files, one skipped file; 23,251 passing tests, 18 skipped, no failures or unhandled errors; the configured five-second case timeout is unchanged.
 - Both package-workflow dry packs; inspected real daemon/client tarballs; a fresh independent install with the local daemon tarball and the public SDK resolved in that install scope.
 - Standalone import, executable symlink/Help, start/API/stop, package-directory native Jiti loading, lazy `/sync help`, and survival after the installed Pi process exited.
 - Production Git preparation without development tools: Kit and daemon runtime JavaScript, exact imports, executable CLI, source-entry Jiti Help, and daemon start/API/stop.
+- Actual-daemon typed sync/selection decisions through both command and recovery routing; RPC resolution-menu cancellation without mutation; live-PID protection through detach/exit/pause/replacement gaps, unrelated attach, restart, and confirmed PID exit; parameterized child programs keep data outside executable source. Targeted old-policy negative controls failed, and both regression suites passed after the fixes were restored.
 - Two actual Pi RPC clients sharing one owner; new/reload/fork/resume/exit; stable provider-visible prompt/message prefix and ordered tools; real loopback S3/WebDAV cancellation; actual Pi file queues and SettingsManager lock branches; native model resolution through command/startup/Continuous/retry/zero-client paths; stale reviews and durable grant revocation across restart.
 
 The semantic audit used `docs/extension-conventions.md`, `docs/extension-settings.md`, `docs/readme-conventions.md`, and both package instruction files. It covered cancellation/disposal/replacement, every owned process/task, callback generations and post-await freshness, settings read/write ordering and failure recovery, unknown/invalid-file preservation, conditional publication/journals, provider capability and post-auth validation, bounded IPC/logs, loading boundaries, and model-prefix stability. The README audit covered 39 active packages and 92 affected local links.
