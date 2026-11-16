@@ -143,6 +143,8 @@ test("handoff protection is removed only after its matching replacement is publi
       assert.equal(server.participants().length, 2);
       await replacement.attach();
       assert.ok(!server.participants().some((peer) => peer.id === oldFacts.id));
+      assert.ok(!server.liveClients().some((peer) => peer.id === oldFacts.id));
+      assert.ok(server.liveClients().some((peer) => peer.sessionFile === nextFile));
       assert.ok(server.participants().some((peer) => peer.sessionFile === nextFile));
       await assert.rejects(
         new DaemonConnection(server.paths, server.identity, oldFacts, { callback: async () => false }).attach(),

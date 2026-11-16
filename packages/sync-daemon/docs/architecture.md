@@ -27,7 +27,7 @@ The exact unscoped `sync-daemon` name applies to a non-extension package; the re
 | `settings.json` selected by synchronization | Daemon apply transaction; Pi core remains an independent writer | Participating public file queues plus the actual Pi settings-file lock; revalidate preimages inside ownership |
 | Selected settings/resources/sessions | Daemon apply transaction; tools/editors remain independent writers | Public client queue reservations, protected-session union, original preimages/backups/journals |
 | `pi-sync/`, legacy `.pisync/` | Existing engine state writer in daemon | Existing operation lock, explicit migration guard, journal recovery; no automatic destructive migration |
-| IPC identity/client ledger | Local server | Private root-bound namespace; atomic identity publication; ambiguous live sessions survive restart |
+| IPC identity/client ledger | Local server | Private root-bound namespace; atomic identity publication; ambiguous and orderly retired live sessions survive restart |
 | `pi-sync/daemon.json` | Daemon consent owner | Bounded private atomic publication in one event-loop turn; exact policy/config/binding checks after review; interactive binding changes durably revoke prior unattended grants |
 | `auth.json`, `models.json` | Public Pi SDK APIs only | No private credential parsing or parent credential copying; settle SDK credential writes before exit |
 
@@ -40,6 +40,7 @@ Read-only display state is not a second settings writer. A client proposes a val
 | `getAgentDir()` | Explicit canonical service root | `engine/host.ts`, `engine/snapshot/session-paths.ts` |
 | `ctx.cwd`, session directory/current session | Plain client facts, generation-bound getters | `protocol.ts`, `service-host.ts` |
 | `ctx.isIdle()` | Current participating-client facts, not a captured Pi context | `service-host.ts` |
+| Protected sessions and missing-settings guard | All live client PIDs, including retired clients; separate from active participation | `server.ts`, `service-host.ts` |
 | `ctx.ui.notify`, status | Bounded events | `server.ts`, `service-host.ts` |
 | Confirm/select/exact merge review | Job-bound callbacks; revalidation after response | `service-host.ts`, `engine/ui/merge-review.ts` |
 | Reload | Explicit client callback after the existing user confirmation | `engine/sync/sync-mutations.ts` |
@@ -66,6 +67,7 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Lost connection with live PID / timeout | Retain protection and queue uncertainty; not proof of exit | Ambiguous-disconnection tests |
 | Confirmed daemon exit | Release quarantined Pi grants only after ESRCH | Apply-gate tests |
 | Busy participating client / changed generation | Stop or refuse automatic work; invalidate stale approval | Lifecycle tests |
+| Directional sync / remote-selection decision across IPC | Restore the typed decision for command and recovery routing; preserve the existing resolution menu | Actual daemon error-routing tests |
 | Pi edit/write during apply | Hold the actual public Pi queue; recheck preimages | Real `createEditTool` race test |
 | Pi core settings update, existing file | Share its `proper-lockfile` file lock | Settings writer race tests |
 | Missing `settings.json` with a live Pi | Refuse creation; Pi's missing-file branch does not reread after lock | Missing-settings contract test |
@@ -100,7 +102,7 @@ Each POSIX instance binds inside an exclusively created 0700 directory; this par
 
 The model signature hashes the exact existing JSON serialization. Equal hashes preserve the engine's existing candidate keys and Continuous configuration identity; a definition with different serialization is unavailable, not a reason to reset budgets. Static metadata uses an in-memory credential store and no refresh. Only an actual resolver transport creates the public SDK credential runtime. Its final public `transformHeaders` hook revalidates capability and evidence after auth awaits, without returning header values to Pi.
 
-Unattended permission stores a setup/policy digest and an independent model/location binding, not a former Pi context. Normal closed clients remain in the protected-session ledger while their PID is alive but do not block zero-client scheduling; ambiguous losses and replacement gaps do. A consent publication failure latches automatic work off for that service instance; repair persistence and revoke the retained grant before an explicit restart.
+Unattended permission stores a setup/policy digest and an independent model/location binding, not a former Pi context. Normal closed clients remain in the durable protected-session ledger while their PID is alive but do not block zero-client scheduling; ambiguous losses and replacement gaps do. `Execution.liveClients()` supplies file protection and the missing-settings guard, while `Execution.participants()` supplies queue reservations and work eligibility. An unrelated attach or daemon restart does not remove retired protection. Only confirmed PID exit or a matching published replacement releases the corresponding record. A consent publication failure latches automatic work off for that service instance; repair persistence and revoke the retained grant before an explicit restart.
 
 The resolver uses independently available agent-root `auth.json`/`models.json` configuration and the environment captured at service start. Credential commands execute non-interactively from the canonical agent root, not from a former Pi working directory. Handover must disclose this provider/account boundary; changing the service environment requires a restart. Parent runtime accounts, registered providers, and conversations are not copied.
 

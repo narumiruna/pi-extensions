@@ -77,7 +77,7 @@ test("the actual Pi settings writer refuses a daemon-held lock and preserves the
   }
 });
 
-test("an absent settings file is refused with a live participant instead of racing Pi's missing-file branch", async () => {
+test("an absent settings file is refused with a retired live client instead of racing Pi's missing-file branch", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-missing-settings-"));
   const owner = child("missing", root);
   let writer: ReturnType<typeof child> | undefined;

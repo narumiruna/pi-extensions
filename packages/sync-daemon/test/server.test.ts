@@ -341,10 +341,11 @@ test("evicted results and old-instance operation IDs cannot dispatch another com
       await server.close();
     }
     const next = await startServer(root, async () => ++calls);
+    const replacement = { ...peer, id: randomUUID(), generation: randomUUID() };
     try {
-      await requestDaemon(next.paths, next.identity, "attach", peer);
+      await requestDaemon(next.paths, next.identity, "attach", replacement);
       await assert.rejects(
-        requestDaemon(next.paths, next.identity, "submit", { id: first, client: peer.id, operation: "commit" }),
+        requestDaemon(next.paths, next.identity, "submit", { id: first, client: replacement.id, operation: "commit" }),
         /another daemon instance/u,
       );
       assert.equal(calls, 65);

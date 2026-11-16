@@ -26,8 +26,8 @@ export function installServiceHost(root: string) {
   }
   function protectedTarget(target: string, execution: Execution) {
     const normalized = path.resolve(target);
-    if (execution.participants().some((peer) => peer.sessionFile && path.resolve(peer.sessionFile) === normalized))
-      throw new Error("An attached or ambiguously disconnected client's active session is protected.");
+    if (execution.liveClients().some((peer) => peer.sessionFile && path.resolve(peer.sessionFile) === normalized))
+      throw new Error("A live client's session is protected, including after orderly exit.");
   }
   async function reserve<T>(targets: readonly string[], action: () => Promise<T>): Promise<T> {
     const owner = current();
@@ -100,7 +100,7 @@ export function installServiceHost(root: string) {
               if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
               throw error;
             });
-            if (!info && owner.execution.participants().length)
+            if (!info && owner.execution.liveClients().length)
               throw new Error("Cannot create settings.json while a Pi client is alive; create it through Pi first.");
             if (info?.isSymbolicLink()) throw new Error("Refusing an aliased settings file.");
             release = await lockfile.lock(target, { realpath: false });
@@ -164,7 +164,7 @@ export function createServiceContext(execution: Execution): EngineContext {
       usesDefaultSessionDir: () => facts().sessionDir === undefined,
     },
     get protectedSessionFiles() {
-      return execution.participants().flatMap((peer) => (peer.sessionFile ? [peer.sessionFile] : []));
+      return execution.liveClients().flatMap((peer) => (peer.sessionFile ? [peer.sessionFile] : []));
     },
     isIdle: () => execution.participants().every((peer) => peer.idle),
     reload: async () => {

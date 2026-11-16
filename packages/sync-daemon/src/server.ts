@@ -123,7 +123,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       version: 1,
       root: paths.root,
       clients: [...participants.values()]
-        .filter((peer) => peer.connected || peer.suspected)
+        .filter((peer) => processExists(peer.facts.pid))
         .map((peer) => ({ ...peer.facts, handoff: peer.handoff })),
     };
     const handle = await fs.open(temporary, "wx", 0o600);
@@ -167,7 +167,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           const { handoff, ...value } = stored;
           validateFacts(value);
           if (handoff !== undefined) validateHandoff(handoff);
-          if (processExists(value.pid))
+          if (processExists(value.pid)) {
+            if (handoff?.kind === "exit") closedClients.add(value.id);
             participants.set(value.id, {
               facts: value,
               handoff,
@@ -175,9 +176,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
               events: [],
               connected: false,
               closing: false,
-              suspected: true,
+              suspected: handoff?.kind !== "exit",
               seen: 0,
             });
+          }
         }
       } finally {
         await handle.close();
@@ -223,6 +225,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       throw new Error("Client is not attached or is closing.");
     return peer;
   };
+  const liveClientFacts = () =>
+    [...participants.values()].filter((peer) => processExists(peer.facts.pid)).map((peer) => peer.facts);
   const participantFacts = () =>
     [...participants.values()]
       .filter((peer) => !peer.publishing && (peer.connected || peer.suspected) && processExists(peer.facts.pid))
@@ -319,6 +323,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       signal: job.controller.signal,
       facts: () => (job.client ? participants.get(job.client)?.facts : undefined),
       participants: participantFacts,
+      liveClients: liveClientFacts,
       validate,
       request,
       emit: (kind, data, target = job.client) => emit(kind, data, target),
@@ -394,6 +399,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       if (closedClients.size < 10_000) closedClients.add(id);
       return { cursor: sequence, callbacks: [], events: [] };
     }
+    if (closedClients.has(id)) return poll(peer, 0);
     peer.closing = true;
     for (const waiting of [...pending.values()])
       if (waiting.target === id && !waiting.callback.kind.startsWith("queue-"))
@@ -407,7 +413,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     // Orderly exit remains protected by PID, but is not an ambiguous active participant.
     peer.suspected = retain && handoff?.kind !== "exit";
     peer.closing = false;
-    peer.handoff = handoff;
+    peer.handoff = handoff ?? (retain ? undefined : { kind: "exit" });
     if (!retain || handoff?.kind === "exit") closedClients.add(id);
     await savePeers();
     const result = poll(peer, 0);
@@ -427,8 +433,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         throw new Error("Client retirement ledger is full; stop and restart the service.");
       if (!processExists(params.pid)) throw new Error("Client process is not alive.");
       for (const [id, peer] of participants)
-        if ((!processExists(peer.facts.pid) || (!peer.connected && !peer.suspected)) && !peer.callbacks.size)
-          participants.delete(id);
+        if (!processExists(peer.facts.pid) && !peer.callbacks.size) participants.delete(id);
       if (!participants.has(params.id) && participants.size >= 64) throw new Error("Daemon client capacity reached.");
       const old = participants.get(params.id);
       if (
@@ -716,6 +721,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       return endpoint.retainedDirectory;
     },
     participants: participantFacts,
+    liveClients: liveClientFacts,
     expireClients,
     isIdle: () =>
       !closed && [...jobs.values()].every((job) => job.view.phase !== "queued" && job.view.phase !== "running"),

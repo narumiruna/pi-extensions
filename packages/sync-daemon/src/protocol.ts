@@ -89,6 +89,8 @@ export interface Execution {
   readonly signal: AbortSignal;
   facts(): ClientFacts | undefined;
   participants(): readonly ClientFacts[];
+  /** All live PIDs, including retired clients that must no longer authorize work. */
+  liveClients(): readonly ClientFacts[];
   validate(): void;
   request(kind: string, payload: unknown, clientId?: string, signal?: AbortSignal): Promise<unknown>;
   emit(kind: ClientEvent["kind"], payload: unknown, clientId?: string): void;
