@@ -269,14 +269,11 @@ test("the pre-commit hook delegates checks without narrowing the repository gate
   assert.equal(manifest.scripts.precommit, undefined);
   assert.ok(
     preCommitScript.includes(
-      [
-        "npx biome migrate --write",
-        "npx biome check --write packages",
-        "npx biome format --write packages",
-        "uvx zizmor --pedantic .github",
-      ].join("\n"),
+      ["npx biome migrate --write", "npx biome check --write packages", "npx biome format --write packages"].join("\n"),
     ),
   );
+  assert.match(preCommitScript, /check \. --error-on-warnings/u);
+  assert.match(preCommitScript, /uvx zizmor --pedantic \.github/u);
   assert.equal(manifest.scripts["check:biome"], "biome check . --error-on-warnings");
   assert.match(preCommitScript, /run-typechecks\.mjs --staged/u);
   assert.doesNotMatch(manifest.scripts.typecheck, /--staged/u);

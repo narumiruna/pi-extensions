@@ -188,10 +188,13 @@ npm run check
 and stops before consumers if a prerequisite fails; workspace-list order is not a build contract.
 Staged typechecks use the same build planner.
 
-The Git pre-commit hook migrates the Biome configuration, applies Biome checks and formatting to all of `packages/`,
-runs `uvx zizmor --pedantic .github`, and typechecks staged changes.
+The Git pre-commit hook migrates the Biome configuration and applies Biome checks and formatting to all of `packages/`.
+It then checks a temporary copy of the Git index with Biome, including root files and warnings,
+and runs `uvx zizmor --pedantic .github` in that copy before typechecking staged changes.
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to provide `uvx`.
-Biome can modify unstaged files; review and stage any fixes because the hook does not stage them automatically.
+Biome can modify unstaged files, but the hook does not stage them automatically.
+If staged content fails Biome checks, the hook stops the commit; review and stage the fixes, then retry.
+Valid partial staging is preserved. The temporary copy is removed when the hook exits.
 
 See [test performance and isolation](./docs/test-performance.md) for package timing reports,
 cache behavior, and the reviewed shared-module test boundary.
