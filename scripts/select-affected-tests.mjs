@@ -8,6 +8,7 @@ const ROOT_FULL_TEST_FILES = new Set([
   ".npmrc",
   "package-lock.json",
   "package.json",
+  "prek.toml",
   "tsconfig.json",
   "tsconfig.test.json",
 ]);

@@ -1,0 +1,43 @@
+#:schema https://www.schemastore.org/prek.json
+
+fail_fast = true
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "biome-migrate"
+name = "Migrate Biome configuration"
+entry = "npx @biomejs/biome migrate --write"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 0
+
+[[repos.hooks]]
+id = "biome-check"
+name = "Biome check"
+entry = "npx @biomejs/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched"
+language = "system"
+types = ["text"]
+files = '\.(jsx?|tsx?|c(js|ts)|m(js|ts)|d\.(ts|cts|mts)|jsonc?|css)$'
+pass_filenames = true
+priority = 1
+
+[[repos.hooks]]
+id = "zizmor"
+name = "Check GitHub Actions with zizmor"
+entry = "uvx zizmor --pedantic .github"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 2
+
+[[repos.hooks]]
+id = "typecheck-staged"
+name = "Typecheck staged changes"
+entry = "npm run typecheck -- --staged"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 3

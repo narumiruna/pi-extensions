@@ -21,7 +21,7 @@
 - Use `npm install` to install dependencies, `npm run format` to apply Biome formatting, and `npm run typecheck` to typecheck every workspace.
 - Run `npm run` before adding or documenting a root workflow command.
 - Keep root npm scripts as canonical entrypoints only for workflows users run from the root, and move complex implementations under `scripts/`.
-- Keep pre-commit hook logic in `scripts/pre-commit.sh`, invoke it directly from `.husky/pre-commit`, and do not add a duplicate root npm script.
+- Define each pre-commit check directly in `prek.toml` with distinct ordered priorities and fail-fast behavior, and do not add a wrapper script or duplicate root npm script.
 - Do not run root checks concurrently with a `pi-tui-kit` build or check because both clear `packages/pi-tui-kit/dist`.
 - Rebuild `pi-tui-kit` before consumer tests because consumers resolve its built output.
 - After raising a consumer's Kit floor, run root `npm install`, verify the resolution with `npm ls @narumitw/pi-tui-kit`, and then typecheck.

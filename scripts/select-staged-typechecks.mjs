@@ -8,7 +8,13 @@ import {
 } from "./workspace-graph.mjs";
 
 const DOCUMENTATION_BASENAMES = new Set(["CHANGELOG.md", "LICENSE", "LICENSE.md", "NOTICES.md", "README.md"]);
-const ROOT_FULL_TYPECHECK_FILES = new Set(["package-lock.json", "package.json", "tsconfig.json", "tsconfig.test.json"]);
+const ROOT_FULL_TYPECHECK_FILES = new Set([
+  "package-lock.json",
+  "package.json",
+  "prek.toml",
+  "tsconfig.json",
+  "tsconfig.test.json",
+]);
 const ROOT_IGNORED_PREFIXES = [".changeset/", ".github/", "docs/"];
 
 export function stagedFiles(root) {
