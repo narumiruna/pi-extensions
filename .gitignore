@@ -205,6 +205,7 @@ vite.config.ts.timestamp-*
 # Project
 /site/
 /.zensical-docs/
+/.zensical-docs.lock
 packages/pi-tui-kit/.kit-runtime-staging-*/
 packages/pi-tui-kit/.kit-runtime-backup-*/
 packages/pi-inspect/browser-dist/

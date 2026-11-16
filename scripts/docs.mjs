@@ -1,93 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, watch } from "node:fs";
-import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { rewriteLinks, sitePath } from "./docs-markdown.mjs";
+
+export { rewriteLinks };
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
-const repositoryUrl = "https://github.com/narumiruna/pi-extensions";
 // Keep sources outside .cache, which Zensical removes during --clean.
 const outputDirectory = ".zensical-docs";
-
-function sitePath(source) {
-  return source === "docs/index.md" ? "index.md" : source;
-}
-
-// Only Markdown destinations are changed, never fenced examples or inline code.
-export function rewriteLinks(markdown, source, files, repositoryPaths) {
-  const destination = (href) => {
-    if (/^(?:[a-z][a-z\d+.-]*:|\/|#|\?)/i.test(href)) return href;
-    const [, pathname, suffix = ""] = href.match(/^([^?#]*)(.*)$/);
-    const target = posix.normalize(posix.join(posix.dirname(source), decodeURI(pathname).replace(/\\([()])/g, "$1")));
-    if (!repositoryPaths.has(target)) throw new Error(`${source}: missing link target ${href}`);
-    if (files.has(target)) {
-      return `${posix.relative(posix.dirname(sitePath(source)), sitePath(target))}${suffix}`;
-    }
-    const kind = repositoryPaths.get(target) === "directory" ? "tree" : "blob";
-    const encoded = target.split("/").map(encodeURIComponent).join("/");
-    return `${repositoryUrl}/${kind}/main/${encoded}${suffix}`;
-  };
-
-  let fence;
-  return markdown
-    .split("\n")
-    .map((line) => {
-      const marker = line.match(/^\s*(`{3,}|~{3,})/);
-      if (fence) {
-        if (
-          marker &&
-          marker[1][0] === fence[0] &&
-          marker[1].length >= fence.length &&
-          line.slice(marker[0].length).trim() === ""
-        )
-          fence = undefined;
-        return line;
-      }
-      if (marker) {
-        fence = marker[1];
-        return line;
-      }
-      const rewrite = (href) => (href.startsWith("<") ? `<${destination(href.slice(1, -1))}>` : destination(href));
-      // Preserve reference labels, link titles, images, and query/fragment suffixes.
-      const reference = line.match(/^(\s{0,3}\[(?!\^)[^\]]+\]:\s*)(<[^>]+>|\S+)(.*)$/);
-      if (reference) return `${reference[1]}${rewrite(reference[2])}${reference[3]}`;
-      const tokens = /(`+).*?\1|\]\(/g;
-      let result = "";
-      let copied = 0;
-      for (let token = tokens.exec(line); token; token = tokens.exec(line)) {
-        if (token[1]) continue;
-        const start = token.index + 2;
-        let end = start;
-        if (line[start] === "<") {
-          const closing = line.indexOf(">", start + 1);
-          if (closing < 0) continue;
-          end = closing + 1;
-        } else {
-          let depth = 0;
-          for (; end < line.length; end++) {
-            const char = line[end];
-            if (char === "\\") end++;
-            else if (char === "(") depth++;
-            else if (char === ")") {
-              if (depth === 0) break;
-              depth--;
-            } else if (/\s/.test(char)) break;
-          }
-          if (depth !== 0 || end === start) continue;
-        }
-        // A destination must be followed by a closing delimiter or a quoted title.
-        const tail = line
-          .slice(end)
-          .match(/^(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))?[ \t]*\)/);
-        if (!tail) continue;
-        result += line.slice(copied, start) + rewrite(line.slice(start, end));
-        copied = end;
-        tokens.lastIndex = end + tail[0].length;
-      }
-      return result + line.slice(copied);
-    })
-    .join("\n");
-}
 
 export async function prepareDocs(root = repositoryRoot) {
   // Honor Git ignores so local drafts and generated files cannot become site assets.
@@ -155,73 +77,113 @@ export async function prepareDocs(root = repositoryRoot) {
   return prepared.size;
 }
 
+async function withDocsOwnership(root, run) {
+  const path = resolve(root, ".zensical-docs.lock");
+  let lock;
+  try {
+    lock = await open(path, "wx", 0o600);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    throw new Error(
+      "Another documentation command owns .zensical-docs.lock. Stop it first; see docs/documentation.md for crash recovery.",
+    );
+  }
+  try {
+    await lock.writeFile(String(process.pid) + "\n");
+    return await run();
+  } finally {
+    try {
+      await lock.close();
+    } finally {
+      await rm(path, { force: true });
+    }
+  }
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!["build", "serve"].includes(command))
     throw new Error("Usage: node scripts/docs.mjs <build|serve> [zensical options]");
-  console.log(`Prepared ${await prepareDocs()} documentation files.`);
-  const sourceDirectories = [
-    "docs",
-    ...(await readdir(resolve(repositoryRoot, "packages"))).map((name) => `packages/${name}/docs`),
-  ]
-    .map((path) => resolve(repositoryRoot, path))
-    .filter(existsSync);
   const watchers = [];
   let timer;
   let preparing = Promise.resolve();
+  let child;
+  let stopping = false;
   const stop = () => {
+    stopping = true;
     for (const watcher of watchers) watcher.close();
     clearTimeout(timer);
   };
-  const changed = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      preparing = preparing
-        .then(() => prepareDocs())
-        .catch((error) => {
-          console.error(error.message);
-          process.exitCode = 1;
-          child.kill("SIGTERM");
-        });
-    }, 100);
-  };
-  if (command === "serve") {
-    try {
-      for (const path of sourceDirectories) watchers.push(watch(path, { recursive: true }, changed));
-    } catch (error) {
-      stop();
-      throw error;
-    }
-  }
-  const child = spawn("uvx", ["zensical", command, ...(command === "build" ? ["--strict"] : []), ...args], {
-    cwd: repositoryRoot,
-    stdio: "inherit",
-  });
   const interrupt = (signal) => {
+    process.exitCode = signal === "SIGINT" ? 130 : 143;
     stop();
-    child.kill(signal);
+    child?.kill(signal);
   };
   const sigint = () => interrupt("SIGINT");
   const sigterm = () => interrupt("SIGTERM");
+  // Install cancellation before acquiring ownership or starting asynchronous work.
   process.on("SIGINT", sigint);
   process.on("SIGTERM", sigterm);
-  child.on("error", (error) => {
-    console.error(error.message);
-    stop();
-    process.exitCode = 1;
-  });
-  child.on("exit", (code, signal) => {
-    stop();
+  try {
+    await withDocsOwnership(repositoryRoot, async () => {
+      try {
+        if (stopping) return;
+        const count = await prepareDocs();
+        if (stopping) return;
+        console.log("Prepared " + count + " documentation files.");
+        if (command === "serve") {
+          const sourceDirectories = [
+            "docs",
+            ...(await readdir(resolve(repositoryRoot, "packages"))).map((name) => "packages/" + name + "/docs"),
+          ]
+            .map((path) => resolve(repositoryRoot, path))
+            .filter(existsSync);
+          if (stopping) return;
+          const changed = () => {
+            if (stopping) return;
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+              preparing = preparing
+                .then(() => (stopping ? undefined : prepareDocs()))
+                .catch((error) => {
+                  if (stopping) return;
+                  console.error(error.message);
+                  process.exitCode = 1;
+                  stop();
+                  child?.kill("SIGTERM");
+                });
+            }, 100);
+          };
+          for (const path of sourceDirectories) watchers.push(watch(path, { recursive: true }, changed));
+        }
+        child = spawn("uvx", ["zensical", command, ...(command === "build" ? ["--strict"] : []), ...args], {
+          cwd: repositoryRoot,
+          stdio: "inherit",
+        });
+        const { code, signal } = await new Promise((done) => {
+          child.on("error", (error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+            stop();
+          });
+          child.once("close", (code, signal) => done({ code, signal }));
+        });
+        if (!process.exitCode) process.exitCode = signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : (code ?? 1);
+      } finally {
+        stop();
+        // Do not release ownership while an admitted refresh can still publish.
+        await preparing;
+      }
+    });
+  } finally {
     process.removeListener("SIGINT", sigint);
     process.removeListener("SIGTERM", sigterm);
-    if (process.exitCode) return;
-    process.exitCode = signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : (code ?? 1);
-  });
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error(error.message);
-    process.exitCode = 1;
+    if (!process.exitCode) process.exitCode = 1;
   });
 }
