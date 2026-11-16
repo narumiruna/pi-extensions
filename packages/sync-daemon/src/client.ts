@@ -75,7 +75,9 @@ export async function requestDaemon(
           .catch(reject);
       },
     );
-    request.setTimeout(30_000, () => request.destroy(new Error("Daemon request timed out.")));
+    // Attach can wait behind a complete apply. Its connection-owned signal/dispose
+    // cancels that wait; an idle timeout must not let startup escape the admission fence.
+    request.setTimeout(method === "attach" ? 0 : 30_000, () => request.destroy(new Error("Daemon request timed out.")));
     request.once("error", reject);
     request.end(body);
   });

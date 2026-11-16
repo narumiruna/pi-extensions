@@ -15,6 +15,7 @@ import {
   runtimePaths,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
+import { ParticipantAdmission } from "./participant-admission.js";
 import {
   type Callback,
   type ClientEvent,
@@ -98,6 +99,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     },
   });
   const participants = new Map<string, Participant>();
+  const admission = new ParticipantAdmission();
   const jobs = new Map<string, Job>();
   const backgroundJobs = new Set<Job>();
   const cancelled = new Set<string>();
@@ -324,6 +326,14 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       facts: () => (job.client ? participants.get(job.client)?.facts : undefined),
       participants: participantFacts,
       liveClients: liveClientFacts,
+      withParticipants: (action) =>
+        admission.run(
+          async () => {
+            validate();
+            return action(participantFacts());
+          },
+          job.committed ? undefined : job.controller.signal,
+        ),
       validate,
       request,
       emit: (kind, data, target = job.client) => emit(kind, data, target),
@@ -420,65 +430,73 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     hooks.idle?.();
     return result;
   }
-  async function handle(method: string, params: unknown): Promise<unknown> {
+  async function handle(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
     const cleanup = ["answer", "poll", "cancel", "detach", "pause", "handoff", "stop"].includes(method);
     if (!published && !cleanup) throw new Error("Daemon readiness is not published.");
     if (!cleanup) assertOwner();
     if (method === "hello")
       return { version: PROTOCOL_VERSION, root: identity.root, instance: identity.instance, pid: identity.pid };
     if (method === "attach") {
-      validateFacts(params);
-      if (closedClients.has(params.id)) throw new Error("Client was retired; attach a new client identity.");
-      if (closedClients.size >= 10_000)
-        throw new Error("Client retirement ledger is full; stop and restart the service.");
-      if (!processExists(params.pid)) throw new Error("Client process is not alive.");
-      for (const [id, peer] of participants)
-        if (!processExists(peer.facts.pid) && !peer.callbacks.size) participants.delete(id);
-      if (!participants.has(params.id) && participants.size >= 64) throw new Error("Daemon client capacity reached.");
-      const old = participants.get(params.id);
-      if (
-        old &&
-        (old.facts.pid !== params.pid ||
-          ((old.connected || old.suspected) && old.facts.generation !== params.generation))
-      )
-        throw new Error("Client identity collision.");
-      participants.set(params.id, {
-        facts: structuredClone(params),
-        callbacks: old?.callbacks ?? new Map(),
-        events: old?.events ?? [],
-        connected: true,
-        closing: false,
-        suspected: false,
-        seen: Date.now(),
-        publishing: !old,
-      });
-      try {
-        await savePeers();
-      } catch (error) {
-        if (old) participants.set(params.id, old);
-        else participants.delete(params.id);
-        throw error;
-      }
-      const attached = requireParticipant(params.id, true);
-      attached.publishing = false;
-      // A shutdown-confirmed handoff keeps protection across SDK invalidation.
-      // Publish the replacement first, then retire only the matching closed scope.
-      for (const [id, peer] of participants) {
-        const next = peer.handoff;
-        if (id === params.id || peer.facts.pid !== params.pid || next?.kind !== "replace") continue;
-        const matches =
-          next.file !== undefined
-            ? next.file === params.sessionFile
-            : next.sessionId !== undefined
-              ? next.sessionId === params.sessionId
-              : params.sessionFile === undefined && next.cwd === params.cwd;
-        if (matches) {
-          participants.delete(id);
-          closedClients.add(id);
+      const attached = await admission.run(async () => {
+        assertOwner();
+        validateFacts(params);
+        if (closedClients.has(params.id)) throw new Error("Client was retired; attach a new client identity.");
+        if (closedClients.size >= 10_000)
+          throw new Error("Client retirement ledger is full; stop and restart the service.");
+        if (!processExists(params.pid)) throw new Error("Client process is not alive.");
+        for (const [id, peer] of participants)
+          if (!processExists(peer.facts.pid) && !peer.callbacks.size) participants.delete(id);
+        if (!participants.has(params.id) && participants.size >= 64) throw new Error("Daemon client capacity reached.");
+        const old = participants.get(params.id);
+        if (
+          old &&
+          (old.facts.pid !== params.pid ||
+            ((old.connected || old.suspected) && old.facts.generation !== params.generation))
+        )
+          throw new Error("Client identity collision.");
+        participants.set(params.id, {
+          facts: structuredClone(params),
+          callbacks: old?.callbacks ?? new Map(),
+          events: old?.events ?? [],
+          connected: true,
+          closing: false,
+          suspected: false,
+          seen: Date.now(),
+          publishing: !old,
+        });
+        try {
+          await savePeers();
+          assertOwner();
+        } catch (error) {
+          if (old) participants.set(params.id, old);
+          else participants.delete(params.id);
+          throw error;
         }
-      }
-      await savePeers();
+        const attached = requireParticipant(params.id, true);
+        attached.publishing = false;
+        // A shutdown-confirmed handoff keeps protection across SDK invalidation.
+        // Publish the replacement first, then retire only the matching closed scope.
+        for (const [id, peer] of participants) {
+          const next = peer.handoff;
+          if (id === params.id || peer.facts.pid !== params.pid || next?.kind !== "replace") continue;
+          const matches =
+            next.file !== undefined
+              ? next.file === params.sessionFile
+              : next.sessionId !== undefined
+                ? next.sessionId === params.sessionId
+                : params.sessionFile === undefined && next.cwd === params.cwd;
+          if (matches) {
+            participants.delete(id);
+            closedClients.add(id);
+          }
+        }
+        await savePeers();
+        assertOwner();
+        return attached;
+      }, signal);
+      // Monitoring can await a queued reservation; never call it while admission is held.
       await hooks.factsChanged?.();
+      assertOwner();
       return poll(attached, 0);
     }
     if (!record(params)) throw new Error("Invalid request parameters.");
@@ -593,6 +611,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     response.end(encoded);
   };
   const server = createServer(async (request, response) => {
+    let admissionController: AbortController | undefined;
+    const disconnect = () => admissionController?.abort(new DOMException("Client disconnected", "AbortError"));
     try {
       if (request.method !== "POST" || request.url !== "/v1") {
         respond(response, 404, { error: { message: "Not found." } });
@@ -612,9 +632,15 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         respond(response, 403, { error: { name: "Error", message: "Invalid daemon identity or protocol." } });
         return;
       }
-      respond(response, 200, { result: await handle(body.method, body.params) });
+      if (body.method === "attach") {
+        admissionController = new AbortController();
+        response.once("close", disconnect);
+      }
+      respond(response, 200, { result: await handle(body.method, body.params, admissionController?.signal) });
     } catch (error) {
       if (!response.destroyed) respond(response, 400, { error: remoteError(error) });
+    } finally {
+      response.removeListener("close", disconnect);
     }
   });
   server.requestTimeout = 30_000;
@@ -682,6 +708,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         closeError = error;
       }
       await Promise.allSettled([...jobs.values()].map((job) => job.promise));
+      await admission.run(async () => {});
       for (const waiting of [...pending.values()]) waiting.reject(new Error("Daemon stopping."));
       await endpoint.close();
       if (await known()) await fs.rm(paths.identity, { force: true });

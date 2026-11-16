@@ -33,6 +33,7 @@ if (role === "writer") {
     facts: () => undefined,
     participants: () => [],
     liveClients: () => (role === "missing" ? [{ id: "fixture", generation: "fixture", idle: true }] : []),
+    withParticipants: async (action) => action(execution.participants()),
     validate: () => controller.signal.throwIfAborted(),
     request: async (kind) => {
       if (kind.startsWith("queue-")) return true;

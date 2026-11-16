@@ -69,6 +69,7 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Busy participating client / changed generation | Stop or refuse automatic work; invalidate stale approval | Lifecycle tests |
 | Directional sync / remote-selection decision across IPC | Restore the typed decision for command and recovery routing; preserve the existing resolution menu | Actual daemon error-routing tests |
 | Pi edit/write during apply | Hold the actual public Pi queue; recheck preimages | Real `createEditTool` race test |
+| Client joins during queue grant, apply, or release | Delay attach publication through the full reservation lifetime; include the new client in the next batch | Admission tests for print, JSON, and RPC clients, nested writes, cancellation, shutdown, and hook re-entry |
 | Pi core settings update, existing file | Share its `proper-lockfile` file lock | Settings writer race tests |
 | Missing `settings.json` with a live Pi | Refuse creation; Pi's missing-file branch does not reread after lock | Missing-settings contract test |
 | Arbitrary unregistered writer | Existing optimistic checks only; no universal filesystem CAS claim | Existing snapshot race suites and documented limitation |
@@ -90,7 +91,9 @@ The source-linked matrix is the audit contract, not a list of already completed 
 
 Acquire target queues in deterministic client-ID and canonical-target order. Each reservation has a job-bound ID and the peer's session generation. The client holds Pi's public queues until the daemon acknowledges completion with a `queue-release` callback. Release uses the reservation ID even if the grant response was lost. A cancelled UI callback does not release an acquired grant. If IPC disappears, hold the grant until explicit release or proof that its daemon process exited. A timeout is not such proof.
 
-Batch reservations cover the transaction, not only each rename. Nested writes retain the transaction's queue ownership. Validate paths and canonical parents before reservation and recheck session protection and preimages after every await that can change them. The daemon's own Pi queue alone is insufficient.
+Batch reservations cover the transaction, not only each rename. `Execution.withParticipants()` fences attach publication from the peer snapshot through every grant, nested write, and acknowledged release. Nested reservations share that fence instead of reacquiring it. An attach queued behind an apply cannot finish startup until the reservation ends; the next batch includes that client. Cancelled waiters cannot publish later, and shutdown drains admission. Attach has no idle request timeout: a legitimate long apply must not let startup escape the fence. Transport disconnection cancels queued admission, and the Pi adapter pauses or disposes its partial connection without waiting for attach to finish. Other local requests retain their timeout. Monitoring hooks run outside the fence because they can await a queued background reservation.
+
+Nested writes retain the transaction's queue ownership. Validate paths and canonical parents before reservation and recheck session protection and preimages after every await that can change them. The daemon's own Pi queue alone is insufficient.
 
 Pi core's settings storage has separate existing-file and missing-file branches (`FileSettingsStorage.withLock()` in the installed SDK). Existing files lock before reading. Missing files compute the update before acquiring the file lock and do not reread afterward. Therefore creation with live Pi clients is refused, rather than claiming that the shared lock repairs this branch.
 

@@ -7,11 +7,12 @@ import { readConsent } from "./consent.js";
 import { configureEngineHost, type EngineContext } from "./engine/host.js";
 import { canonicalRootGuard, processExists } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
-import type { Execution } from "./protocol.js";
+import type { ClientFacts, Execution } from "./protocol.js";
 
 interface Scope {
   execution: Execution;
   held: ReadonlySet<string>;
+  peers?: readonly ClientFacts[];
 }
 const scope = new AsyncLocalStorage<Scope>();
 
@@ -35,9 +36,13 @@ export function installServiceHost(root: string) {
     if (poisoned) throw new Error("Daemon ownership cleanup is uncertain; stop and reconcile before retrying.");
     const missing = [...new Set(targets)].filter((target) => !owner.held.has(target)).sort();
     if (!missing.length) return action();
+    if (!owner.peers)
+      return owner.execution.withParticipants((peers) =>
+        scope.run({ ...owner, peers }, () => reserve(targets, action)),
+      );
     owner.execution.validate();
     for (const target of missing) protectedTarget(target, owner.execution);
-    const peers = owner.execution.participants().toSorted((a, b) => a.id.localeCompare(b.id));
+    const peers = owner.peers.toSorted((a, b) => a.id.localeCompare(b.id));
     const requested: { client: string; reservation: string }[] = [];
     return withCleanup(
       async () => {
@@ -53,7 +58,7 @@ export function installServiceHost(root: string) {
           owner.execution.validate();
         }
         for (const target of missing) protectedTarget(target, owner.execution);
-        return await scope.run({ execution: owner.execution, held: new Set([...owner.held, ...missing]) }, action);
+        return await scope.run({ ...owner, held: new Set([...owner.held, ...missing]) }, action);
       },
       async () => {
         // Release by request identity even when a grant response was lost. A cancelled

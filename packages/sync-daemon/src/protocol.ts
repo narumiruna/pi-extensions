@@ -91,6 +91,8 @@ export interface Execution {
   participants(): readonly ClientFacts[];
   /** All live PIDs, including retired clients that must no longer authorize work. */
   liveClients(): readonly ClientFacts[];
+  /** Fence attach publication until every queue grant and release in the action settles. */
+  withParticipants<T>(action: (peers: readonly ClientFacts[]) => Promise<T>): Promise<T>;
   validate(): void;
   request(kind: string, payload: unknown, clientId?: string, signal?: AbortSignal): Promise<unknown>;
   emit(kind: ClientEvent["kind"], payload: unknown, clientId?: string): void;

@@ -293,7 +293,7 @@ export class PiDaemonClient {
     this.paused = true;
     this.gate.cancelPending();
     this.pausing ??= (async () => {
-      const connection = this.connection ?? (await this.connecting?.catch(() => undefined)) ?? this.partialConnection;
+      const connection = this.connection ?? this.partialConnection ?? (await this.connecting?.catch(() => undefined));
       if (connection) {
         await connection.pause();
         await this.gate.releaseAfterDrain();
@@ -572,7 +572,7 @@ export class PiDaemonClient {
     if (this.disposing) return this.disposing;
     this.closing = true;
     this.disposing = (async () => {
-      const connection = this.connection ?? (await this.connecting?.catch(() => undefined)) ?? this.partialConnection;
+      const connection = this.connection ?? this.partialConnection ?? (await this.connecting?.catch(() => undefined));
       let confirmed = false;
       try {
         await connection?.dispose(handoff);
