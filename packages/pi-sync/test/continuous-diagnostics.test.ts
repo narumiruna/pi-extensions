@@ -23,6 +23,7 @@ import {
   continuousRoot,
   hashContinuous,
 } from "../src/sync/continuous-storage.js";
+import { describeManagerState } from "../src/ui/manager-state.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
@@ -300,18 +301,65 @@ test("invalid terminal-control owner IDs do not hide valid accounting or expose 
     assert.doesNotMatch(text, /private-owner|\u001b|\u0007/u);
   }));
 
-test("Continuous diagnostics remain observable in RPC without requests or mutations", async () =>
+for (const phase of ["waiting", "syncing", "retry", "blocked"] as const)
+  test(`homepage separates recorded background ${phase} and transfer history from remote freshness`, async () =>
+    withTempHome(async (agentDir) => {
+      const config = await configured(agentDir);
+      await store(config, (record) => {
+        record.phase = phase;
+        record.transferred = now;
+        if (phase === "blocked") record.error = "authentication";
+      });
+      const before = await tree(agentDir);
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Homepage must stay local"));
+      try {
+        const manager = await describeManagerState();
+        const label = phase[0]?.toUpperCase() + phase.slice(1);
+        assert.match(manager.title, new RegExp(`Background sync \\(recorded\\): ${label}`));
+        if (phase === "blocked") assert.match(manager.title, /Blocked · authentication/);
+        assert.match(manager.title, /Last background transfer: Success · 2027-01-15T08:00:00\.000Z/);
+        assert.match(manager.title, /Remote status: Not checked/);
+        assert.doesNotMatch(manager.title, /Scheduler|Lease|Automatic requests|Accounting:/);
+        assert.equal(fetch.mock.calls.length, 0);
+        assert.deepEqual(await tree(agentDir), before);
+      } finally {
+        fetch.mockRestore();
+      }
+    }));
+
+for (const missing of [true, false])
+  test(`homepage does not invent a waiting state from ${missing ? "missing" : "invalid"} background evidence`, async () =>
+    withTempHome(async (agentDir) => {
+      const config = await configured(agentDir);
+      if (!missing) {
+        const { file } = await store(config);
+        await fs.writeFile(file, "{invalid", { mode: 0o600 });
+      }
+      const before = await tree(agentDir);
+      const manager = await describeManagerState();
+      assert.match(manager.title, missing ? /Enabled · not yet observed/ : /Unknown · open Diagnostics/);
+      assert.doesNotMatch(manager.title, /recorded\): Waiting|Last background transfer: Success/);
+      assert.deepEqual(await tree(agentDir), before);
+    }));
+
+test("Continuous diagnostics open on request in RPC without transfers or mutations", async () =>
   withTempHome(async (agentDir) => {
     const config = await configured(agentDir);
     await store(config);
     const before = await tree(agentDir);
     const titles: string[] = [];
+    const choices = ["Diagnostics", "Back", undefined];
+    let confirmations = 0;
     const mock = createMockContext({
       mode: "rpc",
       hasUI: true,
       select: async (title: string) => {
         titles.push(title);
-        return undefined;
+        return choices.shift();
+      },
+      confirm: async () => {
+        confirmations++;
+        return false;
       },
     });
     let routes = 0;
@@ -319,11 +367,92 @@ test("Continuous diagnostics remain observable in RPC without requests or mutati
       routes++;
       return { kind: "completed" };
     });
+    assert.doesNotMatch(titles[0] ?? "", /Automatic requests|Accounting:|Scheduler owner/);
+    assert.match(titles[1] ?? "", /Sync diagnostics/);
     assert.match(titles.join("\n"), /Automatic requests \(rolling 15 minutes/);
     assert.match(titles.join("\n"), /Accounting:/);
+    assert.equal(choices.length, 0);
+    assert.equal(confirmations, 0);
     assert.equal(routes, 0);
     assert.deepEqual(await tree(agentDir), before);
   }));
+
+for (const confirmed of [false, true])
+  test(`continuous diagnostics retain separate backend-probe consent: ${confirmed}`, async () =>
+    withTempHome(async (agentDir) => {
+      const config = await configured(agentDir);
+      await store(config);
+      const before = await tree(agentDir);
+      const choices = ["Diagnostics", "Continue to backend checks…", undefined];
+      const reviews: string[] = [];
+      const mock = createMockContext({
+        mode: "rpc",
+        select: async () => choices.shift(),
+        confirm: async (_title: string, body: string) => {
+          reviews.push(body);
+          return confirmed;
+        },
+      });
+      const routes: string[] = [];
+      await showSyncManager(mock.ctx, async (route) => {
+        routes.push(route);
+        return { kind: "completed" };
+      });
+      assert.equal(reviews.length, 1);
+      assert.match(reviews[0] ?? "", /WebDAV probes conditional writes/);
+      assert.deepEqual(routes, confirmed ? ["doctor"] : []);
+      assert.deepEqual(await tree(agentDir), before);
+    }));
+
+for (const boundary of ["back", "hard-cancel", "session"] as const)
+  test(`continuous diagnostics release their UI on ${boundary}`, async () =>
+    withTempHome(async (agentDir) => {
+      const config = await configured(agentDir);
+      await store(config);
+      const before = await tree(agentDir);
+      const owner = new AbortController();
+      const tui = createTuiHarness({ width: 60, rows: 18 });
+      let confirmations = 0;
+      const mock = createMockContext({
+        mode: "tui",
+        custom: tui.custom,
+        confirm: async () => {
+          confirmations++;
+          return true;
+        },
+      });
+      const routes: string[] = [];
+      const running = showSyncManager(
+        mock.ctx,
+        async (route) => {
+          routes.push(route);
+        },
+        owner.signal,
+      );
+      try {
+        await tui.waitForOpen();
+        tui.send("\u001b[200~Diagnostics\u001b[201~");
+        tui.press("tui.select.confirm");
+        await tui.waitForOpen();
+        assert.match(tui.render().join("\n"), /Sync diagnostics/);
+        if (boundary === "session") owner.abort();
+        else tui.press(boundary === "back" ? "tui.select.cancel" : "ctrl+c");
+        if (boundary === "back") {
+          await tui.waitForOpen();
+          assert.match(tui.render().join("\n"), /Manage sync/);
+          tui.press("ctrl+c");
+        }
+        await running;
+        assert.deepEqual(routes, []);
+        assert.equal(confirmations, 0);
+        assert.deepEqual(mock.notifications, []);
+        assert.deepEqual(await tree(agentDir), before);
+      } finally {
+        owner.abort();
+        tui.dispose();
+        await running;
+      }
+    }));
 
 test("Continuous diagnostics keep the manager bounded at zero and narrow terminal widths", async () =>
   withTempHome(async (agentDir) => {

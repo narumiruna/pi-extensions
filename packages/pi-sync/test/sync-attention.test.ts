@@ -54,17 +54,12 @@ test("attention presentation is sanitized, textual, bounded, and clearable", asy
     assert.equal(lines[0], divider(normalized));
     assert.equal(themeCalls.includes("borderMuted"), normalized > 2);
     themeCalls.length = 0;
-    assert.equal(lines.length, 4);
+    assert.equal(lines.length, 2);
     assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
     assert.equal(lines.join("\n").includes("\u001b]8"), false);
-    if (normalized === 0) assert.deepEqual(lines, ["", "", "", ""]);
+    if (normalized === 0) assert.deepEqual(lines, ["", ""]);
   }
-  assert.deepEqual(component.render(100), [
-    divider(100),
-    "Setup: home?]8;;spoof",
-    "Selection: 1 remote-only · 1 device-only",
-    "No transfer performed · Run /sync to review",
-  ]);
+  assert.deepEqual(component.render(100), [divider(100), "Open /sync to review · home?]8;;spoof"]);
   assert.equal(controller.current()?.decision.setupName, "home\u001b]8;;spoof");
 
   controller.clear(ctx);
@@ -113,12 +108,7 @@ test("blank-column body clicks retain collapse through attention updates and res
   assert.deepEqual(updated.render(100), [divider(100, true)]);
   const collapsed = { ...event, y: 0, screenY: 0, height: updated.render(100).length };
   assert.deepEqual(clickWidget(updated, collapsed), { handled: true, render: true });
-  assert.deepEqual(updated.render(100), [
-    divider(100),
-    "Setup: home?]8;;spoof",
-    "Remote snapshot missing; review needed",
-    "No transfer performed · Run /sync to review",
-  ]);
+  assert.deepEqual(updated.render(100), [divider(100), "Open /sync to review · home?]8;;spoof"]);
   clickWidget(updated, { ...collapsed, height: updated.render(100).length });
   controller.clear(ctx);
   await controller.publish(ctx);
@@ -185,7 +175,7 @@ test("disabled status preserves the TUI review widget", async () => {
   assert.equal(typeof widgets.get("sync:attention"), "function");
 });
 
-test("attention presentation explains an order-only difference", async () => {
+test("order-only attention keeps the compact review entry and exact selection state", async () => {
   const controller = createSyncAttentionController();
   const { ctx, widgets } = createMockContext({ hasUI: true, mode: "tui" });
   controller.set(
@@ -203,12 +193,8 @@ test("attention presentation explains an order-only difference", async () => {
     theme: { fg(color: string, text: string): string },
   ) => { render(width: number): string[] };
   const component = factory({}, { fg: (_color, text) => text });
-  assert.deepEqual(component.render(60), [
-    divider(60),
-    "Setup: home",
-    "Selection: only list order differs",
-    "No transfer performed · Run /sync to review",
-  ]);
+  assert.deepEqual(component.render(60), [divider(60), "Open /sync to review · home"]);
+  assert.deepEqual(controller.current()?.decision.remoteInclude, ["AGENTS.md", "settings.json"]);
 });
 
 test.each(["rpc", "print", "json"] as const)("keeps explicit review publication unchanged in %s", async (mode) => {
@@ -284,7 +270,6 @@ const observationPresentations: Array<{
   inspection: Partial<SyncInspection>;
   automaticTransfer?: boolean;
   reason: string;
-  widgetReason?: string;
 }> = [
   {
     inspection: { localChanged: true, remoteChanged: true },
@@ -314,7 +299,6 @@ const observationPresentations: Array<{
       },
     },
     reason: "Synced-content list differs; review needed",
-    widgetReason: "Selection: 1 remote-only · 1 device-only",
   },
   {
     inspection: {
@@ -326,7 +310,6 @@ const observationPresentations: Array<{
       },
     },
     reason: "Synced-content list differs; review needed",
-    widgetReason: "Selection: only list order differs",
   },
 ];
 
@@ -351,12 +334,7 @@ test.each(observationPresentations)("separates named review from unchanged notif
         {},
         { fg: (_role: string, text: string) => text },
       );
-      const lines = [
-        divider(160),
-        "Setup: home",
-        entry.widgetReason ?? entry.reason,
-        "No transfer performed · Run /sync to review",
-      ];
+      const lines = [divider(160), "Open /sync to review · home"];
       assert.deepEqual(component.render(160), lines);
       component.invalidate();
       assert.deepEqual(component.render(160), lines);

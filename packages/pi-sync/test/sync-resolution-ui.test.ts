@@ -561,7 +561,7 @@ test("pending selection attention is the manager's first action and blocks Sync 
     assert.match(frame, /Sync status: Review needed/u);
     assert.match(frame, /Review synced content \(recommended\)/u);
     tui.press("tui.select.down");
-    assert.match(tui.render().join("\n"), /\[-\] Sync now/u);
+    assert.match(tui.render().join("\n"), /\[-\] Sync…/u);
     assert.match(tui.render().join("\n"), /Review first/u);
     tui.press("tui.select.up");
     tui.press("tui.select.confirm");
@@ -623,8 +623,8 @@ test("attention for a non-current setup stays reviewable without blocking curren
     assert.match(frame, /Current sync setup: home/u);
     assert.match(frame, /Review needed for setup work/u);
     assert.match(frame, /Review synced content \(recommended\)/u);
-    assert.match(frame, /Sync now/u);
-    assert.doesNotMatch(frame, /\[-\] Sync now/u);
+    assert.match(frame, /Sync…/u);
+    assert.doesNotMatch(frame, /\[-\] Sync…/u);
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();

@@ -57,7 +57,8 @@ test("main menu uses only storage connection and sync setup resource wording", a
     assert.match(rendered, /Manage sync/u);
     assert.match(rendered, /Current sync setup: home/u);
     assert.match(rendered, /Storage: Cloudflare R2 · r2 · home-bucket/u);
-    assert.match(rendered, /Automatic sync: On/u);
+    assert.match(rendered, /Remote status: Not checked/u);
+    assert.doesNotMatch(rendered, /CURRENT STATE|Scheduler|Accounting/u);
     assert.doesNotMatch(rendered, /storage profile|sync target|saved connection|remote destination/iu);
   });
 });

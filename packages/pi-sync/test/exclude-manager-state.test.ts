@@ -85,13 +85,13 @@ for (const [exclude, enabled] of [
   [["sessions/**"], false],
   [["sessions/**/draft-*.jsonl"], true],
 ] as const)
-  test(`manager Sessions label uses effective selection: ${JSON.stringify(exclude)}`, async () =>
+  test(`manager transfer permission uses effective sessions selection: ${JSON.stringify(exclude)}`, async () =>
     withTempHome(async (root) => {
       await fs.mkdir(root, { recursive: true });
-      const settings = v3S3Settings({ include: ["sessions"] });
+      const settings = v3S3Settings({ include: ["sessions"], automatic: true });
       settings.version = 6;
       Object.assign(settings.syncSetups.home.sync, { exclude: [...exclude] });
       await fs.writeFile(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
       const manager = await describeManagerState(undefined, undefined, async () => ({ kind: "free" }));
-      assert.match(manager.title, new RegExp(`Sessions ${enabled ? "on" : "off"}`));
+      assert.equal(manager.title.includes("Automatic transfer permission: On"), enabled);
     }));

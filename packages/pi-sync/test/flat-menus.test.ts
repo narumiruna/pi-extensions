@@ -25,7 +25,7 @@ async function configured(run: () => Promise<void>) {
   });
 }
 
-test("ordinary main exposes transfers, inspection and management actions and advisory status/help without writes or routing", async () => {
+test("ordinary main exposes transfers, inspection and management actions with compact status without writes or routing", async () => {
   await configured(async () => {
     const before = readFileSync(localConfigPath());
     const manager = await describeManagerState();
@@ -44,10 +44,9 @@ test("ordinary main exposes transfers, inspection and management actions and adv
     await showSyncManager(context.ctx, async () => {
       routed = true;
     });
-    assert.deepEqual(choices, [...MAIN_MENU_ACTIONS]);
+    assert.deepEqual(choices, [...MAIN_MENU_ACTIONS, "Done"]);
     assert.match(title, /Remote status: Not checked/u);
-    assert.match(title, /Help: \/sync help/u);
-    assert.match(title, /\/sync status.*\/sync diff/u);
+    assert.doesNotMatch(title, /CURRENT STATE|ACTIONS ·|Scheduler|Accounting/u);
     assert.equal(routed, false);
     assert.deepEqual(readFileSync(localConfigPath()), before);
   });

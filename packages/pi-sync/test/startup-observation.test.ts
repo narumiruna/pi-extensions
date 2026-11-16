@@ -84,7 +84,8 @@ test("manager uses local observation without remote requests and drops it after 
     try {
       const manager = await describeManagerState(undefined, undefined, undefined, observation);
       assert.equal(manager.observation, observation);
-      assert.match(manager.title, /Check-time observation only/u);
+      assert.match(manager.title, /Observed 2026-09-06T12:00:00\.000Z:/u);
+      assert.doesNotMatch(manager.title, /Remote status: Not checked|Already in sync/u);
       assert.match(manager.title, /No changes detected since last sync/u);
       await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings({ automatic: false })));
       assert.equal((await describeManagerState(undefined, undefined, undefined, observation)).observation, undefined);
