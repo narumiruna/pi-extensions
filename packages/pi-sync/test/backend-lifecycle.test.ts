@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { pushSessionsOnShutdown } from "sync-daemon/engine/sync/session-push";
+import { pushSessionsOnShutdown } from "@narumitw/sync-daemon/engine/sync/session-push";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";

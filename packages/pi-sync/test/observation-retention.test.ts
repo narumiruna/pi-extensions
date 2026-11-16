@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as operations from "sync-daemon/engine/sync/sync-operations";
+import * as operations from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { SyncBackend } from "../src/backends/sync-backend.js";

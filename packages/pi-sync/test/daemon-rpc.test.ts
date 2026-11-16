@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { findDaemon, stopDaemon } from "sync-daemon";
+import { findDaemon, stopDaemon } from "@narumitw/sync-daemon";
 import { test } from "vitest";
 import { SyncRpc } from "./daemon-rpc-helpers.js";
 import { v3WebDavSettings } from "./helpers.js";

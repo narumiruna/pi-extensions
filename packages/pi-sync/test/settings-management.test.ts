@@ -599,8 +599,8 @@ test("cross-process settings mutations serialize under one read-modify-write loc
         [
           "--input-type=module",
           "--eval",
-          `import { configureEngineHost } from "sync-daemon/engine/host";
-           import { updateLocalConfig } from "sync-daemon/engine/settings/settings-store";
+          `import { configureEngineHost } from "@narumitw/sync-daemon/engine/host";
+           import { updateLocalConfig } from "@narumitw/sync-daemon/engine/settings/settings-store";
            const [root, field] = process.argv.slice(1);
            configureEngineHost({ root: () => root });
            await updateLocalConfig((settings) => ({ ...settings, [field]: true }));`,

@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/settings/settings-management";
+export type * from "@narumitw/sync-daemon/engine/settings/settings-management";
 export {
   addStorageConnection,
   addSyncSetup,
@@ -8,4 +8,4 @@ export {
   saveNewV3Settings,
   updateStorageConnection,
   updateSyncSetup,
-} from "sync-daemon/engine/settings/settings-management";
+} from "@narumitw/sync-daemon/engine/settings/settings-management";

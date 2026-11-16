@@ -69,7 +69,7 @@ function resolveWorkspace(name) {
     const manifest = join(directory, "package.json");
     if (!existsSync(manifest)) continue;
     const value = JSON.parse(readFileSync(manifest, "utf8"));
-    if (value.name !== name && value.name !== `@narumitw/pi-${name}`) continue;
+    if (value.name !== name && value.name !== `@narumitw/${name}` && value.name !== `@narumitw/pi-${name}`) continue;
     return { name: value.name, directory, service: !value.pi?.extensions?.length && Boolean(value.bin) };
   }
   console.error(`No matching workspace: ${name}`);

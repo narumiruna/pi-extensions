@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { inspectSync } from "sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { test } from "vitest";
 import type { RemoteHead, SyncBackend } from "../src/backends/sync-backend.js";
 import { loadConfig } from "../src/settings/config.js";

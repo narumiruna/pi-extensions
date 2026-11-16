@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { validateSettingsDocument } from "sync-daemon/engine/settings/settings-validation";
+import { validateSettingsDocument } from "@narumitw/sync-daemon/engine/settings/settings-validation";
 import { createMockPi as baseMockPi } from "../../../test/support.js";
 import { installPiDaemonHost } from "../src/daemon/pi-client.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";

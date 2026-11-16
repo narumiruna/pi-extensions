@@ -1,2 +1,2 @@
-export type * from "sync-daemon/engine/sync/agent-request";
-export { AgentResolutionRequired } from "sync-daemon/engine/sync/agent-request";
+export type * from "@narumitw/sync-daemon/engine/sync/agent-request";
+export { AgentResolutionRequired } from "@narumitw/sync-daemon/engine/sync/agent-request";

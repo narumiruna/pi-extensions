@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/settings/settings-validation";
+export type * from "@narumitw/sync-daemon/engine/settings/settings-validation";
 export {
   DEFAULT_ON_SWITCH,
   effectiveSyncSetupRemoteIdentity,
@@ -14,4 +14,4 @@ export {
   validateConfigName,
   validateSettingsDocument,
   validateUniqueRemoteSyncSetups,
-} from "sync-daemon/engine/settings/settings-validation";
+} from "@narumitw/sync-daemon/engine/settings/settings-validation";

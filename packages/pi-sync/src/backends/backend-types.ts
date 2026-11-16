@@ -1,1 +1,1 @@
-export type * from "sync-daemon/engine/backends/backend-types";
+export type * from "@narumitw/sync-daemon/engine/backends/backend-types";

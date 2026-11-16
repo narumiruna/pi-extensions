@@ -1,1 +1,1 @@
-export type * from "sync-daemon/engine/state/state-types";
+export type * from "@narumitw/sync-daemon/engine/state/state-types";

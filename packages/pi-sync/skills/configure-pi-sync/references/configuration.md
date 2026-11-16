@@ -524,7 +524,7 @@ No Pi core changes or other extension are required.
 
 ### Daemon lifetime and unattended permission
 
-Pi starts or connects to `sync-daemon` only for configured interactive work or an explicit setup/command. The service is a normal dependency, not another Pi extension. Unconfigured reads create no service or settings. Closing Pi releases its tasks, not the daemon; no OS service is installed.
+Pi starts or connects to the `sync-daemon` service from `@narumitw/sync-daemon` only for configured interactive work or an explicit setup/command. The service is a normal dependency, not another Pi extension. Unconfigured reads create no service or settings. Closing Pi releases its tasks, not the daemon; no OS service is installed.
 
 Before the first daemon-owned mutation, close or upgrade older Pi processes and review `/sync daemon handover`. An absent lock does not prove that an idle older process is absent. Settings and existing state/snapshot formats remain authoritative in the same locations; Pi proposes settings changes and the daemon serializes their publication.
 

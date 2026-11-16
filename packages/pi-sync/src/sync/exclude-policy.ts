@@ -1,2 +1,6 @@
-export type * from "sync-daemon/engine/sync/exclude-policy";
-export { compileSyncExclude, normalizeSyncExclude, sameSyncExclude } from "sync-daemon/engine/sync/exclude-policy";
+export type * from "@narumitw/sync-daemon/engine/sync/exclude-policy";
+export {
+  compileSyncExclude,
+  normalizeSyncExclude,
+  sameSyncExclude,
+} from "@narumitw/sync-daemon/engine/sync/exclude-policy";

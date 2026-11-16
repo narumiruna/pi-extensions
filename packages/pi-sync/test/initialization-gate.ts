@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
-import { stopDaemon } from "sync-daemon";
+import { stopDaemon } from "@narumitw/sync-daemon";
 
 /** A real isolated engine paused before startup recovery, not a parent-process fs mock. */
 export async function initializationGate(root: string) {

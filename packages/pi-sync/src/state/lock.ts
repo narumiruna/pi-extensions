@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/state/lock";
+export type * from "@narumitw/sync-daemon/engine/state/lock";
 export {
   inspectLock,
   isLockGuardHeld,
@@ -7,4 +7,4 @@ export {
   readLock,
   unlock,
   withLock,
-} from "sync-daemon/engine/state/lock";
+} from "@narumitw/sync-daemon/engine/state/lock";

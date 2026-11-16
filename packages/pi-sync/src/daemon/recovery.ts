@@ -1,4 +1,4 @@
-import { type ClientFacts, DaemonConnection, findDaemon, type Identity } from "sync-daemon";
+import { type ClientFacts, DaemonConnection, findDaemon, type Identity } from "@narumitw/sync-daemon";
 import type { PiApplyGate } from "./apply-gate.js";
 
 type Address = { paths: DaemonConnection["paths"]; identity: Identity };

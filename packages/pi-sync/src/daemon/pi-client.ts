@@ -16,11 +16,11 @@ import {
   findDaemon,
   MAX_SETTINGS_BYTES,
   modelSignature,
-} from "sync-daemon";
-import { type ConfigAuthority, configureEngineHost } from "sync-daemon/engine/host";
-import { type LocalConfigDocument, peekLocalConfigDocument } from "sync-daemon/engine/settings/config-file";
-import { validateSettingsDocument } from "sync-daemon/engine/settings/settings-validation";
-import { sessionDirFromContext } from "sync-daemon/engine/snapshot/session-paths";
+} from "@narumitw/sync-daemon";
+import { type ConfigAuthority, configureEngineHost } from "@narumitw/sync-daemon/engine/host";
+import { type LocalConfigDocument, peekLocalConfigDocument } from "@narumitw/sync-daemon/engine/settings/config-file";
+import { validateSettingsDocument } from "@narumitw/sync-daemon/engine/settings/settings-validation";
+import { sessionDirFromContext } from "@narumitw/sync-daemon/engine/snapshot/session-paths";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { StartupTimingPublisher } from "../sync/startup-timings.js";
 import { SyncDecisionRequiredError } from "../sync/sync-errors.js";

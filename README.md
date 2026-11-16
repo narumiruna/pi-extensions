@@ -126,7 +126,7 @@ Choose either `pi-starship` or `pi-statusline`; do not enable both footer extens
 
 | Package | Use it for | Install |
 | --- | --- | --- |
-| [`sync-daemon`](./packages/sync-daemon) | Detached synchronization owner used by Pi Sync; not a Pi extension. | Installed with Pi Sync; first publication requires approval |
+| [`@narumitw/sync-daemon`](./packages/sync-daemon) | Detached synchronization owner used by Pi Sync; not a Pi extension. | Installed with Pi Sync; first publication requires approval |
 | [`pi-tui-kit`](./packages/pi-tui-kit) | Extend `@earendil-works/pi-tui` with reusable navigation helpers and declarative action, detail, settings, and multi-select flows. | `npm install @narumitw/pi-tui-kit` |
 
 Libraries are runtime dependencies for extension authors, not standalone Pi extensions. New standard

@@ -18,7 +18,7 @@ for (const route of ["sync", "sync --invalid-flag", "status", "sync --setup othe
       const mock = agentContext(selectRemote);
       const loaders = createSyncLoaders({
         loadSyncOperations: async () => ({
-          ...(await import("sync-daemon/engine/sync/sync-operations")),
+          ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
           syncBoth: async () => "applied" as const,
           status: async () => {},
         }),
@@ -50,7 +50,7 @@ test("Sync now in the manager uses the same explicit retry boundary", async () =
     const retried: (string | undefined)[] = [];
     const loaders = createSyncLoaders({
       loadSyncOperations: async () => ({
-        ...(await import("sync-daemon/engine/sync/sync-operations")),
+        ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
         syncBoth: async () => "applied" as const,
       }),
     });

@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/backends/git/git-storage";
+export type * from "@narumitw/sync-daemon/engine/backends/git/git-storage";
 export {
   GIT_MANIFEST_VERSION,
   isGitPayloadSizeAllowed,
@@ -11,4 +11,4 @@ export {
   requireGitManifest,
   validateGitPublicationTree,
   validateGitSnapshot,
-} from "sync-daemon/engine/backends/git/git-storage";
+} from "@narumitw/sync-daemon/engine/backends/git/git-storage";

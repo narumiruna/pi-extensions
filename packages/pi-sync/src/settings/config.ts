@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/settings/config";
+export type * from "@narumitw/sync-daemon/engine/settings/config";
 export {
   configFromSettings,
   isEnabled,
@@ -13,4 +13,4 @@ export {
   syncSessionsWarnings,
   syncSetupReviewIdentity,
   syncSetupStorageReview,
-} from "sync-daemon/engine/settings/config";
+} from "@narumitw/sync-daemon/engine/settings/config";

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { stopDaemon } from "sync-daemon";
+import { stopDaemon } from "@narumitw/sync-daemon";
 import { installEngineFixtureHost } from "./engine-host.js";
 
 installEngineFixtureHost();

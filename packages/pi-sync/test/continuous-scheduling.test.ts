@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { inspectSync } from "sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
 import type { ContinuousClock } from "../src/sync/continuous-sync.js";
@@ -18,7 +18,7 @@ const watch = vi.hoisted(() => ({
   open: 0,
   closed: 0,
 }));
-vi.mock("sync-daemon/engine/sync/continuous-watch", () => ({
+vi.mock("@narumitw/sync-daemon/engine/sync/continuous-watch", () => ({
   watchContinuous: async (_config: unknown, changed: (settings: boolean) => void) => {
     watch.changed = changed;
     watch.open++;

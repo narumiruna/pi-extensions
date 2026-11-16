@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/sync/agent-policy";
+export type * from "@narumitw/sync-daemon/engine/sync/agent-policy";
 export {
   AGENT_INPUT_BYTES,
   AGENT_MAX_ATTEMPTS,
@@ -7,4 +7,4 @@ export {
   AGENT_OUTPUT_BYTES,
   AGENT_TIMEOUT_MS,
   startupTransferEnabled,
-} from "sync-daemon/engine/sync/agent-policy";
+} from "@narumitw/sync-daemon/engine/sync/agent-policy";

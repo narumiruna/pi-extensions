@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { initializeSync as startSession } from "sync-daemon/engine/sync/initialization";
+import { initializeSync as startSession } from "@narumitw/sync-daemon/engine/sync/initialization";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "../src/snapshot/snapshot-transaction.js";

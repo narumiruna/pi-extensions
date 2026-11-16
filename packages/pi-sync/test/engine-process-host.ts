@@ -1,5 +1,5 @@
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { configureEngineHost } from "sync-daemon/engine/host";
+import { configureEngineHost } from "@narumitw/sync-daemon/engine/host";
 
 // These disposable child fixtures deliberately host the extracted engine themselves.
 configureEngineHost({ root: getAgentDir, mutate: withFileMutationQueue, review: async () => false });

@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/settings/settings-store";
+export type * from "@narumitw/sync-daemon/engine/settings/settings-store";
 export {
   configuredSyncSetupNames,
   loadOnSwitch,
@@ -7,4 +7,4 @@ export {
   readLocalConfigObject,
   requireSettings,
   updateLocalConfig,
-} from "sync-daemon/engine/settings/settings-store";
+} from "@narumitw/sync-daemon/engine/settings/settings-store";

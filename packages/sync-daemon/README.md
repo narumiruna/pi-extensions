@@ -1,11 +1,11 @@
-# 🔄 sync-daemon — A local synchronization owner
+# 🔄 @narumitw/sync-daemon — A local synchronization owner
 
-[![npm](https://img.shields.io/npm/v/sync-daemon)](https://www.npmjs.com/package/sync-daemon)
+[![npm](https://img.shields.io/npm/v/@narumitw/sync-daemon)](https://www.npmjs.com/package/@narumitw/sync-daemon)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`sync-daemon` runs the existing Pi Sync engine in a separate Node.js process. Pi remains the interface for setup, exact reviews, commands, and live-session integration.
+`@narumitw/sync-daemon` runs the existing Pi Sync engine in a separate Node.js process. Pi remains the interface for setup, exact reviews, commands, and live-session integration.
 
-> **Experimental and not release-ready.** Complete the migration and verification gates before using this checkout with real data. The unscoped npm name is not reserved or published by this change. Installation runs code with your user permissions.
+> **Experimental and not release-ready.** Complete the migration and verification gates before using this checkout with real data. This change does not publish the package or verify npm scope permissions. Installation runs code with your user permissions.
 
 ## ✨ Features
 
@@ -16,16 +16,16 @@
 
 ## 📦 Install
 
-The Pi client declares this service as a normal dependency; do not add it to `pi.extensions` or load it with `pi -e`. The exact unscoped package and executable name is `sync-daemon`.
+The Pi client declares this service as a normal dependency; do not add it to `pi.extensions` or load it with `pi -e`. The npm package is `@narumitw/sync-daemon`; the executable remains `sync-daemon`.
 
 For a local checkout, run from the repository root:
 
 ```sh
 npm install
-npm --workspace sync-daemon run build
+npm --workspace @narumitw/sync-daemon run build
 ```
 
-The build emits JavaScript, declarations, and an executable under `dist/`. A global npm installation is not required for the Pi client to locate its dependency. Registry installation remains blocked until the exact name and dependency-first release are approved.
+The build emits JavaScript, declarations, and an executable under `dist/`. A global npm installation is not required for the Pi client to locate its dependency. Registry installation remains blocked until publication rights and the dependency-first release are approved.
 
 ## 🚀 Quick start
 

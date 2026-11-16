@@ -1,5 +1,5 @@
 import { type ExtensionContext, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { configureEngineHost, engineHost } from "sync-daemon/engine/host";
+import { configureEngineHost, engineHost } from "@narumitw/sync-daemon/engine/host";
 import { type SyncStatusPresentation, setSyncStatus } from "../src/ui/sync-status.js";
 
 /** Scope an explicitly injected engine-unit action; never used by the production client. */

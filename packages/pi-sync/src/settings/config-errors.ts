@@ -1,2 +1,2 @@
-export type * from "sync-daemon/engine/settings/config-errors";
-export { isMissingConfigError } from "sync-daemon/engine/settings/config-errors";
+export type * from "@narumitw/sync-daemon/engine/settings/config-errors";
+export { isMissingConfigError } from "@narumitw/sync-daemon/engine/settings/config-errors";

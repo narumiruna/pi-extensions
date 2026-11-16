@@ -1,7 +1,7 @@
-export type * from "sync-daemon/engine/sync/agent-candidate";
+export type * from "@narumitw/sync-daemon/engine/sync/agent-candidate";
 export {
   applyAgentCandidate,
   buildAgentEvidence,
   digest,
   parseAgentCandidate,
-} from "sync-daemon/engine/sync/agent-candidate";
+} from "@narumitw/sync-daemon/engine/sync/agent-candidate";

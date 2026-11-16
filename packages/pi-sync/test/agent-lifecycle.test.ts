@@ -45,7 +45,7 @@ for (const boundary of ["agent_start", "session_shutdown", "session_start", "for
             inspectionFixture(current, { localChanged: true, remoteChanged: true, capability: "atomic-conditional" }),
         }),
         loadSyncOperations: async () => ({
-          ...(await import("sync-daemon/engine/sync/sync-operations")),
+          ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
           syncBoth: (ctx, options) =>
             withAgentSyncLock(ctx, options, (current) => syncBoth(ctx, current, () => fixture.backend)),
         }),

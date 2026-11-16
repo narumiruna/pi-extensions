@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/sync/continuous-record";
+export type * from "@narumitw/sync-daemon/engine/sync/continuous-record";
 export {
   continuousStatusLines,
   normalizeContinuousClock,
@@ -7,4 +7,4 @@ export {
   reserveContinuousRequest,
   updateContinuousRecord,
   validateContinuousRecord,
-} from "sync-daemon/engine/sync/continuous-record";
+} from "@narumitw/sync-daemon/engine/sync/continuous-record";

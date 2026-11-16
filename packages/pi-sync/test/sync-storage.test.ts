@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { backupLocal } from "sync-daemon/engine/sync/sync-operations";
+import { backupLocal } from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { S3Client } from "../src/backends/s3/s3-client.js";

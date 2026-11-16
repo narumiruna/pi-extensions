@@ -1,5 +1,5 @@
 {
-  "name": "sync-daemon",
+  "name": "@narumitw/sync-daemon",
   "version": "0.1.0",
   "description": "A local synchronization daemon with a versioned client API.",
   "type": "module",

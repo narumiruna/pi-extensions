@@ -4,7 +4,7 @@ This daemon extraction is experimental. Deterministic Linux verification passed,
 
 ## Ownership and upgrade
 
-The new non-extension package is named exactly `sync-daemon`. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; ordinary Pi shutdown does not stop it. No OS service or supervisor is installed.
+The non-extension npm package is `@narumitw/sync-daemon`; its executable remains `sync-daemon`. The namespace change affects npm identity and imports only, not IPC names or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; ordinary Pi shutdown does not stop it. No OS service or supervisor is installed.
 
 Stop the service before updating its package or rebuilding a local checkout: a surviving Node process can otherwise combine cached code with newly loaded modules from the replaced directory. A compatible protocol handshake does not upgrade the running implementation; restart explicitly after installation.
 
@@ -48,7 +48,8 @@ Operation retries are instance-bound and deduplicated. An expired result or old 
 Completed on disposable roots and synthetic loopback endpoints:
 
 - `npm run format` and `npm run check`: builds, Biome, package boundaries, dependency compatibility, and workspace types.
-- `npm test`: 1,032 passing files, one skipped file; 23,268 passing tests, 18 skipped, no failures or unhandled errors; the configured five-second case timeout is unchanged.
+- `npm test`: 1,033 passing files, one skipped file; 23,271 passing tests, 18 skipped, no failures or unhandled errors; the configured five-second case timeout is unchanged.
+- Scoped package workflow and cold build-order regressions; the real Changeset raises the scoped dependency floor and plans a public daemon-first release using a simulated unpublished registry entry.
 - Both package-workflow dry packs; inspected real daemon/client tarballs; a fresh independent install with the local daemon tarball and the public SDK resolved in that install scope.
 - Standalone import, executable symlink/Help, start/API/stop, package-directory native Jiti loading, lazy `/sync help`, and survival after the installed Pi process exited.
 - Production Git preparation without development tools: Kit and daemon runtime JavaScript, exact imports, executable CLI, source-entry Jiti Help, and daemon start/API/stop.
@@ -85,7 +86,7 @@ The archived previous engine also held its real operation lock in a separate pro
 
 | Responsible role | Prerequisite and action | Expected result | Unverified behavior and restriction |
 | --- | --- | --- | --- |
-| npm/release account owner | Passing package gates and explicit approval; verify exact unscoped name eligibility and dependency-first publication | The daemon resolves before the dependent Pi client is released | Name ownership and first publication are not verified; no publication, visibility change, tags, or workflow dispatch without approval |
-| Deployment operator | Verified cutover/recovery evidence and backups; close older Pi processes and authorize each real root | One recognized owner with unchanged compatible data | Existing user processes, credentials, remotes, and production data were not inspected or mutated; no real-data cutover is included |
+| npm/release account owner | Passing package gates and explicit approval; verify publication rights for `@narumitw/sync-daemon` and dependency-first publication | The daemon resolves before the dependent Pi client is released | Scope permissions and first publication are not verified; no publication, visibility change, tags, or workflow dispatch without approval |
+| Deployment operator | Verified cutover/recovery evidence and backups; close older Pi processes and authorize each real root | One recognized owner with unchanged compatible data | Only the explicitly approved checkout-service stop/restart was performed for package-identity maintenance; credentials, remotes, and managed data were not inspected or edited, and no real-data cutover is included |
 | Native platform maintainer | Prepared transport/process tests; run native Windows/macOS checks | Correct local transport, permissions, independent lifetime, and recovery | Native ACL/named-pipe, logout, and physical power-loss behavior remain unverified; do not advertise new unverified guarantees or silently remove previous support |
 | Provider/storage account owner | Explicit cost/network authorization and isolated data; optional live smoke | Authorized dispatch/publication without exposed credentials | Entitlements and custom-provider/production behavior remain unverified; deterministic providers and loopback stores are the default |

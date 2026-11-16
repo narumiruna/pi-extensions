@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sync)](https://www.npmjs.com/package/@narumitw/pi-sync) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Pi Sync synchronizes selected Pi settings and content across machines through Git, WebDAV, Cloudflare R2, or another S3-compatible store.
-Reusable storage connections hold credentials, while named sync setups define exactly what to sync, where to store it, and whether to sync automatically. Pi owns the interface; the separate [sync-daemon service](https://github.com/narumiruna/pi-extensions/tree/main/packages/sync-daemon) owns execution.
+Reusable storage connections hold credentials, while named sync setups define exactly what to sync, where to store it, and whether to sync automatically. Pi owns the interface; the separate [@narumitw/sync-daemon service](https://github.com/narumiruna/pi-extensions/tree/main/packages/sync-daemon) owns execution.
 
 > **Experimental daemon migration:** this checkout requires the new, independently published dependency. Close or upgrade older Pi processes and review ownership before real-data use. See [migration and release restrictions](./docs/daemon-migration.md).
 
@@ -36,7 +36,7 @@ Build the generated runtime and try a local checkout:
 ```bash
 npm install
 npm --workspace @narumitw/pi-tui-kit run build
-npm --workspace sync-daemon run build
+npm --workspace @narumitw/sync-daemon run build
 npm --workspace @narumitw/pi-sync run build
 pi -e ./packages/pi-sync
 ```
@@ -411,7 +411,7 @@ The [exclude policy safety audit](./docs/exclude-policy-audit.md) maps implement
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
 Internal modules use direct imports from their owners; `src/sync.ts` and `src/types.ts` retain compatibility exports.
-Engine implementation lives in the non-extension `sync-daemon` dependency; Pi uses its documented exports, without an in-process transfer fallback. First-use UI and setup implementations remain lazy.
+Engine implementation lives in the non-extension `@narumitw/sync-daemon` dependency; Pi uses its documented exports, without an in-process transfer fallback. First-use UI and setup implementations remain lazy.
 
 ## 🔎 Keywords
 

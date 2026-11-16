@@ -482,7 +482,7 @@ refusalTest(
     const { default: extension } = await import("../src/sync-extension.js");
     extension(parent.pi, {
       loadSyncOperations: async () => ({
-        ...(await import("sync-daemon/engine/sync/sync-operations")),
+        ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
         syncBoth: (ctx, options) =>
           withEngineFixtureHost(() =>
             withStateDirectoryAccess(() =>
@@ -548,7 +548,7 @@ for (const boundary of ["confirmation", "request"] as const) {
     const { default: extension } = await import("../src/sync-extension.js");
     extension(parent.pi, {
       loadSyncOperations: async () => ({
-        ...(await import("sync-daemon/engine/sync/sync-operations")),
+        ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
         syncBoth: (ctx, options) =>
           withEngineFixtureHost(() =>
             withStateDirectoryAccess(() =>

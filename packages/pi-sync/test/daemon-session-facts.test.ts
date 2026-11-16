@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ClientFacts } from "sync-daemon";
+import type { ClientFacts } from "@narumitw/sync-daemon";
 import { test } from "vitest";
 import { withTempHome } from "./helpers.js";
 

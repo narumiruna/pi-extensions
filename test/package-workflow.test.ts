@@ -10,12 +10,13 @@ import { test } from "vitest";
 const exec = promisify(execFile);
 const script = fileURLToPath(new URL("../scripts/run-package-workflow.mjs", import.meta.url));
 
-test.each(["sync", "sync-daemon"])("package pack resolves the exact workspace for %s", async (name) => {
+test.each([
+  ["sync", "@narumitw/pi-sync"],
+  ["sync-daemon", "@narumitw/sync-daemon"],
+  ["plain-service", "plain-service"],
+])("package pack resolves the exact workspace for %s", async (name, workspace) => {
   await fixture(async ({ run }) => {
-    const calls = await run("pack", name);
-    assert.deepEqual(calls, [
-      ["npm", "--workspace", name === "sync" ? "@narumitw/pi-sync" : "sync-daemon", "pack", "--dry-run"],
-    ]);
+    assert.deepEqual(await run("pack", name), [["npm", "--workspace", workspace, "pack", "--dry-run"]]);
   });
 });
 test.each([0, 1])("service install uses npm and checks visibility first (view=%s)", async (status) => {
@@ -25,12 +26,12 @@ test.each([0, 1])("service install uses npm and checks visibility first (view=%s
       calls,
       status === 0
         ? [
-            ["npm", "view", "sync-daemon", "version"],
-            ["npm", "install", "--global", "sync-daemon"],
+            ["npm", "view", "@narumitw/sync-daemon", "version"],
+            ["npm", "install", "--global", "@narumitw/sync-daemon"],
           ]
         : [
-            ["npm", "view", "sync-daemon", "version"],
-            ["npm", "--workspace", "sync-daemon", "run", "build"],
+            ["npm", "view", "@narumitw/sync-daemon", "version"],
+            ["npm", "--workspace", "@narumitw/sync-daemon", "run", "build"],
             ["npm", "install", "--global", "./packages/sync-daemon"],
           ],
     );
@@ -59,7 +60,8 @@ async function fixture(
     await fs.mkdir(bin);
     for (const [directory, manifest] of [
       ["pi-sync", { name: "@narumitw/pi-sync", pi: { extensions: ["./src/index.ts"] } }],
-      ["sync-daemon", { name: "sync-daemon", bin: { "sync-daemon": "./dist/cli.js" } }],
+      ["sync-daemon", { name: "@narumitw/sync-daemon", bin: { "sync-daemon": "./dist/cli.js" } }],
+      ["plain-service", { name: "plain-service", bin: { "plain-service": "./dist/cli.js" } }],
     ] as const) {
       const folder = path.join(root, "packages", directory);
       await fs.mkdir(folder, { recursive: true });

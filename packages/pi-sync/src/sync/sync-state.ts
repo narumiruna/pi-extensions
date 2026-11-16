@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/sync/sync-state";
+export type * from "@narumitw/sync-daemon/engine/sync/sync-state";
 export {
   canPullRemoteSessionsOnFirstSync,
   canPullRemoteSettingsOnFirstSync,
@@ -15,4 +15,4 @@ export {
   snapshotHashesMatchState,
   snapshotsMatch,
   syncPolicyChanged,
-} from "sync-daemon/engine/sync/sync-state";
+} from "@narumitw/sync-daemon/engine/sync/sync-state";

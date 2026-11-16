@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/snapshot/session-paths";
+export type * from "@narumitw/sync-daemon/engine/snapshot/session-paths";
 export {
   agentDir,
   configuredSessionDir,
@@ -8,4 +8,4 @@ export {
   sessionDirForApply,
   sessionDirFromContext,
   snapshotOptionsForContext,
-} from "sync-daemon/engine/snapshot/session-paths";
+} from "@narumitw/sync-daemon/engine/snapshot/session-paths";

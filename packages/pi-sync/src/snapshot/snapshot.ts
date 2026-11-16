@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/snapshot/snapshot";
+export type * from "@narumitw/sync-daemon/engine/snapshot/snapshot";
 export {
   canonicalSnapshotPathForConfig,
   collectFiles,
@@ -17,4 +17,4 @@ export {
   snapshotIncludesSessions,
   snapshotTarget,
   snapshotWithoutSessions,
-} from "sync-daemon/engine/snapshot/snapshot";
+} from "@narumitw/sync-daemon/engine/snapshot/snapshot";

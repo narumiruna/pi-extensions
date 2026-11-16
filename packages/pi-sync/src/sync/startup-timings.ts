@@ -1,2 +1,2 @@
-export type * from "sync-daemon/engine/sync/startup-timings";
-export { createStartupTimings } from "sync-daemon/engine/sync/startup-timings";
+export type * from "@narumitw/sync-daemon/engine/sync/startup-timings";
+export { createStartupTimings } from "@narumitw/sync-daemon/engine/sync/startup-timings";

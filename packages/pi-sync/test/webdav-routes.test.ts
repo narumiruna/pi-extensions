@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { diff, doctor, history, pull, push, rollback, status, syncBoth } from "sync-daemon/engine/sync/sync-operations";
+import {
+  diff,
+  doctor,
+  history,
+  pull,
+  push,
+  rollback,
+  status,
+  syncBoth,
+} from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { CommandOptions } from "../src/commands/command-types.js";

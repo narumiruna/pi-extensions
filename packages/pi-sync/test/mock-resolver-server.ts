@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { type ExtensionContext, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { DaemonConnection, ensureDaemon, modelSignature } from "sync-daemon";
-import type { AgentEvidence } from "sync-daemon/engine/sync/agent-candidate";
+import { DaemonConnection, ensureDaemon, modelSignature } from "@narumitw/sync-daemon";
+import type { AgentEvidence } from "@narumitw/sync-daemon/engine/sync/agent-candidate";
 
 /** An independently configured, loopback-only provider usable by a real daemon process. */
 export class MockResolverServer {

@@ -34,7 +34,7 @@ for (const mode of ["tui", "rpc", "print", "json"] as const)
       sync(mock.pi, {
         loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
         loadSyncOperations: async () => ({
-          ...(await import("sync-daemon/engine/sync/sync-operations")),
+          ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
           syncBoth: async (_ctx, options) => {
             assert.equal(options.auto, true);
             assert.equal(options.yes, true);
@@ -73,7 +73,7 @@ test("busy startup queues one attempt until agent_settled, not agent_end", async
         },
       }),
       loadSyncOperations: async () => ({
-        ...(await import("sync-daemon/engine/sync/sync-operations")),
+        ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
         syncBoth: async () => {
           transfers++;
           return "applied";
@@ -105,7 +105,7 @@ for (const event of ["foreground", "agent_start", "replacement", "shutdown"] as 
       sync(mock.pi, {
         loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
         loadSyncOperations: async () => ({
-          ...(await import("sync-daemon/engine/sync/sync-operations")),
+          ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
           syncBoth: async (_ctx, options) => {
             entered.resolve();
             await new Promise<void>((resolve) =>
@@ -164,7 +164,7 @@ for (const mode of ["tui", "rpc"] as const)
           createSyncLoaders({
             loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
             loadSyncOperations: async () => ({
-              ...(await import("sync-daemon/engine/sync/sync-operations")),
+              ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
               syncBoth: async (_ctx, options) => {
                 entered.resolve();
                 await new Promise<void>((resolve) =>
@@ -240,7 +240,7 @@ for (const mode of ["tui", "rpc"] as const)
                   throw new Error("settings changed during loading");
                 }
                 return {
-                  ...(await import("sync-daemon/engine/sync/sync-operations")),
+                  ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
                   syncBoth: async () => {
                     await invalidate();
                     if (phase === "failure") throw new Error("settings changed before commit");
@@ -292,7 +292,7 @@ for (const cancellation of ["stop", "replacement"] as const)
         createSyncLoaders({
           loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
           loadSyncOperations: async () => ({
-            ...(await import("sync-daemon/engine/sync/sync-operations")),
+            ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
             syncBoth: async () => {
               finalizing = true;
               return "cancelled" as const;
@@ -343,7 +343,7 @@ for (const committed of [false, true])
         createSyncLoaders({
           loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }),
           loadSyncOperations: async () => ({
-            ...(await import("sync-daemon/engine/sync/sync-operations")),
+            ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
             syncBoth: async (_ctx, options) => {
               if (committed) options.onCommit?.();
               throw new Error("injected transfer failure");

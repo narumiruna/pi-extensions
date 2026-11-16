@@ -17,7 +17,7 @@ flowchart LR
 
 `src/index.ts` exposes the lightweight IPC client, wire types, and hashes. It must not import the service, backend, watcher, or model runtime. `src/engine-service.ts` dispatches a closed operation set. `src/engine/host.ts` defines the engine's process boundary. The daemon never imports another extension or loads user extensions.
 
-The exact unscoped `sync-daemon` name applies to a non-extension package; the repository's extension naming and `pi.extensions` requirements do not apply to it. The Pi client retains its own UI, commands, and status protocol.
+`@narumitw/sync-daemon` is a non-extension library and Node service; the repository's Pi-extension naming and `pi.extensions` requirements do not apply to it. Its npm scope does not change the `sync-daemon` executable, `packages/sync-daemon/` directory, IPC namespaces, or settings/state formats. The Pi client retains its own UI, commands, and status protocol.
 
 ## Authoritative documents
 

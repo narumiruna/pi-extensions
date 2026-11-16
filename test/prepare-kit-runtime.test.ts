@@ -232,7 +232,7 @@ test("clean production Git preparation loads root-listed Files source and its la
     await mkdir(dirname(kitLink), { recursive: true });
     await symlink(kit, kitLink, "dir");
     const daemon = join(checkout, "packages/sync-daemon");
-    await symlink(daemon, join(checkout, "node_modules/sync-daemon"), "dir");
+    await symlink(daemon, join(checkout, "node_modules", daemonManifest.name), "dir");
     for (const name of Object.keys(daemonManifest.dependencies)) {
       const nested = resolve("packages/sync-daemon/node_modules", name);
       const target = join(daemon, "node_modules", name);
@@ -387,7 +387,7 @@ try {
   for(const handler of syncExtension.handlers.get("session_start")??[]) await handler({type:"session_start",reason:"startup"},syncCtx);
   await syncExtension.commands.get("sync").handler("help",syncCtx);
   assert.ok(syncNotices.some(message=>message.includes("daemon [")));
-  const api=await import("sync-daemon"); const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
+  const api=await import("@narumitw/sync-daemon"); const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
   try { assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance); }
   finally { await api.stopDaemon(process.env.PI_CODING_AGENT_DIR); }
 } finally {

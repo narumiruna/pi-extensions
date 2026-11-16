@@ -1,7 +1,7 @@
-export type * from "sync-daemon/engine/sync/json-document";
+export type * from "@narumitw/sync-daemon/engine/sync/json-document";
 export {
   jsonEqual,
   parseJsonObjectDocument,
   parseSettingsDocument,
   renderSettingsMembers,
-} from "sync-daemon/engine/sync/json-document";
+} from "@narumitw/sync-daemon/engine/sync/json-document";

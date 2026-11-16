@@ -130,7 +130,7 @@ async function withPublicationHarness(
       const mock = createMockPi();
       sync(mock.pi, {
         loadSyncOperations: async () => {
-          const operations = await import("sync-daemon/engine/sync/sync-operations");
+          const operations = await import("@narumitw/sync-daemon/engine/sync/sync-operations");
           return {
             ...operations,
             push: (

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { showConflicts } from "sync-daemon/engine/sync/conflict-review";
+import { showConflicts } from "@narumitw/sync-daemon/engine/sync/conflict-review";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";

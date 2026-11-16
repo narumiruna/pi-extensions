@@ -54,7 +54,7 @@ test("Sync setup switching loads only for the use route and caches the module", 
       },
       loadSyncOperations: async () => {
         operationLoads += 1;
-        return import("sync-daemon/engine/sync/sync-operations");
+        return import("@narumitw/sync-daemon/engine/sync/sync-operations");
       },
     });
     const context = createMockContext({ hasUI: true, mode: "rpc" });

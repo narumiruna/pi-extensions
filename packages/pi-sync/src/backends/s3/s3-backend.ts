@@ -1,4 +1,4 @@
-export type * from "sync-daemon/engine/backends/s3/s3-backend";
+export type * from "@narumitw/sync-daemon/engine/backends/s3/s3-backend";
 export {
   encodeKey,
   historyKey,
@@ -8,4 +8,4 @@ export {
   s3BackendIdentity,
   snapshotKey,
   storageRoot,
-} from "sync-daemon/engine/backends/s3/s3-backend";
+} from "@narumitw/sync-daemon/engine/backends/s3/s3-backend";

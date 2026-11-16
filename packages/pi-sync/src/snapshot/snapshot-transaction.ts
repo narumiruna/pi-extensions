@@ -1,6 +1,6 @@
-export type * from "sync-daemon/engine/snapshot/snapshot-transaction";
+export type * from "@narumitw/sync-daemon/engine/snapshot/snapshot-transaction";
 export {
   applySnapshotTransaction,
   recoverPendingSnapshotTransactions,
   recoverSnapshotTransactionsOnStartup,
-} from "sync-daemon/engine/snapshot/snapshot-transaction";
+} from "@narumitw/sync-daemon/engine/snapshot/snapshot-transaction";
