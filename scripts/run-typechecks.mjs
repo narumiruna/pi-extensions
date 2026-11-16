@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runBuilds } from "./run-builds.mjs";
 import { selectStagedTypechecks, stagedFiles } from "./select-staged-typechecks.mjs";
+import { readWorkspaces } from "./workspace-graph.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const stagedOnly = process.argv.slice(2).includes("--staged");
@@ -41,25 +42,44 @@ if (process.env.PI_EXTENSIONS_BUILD_READY !== "1" && selection.buildWorkspaceNam
   const status = runBuilds({ root, workspaceNames: selection.buildWorkspaceNames });
   if (status !== 0) process.exit(status);
 }
-runWorkspaceScript("typecheck", selection.workspaceNames);
+runWorkspaceTypechecks(selection.workspaceNames);
 
 function runFullTypechecks() {
   if (process.env.PI_EXTENSIONS_BUILD_READY !== "1") {
     runNpm(["run", "build"]);
     process.env.PI_EXTENSIONS_BUILD_READY = "1";
   }
-  runNpm(["--workspaces", "run", "typecheck"]);
+  runWorkspaceTypechecks();
 }
 
-function runWorkspaceScript(script, workspaceNames) {
-  const workspaceArgs = workspaceNames.flatMap((workspaceName) => ["--workspace", workspaceName]);
-  runNpm([...workspaceArgs, "run", script]);
+function runWorkspaceTypechecks(workspaceNames) {
+  const workspaces = readWorkspaces(root);
+  const workspaceByName = new Map(workspaces.map((workspace) => [workspace.name, workspace]));
+  const selected = workspaceNames
+    ? workspaceNames.map((name) => {
+        const workspace = workspaceByName.get(name);
+        if (!workspace) throw new Error(`Unknown typecheck workspace: ${name}`);
+        return workspace;
+      })
+    : workspaces;
+  if (selected.length === 0) throw new Error("No typecheck workspaces found.");
+
+  // Use Node directly: npm exec turns the Windows executable path into unquoted shell text.
+  const compiler = path.join(root, "node_modules", "tsc-rs", "bin", "tsc-rs");
+  for (const { directoryName, name } of selected) {
+    console.log(`Typechecking ${name} with tsc-rs.`);
+    runCommand(process.execPath, [compiler, "--noEmit"], path.join(root, "packages", directoryName));
+  }
 }
 
 function runNpm(args) {
   const command = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
   const commandArgs = process.env.npm_execpath ? [process.env.npm_execpath, ...args] : args;
-  const result = spawnSync(command, commandArgs, { cwd: root, stdio: "inherit" });
+  runCommand(command, commandArgs);
+}
+
+function runCommand(command, args, cwd = root) {
+  const result = spawnSync(command, args, { cwd, stdio: "inherit" });
   if (result.error) {
     console.error(result.error.message);
     process.exit(1);

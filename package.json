@@ -102,6 +102,7 @@
     "concurrently": "^10.0.6",
     "npm-check-updates": "23.1.1",
     "semver": "7.8.6",
+    "tsc-rs": "0.8.0",
     "typebox": "^1.4.5",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
@@ -123,6 +124,7 @@
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
+    "tsc-rs@0.8.0": true,
     "@google/genai": false,
     "protobufjs": false,
     "fsevents": false,

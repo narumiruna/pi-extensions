@@ -263,6 +263,7 @@ test("file-scoped Biome checks preserve ordered repository gates", () => {
   const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, "package.json"), "utf8")) as {
     scripts: Record<string, string>;
     devDependencies: Record<string, string>;
+    allowScripts: Record<string, boolean>;
   };
   const config = readFileSync(path.join(repositoryRoot, "prek.toml"), "utf8");
   const [settings, ...hooks] = config.split("[[repos.hooks]]");
@@ -318,9 +319,10 @@ test("file-scoped Biome checks preserve ordered repository gates", () => {
     assert.doesNotMatch(file, pattern);
   }
   assert.equal(manifest.devDependencies.husky, undefined);
+  assert.equal(manifest.allowScripts[`tsc-rs@${manifest.devDependencies["tsc-rs"]}`], true);
   assert.equal(manifest.scripts.precommit, undefined);
   assert.equal(manifest.scripts["check:biome"], "biome check . --error-on-warnings");
-  assert.doesNotMatch(manifest.scripts.typecheck, /--staged/u);
+  assert.doesNotMatch(manifest.scripts.typecheck, /--staged|--tsc-rs/u);
 });
 
 function writeWorkspace(directoryName: string, manifest: Record<string, unknown>) {

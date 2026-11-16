@@ -306,7 +306,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 process.send?.({ type: "ready" });
 const require = createRequire(import.meta.url);
-for (const tool of ["typescript", "@biomejs/biome", "vitest"]) {
+for (const tool of ["typescript", "tsc-rs", "@biomejs/biome", "vitest"]) {
   assert.throws(() => require.resolve(tool), { code: "MODULE_NOT_FOUND" }, tool);
 }
 assert.ok(require.resolve("esbuild"));
