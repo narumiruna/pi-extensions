@@ -7,7 +7,9 @@ import { runBuilds } from "./run-builds.mjs";
 import { selectStagedTypechecks, stagedFiles } from "./select-staged-typechecks.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const stagedOnly = process.argv.slice(2).includes("--staged");
+const args = process.argv.slice(2);
+const stagedOnly = args.includes("--staged");
+const useRust = args.includes("--tsc-rs");
 
 if (!stagedOnly) {
   runFullTypechecks();
@@ -41,19 +43,29 @@ if (process.env.PI_EXTENSIONS_BUILD_READY !== "1" && selection.buildWorkspaceNam
   const status = runBuilds({ root, workspaceNames: selection.buildWorkspaceNames });
   if (status !== 0) process.exit(status);
 }
-runWorkspaceScript("typecheck", selection.workspaceNames);
+runWorkspaceTypechecks(selection.workspaceNames);
 
 function runFullTypechecks() {
   if (process.env.PI_EXTENSIONS_BUILD_READY !== "1") {
     runNpm(["run", "build"]);
     process.env.PI_EXTENSIONS_BUILD_READY = "1";
   }
-  runNpm(["--workspaces", "run", "typecheck"]);
+  runWorkspaceTypechecks();
 }
 
-function runWorkspaceScript(script, workspaceNames) {
-  const workspaceArgs = workspaceNames.flatMap((workspaceName) => ["--workspace", workspaceName]);
-  runNpm([...workspaceArgs, "run", script]);
+function runWorkspaceTypechecks(workspaceNames) {
+  const workspaceArgs = workspaceNames
+    ? workspaceNames.flatMap((workspaceName) => ["--workspace", workspaceName])
+    : ["--workspaces"];
+  const checkArgs = useRust
+    ? [
+        "exec",
+        "--",
+        path.join(root, "node_modules", ".bin", process.platform === "win32" ? "tsc-rs.cmd" : "tsc-rs"),
+        "--noEmit",
+      ]
+    : ["run", "typecheck"];
+  runNpm([...workspaceArgs, ...checkArgs]);
 }
 
 function runNpm(args) {

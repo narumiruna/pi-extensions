@@ -213,7 +213,13 @@ Distinct priorities keep the hooks sequential, and `fail_fast` stops later hooks
 when a check fails or modifies files.
 Run `prek run --all-files` to run all hooks manually, or select one by ID, such as
 `prek run zizmor --all-files`; typechecks still use the Git index.
-Staged typechecks use `npm run typecheck -- --staged`.
+The prek hook uses `npm run typecheck -- --staged --tsc-rs` to run the installed
+`tsc-rs` binary in affected workspaces after building their prerequisites.
+`tsc-rs` is an early-release compiler and is limited to workspace `--noEmit`
+checks: combined test compilation showed diagnostic differences during evaluation.
+Normal `npm run typecheck`, test compilation, and declaration builds still use
+official TypeScript. The runner preserves documentation-only skips and full-check
+fallbacks; it does not download a compiler on demand.
 The selectors treat `prek.toml` changes as full-workspace inputs for typechecks
 and tests.
 During commits, prek temporarily stashes unstaged changes and blocks the commit
