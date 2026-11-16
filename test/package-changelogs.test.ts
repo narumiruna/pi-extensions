@@ -94,7 +94,10 @@ beforeAll(() => {
     "--json",
   ];
   // Inspect completed builds without prepack rebuilding shared dependencies during consumer tests.
-  const result = spawnSync(command, npmCli ? [npmCli, ...args] : args, { encoding: "utf8" });
+  const result = spawnSync(command, npmCli ? [npmCli, ...args] : args, {
+    encoding: "utf8",
+    shell: !npmCli && process.platform === "win32",
+  });
   packedPackages = inspectPackedPackages(
     result,
     activeExtensions.map(({ name }) => name),
