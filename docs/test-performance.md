@@ -1,8 +1,13 @@
 # Test performance and isolation
 
-The verified local full-suite median fell from 241.39 to 174.54 seconds, a 27.7% reduction.
-All original cases remain; 42 added regressions bring the result to 11,209 passed and two intentional
-skips. This meets the local 25% target, not a claim about hosted CI.
+The matched local warm-cache Vitest-stage median fell from 384.332 to 200.683 seconds (47.8%).
+All 23,343 original passing cases and 18 skips remain; 61 new regressions bring the result to
+23,404 passed. Vitest uses at most four fork workers, capped by available CPUs. This is Linux
+evidence, not a hosted CI claim. The worker and fixture study below records the samples and limits.
+
+The historical isolation study reduced its local median from 241.39 to 174.54 seconds (27.7%).
+Its 11,209 passing cases included 42 added regressions, with two intentional skips. Those older
+measurements describe a smaller inventory and must not be compared directly with the current suite.
 
 `npm test` reports build, test compilation, and Vitest subprocess elapsed time separately. CI reuses
 build output only after `npm run check` succeeds in the same job. Standalone `npm test` still builds.
@@ -45,8 +50,8 @@ The shared-module boundary uses only literal paths in
 isolated. Changes to a listed test or its called source paths require a new semantic audit; remove
 its entry if module reuse can change its result or cleanup.
 
-Both projects inherit the same fork pool, maximum of two concurrent workers, per-file setup, custom timeout
-runner, and 5,000 ms per-test cap. Root global setup runs once. Project includes are defined only on
+Both projects inherit the same fork pool, `Math.min(4, availableParallelism())` worker cap, per-file
+setup, custom timeout runner, and 5,000 ms per-test cap. Root global setup runs once. Project includes are defined only on
 the children because inherited include arrays concatenate. The isolated project excludes exactly the
 reviewed list, and the shared project includes only that list. Verify the resolved inventory with
 Vitest's `list --filesOnly --json` command as well as the policy tests. Static case parsing alone
@@ -160,9 +165,204 @@ accepted-state cloning and shared Git repository state are not used: their modes
 do not justify additional recovery/identity coupling. Continuous convergence retains its readiness
 and server-observed recovery synchronization.
 
-## Measurement evidence
+## Worker and fixture study (2026-11-17)
 
-Measurements use the same Linux x64 host, Node v26.11.1, 32 available CPUs, and at most two fork
+### Scope and preserved boundaries
+
+The baseline is `8e7189e5`, the release-only successor to the investigated `99c7e406` revision.
+The baseline resolved inventory contains 1,038 unique files: 201 shared and 837 isolated. All original package
+cases, conditional skips, assertions, fork isolation boundaries, prerequisite builds, failure
+propagation, native-cache safeguards, and the five-second per-test cap remain required. No retry,
+shared-module admission, affected-test selector, compiler, runtime, metadata, dependency, settings
+policy, or release workflow changes are part of this study.
+
+The default cap is four workers, still bounded by CPU availability; one-, two-, and three-CPU hosts
+must not receive four workers. Both projects inherit that policy. Existing Vitest CLI overrides
+remain available; there is no new configuration interface or `npm test` argument forwarding.
+
+Changelog inspection uses one real `npm pack` invocation with repeated active-extension workspace
+selectors in `beforeAll`, while retaining every individual package case. `--dry-run` reads actual
+packed membership and byte sizes; `--ignore-scripts` prevents prepack builds during consumer tests.
+Validation rejects failed commands, malformed records, unexpected, missing, or duplicate packages,
+and absent, duplicate, or incorrectly sized root changelogs. Extra npm metadata and stderr warnings
+do not invalidate otherwise successful output. Workspace selection can silently omit an unmatched
+selector when others match, so validating the complete returned inventory is necessary.
+
+Sync's four pure data factories live in `packages/pi-sync/test/data-fixtures.ts`, whose only runtime
+import is `node:crypto`. `helpers.ts` re-exports them and retains engine-host installation, unique
+homes, environment restoration, daemon shutdown, and fixture cleanup unchanged. Only the audited
+`exclude-policy.test.ts` and `s3-client-safety.test.ts` consumers change their import boundary.
+A fresh-process regression invokes all four factories and permits only the emitted data module and
+`node:crypto`; value tests pin metadata, payloads, hashes, defaults, and override semantics.
+
+### Matched worker comparison
+
+All samples used Linux x64, Node v26.11.1, npm 11.20.0, and 32 available CPUs. Dependencies came from
+the unchanged lockfile. One successful `npm run build` supplied every sample. A four-worker warm-up
+passed in 212.695 seconds of Vitest time and is excluded from the medians. Native bytecode and Vitest
+filesystem caches were then reused without clearing them. Samples alternated two and four workers,
+with unchanged source inputs and no overlapping builds, checks, or tests from this work.
+
+| Order | Workers | Compilation, s | Vitest stage, s | Whole probe, s | Maximum RSS, KiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2 | 4.355 | 384.332 | 388.97 | 2,970,868 |
+| 2 | 4 | 3.957 | 202.621 | 206.85 | 3,068,952 |
+| 3 | 2 | 3.889 | 378.395 | 382.56 | 2,987,228 |
+| 4 | 4 | 3.864 | 202.946 | 207.08 | 2,989,852 |
+| 5 | 2 | 4.080 | 392.761 | 397.11 | 2,978,628 |
+| 6 | 4 | 4.456 | 213.404 | 218.19 | 2,965,896 |
+
+Every run passed 23,343 tests with 18 skips, 1,037 passing files and one skipped file, and zero
+unhandled errors. The two-worker median is 384.332 seconds; the four-worker median is 202.946 seconds,
+a 47.2% reduction. These are subprocess elapsed times, not cumulative file time or a cold-cache
+claim. The probe includes compilation and npm launch overhead, but not a prerequisite build.
+GNU time's maximum RSS is the largest reported process, not aggregate simultaneous-process memory.
+External host activity was not controlled, and its effect cannot be separated from run variance.
+
+The full JSON case inventories matched after normalizing only five source-confirmed random UUID/PID
+titles in `agent-store.test.ts`. A first literal-title comparison rejected those expected differences;
+it was an evidence-script failure, not a test failure. The earlier investigation's four-worker trial
+without `npm_execpath` failed two npm-environment assertions and is excluded from passing evidence.
+The preliminary 448.496/209.909-second comparison is also not part of these matched medians.
+
+### Integrated results
+
+The integrated samples used the same warm-cache and successful-build-reuse mode as the matched
+baseline. The final median is 200.683 seconds, 47.8% below the two-worker baseline of 384.332 seconds.
+The small difference from the worker-only median is not a separate measured contribution that can
+be added to the worker gain.
+
+| Sample | Compilation, s | Vitest stage, s | Whole probe, s | Maximum RSS, KiB |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 3.926 | 200.683 | 204.89 | 2,964,396 |
+| 2 | 4.161 | 200.780 | 205.22 | 2,993,332 |
+| 3 | 3.966 | 200.193 | 204.44 | 2,996,960 |
+
+All three passed 23,404 tests with the original 18 skips and zero unhandled errors: 1,038 passing
+files and one skipped file. Case-by-case multiset comparison retained every original result, with
+only the five dynamic titles normalized and the concurrency policy test renamed from two to four.
+The 61 additions are 47 package-output validation cases, eight data-fixture cases, and six CPU-cap
+cases. The final resolved inventory has 1,039 unique files: 201 shared and 838 isolated; the only new
+test file is the isolated data-fixture regression suite. The shared allowlist is unchanged.
+
+The unchanged Linux skips remain grouped as follows; other platforms must retain their own existing
+conditions rather than adopt these counts as a universal expectation:
+
+| File | Skipped cases | Existing condition |
+| --- | ---: | --- |
+| `test/macos-install.test.ts` | 1 | macOS-only filesystem watcher test |
+| `packages/pi-files/test/paths.test.ts` | 1 | Windows lexical path conformance |
+| `packages/pi-lsp/test/lsp-client.test.ts` | 5 | Windows shim launch variants |
+| `packages/pi-lsp/test/windows-launch.test.ts` | 8 | Windows launch and expected-failure argv variants |
+| `packages/pi-sync/test/case-replacement.test.ts` | 1 | Native case-insensitive filesystem |
+| `packages/pi-sync/test/snapshot-mutation-queues.test.ts` | 2 | Native case-insensitive filesystem |
+
+Changelog file tests/hooks time was 10.129/9.691/10.111 seconds in the two-worker baseline and
+2.094/2.098/2.079 seconds in the integrated runs, despite the 47 additional cases. These file times
+are not additive full-suite savings and also reflect different worker contention.
+
+Three alternating fresh-process, emitted-JavaScript import probes measured lifecycle `helpers`
+at 471.536/438.594/458.267 ms and `data-fixtures` at 4.505/4.488/4.203 ms. The instrumented medians
+are 458.267 and 4.488 ms, respectively, not a full-suite saving. Hook instrumentation and native
+module loading differ from Vitest. The helper control still loaded the Pi root and engine fixture
+host and configured the host; data-only probes loaded exactly the data file and `node:crypto`.
+These findings apply to the two audited consumers, not every Sync helper user.
+
+### Verification and current semantic audit
+
+`npm run check` passed separately from plain, unfiltered `npm test`. The latter passed all 23,404
+cases with 18 skips and zero unhandled errors; its stages were 7.574 seconds build, 4.194 seconds
+compilation, and 206.380 seconds Vitest (218.33 seconds for the entire command). It is an independent
+standalone-build gate, not one of the matched build-reuse performance samples.
+
+The focused npm execution-hook run passed 466 cases with two existing skips across 22 files:
+runner/environment/cache/failure propagation, gate separation, reporting, project and timeout
+policies, all package changelogs, both migrated consumers, and representative Sync snapshot,
+settings, storage, merge, queue, recovery, and lifecycle fixtures. Kit was rebuilt before consumers.
+The shared project passed shuffled seeds 101, 202, and 303: 3,843 cases each in 9.05/7.98/8.35 seconds,
+with no unhandled errors. `vitest list --filesOnly --json` verified unique complete project membership.
+
+Two initial development checks failed and were corrected rather than waived: test compilation
+rejected an optional undefined assertion message, and Biome rejected dynamic namespace indexing in
+the new compatibility test. The passing checks use a normal assertion and explicit export comparisons.
+
+The final source diff was audited against root and Sync `AGENTS.md`, `docs/extension-conventions.md`,
+and this document, including an independent read-only review. The applicable MUSTs are covered by
+deterministic behavior tests, real package membership/size inspection, unchanged lifecycle ownership,
+and both repository gates. The audit covered npm selection/launch/JSON branches, failed and partial
+inventory handling, fixture payload/hash identity, engine-host setup, cleanup and environment
+restoration, post-await ownership, inherited scheduling, mocks restored in `finally`, unchanged
+conditional skips, and cache/coverage/failure safeguards. No production asynchronous flow or settings
+read/write policy changed. Package-directory Pi smokes, publication tarballs, and Changesets are not
+applicable because metadata, runtime loading, and published behavior are unchanged; real dry-run pack
+checks remain in the suite. No retry, timeout increase, skipped gate, or isolation deviation was used.
+
+### Current external handoff and recovery
+
+**CI maintainer:** after the approved commit is available, compare three normal before/after runs on
+the same runner class. Confirm CPU and memory limits, full versus affected selection, stable outcomes,
+and separate check/test gates. Hosted timeout headroom and aggregate process pressure remain
+unverified by these local samples. Do not claim CI acceleration or merge a failing worker-default
+change. If worker concurrency fails hosted checks, restore the two-worker cap and its policy tests
+while retaining independently verified batching and fixture extraction. Do not add retries or timeouts.
+
+**Native-platform maintainers:** with the approved revision and native macOS/Windows toolchains, run
+the existing gates and verify batch npm launch, package inventory, conditional skips, and worker
+stability. Native launch and memory behavior remain unverified on this Linux host. Linux measurements
+do not establish native compatibility or performance. No workflow dispatch, paid runner change,
+package publication, or release tag is authorized by this work.
+
+### Reproducing the measurements
+
+Run commands from the repository root. First install dependencies and complete `npm run build`.
+Do not set `PI_EXTENSIONS_TEST_BASE`. Save the following temporary probe outside the repository;
+launching it through npm preserves `npm_execpath` and the npm environment. The execution hook changes
+only Vitest's worker count, not the test inventory or test behavior:
+
+```js
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const { runTests } = await import(pathToFileURL(path.resolve("scripts/run-tests.mjs")).href);
+const workers = Number(process.argv[2]);
+if (![2, 4].includes(workers) || !process.env.npm_execpath) throw new Error("Use npm exec and 2 or 4 workers");
+if (process.env.PI_EXTENSIONS_TEST_BASE) throw new Error("Full inventory required");
+process.exitCode = runTests({
+  env: { ...process.env, PI_EXTENSIONS_BUILD_READY: "1" },
+  execute(command, args, options) {
+    return spawnSync(command, args[0]?.endsWith("vitest.mjs") ? [...args, `--maxWorkers=${workers}`] : args, options);
+  },
+});
+```
+
+```sh
+npm exec -- node /absolute/path/to/worker-probe.mjs 4 # excluded warm-up
+# Run sequentially, alternating 2, 4, 2, 4, 2, 4:
+npm exec -- node /absolute/path/to/worker-probe.mjs 2
+npm exec -- node /absolute/path/to/worker-probe.mjs 4
+```
+
+Acceptance probes also selected the existing default and timing reporters plus Vitest's JSON reporter
+with `--reporter=json --outputFile.json=<sample>.cases.json`, consistently across configurations.
+The inventory, separate gates, and representative shared-order command are:
+
+```sh
+npm run check
+npm test
+npm exec -- vitest list --filesOnly --json
+npm exec -- vitest run --project shared --sequence.shuffle --sequence.seed=101
+# Repeat the order check with seeds 202 and 303, after a successful prerequisite build.
+```
+
+Full logs, case inventories, timing reports, host details, GNU time output, and probe sources remain
+in `/tmp/pi-test-speed-execute-ZcBtVX/` for this session; this document retains the durable results.
+Do not infer a passing run from stale timing output; check the command exit and JSON result.
+
+## Historical isolation-study measurements
+
+The remaining measurements and audits record the earlier isolation study, not the current worker
+comparison. Measurements use the same Linux x64 host, Node v26.11.1, 32 available CPUs, and at most two fork
 workers. Dependencies were installed once from the unchanged lockfile. Run one used a cold Vitest
 transform cache; later baseline and comparison runs reused the normal filesystem cache. No test or
 build jobs were run concurrently by this change. GNU time's maximum resident set is the largest
@@ -301,7 +501,7 @@ warning result, not a zero-diagnostics claim. The 203-file cohort passed seeds 1
 with 3,549 cases each, in 14.50, 12.10, and 12.45 seconds. Resolved inventory: 671 unique files,
 203 shared and 468 isolated.
 
-## Verification and semantic audit
+## Historical isolation-study verification and semantic audit
 
 `npm run check` passed for the final configuration: builds, Biome, package boundaries, and all
 workspace typechecks. Three separate full `npm test` runs passed. The 53 focused runner, reporting,
@@ -319,7 +519,7 @@ checks and test-only changes. Existing actual Jiti/lazy-boundary, WebDAV, builde
 fresh-process restart tests provide runtime verification; no live provider or interactive TUI smoke
 is needed for unchanged product behavior.
 
-## Rejected alternatives and hosted handoff
+## Historical isolation-study alternatives and hosted handoff
 
 Do not prebundle the Pi runtime root: its `import.meta.url` resource paths, Jiti aliases, and module
 identities depend on the original package layout. The native Vitest runner is not a drop-in change

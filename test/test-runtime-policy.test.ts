@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import vitestConfig from "../vitest.config.js";
 import { assertTestTasksWithinCap, assertTestTimeoutWithinCap, maximumTestTimeoutMs } from "./test-timeout-policy.js";
 
@@ -15,9 +15,23 @@ test("Vitest keeps every test within the repository timeout cap", (context) => {
   assertTestTimeoutWithinCap(context.task.timeout, context.task.name);
 });
 
-test("default integration concurrency uses at most two fork workers", () => {
-  assert.equal(vitestConfig.test?.maxWorkers, Math.min(2, os.availableParallelism()));
+test("default integration concurrency uses at most four fork workers", () => {
+  assert.equal(vitestConfig.test?.maxWorkers, Math.min(4, os.availableParallelism()));
 });
+
+for (const available of [1, 2, 3, 4, 8, 32]) {
+  test(`fork concurrency stays within ${available} available CPUs`, async () => {
+    vi.resetModules();
+    vi.doMock("node:os", () => ({ availableParallelism: () => available }));
+    try {
+      const { default: config } = await import("../vitest.config.js");
+      assert.equal(config.test?.maxWorkers, Math.min(4, available));
+    } finally {
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
+  });
+}
 
 test("the runtime timeout guard rejects disabled and upward overrides", () => {
   for (const timeout of [1, 4_000, maximumTestTimeoutMs]) {
