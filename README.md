@@ -144,7 +144,7 @@ Install the repository as one Pi package:
 pi install git:github.com/narumiruna/pi-extensions
 ```
 
-The repository root Pi manifest explicitly lists every extension under `packages/`, so this enables all of them. Its install prepare step generates Kit and sync-daemon runtime JavaScript, then builds Inspector browser assets before hook setup, even when Pi omits development dependencies; normal package builds still emit library declarations.
+The repository root Pi manifest explicitly lists every extension under `packages/`, so this enables all of them. Its install prepare step generates Kit and sync-daemon runtime JavaScript, then builds Inspector browser assets without hook setup, even when Pi omits development dependencies; normal package builds still emit library declarations.
 
 To load only selected extensions, replace the installed package entry in `~/.pi/agent/settings.json` with a resource filter:
 
@@ -188,10 +188,37 @@ npm run check
 and stops before consumers if a prerequisite fails; workspace-list order is not a build contract.
 Staged typechecks use the same build planner.
 
-The Git pre-commit hook migrates the Biome configuration, applies Biome checks and formatting to all of `packages/`,
-runs `uvx zizmor --pedantic .github`, and typechecks staged changes.
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to provide `uvx`.
-Biome can modify unstaged files; review and stage any fixes because the hook does not stage them automatically.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to provide `uvx`,
+then install [prek](https://prek.j178.dev/) and enable the Git pre-commit hook:
+
+```bash
+uv tool install prek
+prek install
+```
+
+For an existing Husky checkout, run `git config --local --unset-all core.hooksPath`
+before `prek install` if the local hook path is still `.husky/_`.
+Hook installation is explicit; `npm install` does not install Git hooks.
+
+[`prek.toml`](./prek.toml) defines separate local hooks for Biome configuration
+migration, Biome checks, `uvx zizmor --pedantic .github`, and staged typechecks,
+in that order. The migration hook runs `npx @biomejs/biome migrate --write` on
+every commit before file checks.
+The Biome check hook uses the installed `@biomejs/biome` dependency and receives
+matching staged text files: JavaScript, TypeScript, JSON/JSONC, and CSS.
+`biome check --write` applies formatting and safe fixes in one pass without
+scanning all of `packages/` on every commit.
+The other hooks run without filename arguments, even when no files match.
+Distinct priorities keep the hooks sequential, and `fail_fast` stops later hooks
+when a check fails or modifies files.
+Run `prek run --all-files` to run all hooks manually, or select one by ID, such as
+`prek run zizmor --all-files`; typechecks still use the Git index.
+Staged typechecks use `npm run typecheck -- --staged`.
+The selectors treat `prek.toml` changes as full-workspace inputs for typechecks
+and tests.
+During commits, prek temporarily stashes unstaged changes and blocks the commit
+if checks fail or modify files. Review and stage fixes before retrying; the hook
+does not stage them automatically.
 
 See [test performance and isolation](./docs/test-performance.md) for package timing reports,
 cache behavior, and the reviewed shared-module test boundary.

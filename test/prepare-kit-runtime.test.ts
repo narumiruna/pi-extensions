@@ -190,7 +190,6 @@ test("clean production Git preparation loads root-listed Files source and its la
       "scripts/prepare-kit-runtime.mjs",
       "scripts/prepare-workspace-runtime.mjs",
       "scripts/prepare-daemon-runtime.mjs",
-      ".husky/install.mjs",
       "packages/pi-inspect/scripts/build.mjs",
     ]) {
       await mkdir(dirname(join(checkout, file)), { recursive: true });
@@ -307,7 +306,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 process.send?.({ type: "ready" });
 const require = createRequire(import.meta.url);
-for (const tool of ["typescript", "@biomejs/biome", "vitest", "husky"]) {
+for (const tool of ["typescript", "@biomejs/biome", "vitest"]) {
   assert.throws(() => require.resolve(tool), { code: "MODULE_NOT_FOUND" }, tool);
 }
 assert.ok(require.resolve("esbuild"));
