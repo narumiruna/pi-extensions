@@ -23,6 +23,7 @@ jobs:
       test-base: ${{ github.event.before || '' }}
 
   select-mode:
+    name: select-mode
     needs: checks
     runs-on: ubuntu-latest
     permissions:
@@ -50,12 +51,13 @@ jobs:
         uses: changesets/action/select-mode@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
 
   version:
+    name: version
     needs: select-mode
     if: needs.select-mode.outputs.mode == 'version'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write # Allow Changesets to push version commits.
+      pull-requests: write # Allow Changesets to create and update the version pull request.
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,6 +89,7 @@ jobs:
           push-with-git-cli: false
 
   pack:
+    name: pack
     needs: select-mode
     if: needs.select-mode.outputs.mode == 'publish'
     runs-on: ubuntu-latest
@@ -122,11 +125,12 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
 
   publish:
+    name: publish
     needs: pack
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
+      contents: write # Create package tags and GitHub releases.
+      id-token: write # Authenticate to npm through trusted publishing and generate provenance.
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

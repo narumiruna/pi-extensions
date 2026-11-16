@@ -91,7 +91,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | --- | --- | --- |
 | [`pi-chat`](./packages/pi-chat) | Join ephemeral peer-to-peer chat rooms that stay separate from Pi sessions, prompts, and model context. | `pi install npm:@narumitw/pi-chat` |
 | [`pi-fleet`](./packages/pi-fleet) | Start a separate Pi process in a terminal split and connect explicit local Pi sessions for bounded messages and one-turn requests. | `pi install npm:@narumitw/pi-fleet` |
-| [`pi-herdr`](./packages/pi-herdr) | Report Pi lifecycle state to Herdr and bundle safe Herdr terminal-orchestration guidance. | `pi install npm:@narumitw/pi-herdr` |
+| [`pi-herdr`](./packages/pi-herdr) | Report Pi lifecycle state and metadata to Herdr and show sibling agent status. | `pi install npm:@narumitw/pi-herdr` |
 
 ### Accounts and data
 
@@ -183,7 +183,10 @@ npm test
 npm run check
 ```
 
-`npm test` typechecks the test sources and runs the root and workspace suites with Vitest.
+`npm test` builds prerequisites, typechecks the test sources, and runs the root and workspace suites with Vitest.
+`npm run build` derives dependency-first order from workspace manifests, builds each prerequisite once,
+and stops before consumers if a prerequisite fails; workspace-list order is not a build contract.
+Staged typechecks use the same build planner.
 See [test performance and isolation](./docs/test-performance.md) for package timing reports,
 cache behavior, and the reviewed shared-module test boundary.
 CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.

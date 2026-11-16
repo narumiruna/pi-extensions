@@ -28,6 +28,24 @@ If an update fails, inspect the manifest and lockfile diff, then use Git to rest
 
 For an urgent patch, prefer an eligible fixed version where possible. Otherwise review the artifact, advisory, age exception, and exact resulting lockfile diff explicitly, and obtain maintainer approval for a targeted temporary exception during lockfile generation. Do not broaden the exact Kit exclusion, disable strict policy, or silently add overrides to CI. Subsequent normal installs must pass the unchanged preflight and script policy; retaining the reviewed lock does not establish that every entry is three days old.
 
+## Dependency compatibility
+
+`npm run check:dependencies`, also run by `npm run check` locally and in CI, checks that each
+SemVer dev dependency range fits inside its declared peer range and that npm's actual installed tree
+has no missing or invalid required dependencies or peers. Optional peers can be absent, but installed
+peers must satisfy their ranges. Extraneous packages alone do not fail this compatibility check.
+The check also compares each installed root/workspace peer with its declared SemVer range, even when
+npm replaces that peer edge with a same-name regular, optional, or dev dependency. Non-SemVer sources,
+such as npm aliases, Git sources, and local directories, use their installed package version rather
+than a range comparison. Peer lookup uses the owning package's local or hoisted copy, without relying
+on a public `package.json` export or packages outside the repository install scope.
+
+Update peer support and test dependencies together when changing compatibility. If the check fails,
+align the named manifest ranges, run `npm install`, and inspect the lockfile diff before retrying.
+A newer peer nested under a consumer does not satisfy a hoisted dependency that resolves an older
+copy from the root. This gate checks the current install scope; it does not replace independent
+package-install or runtime compatibility smokes.
+
 ## Toolchain upgrades and verification
 
 Update the shared Node pin and bundled npm assertion together after inspecting the upstream release and running the policy fixtures. Pinning avoids unreviewed automatic toolchain changes but also requires prompt review of security patches. Do not broaden the supported npm range without behavioral evidence.

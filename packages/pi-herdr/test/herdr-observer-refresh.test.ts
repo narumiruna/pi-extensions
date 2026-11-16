@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { createMockContext as createBaseContext } from "../../../test/support.js";
 import type { HerdrRequest } from "../src/herdr-client.js";
@@ -94,8 +94,8 @@ function fixture(retryDelayMs = 0) {
             : request.method === "agent.list"
               ? { type: "agent_list", agents: state.panes.map((entry) => ({ ...entry, name: state.name })) }
               : {
-                  type: "workspace_info",
-                  workspace: { workspace_id: state.current.workspace_id, label: state.workspaceLabel },
+                  type: "workspace_list",
+                  workspaces: [{ workspace_id: state.current.workspace_id, label: state.workspaceLabel }],
                 };
       try {
         return await (state.override?.(request, result, signal) ?? result);
@@ -187,7 +187,157 @@ for (const phase of ["initialization", "refresh", "reconnect"] as const) {
   });
 }
 
-test("coalesces burst invalidations and never publishes an invalidated read", async () => {
+const continuousEvents = [
+  {
+    name: "non-agent pane updates from another workspace",
+    frame: { event: "pane_updated", data: { pane: pane("w2:shell", { workspace_id: "w2", agent: undefined }) } },
+  },
+  { name: "agent status changes", frame: staleStatus },
+  { name: "workspace renames", frame: { event: "workspace_renamed", data: { workspace_id: "w2", label: "stale" } } },
+];
+
+for (const phase of ["initialization", "refresh", "reconnect"] as const) {
+  for (const { name, frame } of continuousEvents) {
+    test(`continuous ${name} cannot starve publication during ${phase}`, async () => {
+      const f = fixture();
+      const pending = deferred<unknown>();
+      let heldResult: unknown;
+      let invalidatedReads = 0;
+      const seen: string[] = [];
+      try {
+        if (phase !== "initialization") {
+          f.observer.start(f.ctx);
+          await f.ready();
+        }
+        f.state.override = (request) => {
+          if (request.method !== "pane.list" || f.subscriptions.length < (phase === "reconnect" ? 2 : 1))
+            return undefined;
+          invalidatedReads += 1;
+          if (typeof f.widgets.get(HERDR_WIDGET_KEY) === "function") seen.push(f.text());
+          const result = {
+            type: "pane_list",
+            panes: [pane("w1:p1"), pane("w1:p2", { state_labels: { idle: `sample-${invalidatedReads}` } })],
+          };
+          f.emit(frame);
+          if (invalidatedReads === 8) {
+            heldResult = result;
+            return pending.promise;
+          }
+          return Promise.resolve(result);
+        };
+        if (phase === "initialization") f.observer.start(f.ctx);
+        else if (phase === "reconnect") f.subscriptions[0]?.fail();
+        else f.emit(updated());
+        await until(() => heldResult !== undefined);
+        assert.equal(typeof f.widgets.get(HERDR_WIDGET_KEY), "function", "publish before event traffic stops");
+        assert.match(f.text(), /sample-6/);
+        assert.ok(
+          seen.some((text) => text.includes("sample-3")),
+          "publish more than once under sustained events",
+        );
+        assert.doesNotMatch(f.text(), /blocked|stale/);
+        assert.equal(f.state.maxActiveLists, 1);
+        f.state.override = undefined;
+        pending.resolve(heldResult);
+        await until(() => f.state.activeLists === 0 && f.text().includes("idle"));
+        assert.doesNotMatch(f.text(), /sample-/);
+        const reads = f.state.reads;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(f.state.reads, reads, "stop reading after the last invalidation is covered");
+      } finally {
+        f.state.override = undefined;
+        pending.resolve(heldResult);
+        await f.observer.shutdown(f.ctx);
+      }
+    });
+  }
+}
+
+test("sustained invalidations cannot publish a snapshot with an obsolete subscription topology", async () => {
+  const f = fixture();
+  let invalidatedReads = 0;
+  const publicationSubscriptions: number[] = [];
+  const ctx = f.ctx as ExtensionContext;
+  const setWidget = ctx.ui.setWidget;
+  ctx.ui.setWidget = (key, content, options) => {
+    if (typeof content === "function") {
+      setWidget(key, content, options);
+      publicationSubscriptions.push(f.subscriptions.length);
+    } else {
+      setWidget(key, content, options);
+    }
+  };
+  f.state.override = (request, result) => {
+    if (request.method !== "pane.list" || f.subscriptions.length !== 1) return undefined;
+    invalidatedReads += 1;
+    f.emit(updated());
+    if (invalidatedReads === 3) {
+      f.state.panes.push(pane("w1:p3"));
+      return Promise.resolve({ type: "pane_list", panes: [...f.state.panes] });
+    }
+    return Promise.resolve(result);
+  };
+  f.observer.start(f.ctx);
+  try {
+    await until(() => f.subscriptions.length === 2 && typeof f.widgets.get(HERDR_WIDGET_KEY) === "function");
+    assert.deepEqual(publicationSubscriptions, [2]);
+    assert.match(f.text(), /2 sibling agents/);
+    const subscription = f.subscriptions[1];
+    assert.ok(subscription);
+    assert.ok((subscription.types as Array<{ pane_id?: string }>).some(({ pane_id }) => pane_id === "w1:p3"));
+    assert.equal(f.subscriptions[0]?.signal.aborted, true);
+  } finally {
+    await f.observer.shutdown(f.ctx);
+  }
+});
+
+for (const boundary of ["shutdown", "replacement"] as const) {
+  test(`${boundary} cancels a pending bounded-publication read`, async () => {
+    const f = fixture();
+    const pending = deferred<unknown>();
+    let held: { result: unknown; signal: AbortSignal } | undefined;
+    let invalidatedReads = 0;
+    let active = f.ctx;
+    f.state.override = (request, result, signal) => {
+      if (request.method !== "pane.list" || f.subscriptions.length !== 1) return undefined;
+      invalidatedReads += 1;
+      f.emit(updated());
+      if (invalidatedReads === 3) {
+        held = { result, signal };
+        return pending.promise;
+      }
+      return Promise.resolve(result);
+    };
+    f.observer.start(f.ctx);
+    try {
+      await until(() => held !== undefined);
+      assert.ok(held);
+      f.state.override = undefined;
+      if (boundary === "shutdown") {
+        const stopping = f.observer.shutdown(f.ctx);
+        assert.equal(held.signal.aborted, true);
+        pending.resolve(held.result);
+        await stopping;
+      } else {
+        const replacement = createMockContext({ mode: "tui", hasUI: true });
+        active = replacement.ctx;
+        f.state.name = "replacement";
+        f.observer.start(active);
+        assert.equal(held.signal.aborted, true);
+        pending.resolve(held.result);
+        await until(() => typeof replacement.widgets.get(HERDR_WIDGET_KEY) === "function");
+        assert.match(render(replacement.widgets.get(HERDR_WIDGET_KEY)), /replacement/);
+      }
+      assert.equal(f.widgets.get(HERDR_WIDGET_KEY), undefined);
+      assert.equal(f.subscriptions[0]?.signal.aborted, true);
+    } finally {
+      pending.resolve(held?.result);
+      await f.observer.shutdown(active);
+    }
+  });
+}
+
+test("coalesces burst invalidations and discards the superseded read", async () => {
   const f = fixture();
   f.observer.start(f.ctx);
   try {
@@ -269,7 +419,8 @@ test("pane and workspace invalidations refresh names and clear null or omitted p
     f.emit({ event: "pane_updated", data: { pane: pane("w2:p1", { workspace_id: "w2" }) } });
     f.emit({ event: "workspace_renamed", data: { workspace_id: "w2", label: "other" } });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(f.state.reads, reads);
+    await until(() => f.state.reads > reads && f.state.activeLists === 0);
+    assert.doesNotMatch(f.text(), /other/);
   } finally {
     await f.observer.shutdown(f.ctx);
   }
