@@ -172,6 +172,14 @@ pi update --extensions
 
 </details>
 
+## 📚 Documentation
+
+Start with the [documentation home](./docs/index.md), [package documentation index](./docs/packages.md),
+and [design and evidence index](./docs/design-and-evidence.md).
+With Node.js, Git, and [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, run
+`npm run docs:serve` for a live preview or `npm run docs:build` for a strict static build in `site/`.
+See the [documentation workflow](./docs/documentation.md) for content ownership, links, and navigation updates.
+
 ## 🧑‍💻 Local development
 
 Use Node.js from [`.node-version`](./.node-version) with its bundled npm, then run from the repository root:
@@ -286,7 +294,9 @@ consumer together.
 ```text
 packages/                Extension packages and reusable libraries
 deprecated/              Reference packages excluded from active workspace scripts
-docs/                    Repository conventions and plans
+docs/                    Repository guides, protocols, and design evidence
+packages/*/docs/         Package-owned guides and technical references
+zensical.toml            Documentation site configuration and navigation
 .github/scripts/         GitHub Actions versioning and publishing helpers
 scripts/                 Shared builds, checks, tests, and local workflow helpers
 test/                    Root integration and repository tests

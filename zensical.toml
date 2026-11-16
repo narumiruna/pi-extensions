@@ -1,0 +1,273 @@
+# Initialized with uvx zensical new. Source content remains in its owning tree.
+[project]
+site_name = "Pi Extensions"
+site_description = "Guides, references, and development documentation for the Pi Extensions monorepo."
+site_url = "https://narumiruna.github.io/pi-extensions/"
+repo_url = "https://github.com/narumiruna/pi-extensions"
+repo_name = "narumiruna/pi-extensions"
+edit_uri = ""
+docs_dir = ".zensical-docs"
+site_dir = "site"
+# Keep providers.md distinct from providers/README.md and other directory indexes.
+use_directory_urls = false
+
+# Compatibility indexes remain available by URL, but primary navigation uses their owners.
+nav = [
+  { "Home" = "index.md" },
+  { "Packages" = [
+    { "Documentation index" = "docs/packages.md" },
+    { "Coding and delegation" = [
+      { "pi-codex-compact" = [
+        { "Codex Compact settings reference" = "packages/pi-codex-compact/docs/settings.md" },
+        { "Historical research: Codex compaction mechanism" = "packages/pi-codex-compact/docs/codex-compaction-mechanism.md" },
+        { "Codex Compact implementation reference" = "packages/pi-codex-compact/docs/implementation.md" },
+        { "Checkpoint replay after a Responses model switch" = "packages/pi-codex-compact/docs/model-switch-validation.md" },
+        { "Checkpoint replay after a provider switch" = "packages/pi-codex-compact/docs/provider-switch-validation.md" },
+      ] },
+      { "pi-codex-imagegen" = [
+        { "Architecture" = "packages/pi-codex-imagegen/docs/architecture.md" },
+        { "Codex image protocol contract" = "packages/pi-codex-imagegen/docs/protocol.md" },
+        { "Verification and release handoff" = "packages/pi-codex-imagegen/docs/verification.md" },
+        { "Workflows" = "packages/pi-codex-imagegen/docs/workflows.md" },
+      ] },
+      { "pi-context-management" = [
+        { "Experimental context management" = "packages/pi-context-management/docs/context-management.md" },
+      ] },
+      { "pi-files" = [
+        { "Edit scope reference" = "packages/pi-files/docs/edit-scope-reference.md" },
+        { "File context reference" = "packages/pi-files/docs/file-context-reference.md" },
+        { "Migrate to Pi Files" = "packages/pi-files/docs/migration.md" },
+        { "Pi Files verification" = "packages/pi-files/docs/verification.md" },
+      ] },
+      { "pi-illustrate" = [
+        { "Verification and external handoff" = "packages/pi-illustrate/docs/verification.md" },
+      ] },
+      { "pi-lsp" = [
+        { "Pi LSP settings reference" = "packages/pi-lsp/docs/settings.md" },
+      ] },
+      { "pi-plan-mode" = [
+        { "Plan command workflows" = "packages/pi-plan-mode/docs/command-workflows.md" },
+        { "Pi Plan Mode settings reference" = "packages/pi-plan-mode/docs/settings.md" },
+      ] },
+      { "pi-subagents" = [
+        { "Pi Subagents attachment behavior" = "packages/pi-subagents/docs/attachments.md" },
+        { "Conversation presentation" = "packages/pi-subagents/docs/conversation-display.md" },
+        { "Design principles" = "packages/pi-subagents/docs/design-principles.md" },
+        { "Unverified proposal: per-child IPC transport" = "packages/pi-subagents/docs/ipc-transport-idea.md" },
+        { "Pi Subagents messaging and lifecycle" = "packages/pi-subagents/docs/messaging.md" },
+        { "Pi Subagents tools" = "packages/pi-subagents/docs/tools.md" },
+      ] },
+    ] },
+    { "Browser" = [
+      { "pi-chrome-devtools" = [
+        { "Pi Chrome DevTools browser setup reference" = "packages/pi-chrome-devtools/docs/browser-setup.md" },
+      ] },
+    ] },
+    { "Task workflows" = [
+      { "pi-btw" = [
+        { "Side-thread workflows" = "packages/pi-btw/docs/workflows.md" },
+        { "Pi core alignment and API handoff" = "packages/pi-btw/docs/core-alignment.md" },
+        { "Manual main-context import: runtime audit" = "packages/pi-btw/docs/main-context-runtime.md" },
+        { "Main-thread tree snapshots" = "packages/pi-btw/docs/main-tree-snapshots.md" },
+        { "Native conversation appearance" = "packages/pi-btw/docs/native-appearance.md" },
+      ] },
+      { "pi-goal" = [
+        { "pi-goal interruption and continuation lifecycle" = "packages/pi-goal/docs/continuation-lifecycle.md" },
+        { "Managing goals" = "packages/pi-goal/docs/managing-goals.md" },
+        { "Pi Goal settings reference" = "packages/pi-goal/docs/settings.md" },
+      ] },
+    ] },
+    { "Accounts and data" = [
+      { "pi-accounts" = [
+        { "Protocols" = [
+          { "Named Account Protocols v1" = "packages/pi-accounts/docs/api/accounts-v1.md" },
+          { "OAuth Credential Readiness Protocol v1" = "packages/pi-accounts/docs/api/oauth-credential-readiness-v1.md" },
+          { "OAuth Credential Source Protocol v1" = "packages/pi-accounts/docs/api/oauth-credential-source-v1.md" },
+        ] },
+      ] },
+      { "pi-agentfs" = [
+        { "Dependency security" = "packages/pi-agentfs/docs/dependency-security.md" },
+        { "Service integration" = "packages/pi-agentfs/docs/integration.md" },
+      ] },
+      { "pi-sync" = [
+        { "Pi Sync settings reference" = "packages/pi-sync/docs/settings.md" },
+        { "Sync TUI behavior contract" = "packages/pi-sync/docs/tui-contract.md" },
+        { "Autonomous and Continuous sync recovery boundaries" = "packages/pi-sync/docs/agent-continuous-hardening.md" },
+        { "Autonomous sync implementation verification" = "packages/pi-sync/docs/agent-mode-verification.md" },
+        { "Synthetic Autonomous sync merge-quality verification" = "packages/pi-sync/docs/agent-quality-verification.md" },
+        { "Content merge and partial-progress audit" = "packages/pi-sync/docs/content-merge-audit.md" },
+        { "Continuous sync verification" = "packages/pi-sync/docs/continuous-sync-verification.md" },
+        { "Daemon migration and release restrictions" = "packages/pi-sync/docs/daemon-migration.md" },
+        { "Exclude policy safety audit" = "packages/pi-sync/docs/exclude-policy-audit.md" },
+        { "File merge safety and recovery" = "packages/pi-sync/docs/merge-implementation-audit.md" },
+        { "Settings merge audit" = "packages/pi-sync/docs/settings-merge-audit.md" },
+      ] },
+      { "pi-usage" = [
+        { "Usage queries and provider targets" = "packages/pi-usage/docs/operations.md" },
+        { "Quota statusline display templates" = "packages/pi-usage/docs/statusline-display.md" },
+        { "Protocols" = [
+          { "Network-free usage identity checks" = "packages/pi-usage/docs/api/auth-identity.md" },
+          { "Read-only usage API v1" = "packages/pi-usage/docs/api/usage-v1.md" },
+        ] },
+        { "Provider guides" = [
+          { "Provider guides" = "packages/pi-usage/docs/providers/README.md" },
+          { "Anthropic Claude extra usage" = "packages/pi-usage/docs/providers/anthropic.md" },
+          { "Baseten Model APIs spend" = "packages/pi-usage/docs/providers/baseten.md" },
+          { "Command Code" = "packages/pi-usage/docs/providers/command-code.md" },
+          { "DeepSeek API balance" = "packages/pi-usage/docs/providers/deepseek.md" },
+          { "Fireworks API spend" = "packages/pi-usage/docs/providers/fireworks.md" },
+          { "GitHub Copilot" = "packages/pi-usage/docs/providers/github-copilot.md" },
+          { "Kimi For Coding" = "packages/pi-usage/docs/providers/kimi-coding.md" },
+          { "MiniMax Token Plan and API balance" = "packages/pi-usage/docs/providers/minimax.md" },
+          { "Moonshot AI API balance" = "packages/pi-usage/docs/providers/moonshotai.md" },
+          { "OpenAI Codex" = "packages/pi-usage/docs/providers/openai-codex.md" },
+          { "OpenAI native ChatGPT OAuth" = "packages/pi-usage/docs/providers/openai.md" },
+          { "OpenCode Go (Zen)" = "packages/pi-usage/docs/providers/opencode-go.md" },
+          { "OpenRouter" = "packages/pi-usage/docs/providers/openrouter.md" },
+          { "Vercel AI Gateway credits" = "packages/pi-usage/docs/providers/vercel-ai-gateway.md" },
+          { "xAI consumer subscriptions" = "packages/pi-usage/docs/providers/xai.md" },
+          { "Z.AI (GLM Coding Plan)" = "packages/pi-usage/docs/providers/zai.md" },
+        ] },
+      ] },
+    ] },
+    { "Status and observability" = [
+      { "pi-inspect" = [
+        { "Verification evidence" = "packages/pi-inspect/docs/VERIFICATION.md" },
+        { "Cache history contract" = "packages/pi-inspect/docs/cache-history.md" },
+        { "Viewer reference" = "packages/pi-inspect/docs/viewer.md" },
+      ] },
+      { "pi-langfuse" = [
+        { "Durable tracing" = "packages/pi-langfuse/docs/durable.md" },
+      ] },
+      { "pi-notify" = [
+        { "Notify settings and behavior" = "packages/pi-notify/docs/settings.md" },
+      ] },
+      { "pi-stamp" = [
+        { "Pi Stamp settings" = "packages/pi-stamp/docs/settings.md" },
+      ] },
+      { "pi-starship" = [
+        { "Configuration chat runtime" = "packages/pi-starship/docs/configuration-chat-runtime.md" },
+      ] },
+      { "pi-statusline" = [
+        { "Pi Statusline configuration reference" = "packages/pi-statusline/docs/configuration.md" },
+        { "Extension status metadata v1" = "packages/pi-statusline/docs/extension-status-protocol.md" },
+      ] },
+    ] },
+    { "Libraries" = [
+      { "pi-tui-kit" = [
+        { "Pi TUI Kit API reference" = "packages/pi-tui-kit/docs/api.md" },
+        { "Native TUI alignment audits" = "packages/pi-tui-kit/docs/core-alignment-audit.md" },
+        { "Editor status presentation" = "packages/pi-tui-kit/docs/editor-status-presentation.md" },
+        { "Internal standalone error reporting" = "packages/pi-tui-kit/docs/error-routing.md" },
+        { "Fullscreen terminal handoff" = "packages/pi-tui-kit/docs/fullscreen-handoff.md" },
+        { "Responsive list UI/UX review" = "packages/pi-tui-kit/docs/responsive-lists-uiux.md" },
+        { "Showcase, search, and copy verification" = "packages/pi-tui-kit/docs/showcase-verification.md" },
+        { "Consumer UI consolidation audit" = "packages/pi-tui-kit/docs/ui-consolidation-audit.md" },
+      ] },
+      { "sync-daemon" = [
+        { "Ownership and safety contract" = "packages/sync-daemon/docs/architecture.md" },
+      ] },
+    ] },
+  ] },
+  { "Authoring" = [
+    { "Pi extension conventions" = "docs/extension-conventions.md" },
+    { "Extension settings conventions" = "docs/extension-settings.md" },
+    { "Package README conventions" = "docs/readme-conventions.md" },
+    { "Generated-runtime builder" = "docs/runtime-builder.md" },
+    { "Documentation site" = "docs/documentation.md" },
+    { "Workflow Mutex Protocol v1" = "docs/api/workflow-mutex-v1.md" },
+  ] },
+  { "Maintenance" = [
+    { "Dependency installation policy" = "docs/dependency-installation.md" },
+    { "Test performance and isolation" = "docs/test-performance.md" },
+    { "Release workflow" = "docs/release-workflow.md" },
+    { "Publish workflow" = "docs/publish-workflow.md" },
+    { "Coordinated Kit and consumer releases" = "docs/coordinated-releases.md" },
+    { "Publication registry diagnostics" = "docs/publish-registry-diagnostics.md" },
+  ] },
+  { "Design and evidence" = [
+    { "How to read these records" = "docs/design-and-evidence.md" },
+    { "Architecture decisions" = [
+      { "ADR: pi-sync backend contract and publication safety" = "docs/adr/pi-sync-backend-contract.md" },
+      { "ADR: pi-sync Git backend" = "docs/adr/pi-sync-git-backend.md" },
+      { "ADR: pi-sync portable included-content policy" = "docs/adr/pi-sync-portable-selection-policy.md" },
+      { "ADR: pi-sync version 3 settings and sync setup model" = "docs/adr/pi-sync-v3-settings-model.md" },
+    ] },
+    { "Implementation audits" = [
+      { "Command output limits" = "docs/exec-output-audit.md" },
+      { "ChatGPT OAuth compaction verification" = "docs/implementation-notes/chatgpt-oauth-compaction-verification.md" },
+      { "Code scanning verification" = "docs/implementation-notes/code-scanning-verification.md" },
+      { "Editor widget consolidation" = "docs/implementation-notes/editor-widget-consolidation.md" },
+      { "Extension Independence Audit" = "docs/implementation-notes/extension-independence-audit.md" },
+      { "Pi TUI Kit core-pattern audit" = "docs/implementation-notes/pi-tui-kit-core-patterns-audit.md" },
+      { "Pi TUI Kit fullscreen compatibility audit" = "docs/implementation-notes/pi-tui-kit-fullscreen-audit.md" },
+    ] },
+    { "Verification records" = [
+      { "pi-starship module capabilities verification" = "docs/verification/2026-10-23_pi-starship-module-capabilities.md" },
+      { "pi-starship menu verification" = "docs/verification/2026-10-24_pi-starship-menu.md" },
+      { "pi-starship settings side-thread verification" = "docs/verification/2026-10-24_pi-starship-settings-side-thread.md" },
+      { "Pi Subagents widget defaults verification" = "docs/verification/2026-10-28_pi-subagents-widget-defaults.md" },
+      { "Plan mode question display verification" = "docs/verification/2026-11-06_pi-plan-mode-question-display.md" },
+      { "pi-starship individual extension status verification" = "docs/verification/2026-11-06_pi-starship-extension-status.md" },
+      { "Pi patch-release compatibility verification" = "docs/verification/2026-11-10_pi-151-compatibility.md" },
+      { "Pi Goal waiting display verification" = "docs/verification/2026-11-13_pi-goal-wait-display.md" },
+    ] },
+    { "Benchmarks" = [
+      { "Package startup loading" = "docs/benchmarks/2026-11-05-package-startup.md" },
+      { "Pi Goal incremental accounting" = "docs/benchmarks/pi-goal-incremental-accounting.md" },
+    ] },
+    { "Research" = [
+      { "LLM-Agent Least Privilege and Runtime Enforcement" = "docs/research/2026-08-10_llm-agent-least-privilege-and-runtime-enforcement.md" },
+      { "Coding-Agent Subagents: Evidence Catalog" = "docs/research/coding-agent-subagents-evidence-catalog.md" },
+      { "Coding-Agent Subagents: Research Synthesis" = "docs/research/coding-agent-subagents-research.md" },
+    ] },
+    { "Roadmaps and proposals" = [
+      { "pi-starship Command Capabilities Roadmap" = "docs/roadmaps/2026-08-02_pi-starship-command-capabilities-roadmap.md" },
+    ] },
+  ] },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+# Preserve existing GitHub-style fragments on emoji headings.
+toc.slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } }
+pymdownx.details = {}
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tasklist.custom_checkbox = true

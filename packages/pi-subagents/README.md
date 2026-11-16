@@ -172,6 +172,7 @@ The terminal states are `completed`, `partial`, `failed`, `timed_out`, and `canc
 `subagent_inspect` never returns complete task text, child output, prompts, selected tools, attachment paths or totals, context, credentials, environment variables, requests, responses, or secrets.
 
 See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/attachments.md`](./docs/attachments.md) for attachment validation, and [`docs/messaging.md`](./docs/messaging.md) for messaging behavior.
+The [design principles](./docs/design-principles.md) explain context isolation, ownership, and standalone behavior.
 
 ## ⚙️ Settings
 

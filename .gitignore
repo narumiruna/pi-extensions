@@ -203,6 +203,8 @@ vite.config.ts.timestamp-*
 .vite/
 
 # Project
+/site/
+/.zensical-docs/
 packages/pi-tui-kit/.kit-runtime-staging-*/
 packages/pi-tui-kit/.kit-runtime-backup-*/
 packages/pi-inspect/browser-dist/

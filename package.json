@@ -55,6 +55,8 @@
   "scripts": {
     "dev": "npm install && npm run build && PI_TIMING=1 PI_CODING_AGENT_DIR=.pi/agent pi",
     "build": "node ./scripts/run-builds.mjs",
+    "docs:build": "node ./scripts/docs.mjs build",
+    "docs:serve": "node ./scripts/docs.mjs serve",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "typecheck": "node ./scripts/run-typechecks.mjs",
