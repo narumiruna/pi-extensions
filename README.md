@@ -187,6 +187,12 @@ npm run check
 `npm run build` derives dependency-first order from workspace manifests, builds each prerequisite once,
 and stops before consumers if a prerequisite fails; workspace-list order is not a build contract.
 Staged typechecks use the same build planner.
+
+The Git pre-commit hook migrates the Biome configuration, applies Biome checks and formatting to all of `packages/`,
+runs `uvx zizmor --pedantic .github`, and typechecks staged changes.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to provide `uvx`.
+Biome can modify unstaged files; review and stage any fixes because the hook does not stage them automatically.
+
 See [test performance and isolation](./docs/test-performance.md) for package timing reports,
 cache behavior, and the reviewed shared-module test boundary.
 CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.
