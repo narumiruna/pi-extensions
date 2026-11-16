@@ -3,10 +3,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { withLock } from "../src/state/lock.js";
 import sync from "../src/sync.js";
+import { runRegisteredCommand } from "./daemon-test-helpers.js";
+import { withEngineFixtureHost } from "./engine-host.js";
 import { v3S3Settings as requiredConfig, snapshot, withTempHome } from "./helpers.js";
 import { S3ProbeHarness } from "./s3-probe-harness.js";
 
@@ -124,10 +128,22 @@ async function withPublicationHarness(
     }) as typeof globalThis.fetch;
     try {
       const mock = createMockPi();
-      sync(mock.pi);
+      sync(mock.pi, {
+        loadSyncOperations: async () => {
+          const operations = await import("@narumitw/sync-daemon/engine/sync/sync-operations");
+          return {
+            ...operations,
+            push: (
+              ctx: Parameters<typeof operations.push>[0],
+              options: Parameters<typeof operations.push>[1],
+              input?: Parameters<typeof operations.push>[2],
+            ) => withEngineFixtureHost(() => withLock("push", () => operations.push(ctx, options, input))),
+          };
+        },
+      });
       const { ctx, notifications } = createMockContext({ hasUI: true });
 
-      await mock.commands.get("sync")?.handler("push --yes --force", ctx);
+      await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "push --yes --force");
 
       await assertions({
         counts,

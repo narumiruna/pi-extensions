@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { ResolvedWebDavBackend } from "../src/backends/backend-types.js";
 
 export interface MockWebDavOptions {
+  beforeRequest?(request: RecordedWebDavRequest, signal: AbortSignal): Promise<void>;
   username?: string;
   password?: string;
   ignoreConditions?: boolean;
@@ -57,6 +58,7 @@ export class MockWebDavServer {
   }
 
   async close() {
+    this.server.closeAllConnections();
     this.server.close();
     await once(this.server, "close");
   }
@@ -64,7 +66,19 @@ export class MockWebDavServer {
   private async handle(request: IncomingMessage, response: ServerResponse) {
     const method = request.method ?? "GET";
     const path = decodeURIComponent(new URL(request.url ?? "/", this.origin).pathname).replace(/\/+$/u, "") || "/";
-    this.requests.push({ method, path, headers: request.headers });
+    const recorded = { method, path, headers: request.headers };
+    this.requests.push(recorded);
+    if (this.options.beforeRequest) {
+      const controller = new AbortController();
+      const closed = () => controller.abort();
+      response.once("close", closed);
+      try {
+        await this.options.beforeRequest(recorded, controller.signal);
+      } finally {
+        response.off("close", closed);
+      }
+      if (controller.signal.aborted) return;
+    }
     if (this.options.unavailable) return send(response, 503, "temporary outage");
     if (this.options.redirectTo) {
       return send(response, 302, undefined, { location: this.options.redirectTo });

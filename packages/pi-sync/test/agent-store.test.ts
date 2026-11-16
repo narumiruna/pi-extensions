@@ -160,14 +160,19 @@ test("separate processes exclude duplicate inference and reclaim only a dead own
   withTempHome(async (agentDir) => {
     await fs.mkdir(agentDir, { recursive: true });
     await ensureStateDir();
-    const entry = path.resolve("packages/pi-sync/src/sync/agent-store.ts");
-    const state = path.resolve("packages/pi-sync/src/state/state-directory.ts");
     const directory = path.resolve("node_modules/.cache/pi-sync-agent-process");
     await fs.mkdir(directory, { recursive: true });
     const output = path.join(directory, `${randomUUID()}.mjs`);
     await build({
       stdin: {
-        contents: `import { withAgentClaim } from ${JSON.stringify(entry)}; import { withStateDirectoryAccess } from ${JSON.stringify(state)}; await withStateDirectoryAccess(() => withAgentClaim(async () => { process.on("message", () => {}); process.send({ready:true}); await new Promise(() => {}); }));`,
+        contents: `import "./packages/pi-sync/test/engine-process-host.js";
+          import { withAgentClaim } from "./packages/pi-sync/src/sync/agent-store.js";
+          import { withStateDirectoryAccess } from "./packages/pi-sync/src/state/state-directory.js";
+          await withStateDirectoryAccess(() => withAgentClaim(async () => {
+            process.on("message", () => {});
+            process.send({ ready: true });
+            await new Promise(() => {});
+          }));`,
         resolveDir: process.cwd(),
       },
       outfile: output,

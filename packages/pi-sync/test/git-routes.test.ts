@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  diff,
+  doctor,
+  history,
+  pull,
+  push,
+  rollback,
+  status,
+  syncBoth,
+} from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { ResolvedGitBackend } from "../src/backends/backend-types.js";
 import { GitSyncBackend } from "../src/backends/git/git-backend.js";
 import type { CommandOptions } from "../src/commands/command-types.js";
 import { localConfigPath } from "../src/settings/config-file.js";
-import { diff, doctor, history, pull, push, rollback, status, syncBoth } from "../src/sync/sync-operations.js";
 import syncExtension from "../src/sync.js";
+import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { createBareRemote } from "./git-test-helpers.js";
 import { withEnv, withTempHome } from "./helpers.js";
 
@@ -68,7 +79,7 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
             allowLocalRemotes: true,
           });
           const factory = () => backend;
-          const { ctx, notifications } = createMockContext({ hasUI: true });
+          const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
 
           await doctor(ctx, options(), factory);
           await status(ctx, options(), factory);
@@ -86,7 +97,7 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
 
           const mock = createMockPi();
           syncExtension(mock.pi);
-          await mock.commands.get("sync")?.handler("config", ctx);
+          await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
           const configOutput = notifications.at(-1)?.message ?? "";
           assert.match(configOutput, /kind: git/);
           assert.match(configOutput, /branch: pi-sync\/home/);

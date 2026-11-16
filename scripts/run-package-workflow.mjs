@@ -63,9 +63,22 @@ function makePublic(packageName) {
   run(npmCommand, ["view", packageName, "version"]);
 }
 
-function pack(name) {
+function resolveWorkspace(name) {
   requireUnscopedName(name);
-  run(npmCommand, ["--workspace", `@narumitw/pi-${name}`, "pack", "--dry-run"]);
+  for (const directory of [`packages/${name}`, `packages/pi-${name}`]) {
+    const manifest = join(directory, "package.json");
+    if (!existsSync(manifest)) continue;
+    const value = JSON.parse(readFileSync(manifest, "utf8"));
+    if (value.name !== name && value.name !== `@narumitw/${name}` && value.name !== `@narumitw/pi-${name}`) continue;
+    return { name: value.name, directory, service: !value.pi?.extensions?.length && Boolean(value.bin) };
+  }
+  console.error(`No matching workspace: ${name}`);
+  process.exit(2);
+}
+
+function pack(name) {
+  const workspace = resolveWorkspace(name);
+  run(npmCommand, ["--workspace", workspace.name, "pack", "--dry-run"]);
 }
 
 function install(name) {
@@ -74,15 +87,19 @@ function install(name) {
     console.error(`invalid package name: ${name}`);
     process.exit(2);
   }
-  const packageName = `@narumitw/pi-${name}`;
+  const workspace = resolveWorkspace(name);
+  const packageName = workspace.name;
   const isPublished = run(npmCommand, ["view", packageName, "version"], {
     allowFailure: true,
     stdio: "ignore",
   });
-  if (isPublished) {
+  if (workspace.service) {
+    if (!isPublished) run(npmCommand, ["--workspace", packageName, "run", "build"]);
+    run(npmCommand, ["install", "--global", isPublished ? packageName : `./${workspace.directory}`]);
+  } else if (isPublished) {
     run(piCommand, ["install", `npm:${packageName}`]);
   } else {
-    run(piCommand, ["install", `./packages/pi-${name}`]);
+    run(piCommand, ["install", `./${workspace.directory}`]);
   }
 }
 

@@ -1,7 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { completeSyncArguments, splitArgs } from "./commands/command.js";
+import {
+  bindPiDaemonClient,
+  installPiDaemonHost,
+  type PiDaemonClient,
+  withPiDaemonClient,
+} from "./daemon/pi-client.js";
 import type { AnySyncConfig } from "./settings/settings-types.js";
-import { withStateDirectoryAccess } from "./state/state-directory.js";
 import { startupTransferEnabled } from "./sync/agent-policy.js";
 import { autoPushSessions, startSession } from "./sync/automatic-sync.js";
 import { combineSignals } from "./sync/signals.js";
@@ -10,10 +15,11 @@ import { errorMessage } from "./sync/sync-errors.js";
 import { createSyncLoaders, type SyncDependencies } from "./sync/sync-loaders.js";
 import { registerStartupTimings } from "./ui/startup-timings-entry.js";
 import { createSyncAttentionController } from "./ui/sync-attention.js";
-import { createSyncStatusPublisher, setSyncStatus } from "./ui/sync-status.js";
+import { createSyncStatusPublisher } from "./ui/sync-status.js";
 import { safeTerminalText } from "./ui/terminal-text.js";
 
 export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDependencies> = {}) {
+  installPiDaemonHost();
   const loaders = createSyncLoaders(dependencies);
   const attention = createSyncAttentionController();
   const status = createSyncStatusPublisher(pi.events);
@@ -22,183 +28,227 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
   let sessionAbort = new AbortController();
   let shutdownAbort: AbortController | undefined;
   let initialization = Promise.resolve<AnySyncConfig | false | undefined>(undefined);
-  let continuous: ReturnType<typeof import("./sync/continuous-sync.js")["createContinuousSync"]> | undefined;
-  let owner: ExtensionContext["sessionManager"] | undefined;
-  let continuousPossible = false;
-  let startupDebug = false;
-  const foreground = new Map<ExtensionContext["sessionManager"], number>();
-  async function resumeContinuous(ctx: ExtensionContext, signal: AbortSignal, retry?: { setup?: string }) {
-    const isCurrent = () => !signal.aborted && !foreground.has(ctx.sessionManager) && owner === ctx.sessionManager;
-    if (!isCurrent() || !ctx.hasUI) return;
-    try {
-      const { loadConfigForCheck } = await import("./settings/config.js");
-      if (!isCurrent()) return;
-      const config = await loadConfigForCheck();
-      if (!isCurrent()) return;
-      continuousPossible = Boolean(config.continuous && config.agentMode);
-      if (!continuousPossible) {
-        await continuous?.stop(ctx.sessionManager);
-        return;
-      }
-      const { createContinuousSync } = await import("./sync/continuous-sync.js");
-      if (!isCurrent()) return;
-      continuous ??= createContinuousSync(loaders, undefined, publishTimings);
-      continuous.start(
-        ctx,
-        signal,
-        Boolean(retry && (retry.setup === undefined || retry.setup === config.setupName)),
-        startupDebug,
-      );
-    } catch {
-      /* Existing initialization/command paths report settings errors. */
-    }
-  }
+  let owner: PiDaemonClient | undefined;
+  let ownerManager: ExtensionContext["sessionManager"] | undefined;
 
   pi.registerCommand("sync", {
     description: "Sync Pi settings through Git, WebDAV, R2, or S3-compatible storage",
     getArgumentCompletions: completeSyncArguments,
     handler: async (args, ctx) => {
-      if (!ctx.hasUI) {
-        throw new Error("/sync requires TUI or RPC mode so results and safety prompts are observable.");
-      }
+      if (!ctx.hasUI) throw new Error("/sync requires TUI or RPC mode so results and safety prompts are observable.");
       status.bind(ctx);
       const signal = sessionAbort.signal;
-      const manager = ctx.sessionManager;
-      const command = splitArgs(args)[0];
-      let retry: { setup?: string } | undefined;
-      let mayResume = false;
-      foreground.set(manager, (foreground.get(manager) ?? 0) + 1);
-      try {
+      const client = owner;
+      if (!client || ownerManager !== ctx.sessionManager) {
+        if (splitArgs(args)[0] !== "help") throw new Error("pi-sync session is not ready.");
+        const commands = await loaders.commands();
+        if (signal.aborted || owner) return;
+        ctx.isIdle();
+        await commands.handleCommand(args, ctx, signal, loaders, attention);
+        return;
+      }
+      await withPiDaemonClient(ctx, async (ownedContext) => {
+        ctx = ownedContext;
+        const command = splitArgs(args)[0];
         const ready = await initialization;
-        mayResume = ready !== false;
-        if (signal.aborted) return;
-        await continuous?.stop(manager);
-        if (signal.aborted) return;
-        await check.stop();
-        if (signal.aborted) return;
-        if (ready === false && command !== "help" && command !== "unlock" && command !== "migrate-state") {
-          ctx.ui.notify(
-            "pi-sync recovery required. Repair the startup error, then /reload before syncing. Use /sync help for recovery guidance.",
-            "error",
-          );
-          return;
-        }
-        const commands = await loaders.commands().catch((error) => {
+        if (signal.aborted || owner !== client) return;
+        await client.setBusy("command", true);
+        try {
+          await check.stop();
+          if (signal.aborted || owner !== client) return;
+          if (
+            ready === false &&
+            command !== "help" &&
+            command !== "unlock" &&
+            command !== "migrate-state" &&
+            command !== "daemon"
+          ) {
+            ctx.ui.notify(
+              "pi-sync recovery required. Repair the startup error, then /reload before syncing. Use /sync help for recovery guidance.",
+              "error",
+            );
+            return;
+          }
+          if (command === "unlock" || command === "migrate-state") {
+            const { stateDirectoryMigrationNotice } = await import("./state/state-directory.js");
+            if (signal.aborted || owner !== client) return;
+            // Recovery cannot guess an authoritative root when roots coexist or are unsafe.
+            stateDirectoryMigrationNotice();
+          }
+          const commands = await loaders.commands();
+          if (signal.aborted || owner !== client) return;
+          await commands.handleCommand(args, ctx, signal, loaders, attention);
+        } catch (error) {
           if (!signal.aborted) {
             ctx.ui.notify(`pi-sync command unavailable: ${safeTerminalText(errorMessage(error))}`, "error");
+            if (command === "unlock" || command === "migrate-state") throw error;
           }
-        });
-        if (signal.aborted || !commands) return;
-        const run = () =>
-          commands.handleCommand(args, ctx, signal, loaders, attention, (setup) => {
-            retry = { setup };
-          });
-        // Drain background children before foreground guards. Help remains reachable during repair.
-        if (command === "migrate-state" || command === "help") await run();
-        else await withStateDirectoryAccess(run);
-      } finally {
-        const count = (foreground.get(manager) ?? 1) - 1;
-        if (count) foreground.set(manager, count);
-        else foreground.delete(manager);
-        if (mayResume) await resumeContinuous(ctx, signal, retry);
-      }
+        } finally {
+          if (!signal.aborted && owner === client) await client.setBusy("command", false);
+        }
+      });
     },
   });
-
   pi.on("session_start", async (_event, ctx) => {
     const releaseStatus = status.start(ctx);
-    try {
-      shutdownAbort?.abort(new DOMException("Session replaced", "AbortError"));
-      shutdownAbort = undefined;
-      sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
-      sessionAbort = new AbortController();
-      const signal = sessionAbort.signal;
-      owner = ctx.sessionManager;
-      continuousPossible = false;
-      startupDebug = false;
-      attention.reset(ctx);
-      const previous = initialization;
-      initialization = (async () => {
-        await previous;
-        if (signal.aborted) return false;
-        await continuous?.stop();
-        if (signal.aborted) return false;
+    const previousClient = owner;
+    shutdownAbort?.abort(new DOMException("Session replaced", "AbortError"));
+    shutdownAbort = undefined;
+    sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
+    sessionAbort = new AbortController();
+    const signal = sessionAbort.signal;
+    const client = bindPiDaemonClient(ctx, signal, publishTimings);
+    owner = client;
+    ownerManager = ctx.sessionManager;
+    const replacementFile = ctx.sessionManager.getSessionFile?.();
+    attention.reset(ctx);
+    const previous = initialization;
+    initialization = withPiDaemonClient(ctx, async () => {
+      await previous.catch(() => {});
+      if (signal.aborted || owner !== client) return false;
+      try {
         await check.stop();
-        if (signal.aborted) return false;
-        try {
-          const startup = await withStateDirectoryAccess(() => startSession(ctx, signal, publishTimings));
-          if (signal.aborted) return false;
-          startupDebug = startup?.debug ?? false;
-          return startup?.config;
-        } catch (error) {
-          if (!signal.aborted && ctx.hasUI) {
-            ctx.ui.notify(`pi-sync recovery required: ${safeTerminalText(errorMessage(error))}`, "error");
+        if (previousClient) {
+          // Register the replacement before removing old session protection.
+          try {
+            await client.attachExisting();
+          } catch {
+            /* Initialization below reports an unavailable owner. */
           }
-          return false;
+          try {
+            await previousClient.disposeForShutdown("resume", replacementFile);
+          } catch {
+            /* Plain, detached recovery owns uncertain grants; no closed ctx is retained. */
+          }
+          await client.finishReattachment();
         }
-      })();
+        if (signal.aborted || owner !== client) return false;
+        return (await startSession(ctx, signal, publishTimings))?.config;
+      } catch (error) {
+        if (!signal.aborted && owner === client) {
+          try {
+            client.validate();
+            if (ctx.hasUI)
+              ctx.ui.notify(`pi-sync recovery required: ${safeTerminalText(errorMessage(error))}`, "error");
+          } catch {
+            /* SDK context was replaced. */
+          }
+        }
+        return false;
+      }
+    });
+    try {
       const ready = await initialization;
       if (ready === false) releaseStatus();
-      if (ready && !signal.aborted) {
-        if (ready.continuous && ready.agentMode) await resumeContinuous(ctx, signal);
-        else if (ready.automatic || startupTransferEnabled(ready)) check.start(ctx, signal, ready);
-      }
+      if (
+        ready &&
+        !signal.aborted &&
+        owner === client &&
+        !(ready.continuous && ready.agentMode) &&
+        (ready.automatic || startupTransferEnabled(ready))
+      )
+        await withPiDaemonClient(ctx, async () => {
+          check.start(ctx, signal, ready);
+        });
     } catch (error) {
       releaseStatus();
       throw error;
     }
   });
-
   pi.on("agent_start", async (_event, ctx) => {
-    await continuous?.stop(ctx.sessionManager);
-    await check.interrupt(ctx);
+    const client = owner;
+    if (!client || ownerManager !== ctx.sessionManager || sessionAbort.signal.aborted) return;
+    if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) await client.attachExisting();
+    await client.setBusy("agent", true);
+    if (owner === client && !sessionAbort.signal.aborted) await check.interrupt(ctx);
   });
-
   pi.on("agent_settled", async (_event, ctx) => {
-    const signal = sessionAbort.signal;
-    if (!signal.aborted) {
-      check.settled(ctx);
-      if (continuousPossible) await resumeContinuous(ctx, signal);
-    }
+    const client = owner;
+    if (!client || ownerManager !== ctx.sessionManager || sessionAbort.signal.aborted) return;
+    await client.setBusy("agent", false);
+    if (owner === client && !sessionAbort.signal.aborted)
+      await withPiDaemonClient(ctx, async () => {
+        check.settled(ctx);
+      });
   });
-
+  pi.on("model_select", async (_event, ctx) => {
+    if (owner && ownerManager === ctx.sessionManager && !sessionAbort.signal.aborted) await owner.update();
+  });
+  const pauseForReplacement = async (_event: unknown, ctx: ExtensionContext) => {
+    const client = owner;
+    if (!client || ownerManager !== ctx.sessionManager || sessionAbort.signal.aborted) return;
+    const results = await Promise.allSettled([client.pauseForSessionChange(), check.stop()]);
+    if (results.some((result) => result.status === "rejected")) {
+      if (owner === client && !sessionAbort.signal.aborted)
+        ctx.ui.notify(
+          "pi-sync could not drain its writer. Repair or stop the existing daemon before changing sessions.",
+          "error",
+        );
+      return { cancel: true };
+    }
+    // Another handler can still cancel the SDK transition. Stay paused until
+    // /reload instead of guessing that it is safe to resume while handlers run.
+  };
+  pi.on("session_before_switch", pauseForReplacement);
+  pi.on("session_before_fork", pauseForReplacement);
   pi.on("session_shutdown", async (event, ctx) => {
     const releaseStatus = status.cleanupFor(ctx);
-    try {
-      if (continuous && owner && owner !== ctx.sessionManager) return;
-      sessionAbort.abort(new DOMException("Session shut down", "AbortError"));
-      attention.reset(ctx);
-      shutdownAbort?.abort(new DOMException("Session shut down again", "AbortError"));
-      const controller = new AbortController();
-      shutdownAbort = controller;
-      const signal = combineSignals(controller.signal, AbortSignal.timeout(30_000));
-      const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
-      try {
-        const ready = await initialization;
-        if (signal.aborted) return;
-        await continuous?.stop(ctx.sessionManager);
-        if (signal.aborted) return;
-        await check.stop();
-        if (signal.aborted) return;
-        if (ready !== false && reason !== "reload") {
-          await withStateDirectoryAccess(async () => {
-            if (signal.aborted) return;
-            await autoPushSessions(ctx, signal, loaders);
-          });
-        }
-      } catch (error) {
-        if (!signal.aborted) {
-          ctx.ui.notify(`pi-sync session push skipped: ${errorMessage(error)}`, "warning");
-        }
-      } finally {
-        if (shutdownAbort === controller) shutdownAbort = undefined;
-      }
-      if (signal.aborted) return;
-      setSyncStatus(ctx, undefined);
-    } finally {
+    const client = owner;
+    if (!client || ownerManager !== ctx.sessionManager) {
       releaseStatus();
+      return;
+    }
+    const controller = new AbortController();
+    shutdownAbort?.abort(new DOMException("Session shut down again", "AbortError"));
+    shutdownAbort = controller;
+    const signal = combineSignals(controller.signal, AbortSignal.timeout(30_000));
+    const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
+    const target =
+      typeof event === "object" && event ? (event as { targetSessionFile?: string }).targetSessionFile : undefined;
+    // Cancel old dialogs/settings work now, while the SDK context is still active.
+    sessionAbort.abort(new DOMException("Session shutting down", "AbortError"));
+    let shutdownClient: PiDaemonClient | undefined;
+    try {
+      await initialization.catch(() => {});
+      await check.stop();
+      if (signal.aborted || owner !== client) return;
+      if (reason !== "reload") {
+        shutdownClient = bindPiDaemonClient(ctx, signal, publishTimings);
+        await shutdownClient.setBusy("shutdown", true);
+        const attached = await shutdownClient.attachExisting();
+        if (!signal.aborted && owner === client && attached)
+          await withPiDaemonClient(ctx, () => autoPushSessions(ctx, signal, loaders));
+      }
+    } catch (error) {
+      if (!signal.aborted && owner === client) {
+        try {
+          ctx.ui.notify(`pi-sync shutdown skipped: ${safeTerminalText(errorMessage(error))}`, "warning");
+        } catch {
+          /* SDK context was replaced. */
+        }
+      }
+    } finally {
+      if (owner === client) {
+        owner = undefined;
+        ownerManager = undefined;
+        try {
+          attention.reset(ctx);
+        } catch {
+          /* Cleanup never depends on an active SDK context. */
+        }
+      }
+      try {
+        await client.disposeForShutdown(reason, target);
+      } finally {
+        try {
+          await shutdownClient?.disposeForShutdown(reason, target);
+        } finally {
+          controller.abort();
+          releaseStatus();
+        }
+      }
+      if (shutdownAbort === controller) shutdownAbort = undefined;
     }
   });
 }
-
 export type { SyncDependencies } from "./sync/sync-loaders.js";

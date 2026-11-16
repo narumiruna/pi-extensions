@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext } from "../../../test/support.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { createSnapshot } from "../src/snapshot/snapshot.js";
 import { stageMergeBaseline } from "../src/state/merge-baseline-store.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
+import { withAgentSyncLock } from "../src/sync/agent-sync.js";
 import { readMergeJournal } from "../src/sync/merge-journal.js";
+import { createStartupCheck } from "../src/sync/startup-check.js";
+import { createSyncLoaders } from "../src/sync/sync-loaders.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
+import { createSyncAttentionController } from "../src/ui/sync-attention.js";
 import { agentContext } from "./agent-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { createMergeFixture } from "./merged-sync-fixture.js";
@@ -35,39 +39,38 @@ for (const boundary of ["agent_start", "session_shutdown", "session_start", "for
         ready.resolve();
         return new Promise<string>(() => {});
       });
-      const mock = createMockPi();
-      const { default: extension } = await import("../src/sync-extension.js");
-      extension(mock.pi, {
+      const loaders = createSyncLoaders({
         loadSyncInspection: async () => ({
           inspectSync: async (current) =>
             inspectionFixture(current, { localChanged: true, remoteChanged: true, capability: "atomic-conditional" }),
         }),
         loadSyncOperations: async () => ({
-          ...(await import("../src/sync/sync-operations.js")),
-          syncBoth: (ctx, options) => syncBoth(ctx, options, () => fixture.backend),
+          ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+          syncBoth: (ctx, options) =>
+            withAgentSyncLock(ctx, options, (current) => syncBoth(ctx, current, () => fixture.backend)),
         }),
       });
-      await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+      const check = createStartupCheck(loaders, createSyncAttentionController());
+      const lifetime = new AbortController();
+      check.start(context.ctx, lifetime.signal, config);
       await ready.promise;
       assert.equal(context.statuses.get("sync"), "sync resolving");
-      const sibling = createMockPi();
-      extension(sibling.pi);
+      const sibling = createStartupCheck(loaders, createSyncAttentionController());
       const siblingContext = createMockContext({ mode: "json", hasUI: false });
-      await sibling.events.get("session_start")?.[0]?.({ reason: "startup" }, siblingContext.ctx);
-      await sibling.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, siblingContext.ctx);
+      sibling.start(siblingContext.ctx, new AbortController().signal, config);
+      await sibling.stop();
       assert.equal(
         (context.requestOptions[0] as { signal: AbortSignal }).signal.aborted,
         false,
         "an unrelated session must not cancel the owner",
       );
-      if (boundary === "foreground") await mock.commands.get("sync")?.handler("help", context.ctx);
-      else if (boundary === "session_start") {
-        // A replacement with no model must not inherit the previous conversation/transport.
-        const replacement = createMockContext({ mode: "rpc" });
-        await mock.events.get("session_start")?.[0]?.({ reason: "new" }, replacement.ctx);
-      } else await mock.events.get(boundary)?.[0]?.({ reason: "reload" }, context.ctx);
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+      if (boundary === "agent_start") await check.interrupt(context.ctx);
+      else {
+        if (boundary === "session_start" || boundary === "session_shutdown") lifetime.abort();
+        await check.stop();
+      }
+      await check.stop();
+      await check.stop();
       assert.equal(context.requests.length, 1);
       assert.equal((context.requestOptions[0] as { signal: AbortSignal }).signal.aborted, true);
       assert.equal(context.statuses.get("sync"), undefined);

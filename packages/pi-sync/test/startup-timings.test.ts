@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadConfig, loadConfigForCheck, syncCheckConfigFingerprint } from "../src/settings/config.js";
@@ -9,8 +10,8 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import { localConfigTemplate, updateLocalConfig } from "../src/settings/settings-store.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { createStartupTimings } from "../src/sync/startup-timings.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
 import { STARTUP_TIMING_ENTRY, type StartupTimingEntry } from "../src/ui/startup-timings-entry.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { contextUi, deferred, inspectionFixture } from "./startup-check-helpers.js";
 
@@ -30,6 +31,7 @@ async function configured(debug: boolean | undefined, run: () => Promise<void>, 
     Object.assign(settings.syncSetups.home.sync, { automaticTransfer: transfer });
     await fs.writeFile(localConfigPath(), JSON.stringify(settings));
     await fs.writeFile(path.join(root, "settings.json"), "{}\n");
+    await adoptFixtureRoot(root);
     await run();
   });
 }

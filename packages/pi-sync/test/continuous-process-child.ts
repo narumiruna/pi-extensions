@@ -1,12 +1,13 @@
+import "./engine-process-host.js";
 import fs from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { type ContinuousClock, createContinuousSync } from "../src/sync/continuous-sync.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
-import { createSyncLoaders } from "../src/sync/sync-loaders.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
+import { createEngineTestLoaders as createSyncLoaders } from "./engine-loaders.js";
 
 // Drive only scheduler time. Real fetch and lock-renewal timers must not be faked.
 let now = Date.now();
@@ -56,7 +57,7 @@ const service = createContinuousSync(
       },
     }),
     loadSyncOperations: async () => ({
-      ...(await import("../src/sync/sync-operations.js")),
+      ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
       syncBoth: async (...args) => {
         inFlight++;
         try {

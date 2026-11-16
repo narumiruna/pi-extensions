@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { readContinuousRecord } from "../src/sync/continuous-record.js";
 import { continuousBinding } from "../src/sync/continuous-storage.js";
 import { createContinuousSync } from "../src/sync/continuous-sync.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { continuousLoaders } from "./continuous-test-helpers.js";
 import { RecoveryClock as Clock, recoveryFixture, waitRecoveryStatus as waitStatus } from "./recovery-test-helpers.js";
 
-vi.mock("../src/sync/continuous-watch.js", () => ({ watchContinuous: async () => () => {} }));
+vi.mock("@narumitw/sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
 
 const fixture = recoveryFixture();
 
@@ -117,7 +117,7 @@ test("opaque failures remain blocked without inspection after content changes or
       },
     }),
     loadSyncOperations: async () => ({
-      ...(await import("../src/sync/sync-operations.js")),
+      ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
       syncBoth: async () => {
         transfers++;
         throw new Error("opaque failure");

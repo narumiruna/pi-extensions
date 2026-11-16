@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { showConflicts } from "@narumitw/sync-daemon/engine/sync/conflict-review";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
-import { showConflicts } from "../src/sync/conflict-review.js";
 import { mergeSync } from "../src/sync/merged-sync.js";
 import { withTempHome } from "./helpers.js";
 import { fixture, options, publish } from "./partial-sync-fixture.js";

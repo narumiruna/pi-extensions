@@ -32,7 +32,12 @@ export function agentContext(
   const requestOptions: unknown[] = [];
   const mock = createMockContext({ mode: "rpc", model: agentTestModel, ...overrides });
   const ctx = mock.ctx as ExtensionContext;
-  ctx.modelRegistry = {
+  const registry: Pick<
+    ExtensionContext["modelRegistry"],
+    "getRegisteredProviderIds" | "getProviderAuthStatus" | "streamSimple"
+  > = {
+    getRegisteredProviderIds: () => ["sync-test"],
+    getProviderAuthStatus: () => ({ configured: true, source: "runtime" }),
     streamSimple: (_model, context, options) => {
       requests.push(structuredClone(context));
       requestOptions.push(options);
@@ -98,7 +103,8 @@ export function agentContext(
       });
       return stream;
     },
-  } as ExtensionContext["modelRegistry"];
+  };
+  ctx.modelRegistry = registry as ExtensionContext["modelRegistry"];
   return { ...mock, ctx, requests, requestOptions };
 }
 export function selectRemote(units: AgentUnit[]) {

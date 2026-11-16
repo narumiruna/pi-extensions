@@ -1,2 +1,2 @@
-export const LOCK_GUARD_STALE_MS = 30_000;
-export const LOCK_GUARD_UPDATE_MS = 10_000;
+export type * from "@narumitw/sync-daemon/engine/state/lock-policy";
+export { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "@narumitw/sync-daemon/engine/state/lock-policy";

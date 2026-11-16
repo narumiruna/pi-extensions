@@ -8,6 +8,7 @@ import { loadConfig, syncCheckConfigFingerprint } from "../src/settings/config.j
 import { localConfigPath } from "../src/settings/config-file.js";
 import { describeManagerState } from "../src/ui/manager-state.js";
 import { createSyncAttentionController } from "../src/ui/sync-attention.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { contextUi, deferred, inspectionFixture, observeCheckCompletion } from "./startup-check-helpers.js";
 
@@ -99,6 +100,7 @@ for (const route of ["", "status", "sync --yes", "files", "use work", "migrate-s
     await withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings({ automatic: true })));
+      await adoptFixtureRoot(agentDir);
       const { default: sync } = await import("../src/sync-extension.js");
       const entered = deferred();
       let aborted = false;
@@ -157,6 +159,7 @@ test("replacement sessions sharing a UI cannot inherit a late failure or clear n
   await withTempHome(async (agentDir) => {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings({ automatic: true })));
+    await adoptFixtureRoot(agentDir);
     const { default: sync } = await import("../src/sync-extension.js");
     const entered = deferred();
     let calls = 0;

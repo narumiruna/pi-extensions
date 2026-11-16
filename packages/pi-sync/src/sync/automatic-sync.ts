@@ -1,135 +1,79 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { setSyncSetupCompletions } from "../commands/command.js";
-import type { CommandOptions } from "../commands/command-types.js";
-import { loadConfig, loadPartialConfig } from "../settings/config.js";
+import { piDaemonClient } from "../daemon/pi-client.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
-import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
-import { readLocalConfigObject } from "../settings/settings-store.js";
-import type { AnySyncConfig } from "../settings/settings-types.js";
-import { sessionDirFromContext, snapshotOptionsForContext } from "../snapshot/session-paths.js";
-import { pendingTransactionEntries } from "../snapshot/snapshot-transaction-directory.js";
-import { withLock } from "../state/lock.js";
-import { stateDirectoryMigrationNotice } from "../state/state-directory.js";
-import { ensureStateDir, readStateForConfig } from "../state/sync-state-store.js";
-import { configureSyncStatus, setSyncStatus } from "../ui/sync-status.js";
+import type { AnySyncConfig, PiSyncSettingsV3 } from "../settings/settings-types.js";
+import { configureSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
-import { captureMutationOwner } from "./mutation-owner.js";
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
-import { syncSessionsSelected } from "./sync-policy.js";
-
-const AUTO_SYNC_OPTIONS: CommandOptions = {
-  yes: true,
-  force: false,
-  stale: false,
-  silent: true,
-  reload: false,
-  auto: true,
-  args: [],
-};
 
 export async function startSession(
   ctx: ExtensionContext,
   signal: AbortSignal,
   publish?: StartupTimingPublisher,
 ): Promise<{ debug: boolean; config?: AnySyncConfig } | undefined> {
-  const timings = createStartupTimings(publish);
-  let debug = false;
-  let outcome: "completed" | "stopped" = "stopped";
-  try {
+  throwIfAborted(signal);
+  const client = piDaemonClient(ctx);
+  // One-off sessions only protect their files in an already existing service.
+  // They never launch it or authorize observations, transfers, or model work.
+  if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) {
+    await client.attachExisting();
     throwIfAborted(signal);
-    const stateNotice = stateDirectoryMigrationNotice();
-    if (stateNotice && ctx.hasUI) ctx.ui.notify(stateNotice, "warning");
-    // Recovery can restore managed files: finish it before Pi accepts user edits.
-    // Unlike remote inspection, it must never be detached behind startup.
-    const validateMutation = captureMutationOwner(ctx, signal);
-    const currentFile = ctx.sessionManager.getSessionFile?.();
-    await timings.measure("transaction recovery", async () => {
-      const pending = await pendingTransactionEntries();
-      validateMutation();
-      if (!pending.some((entry) => entry.isDirectory())) return;
-      // Normal startup needs only the directory probe, not the recovery/snapshot graph.
-      const { recoverSnapshotTransactionsOnStartup } = await import("../snapshot/snapshot-transaction.js");
-      validateMutation();
-      const recoverySettings = await readLocalConfigObject();
-      validateMutation();
-      const recoverySetup = recoverySettings?.activeSyncSetup;
-      await recoverSnapshotTransactionsOnStartup({
-        exclude: recoverySetup ? recoverySettings.syncSetups[recoverySetup]?.sync.exclude : undefined,
-        signal,
-        sessionDir: sessionDirFromContext(ctx),
-        protectedTargets: currentFile ? [currentFile] : [],
-        validateMutation,
-      });
-    });
-    throwIfAborted(signal);
-    try {
-      const settings = await timings.measure("settings read", () => readLocalConfigObject());
-      throwIfAborted(signal);
-      debug = settings?.debug ?? false;
-      const names = settings ? Object.keys(settings.syncSetups).sort((left, right) => left.localeCompare(right)) : [];
-      setSyncSetupCompletions(names);
-      configureSyncStatus(ctx, settings?.showStatus ?? true);
-    } catch {
-      if (signal.aborted) return;
-      setSyncSetupCompletions([]);
-    }
-    const migrationNotice = consumeLocalConfigMigrationNotice();
-    if (migrationNotice && ctx.hasUI) ctx.ui.notify(migrationNotice, "warning");
-    throwIfAborted(signal);
-    if (!ctx.hasUI) return { debug };
-    try {
-      const config = await timings.measure("config resolution", () => loadConfig());
-      throwIfAborted(signal);
-      configureSyncStatus(ctx, config.showStatus);
-      outcome = "completed";
-      return { debug, config };
-    } catch (error) {
-      throwIfAborted(signal);
-      if (!isMissingConfigError(error)) {
-        ctx.ui.notify(`pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}`, "warning");
-      }
-    }
-    return { debug };
-  } finally {
-    timings.publish(ctx, debug, signal, "local initialization", outcome);
+    return { debug: false };
   }
+  const timings = createStartupTimings(publish);
+  const document = await timings.measure("settings read", () => client.readSettings());
+  throwIfAborted(signal);
+  configureSyncStatus(ctx, (document?.parsed.showStatus as boolean | undefined) ?? true);
+  const { stateDirectoryMigrationNotice } = await import("../state/state-directory.js");
+  const notice = stateDirectoryMigrationNotice();
+  const { pendingTransactionEntries } = await import("../snapshot/snapshot-transaction-directory.js");
+  const recoveryNeeded = (await pendingTransactionEntries()).some((entry) => entry.isDirectory());
+  throwIfAborted(signal);
+  if (!(await client.configured()) && !recoveryNeeded) {
+    if (notice) ctx.ui.notify(notice, "warning");
+    setSyncSetupCompletions([]);
+    const debug = document?.parsed.debug === true;
+    await client.markReady(debug);
+    timings.publish(ctx, debug, signal, "local initialization", "completed");
+    return { debug };
+  }
+  throwIfAborted(signal);
+  const result = (await client.run("initialize", {}, signal)) as {
+    debug: boolean;
+    config?: AnySyncConfig;
+    settings?: PiSyncSettingsV3;
+    handoverRequired: boolean;
+  };
+  throwIfAborted(signal);
+  configureSyncStatus(ctx, result.settings?.showStatus ?? true);
+  setSyncSetupCompletions(Object.keys(result.settings?.syncSetups ?? {}).sort((a, b) => a.localeCompare(b)));
+  await client.markReady(result.debug);
+  throwIfAborted(signal);
+  if (result.handoverRequired) {
+    ctx.ui.notify(
+      "pi-sync: close or upgrade older Pi processes, then use /sync to review daemon handover. No automatic transfer is authorized yet.",
+      "warning",
+    );
+    return { debug: result.debug };
+  }
+  return { debug: result.debug, config: result.config };
 }
-
-export async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal, loaders: SyncLoaders) {
+export async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal, _loaders: SyncLoaders) {
   try {
-    const partial = await loadPartialConfig();
+    const client = piDaemonClient(ctx);
+    if (!(await client.configured())) return;
     throwIfAborted(signal);
-    if (!partial.automatic) return;
-    if (!syncSessionsSelected(partial)) return;
-    await ensureStateDir();
-    throwIfAborted(signal);
-    const config = await loadConfig();
-    throwIfAborted(signal);
-    if (!syncSessionsSelected(config)) return;
-    const [operations, snapshotModule, syncStateModule] = await Promise.all([
-      loaders.operations(),
-      loaders.snapshot(),
-      loaders.syncState(),
-    ]);
-    throwIfAborted(signal);
-    await withLock("auto-session-push", async () => {
-      throwIfAborted(signal);
-      const state = await readStateForConfig(config);
-      throwIfAborted(signal);
-      const local = await snapshotModule.createSnapshot(config.snapshotIdentity, {
-        ...snapshotOptionsForContext(ctx, config),
-        signal,
-      });
-      throwIfAborted(signal);
-      if (!syncStateModule.hasLocalChanges(local, state, config)) return;
-      await operations.push(ctx, { ...AUTO_SYNC_OPTIONS, signal }, { config, state, local });
-    });
+    await client.run(
+      "shutdown",
+      { args: [], yes: true, force: false, stale: false, silent: true, reload: false },
+      signal,
+    );
   } catch (error) {
     if (signal.aborted || isMissingConfigError(error)) return;
-    setSyncStatus(ctx, undefined);
-    ctx.ui.notify(`pi-sync session push skipped: ${errorMessage(error)}`, "warning");
+    ctx.ui.notify(`pi-sync session push skipped: ${safeTerminalText(errorMessage(error))}`, "warning");
   }
 }

@@ -16,6 +16,11 @@ export const SYNC_COMMANDS = [
   { name: "diff", description: "Show local/remote diff" },
   { name: "conflicts", description: "Review private unresolved conflict groups" },
   { name: "doctor", description: "Check config, secrets, and lock state" },
+  {
+    name: "daemon",
+    description: "Review service handover and unattended permission",
+    usageSuffix: " [status|handover|allow-after-exit|revoke-after-exit]",
+  },
   { name: "push", description: "Upload local settings" },
   { name: "pull", description: "Apply remote settings" },
   { name: "sync", description: "Push or pull as needed" },
@@ -133,6 +138,12 @@ export function validateCommandOptions(command: string, options: CommandOptions)
   if (options.stale && command !== "unlock") {
     throw new Error(`--stale is not supported by /sync ${command}.`);
   }
+  if (command === "daemon" && options.args.length <= 1) {
+    const action = options.args[0];
+    if (action !== undefined && !DAEMON_ACTIONS.some((value) => value === action))
+      throw new Error(`Unknown daemon action: ${action}`);
+    return;
+  }
   const expectedValues = command === "rollback" || command === "use" ? 1 : 0;
   if (options.args.length !== expectedValues) {
     if (command === "rollback") throw new Error("Usage: /sync rollback <snapshot-id> [--yes] [--setup <name>]");
@@ -140,6 +151,8 @@ export function validateCommandOptions(command: string, options: CommandOptions)
     throw new Error(`Unexpected argument for /sync ${command}: ${options.args.join(" ")}`);
   }
 }
+
+const DAEMON_ACTIONS = ["status", "handover", "allow-after-exit", "revoke-after-exit"] as const;
 
 export function completeSyncArguments(argumentPrefix: string): CommandArgumentCompletion[] | null {
   const prefix = argumentPrefix.trimStart();
@@ -159,6 +172,15 @@ export function completeSyncArguments(argumentPrefix: string): CommandArgumentCo
   if (command === "use") {
     if (args.length > 1 || (trailingSpace && args.length > 0)) return null;
     return completeSetupValue(prefix, trailingSpace ? "" : (args[0] ?? ""));
+  }
+  if (command === "daemon") {
+    if (args.length > 1 || (trailingSpace && args.length > 0)) return null;
+    const current = trailingSpace ? "" : (args[0] ?? "");
+    const base = trailingSpace ? prefix : prefix.slice(0, prefix.length - current.length);
+    const matches = DAEMON_ACTIONS.filter((action) => action.startsWith(current));
+    return matches.length
+      ? matches.map((action) => ({ value: `${base}${action}`, label: action, description: "Daemon control" }))
+      : null;
   }
   const setupFlagIndex = args.lastIndexOf("--setup");
   if (setupFlagIndex >= 0 && setupFlagIndex === args.length - (trailingSpace ? 1 : 2)) {
@@ -236,7 +258,7 @@ export function usage() {
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
-    "Continuous sync is a separate default-Off opt-in in Settings. It requires Autonomous sync, monitors while Pi is open, and can incur recurring network/model costs. Safety blocks and durable automatic request limits remain.",
+    "Continuous sync is a separate default-Off opt-in in Settings. It requires Autonomous sync and can incur recurring network/model costs. The service survives Pi exit, but zero-client work requires separately reviewed /sync daemon allow-after-exit permission. Safety blocks and durable automatic request limits remain.",
     "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");
 }

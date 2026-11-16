@@ -61,7 +61,10 @@ for (const boundary of ["validation", "reservation", "postresponse"] as const)
           }
           throw new AgentResolutionRequired("b".repeat(64), evidence, async (signal) => {
             validations++;
-            if (validations === (boundary === "validation" ? 2 : boundary === "postresponse" ? 4 : -1))
+            if (
+              (boundary === "validation" && validations === 2) ||
+              (boundary === "postresponse" && mock.requests.length > 0)
+            )
               await block(signal);
           });
         },

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, { type SyncDependencies } from "../src/sync-extension.js";
+import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
 
@@ -52,7 +54,7 @@ test("Sync setup switching loads only for the use route and caches the module", 
       },
       loadSyncOperations: async () => {
         operationLoads += 1;
-        return import("../src/sync/sync-operations.js");
+        return import("@narumitw/sync-daemon/engine/sync/sync-operations");
       },
     });
     const context = createMockContext({ hasUI: true, mode: "rpc" });
@@ -138,9 +140,9 @@ test("Sync setup-switch loader failure is observable and can retry", async () =>
     const command = mock.commands.get("sync");
     assert.ok(command);
 
-    await command.handler("use work", context.ctx);
+    await runRegisteredCommand(mock, context.ctx as ExtensionCommandContext, "use work");
     assert.match(context.notifications.map(({ message }) => message).join("\n"), /temporary setup loader failure/u);
-    await command.handler("use work", context.ctx);
+    await runRegisteredCommand(mock, context.ctx as ExtensionCommandContext, "use work");
     assert.equal(loads, 2);
     assert.equal(uses, 1);
   });

@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initializeSync as startSession } from "@narumitw/sync-daemon/engine/sync/initialization";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "../src/snapshot/snapshot-transaction.js";
-import { startSession } from "../src/sync/automatic-sync.js";
 import { withTempHome } from "./helpers.js";
 
 const fileImage = (value: string) => `file:${createHash("sha256").update(value).digest("hex")}`;

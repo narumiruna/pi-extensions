@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
@@ -8,7 +9,6 @@ import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { readContinuousRecord } from "../src/sync/continuous-record.js";
 import { continuousBinding } from "../src/sync/continuous-storage.js";
 import { createContinuousSync } from "../src/sync/continuous-sync.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
 import { agentContext, agentTestModel, selectRemote } from "./agent-test-helpers.js";
 import {
   advanceContinuous,
@@ -24,7 +24,7 @@ import { createMergeFixture } from "./merged-sync-fixture.js";
 
 const watch = vi.hoisted(() => ({ changed: undefined as ((settings: boolean) => void) | undefined }));
 // Drive watcher hints explicitly so native callbacks cannot race the manual clock.
-vi.mock("../src/sync/continuous-watch.js", () => ({
+vi.mock("@narumitw/sync-daemon/engine/sync/continuous-watch", () => ({
   watchContinuous: async (_config: unknown, changed: (settings: boolean) => void) => {
     watch.changed = changed;
     return () => {

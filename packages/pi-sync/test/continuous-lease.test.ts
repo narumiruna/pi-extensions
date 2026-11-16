@@ -142,7 +142,20 @@ test("separate processes allow legacy foreground access and retain budgets acros
     const output = path.join(directory, `${randomUUID()}.mjs`);
     await build({
       stdin: {
-        contents: `import {acquireContinuousLease} from ${JSON.stringify(path.resolve("packages/pi-sync/src/sync/continuous-lease.ts"))}; import {withStateDirectoryAccess} from ${JSON.stringify(path.resolve("packages/pi-sync/src/state/state-directory.ts"))}; let lease; await withStateDirectoryAccess(async()=>{lease=await acquireContinuousLease(${JSON.stringify(binding)}); if(!lease)throw Error("no lease"); const {reserveContinuousRequest}=await import(${JSON.stringify(path.resolve("packages/pi-sync/src/sync/continuous-record.ts"))}); await reserveContinuousRequest(${JSON.stringify(binding)},lease,"d".repeat(64)); await reserveContinuousRequest(${JSON.stringify(binding)},lease,"d".repeat(64)); }); process.on("message",()=>{}); process.send({ready:true}); await new Promise(()=>{});`,
+        contents: `import "./packages/pi-sync/test/engine-process-host.js";
+          import { acquireContinuousLease } from "./packages/pi-sync/src/sync/continuous-lease.js";
+          import { withStateDirectoryAccess } from "./packages/pi-sync/src/state/state-directory.js";
+          import { reserveContinuousRequest } from "./packages/pi-sync/src/sync/continuous-record.js";
+          const binding = JSON.parse(process.argv[2]);
+          await withStateDirectoryAccess(async () => {
+            const lease = await acquireContinuousLease(binding);
+            if (!lease) throw Error("no lease");
+            await reserveContinuousRequest(binding, lease, "d".repeat(64));
+            await reserveContinuousRequest(binding, lease, "d".repeat(64));
+          });
+          process.on("message", () => {});
+          process.send({ ready: true });
+          await new Promise(() => {});`,
         resolveDir: process.cwd(),
       },
       outfile: output,
@@ -152,7 +165,7 @@ test("separate processes allow legacy foreground access and retain budgets acros
       packages: "external",
       logLevel: "silent",
     });
-    const child = fork(output, [], {
+    const child = fork(output, [JSON.stringify(binding)], {
       env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });

@@ -3,21 +3,24 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import { pull, push, status, syncBoth } from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";
+import { handleCommand } from "../src/commands/command-handler.js";
 import type { CommandOptions } from "../src/commands/command-types.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import type { Snapshot } from "../src/snapshot/snapshot-types.js";
 import { statePathForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
+import { createStartupCheck } from "../src/sync/startup-check.js";
 import { SyncDecisionRequiredError } from "../src/sync/sync-decision.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
-import { pull, push, status, syncBoth } from "../src/sync/sync-operations.js";
+import { createSyncLoaders } from "../src/sync/sync-loaders.js";
 import { RemoteSelectionMismatchError } from "../src/sync/sync-policy.js";
-import sync from "../src/sync.js";
-import { classifyObservation } from "../src/ui/sync-attention.js";
+import { classifyObservation, createSyncAttentionController } from "../src/ui/sync-attention.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
 
@@ -328,8 +331,10 @@ test("startup check reports missing baseline without predicting a directional co
       throw new Error(`Unexpected request: ${url.pathname}`);
     };
     let customCalls = 0;
-    const mock = createMockPi();
-    sync(mock.pi);
+    const controller = createStartupCheck(
+      createSyncLoaders({ loadSyncInspection: async () => ({ inspectSync }) }),
+      createSyncAttentionController(),
+    );
     const { ctx, notifications } = createMockContext({
       hasUI: true,
       mode: "rpc",
@@ -341,10 +346,10 @@ test("startup check reports missing baseline without predicting a directional co
     const { observeCheckCompletion } = await import("./startup-check-helpers.js");
     const completion = observeCheckCompletion(ctx);
     try {
-      await mock.events.get("session_start")?.[0]?.({}, ctx);
+      controller.start(ctx, new AbortController().signal);
       await completion.completed;
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
     } finally {
+      await controller.stop();
       globalThis.fetch = originalFetch;
     }
     assert.equal(customCalls, 0);
@@ -358,13 +363,17 @@ test("direct pull retains its actionable notification instead of opening recover
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
     writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
-    const mock = createMockPi();
-    sync(mock.pi);
     const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(null, { status: 404 });
     try {
-      await mock.commands.get("sync")?.handler("pull", ctx);
+      await handleCommand(
+        "pull",
+        ctx as ExtensionCommandContext,
+        new AbortController().signal,
+        createSyncLoaders({ loadSyncOperations: () => import("@narumitw/sync-daemon/engine/sync/sync-operations") }),
+        createSyncAttentionController(),
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

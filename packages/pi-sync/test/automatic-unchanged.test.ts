@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadConfig } from "../src/settings/config.js";
@@ -13,10 +14,12 @@ import {
   syncStateFingerprint,
   writeStateForConfig,
 } from "../src/state/sync-state-store.js";
+import { withAgentSyncLock } from "../src/sync/agent-sync.js";
 import { mergeJournalIdentity, mergeJournalPath, writeMergeJournal } from "../src/sync/merge-journal.js";
 import { createStartupTimings } from "../src/sync/startup-timings.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
+import { withEngineFixtureHost } from "./engine-host.js";
 import { withTempHome } from "./helpers.js";
 import { createMergeFixture, mergeOptions } from "./merged-sync-fixture.js";
 import { contextUi, deferred } from "./startup-check-helpers.js";
@@ -91,6 +94,7 @@ test("startup passes one collector through inspection and unchanged automatic tr
   await withTempHome(async (root) => {
     const f = await fixture(root);
     await updateLocalConfig((settings) => ({ ...settings, debug: true }));
+    await adoptFixtureRoot(root);
     const { default: sync } = await import("../src/sync-extension.js");
     const mock = createMockPi();
     const context = createMockContext({ mode: "rpc" });
@@ -109,7 +113,9 @@ test("startup passes one collector through inspection and unchanged automatic tr
       loadSyncOperations: async () =>
         ({
           syncBoth: (ctx: ExtensionContext, options: Parameters<typeof syncBoth>[1]) =>
-            syncBoth(ctx, options, () => f.backend),
+            withEngineFixtureHost(() =>
+              withAgentSyncLock(ctx, options, (current) => syncBoth(ctx, current, () => f.backend)),
+            ),
         }) as never,
     });
     const calls = observed(f);

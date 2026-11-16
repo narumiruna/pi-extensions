@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initializeSync as startSession } from "@narumitw/sync-daemon/engine/sync/initialization";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { configuredSessionDir, sessionDirForApply } from "../src/snapshot/session-paths.js";
@@ -13,7 +14,6 @@ import {
 } from "../src/snapshot/snapshot-root-transition.js";
 import { applySnapshotTransaction } from "../src/snapshot/snapshot-transaction.js";
 import { fileImage } from "../src/snapshot/snapshot-transaction-plan.js";
-import { startSession } from "../src/sync/automatic-sync.js";
 import { snapshot, withTempHome } from "./helpers.js";
 
 function defaultContext() {

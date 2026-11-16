@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initializeSync as startSession } from "@narumitw/sync-daemon/engine/sync/initialization";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { pendingTransactionEntries, transactionRoot } from "../src/snapshot/snapshot-transaction-directory.js";
-import { startSession } from "../src/sync/automatic-sync.js";
 import { withTempHome } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
 
@@ -90,7 +90,7 @@ for (const boundary of ["abort", "session mutation"] as const) {
       const controller = new AbortController();
       const context = createMockContext({ mode: "rpc" });
       let recoveries = 0;
-      vi.doMock("../src/snapshot/snapshot-transaction.js", async () => {
+      vi.doMock("@narumitw/sync-daemon/engine/snapshot/snapshot-transaction", async () => {
         entered.resolve();
         await release.promise;
         return {
@@ -112,7 +112,7 @@ for (const boundary of ["abort", "session mutation"] as const) {
       } finally {
         release.resolve();
         await pending.catch(() => {});
-        vi.doUnmock("../src/snapshot/snapshot-transaction.js");
+        vi.doUnmock("@narumitw/sync-daemon/engine/snapshot/snapshot-transaction");
       }
     });
   });

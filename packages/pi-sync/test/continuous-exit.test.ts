@@ -17,7 +17,12 @@ for (const replacement of ["inode", "token"] as const)
       const binding = "e".repeat(64);
       await build({
         stdin: {
-          contents: `import {acquireContinuousLease} from ${JSON.stringify(path.resolve("packages/pi-sync/src/sync/continuous-lease.ts"))}; const lease=await acquireContinuousLease(${JSON.stringify(binding)}); if(!lease)throw Error("no lease"); process.on("message",()=>process.exit(0)); process.send({ready:true});`,
+          contents: `import "./packages/pi-sync/test/engine-process-host.js";
+            import { acquireContinuousLease } from "./packages/pi-sync/src/sync/continuous-lease.js";
+            const lease = await acquireContinuousLease(process.argv[2]);
+            if (!lease) throw Error("no lease");
+            process.on("message", () => process.exit(0));
+            process.send({ ready: true });`,
           resolveDir: process.cwd(),
         },
         outfile: output,
@@ -27,7 +32,7 @@ for (const replacement of ["inode", "token"] as const)
         packages: "external",
         logLevel: "silent",
       });
-      const child = fork(output, [], {
+      const child = fork(output, [binding], {
         env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       });

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import { createEventBus, type EventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createSyncStatusPublisher, setSyncStatus } from "../src/ui/sync-status.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
 
@@ -160,7 +162,9 @@ test("independent publishers do not share current metadata through a shared no-o
 
 for (const boundary of ["failed initialization", "reload", "shutdown", "aborted shutdown", "first use"] as const) {
   test(`factory releases its optional listener at ${boundary}`, async () =>
-    withTempHome(async () => {
+    withTempHome(async (agentDir) => {
+      await fs.mkdir(agentDir, { recursive: true });
+      await adoptFixtureRoot(agentDir);
       vi.resetModules();
       const pausedShutdown = deferred();
       const enteredShutdown = deferred();

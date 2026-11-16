@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
 import { vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -8,9 +9,11 @@ import { createSnapshot } from "../src/snapshot/snapshot.js";
 import { stageMergeBaseline } from "../src/state/merge-baseline-store.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
 import type { ContinuousClock } from "../src/sync/continuous-sync.js";
-import { inspectSync } from "../src/sync/sync-inspection.js";
-import { createSyncLoaders, type SyncDependencies } from "../src/sync/sync-loaders.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
+import {
+  createEngineTestLoaders as createSyncLoaders,
+  type EngineTestDependencies as SyncDependencies,
+} from "./engine-loaders.js";
 import type { MemorySyncBackend } from "./memory-sync-backend.js";
 
 export function requiredHome(settings: PiSyncSettingsV3) {
@@ -41,7 +44,7 @@ export function continuousDependencies(
         inspectSync(config, options, signal, () => backend, timings),
     }),
     loadSyncOperations: async () => ({
-      ...(await import("../src/sync/sync-operations.js")),
+      ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
       syncBoth: (ctx, options) => syncBoth(ctx, options, () => backend),
     }),
     ...overrides,

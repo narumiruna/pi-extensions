@@ -4,13 +4,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { withPiDaemonClient } from "../src/daemon/pi-client.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath, withConfigReplacementInstalledHookForTest } from "../src/settings/config-file.js";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
 import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
+import { withStateDirectoryAccess } from "../src/state/state-directory.js";
 import { lockPath, writeStateForConfig } from "../src/state/sync-state-store.js";
 import { setSyncStatus } from "../src/ui/sync-status.js";
-import { v3S3Settings, withTempHome } from "./helpers.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
+import { installEngineFixtureHost } from "./engine-host.js";
+import { v3S3Settings, v3WebDavSettings, withTempHome } from "./helpers.js";
+import { initializationGate } from "./initialization-gate.js";
+import { MockWebDavServer } from "./mock-webdav-server.js";
 import { contextUi, deferred, inspectionFixture, observeCheckCompletion } from "./startup-check-helpers.js";
 
 async function configured(run: (agentDir: string) => Promise<void>) {
@@ -18,6 +24,7 @@ async function configured(run: (agentDir: string) => Promise<void>) {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings({ automatic: true })));
     await fs.writeFile(path.join(agentDir, "settings.json"), "{}\n");
+    await adoptFixtureRoot(agentDir);
     await run(agentDir);
   });
 }
@@ -93,12 +100,14 @@ test("disabled status remains active when the session starts without a sync setu
 
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     const configuredSettings = v3S3Settings() as PiSyncSettingsV3;
-    await updateLocalConfig((settings) => ({
-      ...settings,
-      activeSyncSetup: configuredSettings.activeSyncSetup,
-      storageConnections: configuredSettings.storageConnections,
-      syncSetups: configuredSettings.syncSetups,
-    }));
+    await withPiDaemonClient(context.ctx, () =>
+      updateLocalConfig((settings) => ({
+        ...settings,
+        activeSyncSetup: configuredSettings.activeSyncSetup,
+        storageConnections: configuredSettings.storageConnections,
+        syncSetups: configuredSettings.syncSetups,
+      })),
+    );
     setSyncStatus(context.ctx, "sync ⇡");
 
     assert.equal(context.statuses.get("sync"), undefined);
@@ -205,12 +214,14 @@ for (const mutation of ["automatic", "include", "destination", "credentials", "s
         settings.activeSyncSetup = "work";
       }
       if (mutation === "state")
-        await writeStateForConfig(await loadConfig(), {
-          version: 2,
-          profile: "home",
-          lastAppliedSnapshot: "newer",
-          lastFileHashes: {},
-        });
+        await withPiDaemonClient(context.ctx, async () =>
+          writeStateForConfig(await loadConfig(), {
+            version: 2,
+            profile: "home",
+            lastAppliedSnapshot: "newer",
+            lastFileHashes: {},
+          }),
+        );
       else await fs.writeFile(localConfigPath(), mutation === "invalid" ? "{broken" : JSON.stringify(settings));
       release.resolve();
       await completion.completed;
@@ -338,14 +349,7 @@ test("recovery completes before startup or foreground mutations become available
         ],
       }),
     );
-    const recovering = deferred();
-    const release = deferred();
-    const copy = fs.copyFile.bind(fs);
-    const spy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-      recovering.resolve();
-      await release.promise;
-      return copy(...args);
-    });
+    const gate = await initializationGate(agentDir);
     let mutations = 0;
     const mock = createMockPi();
     sync(mock.pi, {
@@ -361,19 +365,19 @@ test("recovery completes before startup or foreground mutations become available
     const context = createMockContext({ mode: "rpc" });
     const startup = mock.events.get("session_start")?.[0]?.({}, context.ctx);
     try {
-      await recovering.promise;
+      await gate.initializing;
       const command = mock.commands.get("sync")?.handler("push --yes", context.ctx);
       assert.equal(mutations, 0);
-      release.resolve();
+      gate.release();
       await startup;
       await command;
       assert.equal(mutations, 1);
       await assert.rejects(fs.access(directory), { code: "ENOENT" });
     } finally {
-      release.resolve();
+      gate.release();
       await startup;
       await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-      spy.mockRestore();
+      await gate.close();
     }
   });
 });
@@ -382,7 +386,7 @@ for (const owner of [process.pid, 2147483647]) {
   test(`background checking never removes an existing lock owned by ${owner === process.pid ? "a live process" : "a stopped process"}`, async () => {
     await configured(async (agentDir) => {
       const { default: sync } = await import("../src/sync-extension.js");
-      await fs.mkdir(path.join(agentDir, "pi-sync"));
+      await fs.mkdir(path.join(agentDir, "pi-sync"), { recursive: true });
       const bytes = JSON.stringify({
         id: "other-owner",
         pid: owner,
@@ -390,51 +394,58 @@ for (const owner of [process.pid, 2147483647]) {
         startedAt: new Date().toISOString(),
       });
       await fs.writeFile(lockPath(), bytes);
-      let queries = 0;
+      const storage = await new MockWebDavServer().start();
+      const settings = v3WebDavSettings({ automatic: true });
+      settings.storageConnections.dav.url = storage.url;
+      await fs.writeFile(localConfigPath(), JSON.stringify(settings));
       const mock = createMockPi();
-      sync(mock.pi, {
-        loadSyncInspection: async () => ({
-          inspectSync: async (config) => {
-            queries++;
-            return inspectionFixture(config);
-          },
-        }),
-      });
+      sync(mock.pi);
       const context = createMockContext({ mode: "rpc" });
       const completion = observeCheckCompletion(context.ctx);
       await mock.events.get("session_start")?.[0]?.({}, context.ctx);
       await completion.completed;
-      assert.equal(queries, 0);
+      assert.equal(storage.requests.length, 0);
       assert.equal(await fs.readFile(lockPath(), "utf8"), bytes);
       assert.match(context.notifications.at(-1)?.message ?? "", /startup check skipped/u);
       await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+      await storage.close();
     });
   });
 }
 
-test("foreground migration drains background state access before renaming the legacy root", async () => {
-  await configured(async (agentDir) => {
-    const { default: sync } = await import("../src/sync-extension.js");
-    await fs.mkdir(path.join(agentDir, ".pisync"));
+test("state migration refuses an active legacy user and succeeds after its guard drains", async () => {
+  await withTempHome(async (agentDir) => {
+    await fs.mkdir(path.join(agentDir, ".pisync"), { recursive: true });
+    await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings({ automatic: true })));
     const entered = deferred();
-    const mock = createMockPi();
-    sync(mock.pi, {
-      loadSyncInspection: async () => ({
-        inspectSync: async (config, _options, signal) => {
-          entered.resolve();
-          await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
-          return inspectionFixture(config);
-        },
-      }),
+    const release = deferred();
+    const holder = withStateDirectoryAccess(async () => {
+      entered.resolve();
+      await release.promise;
     });
-    const context = createMockContext({ mode: "rpc" });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await entered.promise;
-    await mock.commands.get("sync")?.handler("migrate-state --yes", context.ctx);
-    await assert.rejects(fs.access(path.join(agentDir, ".pisync")), { code: "ENOENT" });
-    await fs.access(path.join(agentDir, "pi-sync"));
-    assert.ok(context.notifications.some((n) => /Migrated pi-sync state/u.test(n.message)));
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+    const { default: sync } = await import("../src/sync-extension.js");
+    const mock = createMockPi();
+    sync(mock.pi);
+    const context = createMockContext({ mode: "rpc" });
+    contextUi(context.ctx).confirm = async () => true;
+    try {
+      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      await mock.commands.get("sync")?.handler("migrate-state --yes", context.ctx);
+      await fs.access(path.join(agentDir, ".pisync"));
+      await assert.rejects(fs.access(path.join(agentDir, "pi-sync")), { code: "ENOENT" });
+      assert.ok(context.notifications.some((item) => /migration was deferred/u.test(item.message)));
+      release.resolve();
+      await holder;
+      await mock.commands.get("sync")?.handler("migrate-state --yes", context.ctx);
+      await assert.rejects(fs.access(path.join(agentDir, ".pisync")), { code: "ENOENT" });
+      await fs.access(path.join(agentDir, "pi-sync"));
+      assert.ok(context.notifications.some((item) => /Migrated pi-sync state/u.test(item.message)));
+    } finally {
+      release.resolve();
+      await holder;
+      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+    }
   });
 });
 
@@ -493,6 +504,7 @@ test("startup settings read waits for an ordered save and observes its durable O
         await startup;
         await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
         assert.equal(loads, 0);
+        installEngineFixtureHost();
         assert.equal((await loadConfig()).automatic, false);
       },
     );

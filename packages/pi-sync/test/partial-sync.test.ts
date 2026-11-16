@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { showConflicts } from "@narumitw/sync-daemon/engine/sync/conflict-review";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";
@@ -17,7 +18,6 @@ import {
 } from "../src/sync/conflict-artifacts.js";
 import { resolveReviewedGroup } from "../src/sync/conflict-resolution.js";
 import { pruneCompletedConflicts } from "../src/sync/conflict-retention.js";
-import { showConflicts } from "../src/sync/conflict-review.js";
 import { snapshotFile } from "../src/sync/content-conflicts.js";
 import { planFileMerge } from "../src/sync/file-merge-planner.js";
 import { readMergeJournal, writeMergeJournal } from "../src/sync/merge-journal.js";

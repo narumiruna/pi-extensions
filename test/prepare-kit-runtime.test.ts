@@ -178,7 +178,7 @@ for (const kind of ["file", "symlink", "dangling symlink"] as const) {
 test("clean production Git preparation loads root-listed Files source and its lazy menus through native Jiti", async () => {
   const checkout = await mkdtemp(join(tmpdir(), "prepare-git-production-"));
   try {
-    for (const packageId of ["pi-tui-kit", "pi-files"]) {
+    for (const packageId of ["pi-tui-kit", "pi-files", "sync-daemon", "pi-sync"]) {
       const target = join(checkout, "packages", packageId);
       await mkdir(target, { recursive: true });
       await copyFile(resolve("packages", packageId, "package.json"), join(target, "package.json"));
@@ -188,6 +188,8 @@ test("clean production Git preparation loads root-listed Files source and its la
       "package.json",
       "scripts/prepare.mjs",
       "scripts/prepare-kit-runtime.mjs",
+      "scripts/prepare-workspace-runtime.mjs",
+      "scripts/prepare-daemon-runtime.mjs",
       ".husky/install.mjs",
       "packages/pi-inspect/scripts/build.mjs",
     ]) {
@@ -203,6 +205,8 @@ test("clean production Git preparation loads root-listed Files source and its la
     const rootManifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
     const kitManifest = JSON.parse(await readFile(resolve("packages/pi-tui-kit/package.json"), "utf8"));
     const filesManifest = JSON.parse(await readFile(resolve("packages/pi-files/package.json"), "utf8"));
+    const daemonManifest = JSON.parse(await readFile(resolve("packages/sync-daemon/package.json"), "utf8"));
+    const syncManifest = JSON.parse(await readFile(resolve("packages/pi-sync/package.json"), "utf8"));
     const source = await inventory(resolve("packages/pi-files/src"));
     assert.deepEqual(await inventory(join(checkout, "packages/pi-files/src")), source);
     for (const file of ["index.ts", "files.ts", "file-context.ts", "scope/edit-scope.ts", "scope/picker.ts"]) {
@@ -215,6 +219,8 @@ test("clean production Git preparation loads root-listed Files source and its la
       ...Object.keys(kitManifest.peerDependencies),
       ...Object.keys(filesManifest.dependencies).filter((name) => name !== "@narumitw/pi-tui-kit"),
       ...Object.keys(filesManifest.peerDependencies),
+      ...Object.keys(daemonManifest.dependencies),
+      ...Object.keys(syncManifest.peerDependencies),
     ]);
     for (const name of dependencies) {
       const target = join(checkout, "node_modules", name);
@@ -225,6 +231,14 @@ test("clean production Git preparation loads root-listed Files source and its la
     const kitLink = join(checkout, "node_modules/@narumitw/pi-tui-kit");
     await mkdir(dirname(kitLink), { recursive: true });
     await symlink(kit, kitLink, "dir");
+    const daemon = join(checkout, "packages/sync-daemon");
+    await symlink(daemon, join(checkout, "node_modules", daemonManifest.name), "dir");
+    for (const name of Object.keys(daemonManifest.dependencies)) {
+      const nested = resolve("packages/sync-daemon/node_modules", name);
+      const target = join(daemon, "node_modules", name);
+      await mkdir(dirname(target), { recursive: true });
+      await symlink(existsSync(nested) ? nested : resolve("node_modules", name), target, "dir");
+    }
     assert.equal(existsSync(join(kit, "dist")), false);
     assert.equal(existsSync(join(kit, "scripts")), false, "the production fixture has no TypeScript build script");
     const result = spawnSync(process.execPath, ["scripts/prepare.mjs"], {
@@ -235,6 +249,9 @@ test("clean production Git preparation loads root-listed Files source and its la
     assert.equal(result.status, 0, result.stderr);
     const generated = await inventory(join(kit, "dist"));
     assert.ok(generated["index.js"]);
+    assert.ok(existsSync(join(daemon, "dist/index.js")));
+    assert.ok(existsSync(join(daemon, "dist/cli.js")));
+    assert.equal(existsSync(join(daemon, "dist/index.d.ts")), false);
     assert.equal(
       Object.keys(generated).some((file) => file.endsWith(".ts")),
       false,
@@ -360,5 +377,22 @@ try {
   await emit("session_shutdown");
   loaded.runtime.invalidate("production Git smoke complete");
 }
-console.log("PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle");
+const syncEntry = manifest.pi.extensions.find(file => file === "./packages/pi-sync/src/index.ts");
+assert.ok(syncEntry);
+const syncLoader = new sdk.DefaultResourceLoader({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, settingsManager: sdk.SettingsManager.inMemory({}), additionalExtensionPaths: [join(process.cwd(), syncEntry)] });
+await syncLoader.reload(); const syncLoaded = syncLoader.getExtensions(); assert.deepEqual(syncLoaded.errors, []);
+const syncExtension = syncLoaded.extensions[0]; assert.ok(syncExtension);
+const syncNotices=[]; const syncCtx={...ctx, mode:"rpc", sessionManager:{getSessionId:()=>"production-sync"}, ui:{...ctx.ui,notify:message=>syncNotices.push(message)}};
+try {
+  for(const handler of syncExtension.handlers.get("session_start")??[]) await handler({type:"session_start",reason:"startup"},syncCtx);
+  await syncExtension.commands.get("sync").handler("help",syncCtx);
+  assert.ok(syncNotices.some(message=>message.includes("daemon [")));
+  const api=await import("@narumitw/sync-daemon"); const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
+  try { assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance); }
+  finally { await api.stopDaemon(process.env.PI_CODING_AGENT_DIR); }
+} finally {
+  for(const handler of syncExtension.handlers.get("session_shutdown")??[]) await handler({type:"session_shutdown",reason:"reload"},syncCtx);
+  syncLoaded.runtime.invalidate("production sync Git smoke complete");
+}
+console.log("PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle, Sync source and daemon JavaScript without dev tools");
 `;

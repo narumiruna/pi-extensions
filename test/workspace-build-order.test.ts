@@ -105,6 +105,15 @@ test("selected builds include transitive prerequisites and skip unrelated builds
   });
 });
 
+test("the scoped daemon builds before Pi Sync without renaming either package directory", async () => {
+  await fixture(async (root) => {
+    await workspace(root, "sync-daemon", {}, true);
+    await workspace(root, "pi-sync", { "@narumitw/sync-daemon": "^1.0.0" }, true);
+    assert.equal(runBuilds({ root, workspaceNames: ["@narumitw/pi-sync"] }), 0);
+    assert.equal(await readFile(join(root, "order.log"), "utf8"), "sync-daemon\npi-sync\n");
+  });
+});
+
 test("a failed prerequisite stops consumers, including signal and spawn failures", async () => {
   await fixture(async (root) => {
     for (const failure of [{ status: 7 }, { status: null }, { status: null, error: new Error("cannot spawn") }]) {

@@ -1,0 +1,145 @@
+import { createHash, randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { type Identity, MAX_MESSAGE_BYTES, record } from "./protocol.js";
+
+export interface RuntimePaths {
+  root: string;
+  directory: string;
+  identity: string;
+  startup: string;
+  owner: string;
+}
+export function canonicalRootGuard(root: string) {
+  const identity = lstatSync(root);
+  return () => {
+    const current = lstatSync(root);
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      current.dev !== identity.dev ||
+      current.ino !== identity.ino ||
+      realpathSync(root) !== root
+    )
+      throw new Error("Canonical agent root changed; work stopped and recovery evidence retained.");
+  };
+}
+export async function runtimePaths(root: string): Promise<RuntimePaths> {
+  const canonical = await fs.realpath(path.resolve(root));
+  const hash = createHash("sha256").update(canonical).digest("hex");
+  const user = process.getuid?.() ?? createHash("sha256").update(os.homedir()).digest("hex").slice(0, 12);
+  const base = process.platform === "win32" ? path.join(os.homedir(), "AppData", "Local") : "/tmp";
+  const directory = path.join(base, `sync-daemon-${user}`, hash);
+  return {
+    root: canonical,
+    directory,
+    identity: path.join(directory, "identity.json"),
+    startup: path.join(directory, "startup.lock"),
+    owner: path.join(directory, "owner.lock"),
+  };
+}
+export interface DaemonPaths extends RuntimePaths {
+  endpoint: string;
+  endpointDirectory?: string;
+}
+export function daemonPaths(paths: RuntimePaths, instance: string): DaemonPaths {
+  const nonce = createHash("sha256").update(instance).digest("hex").slice(0, 16);
+  const root = path.basename(paths.directory).slice(0, 16);
+  const endpointDirectory = path.join(path.dirname(paths.directory), `${root}-${nonce}`);
+  const endpoint =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\sync-daemon-${path.basename(path.dirname(paths.directory))}-${root}-${nonce}`
+      : path.join(endpointDirectory, "api.sock");
+  if (process.platform !== "win32" && Buffer.byteLength(endpoint) > 103)
+    throw new Error("Daemon endpoint path is too long.");
+  return { ...paths, endpoint, ...(process.platform === "win32" ? {} : { endpointDirectory }) };
+}
+export async function privateDirectory(directory: string) {
+  const parent = path.dirname(directory);
+  if (parent !== path.dirname(parent) && path.basename(parent).startsWith("sync-daemon-"))
+    await privateDirectory(parent);
+  try {
+    await fs.mkdir(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const stat = await fs.lstat(directory);
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    (process.getuid && stat.uid !== process.getuid()) ||
+    (process.platform !== "win32" && (stat.mode & 0o077) !== 0)
+  )
+    throw new Error("Unsafe daemon runtime directory.");
+}
+export async function readIdentity(paths: RuntimePaths): Promise<Identity | undefined> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    const before = await fs.lstat(paths.identity);
+    if (
+      !before.isFile() ||
+      before.isSymbolicLink() ||
+      before.size > 8192 ||
+      (process.getuid && before.uid !== process.getuid()) ||
+      (process.platform !== "win32" && (before.mode & 0o077) !== 0)
+    )
+      throw new Error("Unsafe daemon identity file.");
+    handle = await fs.open(paths.identity, "r");
+    const opened = await handle.stat();
+    if (before.dev !== opened.dev || before.ino !== opened.ino)
+      throw new Error("Daemon identity changed while opening.");
+    const value: unknown = JSON.parse(await handle.readFile("utf8"));
+    if (
+      !record(value) ||
+      value.version !== 1 ||
+      value.root !== paths.root ||
+      typeof value.instance !== "string" ||
+      !/^[a-f0-9-]{36}$/u.test(value.instance) ||
+      !Number.isSafeInteger(value.pid) ||
+      Number(value.pid) < 1 ||
+      Number(value.pid) > 2_147_483_647 ||
+      typeof value.token !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.token)
+    )
+      throw new Error("Invalid or incompatible daemon identity; state retained.");
+    return value as unknown as Identity;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+export function processExists(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+export async function publishIdentity(paths: RuntimePaths, identity: Identity) {
+  const temporary = path.join(paths.directory, `.${randomUUID()}.json`);
+  const handle = await fs.open(temporary, "wx", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(identity));
+    await handle.sync();
+    await handle.close();
+    await fs.rename(temporary, paths.identity);
+  } finally {
+    await handle.close().catch(() => {});
+    await fs.rm(temporary, { force: true });
+  }
+}
+export async function readJsonBody(source: AsyncIterable<Uint8Array>): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of source) {
+    size += chunk.byteLength;
+    if (size > MAX_MESSAGE_BYTES) throw new Error("Daemon request exceeds its byte limit.");
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}

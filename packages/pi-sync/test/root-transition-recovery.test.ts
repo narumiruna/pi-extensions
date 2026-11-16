@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initializeSync as startSession } from "@narumitw/sync-daemon/engine/sync/initialization";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import {
   applySnapshotTransaction,
   recoverSnapshotTransactionsOnStartup,
 } from "../src/snapshot/snapshot-transaction.js";
-import { startSession } from "../src/sync/automatic-sync.js";
 import { withTempHome } from "./helpers.js";
 
 async function interrupted(agentDir: string, direction: string, phase: string, missingSettings = false) {

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
@@ -31,6 +30,7 @@ import { showSetupSwitcher } from "../src/ui/setup/setup-switcher.js";
 import { showSetupWizard } from "../src/ui/setup/setup-wizard.js";
 import { showStorageConnections } from "../src/ui/storage-connections-ui.js";
 import { configureSyncStatus, setSyncStatus } from "../src/ui/sync-status.js";
+import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { createMockContext } from "./setup-test-context.js";
 
@@ -79,7 +79,7 @@ test.each([
       },
       custom: secretInput("secret-key", rendered),
     });
-    await mock.commands.get("sync")?.handler("", ctx);
+    await runRegisteredCommand(mock, ctx, "");
     const saved = await readLocalConfigObject();
     assert.equal(saved?.skipSecretScan, false);
     assert.equal(saved?.showStatus, true);
@@ -197,7 +197,7 @@ test("generic S3 setup reviews one complete custom storage path", async () => {
       },
       custom: secretInput("secret-key"),
     });
-    await mock.commands.get("sync")?.handler("", ctx);
+    await runRegisteredCommand(mock, ctx, "");
     const saved = await readLocalConfigObject();
     assert.deepEqual(saved?.syncSetups.work.storage, {
       connection: "work",
@@ -238,7 +238,7 @@ test("session inclusion requires privacy acknowledgement before settings publica
       },
       custom: secretInput("secret-key"),
     });
-    await mock.commands.get("sync")?.handler("", ctx);
+    await runRegisteredCommand(mock, ctx, "");
     assert.equal(privacyShown, true);
     assert.equal(await readLocalConfigObject(), undefined);
   });
@@ -255,7 +255,7 @@ test("cancelling first setup creates neither settings nor sync state", async () 
       mode: "tui",
       select: async () => choices.shift(),
     });
-    await mock.commands.get("sync")?.handler("", ctx);
+    await runRegisteredCommand(mock, ctx, "");
     assert.equal(await readLocalConfigObject(), undefined);
     assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
     assert.equal(existsSync(path.join(agentDir, ".pisync")), false);
@@ -417,7 +417,7 @@ test.each([3, 4, 5])(
         },
         input: async () => inputs.shift(),
       });
-      await mock.commands.get("sync")?.handler("", ctx);
+      await runRegisteredCommand(mock, ctx, "");
       const config = await loadConfig("work");
       assert.equal(config.connectionName, "r2");
       assert.equal(config.storagePath, "./");
@@ -593,19 +593,19 @@ test("cross-process settings mutations serialize under one read-modify-write loc
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
     writeSettings();
-    const configModule = pathToFileURL(
-      path.join(
-        process.cwd(),
-        "node_modules/.cache/pi-extensions-test/packages/pi-sync/src/settings/settings-store.js",
-      ),
-    ).href;
     const mutate = (field: string) =>
       execFileAsync(
         process.execPath,
         [
           "--input-type=module",
           "--eval",
-          `import { updateLocalConfig } from ${JSON.stringify(configModule)}; await updateLocalConfig((settings) => ({ ...settings, ${field}: true }));`,
+          `import { configureEngineHost } from "@narumitw/sync-daemon/engine/host";
+           import { updateLocalConfig } from "@narumitw/sync-daemon/engine/settings/settings-store";
+           const [root, field] = process.argv.slice(1);
+           configureEngineHost({ root: () => root });
+           await updateLocalConfig((settings) => ({ ...settings, [field]: true }));`,
+          agentDir,
+          field,
         ],
         { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir } },
       );

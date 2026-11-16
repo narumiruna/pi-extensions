@@ -1,6 +1,2 @@
-export function isMissingConfigError(error: unknown) {
-  return (
-    error instanceof Error &&
-    (error.message.startsWith("Missing pi-sync settings.") || error.message === "No sync setups are configured.")
-  );
-}
+export type * from "@narumitw/sync-daemon/engine/settings/config-errors";
+export { isMissingConfigError } from "@narumitw/sync-daemon/engine/settings/config-errors";
