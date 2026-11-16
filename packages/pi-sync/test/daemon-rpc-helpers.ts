@@ -26,7 +26,7 @@ export class SyncRpc {
   private stderr = "";
   private partial = "";
 
-  constructor(root: string, cwd: string, extension: string) {
+  constructor(root: string, cwd: string, extension: string, sessionDir?: string) {
     let ready!: () => void;
     let failReady!: (error: Error) => void;
     this.ready = new Promise<void>((resolve, reject) => {
@@ -50,6 +50,7 @@ export class SyncRpc {
         "sync-rpc-fixture",
         "--model",
         "fixture",
+        ...(sessionDir ? ["--session-dir", sessionDir] : []),
         "-e",
         extension,
       ],
@@ -136,6 +137,21 @@ export class SyncRpc {
     } finally {
       clearTimeout(deadline);
       this.pending.delete(id);
+    }
+  }
+  async command(message: string, confirm: (title: string) => boolean) {
+    const listener = (record: RecordValue) => {
+      if (record.type !== "extension_ui_request" || record.method !== "confirm" || typeof record.id !== "string")
+        return;
+      this.child.stdin?.write(
+        `${JSON.stringify({ type: "extension_ui_response", id: record.id, confirmed: confirm(String(record.title)) })}\n`,
+      );
+    };
+    this.listeners.add(listener);
+    try {
+      return await this.call({ type: "prompt", message });
+    } finally {
+      this.listeners.delete(listener);
     }
   }
   async prompt(message: string) {

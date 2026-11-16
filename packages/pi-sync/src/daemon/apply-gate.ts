@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { withTargetQueues } from "@narumitw/sync-daemon/engine/snapshot/snapshot-mutation-queues";
-import { isPathInside } from "../paths.js";
 
 interface Gate {
   token: string;
@@ -14,26 +13,20 @@ interface Gate {
   reject(error: unknown): void;
   release(): void;
 }
-/** Holds the running Pi's actual public file queues, not a daemon-local imitation. */
+/**
+ * Holds the running Pi's actual public file queues; it does not authorize filesystem writes.
+ * The engine owns reviewed destinations, which can differ from every participant's current roots.
+ */
 export class PiApplyGate {
   private gates = new Map<string, Gate>();
-  constructor(
-    private roots: () => readonly string[],
-    private validate: () => void,
-  ) {}
+  constructor(private validate: () => void) {}
   async acquire(requestId: string, targets: readonly string[], signal?: AbortSignal) {
     this.validate();
     signal?.throwIfAborted();
     if (
       !targets.length ||
       targets.length > 16_384 ||
-      targets.some(
-        (target) =>
-          typeof target !== "string" ||
-          target.includes("\0") ||
-          !path.isAbsolute(target) ||
-          !this.roots().some((root) => isPathInside(root, target)),
-      )
+      targets.some((target) => typeof target !== "string" || target.includes("\0") || !path.isAbsolute(target))
     )
       throw new Error("Invalid daemon mutation targets.");
     const normalized = [...new Set(targets.map((target) => path.resolve(target)))].sort();
@@ -120,7 +113,6 @@ export class PiApplyGate {
   }
   detach() {
     const failure = new DOMException("Pi session detached", "AbortError");
-    this.roots = () => [];
     this.validate = () => {
       throw failure;
     };

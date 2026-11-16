@@ -68,7 +68,8 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Confirmed daemon exit | Release quarantined Pi grants only after ESRCH | Apply-gate tests |
 | Busy participating client / changed generation | Stop or refuse automatic work; invalidate stale approval | Lifecycle tests |
 | Directional sync / remote-selection decision across IPC | Restore the typed decision for command and recovery routing; preserve the existing resolution menu | Actual daemon error-routing tests |
-| Pi edit/write during apply | Hold the actual public Pi queue; recheck preimages | Real `createEditTool` race test |
+| Pi edit/write during apply, inside or outside the agent root | Hold the actual public Pi queue; recheck preimages | Real `createEditTool` race tests |
+| Reviewed external session destination / different peer session roots | Reserve every participant's canonical target queues; do not restrict coordination to its current roots | Actual two-client Pi RPC pull tests |
 | Client joins during queue grant, apply, or release | Delay attach publication through the full reservation lifetime; include the new client in the next batch | Admission tests for print, JSON, and RPC clients, nested writes, cancellation, shutdown, and hook re-entry |
 | Pi core settings update, existing file | Share its `proper-lockfile` file lock | Settings writer race tests |
 | Missing `settings.json` with a live Pi | Refuse creation; Pi's missing-file branch does not reread after lock | Missing-settings contract test |
@@ -94,6 +95,8 @@ Acquire target queues in deterministic client-ID and canonical-target order. Eac
 Batch reservations cover the transaction, not only each rename. `Execution.withParticipants()` fences attach publication from the peer snapshot through every grant, nested write, and acknowledged release. Nested reservations share that fence instead of reacquiring it. An attach queued behind an apply cannot finish startup until the reservation ends; the next batch includes that client. Cancelled waiters cannot publish later, and shutdown drains admission. Attach has no idle request timeout: a legitimate long apply must not let startup escape the fence. Transport disconnection cancels queued admission, and the Pi adapter pauses or disposes its partial connection without waiting for attach to finish. Other local requests retain their timeout. Monitoring hooks run outside the fence because they can await a queued background reservation.
 
 Nested writes retain the transaction's queue ownership. Validate paths and canonical parents before reservation and recheck session protection and preimages after every await that can change them. The daemon's own Pi queue alone is insufficient.
+
+A queue grant coordinates access; it does not authorize a filesystem write. The engine owns destination selection, transfer review, path preflight, and session protection. A reviewed session destination can be outside the agent directory and every participant's current session root. Each client must reserve those bounded absolute canonical targets without imposing a second current-root policy. Otherwise a directional root transition or a peer with a different session root can block an otherwise valid transfer.
 
 Pi core's settings storage has separate existing-file and missing-file branches (`FileSettingsStorage.withLock()` in the installed SDK). Existing files lock before reading. Missing files compute the update before acquiring the file lock and do not reread afterward. Therefore creation with live Pi clients is refused, rather than claiming that the shared lock repairs this branch.
 

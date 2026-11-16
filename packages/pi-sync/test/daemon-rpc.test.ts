@@ -6,14 +6,19 @@ import os from "node:os";
 import path from "node:path";
 import { findDaemon, stopDaemon } from "@narumitw/sync-daemon";
 import { test } from "vitest";
+import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
+import { configFromSettings } from "../src/settings/config.js";
+import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { SyncRpc } from "./daemon-rpc-helpers.js";
-import { v3WebDavSettings } from "./helpers.js";
+import { adoptFixtureRoot } from "./daemon-test-helpers.js";
+import { snapshot, v3WebDavSettings } from "./helpers.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
 async function fixture(
   run: (value: {
     agent: string;
-    connect(): SyncRpc;
+    cwd: string;
+    connect(sessionDir?: string): SyncRpc;
     requests: Record<string, unknown>[];
     storage: MockWebDavServer;
   }) => Promise<void>,
@@ -86,10 +91,11 @@ async function fixture(
     await fs.writeFile(path.join(agent, "AGENTS.md"), "Test-owned parent instructions.\n");
     await run({
       agent,
+      cwd,
       requests,
       storage,
-      connect() {
-        const client = new SyncRpc(root, cwd, path.resolve("packages/pi-sync/src/index.ts"));
+      connect(sessionDir) {
+        const client = new SyncRpc(root, cwd, path.resolve("packages/pi-sync/src/index.ts"), sessionDir);
         clients.push(client);
         return client;
       },
@@ -144,6 +150,56 @@ test("two real Pi RPC clients share a daemon through new-session, reload, and or
     assert.equal((await findDaemon(agent))?.identity.instance, daemon.identity.instance);
     assert.equal(requests.length, 0);
   }));
+
+for (const transition of [false, true])
+  test(`a real Pi pull coordinates different peer session roots${transition ? " and a new external destination" : ""}`, () =>
+    fixture(async ({ agent, cwd, connect, requests, storage }) => {
+      const oldRoot = path.join(path.dirname(agent), "old-sessions");
+      const peerRoot = path.join(path.dirname(agent), "peer-sessions");
+      const destination = transition ? path.join(path.dirname(agent), "new-sessions") : oldRoot;
+      await fs.mkdir(oldRoot);
+      await fs.mkdir(peerRoot);
+      const settingsFile = path.join(agent, "settings.json");
+      const before = { ...JSON.parse(await fs.readFile(settingsFile, "utf8")), sessionDir: oldRoot };
+      const after = { ...before, sessionDir: destination };
+      await fs.writeFile(settingsFile, JSON.stringify(before));
+      const settings = v3WebDavSettings({ include: ["settings.json", "sessions"] });
+      settings.storageConnections.dav.url = storage.url;
+      await fs.writeFile(path.join(agent, "pi-sync.json"), JSON.stringify(settings), { mode: 0o600 });
+      const config = configFromSettings(validateSettingsDocument(settings));
+      assert.equal(config.backend.type, "webdav");
+      if (config.backend.type !== "webdav") throw new Error("Expected fixture backend.");
+      const session = `${JSON.stringify({ type: "session", version: 3, id: "transferred", timestamp: "2026-01-01T00:00:00.000Z", cwd })}\n`;
+      const remote = {
+        ...snapshot([
+          { path: "settings.json", content: Buffer.from(JSON.stringify(after)) },
+          { path: "sessions/transferred.jsonl", content: Buffer.from(session) },
+        ]),
+        profile: config.snapshotIdentity,
+        selection: { version: 1 as const, include: ["settings.json", "sessions"] },
+      };
+      await new WebDavSyncBackend(config.backend).publishSnapshot(remote, { kind: "missing" });
+      await adoptFixtureRoot(agent);
+      const first = connect(oldRoot);
+      const second = connect(peerRoot);
+      await Promise.all([first.start(), second.start()]);
+      const confirmations: string[] = [];
+      await first.command("/sync pull --force --yes", (title) => {
+        confirmations.push(title);
+        return false;
+      });
+      assert.equal(await fs.readFile(path.join(destination, "transferred.jsonl"), "utf8"), session);
+      assert.equal(JSON.parse(await fs.readFile(settingsFile, "utf8")).sessionDir, destination);
+      assert.ok(confirmations.every((title) => title.includes("Reload")));
+      assert.equal(requests.length, 0);
+      assert.ok(
+        !first.records.some(
+          (record) =>
+            record.type === "extension_ui_request" &&
+            String(record.message).includes("Invalid daemon mutation targets"),
+        ),
+      );
+    }));
 
 test("sync status preserves real Pi request prefixes and ordered tools; fork and resume reattach", () =>
   fixture(async ({ agent, connect, requests, storage }) => {

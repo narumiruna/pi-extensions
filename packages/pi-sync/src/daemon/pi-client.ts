@@ -233,10 +233,7 @@ export class PiDaemonClient {
     const root = canonicalPath(path.resolve(this.rawRoot));
     if (!root) throw new Error("Agent directory is unavailable.");
     this.root = root;
-    this.gate = new PiApplyGate(
-      () => [this.root, this.facts().sessionDir ?? path.join(this.root, "sessions")],
-      () => this.validate(),
-    );
+    this.gate = new PiApplyGate(() => this.validate());
   }
   validate() {
     this.signal.throwIfAborted();
