@@ -17,7 +17,7 @@ The helper's absolute Node and Herdr paths do not constrain the server-owned she
 A project-local executable, shell startup file, or relative/project `PATH` can therefore execute code before identity checks, readiness checks, or Pi project trust apply.
 Those later checks cannot undo an unintended launch, and tests do not establish hostile-checkout protection.
 
-**Release restriction:** the Pi executable-selection security finding remains open, and the PR stays draft.
+**Release restriction:** the Pi executable-selection security finding remains open regardless of the PR's review state.
 The user chose native managed startup rather than a manual-launch readiness contract; that choice does not fix this risk.
 Herdr upstream must provide a public executable override with supported shell/interpreter semantics, and the package maintainer must then validate trusted executable selection and shell startup without losing native readiness.
 Do not merge or publish this feature while that finding is unresolved.

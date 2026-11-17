@@ -2,7 +2,7 @@
 
 hc (herdr-core) is an additive backend in `pi-herdr`.
 Legacy Herdr remains supported with its existing startup contract and unresolved bare-`pi` launcher security finding.
-This backend does not fix that finding or lift the legacy draft/release restriction documented in [Peer spawn provenance](peer-provenance.md#native-startup-contract).
+This backend does not fix that finding or lift the legacy release restriction documented in [Peer spawn provenance](peer-provenance.md#native-startup-contract).
 
 ## Authority and backend selection
 
@@ -194,5 +194,5 @@ Physical TUI appearance and terminal/keybinding-specific delivery remain unverif
 Provider entitlement, latency, model compliance with independence, and provider/TUI end-to-end behavior remain unverified.
 Do not request secrets, bypass MFA, incur unauthorized costs, or retry a clear entitlement failure.
 
-The legacy native-launch security finding remains open and its PR remains draft; hc's direct argv path is not a legacy fix.
+The legacy native-launch security finding remains open regardless of the PR's review state; hc's direct argv path is not a legacy fix.
 No first publication, npm visibility change, tag, or release workflow is authorized by this integration or its verification handoff.

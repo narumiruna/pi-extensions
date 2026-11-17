@@ -89,7 +89,7 @@ hc relationships are explicitly **terminal ancestry**, not Pi session identity o
 The skill checks installed templates first; otherwise its helper needs a verified absolute external Node runtime and Pi CLI script, and starts an independent interactive peer without arranging windows.
 Trust the launch environment, endpoint, external executables, templates, and package code; sampled status/foreground facts do not prevent takeover or draft races.
 See [hc integration](./docs/hc-integration.md) for the wire contract, launch limits, and unverified external checks.
-This addition does not fix legacy Herdr's unresolved bare-`pi` launcher finding or lift its draft/release restriction.
+This addition does not fix legacy Herdr's unresolved bare-`pi` launcher finding or lift its release restriction.
 
 ## ⚙️ Settings
 
