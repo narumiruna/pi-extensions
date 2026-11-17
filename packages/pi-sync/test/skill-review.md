@@ -1,8 +1,7 @@
 # Configuration skill verification
 
 The skill is guidance-only and manual-only.
-The authoritative configuration text is `skills/configure-pi-sync/references/configuration.md`.
-The previous settings URL remains a heading-preserving index, not a second settings specification.
+The authoritative configuration text is the [bundled settings reference](../skills/configure-pi-sync/references/configuration.md).
 
 ## Representative question review
 
@@ -35,7 +34,7 @@ npm --workspace @narumitw/pi-sync run build --if-present
 node packages/pi-sync/test/skill-cli-smoke.ts
 ```
 
-`test/skill.test.ts` checks real Pi discovery through package and root manifests, reload, exclusion from ordinary model prompts, reference boundaries, retained old anchors, and JSON examples against the real validator.
+`test/skill.test.ts` checks real Pi discovery through package and root manifests, reload, exclusion from ordinary model prompts, reference boundaries, retained legacy fragments in the authoritative reference, and JSON examples against the real validator.
 Its negative cases cover unsupported versions, missing required policy fields, invalid booleans, and forbidden version downgrades.
 
 `test/skill-cli-smoke.ts` reads the installed Pi package's `bin.pi` entry and starts it with `process.execPath`, without a global `pi` or npm's PATH changes.
