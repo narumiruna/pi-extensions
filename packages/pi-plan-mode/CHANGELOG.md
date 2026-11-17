@@ -1,5 +1,11 @@
 # @narumitw/pi-plan-mode
 
+## 0.60.2
+
+### Patch Changes
+
+- 757800f: Skip unchanged branch-local state writes so an idle instance does not append a stale state branch during shutdown. Preserve meaningful state changes and completion recovery, and make repeated shutdown share one cleanup task.
+
 ## 0.60.1
 
 ### Patch Changes
