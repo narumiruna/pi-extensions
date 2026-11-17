@@ -14,6 +14,7 @@ import {
   readJsonBody,
   runtimePaths,
 } from "./identity.js";
+import { createIdleExit, type IdleExitPolicy } from "./idle-exit.js";
 import { withCleanup } from "./lifecycle.js";
 import { ParticipantAdmission } from "./participant-admission.js";
 import {
@@ -21,6 +22,7 @@ import {
   type ClientEvent,
   type ClientFacts,
   type ClientHandoff,
+  DaemonStoppingError,
   type Execute,
   type Execution,
   type Identity,
@@ -69,6 +71,10 @@ export interface ServerHooks {
   factsChanged?(): Promise<void>;
   idle?(): void;
   close?(): Promise<void>;
+  lifetime?(): Promise<IdleExitPolicy>;
+  quiesce?(): Promise<void>;
+  stopped?(): void;
+  failure?(): void;
 }
 
 export async function startServer(root: string, execute: Execute, hooks: ServerHooks = {}) {
@@ -110,13 +116,22 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   const peersFile = path.join(paths.directory, "clients.json");
   let sequence = 0;
   let closed = false;
+  let automaticClosing = false;
+  let peerWriteFailed = false;
+  let idleExit: ReturnType<typeof createIdleExit> | undefined;
+  let expiring: Promise<void> | undefined;
+  const peerOperations = new Set<Promise<unknown>>();
   let queue = Promise.resolve();
   let closing: Promise<void> | undefined;
   let peerWrites = Promise.resolve();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   function savePeers() {
+    idleExit?.changed();
     const operation = peerWrites.then(writePeers);
-    peerWrites = operation.catch(() => {});
+    peerWrites = operation.catch(() => {
+      peerWriteFailed = true;
+      hooks.failure?.();
+    });
     return operation;
   }
   async function writePeers() {
@@ -209,6 +224,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     }
   };
   const assertOwner = () => {
+    if (automaticClosing && !compromised) throw new DaemonStoppingError();
     if (closed || compromised) throw new Error("Daemon ownership is no longer valid.");
     assertRoot();
   };
@@ -431,6 +447,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     return result;
   }
   async function handle(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+    if (automaticClosing && method !== "stop") throw new DaemonStoppingError();
     const cleanup = ["answer", "poll", "cancel", "detach", "pause", "handoff", "stop"].includes(method);
     if (!published && !cleanup) throw new Error("Daemon readiness is not published.");
     if (!cleanup) assertOwner();
@@ -636,7 +653,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         admissionController = new AbortController();
         response.once("close", disconnect);
       }
-      respond(response, 200, { result: await handle(body.method, body.params, admissionController?.signal) });
+      const operation = handle(body.method, body.params, admissionController?.signal);
+      if (["attach", "update", "detach", "pause", "handoff"].includes(body.method)) {
+        peerOperations.add(operation);
+        void operation.finally(() => peerOperations.delete(operation)).catch(() => {});
+      }
+      respond(response, 200, { result: await operation });
     } catch (error) {
       if (!response.destroyed) respond(response, 400, { error: remoteError(error) });
     } finally {
@@ -662,7 +684,14 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       () => withCleanup(() => endpoint.close(), release),
     );
   }
-  async function expireClients() {
+  function expireClients(): Promise<void> {
+    expiring ??= expire().finally(() => {
+      expiring = undefined;
+    });
+    return expiring;
+  }
+  async function expire() {
+    if (closed) return;
     let changed = false;
     for (const [id, peer] of participants) {
       const exited = !processExists(peer.facts.pid);
@@ -688,8 +717,58 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       await hooks.factsChanged?.();
     }
   }
+  const lifetime = async (): Promise<IdleExitPolicy> =>
+    closed || compromised || peerWriteFailed ? "pause" : ((await hooks.lifetime?.()) ?? "pause");
+  if (hooks.lifetime) {
+    idleExit = createIdleExit({
+      live: () => liveClientFacts().length > 0,
+      policy: lifetime,
+      quiesce: async () => {
+        for (const job of [...jobs.values(), ...backgroundJobs])
+          if (!job.committed) job.controller.abort(new DOMException("Daemon idle shutdown", "AbortError"));
+        await hooks.quiesce?.();
+        await Promise.allSettled([...jobs.values()].map((job) => job.promise));
+        await Promise.allSettled([...peerOperations]);
+        await expiring;
+        await peerWrites;
+      },
+      close: (current) =>
+        admission.run(async () => {
+          if (!current() || closed || peerWriteFailed || peerOperations.size) return false;
+          await peerWrites;
+          const owned = await known();
+          const policy = await lifetime();
+          if (
+            !owned ||
+            policy !== "exit" ||
+            !current() ||
+            closed ||
+            compromised ||
+            peerWriteFailed ||
+            peerOperations.size ||
+            backgroundJobs.size ||
+            pending.size ||
+            [...jobs.values()].some((job) => job.view.phase === "queued" || job.view.phase === "running")
+          )
+            return false;
+          assertRoot();
+          // Fence new admissions synchronously, then close outside the gate and monitor transition.
+          automaticClosing = true;
+          closed = true;
+          setImmediate(() => {
+            void close().catch(() => {});
+          });
+          return true;
+        }),
+      resume: () => hooks.idle?.(),
+      failed: () => hooks.failure?.(),
+    });
+    void idleExit.tick();
+  }
   heartbeat = setInterval(() => {
-    void expireClients().catch(() => {});
+    void expireClients()
+      .then(() => idleExit?.tick())
+      .catch(() => {});
   }, 1_000);
   heartbeat.unref();
   async function close() {
@@ -701,6 +780,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         if (!waiting.callback.kind.startsWith("queue-")) waiting.reject(new Error("Daemon stopping."));
       for (const job of [...jobs.values(), ...backgroundJobs])
         if (!job.committed) job.controller.abort(new DOMException("Daemon stopping", "AbortError"));
+      await idleExit?.dispose();
       let closeError: unknown;
       try {
         await hooks.close?.();
@@ -709,12 +789,18 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       }
       await Promise.allSettled([...jobs.values()].map((job) => job.promise));
       await admission.run(async () => {});
+      await Promise.allSettled([...peerOperations]);
+      await expiring;
+      await peerWrites;
       for (const waiting of [...pending.values()]) waiting.reject(new Error("Daemon stopping."));
+      // A failed engine drain must retain the live owner, not permit an implicit restart.
+      if (closeError) throw closeError;
       await endpoint.close();
       if (await known()) await fs.rm(paths.identity, { force: true });
       await release();
-      if (closeError) throw closeError;
+      hooks.stopped?.();
     })().catch((error) => {
+      hooks.failure?.();
       closing = undefined;
       throw error;
     });
@@ -750,6 +836,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     participants: participantFacts,
     liveClients: liveClientFacts,
     expireClients,
+    // The heartbeat and deterministic lifecycle tests use the same evaluation boundary.
+    checkLifetime: () => idleExit?.tick() ?? Promise.resolve(),
     isIdle: () =>
       !closed && [...jobs.values()].every((job) => job.view.phase !== "queued" && job.view.phase !== "running"),
     get closed() {

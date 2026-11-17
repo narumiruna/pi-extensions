@@ -1,5 +1,13 @@
 export type { ConnectionOptions } from "./client.js";
-export { DaemonConnection, DaemonError, ensureDaemon, findDaemon, requestDaemon, stopDaemon } from "./client.js";
+export {
+  DaemonConnection,
+  DaemonError,
+  ensureDaemon,
+  findDaemon,
+  requestDaemon,
+  stopDaemon,
+  waitForDaemonExit,
+} from "./client.js";
 export type { DocumentView } from "./document.js";
 export { documentFingerprint } from "./document.js";
 export type { EngineContext, EngineHost, EngineSession, ReviewRequest } from "./engine/host.js";

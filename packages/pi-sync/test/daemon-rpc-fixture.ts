@@ -5,7 +5,6 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { ensureDaemon, findDaemon, stopDaemon } from "@narumitw/pi-sync-daemon";
-import type { TestContext } from "vitest";
 import { SyncRpc } from "./daemon-rpc-helpers.js";
 import { v3WebDavSettings } from "./data-fixtures.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
@@ -21,7 +20,10 @@ export interface RpcFixture {
 }
 
 /** Own setup and teardown separately from each five-second operation test. */
-export async function createRpcFixture(context: Pick<TestContext, "signal" | "onTestFinished">): Promise<RpcFixture> {
+export async function createRpcFixture(
+  context: { signal: AbortSignal; onTestFinished(cleanup: () => Promise<void>): void },
+  extension = path.resolve("packages/pi-sync/src/index.ts"),
+): Promise<RpcFixture> {
   context.signal.throwIfAborted();
   let root: string | undefined;
   let agent = "";
@@ -165,7 +167,7 @@ export async function createRpcFixture(context: Pick<TestContext, "signal" | "on
         if (closing) throw new Error("Pi RPC fixture is closing.");
         context.signal.throwIfAborted();
         assert.ok(root);
-        const client = new SyncRpc(root, cwd, path.resolve("packages/pi-sync/src/index.ts"), sessionDir, signal);
+        const client = new SyncRpc(root, cwd, extension, sessionDir, signal);
         clients.push(client);
         return client;
       });

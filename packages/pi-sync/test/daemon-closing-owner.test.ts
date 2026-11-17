@@ -1,0 +1,270 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import { type ClientFacts, type DaemonConnection, DaemonError, type Identity } from "@narumitw/pi-sync-daemon";
+import { test, vi } from "vitest";
+import { createMockContext } from "../../../test/support.js";
+import { withTempHome } from "./helpers.js";
+
+const transport = vi.hoisted(() => ({
+  connect: vi.fn(),
+  ensure: vi.fn(),
+  find: vi.fn(),
+  wait: vi.fn(),
+  stop: vi.fn(),
+}));
+vi.mock("@narumitw/pi-sync-daemon", async (original) => ({
+  ...(await original<typeof import("@narumitw/pi-sync-daemon")>()),
+  DaemonConnection: transport.connect,
+  ensureDaemon: transport.ensure,
+  findDaemon: transport.find,
+  waitForDaemonExit: transport.wait,
+  stopDaemon: transport.stop,
+}));
+
+function stopping() {
+  return new DaemonError({ name: "DaemonStoppingError", message: "The old owner is closing." });
+}
+function waitingSignal() {
+  const signal = transport.wait.mock.calls[0]?.[1];
+  assert.ok(signal instanceof AbortSignal);
+  return signal;
+}
+
+async function withClient(action: (owned: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
+  await withTempHome(async (agentDir) => {
+    const owned = await fixture(agentDir);
+    try {
+      await action(owned);
+    } finally {
+      // Release the handshake even when an assertion fails, so disposal cannot strand work.
+      owned.exited.resolve();
+      await owned.client.dispose();
+      for (const connection of owned.connections) assert.equal(connection.dispose.mock.calls.length, 1);
+    }
+  });
+}
+
+async function fixture(agentDir: string) {
+  vi.resetModules();
+  for (const mock of Object.values(transport)) mock.mockReset();
+  transport.stop.mockResolvedValue(undefined);
+  await fs.mkdir(agentDir, { recursive: true });
+  const root = await fs.realpath(agentDir);
+  const manager = SessionManager.create(root, path.join(root, "sessions"));
+  const ctx = createMockContext({ cwd: root, mode: "rpc", hasUI: true, sessionManager: manager })
+    .ctx as ExtensionContext;
+  const session = new AbortController();
+  const enteredWait = Promise.withResolvers<void>();
+  const exited = Promise.withResolvers<void>();
+  const events: string[] = [];
+  const addresses = ["old", "new", "unexpected-third"].map((instance) => ({
+    paths: {
+      root,
+      directory: path.join(root, "runtime"),
+      identity: path.join(root, "runtime", "identity.json"),
+      startup: path.join(root, "runtime", "startup.lock"),
+      owner: path.join(root, "runtime", "owner.lock"),
+    },
+    identity: { version: 1, root, instance, pid: process.pid, token: instance } satisfies Identity,
+  }));
+  const attachErrors: unknown[] = [stopping()];
+  let operationError: Error | undefined;
+  const result = { completed: true };
+  const connections: ReturnType<typeof connection>[] = [];
+  function connection(paths: DaemonConnection["paths"], identity: Identity, facts: ClientFacts) {
+    const label = identity.instance;
+    const attachError = attachErrors[connections.length];
+    return {
+      paths,
+      identity,
+      facts,
+      attach: vi.fn(async () => {
+        events.push(`${label}:attach`);
+        if (attachError) throw attachError;
+      }),
+      update: vi.fn(async () => {
+        events.push(`${label}:update`);
+      }),
+      run: vi.fn(async (..._args: Parameters<DaemonConnection["run"]>) => {
+        events.push(`${label}:run`);
+        if (operationError) throw operationError;
+        return result;
+      }),
+      dispose: vi.fn(async () => {
+        events.push(`${label}:dispose`);
+      }),
+    };
+  }
+  // biome-ignore lint/complexity/useArrowFunction: Vitest constructor mocks must be constructable.
+  transport.connect.mockImplementation(function (
+    paths: DaemonConnection["paths"],
+    identity: Identity,
+    facts: ClientFacts,
+  ) {
+    const created = connection(paths, identity, facts);
+    connections.push(created);
+    return created;
+  });
+  transport.ensure.mockImplementation(async () => {
+    const address = addresses[transport.ensure.mock.calls.length - 1];
+    assert.ok(address, "Unexpected additional daemon launch");
+    events.push(`${address.identity.instance}:ensure`);
+    return address;
+  });
+  transport.find.mockResolvedValue(addresses[0]);
+  // Intentionally complete only on the exit handshake, even if the caller becomes stale.
+  // The adapter must revalidate ownership and cancellation after this await.
+  transport.wait.mockImplementation(async () => {
+    events.push("old:wait");
+    enteredWait.resolve();
+    await exited.promise;
+    events.push("old:exited");
+  });
+  // Import after withTempHome installs this test's agent-root environment.
+  const { bindPiDaemonClient } = await import("../src/daemon/pi-client.js");
+  const client = bindPiDaemonClient(ctx, session.signal);
+  return {
+    client,
+    ctx,
+    session,
+    bindPiDaemonClient,
+    addresses,
+    attachErrors,
+    connections,
+    events,
+    enteredWait,
+    exited,
+    result,
+    failOperation(error: Error) {
+      operationError = error;
+    },
+  };
+}
+
+test("run disposes the rejected unpublished connection and waits for owner exit before reconnecting", () =>
+  withClient(async (f) => {
+    const payload = { setup: "requested-setup" };
+    const request = new AbortController();
+    const commit = vi.fn();
+    const running = f.client.run("sync", payload, request.signal, f.ctx, commit);
+    await f.enteredWait.promise;
+    assert.deepEqual(f.events, ["old:ensure", "old:attach", "old:dispose", "old:wait"]);
+    assert.equal(transport.ensure.mock.calls.length, 1);
+    assert.equal(transport.wait.mock.calls[0]?.[0], f.addresses[0]?.identity);
+    assert.equal(waitingSignal().aborted, false);
+    assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+    assert.equal(f.connections[0]?.update.mock.calls.length, 0);
+    f.exited.resolve();
+    assert.equal(await running, f.result);
+    assert.deepEqual(f.events, [
+      "old:ensure",
+      "old:attach",
+      "old:dispose",
+      "old:wait",
+      "old:exited",
+      "new:ensure",
+      "new:attach",
+      "new:update",
+      "new:run",
+    ]);
+    const next = f.connections[1];
+    assert.ok(next);
+    assert.equal(next.facts.generation, f.connections[0]?.facts.generation);
+    assert.equal(next.facts.sessionId, f.ctx.sessionManager.getSessionId());
+    assert.equal(next.facts.sessionFile, f.ctx.sessionManager.getSessionFile());
+    const [operation, sent, signal, onCommit] = next.run.mock.calls[0] ?? [];
+    assert.equal(operation, "sync");
+    assert.equal(sent, payload);
+    assert.equal(signal?.aborted, false);
+    assert.equal(onCommit, commit);
+    assert.equal(transport.ensure.mock.calls.length, 2);
+  }));
+
+for (const invalidation of ["session cancellation", "disposal", "replacement", "request cancellation"] as const)
+  test(`${invalidation} during owner-exit wait prevents a second launch and submission`, () =>
+    withClient(async (f) => {
+      const request = new AbortController();
+      const running = f.client.run("sync", {}, request.signal);
+      const rejected = assert.rejects(running, /cancelled|replaced/iu);
+      await f.enteredWait.promise;
+      let disposal: Promise<void> | undefined;
+      let replacement: ReturnType<typeof f.bindPiDaemonClient> | undefined;
+      try {
+        if (invalidation === "session cancellation") f.session.abort(new Error("Session cancelled"));
+        else if (invalidation === "request cancellation") request.abort(new Error("Request cancelled"));
+        else if (invalidation === "disposal") disposal = f.client.dispose();
+        else replacement = f.bindPiDaemonClient(f.ctx, new AbortController().signal);
+        f.exited.resolve();
+        await rejected;
+        await disposal;
+        assert.equal(
+          waitingSignal().aborted,
+          invalidation === "session cancellation" || invalidation === "request cancellation",
+        );
+        assert.equal(transport.ensure.mock.calls.length, 1);
+        assert.equal(f.connections.length, 1);
+        assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+      } finally {
+        await replacement?.dispose();
+      }
+    }));
+
+test("a second closing attach exhausts the single retry without submitting the operation", () =>
+  withClient(async (f) => {
+    const second = stopping();
+    f.attachErrors.push(second);
+    const running = f.client.run("sync", {});
+    const rejected = assert.rejects(running, (error) => error === second);
+    await f.enteredWait.promise;
+    f.exited.resolve();
+    await rejected;
+    assert.equal(transport.ensure.mock.calls.length, 2);
+    assert.equal(transport.wait.mock.calls.length, 1);
+    assert.equal(f.connections.length, 2);
+    for (const connection of f.connections) {
+      assert.equal(connection.dispose.mock.calls.length, 1);
+      assert.equal(connection.run.mock.calls.length, 0);
+      assert.equal(connection.update.mock.calls.length, 0);
+    }
+  }));
+
+test("a closing error from an already submitted operation is not retried or replayed", () =>
+  withClient(async (f) => {
+    f.attachErrors.length = 0;
+    const error = stopping();
+    f.failOperation(error);
+    await assert.rejects(f.client.run("sync", {}), (caught) => caught === error);
+    assert.equal(transport.ensure.mock.calls.length, 1);
+    assert.equal(transport.wait.mock.calls.length, 0);
+    assert.equal(f.connections.length, 1);
+    assert.equal(f.connections[0]?.run.mock.calls.length, 1);
+  }));
+
+for (const error of [
+  new Error("Attach failed"),
+  new DaemonError({ name: "PermissionError", message: "Attach denied" }),
+  Object.assign(new Error("Not a recognized remote error"), { name: "DaemonStoppingError" }),
+])
+  test(`generic attach error (${error.name}: ${error.message}) does not retry and is cleaned up`, () =>
+    withClient(async (f) => {
+      f.attachErrors[0] = error;
+      await assert.rejects(f.client.run("sync", {}), (caught) => caught === error);
+      assert.equal(transport.ensure.mock.calls.length, 1);
+      assert.equal(transport.wait.mock.calls.length, 0);
+      assert.equal(f.connections.length, 1);
+      assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+      await f.client.dispose();
+      assert.equal(f.connections[0]?.dispose.mock.calls.length, 1);
+    }));
+
+test("passive attach returns false for a closing owner without launching or waiting", () =>
+  withClient(async (f) => {
+    assert.equal(await f.client.attachExisting(), false);
+    assert.deepEqual(transport.find.mock.calls, [[f.client.root]]);
+    assert.equal(transport.ensure.mock.calls.length, 0);
+    assert.equal(transport.wait.mock.calls.length, 0);
+    assert.deepEqual(f.events, ["old:attach", "old:dispose"]);
+    assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+  }));

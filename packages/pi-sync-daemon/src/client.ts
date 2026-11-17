@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
 import {
@@ -82,8 +83,8 @@ export async function requestDaemon(
     request.end(body);
   });
 }
-async function hello(paths: RuntimePaths, identity: Identity) {
-  const value = await requestDaemon(paths, identity, "hello", {});
+async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSignal) {
+  const value = await requestDaemon(paths, identity, "hello", {}, signal);
   if (
     !record(value) ||
     value.version !== 1 ||
@@ -108,19 +109,27 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
   });
   try {
     signal?.throwIfAborted();
-    const existing = await readIdentity(paths);
-    if (existing) {
+    let waited = false;
+    for (;;) {
+      const existing = await readIdentity(paths);
+      if (!existing) break;
       try {
-        await hello(paths, existing);
+        await hello(paths, existing, signal);
         signal?.throwIfAborted();
         return { paths: daemonPaths(paths, existing.instance), identity: existing };
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
+        if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError" && !waited) {
+          waited = true;
+          await waitForDaemonExit(existing, signal);
+          continue;
+        }
         if (processExists(existing.pid))
           throw new Error(
             "A daemon owner is alive but unavailable; use diagnostics instead of starting a second owner.",
             { cause: error },
           );
+        break;
       }
     }
     const executable = process.versions.bun ? "node" : process.execPath;
@@ -175,12 +184,23 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
       child.unref();
     });
     // Never kill a published shared daemon on caller cancellation.
-    await hello(paths, ready);
+    await hello(paths, ready, signal);
     signal?.throwIfAborted();
     return { paths: daemonPaths(paths, ready.instance), identity: ready };
   } finally {
     await release();
   }
+}
+
+/** Wait only for a previously authenticated owner; never kill it or infer exit from lost contact. */
+export async function waitForDaemonExit(identity: Identity, signal?: AbortSignal) {
+  const deadline = Date.now() + 30_000;
+  signal?.throwIfAborted();
+  while (processExists(identity.pid)) {
+    if (Date.now() >= deadline) throw new Error("Closing daemon is still alive; replacement was not attempted.");
+    await delay(25, undefined, { signal });
+  }
+  signal?.throwIfAborted();
 }
 
 /** Inspect an existing compatible owner without starting one. */
@@ -194,7 +214,12 @@ export async function findDaemon(root: string) {
   }
   const identity = await readIdentity(paths);
   if (!identity || !processExists(identity.pid)) return undefined;
-  await hello(paths, identity);
+  try {
+    await hello(paths, identity);
+  } catch (error) {
+    if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return undefined;
+    throw error;
+  }
   return { paths: daemonPaths(paths, identity.instance), identity };
 }
 

@@ -3,8 +3,10 @@ import path from "node:path";
 import { ConsentPublicationError, consentFingerprint, readConsent, revokeChangedBindings } from "./consent.js";
 import type { EngineContext, EngineSession } from "./engine/host.js";
 import { loadConfigForCheck } from "./engine/settings/config.js";
+import type { AnySyncConfig } from "./engine/settings/settings-types.js";
 import type { createContinuousSync } from "./engine/sync/continuous-sync.js";
 import { createEngineLoaders } from "./engine/sync/sync-loaders.js";
+import type { IdleExitPolicy } from "./idle-exit.js";
 import type { ClientFacts, Execution } from "./protocol.js";
 import type { startServer } from "./server.js";
 import type { installServiceHost } from "./service-host.js";
@@ -42,6 +44,11 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       transition = transition.then(start).catch(() => {});
     });
   }
+  function blockAutomatic() {
+    authorizationFailed = true;
+    retries.clear();
+    task?.controller.abort(new DOMException("Daemon safety barrier", "AbortError"));
+  }
   async function stop() {
     const current = task;
     if (!current) return;
@@ -49,6 +56,24 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     current.controller.abort(new DOMException("Daemon monitoring interrupted", "AbortError"));
     await current.continuous.stop();
     await current.promise;
+  }
+  function unattendedGrant(config: AnySyncConfig) {
+    if (!config.continuous || !config.agentMode) return undefined;
+    const saved = readConsent(root)?.setups[config.setupName];
+    return saved?.afterExit && saved.fingerprint === consentFingerprint(root, config) ? saved : undefined;
+  }
+  async function lifetime(): Promise<IdleExitPolicy> {
+    if (closed || authorizationFailed) return "pause";
+    try {
+      const consent = readConsent(root);
+      if (!consent || !Object.values(consent.setups).some((saved) => saved.afterExit)) return "exit";
+      const config = await loadConfigForCheck();
+      if (closed || authorizationFailed) return "pause";
+      return unattendedGrant(config) ? "keep" : "exit";
+    } catch {
+      // Invalid evidence is not an implicit revocation or permission to discard a safety barrier.
+      return "pause";
+    }
   }
   async function start() {
     const service = server;
@@ -65,12 +90,11 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     }
     const { pendingTransactionEntries } = await import("./engine/snapshot/snapshot-transaction-directory.js");
     if ((await pendingTransactionEntries()).some((entry) => entry.isDirectory()) || !available()) return;
-    const fingerprint = consentFingerprint(root, config);
     const peers = service.participants();
     if (peers.some((peer) => !peer.idle || peer.ready !== true)) return;
-    const authorized = consent.setups[config.setupName];
+    const authorized = unattendedGrant(config);
     const selected = peers.toSorted((a, b) => a.id.localeCompare(b.id))[0];
-    if (!selected && (!authorized?.afterExit || authorized.fingerprint !== fingerprint)) return;
+    if (!selected && !authorized) return;
     if (!continuous) {
       const { createContinuousSync } = await import("./engine/sync/continuous-sync.js");
       if (!available()) return;
@@ -129,10 +153,9 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
             peer.sessionDir === sessionDir &&
             peer.cwd === cwd,
         );
-      const saved = readConsent(root)?.setups[currentConfig.setupName];
+      const saved = unattendedGrant(currentConfig);
       return Boolean(
-        saved?.afterExit &&
-          saved.fingerprint === consentFingerprint(root, currentConfig) &&
+        saved &&
           JSON.stringify(saved.model) === JSON.stringify(binding) &&
           saved.sessionDir === sessionDir &&
           (saved.cwd ?? root) === cwd,
@@ -209,6 +232,8 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       schedule();
     },
     schedule,
+    lifetime,
+    blockAutomatic,
     explicitSync(setup: string, execution: Execution) {
       const peer = execution.facts();
       if (!closed && peer) retries.set(peer.id, { setup, generation: peer.generation, signal: execution.signal });
@@ -228,8 +253,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
           revokeChangedBindings(root, peers);
         }
       } catch (error) {
-        authorizationFailed = true;
-        retries.clear();
+        blockAutomatic();
         // Recovery barriers must not prevent passive clients from registering protection.
         if (error instanceof ConsentPublicationError) failure = error;
       }

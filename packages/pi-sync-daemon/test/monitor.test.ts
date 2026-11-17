@@ -23,6 +23,7 @@ function deferred<T>() {
 
 async function fixture(
   run: (value: {
+    root: string;
     monitor: ReturnType<typeof createMonitor>;
     continuous: ReturnType<typeof mockContinuous>;
     peers: ClientFacts[];
@@ -33,7 +34,7 @@ async function fixture(
     save(): Promise<void>;
   }) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-monitor-"));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-monitor-")));
   const peers = Array.from({ length: 2 }, () => ({
     id: randomUUID(),
     generation: randomUUID(),
@@ -98,7 +99,7 @@ async function fixture(
     monitor.bind(server);
     await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 1), { interval: 5 });
     await monitor.pause();
-    await run({ monitor, continuous, peers, execution, idle, idleRead, settings, save });
+    await run({ root, monitor, continuous, peers, execution, idle, idleRead, settings, save });
   } finally {
     await monitor.close();
     vi.restoreAllMocks();
@@ -250,4 +251,141 @@ test("an authorization publication failure during config loading blocks the pend
     loaded.resolve(latest);
     await assert.rejects(changed, /Automatic work is blocked/u);
     assert.equal(continuous.start.mock.calls.length, 1);
+    assert.equal(await monitor.lifetime(), "pause", "failed publication must not enable implicit restart");
+  }));
+
+async function grant(root: string, settings: PiSyncSettingsV3) {
+  const file = path.join(root, "pi-sync", "daemon.json");
+  const saved = JSON.parse(await fs.readFile(file, "utf8"));
+  saved.future = { retained: true };
+  saved.setups.home = {
+    fingerprint: consent.consentFingerprint(root, config.configFromSettings(settings)),
+    afterExit: true,
+    cwd: root,
+    future: "retained",
+  };
+  await fs.writeFile(file, JSON.stringify(saved), { mode: 0o600 });
+  return { file, saved };
+}
+
+test("missing unattended consent permits exit without reading settings or creating files", () =>
+  fixture(async ({ root, monitor }) => {
+    const read = vi.spyOn(config, "loadConfigForCheck");
+    const file = path.join(root, "pi-sync", "daemon.json");
+    assert.equal(await monitor.lifetime(), "exit");
+    await fs.rm(file);
+    assert.equal(await monitor.lifetime(), "exit");
+    assert.equal(read.mock.calls.length, 0);
+    await assert.rejects(fs.stat(file), { code: "ENOENT" });
+  }));
+
+test("a valid grant keeps lifetime without resolving an unavailable model or changing evidence", () =>
+  fixture(async ({ root, monitor, settings, continuous }) => {
+    const { file, saved } = await grant(root, settings);
+    saved.setups.home.model = {
+      provider: "unavailable-fixture",
+      id: "unavailable-fixture",
+      signature: "a".repeat(64),
+      authSource: "models_json_key",
+    };
+    await fs.writeFile(file, JSON.stringify(saved), { mode: 0o600 });
+    const before = await fs.readFile(file);
+    const settingsBefore = await fs.readFile(path.join(root, "pi-sync.json"));
+    const resolve = vi.spyOn(resolver, "prepareResolverHost");
+    assert.equal(await monitor.lifetime(), "keep");
+    assert.equal(await monitor.lifetime(), "keep");
+    assert.equal(resolve.mock.calls.length, 0);
+    assert.equal(continuous.start.mock.calls.length, 1);
+    assert.deepEqual(await fs.readFile(file), before);
+    assert.deepEqual(await fs.readFile(path.join(root, "pi-sync.json")), settingsBefore);
+  }));
+
+for (const change of ["revoked", "fingerprint", "other-setup", "agent-mode", "continuous", "storage"] as const)
+  test(`an ineligible after-exit grant does not keep lifetime: ${change}`, () =>
+    fixture(async ({ root, monitor, settings, save }) => {
+      const { file, saved } = await grant(root, settings);
+      const home = settings.syncSetups.home;
+      assert.ok(home);
+      if (change === "revoked") saved.setups.home.afterExit = false;
+      if (change === "fingerprint") saved.setups.home.fingerprint = "f".repeat(64);
+      if (change === "other-setup") {
+        saved.setups.other = saved.setups.home;
+        delete saved.setups.home;
+      }
+      if (change === "agent-mode") home.sync.agentMode = false;
+      if (change === "continuous") home.sync.continuous = false;
+      if (change === "storage") home.storage.path = "different-root";
+      await fs.writeFile(file, JSON.stringify(saved), { mode: 0o600 });
+      await save();
+      const before = await fs.readFile(file);
+      assert.equal(await monitor.lifetime(), "exit");
+      assert.deepEqual(await fs.readFile(file), before);
+    }));
+
+for (const change of ["model", "cwd", "sessionDir"] as const)
+  test(`a changed interactive binding revokes unattended lifetime: ${change}`, () =>
+    fixture(async ({ root, monitor, peers, settings, idle }) => {
+      await grant(root, settings);
+      idle.value = false;
+      const peer = peers[0];
+      assert.ok(peer);
+      if (change === "model")
+        peer.model = {
+          provider: "fixture",
+          id: "fixture",
+          signature: "b".repeat(64),
+          authSource: "models_json_key",
+        };
+      if (change === "cwd") peer.cwd = path.join(root, "other");
+      if (change === "sessionDir") peer.sessionDir = path.join(root, "other-sessions");
+      await monitor.factsChanged();
+      assert.equal(await monitor.lifetime(), "exit");
+      assert.equal(consent.readConsent(root)?.setups.home?.afterExit, false);
+    }));
+
+for (const failure of ["consent", "settings"] as const)
+  test(`uncertain ${failure} reads pause lifetime without rewriting the invalid file`, () =>
+    fixture(async ({ root, monitor, settings }) => {
+      const { file } = await grant(root, settings);
+      const target = failure === "consent" ? file : path.join(root, "pi-sync.json");
+      await fs.writeFile(target, "{invalid", { mode: 0o600 });
+      assert.equal(await monitor.lifetime(), "pause");
+      assert.equal(await fs.readFile(target, "utf8"), "{invalid");
+    }));
+
+test("a cleanup safety barrier blocks lifetime and automatic work without revoking persisted consent", () =>
+  fixture(async ({ root, monitor, settings, continuous }) => {
+    const { file } = await grant(root, settings);
+    const before = await fs.readFile(file);
+    const original = config.loadConfigForCheck;
+    const latest = await original();
+    const entered = deferred<void>();
+    const loaded = deferred<typeof latest>();
+    vi.spyOn(config, "loadConfigForCheck").mockImplementation(() => {
+      entered.resolve();
+      return loaded.promise;
+    });
+    monitor.schedule();
+    await entered.promise;
+    monitor.blockAutomatic();
+    loaded.resolve(latest);
+    await monitor.factsChanged();
+    assert.equal(await monitor.lifetime(), "pause");
+    assert.equal(continuous.start.mock.calls.length, 1);
+    assert.deepEqual(await fs.readFile(file), before);
+    assert.equal(consent.readConsent(root)?.setups.home?.afterExit, true);
+  }));
+
+test("a failed binding revocation keeps the prior grant paused rather than allowing implicit restart", () =>
+  fixture(async ({ root, monitor, settings, idle }) => {
+    const { file } = await grant(root, settings);
+    const before = await fs.readFile(file);
+    idle.value = false;
+    vi.spyOn(consent, "revokeChangedBindings").mockImplementation(() => {
+      throw new consent.ConsentPublicationError("fixture failure");
+    });
+    await assert.rejects(monitor.factsChanged(), /Automatic work is blocked/u);
+    assert.equal(await monitor.lifetime(), "pause");
+    assert.deepEqual(await fs.readFile(file), before);
+    assert.equal(consent.readConsent(root)?.setups.home?.afterExit, true);
   }));

@@ -16,6 +16,7 @@ import {
   findDaemon,
   MAX_SETTINGS_BYTES,
   modelSignature,
+  waitForDaemonExit,
 } from "@narumitw/pi-sync-daemon";
 import { type ConfigAuthority, configureEngineHost } from "@narumitw/pi-sync-daemon/engine/host";
 import {
@@ -305,7 +306,15 @@ export class PiDaemonClient {
     this.validate();
     const address = await findDaemon(this.root);
     this.validate();
-    if (address) await this.connect(address);
+    if (address) {
+      try {
+        await this.connect(address);
+      } catch (error) {
+        this.validate();
+        if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return false;
+        throw error;
+      }
+    }
     this.validate();
     return Boolean(address);
   }
@@ -318,54 +327,77 @@ export class PiDaemonClient {
       this.validate();
     }
   }
-  async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>) {
-    this.validate();
+  async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
+    const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
+    const validateStartup = () => {
+      this.validate();
+      startupSignal.throwIfAborted();
+    };
+    validateStartup();
     if (this.connection) return this.connection;
     this.connecting ??= (async () => {
       // Only explicit setup/command paths or a configured interactive session call connect.
       if (!existing) await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
-      this.validate();
-      const daemon = existing ?? (await ensureDaemon(this.root, this.signal));
-      this.validate();
-      if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
-      const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(), {
-        callback: (callback, signal) => this.callback(callback, signal),
-        event: (event) => {
-          if (event.kind === "commit") return;
-          if (this.signal.aborted || this.disposed || this.closing || clients.get(this.manager) !== this) return;
-          const payload = event.payload as {
-            message?: string;
-            level?: "info" | "warning" | "error";
-            value?: string;
-            presentation?: SyncStatusPresentation;
-          };
-          if (event.kind === "notify" && typeof payload?.message === "string")
-            this.uiContext.ui.notify(safeTerminalText(payload.message), payload.level ?? "info");
-          if (event.kind === "timings" && typeof (event.payload as { report?: unknown })?.report === "string") {
-            this.publish?.(this.ctx, safeTerminalText((event.payload as { report: string }).report));
-          }
-          if (event.kind === "status")
-            setSyncStatus(
-              this.uiContext,
-              typeof payload?.value === "string" ? safeTerminalText(payload.value) : undefined,
-              payload.presentation,
-            );
-        },
-        error: () => {
-          if (!this.signal.aborted && !this.disposed && !this.closing && clients.get(this.manager) === this)
-            setSyncStatus(this.ctx, "sync service unavailable", { activity: "blocked", reason: "repair" });
-        },
-      });
-      this.partialConnection = connection;
-      await connection.attach();
-      this.validate();
-      await recoverDetachedClients(daemon);
-      if (this.signal.aborted || this.disposed || this.closing) {
-        await connection.dispose();
+      validateStartup();
+      let retried = false;
+      for (;;) {
+        validateStartup();
+        const daemon = existing ?? (await ensureDaemon(this.root, startupSignal));
+        validateStartup();
+        if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
+        const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(), {
+          callback: (callback, signal) => this.callback(callback, signal),
+          event: (event) => {
+            if (event.kind === "commit") return;
+            if (this.signal.aborted || this.disposed || this.closing || clients.get(this.manager) !== this) return;
+            const payload = event.payload as {
+              message?: string;
+              level?: "info" | "warning" | "error";
+              value?: string;
+              presentation?: SyncStatusPresentation;
+            };
+            if (event.kind === "notify" && typeof payload?.message === "string")
+              this.uiContext.ui.notify(safeTerminalText(payload.message), payload.level ?? "info");
+            if (event.kind === "timings" && typeof (event.payload as { report?: unknown })?.report === "string") {
+              this.publish?.(this.ctx, safeTerminalText((event.payload as { report: string }).report));
+            }
+            if (event.kind === "status")
+              setSyncStatus(
+                this.uiContext,
+                typeof payload?.value === "string" ? safeTerminalText(payload.value) : undefined,
+                payload.presentation,
+              );
+          },
+          error: () => {
+            if (!this.signal.aborted && !this.disposed && !this.closing && clients.get(this.manager) === this)
+              setSyncStatus(this.ctx, "sync service unavailable", { activity: "blocked", reason: "repair" });
+          },
+        });
+        this.partialConnection = connection;
+        try {
+          await connection.attach();
+        } catch (error) {
+          if (!(error instanceof DaemonError) || error.remote.name !== "DaemonStoppingError") throw error;
+          // The final idle fence rejected publication, so this connection owns no queue grants.
+          await connection.dispose().catch(() => {});
+          this.partialConnection = undefined;
+          validateStartup();
+          if (existing || retried) throw error;
+          retried = true;
+          await waitForDaemonExit(daemon.identity, startupSignal);
+          validateStartup();
+          continue;
+        }
         this.validate();
+        await recoverDetachedClients(daemon);
+        if (this.signal.aborted || this.disposed || this.closing) {
+          await connection.dispose();
+          this.validate();
+        }
+        this.validate();
+        this.connection = connection;
+        return connection;
       }
-      this.connection = connection;
-      return connection;
     })().catch((error) => {
       this.connecting = undefined;
       throw error;
@@ -403,7 +435,7 @@ export class PiDaemonClient {
     signal?.throwIfAborted();
     if (this.paused && operation !== "shutdown")
       throw new Error("Synchronization is paused for a session change; if it was cancelled, use /reload to reattach.");
-    const connection = await this.connect();
+    const connection = await this.connect(undefined, signal);
     if (this.paused && operation === "shutdown") {
       Object.assign(connection.facts, { ...this.facts(), idle: false, ready: false });
       await connection.attach();

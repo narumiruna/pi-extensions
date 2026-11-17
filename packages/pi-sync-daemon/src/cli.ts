@@ -37,13 +37,13 @@ export async function main(args: readonly string[]) {
     try {
       server = await startServer(paths.root, service.execute, {
         ...service.hooks,
-        close: async () => {
-          try {
-            await service.hooks.close();
-          } finally {
-            note("drained");
-            log?.close();
-          }
+        stopped: () => {
+          note("drained");
+          log?.close();
+        },
+        failure: () => {
+          service.hooks.failure();
+          note("failed");
         },
       });
       // Only the published owner may open or modify its shared diagnostic file.
