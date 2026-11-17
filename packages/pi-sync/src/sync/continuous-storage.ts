@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/sync/continuous-storage";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/continuous-storage";
 export {
   CONTINUOUS_RECORD_MAX_BYTES,
   checkContinuousRoot,
@@ -9,4 +9,4 @@ export {
   readContinuousPrivate,
   readContinuousPrivateDocument,
   writeContinuousPrivate,
-} from "@narumitw/sync-daemon/engine/sync/continuous-storage";
+} from "@narumitw/pi-sync-daemon/engine/sync/continuous-storage";

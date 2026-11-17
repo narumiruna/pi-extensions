@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
-import { stopDaemon } from "@narumitw/sync-daemon";
+import { stopDaemon } from "@narumitw/pi-sync-daemon";
 
 /** A real isolated engine paused before startup recovery, not a parent-process fs mock. */
 export async function initializationGate(root: string) {
@@ -21,7 +21,7 @@ export async function initializationGate(root: string) {
   void booted.catch(() => {});
   void initializing.catch(() => {});
   let stderr = "";
-  const child = fork(new URL("../../sync-daemon/test/fixtures/initialization-gate.mjs", import.meta.url), [root], {
+  const child = fork(new URL("../../pi-sync-daemon/test/fixtures/initialization-gate.mjs", import.meta.url), [root], {
     execArgv: [],
     stdio: ["ignore", "ignore", "pipe", "ipc"],
     env: {

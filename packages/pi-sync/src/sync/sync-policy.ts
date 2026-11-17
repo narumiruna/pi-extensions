@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/sync/sync-policy";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/sync-policy";
 export {
   BUILT_IN_SYNC_ROOTS,
   canonicalSnapshotPathForConfig,
@@ -31,4 +31,4 @@ export {
   syncIncludeSelection,
   syncSessionsSelected,
   validateSnapshotSelection,
-} from "@narumitw/sync-daemon/engine/sync/sync-policy";
+} from "@narumitw/pi-sync-daemon/engine/sync/sync-policy";

@@ -1,9 +1,9 @@
-# 🔄 @narumitw/sync-daemon — A local synchronization owner
+# 🔄 @narumitw/pi-sync-daemon — A local synchronization owner
 
-[![npm](https://img.shields.io/npm/v/@narumitw/sync-daemon)](https://www.npmjs.com/package/@narumitw/sync-daemon)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-sync-daemon)](https://www.npmjs.com/package/@narumitw/pi-sync-daemon)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`@narumitw/sync-daemon` runs the existing Pi Sync engine in a separate Node.js process. Pi remains the interface for setup, exact reviews, commands, and live-session integration.
+`@narumitw/pi-sync-daemon` runs the existing Pi Sync engine in a separate Node.js process. Pi remains the interface for setup, exact reviews, commands, and live-session integration.
 
 > **Experimental and not release-ready.** Complete the migration and verification gates before using this checkout with real data. This change does not publish the package or verify npm scope permissions. Installation runs code with your user permissions.
 
@@ -16,13 +16,13 @@
 
 ## 📦 Install
 
-The Pi client declares this service as a normal dependency; do not add it to `pi.extensions` or load it with `pi -e`. The npm package is `@narumitw/sync-daemon`; the executable remains `sync-daemon`.
+The Pi client declares this service as a normal dependency; do not add it to `pi.extensions` or load it with `pi -e`. The npm package is `@narumitw/pi-sync-daemon`; the executable is `pi-sync-daemon`. For the previous package and executable names, see the [rename instructions](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#ownership-and-upgrade).
 
 For a local checkout, run from the repository root:
 
 ```sh
 npm install
-npm --workspace @narumitw/sync-daemon run build
+npm --workspace @narumitw/pi-sync-daemon run build
 ```
 
 The build emits JavaScript, declarations, and an executable under `dist/`. A global npm installation is not required for the Pi client to locate its dependency. Registry installation remains blocked until publication rights and the dependency-first release are approved.
@@ -32,17 +32,17 @@ The build emits JavaScript, declarations, and an executable under `dist/`. A glo
 Use an existing disposable directory for the first smoke:
 
 ```sh
-mkdir -p /tmp/my-sync-daemon-smoke
-node packages/sync-daemon/dist/cli.js start --root /tmp/my-sync-daemon-smoke
-node packages/sync-daemon/dist/cli.js status --root /tmp/my-sync-daemon-smoke
-node packages/sync-daemon/dist/cli.js stop --root /tmp/my-sync-daemon-smoke
+mkdir -p /tmp/my-pi-sync-daemon-smoke
+node packages/pi-sync-daemon/dist/cli.js start --root /tmp/my-pi-sync-daemon-smoke
+node packages/pi-sync-daemon/dist/cli.js status --root /tmp/my-pi-sync-daemon-smoke
+node packages/pi-sync-daemon/dist/cli.js stop --root /tmp/my-pi-sync-daemon-smoke
 ```
 
 `start` reports the same instance when a compatible service already owns the directory. Connecting alone does not configure a backend or authorize transfers. Use the Pi client's reviewed setup flow for synchronization.
 
 ## 💬 Commands
 
-`sync-daemon <start|status|stop|restart|serve> --root <agent-directory>` uses an explicit root. `status` and `stop` never launch an absent service. `restart` drains the compatible owner before replacement; an incompatible or unreachable live owner fails closed. `serve` is the internal foreground launch target, not an OS registration command.
+`pi-sync-daemon <start|status|stop|restart|serve> --root <agent-directory>` uses an explicit root. `status` and `stop` never launch an absent service. `restart` drains the compatible owner before replacement; an incompatible or unreachable live owner fails closed. `serve` is the internal foreground launch target, not an OS registration command.
 
 Pi starts the service only after configured interactive synchronization is needed or an explicit setup/command authorizes it. Closing Pi detaches that client, not the shared service. `/new` and `/reload` attach a new session generation. Use `/sync daemon` for status, reviewed old-process handover, and setup-bound unattended authorization.
 

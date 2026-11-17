@@ -10,12 +10,12 @@ export async function main(args: readonly string[]) {
   const [command = "help", flag, root, ...extra] = args;
   if (["help", "--help", "-h"].includes(command)) {
     console.log(
-      "sync-daemon <start|status|stop|restart|serve> --root <canonical-agent-directory>\nLocal synchronization owner; no OS service registration. status/stop never start a service.",
+      "pi-sync-daemon <start|status|stop|restart|serve> --root <canonical-agent-directory>\nLocal synchronization owner; no OS service registration. status/stop never start a service.",
     );
     return;
   }
   if (!["start", "status", "stop", "restart", "serve"].includes(command) || flag !== "--root" || !root || extra.length)
-    throw new Error("Use sync-daemon --help for the supported commands.");
+    throw new Error("Use pi-sync-daemon --help for the supported commands.");
   if (command === "serve") {
     process.send?.({ type: "booting" });
     const { createEngineService } = await import("./engine-service.js");
@@ -121,7 +121,7 @@ if (import.meta.main) {
         "Daemon initialization failed; private state retained. Check endpoint ownership and compatible versions.",
     });
     console.error(
-      "sync-daemon failed; private state retained. Check root, endpoint ownership, and version compatibility.",
+      "pi-sync-daemon failed; private state retained. Check root, endpoint ownership, and version compatibility.",
     );
     process.exitCode = 1;
   });

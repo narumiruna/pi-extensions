@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as configModule from "@narumitw/sync-daemon/engine/settings/config";
+import * as configModule from "@narumitw/pi-sync-daemon/engine/settings/config";
 import { test, vi } from "vitest";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
@@ -18,7 +18,7 @@ import { createMergeFixture } from "./merged-sync-fixture.js";
 import { deferred } from "./startup-check-helpers.js";
 
 // Watcher hints and the five-second guard must not be needed to reject a new transfer.
-vi.mock("@narumitw/sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
+vi.mock("@narumitw/pi-sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
 
 for (const boundary of ["sync entry", "merge entry"] as const)
   for (const change of ["continuous off", "agent off with startup transfer on", "credentials", "model"] as const)
@@ -87,7 +87,7 @@ for (const boundary of ["sync entry", "merge entry"] as const)
           const service = createContinuousSync(
             continuousLoaders(f.backend, {
               loadSyncOperations: async () => ({
-                ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+                ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
                 syncBoth: async (ctx, options) => {
                   transferring = true;
                   let failure: unknown;

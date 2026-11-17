@@ -105,12 +105,12 @@ test("selected builds include transitive prerequisites and skip unrelated builds
   });
 });
 
-test("the scoped daemon builds before Pi Sync without renaming either package directory", async () => {
+test("the renamed daemon builds before Pi Sync from a cold workspace", async () => {
   await fixture(async (root) => {
-    await workspace(root, "sync-daemon", {}, true);
-    await workspace(root, "pi-sync", { "@narumitw/sync-daemon": "^1.0.0" }, true);
+    await workspace(root, "pi-sync-daemon", {}, true);
+    await workspace(root, "pi-sync", { "@narumitw/pi-sync-daemon": "^1.0.0" }, true);
     assert.equal(runBuilds({ root, workspaceNames: ["@narumitw/pi-sync"] }), 0);
-    assert.equal(await readFile(join(root, "order.log"), "utf8"), "sync-daemon\npi-sync\n");
+    assert.equal(await readFile(join(root, "order.log"), "utf8"), "pi-sync-daemon\npi-sync\n");
   });
 });
 

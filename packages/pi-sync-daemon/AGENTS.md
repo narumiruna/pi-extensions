@@ -1,4 +1,4 @@
-# Sync Daemon Guidelines
+# Pi Sync Daemon Guidelines
 
 ## Engine and documents
 

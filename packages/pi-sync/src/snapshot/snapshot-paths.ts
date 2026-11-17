@@ -1,2 +1,2 @@
-export type * from "@narumitw/sync-daemon/engine/snapshot/snapshot-paths";
-export { sessionStorageRoot } from "@narumitw/sync-daemon/engine/snapshot/snapshot-paths";
+export type * from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-paths";
+export { sessionStorageRoot } from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-paths";

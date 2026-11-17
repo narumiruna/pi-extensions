@@ -2,7 +2,7 @@ import "./engine-process-host.js";
 import fs from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { type ContinuousClock, createContinuousSync } from "../src/sync/continuous-sync.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
@@ -57,7 +57,7 @@ const service = createContinuousSync(
       },
     }),
     loadSyncOperations: async () => ({
-      ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+      ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
       syncBoth: async (...args) => {
         inFlight++;
         try {

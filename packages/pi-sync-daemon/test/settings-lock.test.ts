@@ -50,7 +50,7 @@ function child(role: string, root: string) {
 }
 
 test("the actual Pi settings writer refuses a daemon-held lock and preserves the later daemon fields", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-settings-lock-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-settings-lock-"));
   const file = path.join(root, "settings.json");
   await fs.writeFile(file, JSON.stringify({ theme: "before" }));
   const writer = child("writer", root);
@@ -78,7 +78,7 @@ test("the actual Pi settings writer refuses a daemon-held lock and preserves the
 });
 
 test("an absent settings file is refused with a retired live client instead of racing Pi's missing-file branch", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-missing-settings-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-missing-settings-"));
   const owner = child("missing", root);
   let writer: ReturnType<typeof child> | undefined;
   try {

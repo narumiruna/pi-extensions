@@ -4,7 +4,7 @@ This daemon extraction is experimental. Deterministic Linux verification passed,
 
 ## Ownership and upgrade
 
-The non-extension npm package is `@narumitw/sync-daemon`; its executable remains `sync-daemon`. The namespace change affects npm identity and imports only, not IPC names or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; ordinary Pi shutdown does not stop it. No OS service or supervisor is installed.
+The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. Stop an existing installation with `sync-daemon stop --root <agent-directory>` before replacing it, then use `pi-sync-daemon` after installation. The rename changes package identity, imports, the package directory, and executable names, not IPC names, authorization digests, or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; ordinary Pi shutdown does not stop it. No OS service or supervisor is installed.
 
 Stop the service before updating its package or rebuilding a local checkout: a surviving Node process can otherwise combine cached code with newly loaded modules from the replaced directory. A compatible protocol handshake does not upgrade the running implementation; restart explicitly after installation.
 
@@ -30,7 +30,7 @@ Protect the union of all registered live-PID sessions, including ambiguously dis
 
 If saving consent fails, that service instance blocks automatic work. Preserve the retained file, repair persistence, and revoke permission before an explicit restart; a failed save does not prove the previous grant changed.
 
-Use `sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers.
+Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers.
 
 CLI `status` includes an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
 
@@ -87,7 +87,7 @@ The archived previous engine also held its real operation lock in a separate pro
 
 | Responsible role | Prerequisite and action | Expected result | Unverified behavior and restriction |
 | --- | --- | --- | --- |
-| npm/release account owner | Passing package gates and explicit approval; verify publication rights for `@narumitw/sync-daemon` and dependency-first publication | The daemon resolves before the dependent Pi client is released | Scope permissions and first publication are not verified; no publication, visibility change, tags, or workflow dispatch without approval |
+| npm/release account owner | Passing package gates and explicit approval; verify publication rights for `@narumitw/pi-sync-daemon` and dependency-first publication | The daemon resolves before the dependent Pi client is released | Scope permissions and first publication are not verified; no publication, visibility change, tags, or workflow dispatch without approval |
 | Deployment operator | Verified cutover/recovery evidence and backups; close older Pi processes and authorize each real root | One recognized owner with unchanged compatible data | Only the explicitly approved checkout-service stop/restart was used for package-identity and runtime maintenance; no production-storage transfer or settings change was made, and no real-data cutover is included |
 | Native platform maintainer | Prepared transport/process tests; run native Windows/macOS checks | Correct local transport, permissions, independent lifetime, and recovery | Native ACL/named-pipe, logout, and physical power-loss behavior remain unverified; do not advertise new unverified guarantees or silently remove previous support |
 | Provider/storage account owner | Explicit cost/network authorization and isolated data; optional live smoke | Authorized dispatch/publication without exposed credentials | Entitlements and custom-provider/production behavior remain unverified; deterministic providers and loopback stores are the default |

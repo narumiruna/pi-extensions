@@ -1,1 +1,1 @@
-export type * from "@narumitw/sync-daemon/engine/settings/settings-types";
+export type * from "@narumitw/pi-sync-daemon/engine/settings/settings-types";

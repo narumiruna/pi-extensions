@@ -1,8 +1,8 @@
-export type * from "@narumitw/sync-daemon/engine/state/state-directory";
+export type * from "@narumitw/pi-sync-daemon/engine/state/state-directory";
 export {
   legacyStateDir,
   migrateLegacyStateDirectory,
   stateDir,
   stateDirectoryMigrationNotice,
   withStateDirectoryAccess,
-} from "@narumitw/sync-daemon/engine/state/state-directory";
+} from "@narumitw/pi-sync-daemon/engine/state/state-directory";

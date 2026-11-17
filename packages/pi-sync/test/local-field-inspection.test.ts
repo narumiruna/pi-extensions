@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { CommandOptions } from "../src/commands/command-types.js";

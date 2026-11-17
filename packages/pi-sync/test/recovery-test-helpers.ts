@@ -18,7 +18,7 @@ export function recoveryFixture() {
     await import("../src/sync/agent-plan.js");
     await import("../src/sync/agent-store.js");
     await import("../src/sync/agent-runner.js");
-    await import("@narumitw/sync-daemon/engine/sync/sync-operations");
+    await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations");
   });
   beforeEach(async () => {
     const ready = deferred();

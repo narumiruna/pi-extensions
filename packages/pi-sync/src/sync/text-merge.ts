@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/sync/text-merge";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/text-merge";
 export {
   edits,
   isMergeTextPath,
@@ -7,4 +7,4 @@ export {
   TEXT_LIMIT,
   TEXT_MERGE_WORK_LIMIT,
   text,
-} from "@narumitw/sync-daemon/engine/sync/text-merge";
+} from "@narumitw/pi-sync-daemon/engine/sync/text-merge";

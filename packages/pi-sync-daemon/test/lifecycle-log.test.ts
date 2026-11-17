@@ -6,7 +6,7 @@ import { test } from "vitest";
 import { openLifecycleLog } from "../src/lifecycle-log.js";
 
 async function fixture(run: (directory: string) => Promise<void>) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-log-"));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-log-"));
   try {
     await run(directory);
   } finally {

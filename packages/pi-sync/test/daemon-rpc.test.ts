@@ -1,141 +1,37 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { findDaemon, stopDaemon } from "@narumitw/sync-daemon";
-import { test, vi } from "vitest";
+import { findDaemon } from "@narumitw/pi-sync-daemon";
+import { beforeEach, describe, test, vi } from "vitest";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { configFromSettings } from "../src/settings/config.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import type { ContinuousRecord } from "../src/sync/continuous-record.js";
-import { SyncRpc } from "./daemon-rpc-helpers.js";
+import { createRpcFixture, type RpcFixture } from "./daemon-rpc-fixture.js";
+import type { SyncRpc } from "./daemon-rpc-helpers.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { snapshot, v3WebDavSettings } from "./helpers.js";
-import { MockWebDavServer } from "./mock-webdav-server.js";
 
-async function fixture(
-  run: (value: {
-    agent: string;
-    cwd: string;
-    connect(sessionDir?: string): SyncRpc;
-    requests: Record<string, unknown>[];
-    storage: MockWebDavServer;
-  }) => Promise<void>,
-) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-rpc-"));
-  const agent = path.join(root, "agent");
-  const cwd = path.join(root, "project");
-  const clients: SyncRpc[] = [];
-  const requests: Record<string, unknown>[] = [];
-  const storage = new MockWebDavServer();
-  const failures: unknown[] = [];
-  const api = createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const base = { id: "fixture", object: "chat.completion.chunk", created: 0, model: "fixture" };
-      response.end(
-        `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`,
-      );
-    })().catch((error) => {
-      response.writeHead(500);
-      response.end(String(error));
-    });
-  });
-  try {
-    await Promise.all([
-      fs.mkdir(agent, { recursive: true }),
-      fs.mkdir(cwd, { recursive: true }),
-      fs.mkdir(path.join(root, "home"), { recursive: true }),
-    ]);
-    await storage.start();
-    api.listen(0, "127.0.0.1");
-    await once(api, "listening");
-    const address = api.address();
-    assert.ok(address && typeof address !== "string");
-    const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
-    settings.storageConnections.dav.url = storage.url;
-    await fs.writeFile(path.join(agent, "pi-sync.json"), JSON.stringify(settings), { mode: 0o600 });
-    await fs.writeFile(
-      path.join(agent, "settings.json"),
-      JSON.stringify({ cacheWarming: "off", compaction: { enabled: false }, retry: { enabled: false } }),
-      { mode: 0o600 },
-    );
-    await fs.writeFile(
-      path.join(agent, "models.json"),
-      JSON.stringify({
-        providers: {
-          "sync-rpc-fixture": {
-            api: "openai-completions",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
-            apiKey: "owned-loopback-fixture",
-            models: [
-              {
-                id: "fixture",
-                name: "Fixture",
-                reasoning: false,
-                input: ["text"],
-                contextWindow: 65536,
-                maxTokens: 1024,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      }),
-      { mode: 0o600 },
-    );
-    await fs.writeFile(path.join(agent, "AGENTS.md"), "Test-owned parent instructions.\n");
-    await run({
-      agent,
-      cwd,
-      requests,
-      storage,
-      connect(sessionDir) {
-        const client = new SyncRpc(root, cwd, path.resolve("packages/pi-sync/src/index.ts"), sessionDir);
-        clients.push(client);
-        return client;
-      },
-    });
-  } catch (error) {
-    failures.push(error);
-  }
-  const closed = await Promise.allSettled(clients.map((client) => client.close()));
-  for (const result of closed) if (result.status === "rejected") failures.push(result.reason);
-  let stopped = false;
-  try {
-    await stopDaemon(agent);
-    stopped = true;
-  } catch (error) {
-    failures.push(error);
-  }
-  try {
-    await storage.close();
-  } catch (error) {
-    failures.push(error);
-  }
-  api.closeAllConnections();
-  await new Promise<void>((resolve) => api.close(() => resolve()));
-  if (stopped) {
-    try {
-      await fs.rm(root, { recursive: true, force: true });
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length === 1) throw failures[0];
-  if (failures.length) throw new AggregateError(failures, "Pi RPC fixture or cleanup failed.");
-}
+let owned: RpcFixture;
+beforeEach(async (context) => {
+  owned = await createRpcFixture(context);
+});
 
-test("two real Pi RPC clients share a daemon through new-session, reload, and ordinary exit", () =>
-  fixture(async ({ agent, connect, requests }) => {
-    const first = connect();
-    const second = connect();
-    const [before] = await Promise.all([first.start(), second.start()]);
+describe("shared daemon lifecycle", () => {
+  let first: SyncRpc;
+  let second: SyncRpc;
+  let before: Record<string, unknown>;
+  beforeEach(() =>
+    owned.prepare(async () => {
+      first = await owned.connect();
+      second = await owned.connect();
+      [before] = await Promise.all([first.start(), second.start()]);
+    }),
+  );
+
+  test("two real Pi RPC clients share a daemon through new-session, reload, and ordinary exit", async () => {
+    const { agent, requests } = owned;
     const daemon = await findDaemon(agent);
     assert.ok(daemon);
     assert.notEqual(daemon.identity.pid, first.child.pid);
@@ -150,40 +46,52 @@ test("two real Pi RPC clients share a daemon through new-session, reload, and or
     await second.close();
     assert.equal((await findDaemon(agent))?.identity.instance, daemon.identity.instance);
     assert.equal(requests.length, 0);
-  }));
+  });
+});
 
 for (const transition of [false, true])
-  test(`a real Pi pull coordinates different peer session roots${transition ? " and a new external destination" : ""}`, () =>
-    fixture(async ({ agent, cwd, connect, requests, storage }) => {
-      const oldRoot = path.join(path.dirname(agent), "old-sessions");
-      const peerRoot = path.join(path.dirname(agent), "peer-sessions");
-      const destination = transition ? path.join(path.dirname(agent), "new-sessions") : oldRoot;
-      await fs.mkdir(oldRoot);
-      await fs.mkdir(peerRoot);
-      const settingsFile = path.join(agent, "settings.json");
-      const before = { ...JSON.parse(await fs.readFile(settingsFile, "utf8")), sessionDir: oldRoot };
-      const after = { ...before, sessionDir: destination };
-      await fs.writeFile(settingsFile, JSON.stringify(before));
-      const settings = v3WebDavSettings({ include: ["settings.json", "sessions"] });
-      settings.storageConnections.dav.url = storage.url;
-      await fs.writeFile(path.join(agent, "pi-sync.json"), JSON.stringify(settings), { mode: 0o600 });
-      const config = configFromSettings(validateSettingsDocument(settings));
-      assert.equal(config.backend.type, "webdav");
-      if (config.backend.type !== "webdav") throw new Error("Expected fixture backend.");
-      const session = `${JSON.stringify({ type: "session", version: 3, id: "transferred", timestamp: "2026-01-01T00:00:00.000Z", cwd })}\n`;
-      const remote = {
-        ...snapshot([
-          { path: "settings.json", content: Buffer.from(JSON.stringify(after)) },
-          { path: "sessions/transferred.jsonl", content: Buffer.from(session) },
-        ]),
-        profile: config.snapshotIdentity,
-        selection: { version: 1 as const, include: ["settings.json", "sessions"] },
-      };
-      await new WebDavSyncBackend(config.backend).publishSnapshot(remote, { kind: "missing" });
-      await adoptFixtureRoot(agent);
-      const first = connect(oldRoot);
-      const second = connect(peerRoot);
-      await Promise.all([first.start(), second.start()]);
+  describe(`peer session roots (new destination: ${transition})`, () => {
+    let first: SyncRpc;
+    let destination: string;
+    let session: string;
+    let settingsFile: string;
+    beforeEach(() =>
+      owned.prepare(async () => {
+        const { agent, cwd, storage } = owned;
+        const oldRoot = path.join(path.dirname(agent), "old-sessions");
+        const peerRoot = path.join(path.dirname(agent), "peer-sessions");
+        destination = transition ? path.join(path.dirname(agent), "new-sessions") : oldRoot;
+        await fs.mkdir(oldRoot);
+        await fs.mkdir(peerRoot);
+        settingsFile = path.join(agent, "settings.json");
+        const before = { ...JSON.parse(await fs.readFile(settingsFile, "utf8")), sessionDir: oldRoot };
+        const after = { ...before, sessionDir: destination };
+        await fs.writeFile(settingsFile, JSON.stringify(before));
+        const settings = v3WebDavSettings({ include: ["settings.json", "sessions"] });
+        settings.storageConnections.dav.url = storage.url;
+        await fs.writeFile(path.join(agent, "pi-sync.json"), JSON.stringify(settings), { mode: 0o600 });
+        const config = configFromSettings(validateSettingsDocument(settings));
+        assert.equal(config.backend.type, "webdav");
+        if (config.backend.type !== "webdav") throw new Error("Expected fixture backend.");
+        session = `${JSON.stringify({ type: "session", version: 3, id: "transferred", timestamp: "2026-01-01T00:00:00.000Z", cwd })}\n`;
+        const remote = {
+          ...snapshot([
+            { path: "settings.json", content: Buffer.from(JSON.stringify(after)) },
+            { path: "sessions/transferred.jsonl", content: Buffer.from(session) },
+          ]),
+          profile: config.snapshotIdentity,
+          selection: { version: 1 as const, include: ["settings.json", "sessions"] },
+        };
+        await new WebDavSyncBackend(config.backend).publishSnapshot(remote, { kind: "missing" });
+        await owned.startDaemon();
+        await adoptFixtureRoot(agent);
+        first = await owned.connect(oldRoot);
+        const second = await owned.connect(peerRoot);
+        await Promise.all([first.start(), second.start()]);
+      }),
+    );
+
+    test(`a real Pi pull coordinates different peer session roots${transition ? " and a new external destination" : ""}`, async () => {
       const confirmations: string[] = [];
       await first.command("/sync pull --force --yes", (title) => {
         confirmations.push(title);
@@ -192,7 +100,7 @@ for (const transition of [false, true])
       assert.equal(await fs.readFile(path.join(destination, "transferred.jsonl"), "utf8"), session);
       assert.equal(JSON.parse(await fs.readFile(settingsFile, "utf8")).sessionDir, destination);
       assert.ok(confirmations.every((title) => title.includes("Reload")));
-      assert.equal(requests.length, 0);
+      assert.equal(owned.requests.length, 0);
       assert.ok(
         !first.records.some(
           (record) =>
@@ -200,17 +108,27 @@ for (const transition of [false, true])
             String(record.message).includes("Invalid daemon mutation targets"),
         ),
       );
-    }));
+    });
+  });
 
-test("a real explicit sync resumes Continuous after repaired authentication without resetting accounting", () =>
-  fixture(async ({ agent, connect, requests, storage }) => {
-    const settingsFile = path.join(agent, "pi-sync.json");
-    const settings = JSON.parse(await fs.readFile(settingsFile, "utf8"));
-    Object.assign(settings.syncSetups.home.sync, { continuous: true, agentMode: true });
-    await fs.writeFile(settingsFile, JSON.stringify(settings));
-    await adoptFixtureRoot(agent);
-    const client = connect();
-    await client.start();
+describe("Continuous retry", () => {
+  let client: SyncRpc;
+  beforeEach(() =>
+    owned.prepare(async () => {
+      const { agent } = owned;
+      const settingsFile = path.join(agent, "pi-sync.json");
+      const settings = JSON.parse(await fs.readFile(settingsFile, "utf8"));
+      Object.assign(settings.syncSetups.home.sync, { continuous: true, agentMode: true });
+      await fs.writeFile(settingsFile, JSON.stringify(settings));
+      await owned.startDaemon();
+      await adoptFixtureRoot(agent);
+      client = await owned.connect();
+      await client.start();
+    }),
+  );
+
+  test("a real explicit sync resumes Continuous after repaired authentication without resetting accounting", async () => {
+    const { agent, requests, storage } = owned;
     const directory = path.join(agent, "pi-sync", "continuous");
     const record = async () => {
       const names = (await fs.readdir(directory)).filter((name) => /^[a-f0-9]{64}\.json$/u.test(name));
@@ -242,12 +160,20 @@ test("a real explicit sync resumes Continuous after repaired authentication with
     assert.deepEqual(after.attempts, before.attempts);
     assert.equal(after.binding, before.binding);
     assert.equal(requests.length, 0);
-  }));
+  });
+});
 
-test("sync status preserves real Pi request prefixes and ordered tools; fork and resume reattach", () =>
-  fixture(async ({ agent, connect, requests, storage }) => {
-    const client = connect();
-    await client.start();
+describe("request prefixes and session replacement", () => {
+  let client: SyncRpc;
+  beforeEach(() =>
+    owned.prepare(async () => {
+      client = await owned.connect();
+      await client.start();
+    }),
+  );
+
+  test("sync status preserves real Pi request prefixes and ordered tools", async () => {
+    const { requests, storage } = owned;
     await client.prompt("prefix one");
     const before = await client.call({ type: "get_messages" });
     await client.call({ type: "prompt", message: "/sync status" });
@@ -260,6 +186,12 @@ test("sync status preserves real Pi request prefixes and ordered tools; fork and
     assert.deepEqual((second.messages as unknown[]).slice(0, prefix.length), prefix);
     assert.deepEqual(second.tools, first.tools);
     assert.ok(Array.isArray(first.tools) && first.tools.length > 0);
+    assert.ok(storage.requests.every((request) => ["GET", "PROPFIND"].includes(request.method)));
+  });
+
+  test("fork and resume reattach to the existing daemon without another model request", async () => {
+    const { agent, requests } = owned;
+    await client.prompt("session seed");
     const original = await client.call({ type: "get_state" });
     const entries = (await client.call({ type: "get_entries" })).entries as {
       id: string;
@@ -268,7 +200,9 @@ test("sync status preserves real Pi request prefixes and ordered tools; fork and
     }[];
     const user = entries.find((entry) => entry.type === "message" && entry.message?.role === "user");
     assert.ok(user);
-    const instance = (await findDaemon(agent))?.identity.instance;
+    const daemon = await findDaemon(agent);
+    assert.ok(daemon);
+    const instance = daemon.identity.instance;
     await client.call({ type: "fork", entryId: user.id });
     assert.notEqual((await client.call({ type: "get_state" })).sessionId, original.sessionId);
     assert.equal((await findDaemon(agent))?.identity.instance, instance);
@@ -276,6 +210,56 @@ test("sync status preserves real Pi request prefixes and ordered tools; fork and
     await client.call({ type: "switch_session", sessionPath: original.sessionFile as string });
     assert.equal((await client.call({ type: "get_state" })).sessionId, original.sessionId);
     assert.equal((await findDaemon(agent))?.identity.instance, instance);
-    assert.equal(requests.length, 2);
-    assert.ok(storage.requests.every((request) => ["GET", "PROPFIND"].includes(request.method)));
-  }));
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("cancelling RPC bootstrap releases the child and rejects readiness", async () => {
+  const controller = new AbortController();
+  const client = await owned.connect(undefined, controller.signal);
+  controller.abort();
+  await assert.rejects(client.start(), /RPC fixture cancelled/u);
+  await client.dispose();
+  assert.equal((await client.exited).signal, "SIGKILL");
+});
+
+describe("pending RPC cancellation", () => {
+  let client: SyncRpc;
+  let controller: AbortController;
+  beforeEach(() =>
+    owned.prepare(async () => {
+      controller = new AbortController();
+      client = await owned.connect(undefined, controller.signal);
+      await client.start();
+    }),
+  );
+
+  test("cancelling an observed pending command rejects it and releases the child", async () => {
+    const observed = once(client.child, "message");
+    const rejected = assert.rejects(
+      client.call({ type: "prompt", message: "/test-sync-pending" }),
+      /RPC fixture cancelled/u,
+    );
+    const [message] = await observed;
+    assert.deepEqual(message, { type: "pending" });
+    controller.abort();
+    await rejected;
+    await client.dispose();
+    assert.equal((await client.exited).signal, "SIGKILL");
+    assert.equal(owned.requests.length, 0);
+  });
+
+  test("cancellation after a handled prompt response rejects the pending settled wait", async () => {
+    const rejected = assert.rejects(client.prompt("/sync help"), /RPC fixture cancelled/u);
+    await vi.waitFor(() => {
+      assert.ok(
+        client.records.some((record) => record.type === "response" && record.command === "prompt" && record.success),
+      );
+    });
+    controller.abort();
+    await rejected;
+    await client.dispose();
+    assert.equal((await client.exited).signal, "SIGKILL");
+    assert.equal(owned.requests.length, 0);
+  });
+});

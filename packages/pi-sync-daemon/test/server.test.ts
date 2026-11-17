@@ -24,7 +24,7 @@ function facts(root: string): ClientFacts {
   };
 }
 async function fixture(run: (root: string) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-api-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-api-"));
   try {
     await run(await fs.realpath(root));
   } finally {

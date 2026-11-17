@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pushSessionsOnShutdown } from "@narumitw/sync-daemon/engine/sync/session-push";
+import { pushSessionsOnShutdown } from "@narumitw/pi-sync-daemon/engine/sync/session-push";
 import { test, vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -114,7 +114,7 @@ test("shutdown session push keeps local-only conflicts even when remote accepted
     const f = await pendingFixture(root);
     const head = await f.backend.readHead();
     const publish = vi.spyOn(f.backend, "publishSnapshot");
-    const operations = await import("@narumitw/sync-daemon/engine/sync/sync-operations");
+    const operations = await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations");
     const loaders = createSyncLoaders({
       loadSyncOperations: async () => ({
         ...operations,

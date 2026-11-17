@@ -152,7 +152,7 @@ export function readConsent(root: string): Consent | undefined {
 export function consentFingerprint(root: string, config: AnySyncConfig) {
   const consent = readConsent(root);
   if (!consent) throw new Error("Review daemon handover first.");
-  // Domain-separated authorization digest; never persist the internal freshness token itself.
+  // Keep the original digest domain across package renames; never persist the internal freshness token.
   return createHmac("sha256", consent.nonce)
     .update("sync-daemon-consent/v1")
     .update(syncCheckConfigFingerprint(config))
@@ -161,7 +161,7 @@ export function consentFingerprint(root: string, config: AnySyncConfig) {
 export async function requireHandover(execution: Execution) {
   if (readConsent(execution.root)) return;
   const accepted = await execution.request("confirm", {
-    title: "Adopt sync-daemon as the synchronization owner?",
+    title: "Adopt pi-sync-daemon as the synchronization owner?",
     message:
       "Close or upgrade every older Pi process before continuing. An idle older Pi cannot be detected from an absent sync lock. The daemon will own transfers; Pi keeps presentation and live file queues. Autonomous resolution uses independently available auth.json/models.json configuration and the environment captured when the service starts, not Pi runtime accounts or providers. Credential commands run non-interactively from the canonical agent root. Review this independent provider/account configuration; restart the service after changing its environment. This does not authorize transfers or model requests after the last Pi exits.",
   });

@@ -11,7 +11,7 @@ import {
   rollback,
   status,
   syncBoth,
-} from "@narumitw/sync-daemon/engine/sync/sync-operations";
+} from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { ResolvedGitBackend } from "../src/backends/backend-types.js";

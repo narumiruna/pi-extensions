@@ -1,6 +1,6 @@
-export type * from "@narumitw/sync-daemon/engine/backends/sync-backend";
+export type * from "@narumitw/pi-sync-daemon/engine/backends/sync-backend";
 export {
   expectedRemoteHead,
   SyncBackendConflictError,
   SyncBackendPublicationOutcomeUnknownError,
-} from "@narumitw/sync-daemon/engine/backends/sync-backend";
+} from "@narumitw/pi-sync-daemon/engine/backends/sync-backend";

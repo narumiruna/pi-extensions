@@ -1,2 +1,2 @@
-export type * from "@narumitw/sync-daemon/engine/sync/apply-review";
-export { inspectCaseCleanup, revalidateCaseCleanup } from "@narumitw/sync-daemon/engine/sync/apply-review";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/apply-review";
+export { inspectCaseCleanup, revalidateCaseCleanup } from "@narumitw/pi-sync-daemon/engine/sync/apply-review";

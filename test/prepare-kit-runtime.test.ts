@@ -178,7 +178,7 @@ for (const kind of ["file", "symlink", "dangling symlink"] as const) {
 test("clean production Git preparation loads root-listed Files source and its lazy menus through native Jiti", async () => {
   const checkout = await mkdtemp(join(tmpdir(), "prepare-git-production-"));
   try {
-    for (const packageId of ["pi-tui-kit", "pi-files", "sync-daemon", "pi-sync"]) {
+    for (const packageId of ["pi-tui-kit", "pi-files", "pi-sync-daemon", "pi-sync"]) {
       const target = join(checkout, "packages", packageId);
       await mkdir(target, { recursive: true });
       await copyFile(resolve("packages", packageId, "package.json"), join(target, "package.json"));
@@ -204,7 +204,7 @@ test("clean production Git preparation loads root-listed Files source and its la
     const rootManifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
     const kitManifest = JSON.parse(await readFile(resolve("packages/pi-tui-kit/package.json"), "utf8"));
     const filesManifest = JSON.parse(await readFile(resolve("packages/pi-files/package.json"), "utf8"));
-    const daemonManifest = JSON.parse(await readFile(resolve("packages/sync-daemon/package.json"), "utf8"));
+    const daemonManifest = JSON.parse(await readFile(resolve("packages/pi-sync-daemon/package.json"), "utf8"));
     const syncManifest = JSON.parse(await readFile(resolve("packages/pi-sync/package.json"), "utf8"));
     const source = await inventory(resolve("packages/pi-files/src"));
     assert.deepEqual(await inventory(join(checkout, "packages/pi-files/src")), source);
@@ -230,10 +230,10 @@ test("clean production Git preparation loads root-listed Files source and its la
     const kitLink = join(checkout, "node_modules/@narumitw/pi-tui-kit");
     await mkdir(dirname(kitLink), { recursive: true });
     await symlink(kit, kitLink, "dir");
-    const daemon = join(checkout, "packages/sync-daemon");
+    const daemon = join(checkout, "packages/pi-sync-daemon");
     await symlink(daemon, join(checkout, "node_modules", daemonManifest.name), "dir");
     for (const name of Object.keys(daemonManifest.dependencies)) {
-      const nested = resolve("packages/sync-daemon/node_modules", name);
+      const nested = resolve("packages/pi-sync-daemon/node_modules", name);
       const target = join(daemon, "node_modules", name);
       await mkdir(dirname(target), { recursive: true });
       await symlink(existsSync(nested) ? nested : resolve("node_modules", name), target, "dir");
@@ -386,7 +386,7 @@ try {
   for(const handler of syncExtension.handlers.get("session_start")??[]) await handler({type:"session_start",reason:"startup"},syncCtx);
   await syncExtension.commands.get("sync").handler("help",syncCtx);
   assert.ok(syncNotices.some(message=>message.includes("daemon [")));
-  const api=await import("@narumitw/sync-daemon"); const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
+  const api=await import("@narumitw/pi-sync-daemon"); const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
   try { assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance); }
   finally { await api.stopDaemon(process.env.PI_CODING_AGENT_DIR); }
 } finally {

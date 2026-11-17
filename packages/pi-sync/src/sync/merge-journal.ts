@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/sync/merge-journal";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/merge-journal";
 export {
   clearMergeJournal,
   mergeJournalIdentity,
@@ -7,4 +7,4 @@ export {
   requireNoMergeJournal,
   retireMergeJournal,
   writeMergeJournal,
-} from "@narumitw/sync-daemon/engine/sync/merge-journal";
+} from "@narumitw/pi-sync-daemon/engine/sync/merge-journal";

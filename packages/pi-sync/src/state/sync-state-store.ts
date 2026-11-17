@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/state/sync-state-store";
+export type * from "@narumitw/pi-sync-daemon/engine/state/sync-state-store";
 export {
   ensureStateDir,
   lockPath,
@@ -8,4 +8,4 @@ export {
   syncStateFingerprint,
   writeState,
   writeStateForConfig,
-} from "@narumitw/sync-daemon/engine/state/sync-state-store";
+} from "@narumitw/pi-sync-daemon/engine/state/sync-state-store";

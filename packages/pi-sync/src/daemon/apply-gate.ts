@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { withTargetQueues } from "@narumitw/sync-daemon/engine/snapshot/snapshot-mutation-queues";
+import { withTargetQueues } from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-mutation-queues";
 
 interface Gate {
   token: string;

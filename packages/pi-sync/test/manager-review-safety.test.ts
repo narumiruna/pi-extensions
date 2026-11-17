@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { syncBoth } from "@narumitw/sync-daemon/engine/sync/sync-operations";
+import { syncBoth } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { executeCommand } from "../src/commands/command-execution.js";

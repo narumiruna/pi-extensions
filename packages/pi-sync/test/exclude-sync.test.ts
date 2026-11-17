@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SyncLoaders } from "@narumitw/sync-daemon/engine/sync/sync-loaders";
+import type { SyncLoaders } from "@narumitw/pi-sync-daemon/engine/sync/sync-loaders";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { loadConfig } from "../src/settings/config.js";
@@ -48,7 +48,7 @@ test("excluding the entire sessions tree disables the legacy shutdown push befor
       });
       return current;
     });
-    const { pushSessionsOnShutdown } = await import("@narumitw/sync-daemon/engine/sync/session-push");
+    const { pushSessionsOnShutdown } = await import("@narumitw/pi-sync-daemon/engine/sync/session-push");
     let loaded = 0;
     const loaders = new Proxy(
       {},

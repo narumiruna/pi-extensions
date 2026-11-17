@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { createEventBus, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { stopDaemon } from "@narumitw/sync-daemon";
+import { stopDaemon } from "@narumitw/pi-sync-daemon";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { MockResolverServer } from "../packages/pi-sync/test/mock-resolver-server.js";
 import { MockWebDavServer } from "../packages/pi-sync/test/mock-webdav-server.js";
@@ -119,7 +119,7 @@ async function configure(showStatus = true) {
   );
   const { installEngineFixtureHost } = await import("../packages/pi-sync/test/engine-host.js");
   const { installPiDaemonHost } = await import("../packages/pi-sync/src/daemon/pi-client.js");
-  const { push } = await import("@narumitw/sync-daemon/engine/sync/sync-operations");
+  const { push } = await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations");
   storage.options.password = "test";
   await writeFile(join(agentDir, "AGENTS.md"), "Test-owned stable content.\n");
   installEngineFixtureHost();

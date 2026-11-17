@@ -9,7 +9,7 @@
 
 ## Engine boundary
 
-- Use documented `@narumitw/sync-daemon` exports and keep engine safety rules in `packages/sync-daemon/AGENTS.md` with their implementation.
+- Use documented `@narumitw/pi-sync-daemon` exports and keep engine safety rules in `packages/pi-sync-daemon/AGENTS.md` with their implementation.
 
 ## Interaction model
 

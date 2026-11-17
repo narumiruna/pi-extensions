@@ -27,7 +27,7 @@ function facts(root: string, name: string, pid = process.pid): ClientFacts {
   };
 }
 async function fixture(run: (root: string) => Promise<void>) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-protection-")));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-protection-")));
   try {
     await run(root);
   } finally {

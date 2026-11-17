@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { stopDaemon } from "@narumitw/sync-daemon";
+import { stopDaemon } from "@narumitw/pi-sync-daemon";
 import { installEngineFixtureHost } from "./engine-host.js";
 
 installEngineFixtureHost();

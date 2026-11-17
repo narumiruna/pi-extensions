@@ -16,7 +16,7 @@ const template = {
   future: { preserved: true },
 };
 async function fixture(run: (root: string, connect: () => Promise<DaemonConnection>) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-settings-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-settings-"));
   const clients: DaemonConnection[] = [];
   const connect = async () => {
     const daemon = await ensureDaemon(root);
@@ -36,7 +36,7 @@ async function fixture(run: (root: string, connect: () => Promise<DaemonConnecti
         callback: async (callback) => {
           if (
             callback.kind === "confirm" &&
-            (callback.payload as { title?: string }).title === "Adopt sync-daemon as the synchronization owner?"
+            (callback.payload as { title?: string }).title === "Adopt pi-sync-daemon as the synchronization owner?"
           )
             return true;
           throw new Error("Unexpected settings approval.");

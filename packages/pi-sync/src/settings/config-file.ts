@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/settings/config-file";
+export type * from "@narumitw/pi-sync-daemon/engine/settings/config-file";
 export {
   activeLocalConfigPath,
   consumeLocalConfigMigrationNotice,
@@ -16,4 +16,4 @@ export {
   withConfigReplacementInstalledHookForTest,
   withLocalConfigFileLock,
   withMissingConfigReadProbeHookForTest,
-} from "@narumitw/sync-daemon/engine/settings/config-file";
+} from "@narumitw/pi-sync-daemon/engine/settings/config-file";

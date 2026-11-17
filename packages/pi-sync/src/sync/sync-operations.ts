@@ -10,7 +10,7 @@ async function transfer(
 ): Promise<SetupPullOutcome | undefined> {
   const result = await remoteOperation(ctx, operation, options);
   if (result === undefined || result === "applied" || result === "cancelled") return result;
-  throw new Error("Invalid transfer result from sync-daemon.");
+  throw new Error("Invalid transfer result from pi-sync-daemon.");
 }
 export const push = (ctx: ExtensionContext, options: CommandOptions) => transfer(ctx, "push", options);
 export const pull = (ctx: ExtensionContext, options: CommandOptions) => transfer(ctx, "pull", options);

@@ -28,7 +28,7 @@ function facts(root: string, mode: ClientFacts["mode"] = "rpc"): ClientFacts {
   };
 }
 async function fixture(run: (root: string) => Promise<void>) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-admission-")));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-admission-")));
   try {
     await run(root);
   } finally {

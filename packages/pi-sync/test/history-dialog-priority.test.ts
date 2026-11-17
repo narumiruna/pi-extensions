@@ -261,7 +261,7 @@ test("real manager command forwards History dialog ownership through command exe
     }) as ExtensionCommandContext["ui"]["custom"];
     const loaders = createSyncLoaders({
       loadSyncOperations: async () => ({
-        ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+        ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
         history: async (routeCtx) => {
           await routeCtx.ui.select("History", ["snapshot"]);
         },
