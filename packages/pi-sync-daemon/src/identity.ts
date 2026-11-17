@@ -31,6 +31,7 @@ export async function runtimePaths(root: string): Promise<RuntimePaths> {
   const hash = createHash("sha256").update(canonical).digest("hex");
   const user = process.getuid?.() ?? createHash("sha256").update(os.homedir()).digest("hex").slice(0, 12);
   const base = process.platform === "win32" ? path.join(os.homedir(), "AppData", "Local") : "/tmp";
+  // Keep the original namespace so the package rename cannot create a second root owner.
   const directory = path.join(base, `sync-daemon-${user}`, hash);
   return {
     root: canonical,

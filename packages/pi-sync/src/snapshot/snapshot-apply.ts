@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/snapshot/snapshot-apply";
+export type * from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-apply";
 export {
   addTopLevelCaseVariantDeletes,
   appliedFileHashMap,
@@ -6,4 +6,4 @@ export {
   preflightSnapshotApply,
   preflightSnapshotMutations,
   protectSnapshotApplyPlan,
-} from "@narumitw/sync-daemon/engine/snapshot/snapshot-apply";
+} from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-apply";

@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { SyncInspection } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import type { SyncInspection } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import type { AnySyncConfig } from "../src/settings/settings-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../src/state/sync-state-store.js";
 

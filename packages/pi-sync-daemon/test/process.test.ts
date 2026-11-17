@@ -15,11 +15,13 @@ const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 test.skipIf(process.platform === "win32")(
   "the executable runs through npm-style symlinks without executing on import",
   async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-bin-"));
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-bin-"));
     try {
-      const alias = path.join(directory, "sync-daemon");
+      const alias = path.join(directory, "pi-sync-daemon");
       await fs.symlink(cli, alias);
-      assert.match((await exec(alias, ["--help"])).stdout, /status\/stop never start/u);
+      const help = (await exec(alias, ["--help"])).stdout;
+      assert.match(help, /^pi-sync-daemon <start\|status\|stop\|restart\|serve>/u);
+      assert.match(help, /status\/stop never start/u);
       assert.equal(
         (
           await exec(process.execPath, [
@@ -51,7 +53,7 @@ test("a losing explicit serve launch leaves the recognized owner and lifecycle l
   }));
 
 async function fixture(run: (root: string) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-process-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-process-"));
   try {
     await run(await fs.realpath(root));
   } finally {

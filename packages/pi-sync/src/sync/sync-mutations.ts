@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/sync/sync-mutations";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/sync-mutations";
 export {
   backupLocal,
   PublicationStatePersistenceError,
@@ -7,4 +7,4 @@ export {
   RollbackPublicationError,
   rollback,
   syncBoth,
-} from "@narumitw/sync-daemon/engine/sync/sync-mutations";
+} from "@narumitw/pi-sync-daemon/engine/sync/sync-mutations";

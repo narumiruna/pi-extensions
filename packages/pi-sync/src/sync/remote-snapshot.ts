@@ -1,7 +1,7 @@
-export type * from "@narumitw/sync-daemon/engine/sync/remote-snapshot";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/remote-snapshot";
 export {
   formatRemoteSelectionStatus,
   readRemoteSnapshot,
   readSnapshotForHead,
   requireCompatibleRemoteSelection,
-} from "@narumitw/sync-daemon/engine/sync/remote-snapshot";
+} from "@narumitw/pi-sync-daemon/engine/sync/remote-snapshot";

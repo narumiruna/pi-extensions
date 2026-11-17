@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { stopDaemon } from "@narumitw/sync-daemon";
+import { stopDaemon } from "@narumitw/pi-sync-daemon";
 import { afterAll, describe, test } from "vitest";
 import {
   type BuildMetadata,

@@ -16,11 +16,14 @@ import {
   findDaemon,
   MAX_SETTINGS_BYTES,
   modelSignature,
-} from "@narumitw/sync-daemon";
-import { type ConfigAuthority, configureEngineHost } from "@narumitw/sync-daemon/engine/host";
-import { type LocalConfigDocument, peekLocalConfigDocument } from "@narumitw/sync-daemon/engine/settings/config-file";
-import { validateSettingsDocument } from "@narumitw/sync-daemon/engine/settings/settings-validation";
-import { sessionDirFromContext } from "@narumitw/sync-daemon/engine/snapshot/session-paths";
+} from "@narumitw/pi-sync-daemon";
+import { type ConfigAuthority, configureEngineHost } from "@narumitw/pi-sync-daemon/engine/host";
+import {
+  type LocalConfigDocument,
+  peekLocalConfigDocument,
+} from "@narumitw/pi-sync-daemon/engine/settings/config-file";
+import { validateSettingsDocument } from "@narumitw/pi-sync-daemon/engine/settings/settings-validation";
+import { sessionDirFromContext } from "@narumitw/pi-sync-daemon/engine/snapshot/session-paths";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { StartupTimingPublisher } from "../sync/startup-timings.js";
 import { SyncDecisionRequiredError } from "../sync/sync-errors.js";
@@ -122,7 +125,7 @@ export function installPiDaemonHost() {
     root: () => scope.getStore()?.root ?? path.resolve(getAgentDir()),
     config: authority,
     mutate: async () => {
-      throw new Error("File mutation belongs to sync-daemon; no in-process fallback is permitted.");
+      throw new Error("File mutation belongs to pi-sync-daemon; no in-process fallback is permitted.");
     },
     review: async () => {
       throw new Error("Engine reviews must arrive through the daemon API.");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { watchContinuous } from "@narumitw/sync-daemon/engine/sync/continuous-watch";
+import { watchContinuous } from "@narumitw/pi-sync-daemon/engine/sync/continuous-watch";
 import { test, vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";

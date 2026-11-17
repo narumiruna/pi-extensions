@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { acquireContinuousLease } from "../src/sync/continuous-lease.js";
 import { readContinuousRecord, reserveContinuousRequest } from "../src/sync/continuous-record.js";
@@ -12,7 +12,7 @@ import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { continuousLoaders } from "./continuous-test-helpers.js";
 import { RecoveryClock, recoveryFixture, waitRecoveryStatus } from "./recovery-test-helpers.js";
 
-vi.mock("@narumitw/sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
+vi.mock("@narumitw/pi-sync-daemon/engine/sync/continuous-watch", () => ({ watchContinuous: async () => () => {} }));
 
 const fixture = recoveryFixture();
 
@@ -50,7 +50,7 @@ for (const [kind, failure] of [
           },
         }),
         loadSyncOperations: async () => ({
-          ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+          ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
           syncBoth: async (ctx, options) => {
             transfers++;
             if (!repaired) throw failure();

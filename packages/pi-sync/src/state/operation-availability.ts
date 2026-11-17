@@ -1,7 +1,7 @@
-export type * from "@narumitw/sync-daemon/engine/state/operation-availability";
+export type * from "@narumitw/pi-sync-daemon/engine/state/operation-availability";
 export {
   classifyOperationAvailability,
   inspectOperationAvailability,
   operationBlocksChanges,
   operationCanRecover,
-} from "@narumitw/sync-daemon/engine/state/operation-availability";
+} from "@narumitw/pi-sync-daemon/engine/state/operation-availability";

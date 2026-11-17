@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { findDaemon, stopDaemon } from "@narumitw/sync-daemon";
+import { findDaemon, stopDaemon } from "@narumitw/pi-sync-daemon";
 import { test, vi } from "vitest";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { configFromSettings } from "../src/settings/config.js";

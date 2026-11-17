@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, type ExtensionCommandContext, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { DaemonConnection, ensureDaemon, modelSignature } from "@narumitw/sync-daemon";
+import { DaemonConnection, ensureDaemon, modelSignature } from "@narumitw/pi-sync-daemon";
 import { afterAll, test } from "vitest";
 import { createSyncBackend } from "../src/backends/backend-factory.js";
 import { loadConfig } from "../src/settings/config.js";

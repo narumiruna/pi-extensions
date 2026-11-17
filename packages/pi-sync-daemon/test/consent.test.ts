@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { DaemonConnection, ensureDaemon, stopDaemon } from "../dist/client.js";
+import { consentFingerprint, readConsent } from "../src/consent.js";
+import { configureEngineHost } from "../src/engine/host.js";
+import { configFromSettings } from "../src/engine/settings/config.js";
+import type { PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import { runtimePaths } from "../src/identity.js";
 
 const config = {
@@ -20,7 +24,7 @@ const config = {
       sync: { include: ["settings.json"], automatic: true, continuous: true, agentMode: true },
     },
   },
-};
+} satisfies PiSyncSettingsV3;
 async function fixture(
   run: (state: {
     root: string;
@@ -28,7 +32,7 @@ async function fixture(
     approve: (fn: () => Promise<boolean>) => void;
   }) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-consent-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-consent-"));
   await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(config), { mode: 0o600 });
   let approval = async () => true;
   const daemon = await ensureDaemon(root);
@@ -54,7 +58,7 @@ async function fixture(
     {
       callback: async (callback) => {
         assert.equal(callback.kind, "confirm");
-        if ((callback.payload as { title?: string }).title === "Adopt sync-daemon as the synchronization owner?")
+        if ((callback.payload as { title?: string }).title === "Adopt pi-sync-daemon as the synchronization owner?")
           return true;
         return approval();
       },
@@ -83,6 +87,44 @@ async function readPolicy(client: DaemonConnection): Promise<Policy> {
   assert.equal(typeof value.afterExit, "boolean");
   return value;
 }
+
+test("the package rename preserves the consent digest and an existing unattended grant", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-consent-digest-")));
+  try {
+    configureEngineHost({
+      root: () => root,
+      mutate: async () => {
+        throw new Error("A consent read must not mutate files.");
+      },
+      review: async () => false,
+    });
+    const resolved = configFromSettings(config);
+    const nonce = "a".repeat(64);
+    const configFingerprint = createHash("sha256")
+      .update(JSON.stringify({ ...resolved, showStatus: undefined, debug: undefined }))
+      .digest("hex");
+    const fingerprint = createHmac("sha256", nonce)
+      .update("sync-daemon-consent/v1")
+      .update(configFingerprint)
+      .digest("hex");
+    const saved = {
+      version: 1,
+      root,
+      handover: true,
+      nonce,
+      setups: { home: { fingerprint, afterExit: true, future: "retained" } },
+      future: { retained: true },
+    };
+    const target = path.join(root, "pi-sync", "daemon.json");
+    await fs.mkdir(path.dirname(target), { mode: 0o700 });
+    await fs.writeFile(target, JSON.stringify(saved), { mode: 0o600 });
+    assert.equal(consentFingerprint(root, resolved), fingerprint);
+    assert.deepEqual(readConsent(root), saved);
+    assert.equal(await fs.readFile(target, "utf8"), JSON.stringify(saved));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("unattended permission defaults off and reviewed enable/revoke preserves unknown fields", () =>
   fixture(async ({ root, client }) => {

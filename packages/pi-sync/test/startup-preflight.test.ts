@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { initializeSync as startSession } from "@narumitw/sync-daemon/engine/sync/initialization";
+import { initializeSync as startSession } from "@narumitw/pi-sync-daemon/engine/sync/initialization";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { pendingTransactionEntries, transactionRoot } from "../src/snapshot/snapshot-transaction-directory.js";
@@ -90,7 +90,7 @@ for (const boundary of ["abort", "session mutation"] as const) {
       const controller = new AbortController();
       const context = createMockContext({ mode: "rpc" });
       let recoveries = 0;
-      vi.doMock("@narumitw/sync-daemon/engine/snapshot/snapshot-transaction", async () => {
+      vi.doMock("@narumitw/pi-sync-daemon/engine/snapshot/snapshot-transaction", async () => {
         entered.resolve();
         await release.promise;
         return {
@@ -112,7 +112,7 @@ for (const boundary of ["abort", "session mutation"] as const) {
       } finally {
         release.resolve();
         await pending.catch(() => {});
-        vi.doUnmock("@narumitw/sync-daemon/engine/snapshot/snapshot-transaction");
+        vi.doUnmock("@narumitw/pi-sync-daemon/engine/snapshot/snapshot-transaction");
       }
     });
   });

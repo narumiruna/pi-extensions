@@ -11,13 +11,15 @@ const cli = path.join(repositoryRoot, "node_modules/.bin/changeset");
 const read = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 
 test("scoped daemon versioning updates Pi Sync's floor and plans a public dependency-first release", () => {
-  const daemon = read(path.join(repositoryRoot, "packages/sync-daemon/package.json"));
+  const daemon = read(path.join(repositoryRoot, "packages/pi-sync-daemon/package.json"));
   const client = read(path.join(repositoryRoot, "packages/pi-sync/package.json"));
-  assert.equal(daemon.name, "@narumitw/sync-daemon");
+  assert.equal(daemon.name, "@narumitw/pi-sync-daemon");
   assert.equal(daemon.pi, undefined);
-  assert.deepEqual(daemon.bin, { "sync-daemon": "./dist/cli.js" });
+  assert.deepEqual(daemon.bin, { "pi-sync-daemon": "./dist/cli.js" });
   assert.ok(client.dependencies[daemon.name]);
-  assert.equal(Object.hasOwn(client.dependencies, "sync-daemon"), false);
+  for (const oldName of ["sync-daemon", "@narumitw/sync-daemon", "pi-sync-daemon"]) {
+    assert.equal(Object.hasOwn(client.dependencies, oldName), false);
+  }
   const root = mkdtempSync(path.join(os.tmpdir(), "scoped-daemon-release-"));
   const save = (file: string, value: unknown) => {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -26,7 +28,7 @@ test("scoped daemon versioning updates Pi Sync's floor and plans a public depend
   try {
     save("package.json", { name: "scoped-release-fixture", private: true, workspaces: ["packages/*"] });
     save("package-lock.json", { lockfileVersion: 3, packages: {} });
-    save("packages/sync-daemon/package.json", { name: daemon.name, version: daemon.version, bin: daemon.bin });
+    save("packages/pi-sync-daemon/package.json", { name: daemon.name, version: daemon.version, bin: daemon.bin });
     save("packages/pi-sync/package.json", {
       name: client.name,
       version: client.version,
@@ -40,7 +42,7 @@ test("scoped daemon versioning updates Pi Sync's floor and plans a public depend
       `---\n"${daemon.name}": minor\n"${client.name}": minor\n---\n\nRelease the scoped daemon and Pi Sync.\n`,
     );
     execFileSync(process.execPath, [cli, "version"], { cwd: root, stdio: "pipe" });
-    const versionedDaemon = read(path.join(root, "packages/sync-daemon/package.json"));
+    const versionedDaemon = read(path.join(root, "packages/pi-sync-daemon/package.json"));
     const versionedClient = read(path.join(root, "packages/pi-sync/package.json"));
     assert.equal(versionedDaemon.version, inc(daemon.version, "minor"));
     assert.equal(versionedClient.version, inc(client.version, "minor"));

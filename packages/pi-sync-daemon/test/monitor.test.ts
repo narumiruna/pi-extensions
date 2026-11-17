@@ -33,7 +33,7 @@ async function fixture(
     save(): Promise<void>;
   }) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-monitor-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-monitor-"));
   const peers = Array.from({ length: 2 }, () => ({
     id: randomUUID(),
     generation: randomUUID(),

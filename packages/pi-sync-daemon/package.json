@@ -1,5 +1,5 @@
 {
-  "name": "@narumitw/sync-daemon",
+  "name": "@narumitw/pi-sync-daemon",
   "version": "0.2.0",
   "description": "A local synchronization daemon with a versioned client API.",
   "type": "module",
@@ -20,7 +20,7 @@
     }
   },
   "bin": {
-    "sync-daemon": "./dist/cli.js"
+    "pi-sync-daemon": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -51,6 +51,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/narumiruna/pi-extensions",
-    "directory": "packages/sync-daemon"
+    "directory": "packages/pi-sync-daemon"
   }
 }

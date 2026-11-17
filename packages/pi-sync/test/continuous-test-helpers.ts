@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import { vi } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -44,7 +44,7 @@ export function continuousDependencies(
         inspectSync(config, options, signal, () => backend, timings),
     }),
     loadSyncOperations: async () => ({
-      ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+      ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
       syncBoth: (ctx, options) => syncBoth(ctx, options, () => backend),
     }),
     ...overrides,

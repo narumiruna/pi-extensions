@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { syncBoth } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { syncBoth } from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import {
@@ -536,7 +536,7 @@ test("startup selection mismatch stays passive until the user opens the manager"
         return undefined;
       },
     });
-    const { pushSessionsOnShutdown } = await import("@narumitw/sync-daemon/engine/sync/session-push");
+    const { pushSessionsOnShutdown } = await import("@narumitw/pi-sync-daemon/engine/sync/session-push");
     await assert.rejects(
       pushSessionsOnShutdown(
         shutdown.ctx,

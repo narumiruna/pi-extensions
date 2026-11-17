@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { DaemonConnection, ensureDaemon } from "@narumitw/sync-daemon";
+import { DaemonConnection, ensureDaemon } from "@narumitw/pi-sync-daemon";
 import type { createMockPi } from "../../../test/support.js";
 import { installPiDaemonHost } from "../src/daemon/pi-client.js";
 import { installEngineFixtureHost } from "./engine-host.js";

@@ -1,5 +1,5 @@
-export type * from "@narumitw/sync-daemon/engine/snapshot/snapshot-transaction-directory";
+export type * from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-transaction-directory";
 export {
   pendingTransactionEntries,
   transactionRoot,
-} from "@narumitw/sync-daemon/engine/snapshot/snapshot-transaction-directory";
+} from "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-transaction-directory";

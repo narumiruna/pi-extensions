@@ -106,7 +106,7 @@ export async function executeCommand(
         } else if (action === "status") {
           const connection = await client.connect();
           ctx.ui.notify(
-            `sync-daemon: connected\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\nUse sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.`,
+            `pi-sync-daemon: connected\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\nUse pi-sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.`,
             "info",
           );
         } else throw new Error("Use /sync daemon status|handover|allow-after-exit|revoke-after-exit.");

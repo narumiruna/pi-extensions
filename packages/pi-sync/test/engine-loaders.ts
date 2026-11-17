@@ -1,4 +1,4 @@
-import { createEngineLoaders, type SyncLoaders } from "@narumitw/sync-daemon/engine/sync/sync-loaders";
+import { createEngineLoaders, type SyncLoaders } from "@narumitw/pi-sync-daemon/engine/sync/sync-loaders";
 
 export interface EngineTestDependencies {
   loadSyncInspection: SyncLoaders["inspection"];

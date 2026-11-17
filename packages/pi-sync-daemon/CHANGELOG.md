@@ -1,4 +1,4 @@
-# @narumitw/sync-daemon
+# @narumitw/pi-sync-daemon
 
 ## 0.2.0
 

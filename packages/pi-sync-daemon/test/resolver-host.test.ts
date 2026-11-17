@@ -15,7 +15,7 @@ test("model signatures preserve the legacy JSON identity and need no raw model h
 });
 
 test("a parent-only provider remains unavailable without loading extensions or selecting a fallback", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-model-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-model-"));
   try {
     const host = await prepareResolverHost(root, {
       provider: "parent-only-provider",
@@ -33,7 +33,7 @@ test("a parent-only provider remains unavailable without loading extensions or s
 });
 
 test("missing authorization and cancellation do not create credential files", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-daemon-no-model-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-no-model-"));
   try {
     assert.equal((await prepareResolverHost(root, undefined)).model, undefined);
     const controller = new AbortController();

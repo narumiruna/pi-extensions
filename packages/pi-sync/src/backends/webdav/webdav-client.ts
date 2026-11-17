@@ -1,6 +1,6 @@
-export type * from "@narumitw/sync-daemon/engine/backends/webdav/webdav-client";
+export type * from "@narumitw/pi-sync-daemon/engine/backends/webdav/webdav-client";
 export {
   WebDavClient,
   WebDavHttpError,
   WebDavPreconditionError,
-} from "@narumitw/sync-daemon/engine/backends/webdav/webdav-client";
+} from "@narumitw/pi-sync-daemon/engine/backends/webdav/webdav-client";

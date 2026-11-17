@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { initializeSync } from "@narumitw/sync-daemon/engine/sync/initialization";
+import { initializeSync } from "@narumitw/pi-sync-daemon/engine/sync/initialization";
 import { test } from "vitest";
 import { type createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -225,7 +225,7 @@ for (const fail of [false, true])
           fail
             ? {
                 loadSyncOperations: async () => ({
-                  ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+                  ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
                   syncBoth: async (_ctx, options) => {
                     assert.ok(options.startupTimings);
                     return options.startupTimings.measure("transfer remote head", () => {

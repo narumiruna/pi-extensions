@@ -1,6 +1,6 @@
-export type * from "@narumitw/sync-daemon/engine/sync/settings-merge";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/settings-merge";
 export {
   COUPLED_FIELDS,
   mergeAcceptedSettingsPackages,
   mergeSettingsJson,
-} from "@narumitw/sync-daemon/engine/sync/settings-merge";
+} from "@narumitw/pi-sync-daemon/engine/sync/settings-merge";

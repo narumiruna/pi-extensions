@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
+import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadConfig, loadConfigForCheck, syncCheckConfigFingerprint } from "../src/settings/config.js";

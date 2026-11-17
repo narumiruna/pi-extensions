@@ -13,7 +13,7 @@ import {
   rollback,
   status,
   syncBoth,
-} from "@narumitw/sync-daemon/engine/sync/sync-operations";
+} from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";

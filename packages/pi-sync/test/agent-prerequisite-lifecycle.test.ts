@@ -50,7 +50,7 @@ for (const prerequisite of ["validation", "reservation", "postresponse"] as cons
         const service = createContinuousSync(
           continuousLoaders(fixture.backend, {
             loadSyncOperations: async () => ({
-              ...(await import("@narumitw/sync-daemon/engine/sync/sync-operations")),
+              ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
               syncBoth: async (_ctx, options) => {
                 if (options.agentAcceptance) {
                   commits++;

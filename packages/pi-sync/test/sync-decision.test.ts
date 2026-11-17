@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
+import { pull, push, status, syncBoth } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { inspectSync } from "@narumitw/sync-daemon/engine/sync/sync-inspection";
-import { pull, push, status, syncBoth } from "@narumitw/sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";
@@ -371,7 +371,7 @@ test("direct pull retains its actionable notification instead of opening recover
         "pull",
         ctx as ExtensionCommandContext,
         new AbortController().signal,
-        createSyncLoaders({ loadSyncOperations: () => import("@narumitw/sync-daemon/engine/sync/sync-operations") }),
+        createSyncLoaders({ loadSyncOperations: () => import("@narumitw/pi-sync-daemon/engine/sync/sync-operations") }),
         createSyncAttentionController(),
       );
     } finally {

@@ -9,8 +9,8 @@ import {
   initTheme,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { stopDaemon } from "@narumitw/pi-sync-daemon";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { stopDaemon } from "@narumitw/sync-daemon";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { v3S3Settings } from "./helpers.js";

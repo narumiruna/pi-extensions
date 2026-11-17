@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/backends/webdav/webdav-backend";
+export type * from "@narumitw/pi-sync-daemon/engine/backends/webdav/webdav-backend";
 export {
   historyPath,
   latestPath,
@@ -7,4 +7,4 @@ export {
   snapshotsPath,
   WebDavSyncBackend,
   webDavBackendIdentity,
-} from "@narumitw/sync-daemon/engine/backends/webdav/webdav-backend";
+} from "@narumitw/pi-sync-daemon/engine/backends/webdav/webdav-backend";

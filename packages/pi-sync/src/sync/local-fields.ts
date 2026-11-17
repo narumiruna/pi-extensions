@@ -1,4 +1,4 @@
-export type * from "@narumitw/sync-daemon/engine/sync/local-fields";
+export type * from "@narumitw/pi-sync-daemon/engine/sync/local-fields";
 export {
   normalizeLocalFields,
   overlayLocalFields,
@@ -6,4 +6,4 @@ export {
   sameLocalFields,
   validatePortableSnapshot,
   validateSnapshotFieldPolicy,
-} from "@narumitw/sync-daemon/engine/sync/local-fields";
+} from "@narumitw/pi-sync-daemon/engine/sync/local-fields";

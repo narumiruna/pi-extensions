@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import { ensureDaemon, findDaemon } from "@narumitw/sync-daemon";
+import { ensureDaemon, findDaemon } from "@narumitw/pi-sync-daemon";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";

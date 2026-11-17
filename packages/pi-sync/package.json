@@ -46,7 +46,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/sync-daemon": "^0.2.0",
+    "@narumitw/pi-sync-daemon": "^0.2.0",
     "@narumitw/pi-tui-kit": "^0.70.0"
   },
   "devDependencies": {
