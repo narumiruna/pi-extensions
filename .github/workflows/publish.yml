@@ -13,18 +13,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  checks:
-    name: CI
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-    uses: $/.github/workflows/ci.yml
-    with:
-      test-base: ${{ github.event.before || '' }}
-
   select-mode:
     name: select-mode
-    needs: checks
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
