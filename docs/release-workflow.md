@@ -1,11 +1,10 @@
 # Release workflow
 
-Main pushes and manual release runs on main run `.github/workflows/publish.yml`; manual runs on other branches skip release work. Its `checks` job calls the reusable CI workflow before Changesets can version or publish packages. Pull requests and manual CI runs still use `.github/workflows/ci.yml` directly. Main pushes do not start a second standalone CI run.
+Main pushes and manual release runs on main run `.github/workflows/publish.yml`; manual runs on other branches skip release work. Release runs start with Changesets mode selection and do not call CI or rerun checks and tests. Pull requests and manual CI runs use `.github/workflows/ci.yml`. Require successful PR checks before merging; direct pushes and manual release runs do not have a CI gate in the release workflow.
 
 ```mermaid
 flowchart TD
-    Push[Push to main or manual release run] --> CI[Reusable CI: check and test]
-    CI --> Select[Select Changesets mode]
+    Push[Push to main or manual release run on main] --> Select[Select Changesets mode]
     Select -->|version| Plan{Package versions would change?}
     Plan -->|Yes| Version[Create or update Version PR]
     Plan -->|No| Skip
@@ -18,13 +17,13 @@ flowchart TD
 
 Changesets selects `version` when there are non-empty pending changesets, including changesets for packages excluded from versioning. Before the Version PR action, `.github/scripts/check-version-plan.mjs` runs `changeset status --output` and permits the action only if the plan changes a package version. Private-only changesets with `privatePackages.version: false`, ignored-only changesets, and other no-op plans skip PR creation and updates. Plan failures fail the job instead of permitting a PR. Skipped changesets remain pending; the guard does not switch to publishing.
 
-Merging a Version PR consumes its versioned changesets and updates manifests, changelogs, and the lockfile. The next main push selects `publish` if no pending changesets remain and unpublished package versions exist. Empty-only changesets or no unpublished versions select `none`. CI failure blocks all release jobs.
+Merging a Version PR consumes its versioned changesets and updates manifests, changelogs, and the lockfile. The next main push selects `publish` if no pending changesets remain and unpublished package versions exist. Empty-only changesets or no unpublished versions select `none`.
 
 ## Permissions and authentication
 
-Workflow permissions default to none. CI, mode selection, and packing have only repository read access. Versioning has repository and pull-request write access and uses `PAT_TOKEN` so the generated PR triggers CI. Version commits are signed through the GitHub API. Publishing alone has `id-token: write` for npm Trusted Publishing and repository write access for tags and GitHub releases; it does not use the PAT.
+Workflow permissions default to none. Mode selection and packing have only repository read access. Versioning has repository and pull-request write access and uses `PAT_TOKEN` so the generated PR triggers CI. Version commits are signed through the GitHub API. Publishing alone has `id-token: write` for npm Trusted Publishing and repository write access for tags and GitHub releases; it does not use the PAT.
 
-Keep npm trusted-publisher bindings pointed at this repository's `publish.yml`. All release jobs disable persisted checkout credentials and dependency caches. Checks run once in reusable CI; the pack job rebuilds packages in its fresh runner but does not rerun checks or tests. The publish job installs dependencies without rebuilding packages and publishes the exact tarballs passed from pack via the same run's artifact ID.
+Keep npm trusted-publisher bindings pointed at this repository's `publish.yml`. All release jobs disable persisted checkout credentials and dependency caches. Checks and tests run in PR CI, not in this workflow. The pack job builds packages in its fresh runner. The publish job installs dependencies without rebuilding packages and publishes the exact tarballs passed from pack via the same run's artifact ID.
 
 ## Failures and recovery
 
