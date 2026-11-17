@@ -20,7 +20,6 @@ const referencePath = path.join(skillDirectory, "references/configuration.md");
 const skillText = readFileSync(path.join(skillDirectory, "SKILL.md"), "utf8");
 const reference = readFileSync(referencePath, "utf8");
 const readme = readFileSync(path.join(packageDirectory, "README.md"), "utf8");
-const oldReference = readFileSync(path.join(packageDirectory, "docs/settings.md"), "utf8");
 const manifest = JSON.parse(readFileSync(path.join(packageDirectory, "package.json"), "utf8"));
 
 function headingId(heading: string): string {
@@ -191,7 +190,20 @@ test("moved operational links still name existing repository files and fragments
   }
 });
 
-test("old settings URLs retain all original fragments and link to current reference headings", () => {
+test("operational verification links point directly to authoritative settings fragments", () => {
+  for (const [file, fragment] of [
+    ["agent-mode-verification.md", "autonomous-sync"],
+    ["agent-quality-verification.md", "autonomous-sync"],
+    ["continuous-sync-verification.md", "continuous-sync"],
+  ] as const) {
+    const document = readFileSync(path.join(packageDirectory, "docs", file), "utf8");
+    const target = `../skills/configure-pi-sync/references/configuration.md#${fragment}`;
+    assert.ok(document.includes(`](${target})`), `${file}: ${target}`);
+    assert.ok(fragmentIds(reference).has(fragment), target);
+  }
+});
+
+test("the authoritative settings reference retains original fragments and current headings", () => {
   const originalHeadings = [
     "⚙️ Settings",
     "Editing in the manager",
@@ -218,25 +230,17 @@ test("old settings URLs retain all original fragments and link to current refere
     ["Experimental Agent mode", "Autonomous sync"],
     ["Experimental Continuous sync", "Continuous sync"],
   ]);
-  assert.deepEqual(
-    headings(oldReference),
-    originalHeadings.map((heading) => renamedHeadings.get(heading) ?? heading),
-  );
   for (const heading of originalHeadings) {
     const currentHeading = renamedHeadings.get(heading) ?? heading;
     assert.ok(headings(reference).includes(currentHeading), currentHeading);
-    assert.ok(fragmentIds(oldReference).has(headingId(heading)), `missing old URL: ${heading}`);
     assert.ok(fragmentIds(reference).has(headingId(heading)), `missing reference URL: ${heading}`);
-    assert.ok(oldReference.includes(`references/configuration.md#${headingId(currentHeading)}`));
   }
-  assert.doesNotMatch(oldReference, /```json/u, "the compatibility index must not duplicate the schema example");
 });
 
 test("all settings documents expose current headings and invisible legacy fragment anchors", () => {
   for (const [label, document] of [
     ["README", readme],
     ["authoritative reference", reference],
-    ["compatibility index", oldReference],
   ] as const) {
     for (const [heading, legacyFragment] of [
       ["Autonomous sync", "experimental-agent-mode"],

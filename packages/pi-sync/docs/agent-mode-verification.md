@@ -1,6 +1,6 @@
 # Autonomous sync implementation verification
 
-This record describes the original implementation and its verification scope. The [settings reference](settings.md#autonomous-sync) is authoritative for current user behavior, limits, privacy, and recovery.
+This record describes the original implementation and its verification scope. The [settings reference](../skills/configure-pi-sync/references/configuration.md#autonomous-sync) is authoritative for current user behavior, limits, privacy, and recovery.
 
 Later recovery, cancellation, confirmed-refusal retry, and diagnostics changes are documented in [Autonomous and Continuous sync recovery boundaries](agent-continuous-hardening.md). The [synthetic quality corpus](agent-quality-verification.md) adds structural tests without claiming measured model accuracy. Historical verification below retains the former **Agent mode** name and the maturity labels used at that time; recorded results are unchanged.
 

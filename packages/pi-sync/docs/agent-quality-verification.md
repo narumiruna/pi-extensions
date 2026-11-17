@@ -1,6 +1,6 @@
 # Synthetic Autonomous sync merge-quality verification
 
-The [corpus](../test/agent-quality-corpus.ts) and [tests](../test/agent-quality.test.ts) check structural merge safety with synthetic data and fixed resolver responses. They do not measure real-model semantic accuracy. Autonomous sync is default-off; the [settings reference](settings.md#autonomous-sync) and [implementation verification](agent-mode-verification.md) retain their authority.
+The [corpus](../test/agent-quality-corpus.ts) and [tests](../test/agent-quality.test.ts) check structural merge safety with synthetic data and fixed resolver responses. They do not measure real-model semantic accuracy. Autonomous sync is default-off; the [settings reference](../skills/configure-pi-sync/references/configuration.md#autonomous-sync) and [implementation verification](agent-mode-verification.md) retain their authority.
 
 ## Deterministic evidence
 
