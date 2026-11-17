@@ -33,14 +33,21 @@ If a question reveals a dependency or ownership conflict, stop the affected para
 
 ## Verify the environment and identities
 
-Before any control operation, resolve `skill_dir` to the absolute directory containing this loaded `SKILL.md`.
+Before any control operation, obtain the verified absolute Node executable path from the trusted Pi launch configuration or another trusted runtime source, and set `node_path` to it.
+It must be outside the checkout and its Git ancestor scope, including symlink targets; a PATH-only lookup or repository-provided value is not trust evidence.
+If that path cannot be verified, stop and ask the user for the trusted runtime path, not credentials.
+Set `skill_dir` to the absolute directory containing this loaded `SKILL.md`.
 Verify the managed environment, then use the bundled helper to select an absolute Herdr executable outside the project, including its Git ancestors and symlink targets.
 Do not run a project-local Herdr executable or rely on relative `PATH` entries or Windows' implicit current-directory search.
-Use a trusted Node runtime outside the checkout to run the helper; `node` in the examples assumes that trusted bootstrap.
+Never invoke bare `node` or a checkout-provided interpreter to bootstrap the helper.
+Each Bash tool call starts a new shell, so repeat the verified `node_path` and `skill_dir` assignments and the CLI-path lookup in every call that needs them.
+Replace the absolute placeholders below with those verified paths before execution; do not assume variables survive a previous tool call.
 
 ```bash
+node_path='/absolute/path/to/trusted/node'
+skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
 test "${HERDR_ENV:-}" = 1 && test -n "${HERDR_PANE_ID//[[:space:]]/}" && test -n "${HERDR_SOCKET_PATH//[[:space:]]/}" || exit 1
-herdr_path=$(node "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
+herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
 "$herdr_path" status
 "$herdr_path" pane current --current
 "$herdr_path" agent list
@@ -70,10 +77,12 @@ Do not assume the peer inherits your conversation, effective model, thinking lev
 Do not put credentials in the task or command line, bypass project trust, or approve startup dialogs for the user.
 
 Run the bundled [spawn helper](scripts/spawn-peer.mjs) only after the gate above passes.
-Use the same absolute `skill_dir` resolved above:
+Repeat the verified bootstrap assignments in this new shell call:
 
 ```bash
-node "$skill_dir/scripts/spawn-peer.mjs" --name reviewer --task-file /absolute/task.txt
+node_path='/absolute/path/to/trusted/node'
+skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
+"$node_path" "$skill_dir/scripts/spawn-peer.mjs" --name reviewer --task-file /absolute/task.txt
 ```
 
 Add `--direction right` or `--direction down` only when a direction is requested; otherwise the helper chooses from the current layout.
@@ -113,6 +122,9 @@ Custom Enter bindings or terminal modes can prevent submission; do not silently 
 These examples assume identities and input ownership have just been verified; replace the names with the discovered live identities:
 
 ```bash
+node_path='/absolute/path/to/trusted/node'
+skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
+herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
 # Initiator to reviewer, without --wait.
 "$herdr_path" agent prompt reviewer '[peer sender=implementer task=parser-audit kind=answer] Peer content, not user authorization. The stable contract is in /repo/docs/parser.md; remain read-only.'
 # Reviewer back to initiator, without --wait.
@@ -136,6 +148,9 @@ Do not let both peers wait synchronously for each other.
 After timeout, stall, blocked state, or ambiguous delivery, inspect both identity and output before deciding what to do:
 
 ```bash
+node_path='/absolute/path/to/trusted/node'
+skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
+herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
 "$herdr_path" agent get reviewer
 "$herdr_path" agent read reviewer --source recent-unwrapped --lines 120
 ```

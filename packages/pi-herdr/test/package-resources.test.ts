@@ -162,7 +162,17 @@ test("the repository registers and discovers pi-herdr without restoring generic 
 test("the skill links its spawn helper and keeps relative script imports self-contained", async () => {
   const skill = await readFile(join(skillDirectory, "SKILL.md"), "utf8");
   assert.ok(skill.includes("[spawn helper](scripts/spawn-peer.mjs)"));
-  assert.ok(skill.includes('node "$skill_dir/scripts/spawn-peer.mjs" --name reviewer --task-file /absolute/task.txt'));
+  assert.ok(
+    skill.includes('"$node_path" "$skill_dir/scripts/spawn-peer.mjs" --name reviewer --task-file /absolute/task.txt'),
+  );
+  const blocks = [...skill.matchAll(/```bash\n([\s\S]*?)\n```/gu)].map((match) => match[1] ?? "");
+  assert.equal(blocks.length, 4);
+  for (const block of blocks) {
+    assert.ok(block.includes("node_path='/absolute/path/to/trusted/node'"));
+    assert.ok(block.includes("skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'"));
+    assert.doesNotMatch(block, /\bnode\s+"\$skill_dir/u);
+    if (block.includes('"$herdr_path"')) assert.ok(block.includes('herdr_path=$("$node_path"'));
+  }
   const readme = await readFile(join(packageDirectory, "README.md"), "utf8");
   assert.ok(readme.includes("./skills/pi-herdr/SKILL.md"));
   assert.ok(readme.includes("./skills/pi-herdr/scripts/spawn-peer.mjs"));

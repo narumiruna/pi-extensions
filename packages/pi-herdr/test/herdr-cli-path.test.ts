@@ -111,11 +111,13 @@ test("Windows selection ignores implicit cwd lookup and uses a canonical externa
 test("cli-path preflight prints the trusted path without spawning and validates context first", async () => {
   const signals = new EventEmitter();
   const output: string[] = [];
+  const errors: string[] = [];
   let resolutions = 0;
   let spawns = 0;
   const dependencies = {
     env: { HERDR_ENV: "1", HERDR_PANE_ID: "pane", HERDR_SOCKET_PATH: "/unused" },
     stdout: { write: (value: string) => output.push(value) },
+    stderr: { write: (value: string) => errors.push(value) },
     signals,
     resolveCli: async () => {
       resolutions += 1;
@@ -132,5 +134,46 @@ test("cli-path preflight prints the trusted path without spawning and validates 
   assert.equal(spawns, 0);
   assert.equal(await helper.runCli(["--cli-path"], { ...dependencies, env: { HERDR_ENV: "1" } }), 1);
   assert.equal(resolutions, 1);
+  assert.equal(output.length, 1);
+  assert.match(errors.join(""), /HERDR_PANE_ID.*HERDR_SOCKET_PATH/u);
+  assert.doesNotMatch(errors.join(""), /Invalid arguments/u);
   assert.equal(signals.listenerCount("SIGTERM"), 0);
+});
+
+test("preflight errors name the rejecting Git root on stderr with empty stdout", async () => {
+  const f = await fixture();
+  await mkdir(join(f.cwd, ".git"));
+  const output: string[] = [];
+  const errors: string[] = [];
+  const result = await helper.runCli(["--cli-path"], {
+    env: { HERDR_ENV: "1", HERDR_PANE_ID: "pane", HERDR_SOCKET_PATH: "/unused" },
+    stdout: { write: (value: string) => output.push(value) },
+    stderr: { write: (value: string) => errors.push(value) },
+    signals: new EventEmitter(),
+    resolveCli: () => helper.resolveHerdrExecutable({ cwd: f.cwd, env: { PATH: "." } }),
+  });
+  assert.equal(result, 1);
+  assert.deepEqual(output, []);
+  assert.ok(errors.join("").includes(await realpath(f.project)));
+  assert.doesNotMatch(errors.join(""), /Invalid arguments/u);
+});
+
+test("preflight failure details are sanitized and bounded before stderr publication", async () => {
+  const output: string[] = [];
+  const errors: string[] = [];
+  assert.equal(
+    await helper.runCli(["--cli-path"], {
+      env: { HERDR_ENV: "1", HERDR_PANE_ID: "pane", HERDR_SOCKET_PATH: "/unused" },
+      stdout: { write: (value: string) => output.push(value) },
+      stderr: { write: (value: string) => errors.push(value) },
+      signals: new EventEmitter(),
+      resolveCli: () => {
+        throw new Error(`bad\\n\u001b[31m${"x".repeat(2000)}\u001b[0m`);
+      },
+    }),
+    1,
+  );
+  assert.deepEqual(output, []);
+  assert.equal(errors.join("").includes("\u001b"), false);
+  assert.equal([...errors.join("")].length, 1025);
 });

@@ -27,7 +27,10 @@ The source scopes sequence handling, not token ownership; another caller can ove
 The helper writes only its five distinct keys and verifies their exact readback and both live session identities before attempting the task prompt.
 Before CLI execution, it selects a canonical absolute Herdr executable outside the checkout and its Git ancestors, rejects project-local symlink targets, and skips relative `PATH` entries.
 The skill's `--cli-path` preflight prints that path without launching Herdr; the probe and default helper runner use the same resolver, including on Windows where a bare command could otherwise use the project cwd.
-This requires a trusted Node runtime and launch environment; it does not authenticate the selected external executable or the Herdr socket.
+The skill requires the verified absolute Node path from trusted Pi launch/runtime information before either helper call; it does not bootstrap through bare `node` or trust a PATH-only lookup.
+Each independent shell call repeats its Node/skill path setup and, when needed, CLI resolution rather than relying on prior shell variables.
+CLI-path setup failures name the rejecting project root on stderr with sanitized, bounded text and no stdout path.
+This still requires a trusted launch environment; it does not authenticate the selected external executable or the Herdr socket.
 It leaves a partially created pane available for inspection after failure or cancellation and never retries an ambiguous submission automatically.
 Stopping its CLI subprocess does not undo server-side changes or terminate the independent peer.
 
@@ -89,7 +92,7 @@ The package tests include the fake-CLI spawn state machine, producer/consumer ro
 When Herdr is installed and the caller is already in a managed pane, run the repository-only public-contract probe:
 
 ```bash
-node packages/pi-herdr/scripts/probe-provenance.mjs
+"/absolute/path/to/trusted/node" packages/pi-herdr/scripts/probe-provenance.mjs
 ```
 
 On a Unix-like host with `/bin/sh`, the probe creates a uniquely named headless session and an inert shell process recognized as Pi, waits for readiness, and uses only that isolated session's public API.

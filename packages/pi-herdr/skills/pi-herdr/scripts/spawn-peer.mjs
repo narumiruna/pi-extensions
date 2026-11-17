@@ -11,7 +11,7 @@ export const MAX_TASK_BYTES = 32 * 1024;
 export const MAX_OUTPUT_BYTES = 64 * 1024;
 export const SOURCE = "pi-herdr:spawn:v1";
 export const USAGE =
-  "node <skill-dir>/scripts/spawn-peer.mjs --name NAME --task-file PATH [--direction right|down] | --cli-path";
+  "<trusted-absolute-node> <skill-dir>/scripts/spawn-peer.mjs --name NAME --task-file PATH [--direction right|down] | --cli-path";
 const TOKEN_KEYS = ["pi_spawn_v", "pi_spawn_origin", "pi_spawn_from", "pi_spawn_to", "pi_spawn_label"];
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 export const skillDirectory = resolve(scriptDirectory, "..");
@@ -101,7 +101,9 @@ export async function resolveHerdrExecutable({
       if (!["ENOENT", "ENOTDIR", "EACCES", "ELOOP"].includes(error.code)) throw error;
     }
   }
-  throw new Error("No trusted absolute Herdr executable outside the project was found on PATH");
+  throw new Error(
+    `No trusted absolute Herdr executable outside the project ${displayText(project, 512)} was found on PATH`,
+  );
 }
 
 /** Only the helper's CLI process is cancelled, never the independent peer. */
@@ -256,14 +258,18 @@ function freshPane(value, expected, cwd) {
   }
 }
 
-function label(value) {
+function displayText(value, limit) {
   return [
     ...stripVTControlCharacters(value)
       .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ")
       .trim(),
   ]
-    .slice(0, 80)
+    .slice(0, limit)
     .join("");
+}
+
+function label(value) {
+  return displayText(value, 80);
 }
 
 export class SpawnPeerError extends Error {
@@ -505,6 +511,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     signals = process,
     spawn = spawnPeer,
     env = process.env,
@@ -515,8 +522,10 @@ export async function runCli(
   const cancel = () => controller.abort();
   signals.on("SIGINT", cancel);
   signals.on("SIGTERM", cancel);
+  let cliPathRequested = false;
   try {
     const options = parseArguments(argv);
+    cliPathRequested = options.cliPath === true;
     if (options.cliPath) {
       requireEnvironment(env);
       const executable = await resolveCli({ env });
@@ -529,6 +538,10 @@ export async function runCli(
     }
     return 0;
   } catch (error) {
+    if (cliPathRequested) {
+      stderr.write(`${displayText(error instanceof Error ? error.message : "CLI path resolution failed", 1024)}\n`);
+      return 1;
+    }
     const result = error instanceof SpawnPeerError ? error.details : { error: "Invalid arguments; use --help" };
     stdout.write(`${JSON.stringify(result)}\n`);
     return 1;
