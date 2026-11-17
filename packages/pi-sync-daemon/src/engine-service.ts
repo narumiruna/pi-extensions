@@ -291,7 +291,14 @@ export function createEngineService(root: string) {
   return {
     execute,
     bind: monitor.bind,
-    hooks: { factsChanged: monitor.factsChanged, idle: monitor.schedule, close: monitor.close },
+    hooks: {
+      factsChanged: monitor.factsChanged,
+      idle: monitor.schedule,
+      close: monitor.close,
+      lifetime: monitor.lifetime,
+      quiesce: monitor.pause,
+      failure: monitor.blockAutomatic,
+    },
   };
 }
 async function withJobTimings<T>(

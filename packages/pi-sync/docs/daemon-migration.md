@@ -4,7 +4,7 @@ This daemon extraction is experimental. Deterministic Linux verification passed,
 
 ## Ownership and upgrade
 
-The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. Stop an existing installation with `sync-daemon stop --root <agent-directory>` before replacing it, then use `pi-sync-daemon` after installation. The rename changes package identity, imports, the package directory, and executable names, not IPC names, authorization digests, or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; ordinary Pi shutdown does not stop it. No OS service or supervisor is installed.
+The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. Stop an existing installation with `sync-daemon stop --root <agent-directory>` before replacing it, then use `pi-sync-daemon` after installation. The rename changes package identity, imports, the package directory, and executable names, not IPC names, authorization digests, or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; the daemon, not an individual Pi shutdown hook, decides when the shared owner can exit. No OS service or supervisor is installed.
 
 Stop the service before updating its package or rebuilding a local checkout: a surviving Node process can otherwise combine cached code with newly loaded modules from the replaced directory. A compatible protocol handshake does not upgrade the running implementation; restart explicitly after installation.
 
@@ -14,9 +14,11 @@ Backend formats, `pi-sync.json`, `pi-sync/`, `.pisync/`, backups, and journals r
 
 ## Lifetime is not consent
 
-Old Continuous consent was limited to an open Pi session. Existing Automatic, Autonomous, and Continuous defaults stay unchanged. The service may remain alive with no clients, but this alone does not authorize a transfer or model request.
+Old Continuous consent was limited to an open Pi session. Existing Automatic, Autonomous, and Continuous defaults stay unchanged. When no registered live client PID remains for that canonical root and no valid explicit after-exit grant covers the active setup, a fixed 30-second grace period starts. Explicit CLI start without clients follows the same policy. Live passive, disconnected, publishing, and orderly retired PIDs keep the owner alive; detach, heartbeat loss, and an empty active-participant list do not prove process exit. `/reload`, `/new`, fork, and resume retain protection while their Pi process lives. A client arriving before shutdown becomes final cancels automatic exit. No new setting, environment variable, or keep-alive flag is added.
 
-`/sync daemon allow-after-exit` reviews extra unattended permission for the current setup and selected standalone-capable model. `/sync daemon revoke-after-exit` stops new unattended work. Setup changes invalidate the persisted digest. Interactive model, working-directory, or session-directory changes durably revoke older grants; returning to the old binding or restarting does not restore them. Independent model availability is checked through public Pi SDK APIs; private extension registrations and parent runtime credentials are not transferred.
+After grace, stop new automatic work, cancel cancellable work, and drain committed writes, monitor work, mutation-queue releases, persistence, and owned callbacks before releasing ownership. Closing adds no final sync or model request and preserves journals, backups, request accounting, and existing transfer permissions. The next eligible interactive client or explicit command can use singleton startup only after the old owner's exit is proven. Print/JSON never launch a replacement.
+
+`/sync daemon allow-after-exit` reviews extra unattended permission for the current setup and selected standalone-capable model. `/sync daemon revoke-after-exit` stops new unattended work. Setup changes invalidate the persisted digest. Interactive model, working-directory, or session-directory changes durably revoke older grants; returning to the old binding or restarting does not restore them. A valid active-setup grant keeps service lifetime under the existing fingerprint and binding rules, without expanding work permissions. A grant for another setup, a revoked grant, or a stale fingerprint does not. Temporary provider or backend unavailability does not itself revoke a valid grant. Lifetime checks do not call a model, contact a provider or storage, or execute credential commands. Independent model availability for actual work is checked through public Pi SDK APIs; private extension registrations and parent runtime credentials are not transferred.
 
 Headless print/JSON startup never launches a persistent service. It passively attaches to an existing one to protect its session and pause automatic work. Orderly closed clients retain live-PID file protection without remaining active participants; ambiguous disconnections and replacement gaps remain pauses. Pending recovery needs a configured observable client and reviewed ownership before managed files can be changed. No event automatically reloads resources or changes the model-visible prompt/tool prefix; reload remains an explicit reviewed client action.
 
@@ -28,7 +30,7 @@ Protect the union of all registered live-PID sessions, including ambiguously dis
 
 ## Diagnostics and rollback
 
-If saving consent fails, that service instance blocks automatic work. Preserve the retained file, repair persistence, and revoke permission before an explicit restart; a failed save does not prove the previous grant changed.
+If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
 
 Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers.
 
@@ -44,6 +46,8 @@ Before rollback:
 Operation retries are instance-bound and deduplicated. An expired result or old instance requires journal reconciliation, not blind replay. A full bounded result ledger requires an explicit drained restart.
 
 ## Verification status
+
+The following evidence records the earlier daemon extraction, including its former idle-persistence policy. It does not verify the new automatic-exit policy; that policy requires separate runtime verification. Native and production restrictions below remain unchanged.
 
 Completed on disposable roots and synthetic loopback endpoints:
 

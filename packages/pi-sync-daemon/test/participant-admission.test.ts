@@ -247,44 +247,65 @@ test("cancelled waiters settle without releasing an active scope or poisoning la
   }
 });
 
-test("a cancelled queued attach cannot publish after the reservation ends", () =>
-  fixture(async (root) => {
-    const server = await startServer(root, async () => undefined);
-    const controller = new AbortController();
-    const ready = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const held = server.backgroundExecution(controller.signal).withParticipants(async () => {
-      ready.resolve();
-      await release.promise;
-    });
-    const joined = new DaemonConnection(server.paths, server.identity, facts(root), { callback: async () => true });
-    let observer: ReturnType<typeof observeAdmission> | undefined;
-    let attaching: Promise<unknown> | undefined;
-    try {
-      await ready.promise;
-      observer = observeAdmission();
-      attaching = joined.attach().then(
-        () => undefined,
-        (error) => error,
-      );
-      await observer.entered;
-      observer.restore();
-      await joined.dispose();
-      assert.ok((await attaching) instanceof Error);
-      release.resolve();
-      await held;
-      // This second scope starts after the cancelled attach has drained from admission.
-      await server.backgroundExecution(controller.signal).withParticipants(async (peers) => {
-        assert.deepEqual(peers, []);
+for (const cancellation of ["dispose", "signal"] as const)
+  test(`a queued attach cancelled by ${cancellation} cannot publish after the reservation ends`, () =>
+    fixture(async (root) => {
+      const server = await startServer(root, async () => undefined);
+      const controller = new AbortController();
+      const request = new AbortController();
+      const ready = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const held = server.backgroundExecution(controller.signal).withParticipants(async () => {
+        ready.resolve();
+        await release.promise;
       });
-      assert.deepEqual(server.liveClients(), []);
+      const joined = new DaemonConnection(server.paths, server.identity, facts(root), { callback: async () => true });
+      let observer: ReturnType<typeof observeAdmission> | undefined;
+      let attaching: Promise<unknown> | undefined;
+      try {
+        await ready.promise;
+        observer = observeAdmission();
+        attaching = joined.attach(request.signal).then(
+          () => undefined,
+          (error) => error,
+        );
+        await observer.entered;
+        observer.restore();
+        if (cancellation === "dispose") await joined.dispose();
+        else request.abort(new DOMException("Startup cancelled", "AbortError"));
+        assert.ok((await attaching) instanceof Error);
+        release.resolve();
+        await held;
+        // This second scope starts after the cancelled attach has drained from admission.
+        await server.backgroundExecution(controller.signal).withParticipants(async (peers) => {
+          assert.deepEqual(peers, []);
+        });
+        assert.deepEqual(server.liveClients(), []);
+      } finally {
+        observer?.restore();
+        release.resolve();
+        controller.abort();
+        await Promise.allSettled([held, attaching]);
+        await withCleanup(
+          () => joined.dispose(),
+          () => server.close(),
+        );
+      }
+    }));
+
+test("an attach signal does not cancel the established session connection", () =>
+  fixture(async (root) => {
+    const server = await startServer(root, async () => "ok");
+    const client = new DaemonConnection(server.paths, server.identity, facts(root), { callback: async () => true });
+    const request = new AbortController();
+    try {
+      await client.attach(request.signal);
+      request.abort();
+      await client.update(client.facts);
+      assert.equal(await client.run("check", {}), "ok");
     } finally {
-      observer?.restore();
-      release.resolve();
-      controller.abort();
-      await Promise.allSettled([held, attaching]);
       await withCleanup(
-        () => joined.dispose(),
+        () => client.dispose(),
         () => server.close(),
       );
     }

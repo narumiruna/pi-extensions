@@ -79,7 +79,12 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Missing independent credentials | Public SDK failure; no parent-runtime key extraction | Synthetic resolver tests |
 | No resolver request / cancellation after credential runtime creation | Metadata uses memory credentials without auth refresh / settle already-started SDK credential writes before releasing owner | Resolver lifecycle tests |
 | Model output / stale candidate / refusal | Candidate only / revalidate all evidence / retain budget and refusal policy | Existing agent suites |
-| Last Pi exit without reviewed daemon-era permission | Service may stay alive; no unattended transfer or inference | Zero-client tests |
+| No registered live PID and no valid active-setup after-exit grant / explicit CLI start without clients | Fixed 30-second grace, then quiesce and drain before safe exit; no final sync or inference | Lifecycle timer and process tests |
+| Registered live PID, including passive, disconnected, publishing, or retired clients / uncertain PID probe | Retain lifetime and session protection; detach or heartbeat loss is not proof of exit | Live-PID and lifecycle tests |
+| Client arrives during grace or quiescing, before final closing boundary | Cancel automatic exit; preserve one owner through admission | Admission and reattachment race tests |
+| Valid active-setup grant / temporarily unavailable provider or backend | Retain lifetime under existing consent, fingerprint, and binding rules; no new work permission or availability probe | Consent and monitor tests |
+| Uncertain consent publication, failed revocation, or cleanup failure | Stay paused; retain evidence and repair/revoke before explicit restart, without restoring an older grant | Consent failure and shutdown tests |
+| Recognized closing owner / next eligible interactive client | Bounded cancellable wait; prove old-owner exit before singleton replacement; passive clients never launch | Closing-owner startup tests |
 | Print/JSON, no existing service / existing service | No launch / passive protection and automatic-work pause; never an implicit unattended grant | Bootstrap and actual-session-facts tests |
 | Orderly exit / ambiguous disconnection / replacement handoff | Retain live-PID file protection without active participation / pause and retain protection / require matching published successor | Server, handoff, and native post-exit model tests |
 | Config/model/consent changes during unattended review | Reject before publication, preserving new data | Consent tests |
@@ -89,6 +94,30 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Other setup / cancelled or replaced origin / disabled policy / shutdown | Never force an unrelated or stale retry; retain intent while only busy | Monitor lifecycle and setup-scope tests |
 
 The source-linked matrix is the audit contract, not a list of already completed checks. The implementation plan records actual results separately.
+
+## Automatic service lifetime
+
+The daemon owns lifetime for one canonical agent directory and its registered client PIDs, not every Pi process on the machine. Live disconnected, passive, publishing, and orderly retired clients count. `/reload`, `/new`, fork, and resume do not close the shared owner while their Pi process remains alive. An empty participant list, detach, transport failure, or heartbeat timeout is not proof of process exit.
+
+When no registered live PID remains and no valid explicit after-exit grant covers the active setup, start a fixed 30-second grace period. The same policy applies to a service explicitly started without clients. A client arriving before the final closing boundary cancels automatic exit. Grants for other setups, revoked grants, and stale fingerprints do not preserve lifetime. Temporary provider or backend unavailability does not itself revoke a valid grant. Lifetime checks reuse existing consent authority without calling a model, contacting a provider or storage, executing credential commands, or changing authorization. No setting, environment variable, or keep-alive flag controls this policy.
+
+After grace, stop new automatic work and cancel cancellable work. Drain foreground and monitor work, committed writes, admission, queue-release acknowledgements, peer persistence, and owned callbacks before endpoint and owner-lock release. Do not add a closing sync or model request. Preserve journals, backups, request accounting, and existing transfer permissions. Recheck liveness, consent, generation, and ownership after asynchronous reads or drains; the final admission boundary must let an earlier queued attach win and make a later attach observe closing. Cleanup failure is not successful exit.
+
+After quiescence, the authenticated final fence returns `RemoteError.name = "DaemonStoppingError"` to rejected admissions and handshakes on the existing version-1 protocol. `ensureDaemon()` recognizes only this error and waits at most 30 seconds for the recorded PID to exit before singleton startup. The lightweight public `waitForDaemonExit(identity, signal)` helper provides the same cancellable process-exit check for an attach race; it never kills the owner or treats lost contact as exit. Pi Sync retries only an unpublished connection, at most once, and does not replay submitted operations. A rejected first attach preserves this stopping error after local disposal when no callbacks or prior attachment can own grants; a failed cleanup transport remains available as the error cause. Other combined attach and cleanup failures remain aggregate errors and do not authorize a retry. `DaemonConnection.attach(signal)` cancels queued admission without stopping the shared owner; the signal does not own the established connection's lifetime. The next eligible interactive client or explicit command may start after proven owner exit. An incompatible identity, uncertain ownership, or unreachable live owner still fails closed. Print/JSON never launch a service. Manual stop and restart retain explicit behavior. Authorization uncertainty and failed revocation remain paused, not cleared by an implicit restart that could restore an older persisted grant.
+
+A later command can reconnect after a cancelled or failed unpublished attach. First, Pi Sync confirms the old connection's detach and drain, then releases its local queue grants. It uses a fresh client ID and generation for the next connection. Daemon retirement records stay intact, so late requests cannot revive the old attempt. Failed cleanup blocks a new identity and operation; it does not release uncertain grants. The established connection keeps its identity. A cancelled or submitted operation is never replayed by this recovery.
+
+## Repository lifetime smoke
+
+After the repository build, run the standalone real-clock smoke from the repository root. It loads the built package directory through real Pi RPC, tests no-client CLI exit and last-Pi exit, restarts through the next eligible Pi, and retains an explicitly reviewed grant beyond the grace period. It uses only owned loopback provider/storage fixtures and preserves recovery bytes. It takes about two minutes; it is not a Vitest case.
+
+```sh
+npm exec -- tsc -p tsconfig.test.json
+cp -R packages/pi-sync/test/fixtures node_modules/.cache/pi-extensions-test/packages/pi-sync/test/
+node node_modules/.cache/pi-extensions-test/packages/pi-sync/test/idle-exit-cli-smoke.js
+```
+
+Do not rebuild while a smoke-owned daemon is running. Linux containers need an init process to reap detached children. This smoke does not verify native Windows behavior, terminal logout, physical power loss, or real-data cutover.
 
 ## Cross-process apply protocol
 
@@ -116,7 +145,7 @@ Each POSIX instance binds inside an exclusively created 0700 directory; this par
 
 The model signature hashes the exact existing JSON serialization. Equal hashes preserve the engine's existing candidate keys and Continuous configuration identity; a definition with different serialization is unavailable, not a reason to reset budgets. Static metadata uses an in-memory credential store and no refresh. Only an actual resolver transport creates the public SDK credential runtime. Its final public `transformHeaders` hook revalidates capability and evidence after auth awaits, without returning header values to Pi.
 
-Unattended permission stores a setup/policy digest and an independent model/location binding, not a former Pi context. Normal closed clients remain in the durable protected-session ledger while their PID is alive but do not block zero-client scheduling; ambiguous losses and replacement gaps do. `Execution.liveClients()` supplies file protection and the missing-settings guard, while `Execution.participants()` supplies queue reservations and work eligibility. An unrelated attach or daemon restart does not remove retired protection. Only confirmed PID exit or a matching published replacement releases the corresponding record. A consent publication failure latches automatic work off for that service instance; repair persistence and revoke the retained grant before an explicit restart.
+Unattended permission stores a setup/policy digest and an independent model/location binding, not a former Pi context. Normal closed clients remain in the durable protected-session ledger while their PID is alive but do not block zero-client scheduling; ambiguous losses and replacement gaps do. `Execution.liveClients()` supplies file protection and the missing-settings guard, while `Execution.participants()` supplies queue reservations and work eligibility. An unrelated attach or daemon restart does not remove retired protection. Only confirmed PID exit or a matching published replacement releases the corresponding record. A consent publication failure latches automatic work off for that service instance and prevents automatic exit from silently clearing the barrier. Failed revocation or uncertain consent must not restore an older persisted grant through implicit restart; retain the paused owner and evidence, repair persistence, and revoke the retained grant before an explicit restart.
 
 The resolver uses independently available agent-root `auth.json`/`models.json` configuration and the environment captured at service start. Credential commands execute non-interactively from the canonical agent root, not from a former Pi working directory. Handover must disclose this provider/account boundary; changing the service environment requires a restart. Parent runtime accounts, registered providers, and conversations are not copied.
 

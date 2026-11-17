@@ -5,7 +5,7 @@ import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, w
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { test } from "vitest";
+import { beforeEach, describe, test } from "vitest";
 
 const builderUrl = pathToFileURL(resolve("scripts/prepare-kit-runtime.mjs")).href;
 const { prepareKitRuntime } = (await import(builderUrl)) as {
@@ -175,9 +175,25 @@ for (const kind of ["file", "symlink", "dangling symlink"] as const) {
   });
 }
 
-test("clean production Git preparation loads root-listed Files source and its lazy menus through native Jiti", async () => {
-  const checkout = await mkdtemp(join(tmpdir(), "prepare-git-production-"));
-  try {
+describe("clean production Git preparation", () => {
+  let smoke: ReturnType<typeof runSmoke>;
+  let service: ReturnType<typeof startProductionDaemon>;
+
+  beforeEach(async ({ onTestFinished }) => {
+    const checkout = await mkdtemp(join(tmpdir(), "prepare-git-production-"));
+    let ownedSmoke: ReturnType<typeof runSmoke> | undefined;
+    let ownedDaemon: ReturnType<typeof startProductionDaemon> | undefined;
+    onTestFinished(async () => {
+      try {
+        await ownedSmoke?.dispose();
+      } finally {
+        try {
+          await ownedDaemon?.dispose();
+        } finally {
+          await rm(checkout, { recursive: true, force: true });
+        }
+      }
+    });
     for (const packageId of ["pi-tui-kit", "pi-files", "pi-sync-daemon", "pi-sync"]) {
       const target = join(checkout, "packages", packageId);
       await mkdir(target, { recursive: true });
@@ -257,16 +273,32 @@ test("clean production Git preparation loads root-listed Files source and its la
     );
     assert.ok(existsSync(join(checkout, "packages/pi-inspect/browser-dist/app.js")));
     await writeFile(join(checkout, "smoke.mjs"), productionSmoke);
-    const evidence = await runSmoke(checkout);
+    ownedSmoke = smoke = runSmoke(checkout);
+    await smoke.ready;
+    // Own the foreground service directly, including when the smoke child times out.
+    ownedDaemon = service = startProductionDaemon(checkout);
+    await service.ready;
+  });
+
+  test("loads root-listed Files source and its lazy menus through native Jiti", async () => {
+    const evidence = await smoke.run(service.pid);
     assert.match(evidence, /PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle/u);
-  } finally {
-    await rm(checkout, { recursive: true, force: true });
-  }
+  });
 });
 
-function runSmoke(checkout: string): Promise<string> {
-  return new Promise((resolveSmoke, reject) => {
-    const child = spawn(process.execPath, ["smoke.mjs"], {
+function runSmoke(checkout: string) {
+  let markReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolveReady, reject) => {
+    markReady = resolveReady;
+    rejectReady = reject;
+  });
+  let isReady = false;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let child!: ReturnType<typeof spawn>;
+  let joinChild!: Promise<void>;
+  const completion = new Promise<string>((resolveSmoke, reject) => {
+    child = spawn(process.execPath, ["smoke.mjs"], {
       cwd: checkout,
       env: {
         ...process.env,
@@ -276,8 +308,8 @@ function runSmoke(checkout: string): Promise<string> {
       },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
+    joinChild = new Promise((done) => child.once("close", () => done()));
     let output = "";
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     assert.ok(child.stdout && child.stderr);
     child.stdout.on("data", (data) => {
       output += data;
@@ -286,16 +318,98 @@ function runSmoke(checkout: string): Promise<string> {
       output += data;
     });
     child.on("message", (message) => {
-      if ((message as { type?: string })?.type !== "ready" || deadline) return;
-      deadline = setTimeout(() => child.kill("SIGKILL"), 4000);
+      if ((message as { type?: string })?.type !== "ready" || isReady) return;
+      isReady = true;
+      markReady();
     });
-    child.once("error", reject);
+    child.once("error", (error) => {
+      rejectReady(error);
+      reject(error);
+    });
     child.once("close", (code) => {
       clearTimeout(deadline);
       if (code === 0 && deadline) resolveSmoke(output);
-      else reject(new Error(`Production Git Jiti smoke failed (${code}): ${output}`));
+      else {
+        const error = new Error(`Production Git Jiti smoke failed (${code}): ${output}`);
+        rejectReady(error);
+        reject(error);
+      }
     });
   });
+  // Setup owns the child even if SDK initialization fails before readiness.
+  void completion.catch(() => {});
+  return {
+    ready,
+    run: async (daemonPID: number) => {
+      await ready;
+      deadline = setTimeout(() => child.kill("SIGKILL"), 4000);
+      child.send({ type: "run", daemonPID });
+      return completion;
+    },
+    dispose: async () => {
+      clearTimeout(deadline);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await joinChild;
+      await completion.catch(() => {});
+    },
+  };
+}
+
+function startProductionDaemon(checkout: string) {
+  const child = spawn(
+    process.execPath,
+    ["packages/pi-sync-daemon/dist/cli.js", "serve", "--root", join(checkout, "agent")],
+    {
+      cwd: checkout,
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    },
+  );
+  let started = false;
+  let failure = "";
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  child.stderr?.on("data", (value) => {
+    failure = (failure + String(value)).slice(-4096);
+  });
+  child.once("error", rejectReady);
+  child.on("message", (message) => {
+    if ((message as { type?: string })?.type === "ready") {
+      started = true;
+      resolveReady();
+    }
+  });
+  const closed = new Promise<void>((done) =>
+    child.once("close", (code) => {
+      if (!started) rejectReady(new Error(`Production daemon startup failed (${code}): ${failure}`));
+      done();
+    }),
+  );
+  return {
+    get pid() {
+      const pid = child.pid;
+      assert.ok(pid);
+      return pid;
+    },
+    ready,
+    async dispose() {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        await closed;
+        return;
+      }
+      child.kill("SIGTERM");
+      // Readiness was observed before any bounded graceful-shutdown deadline starts.
+      const deadline = started ? setTimeout(() => child.kill("SIGKILL"), 1000) : undefined;
+      try {
+        await closed;
+      } finally {
+        clearTimeout(deadline);
+      }
+    },
+  };
 }
 
 const productionSmoke = String.raw`
@@ -304,15 +418,21 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-process.send?.({ type: "ready" });
 const require = createRequire(import.meta.url);
+await mkdir(process.env.PI_CODING_AGENT_DIR);
+const sdk = await import("@earendil-works/pi-coding-agent");
+sdk.initTheme("dark", false);
+// SDK cold startup belongs to setup; operations start only when the test releases us.
+const run = await new Promise((resolve) => {
+  process.once("message", resolve);
+  process.send?.({ type: "ready" });
+});
+assert.equal(run.type, "run");
+process.disconnect?.();
 for (const tool of ["typescript", "tsc-rs", "@biomejs/biome", "vitest"]) {
   assert.throws(() => require.resolve(tool), { code: "MODULE_NOT_FOUND" }, tool);
 }
 assert.ok(require.resolve("esbuild"));
-await mkdir(process.env.PI_CODING_AGENT_DIR);
-const sdk = await import("@earendil-works/pi-coding-agent");
-sdk.initTheme("dark", false);
 const manifest = JSON.parse(await readFile("package.json", "utf8"));
 const entries = manifest.pi.extensions.filter((file) => /\/pi-(?:files|file-context|edit-scope)\//u.test(file));
 assert.deepEqual(entries, ["./packages/pi-files/src/index.ts"]);
@@ -386,8 +506,13 @@ try {
   for(const handler of syncExtension.handlers.get("session_start")??[]) await handler({type:"session_start",reason:"startup"},syncCtx);
   await syncExtension.commands.get("sync").handler("help",syncCtx);
   assert.ok(syncNotices.some(message=>message.includes("daemon [")));
-  const api=await import("@narumitw/pi-sync-daemon"); const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
-  try { assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance); }
+  const api=await import("@narumitw/pi-sync-daemon");
+  assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.pid,run.daemonPID);
+  const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
+  try {
+    assert.equal(owner.identity.pid,run.daemonPID);
+    assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance);
+  }
   finally { await api.stopDaemon(process.env.PI_CODING_AGENT_DIR); }
 } finally {
   for(const handler of syncExtension.handlers.get("session_shutdown")??[]) await handler({type:"session_shutdown",reason:"reload"},syncCtx);

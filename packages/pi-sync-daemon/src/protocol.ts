@@ -3,6 +3,14 @@ import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 export const PROTOCOL_VERSION = 1;
+
+/** Authenticated idle shutdown after work is drained; callers may wait for this owner to exit. */
+export class DaemonStoppingError extends Error {
+  override name = "DaemonStoppingError";
+  constructor() {
+    super("Daemon is closing after its idle grace period; wait for owner exit before reconnecting.");
+  }
+}
 export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 export const REVIEW_PAGE_CHARS = 64 * 1024;
 export const MAX_REVIEW_BYTES = 16 * 1024 * 1024;
