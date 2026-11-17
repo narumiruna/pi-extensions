@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode, { completePlanArguments } from "../src/plan-mode.js";
 import { restorePlanModeState } from "../src/state.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
+import { createCustomSelectorHarness, createMockContext, createMockPi, restoreMockPlanModeState } from "./support.js";
 import { renderMockWidget } from "./widget-support.js";
 
 const PLAN = `# Saved implementation plan
@@ -256,7 +256,8 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
         assert.equal(mock.entries.length, entriesBeforeMenu);
       }
       await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
-      assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
+      assert.equal(mock.entries.length, entriesBeforeMenu);
+      assert.equal(restoreMockPlanModeState(mock, [savedEntry]).savedPlan?.plan, PLAN);
     } else if (scenario.expected === "history") {
       assert.equal(context.statuses.get("plan-mode"), undefined);
       assert.match(mock.sentUserMessages.at(-1)?.text ?? "", /Saved implementation plan/);
@@ -411,7 +412,8 @@ test("saved Plan implementation preflight retains state on auth failure or sessi
   resolveAuth({ ok: true });
   await pendingImplementation;
   assert.equal(replaced.sentUserMessages.length, 0);
-  assert.equal(latestState(replaced.entries)?.savedPlan?.plan, PLAN);
+  assert.deepEqual(replaced.entries, []);
+  assert.equal(restoreMockPlanModeState(replaced, [savedEntry]).savedPlan?.plan, PLAN);
 });
 
 test("saved Plan survives resume and blocks replacement workflows", async () => {
@@ -438,7 +440,8 @@ test("saved Plan survives resume and blocks replacement workflows", async () => 
   assert.equal(context.statuses.get("plan-mode"), "plan saved");
   assert.match(context.notifications.at(-1)?.message ?? "", /implement or clear/i);
   await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
-  assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
+  assert.deepEqual(mock.entries, []);
+  assert.equal(restoreMockPlanModeState(mock, [savedEntry]).savedPlan?.plan, PLAN);
 });
 
 test("saved Plan no-UI management is observable without changing state", async () => {
@@ -482,7 +485,8 @@ test("saved Plan no-UI management is observable without changing state", async (
     assert.equal(context.statuses.get("plan-mode"), "plan saved");
     assert.deepEqual(mock.rawPi.getActiveTools(), STABLE_READ_EDIT_TOOLS);
     await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
-    assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
+    assert.deepEqual(mock.entries, []);
+    assert.equal(restoreMockPlanModeState(mock, [savedEntry]).savedPlan?.plan, PLAN);
   }
 });
 
@@ -551,7 +555,8 @@ test("session shutdown disposes a saved Plan menu without a late transition", as
   assert.ok(menuHarness);
   assert.equal(context.statuses.get("plan-mode"), undefined);
   assert.deepEqual(mock.rawPi.getActiveTools(), STABLE_READ_EDIT_TOOLS);
-  assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
+  assert.deepEqual(mock.entries, []);
+  assert.equal(restoreMockPlanModeState(mock, [savedEntry]).savedPlan?.plan, PLAN);
   assert.equal(mock.sentMessages.length, 0);
   assert.equal(mock.sentUserMessages.length, 0);
 });

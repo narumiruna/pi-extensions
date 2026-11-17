@@ -3,7 +3,7 @@ import { test } from "vitest";
 import { startFreshImplementationSession } from "../src/fresh-implementation.js";
 import planMode from "../src/plan-mode.js";
 import { MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH, restorePlanModeState } from "../src/state.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createMockContext, createMockPi, restoreMockPlanModeState } from "./support.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const PLAN = "# Runtime plan\n\n1. Apply destination settings.";
@@ -959,14 +959,12 @@ test("destination drains asynchronous model application and preserves stale runt
   await Promise.all([pending, shutdown]);
 
   assert.equal(mock.thinkingLevel, "low");
-  assert.deepEqual(
-    (mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)?.pendingImplementationRuntime,
-    {
-      version: 1,
-      model: { provider: TARGET.provider, modelId: TARGET.id },
-      thinkingLevel: "high",
-    },
-  );
+  assert.deepEqual(mock.entries, []);
+  assert.deepEqual(restoreMockPlanModeState(mock, branch).pendingImplementationRuntime, {
+    version: 1,
+    model: { provider: TARGET.provider, modelId: TARGET.id },
+    thinkingLevel: "high",
+  });
 });
 
 test("destination shutdown preserves intent during uncancellable authentication preflight", async () => {
@@ -1010,13 +1008,11 @@ test("destination shutdown preserves intent during uncancellable authentication 
 
   assert.equal(mock.setModels.length, 0);
   assert.equal(mock.thinkingLevel, "low");
-  assert.deepEqual(
-    (mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)?.pendingImplementationRuntime,
-    {
-      version: 1,
-      model: { provider: TARGET.provider, modelId: TARGET.id },
-    },
-  );
+  assert.equal(mock.entries.length, 0);
+  assert.deepEqual(restoreMockPlanModeState(mock, branch).pendingImplementationRuntime, {
+    version: 1,
+    model: { provider: TARGET.provider, modelId: TARGET.id },
+  });
 
   await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
   assert.equal(mock.setModels.length, 1);

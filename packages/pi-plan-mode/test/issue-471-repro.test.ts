@@ -3,7 +3,7 @@ import { test } from "vitest";
 import { PLAN_MODE_MAX_CHARS } from "../src/completion-tool.js";
 import planModeExtension from "../src/plan-mode.js";
 import { type ActiveImplementationPlan, restorePlanModeState } from "../src/state.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
+import { createCustomSelectorHarness, createMockContext, createMockPi, restoreMockPlanModeState } from "./support.js";
 import { renderMockWidget } from "./widget-support.js";
 
 const PLAN = `# Compaction-safe implementation
@@ -774,5 +774,6 @@ test("resume and shutdown retain branch-local implementation state while clearin
   await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
   assert.equal(context.statuses.get("plan-mode"), undefined);
   assert.equal(context.widgets.get("plan-mode-plan"), undefined);
-  assert.equal(latestState(mock.entries)?.activeImplementation?.plan, PLAN);
+  assert.deepEqual(mock.entries, []);
+  assert.equal(restoreMockPlanModeState(mock, [resumedEntry]).activeImplementation?.plan, PLAN);
 });

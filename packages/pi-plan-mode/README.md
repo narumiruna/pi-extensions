@@ -417,6 +417,13 @@ Invalid settings remain untouched and make Settings read-only; session-start fai
 
 Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, shortcut configuration, shell-override examples, and legacy-file migration.
 
+## 🚧 Limitations
+
+Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
+This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
+Meaningful state changes and writes from Pi or other extensions can still create a branch from an old resume position.
+Plan mode does not repair existing branches; use `/tree` to return to the conversation branch if resume shows incomplete history.
+
 ## 🧠 Codex-like behavior
 
 This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
