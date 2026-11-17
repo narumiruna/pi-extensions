@@ -5,6 +5,7 @@ import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding
 import { type ClientFacts, type DaemonConnection, DaemonError, type Identity } from "@narumitw/pi-sync-daemon";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import type { PiApplyGate } from "../src/daemon/apply-gate.js";
 import { withTempHome } from "./helpers.js";
 
 const transport = vi.hoisted(() => ({
@@ -259,6 +260,81 @@ for (const error of [
       await f.client.dispose();
       assert.equal(f.connections[0]?.dispose.mock.calls.length, 1);
     }));
+
+test("failed unpublished cleanup blocks identity renewal and the next command", () =>
+  withTempHome(async (agentDir) => {
+    const f = await fixture(agentDir);
+    const old = { id: f.client.id, generation: f.client.generation };
+    const failure = new Error("Previous cleanup is uncertain");
+    const gate = (f.client as unknown as { gate: PiApplyGate }).gate;
+    const release = vi.spyOn(gate, "releaseAfterDrain");
+    try {
+      f.attachErrors[0] = new DOMException("Startup cancelled", "AbortError");
+      await assert.rejects(f.client.run("sync", {}), { name: "AbortError" });
+      const partial = f.connections[0];
+      assert.ok(partial);
+      const target = path.join(f.client.root, "held.md");
+      await fs.writeFile(target, "unchanged");
+      await gate.acquire("old-attempt", [target]);
+      partial.dispose.mockRejectedValue(failure);
+      await assert.rejects(f.client.run("sync", {}), (error) => error === failure);
+      assert.deepEqual({ id: f.client.id, generation: f.client.generation }, old);
+      assert.equal(release.mock.calls.length, 0, "uncertain grants must remain held");
+      assert.equal(gate.size, 1);
+      assert.equal(transport.ensure.mock.calls.length, 1);
+      assert.equal(f.connections.length, 1);
+      assert.equal(partial.run.mock.calls.length, 0);
+    } finally {
+      for (const connection of f.connections) connection.dispose.mockResolvedValue(undefined);
+      await f.client.dispose();
+      release.mockRestore();
+    }
+  }));
+
+test("cancellation during prior cleanup cannot publish a new identity or operation", () =>
+  withTempHome(async (agentDir) => {
+    const f = await fixture(agentDir);
+    const old = { id: f.client.id, generation: f.client.generation };
+    const entered = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    const request = new AbortController();
+    const gate = (f.client as unknown as { gate: PiApplyGate }).gate;
+    let next: Promise<unknown> | undefined;
+    try {
+      f.attachErrors[0] = new DOMException("Startup cancelled", "AbortError");
+      await assert.rejects(f.client.run("sync", {}), { name: "AbortError" });
+      const partial = f.connections[0];
+      assert.ok(partial);
+      const target = path.join(f.client.root, "held.md");
+      await fs.writeFile(target, "unchanged");
+      await gate.acquire("old-attempt", [target]);
+      partial.dispose.mockImplementation(async () => {
+        entered.resolve();
+        await drained.promise;
+      });
+      next = f.client.run("sync", {}, request.signal);
+      const rejected = assert.rejects(next, { name: "AbortError" });
+      await entered.promise;
+      request.abort();
+      drained.resolve();
+      await rejected;
+      assert.equal(gate.size, 0, "acknowledged cleanup must finish even after cancellation");
+      assert.deepEqual({ id: f.client.id, generation: f.client.generation }, old);
+      assert.equal(transport.ensure.mock.calls.length, 1);
+      assert.equal(f.connections.length, 1);
+      assert.equal(partial.run.mock.calls.length, 0);
+      assert.equal(await f.client.run("sync", {}), f.result);
+      assert.notEqual(f.client.id, old.id);
+      assert.notEqual(f.client.generation, old.generation);
+      assert.equal(f.connections[1]?.facts.id, f.client.id);
+      assert.equal(f.connections[1]?.facts.generation, f.client.generation);
+    } finally {
+      drained.resolve();
+      request.abort();
+      await next?.catch(() => {});
+      await f.client.dispose();
+    }
+  }));
 
 test("passive attach returns false for a closing owner without launching or waiting", () =>
   withClient(async (f) => {

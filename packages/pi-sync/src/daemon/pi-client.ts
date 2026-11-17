@@ -220,8 +220,13 @@ export class PiDaemonClient {
   private readonly busy = new Set<string>();
   private initialized = false;
   private startupDebug = false;
-  readonly id = randomUUID();
-  readonly generation = randomUUID();
+  private participantIdentity = { id: randomUUID(), generation: randomUUID() };
+  get id() {
+    return this.participantIdentity.id;
+  }
+  get generation() {
+    return this.participantIdentity.generation;
+  }
   readonly root: string;
   private readonly rawRoot: string;
   private readonly gate: PiApplyGate;
@@ -336,6 +341,16 @@ export class PiDaemonClient {
     validateStartup();
     if (this.connection) return this.connection;
     this.connecting ??= (async () => {
+      if (this.partialConnection) {
+        // A failed unpublished attempt may already be retired or own queue grants.
+        // Confirm drain before replacing its identity; failed cleanup must block retry.
+        await this.partialConnection.dispose();
+        // Finish acknowledged cleanup even if this new startup was cancelled meanwhile.
+        await this.gate.releaseAfterDrain();
+        validateStartup();
+        this.partialConnection = undefined;
+        this.participantIdentity = { id: randomUUID(), generation: randomUUID() };
+      }
       // Only explicit setup/command paths or a configured interactive session call connect.
       if (!existing) await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
       validateStartup();
@@ -396,6 +411,7 @@ export class PiDaemonClient {
         }
         this.validate();
         this.connection = connection;
+        this.partialConnection = undefined;
         return connection;
       }
     })().catch((error) => {
