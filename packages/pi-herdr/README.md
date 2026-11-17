@@ -190,7 +190,9 @@ The package does not authenticate the endpoint, so trust the environment that la
 
 The peer workflow runs another independent Pi session with ordinary user permissions and can incur provider costs.
 Do not assume it inherits the initiator's conversation, model, thinking level, runtime credentials, or extension state.
-The helper requires nonblank inherited pane and socket bindings, explicitly loads this package and skill, and never bypasses project trust or passes credentials on command lines.
+The helper requires nonblank inherited pane and socket bindings and resolves an absolute Herdr executable outside the checkout, including Git ancestors and symlink targets.
+It ignores relative `PATH` entries and avoids Windows' implicit current-directory executable search; skill preflight and the contract probe use the same resolver.
+It explicitly loads this package and skill without bypassing project trust or passing credentials on command lines.
 It preserves unrelated extension discovery and supports a source-only Git installation; package-directory loading still requires the documented build.
 Copies of this package use a process-local public event-bus claim to avoid duplicate reporters when both source and generated resources are discovered.
 Provenance tokens contain bounded identity information and session-reference digests, not prompts or credentials; they do not authenticate peers.

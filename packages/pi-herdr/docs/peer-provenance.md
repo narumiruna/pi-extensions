@@ -25,6 +25,9 @@ Fingerprints are correlation keys, not authentication or a guarantee of anonymit
 Herdr tokens share one terminal-level map across sources.
 The source scopes sequence handling, not token ownership; another caller can overwrite a key.
 The helper writes only its five distinct keys and verifies their exact readback and both live session identities before attempting the task prompt.
+Before CLI execution, it selects a canonical absolute Herdr executable outside the checkout and its Git ancestors, rejects project-local symlink targets, and skips relative `PATH` entries.
+The skill's `--cli-path` preflight prints that path without launching Herdr; the probe and default helper runner use the same resolver, including on Windows where a bare command could otherwise use the project cwd.
+This requires a trusted Node runtime and launch environment; it does not authenticate the selected external executable or the Herdr socket.
 It leaves a partially created pane available for inspection after failure or cancellation and never retries an ambiguous submission automatically.
 Stopping its CLI subprocess does not undo server-side changes or terminate the independent peer.
 

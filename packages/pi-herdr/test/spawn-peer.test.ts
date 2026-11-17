@@ -21,7 +21,7 @@ type Dependencies = {
 };
 type Helper = {
   spawnPeer: (options: Options, dependencies?: Dependencies) => Promise<Json>;
-  parseArguments: (args: string[]) => Options | { help: true };
+  parseArguments: (args: string[]) => Options | { help: true } | { cliPath: true };
   createRunner: (options: Json) => Run;
   runCli: (args: string[], dependencies?: Json) => Promise<number>;
   packageRoot: string;
@@ -631,6 +631,7 @@ test("runner uses argument arrays with cwd, inherited environment, deadlines and
   const env = { HERDR_ENV: "1", INHERITED_AUTH: "not-forwarded-as-an-argument" };
   const received: Array<{ command: string; args: string[]; options: Json }> = [];
   const run = helper.createRunner({
+    command: process.execPath,
     cwd,
     env,
     execFileImpl: (
@@ -645,7 +646,7 @@ test("runner uses argument arrays with cwd, inherited environment, deadlines and
   });
   await run(["agent", "start", "reviewer"]);
   await assert.rejects(run(["agent", "prompt", "w1:p2", task]), (error: Error) => !error.message.includes(task));
-  assert.equal(received[0]?.command, "herdr");
+  assert.equal(received[0]?.command, process.execPath);
   assert.deepEqual(received[1]?.args, ["agent", "prompt", "w1:p2", task]);
   assert.equal(received[0]?.options.cwd, cwd);
   assert.equal(received[0]?.options.env, env);

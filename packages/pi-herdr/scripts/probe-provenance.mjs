@@ -7,15 +7,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { resolveHerdrExecutable } from "../skills/pi-herdr/scripts/spawn-peer.mjs";
 
 const exec = promisify(execFile);
 assert.equal(process.env.HERDR_ENV, "1");
 assert.notEqual(process.platform, "win32", "This repository-only probe requires a Unix shell fixture");
+const herdr = await resolveHerdrExecutable();
 const name = `pi-herdr-probe-${randomUUID().slice(0, 8)}`;
 const directory = await mkdtemp(join(tmpdir(), "pi-herdr-contract-"));
 const env = { ...process.env };
 for (const key of ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID"]) delete env[key];
-const server = spawn("herdr", ["--session", name, "server"], { env, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn(herdr, ["--session", name, "server"], { env, stdio: ["ignore", "pipe", "pipe"] });
 let logs = "";
 server.stdout.on("data", (b) => {
   logs = `${logs}${b}`.slice(-4096);
@@ -28,7 +30,7 @@ server.on("error", (error) => {
   serverError = error;
 });
 async function cli(...args) {
-  const r = await exec("herdr", ["--session", name, ...args], { env, timeout: 5000, maxBuffer: 512000 });
+  const r = await exec(herdr, ["--session", name, ...args], { env, timeout: 5000, maxBuffer: 512000 });
   return r.stdout.trim() ? JSON.parse(r.stdout) : undefined;
 }
 async function until(read, predicate, label) {
@@ -71,7 +73,7 @@ try {
     "foreground Pi fixture detection",
   );
   const sessions = JSON.parse(
-    (await exec("herdr", ["session", "list", "--json"], { env, timeout: 5000 })).stdout,
+    (await exec(herdr, ["session", "list", "--json"], { env, timeout: 5000 })).stdout,
   ).sessions;
   const socketPath = sessions.find((s) => s.name === name).socket_path;
   socket = net.createConnection(socketPath);
@@ -260,7 +262,7 @@ try {
 } finally {
   socket?.destroy();
   try {
-    await exec("herdr", ["session", "stop", name, "--json"], { env, timeout: 5000 });
+    await exec(herdr, ["session", "stop", name, "--json"], { env, timeout: 5000 });
   } catch (error) {
     failures.push(error);
     // This PID belongs only to the uniquely named probe server, never the caller's Herdr server.
@@ -270,7 +272,7 @@ try {
     await new Promise((resolve) => server.once("exit", resolve));
   }
   try {
-    await exec("herdr", ["session", "delete", name, "--json"], { env, timeout: 5000 });
+    await exec(herdr, ["session", "delete", name, "--json"], { env, timeout: 5000 });
   } catch (error) {
     failures.push(error);
   }
