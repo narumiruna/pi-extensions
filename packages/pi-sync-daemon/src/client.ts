@@ -266,14 +266,22 @@ export class DaemonConnection {
     readonly facts: ClientFacts,
     private readonly options: ConnectionOptions,
   ) {}
-  async attach() {
+  async attach(signal?: AbortSignal) {
     if (this.closed || this.uncertain) throw new Error("Daemon client is unavailable; reconnect after draining work.");
-    const request = requestDaemon(this.paths, this.identity, "attach", this.facts, this.controller.signal);
+    const request = requestDaemon(
+      this.paths,
+      this.identity,
+      "attach",
+      this.facts,
+      signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
+    );
     // Poll during attach: stopping a previous controller may need release answers
     // from this reattached participant before the attach response can complete.
     this.polling ??= this.poll();
+    let admitted = false;
     try {
       const result = await request;
+      admitted = true;
       this.consume(result);
       this.attached = true;
       return this;
@@ -282,7 +290,28 @@ export class DaemonConnection {
         async () => {
           throw error;
         },
-        () => this.dispose(),
+        async () => {
+          try {
+            await this.dispose();
+          } catch (cleanupError) {
+            if (
+              !admitted &&
+              !this.attached &&
+              this.closed &&
+              !this.callbacks.size &&
+              !this.callbackTasks.size &&
+              !this.completedCallbacks.size &&
+              error instanceof DaemonError &&
+              error.remote.name === "DaemonStoppingError"
+            ) {
+              // The fenced first attach owned no grants, and local tasks have drained.
+              // Keep its retry marker even if the owner closes the cleanup transport.
+              error.cause = cleanupError;
+              return;
+            }
+            throw cleanupError;
+          }
+        },
       );
     }
   }

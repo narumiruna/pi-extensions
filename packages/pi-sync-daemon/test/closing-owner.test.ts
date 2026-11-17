@@ -6,7 +6,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, vi } from "vitest";
-import { ensureDaemon, findDaemon, requestDaemon, waitForDaemonExit } from "../dist/client.js";
+import {
+  DaemonConnection,
+  DaemonError,
+  ensureDaemon,
+  findDaemon,
+  requestDaemon,
+  waitForDaemonExit,
+} from "../dist/client.js";
 import {
   daemonPaths,
   privateDirectory,
@@ -23,27 +30,45 @@ const ownerProgram = `
 import { createServer } from "node:http";
 const { endpoint, identity, mode } = JSON.parse(process.argv[1]);
 identity.pid = process.pid;
+let attached = false;
+const pendingAttach = [];
 const server = createServer(async (request, response) => {
   let text = "";
   for await (const chunk of request) text += chunk;
   const body = JSON.parse(text);
   const authenticated = body.version === 1 && body.root === identity.root &&
-    body.instance === identity.instance && body.token === identity.token && body.method === "hello";
+    body.instance === identity.instance && body.token === identity.token;
   if (authenticated && mode === "silent") {
     process.send({ type: "hello", authenticated });
+    return;
+  }
+  if (authenticated && mode === "drop-detach" && body.method === "detach") {
+    request.socket.destroy();
+    return;
+  }
+  if (authenticated && mode === "callbacks" && body.method === "attach") {
+    pendingAttach.push(response);
     return;
   }
   let value;
   if (!authenticated || mode === "unauthorized") {
     response.statusCode = 403;
     value = { error: { name: "Error", message: "Invalid daemon identity or protocol." } };
+  } else if (mode === "callbacks" && body.method === "poll") {
+    value = { result: { cursor: 0, events: [], callbacks: [{ id: "queue", job: "unpublished", kind: "queue-acquire", payload: {} }] } };
+  } else if (mode === "admitted-event" && body.method !== "detach") {
+    value = { result: { cursor: 1, callbacks: [], events: [{ id: 1, kind: "notify", payload: {} }] } };
+  } else if (mode === "attached" && (!attached || body.method === "poll")) {
+    if (body.method === "attach") attached = true;
+    value = { result: { cursor: 0, callbacks: [], events: [] } };
   } else if (mode === "incompatible") {
     value = { result: { ...identity, version: 2 } };
   } else if (mode === "malformed") {
     value = { error: { name: "DaemonStoppingError" } };
   } else {
     value = { error: {
-      name: mode === "closing" ? "DaemonStoppingError" : "Error",
+      name: ["closing", "drop-detach", "attached", "generic-attach", "admitted-event", "callbacks"].includes(mode) &&
+        !(mode === "generic-attach" && body.method === "attach") ? "DaemonStoppingError" : "Error",
       message: "Daemon is closing after its idle grace period; wait for owner exit before reconnecting."
     } };
   }
@@ -53,11 +78,26 @@ const server = createServer(async (request, response) => {
 process.on("message", (message) => {
   if (message === "probe") process.send({ type: "probe" });
   if (message === "close") server.close(() => process.send({ type: "closed" }));
+  if (message === "reject") {
+    for (const response of pendingAttach) response.end(JSON.stringify({ error: { name: "DaemonStoppingError", message: "closing" } }));
+    process.send({ type: "reject" });
+  }
 });
 server.listen(endpoint, () => process.send({ type: "ready" }));
 `;
 
-type Mode = "closing" | "generic" | "incompatible" | "malformed" | "unauthorized" | "silent";
+type Mode =
+  | "closing"
+  | "generic"
+  | "incompatible"
+  | "malformed"
+  | "unauthorized"
+  | "silent"
+  | "drop-detach"
+  | "attached"
+  | "generic-attach"
+  | "admitted-event"
+  | "callbacks";
 
 function message(child: ChildProcess, type: string) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -168,7 +208,7 @@ async function createOwner(root: string, mode: Mode) {
     await publishIdentity(paths, identity);
     const identityBytes = await fs.readFile(paths.identity);
     const rootEntries = (await fs.readdir(root, { recursive: true })).sort();
-    const command = async (type: "probe" | "close") => {
+    const command = async (type: "probe" | "close" | "reject") => {
       const reply = message(child, type === "close" ? "closed" : type);
       child.send(type);
       await reply;
@@ -191,6 +231,90 @@ async function createOwner(root: string, mode: Mode) {
     throw error;
   }
 }
+
+function connection(owner: Awaited<ReturnType<typeof createOwner>>, event?: () => void) {
+  return new DaemonConnection(
+    owner.paths,
+    owner.identity,
+    {
+      id: randomUUID(),
+      generation: randomUUID(),
+      pid: process.pid,
+      cwd: owner.root,
+      mode: "rpc",
+      hasUI: true,
+      idle: true,
+    },
+    { callback: async () => true, event },
+  );
+}
+
+for (const mode of ["closing", "drop-detach"] as const)
+  test(`a real unpublished attach preserves its stopping marker after ${mode} cleanup`, () =>
+    fixture(async (owner) => {
+      const client = connection(owner);
+      await assert.rejects(client.attach(), (error: unknown) => {
+        assert.ok(error instanceof DaemonError);
+        assert.equal(error.remote.name, "DaemonStoppingError");
+        if (mode === "closing") assert.ok(error.cause instanceof DaemonError);
+        else assert.equal((error.cause as NodeJS.ErrnoException).code, "ECONNRESET");
+        return true;
+      });
+      await client.dispose().catch(() => {});
+      await owner.unchanged();
+    }, mode));
+
+for (const mode of ["attached", "generic-attach", "admitted-event"] as const)
+  test(`failed attach cleanup remains an AggregateError for ${mode} ownership`, () =>
+    fixture(async (owner) => {
+      const client = connection(
+        owner,
+        mode === "admitted-event"
+          ? () => {
+              throw new DaemonError({ name: "DaemonStoppingError", message: "application event failed" });
+            }
+          : undefined,
+      );
+      if (mode === "attached") await client.attach();
+      await assert.rejects(
+        client.attach(),
+        (error: unknown) => error instanceof AggregateError && error.errors.length === 2,
+      );
+      await client.dispose().catch(() => {});
+      await owner.unchanged();
+    }, mode));
+
+test("observed queue callbacks prevent treating a rejected first attach as grant-free", () =>
+  fixture(async (owner) => {
+    const entered = Promise.withResolvers<void>();
+    const client = new DaemonConnection(
+      owner.paths,
+      owner.identity,
+      {
+        id: randomUUID(),
+        generation: randomUUID(),
+        pid: process.pid,
+        cwd: owner.root,
+        mode: "rpc",
+        hasUI: true,
+        idle: true,
+      },
+      {
+        callback: async (_callback, signal) => {
+          entered.resolve();
+          await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+          return true;
+        },
+      },
+    );
+    const attached = client.attach();
+    const rejected = assert.rejects(attached, (error: unknown) => error instanceof AggregateError);
+    await entered.promise;
+    await owner.command("reject");
+    await rejected;
+    await client.dispose().catch(() => {});
+    await owner.unchanged();
+  }, "callbacks"));
 
 test("startup cancellation interrupts a stalled existing-owner handshake without launching", () =>
   fixture(async (owner) => {

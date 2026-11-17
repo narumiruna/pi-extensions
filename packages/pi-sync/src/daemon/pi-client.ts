@@ -323,7 +323,7 @@ export class PiDaemonClient {
     if (this.connection) {
       await recoverDetachedClients({ paths: this.connection.paths, identity: this.connection.identity });
       this.validate();
-      await this.connection.attach();
+      await this.connection.attach(this.signal);
       this.validate();
     }
   }
@@ -375,7 +375,7 @@ export class PiDaemonClient {
         });
         this.partialConnection = connection;
         try {
-          await connection.attach();
+          await connection.attach(startupSignal);
         } catch (error) {
           if (!(error instanceof DaemonError) || error.remote.name !== "DaemonStoppingError") throw error;
           // The final idle fence rejected publication, so this connection owns no queue grants.
@@ -438,7 +438,7 @@ export class PiDaemonClient {
     const connection = await this.connect(undefined, signal);
     if (this.paused && operation === "shutdown") {
       Object.assign(connection.facts, { ...this.facts(), idle: false, ready: false });
-      await connection.attach();
+      await connection.attach(signal ? AbortSignal.any([signal, this.signal]) : this.signal);
       this.validate();
     }
     this.validate();

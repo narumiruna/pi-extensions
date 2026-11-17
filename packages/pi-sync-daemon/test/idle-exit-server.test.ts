@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, vi } from "vitest";
-import { DaemonError, findDaemon, requestDaemon } from "../src/client.js";
+import { DaemonConnection, DaemonError, findDaemon, requestDaemon } from "../src/client.js";
 import { readIdentity, runtimePaths } from "../src/identity.js";
 import { IDLE_EXIT_GRACE_MS } from "../src/idle-exit.js";
 import { ParticipantAdmission } from "../src/participant-admission.js";
@@ -330,6 +330,13 @@ test("a client arriving after the final fence sees an authenticated closing erro
         (error: unknown) => error instanceof DaemonError && error.remote.name === "DaemonStoppingError",
       );
       assert.equal(await findDaemon(root), undefined);
+      const connection = new DaemonConnection(server.paths, server.identity, facts(root), {
+        callback: async () => true,
+      });
+      await assert.rejects(
+        connection.attach(),
+        (error: unknown) => error instanceof DaemonError && error.remote.name === "DaemonStoppingError",
+      );
       hold.resolve();
       await stopped;
     },

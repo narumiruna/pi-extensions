@@ -80,7 +80,7 @@ async function fixture(agentDir: string) {
       paths,
       identity,
       facts,
-      attach: vi.fn(async () => {
+      attach: vi.fn(async (_signal?: AbortSignal) => {
         events.push(`${label}:attach`);
         if (attachError) throw attachError;
       }),
@@ -152,6 +152,7 @@ test("run disposes the rejected unpublished connection and waits for owner exit 
     await f.enteredWait.promise;
     assert.deepEqual(f.events, ["old:ensure", "old:attach", "old:dispose", "old:wait"]);
     assert.equal(transport.ensure.mock.calls.length, 1);
+    assert.equal(f.connections[0]?.attach.mock.calls[0]?.[0], waitingSignal());
     assert.equal(transport.wait.mock.calls[0]?.[0], f.addresses[0]?.identity);
     assert.equal(waitingSignal().aborted, false);
     assert.equal(f.connections[0]?.run.mock.calls.length, 0);
