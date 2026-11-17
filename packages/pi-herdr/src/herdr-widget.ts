@@ -22,12 +22,14 @@ interface ObservedPane {
   title?: string;
 }
 
+export type HerdrWidgetState = HerdrAgentStatus | "error";
+
 export interface HerdrWidgetRow {
   agent: string;
   pane: string;
   paneId: string;
   space: string;
-  state: HerdrAgentStatus;
+  state: HerdrWidgetState;
   stateLabel: string;
   relation?: string;
 }
@@ -38,7 +40,8 @@ export interface HerdrWidgetSnapshot {
   rows: readonly HerdrWidgetRow[];
 }
 
-const STATE_ORDER: Record<HerdrAgentStatus, number> = {
+const STATE_ORDER: Record<HerdrWidgetState, number> = {
+  error: -1,
   blocked: 0,
   done: 1,
   working: 2,
@@ -207,8 +210,9 @@ export class HerdrWidgetModel {
   }
 }
 
-function stateStyle(theme: Theme, state: HerdrAgentStatus, text: string): string {
+function stateStyle(theme: Theme, state: HerdrWidgetState, text: string): string {
   switch (state) {
+    case "error":
     case "blocked":
       return theme.fg("error", text);
     case "done":
@@ -222,8 +226,10 @@ function stateStyle(theme: Theme, state: HerdrAgentStatus, text: string): string
   }
 }
 
-function stateSymbol(state: HerdrAgentStatus): string {
+function stateSymbol(state: HerdrWidgetState): string {
   switch (state) {
+    case "error":
+      return "!";
     case "blocked":
       return "×";
     case "done":

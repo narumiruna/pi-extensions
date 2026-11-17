@@ -1,1 +1,1 @@
-export { default } from "./herdr-agent-state.js";
+export { default } from "./herdr-integration.js";

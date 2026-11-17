@@ -2,21 +2,26 @@ import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 
 export function createHerdrMenu(options: {
   settingsPath: string;
+  backend?: "herdr" | "hc";
   isEnabled(): boolean;
   toggle(signal: AbortSignal): Promise<boolean>;
 }): MenuDefinition<undefined, "main" | "status" | "help", "toggle"> {
+  const hc = options.backend === "hc";
+  const label = hc ? "hc" : "Herdr";
   return {
     start: "main",
     screens: {
       // One setting stays on the main menu, matching /tool rather than adding a submenu.
       main: () => ({
         kind: "actions",
-        title: "Herdr",
+        title: label,
         items: [
           {
             id: "widget",
             label: `Agent widget: ${options.isEnabled() ? "On" : "Off"}`,
-            description: "Show or hide agents across all workspaces above the editor",
+            description: hc
+              ? "Show or hide reporting agents across the connected hc core and machines"
+              : "Show or hide agents across all workspaces above the editor",
             action: "toggle",
           },
           { id: "status", label: "Status", to: "status" },
@@ -27,19 +32,24 @@ export function createHerdrMenu(options: {
       }),
       status: () => ({
         kind: "detail",
-        title: "Herdr Status",
+        title: `${label} Status`,
         lines: [
           `Agent widget setting: ${options.isEnabled() ? "on" : "off"}`,
           "The widget appears only in TUI mode with recognized sibling agents.",
-          "Scope: all workspaces in the connected Herdr session.",
-          "Lifecycle and metadata reporting are independent of this setting.",
+          hc
+            ? "Scope: the connected hc core and its connected machines."
+            : "Scope: all workspaces in the connected Herdr session.",
+          hc
+            ? "Pi owns native OSC 7501 lifecycle reports; this setting changes only the widget."
+            : "Lifecycle and metadata reporting are independent of this setting.",
+          ...(hc ? ["Spawn annotations describe terminal ancestry, not Pi session identity or authority."] : []),
           `User settings file: ${options.settingsPath}`,
         ],
         hint: "back",
       }),
       help: () => ({
         kind: "detail",
-        title: "Herdr Help",
+        title: `${label} Help`,
         lines: [
           "Toggle Agent widget from /herdr. Changes are saved immediately; closing does not undo them.",
           "Manual pi-herdr.json changes apply after /reload or the next session start.",

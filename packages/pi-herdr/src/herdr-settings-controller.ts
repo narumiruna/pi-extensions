@@ -4,6 +4,8 @@ import { awaitHerdrSettingsWrites, herdrSettingsPath, readHerdrSettings, updateH
 
 export interface HerdrSettingsOptions {
   settingsPath?: string;
+  /** Selected transport, not a saved preference. */
+  backend?: "herdr" | "hc";
 }
 
 export function createHerdrSettingsController(
@@ -12,6 +14,7 @@ export function createHerdrSettingsController(
   options: HerdrSettingsOptions = {},
 ) {
   const settingsPath = options.settingsPath ?? herdrSettingsPath();
+  const label = options.backend === "hc" ? "hc" : "Herdr";
   let generation = 0;
   let owner: ExtensionContext | undefined;
   let controller = new AbortController();
@@ -21,7 +24,7 @@ export function createHerdrSettingsController(
   const current = (expected: number) => expected === generation && !controller.signal.aborted;
 
   pi.registerCommand("herdr", {
-    description: "Configure the Herdr agent widget",
+    description: `Configure the ${label} agent widget`,
     handler: async (args, ctx) => {
       if (args.trim()) throw new Error("/herdr does not accept arguments.");
       if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
@@ -42,6 +45,7 @@ export function createHerdrSettingsController(
           ctx,
           createHerdrMenu({
             settingsPath,
+            backend: options.backend,
             isEnabled: () => enabled,
             toggle: (actionSignal) => {
               const result = changes.then(async () => {
@@ -66,7 +70,7 @@ export function createHerdrSettingsController(
                   } finally {
                     if (current(expected))
                       ctx.ui.notify(
-                        "Herdr settings were not saved; the previous widget setting was restored. Check pi-herdr.json and its permissions.",
+                        `${label} settings were not saved; the previous widget setting was restored. Check pi-herdr.json and its permissions.`,
                         "warning",
                       );
                   }
@@ -85,7 +89,7 @@ export function createHerdrSettingsController(
             signal,
             isCurrent: () => current(expected),
             onError: () => {
-              if (current(expected)) ctx.ui.notify("The Herdr menu could not be displayed.", "error");
+              if (current(expected)) ctx.ui.notify(`The ${label} menu could not be displayed.`, "error");
             },
           },
         );
@@ -112,7 +116,7 @@ export function createHerdrSettingsController(
       enabled = loaded.settings.widget;
       if (loaded.kind === "invalid" && ctx.hasUI)
         ctx.ui.notify(
-          "Herdr ignored invalid pi-herdr.json settings and kept the widget enabled. Fix the file before saving.",
+          `${label} ignored invalid pi-herdr.json settings and kept the widget enabled. Fix the file before saving.`,
           "warning",
         );
       if (enabled && ctx.mode === "tui") observer.start(ctx);

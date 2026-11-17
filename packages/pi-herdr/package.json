@@ -1,7 +1,7 @@
 {
   "name": "@narumitw/pi-herdr",
   "version": "0.5.0",
-  "description": "Herdr lifecycle reporting, agent widget, and independent Pi peer collaboration.",
+  "description": "Herdr and hc agent status, independent Pi peers, and spawn relationships.",
   "type": "module",
   "license": "MIT",
   "private": false,
@@ -10,6 +10,8 @@
     "pi-extension",
     "pi",
     "herdr",
+    "hc",
+    "herdr-core",
     "terminal-multiplexer",
     "agent-orchestration"
   ],
