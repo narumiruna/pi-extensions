@@ -23,10 +23,9 @@ test("inactive state-only resume and reload leave ordinary context unchanged", a
   const sourceContext = createMockContext();
   await source.events.get("session_start")?.[0]?.({ reason: "startup" }, sourceContext.ctx);
   await source.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, sourceContext.ctx);
-  const persisted = source.entries.at(-1);
-  assert.ok(persisted);
+  assert.deepEqual(source.entries, []);
 
-  const branch = [{ type: "custom", ...persisted }];
+  const branch = [stateEntry({ enabled: false, awaitingAction: false })];
   const sessionManager = {
     getBranch: () => branch,
     getEntries: () => branch,
@@ -44,6 +43,8 @@ test("inactive state-only resume and reload leave ordinary context unchanged", a
       messages: unknown[];
     };
     assert.deepEqual(transformed.messages, messages, reason);
+    await resumed.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, resumedContext.ctx);
+    assert.deepEqual(resumed.entries, [], reason);
   }
 });
 
