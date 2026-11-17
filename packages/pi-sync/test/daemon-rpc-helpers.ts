@@ -23,10 +23,20 @@ export class SyncRpc {
   private sequence = 0;
   private closing = false;
   private closed = false;
+  private cancelled = false;
+  private disposal: Promise<void> | undefined;
+  private fail!: (error: Error) => void;
   private stderr = "";
   private partial = "";
 
-  constructor(root: string, cwd: string, extension: string, sessionDir?: string) {
+  constructor(
+    root: string,
+    cwd: string,
+    extension: string,
+    sessionDir?: string,
+    private readonly signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
     let ready!: () => void;
     let failReady!: (error: Error) => void;
     this.ready = new Promise<void>((resolve, reject) => {
@@ -67,6 +77,9 @@ export class SyncRpc {
           PI_CODING_AGENT_DIR: path.join(root, "agent"),
           PI_OFFLINE: "1",
           PI_TELEMETRY: "0",
+          // Share bytecode only; every child still owns fresh modules and session state.
+          NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE,
+          NODE_DISABLE_COMPILE_CACHE: process.env.NODE_DISABLE_COMPILE_CACHE,
         },
       },
     );
@@ -75,6 +88,11 @@ export class SyncRpc {
       for (const waiter of this.pending.values()) waiter.reject(error);
       this.pending.clear();
       for (const listener of this.listeners) listener({ type: "fixture_error", error: error.message });
+    };
+    this.fail = fail;
+    const cancel = () => {
+      this.cancelled = true;
+      this.terminate(new Error("Pi RPC fixture cancelled", { cause: signal?.reason }));
     };
     this.child.once("error", fail);
     this.child.stdin?.on("error", fail);
@@ -105,10 +123,12 @@ export class SyncRpc {
     this.exited = new Promise((resolve) =>
       this.child.once("close", (code, signal) => {
         this.closed = true;
-        if (!this.closing) fail(new Error(`Pi exited (${code ?? signal}): ${this.stderr}`));
+        this.signal?.removeEventListener("abort", cancel);
+        fail(new Error(`Pi exited (${code ?? signal}): ${this.stderr}`));
         resolve({ code, signal });
       }),
     );
+    signal?.addEventListener("abort", cancel, { once: true });
   }
   async start() {
     await this.ready;
@@ -116,22 +136,26 @@ export class SyncRpc {
   }
   async call(command: RpcCommand) {
     await this.ready;
-    if (this.closed) throw new Error(`Pi is closed: ${this.stderr}`);
+    this.signal?.throwIfAborted();
+    if (this.closed || this.closing) throw new Error(`Pi is closed: ${this.stderr}`);
     const id = `fixture-${++this.sequence}`;
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const response = new Promise<RecordValue>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      // The child's bootstrap readiness handshake precedes every request deadline.
-      deadline = setTimeout(() => reject(new Error(`RPC ${command.type} deadline exceeded: ${this.stderr}`)), 4_000);
+      // The child reports session startup before any request deadline begins.
+      deadline = setTimeout(
+        () => this.terminate(new Error(`RPC ${command.type} deadline exceeded: ${this.stderr}`)),
+        4_000,
+      );
     });
     void response.catch(() => {});
     try {
-      await new Promise<void>((resolve, reject) =>
+      const written = new Promise<void>((resolve, reject) =>
         this.child.stdin?.write(`${JSON.stringify({ ...command, id })}\n`, (error) =>
           error ? reject(error) : resolve(),
         ),
       );
-      const reply = await response;
+      const [, reply] = await Promise.all([written, response]);
       if (!reply.success) throw new Error(reply.error ?? `RPC ${command.type} failed`);
       return reply.data as Record<string, unknown>;
     } finally {
@@ -175,11 +199,40 @@ export class SyncRpc {
     }
   }
   async close() {
+    if (this.cancelled) {
+      await this.exited;
+      return;
+    }
+    await this.ready;
     if (!this.closing && !this.closed) {
       this.closing = true;
       this.child.stdin?.end();
     }
-    const result = await this.exited;
-    if (result.code !== 0) throw new Error(`Pi shutdown failed (${result.code ?? result.signal}): ${this.stderr}`);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new Error(`Pi shutdown deadline exceeded: ${this.stderr}`)), 4_000);
+      });
+      const result = await Promise.race([this.exited, timeout]);
+      if (result.code !== 0) throw new Error(`Pi shutdown failed (${result.code ?? result.signal}): ${this.stderr}`);
+    } catch (error) {
+      this.terminate(error instanceof Error ? error : new Error(String(error)));
+      await this.exited;
+      throw error;
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
+  dispose(): Promise<void> {
+    this.disposal ??= (async () => {
+      this.terminate(new Error("Pi RPC fixture disposed"));
+      await this.exited;
+    })();
+    return this.disposal;
+  }
+  private terminate(error: Error) {
+    this.closing = true;
+    this.fail(error);
+    if (!this.closed) this.child.kill("SIGKILL");
   }
 }
