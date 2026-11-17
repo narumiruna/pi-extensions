@@ -231,6 +231,8 @@ does not stage them automatically.
 
 See [test performance and isolation](./docs/test-performance.md) for package timing reports,
 cache behavior, and the reviewed shared-module test boundary.
+The [terminal and provider handoff](./docs/verification/terminal-and-provider-handoff.md) retains
+unverified external checks from completed UI changes.
 CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.
 See [dependency installation policy](./docs/dependency-installation.md) for script approvals, lockfile-age limitations,
 failed-update recovery, urgent-patch review, and toolchain upgrades.
