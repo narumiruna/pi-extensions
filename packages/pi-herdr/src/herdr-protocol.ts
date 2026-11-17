@@ -1,3 +1,9 @@
+import {
+  type HerdrSpawnProvenance,
+  herdrSessionFingerprint,
+  parseHerdrSpawnProvenance,
+} from "./herdr-spawn-provenance.js";
+
 export const HERDR_AGENT_STATUSES = ["idle", "working", "blocked", "done", "unknown"] as const;
 
 export type HerdrAgentStatus = (typeof HERDR_AGENT_STATUSES)[number];
@@ -7,6 +13,8 @@ export interface HerdrPane {
   workspaceId: string;
   tabId: string;
   terminalId: string;
+  sessionFingerprint?: string;
+  spawn?: HerdrSpawnProvenance;
   focused: boolean;
   revision: number;
   agent?: string;
@@ -106,11 +114,16 @@ export function parseHerdrPane(value: unknown): HerdrPane | undefined {
   ) {
     return undefined;
   }
+  const sessionFingerprint =
+    value.agent === "pi" ? herdrSessionFingerprint(terminalId, value.agent_session) : undefined;
+  const spawn = parseHerdrSpawnProvenance(value.tokens, terminalId, sessionFingerprint);
   return {
     paneId,
     workspaceId,
     tabId,
     terminalId,
+    ...(sessionFingerprint ? { sessionFingerprint } : {}),
+    ...(spawn ? { spawn } : {}),
     focused: value.focused,
     revision,
     agent: optionalString(value.agent),

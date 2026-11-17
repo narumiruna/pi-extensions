@@ -4,6 +4,7 @@ import { test, vi } from "vitest";
 import { createMockContext as createBaseContext } from "../../../test/support.js";
 import type { HerdrRequest } from "../src/herdr-client.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
+import { herdrSessionFingerprint } from "../src/herdr-spawn-provenance.js";
 import { HERDR_WIDGET_KEY } from "../src/herdr-widget.js";
 
 function createMockContext(overrides: Parameters<typeof createBaseContext>[0]) {
@@ -554,6 +555,54 @@ test("subscription rejection without a topology change remains bounded", async (
   } finally {
     await f.observer.shutdown(f.ctx);
   }
+});
+
+test("metadata invalidations re-read spawn identities and cannot replay stale relationships", async () => {
+  const f = fixture();
+  const originSession = { source: "herdr:pi", agent: "pi", kind: "id", value: "origin" };
+  const targetSession = { ...originSession, value: "target" };
+  f.state.current = pane("w1:p1", { agent_session: originSession });
+  const target = pane("w1:p2", { agent_session: targetSession });
+  const tokens = {
+    pi_spawn_v: "1",
+    pi_spawn_origin: f.state.current.terminal_id,
+    pi_spawn_from: herdrSessionFingerprint(f.state.current.terminal_id, originSession),
+    pi_spawn_to: herdrSessionFingerprint(target.terminal_id, targetSession),
+    pi_spawn_label: "initiator",
+  };
+  const recordedTarget = pane("w1:p2", { agent_session: targetSession, tokens });
+  f.state.panes = [f.state.current, target];
+  f.observer.start(f.ctx);
+  try {
+    await f.ready();
+    assert.doesNotMatch(f.text(), /spawned/);
+    const initialReads = f.state.listReads;
+    f.state.panes = [f.state.current, recordedTarget];
+    f.emit({ event: "pane_updated", data: { pane: target } });
+    await until(() => f.state.listReads > initialReads && f.text().includes("spawned by you"));
+    const reads = f.state.listReads;
+    f.state.panes = [
+      f.state.current,
+      pane("w1:p2", { agent_session: { ...targetSession, value: "replacement" }, tokens }),
+    ];
+    f.emit({ event: "pane_updated", data: { pane: recordedTarget } });
+    await until(() => f.state.listReads > reads && !f.text().includes("spawned"));
+    assert.equal(f.state.maxActiveLists, 1);
+    const afterReplacement = f.state.listReads;
+    f.state.current = pane("w1:p1", { agent_session: { ...originSession, value: "new-origin" } });
+    f.state.panes = [f.state.current, recordedTarget];
+    f.emit({ event: "pane_updated", data: { pane: recordedTarget } });
+    await until(() => f.state.listReads > afterReplacement && f.text().includes("unavailable"));
+    assert.doesNotMatch(f.text(), /spawned by you/);
+    f.subscriptions.at(-1)?.fail();
+    await until(() => f.state.subscribeAttempts === 2);
+    await f.ready();
+    assert.match(f.text(), /unavailable/);
+  } finally {
+    await f.observer.shutdown(f.ctx);
+  }
+  assert.equal(f.widgets.get(HERDR_WIDGET_KEY), undefined);
+  assert.equal(f.state.activeLists, 0);
 });
 
 test("shutdown cancels reconnect backoff and repeated cleanup leaves no resources", async () => {

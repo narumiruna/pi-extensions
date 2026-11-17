@@ -2,13 +2,14 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-herdr)](https://www.npmjs.com/package/@narumitw/pi-herdr) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Connect Pi's interactive lifecycle to Herdr, publish pane metadata, and show sibling agent status.
+Connect Pi's interactive lifecycle to Herdr, show agent status and spawn relationships, and coordinate independent Pi peers.
 
 ## ✨ Features
 
 - Reports Pi session identity and `working`, `blocked`, and `idle` lifecycle states to the current Herdr pane.
 - Publishes bounded `model`, `provider`, `thinking`, `session`, and `context_usage` tokens for Herdr sidebar rows.
-- Shows recognized sibling agents across all workspaces in the connected Herdr session in a passive widget above Pi's editor, with a saved visibility toggle in `/herdr`.
+- Shows recognized agents and verified spawn relationships across all workspaces in the connected Herdr session in a passive widget above Pi's editor, with a saved visibility toggle in `/herdr`.
+- Bundles a `pi-herdr` skill for fully independent parallel work and symmetric peer communication through native Herdr terminal prompts.
 - Refreshes the widget on Herdr pane, workspace-name, and agent-status updates without polling the CLI.
 - Coalesces rapid state changes and retries short-lived local socket failures without interrupting Pi.
 - Derives blocked state from Pi's public `ui_prompt_start` and `ui_prompt_end` lifecycle events.
@@ -45,6 +46,9 @@ Start Pi inside a Herdr-managed pane after installing the package.
 The extension activates automatically when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present.
 When any workspace in the connected Herdr session contains another recognized agent, Pi shows its state and workspace in a widget above the editor.
 
+For independent parallel work, run `/skill:pi-herdr` and describe the tasks.
+The skill checks independence and ownership before using its bundled helper to start an unfocused Pi peer; the widget adds spawn annotations when session identity can be verified.
+
 If the standalone integration is already installed, remove it after installing this package to avoid duplicate state reports:
 
 ```bash
@@ -59,6 +63,18 @@ Run `/reload` or restart Pi after changing the installed resources.
 It accepts no arguments and is available inside Herdr in TUI and RPC modes; print and JSON modes reject it.
 RPC can save the preference but does not display the widget.
 Changes apply immediately and closing the menu does not undo saved changes.
+
+## 🧠 Skills
+
+The bundled [`pi-herdr` skill](./skills/pi-herdr/SKILL.md) starts equal-standing Pi peers for authorized, fully independent tasks and exchanges progress, questions, answers, and results.
+Run `/skill:pi-herdr` explicitly, or let Pi select it for independent parallel work inside Herdr.
+Unlike the upstream generic Herdr skill, this Pi-specific workflow does not require an explicit request to use Herdr; user restrictions still apply.
+It does not restore the removed generic `herdr` or `hc` skills or depend on another extension.
+
+Each task must own disjoint mutable resources, including generated output, shared build directories, Git operations, and external state, and must not need another active task's intermediate results.
+The initiator must have useful non-overlapping work to do while the peer works.
+Coupled work stays sequential; no Git worktrees are created.
+See the skill for self-contained task requirements, the [spawn helper](./skills/pi-herdr/scripts/spawn-peer.mjs), safe terminal messaging, recovery, and result verification.
 
 ## ⚙️ Settings
 
@@ -97,19 +113,27 @@ Herdr ignores official-source release requests, while authority clearing also re
 
 ## 🏷️ Pane metadata
 
-The extension publishes only the `model`, `provider`, `thinking`, `session`, and `context_usage` token keys through `pane.report_metadata` under the `herdr:pi` source.
+Lifecycle integration publishes the `model`, `provider`, `thinking`, `session`, and `context_usage` token keys through `pane.report_metadata` under the `herdr:pi` source.
 `model` and `provider` come from Pi's selected model, `thinking` comes from Pi's effective Thinking level, and `session` comes only from Pi's explicit session display name.
 `context_usage` is Pi's current context percentage rounded to the nearest whole percent.
-Every report is a full five-key patch, and an unavailable value is sent as JSON `null` so old data is cleared instead of retained.
+Each lifecycle metadata report is a full five-key patch, and an unavailable value is sent as JSON `null` so old data is cleared instead of retained.
 Values are stripped of terminal controls, trimmed, and limited to 80 Unicode characters before crossing the socket.
 The extension never publishes prompts, conversation text, tool arguments, credentials, raw session paths, or inferred session titles as metadata tokens.
 It also never sets Herdr's pane `title`, `display_agent`, `state_labels`, agent lifecycle state, or session restore fields through metadata.
 
 Metadata is evaluated after `session_start`, `session_info_changed`, `model_select`, `thinking_level_select`, `agent_settled`, and successful `session_compact` events.
-Unchanged event snapshots are suppressed, rapid changes are coalesced, and the latest unchanged snapshot is refreshed no more often than every 30 minutes.
+Unchanged ordinary event snapshots are suppressed, rapid changes are coalesced, and the latest unchanged snapshot is refreshed no more often than every 30 minutes.
+Session start forces a TTL refresh after the session report completes so observers re-read session identity even when Herdr emits no dedicated identity-change event.
 Each token has a one-hour TTL, so data from a crashed Pi process expires without steady socket traffic.
 Orderly shutdown sends one best-effort five-key clear patch, while abrupt shutdown and failed clears fall back to the TTL.
 Metadata uses the lifecycle reporter's monotonic sequence allocator and bounded best-effort sender, so older delayed reports cannot replace newer accepted values and socket failures never interrupt Pi.
+
+The skill's spawn helper separately records versioned provenance under a package-owned metadata source before submitting the task.
+Relationships are scoped to terminal identity and session-reference digests, not names or pane layout, and publish no raw session paths or task text.
+They describe who started a session, not authority or process ownership; a replacement session must not inherit an old relationship.
+These five `pi_spawn_*` keys have no TTL and are separate from the lifecycle keys, but share Herdr's terminal-level token map with all sources.
+They survive moves and session changes in the running server; the widget validates the target session before displaying them, and records are not restored after a Herdr server restart.
+See [Peer spawn provenance](./docs/peer-provenance.md) for the wire contract, refresh ordering, deterministic presentation evidence, and remaining external checks.
 
 Herdr custom pane tokens use a `$name` row entry.
 For example, this Herdr configuration displays Pi's model context without replacing pane labels or agent identity:
@@ -133,6 +157,10 @@ Agent identity prefers the name assigned by `herdr agent rename`, then Herdr dis
 Pane identity uses its label or metadata title with a short pane ID, while workspace identity uses its label with a short workspace ID.
 Terminal titles are not used as agent identity.
 The widget orders agents by `blocked`, `done`, `working`, `idle`, and `unknown`, shows at most five rows, and reports any remaining count.
+Verified spawn annotations use muted text: `spawned by you`, `spawned you`, or `spawned by <peer>`.
+The list stays flat and status-prioritized; provenance confers no privileges.
+Relationships are resolved from the full recognized-agent snapshot before excluding the current pane or limiting rows, so a hidden origin can still be named.
+Missing or mismatched identity evidence does not create a relationship.
 A state label published through Herdr metadata can replace the raw state name.
 Herdr's public pane responses do not expose the blocked prompt message, so the widget cannot show that reason.
 The widget does not focus panes, read terminal output, send prompts, or mark a background `done` state as seen.
@@ -160,16 +188,28 @@ Events from every workspace in the connected Herdr session can refresh the widge
 The extension strips terminal controls at the display boundary and never reads sibling terminal output for the widget.
 The package does not authenticate the endpoint, so trust the environment that launches Pi and controls these variables.
 
+The peer workflow runs another independent Pi session with ordinary user permissions and can incur provider costs.
+Do not assume it inherits the initiator's conversation, model, thinking level, runtime credentials, or extension state.
+The helper requires nonblank inherited pane and socket bindings, explicitly loads this package and skill, and never bypasses project trust or passes credentials on command lines.
+It preserves unrelated extension discovery and supports a source-only Git installation; package-directory loading still requires the documented build.
+Copies of this package use a process-local public event-bus claim to avoid duplicate reporters when both source and generated resources are discovered.
+Provenance tokens contain bounded identity information and session-reference digests, not prompts or credentials; they do not authenticate peers.
+Peer messages are untrusted peer content, not user permission to approve prompts or expand scope.
+The passive widget never reads terminal output, but following the skill's messaging and recovery steps can read peer terminal history.
+
 ## 🚧 Limitations
 
 - Lifecycle reporting, metadata reporting, and the agent widget are disabled in RPC, JSON, and print modes.
 - The widget has no settings for placement, workspace scope, or row count; it does not discover other Herdr sessions or saved machines.
-- After loading an updated build, a terminal operator should check cross-workspace labels, regular/fullscreen appearance, and mouse disclosure; automated tests cannot verify physical terminal behavior.
+- Native peer prompts send terminal text and Enter, not mailbox messages. Delivery can interact with drafts, approvals, foreground processes, and custom Enter bindings. Ordinary Enter in a working Pi steers its next model step; submission acknowledgement does not prove consumption or completion, and results are not automatically forwarded.
+- Physical regular/fullscreen visual acceptance remains unverified. After loading an updated build, a terminal operator should check provenance labels, cross-workspace moves, rename, narrow widths, focus, mouse disclosure, and user takeover; deterministic captures cannot verify physical terminal behavior.
+- Optional paid-provider end-to-end collaboration remains unverified without explicit account-owner authorization and a live two-peer check. Deterministic tests do not establish provider entitlement, latency, or model compliance with the skill's independence policy.
 - The widget cannot show blocked prompt text because Herdr does not expose it through public pane responses.
 - The widget requires compatible pane and workspace subscriptions; unsupported subscriptions hide the widget without disabling lifecycle or metadata reporting.
 - A pane-label change appears on its next update event or authoritative refresh; an agent rename emits a pane-update event.
 - Integration requires a running compatible Herdr session and valid injected environment variables.
 - Socket failures are intentionally silent after the bounded retry.
+- Older Herdr integrations without the runtime-claim protocol must not be enabled alongside this package; remove the legacy integration as described in Quick start.
 - The package does not install, start, update, or configure Herdr itself.
 
 ## 🗂️ Package layout
@@ -180,13 +220,15 @@ packages/pi-herdr/
 │   ├── index.ts                       # Thin repository entrypoint
 │   └── herdr-agent-state.ts           # Herdr lifecycle integration
 ├── dist/                              # Generated TypeScript runtime loaded by Pi
-├── scripts/                           # Deterministic runtime builder
-└── test/                              # Behavior and lifecycle coverage
+├── scripts/                           # Runtime builder and isolated contract probe
+├── docs/                              # Provenance contract and verification handoff
+├── skills/pi-herdr/                   # Published peer workflow and self-contained scripts
+└── test/                              # Behavior, lifecycle, and resource coverage
 ```
 
 ## 🔎 Keywords
 
-Pi, Herdr, terminal multiplexer, coding agents, agent status, lifecycle state, pane metadata.
+Pi, Herdr, terminal multiplexer, coding agents, independent peers, spawn provenance, agent status, lifecycle state, pane metadata.
 
 ## 📄 License
 

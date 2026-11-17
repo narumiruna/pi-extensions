@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { HerdrAgentStatus, HerdrPane, HerdrWorkspace } from "./herdr-protocol.js";
+import type { HerdrSpawnProvenance } from "./herdr-spawn-provenance.js";
 
 export const HERDR_WIDGET_KEY = "herdr:agents";
 export const MAX_HERDR_WIDGET_AGENTS = 5;
@@ -9,6 +10,9 @@ export const MAX_HERDR_WIDGET_AGENTS = 5;
 interface ObservedPane {
   paneId: string;
   workspaceId: string;
+  terminalId: string;
+  sessionFingerprint?: string;
+  spawn?: HerdrSpawnProvenance;
   agent?: string;
   agentName?: string;
   agentStatus: HerdrAgentStatus;
@@ -25,6 +29,7 @@ export interface HerdrWidgetRow {
   space: string;
   state: HerdrAgentStatus;
   stateLabel: string;
+  relation?: string;
 }
 
 export interface HerdrWidgetSnapshot {
@@ -45,6 +50,9 @@ function observedPane(pane: HerdrPane): ObservedPane {
   return {
     paneId: pane.paneId,
     workspaceId: pane.workspaceId,
+    terminalId: pane.terminalId,
+    sessionFingerprint: pane.sessionFingerprint,
+    spawn: pane.spawn ? { ...pane.spawn } : undefined,
     agent: pane.agent,
     agentName: pane.agentName,
     agentStatus: pane.agentStatus,
@@ -94,6 +102,61 @@ function rowForPane(pane: ObservedPane, workspace: HerdrWorkspace): HerdrWidgetR
   };
 }
 
+function spawnRelations(panes: readonly ObservedPane[], currentPaneId: string): Map<string, string> {
+  const identities = new Map<string, ObservedPane | undefined>();
+  const key = (terminal: string, session: string) => JSON.stringify([terminal, session]);
+  for (const pane of panes) {
+    if (pane.agent !== "pi" || !pane.sessionFingerprint) continue;
+    const identity = key(pane.terminalId, pane.sessionFingerprint);
+    // Ambiguous identities must not resolve to an arbitrary live origin.
+    identities.set(identity, identities.has(identity) ? undefined : pane);
+  }
+  const origins = new Map<string, ObservedPane>();
+  const records = new Map<string, HerdrSpawnProvenance>();
+  for (const pane of panes) {
+    const spawn = pane.spawn;
+    if (
+      pane.agent !== "pi" ||
+      !pane.sessionFingerprint ||
+      !spawn ||
+      spawn.targetSession !== pane.sessionFingerprint ||
+      spawn.originTerminalId === pane.terminalId
+    )
+      continue;
+    records.set(pane.paneId, spawn);
+    const origin = identities.get(key(spawn.originTerminalId, spawn.originSession));
+    if (origin) origins.set(pane.paneId, origin);
+  }
+  const cyclic = (id: string): boolean => {
+    const visited = new Set<string>();
+    let next: string | undefined = id;
+    while (next !== undefined) {
+      if (visited.has(next)) return true;
+      visited.add(next);
+      next = origins.get(next)?.paneId;
+    }
+    return false;
+  };
+  const currentOrigin = cyclic(currentPaneId) ? undefined : origins.get(currentPaneId);
+  const relations = new Map<string, string>();
+  for (const pane of panes) {
+    const labels: string[] = [];
+    const spawn = records.get(pane.paneId);
+    if (spawn && !cyclic(pane.paneId)) {
+      const origin = origins.get(pane.paneId);
+      const label = origin
+        ? origin.paneId === currentPaneId
+          ? "you"
+          : `${agentDisplay(origin)}/${paneDisplay(origin)}`
+        : `${safeDisplay(spawn.originLabel) ?? "previous agent"} (unavailable)`;
+      labels.push(`spawned by ${label}`);
+    }
+    if (currentOrigin?.paneId === pane.paneId) labels.push("spawned you");
+    if (labels.length > 0) relations.set(pane.paneId, labels.join("; "));
+  }
+  return relations;
+}
+
 function immutableSnapshot(rows: HerdrWidgetRow[]): HerdrWidgetSnapshot | undefined {
   if (rows.length === 0) return undefined;
   const visible = rows.slice(0, MAX_HERDR_WIDGET_AGENTS).map((row) => Object.freeze({ ...row }));
@@ -113,6 +176,7 @@ export class HerdrWidgetModel {
     this.currentPaneId = currentPane.paneId;
     this.workspaces = new Map(workspaces.map((workspace) => [workspace.workspaceId, { ...workspace }]));
     this.panes = new Map(panes.map((pane) => [pane.paneId, observedPane(pane)]));
+    if (!this.panes.has(currentPane.paneId)) this.panes.set(currentPane.paneId, observedPane(currentPane));
   }
 
   clear(): void {
@@ -123,9 +187,15 @@ export class HerdrWidgetModel {
 
   snapshot(): HerdrWidgetSnapshot | undefined {
     if (!this.currentPaneId) return undefined;
-    const rows = [...this.panes.values()]
+    const panes = [...this.panes.values()];
+    const relations = spawnRelations(panes, this.currentPaneId);
+    const rows = panes
       .filter((pane) => pane.paneId !== this.currentPaneId && pane.agent !== undefined)
-      .map((pane) => rowForPane(pane, this.workspaces.get(pane.workspaceId) ?? { workspaceId: pane.workspaceId }));
+      .map((pane) => {
+        const row = rowForPane(pane, this.workspaces.get(pane.workspaceId) ?? { workspaceId: pane.workspaceId });
+        const relation = relations.get(pane.paneId);
+        return relation ? { ...row, relation } : row;
+      });
     rows.sort(
       (left, right) =>
         STATE_ORDER[left.state] - STATE_ORDER[right.state] ||
@@ -186,7 +256,8 @@ export function createHerdrWidget(
         const agent = theme.bold(theme.fg("text", row.agent));
         const pane = theme.fg("muted", row.pane);
         const space = theme.fg("dim", row.space);
-        lines.push(`${state}  ${agent}${separator}${pane}${separator}${space}`);
+        const relation = row.relation ? `${separator}${theme.fg("muted", row.relation)}` : "";
+        lines.push(`${state}  ${agent}${separator}${pane}${separator}${space}${relation}`);
       }
       if (snapshot.hiddenAgents > 0) {
         lines.push(theme.fg("dim", `+${snapshot.hiddenAgents} more`));

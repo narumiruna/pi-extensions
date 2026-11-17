@@ -1,7 +1,7 @@
 {
   "name": "@narumitw/pi-herdr",
   "version": "0.5.0",
-  "description": "Herdr lifecycle reporting, pane metadata, and agent widget for Pi.",
+  "description": "Herdr lifecycle reporting, agent widget, and independent Pi peer collaboration.",
   "type": "module",
   "license": "MIT",
   "private": false,
@@ -16,6 +16,8 @@
   "files": [
     "src",
     "dist",
+    "docs",
+    "skills",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -23,6 +25,9 @@
   "pi": {
     "extensions": [
       "./dist/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "scripts": {
