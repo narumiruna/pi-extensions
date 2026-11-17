@@ -4,6 +4,24 @@ The `pi-herdr` skill starts independent, equal-standing Pi sessions.
 The spawn helper records who initiated a session; the widget reads that record without controlling the agents.
 Neither a spawn edge nor a peer message grants authority.
 
+## Native startup contract
+
+The helper keeps Herdr's official `pane split` → `agent start --kind pi` → `agent prompt` flow.
+It creates an unfocused sibling in the same cwd and requires native `interactive_ready=true`, idle/done state, no pending launch, and matching live identities before recording provenance or submitting a task.
+A failed or incomplete native startup stops the attempt; there is no `pane.run`, manual-launch/rename, or relaxed-readiness fallback.
+Manual launch does not establish native managed-start readiness.
+
+Trust the project, the new pane's shell startup, and its Pi executable/interpreter lookup before creating a pane.
+Herdr selects bare `pi` in that shell; its public native-start API has no absolute-executable override.
+The helper's absolute Node and Herdr paths do not constrain the server-owned shell or its command lookup.
+A project-local executable, shell startup file, or relative/project `PATH` can therefore execute code before identity checks, readiness checks, or Pi project trust apply.
+Those later checks cannot undo an unintended launch, and tests do not establish hostile-checkout protection.
+
+**Release restriction:** the Pi executable-selection security finding remains open, and the PR stays draft.
+The user chose native managed startup rather than a manual-launch readiness contract; that choice does not fix this risk.
+Herdr upstream must provide a public executable override with supported shell/interpreter semantics, and the package maintainer must then validate trusted executable selection and shell startup without losing native readiness.
+Do not merge or publish this feature while that finding is unresolved.
+
 ## Wire record
 
 The helper patches five public Herdr pane tokens with source `pi-herdr:spawn:v1` and no TTL:
@@ -98,6 +116,7 @@ When Herdr is installed and the caller is already in a managed pane, run the rep
 On a Unix-like host with `/bin/sh`, the probe creates a uniquely named headless session and an inert shell process recognized as Pi, waits for readiness, and uses only that isolated session's public API.
 It opens no TUI and makes no model request.
 It checks native identity acquisition, shared token patches, TTL expiry/cancellation, metadata invalidations, identity replacement, move, rename, unchanged-identity re-report, and owned-key clearing, then stops and deletes its named session.
+The inert fixture uses `pane.run`; this probe validates the public metadata/identity contract, not `agent.start`, its executable selection, or native managed readiness.
 Do not restart a probe containing synthetic native session references because Herdr could try to resume them.
 The contract was checked against the installed Herdr release and its [exact upstream implementation](https://github.com/herdrdev/herdr/tree/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01), including `src/terminal/state.rs`, `src/metadata_tokens.rs`, `src/app/api_helpers.rs`, and `src/app/api/panes.rs`.
 Recheck the installed contract after an upstream compatibility change rather than assuming token or identity behavior from the schema alone.

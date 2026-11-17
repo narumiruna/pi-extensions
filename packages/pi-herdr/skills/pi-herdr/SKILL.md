@@ -2,7 +2,7 @@
 name: pi-herdr
 description: Start equal-standing Pi peers and exchange progress, questions, and results through Herdr for fully independent parallel work. Use inside a verified Herdr-managed pane (HERDR_ENV=1) when useful concurrent tasks have disjoint mutable resources; not for dependent work or generic terminal management.
 license: MIT
-compatibility: Requires Node.js, Pi, a compatible running Herdr session, and the herdr CLI on PATH.
+compatibility: Requires trusted Node.js, Herdr, and peer shell/Pi lookup, plus a compatible running Herdr session.
 ---
 
 # Pi peers through Herdr
@@ -64,6 +64,12 @@ After a rename, move, or replacement, refresh `pane current`, `agent list`, and 
 
 ## Prepare and start one peer
 
+Before creating a pane, verify that the project, the new pane's shell startup, and its `pi` command lookup are trusted.
+The native flow is `pane split` → `agent start --kind pi` → `agent prompt`; Herdr selects bare `pi` in the peer shell and has no public absolute-executable override.
+The helper's verified Node and Herdr paths do not constrain that shell, Pi lookup, or interpreter chain.
+Later identity/readiness checks and Pi project trust cannot undo code already executed during pane creation or launch.
+If this trust cannot be established, stop; do not run a project candidate as a test or claim protection in a hostile checkout.
+
 Write a self-contained UTF-8 task input file at an absolute path you own.
 Include all of the following:
 
@@ -91,6 +97,8 @@ It uses the generated package entrypoint when available or the source forwarder 
 Do not create tabs, workspaces, or a different cwd without an explicit user request.
 Treat its JSON result as a submission acknowledgement, not proof of consumption, completion, or successful checks.
 On failed or ambiguous startup, preserve the reported IDs and inspect the known pane and agent before any retry; never blindly submit the same task again.
+Keep native managed readiness: the peer must report `interactive_ready=true`, idle/done state, and no pending launch before provenance or task submission.
+Do not fall back to `pane run`, manual launch plus rename, or relaxed readiness when startup fails; those paths do not provide native managed-start readiness.
 Do not replace this flow with manual spawning that omits startup or provenance checks.
 
 ## Exchange peer messages safely

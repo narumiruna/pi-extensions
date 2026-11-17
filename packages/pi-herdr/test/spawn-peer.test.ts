@@ -487,6 +487,28 @@ test("rejects malformed split, fresh-pane takeover, and missing post-start ident
   }
 });
 
+test("native startup requires explicit managed readiness and never falls back to manual launch", async () => {
+  for (const mode of ["startup-error", "missing", "null", "false", "string"]) {
+    const f = fixture();
+    if (mode === "missing") delete f.state.target.interactive_ready;
+    if (mode === "null") f.state.target.interactive_ready = null;
+    if (mode === "false") f.state.target.interactive_ready = false;
+    if (mode === "string") f.state.target.interactive_ready = "true";
+    if (mode === "startup-error") {
+      f.state.after = (args) => {
+        if (args[0] === "agent" && args[1] === "start") throw new Error("native startup failed");
+        return undefined;
+      };
+    }
+    const details = await failed(f);
+    assert.equal(details.paneId, "w1:p2");
+    assert.equal(details.submissionAttempted, false);
+    assert.deepEqual(commandNames(mutations(f.calls)), ["pane split", "agent start"]);
+    assert.equal(commandNames(f.calls).filter((name) => name === "agent start").length, 1);
+    assert.ok(!commandNames(f.calls).some((name) => ["pane run", "agent rename"].includes(name)));
+  }
+});
+
 test("blocks unsafe readiness, focus, renames and identity replacement both before report and before submission", async () => {
   for (const afterReport of [false, true]) {
     for (const mode of [
@@ -495,6 +517,9 @@ test("blocks unsafe readiness, focus, renames and identity replacement both befo
       "unknown",
       "focused",
       "not-ready",
+      "missing-ready",
+      "null-ready",
+      "string-ready",
       "launch-pending",
       "invalid-pending",
       "renamed",
@@ -511,6 +536,9 @@ test("blocks unsafe readiness, focus, renames and identity replacement both befo
         if (["blocked", "working", "unknown"].includes(mode)) f.state.target.agent_status = mode;
         if (mode === "focused") f.state.target.focused = true;
         if (mode === "not-ready") f.state.target.interactive_ready = false;
+        if (mode === "missing-ready") delete f.state.target.interactive_ready;
+        if (mode === "null-ready") f.state.target.interactive_ready = null;
+        if (mode === "string-ready") f.state.target.interactive_ready = "true";
         if (mode === "launch-pending") f.state.target.launch_pending = true;
         if (mode === "invalid-pending") f.state.target.launch_pending = "unknown";
         if (mode === "renamed") f.state.target.name = "other";

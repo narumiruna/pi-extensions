@@ -68,6 +68,9 @@ function requireEnvironment(env) {
     throw new Error("HERDR_ENV=1, HERDR_PANE_ID, and HERDR_SOCKET_PATH are required before Herdr control calls");
 }
 
+// Only this bounded, task-free setup error may cross the CLI-call error boundary.
+class HerdrExecutableError extends Error {}
+
 /** Resolve without executing checkout-controlled candidates or Windows' implicit cwd lookup. */
 export async function resolveHerdrExecutable({
   env = process.env,
@@ -101,7 +104,7 @@ export async function resolveHerdrExecutable({
       if (!["ENOENT", "ENOTDIR", "EACCES", "ELOOP"].includes(error.code)) throw error;
     }
   }
-  throw new Error(
+  throw new HerdrExecutableError(
     `No trusted absolute Herdr executable outside the project ${displayText(project, 512)} was found on PATH`,
   );
 }
@@ -331,7 +334,8 @@ export async function spawnPeer(
       let stdout;
       try {
         stdout = await run(args, { signal });
-      } catch {
+      } catch (error) {
+        if (error instanceof HerdrExecutableError) throw error;
         throw new Error(`${stage} failed, timed out, or was cancelled; inspect known state before retrying`);
       }
       if (typeof stdout !== "string" || Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) {
@@ -425,6 +429,8 @@ export async function spawnPeer(
     freshPane(created, fresh, cwd);
     await verifyOrigin();
     freshPane((await call(["pane", "get", fresh.paneId], "Fresh pane verification")).pane, fresh, cwd);
+    // Keep native managed readiness: pane.run plus rename is not equivalent.
+    // Herdr chooses bare `pi` in the peer shell; that lookup must be trusted.
     await call(
       [
         "agent",

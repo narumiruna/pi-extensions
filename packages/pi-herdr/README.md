@@ -46,8 +46,9 @@ Start Pi inside a Herdr-managed pane after installing the package.
 The extension activates automatically when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present.
 When any workspace in the connected Herdr session contains another recognized agent, Pi shows its state and workspace in a widget above the editor.
 
-For independent parallel work, run `/skill:pi-herdr` and describe the tasks.
-The skill checks independence and ownership before using its bundled helper to start an unfocused Pi peer; the widget adds spawn annotations when session identity can be verified.
+For independent parallel work in a trusted project and peer-shell environment, run `/skill:pi-herdr` and describe the tasks.
+The skill checks independence and ownership before using its bundled helper to start an unfocused Pi peer through native Herdr `agent.start`; the widget adds spawn annotations when session identity can be verified.
+Herdr selects bare `pi` in the peer shell, so do not use this spawn flow in a hostile checkout; see [Security and privacy](#-security-and-privacy).
 
 If the standalone integration is already installed, remove it after installing this package to avoid duplicate state reports:
 
@@ -193,7 +194,14 @@ Do not assume it inherits the initiator's conversation, model, thinking level, r
 The helper requires nonblank inherited pane and socket bindings and resolves an absolute Herdr executable outside the checkout, including Git ancestors and symlink targets.
 It ignores relative `PATH` entries and avoids Windows' implicit current-directory executable search; skill preflight and the contract probe use the same resolver.
 Skill examples invoke the helper through a verified absolute Node executable, not a bare `node` lookup, and repeat their shell-local setup for each tool call.
-Preflight failures identify the rejecting project root on stderr while leaving stdout empty.
+Preflight failures identify the rejecting project root on stderr while leaving stdout empty; direct spawn failures retain that bounded diagnostic in their JSON error.
+
+Native `agent.start --kind pi` preserves Herdr's managed readiness but selects bare `pi` in the peer shell, with no public absolute-executable override.
+Trust the project, peer-shell startup, Pi command lookup, and interpreter chain before creating a pane.
+The Node/Herdr path checks do not constrain that launch, and later identity checks or Pi project trust cannot undo unintended execution.
+Hostile-checkout spawning remains an unresolved security limitation; the helper does not fall back to `pane.run` or weaken readiness checks.
+See [Native startup contract](./docs/peer-provenance.md#native-startup-contract) for the upstream dependency and release restriction.
+
 The helper explicitly loads this package and skill without bypassing project trust or passing credentials on command lines.
 It preserves unrelated extension discovery and supports a source-only Git installation; package-directory loading still requires the documented build.
 Copies of this package use a process-local public event-bus claim to avoid duplicate reporters when both source and generated resources are discovered.

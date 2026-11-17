@@ -13,6 +13,7 @@ const helper = (await import(
 )) as {
   resolveHerdrExecutable(options?: ResolverOptions): Promise<string>;
   createRunner(options: RunnerOptions): (args: string[]) => Promise<string>;
+  spawnPeer(options: { name: string; taskFile: string }, dependencies: Record<string, unknown>): Promise<unknown>;
   parseArguments(args: string[]): unknown;
   runCli(args: string[], dependencies: Record<string, unknown>): Promise<number>;
 };
@@ -156,6 +157,66 @@ test("preflight errors name the rejecting Git root on stderr with empty stdout",
   assert.deepEqual(output, []);
   assert.ok(errors.join("").includes(await realpath(f.project)));
   assert.doesNotMatch(errors.join(""), /Invalid arguments/u);
+});
+
+test("direct spawn and CLI JSON retain only the safe resolver rejection without executing checkout candidates", async () => {
+  const f = await fixture();
+  await mkdir(join(f.cwd, ".git"));
+  await f.candidate(f.local);
+  const env = { HERDR_ENV: "1", HERDR_PANE_ID: "pane", HERDR_SOCKET_PATH: "/unused", PATH: f.local };
+  const task = "private task text and argv must not appear in failures";
+  let executions = 0;
+  const run = helper.createRunner({
+    cwd: f.cwd,
+    env,
+    execFileImpl() {
+      executions += 1;
+      throw new Error(task);
+    },
+  });
+  const options = { name: "reviewer", taskFile: resolve(f.root, "task.txt") };
+  const dependencies = { env, cwd: f.cwd, run, readTask: async () => task, assertResources: async () => {} };
+  const root = await realpath(f.project);
+  await assert.rejects(helper.spawnPeer(options, dependencies), (error: Error) => {
+    assert.match(error.message, /No trusted absolute Herdr executable/u);
+    assert.ok(error.message.includes(root));
+    assert.ok(!error.message.includes(task));
+    return true;
+  });
+  const output: string[] = [];
+  const errors: string[] = [];
+  assert.equal(
+    await helper.runCli(["--name", options.name, "--task-file", options.taskFile], {
+      stdout: { write: (value: string) => output.push(value) },
+      stderr: { write: (value: string) => errors.push(value) },
+      signals: new EventEmitter(),
+      spawn: () => helper.spawnPeer(options, dependencies),
+    }),
+    1,
+  );
+  const failure = JSON.parse(output.join("")) as { error: string; submissionAttempted: boolean };
+  assert.ok(failure.error.includes(root));
+  assert.equal(failure.submissionAttempted, false);
+  assert.ok(!output.join("").includes(task));
+  assert.deepEqual(errors, []);
+  assert.equal(executions, 0);
+
+  // An arbitrary error with the same name is not our private, task-free resolver error.
+  const spoofed = new Error(`Herdr lookup failed: ${task}`);
+  spoofed.name = "HerdrExecutableError";
+  await assert.rejects(
+    helper.spawnPeer(options, {
+      ...dependencies,
+      run: async () => {
+        throw spoofed;
+      },
+    }),
+    (error: Error) => {
+      assert.match(error.message, /Current pane discovery failed/u);
+      assert.ok(!error.message.includes(task));
+      return true;
+    },
+  );
 });
 
 test("preflight failure details are sanitized and bounded before stderr publication", async () => {
