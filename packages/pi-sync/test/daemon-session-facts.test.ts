@@ -43,3 +43,39 @@ for (const custom of [false, true])
         await client.dispose();
       }
     }));
+
+test("an in-memory session publishes no session paths instead of failing", () =>
+  withTempHome(async (agentDir) => {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const { bindPiDaemonClient } = await import("../src/daemon/pi-client.js");
+    const cwd = path.join(path.dirname(agentDir), "project");
+    // `pi --no-session` builds this manager. On pi 1.5.x it reports "" (not
+    // undefined) for the session dir, which used to fail canonicalPath() and throw
+    // out of session_start as "Pi session paths must be absolute".
+    const manager = SessionManager.inMemory(cwd);
+    const ctx = {
+      get sessionManager() {
+        return manager;
+      },
+      cwd,
+      mode: "rpc",
+      hasUI: true,
+      model: undefined,
+      isIdle() {
+        return true;
+      },
+      ui: {},
+    } as unknown as ExtensionContext;
+    const reportedDir = manager.getSessionDir();
+    assert.equal(manager.getSessionFile(), undefined);
+    const client = bindPiDaemonClient(ctx, new AbortController().signal);
+    try {
+      // An empty or absent dir must publish "no path", never throw.
+      const facts = (client as unknown as { facts(): ClientFacts }).facts();
+      assert.equal(facts.sessionDir, reportedDir ? await fs.realpath(reportedDir) : undefined);
+      assert.equal(facts.sessionFile, undefined);
+      assert.equal(facts.sessionId, manager.getSessionId());
+    } finally {
+      await client.dispose();
+    }
+  }));

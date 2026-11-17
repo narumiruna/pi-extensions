@@ -46,7 +46,9 @@ function current() {
   return client;
 }
 function canonicalPath(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
+  // An in-memory session (`pi --no-session`) reports an empty session dir instead of
+  // omitting it, so an empty path means "no path to publish", not a broken caller.
+  if (value === undefined || value === "") return undefined;
   if (!path.isAbsolute(value)) throw new Error("Pi session paths must be absolute.");
   const parts: string[] = [];
   let cursor = path.resolve(value);
