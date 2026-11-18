@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
@@ -10,6 +12,7 @@ import {
   STARTUP_TIMING_ENTRY,
   type StartupTimingEntry,
 } from "../src/ui/startup-timings-entry.js";
+import { v3S3Settings, withTempHome } from "./helpers.js";
 
 const report = "pi-sync debug: local initialization (completed)\nsettings read: 1.0 ms\ntotal: 2.0 ms";
 
@@ -24,6 +27,53 @@ for (const mode of ["tui", "rpc", "print", "json"] as const) {
     assert.deepEqual(mock.sentMessages, []);
     assert.deepEqual(mock.sentUserMessages, []);
   });
+}
+
+for (const mode of ["tui", "rpc"] as const) {
+  test(`daemon startup timings keep separate lines in ${mode}`, () =>
+    withTempHome(async (agentDir) => {
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "pi-sync.json"), JSON.stringify({ ...v3S3Settings(), debug: true }));
+      const { adoptFixtureRoot } = await import("./daemon-test-helpers.js");
+      const { bindPiDaemonClient } = await import("../src/daemon/pi-client.js");
+      await adoptFixtureRoot(agentDir);
+      const mock = createMockPi();
+      const { ctx, notifications } = createMockContext({ mode, cwd: agentDir });
+      const client = bindPiDaemonClient(ctx, new AbortController().signal, registerStartupTimings(mock.pi));
+      try {
+        await client.run("initialize", {});
+        let lines: string[];
+        if (mode === "tui") {
+          const entries = mock.entries.filter((entry) => entry.customType === STARTUP_TIMING_ENTRY);
+          assert.equal(entries.length, 1);
+          const renderer = mock.entryRenderers.get(STARTUP_TIMING_ENTRY);
+          assert.ok(renderer);
+          const component = renderer(
+            entries[0],
+            { expanded: false },
+            { fg: (_role: string, text: string) => text },
+          ) as Component;
+          lines = component.render(80).map((line) => line.trimEnd());
+        } else {
+          assert.deepEqual(mock.entries, []);
+          const timings = notifications.filter((item) => item.message.startsWith("pi-sync debug:"));
+          assert.equal(timings.length, 1);
+          lines = timings[0].message.split("\n");
+        }
+        assert.deepEqual(
+          lines.map((line) => line.replace(/\d+\.\d ms$/u, "<duration>")),
+          [
+            "pi-sync debug: local initialization (completed)",
+            "transaction recovery: <duration>",
+            "settings read: <duration>",
+            "config resolution: <duration>",
+            "total: <duration>",
+          ],
+        );
+      } finally {
+        await client.dispose();
+      }
+    }));
 }
 
 test("TUI reports survive info notifications and renderer reload without changing model context", () => {

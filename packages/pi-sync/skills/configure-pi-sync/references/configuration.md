@@ -251,6 +251,7 @@ UI changes save immediately through the existing ordered, atomic settings writer
 There is no project or environment override.
 
 With `debug: true`, reports show local initialization after recovery and settings resolution, then background work when it ends.
+The report shows one line per stage, followed by a total.
 TUI reports are stored as custom session entries, so they remain in the transcript after `/reload` and later notifications without entering model context.
 RPC reports remain notifications.
 When Continuous sync is enabled, the background report covers its first cycle rather than the separate one-shot startup check; later polls and same-session idle resumes do not publish more timing reports.
