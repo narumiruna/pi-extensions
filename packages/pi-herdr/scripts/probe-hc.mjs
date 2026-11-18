@@ -3,10 +3,11 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { requestHc, subscribeHc } from "../skills/pi-herdr/scripts/hc-rpc.mjs";
-import { spawnHcPeer } from "../skills/pi-herdr/scripts/spawn-hc-peer.mjs";
+import { spawnHcPeer } from "../src/hc-peer.mjs";
+import { requestHc, subscribeHc, withHcConnection } from "../src/hc-rpc.mjs";
 
 // Repository-only, provider-free contract smoke. Never discover or control a default user core.
 assert.equal(process.platform, "linux", "This isolated smoke currently supports Linux only");
@@ -85,21 +86,33 @@ try {
   owned.add(origin.address);
   const ready = await call(endpoint, "terminal.wait", { terminal: origin.address, timeout: 15 }, { timeoutMs: 20_000 });
   assert.equal(ready.status, "idle");
-  const taskFile = join(root, "task.txt");
-  await writeFile(taskFile, "HC_PROBE_TASK: inert local fixture only; no provider or Pi agent.");
   let sends = 0;
-  const peer = await spawnHcPeer(
-    { name: "probe-peer", taskFile, piCli: fixture },
-    {
-      env: { HC_TERMINAL_ID: origin.address, HC_TERMINAL_SOCKET: endpoint },
-      signal: operation.signal,
-      request: async (socket, method, params, options) => {
-        if (method === "terminal.send") sends += 1;
-        const result = await call(socket, method, params, options);
-        if (method === "terminal.run" && typeof result?.address === "string") owned.add(result.address);
-        return result;
-      },
-    },
+  const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+  const peer = await withHcConnection(
+    endpoint,
+    (request, disconnected) =>
+      spawnHcPeer(
+        {
+          name: "probe-peer",
+          text: "HC_PROBE_TASK: inert local fixture only; no provider or Pi agent.",
+          piCli: fixture,
+        },
+        {
+          originId: origin.address,
+          signal: AbortSignal.any([operation.signal, disconnected]),
+          root: packageRoot,
+          skill: resolve(packageRoot, "skills/pi-herdr"),
+          // This fixture owns the scratch core and its pre-spawn environment.
+          approve: async () => true,
+          request: async (method, params, options) => {
+            if (method === "terminal.send") sends += 1;
+            const result = await request(method, params, options);
+            if (method === "terminal.run" && typeof result?.address === "string") owned.add(result.address);
+            return result;
+          },
+        },
+      ),
+    { signal: operation.signal },
   );
   console.error(JSON.stringify({ event: "peer_ready", root, endpoint }));
   assert.equal(peer.submitted, true);

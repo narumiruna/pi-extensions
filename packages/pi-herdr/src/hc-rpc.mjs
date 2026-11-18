@@ -3,8 +3,8 @@ import net from "node:net";
 export const HC_MAX_FRAME_BYTES = 2 * 1024 * 1024;
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-function response(frame) {
-  if (!record(frame) || frame.jsonrpc !== "2.0" || frame.id !== 1) throw new Error("Invalid hc RPC response");
+function response(frame, id = 1) {
+  if (!record(frame) || frame.jsonrpc !== "2.0" || frame.id !== id) throw new Error("Invalid hc RPC response");
   if (Object.hasOwn(frame, "error")) {
     const kind = frame.error?.data?.kind;
     const suffix = typeof kind === "string" && /^[a-z_]{1,40}$/u.test(kind) ? ` (${kind})` : "";
@@ -22,6 +22,10 @@ function connect(endpoint, { signal, timeoutMs, maxBytes, onFrame }) {
     throw new Error("Invalid hc connection limits");
   const socket = net.createConnection(endpoint);
   let ending = false;
+  let connected = false;
+  socket.once("connect", () => {
+    connected = true;
+  });
   let reason;
   let pending = "";
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -75,10 +79,10 @@ function connect(endpoint, { signal, timeoutMs, maxBytes, onFrame }) {
   });
   return {
     closed,
-    send(method, params) {
+    send(method, params, id = 1) {
       let line;
       try {
-        line = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method, params })}\n`;
+        line = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
       } catch {
         stop(new Error("Invalid hc request"));
         return;
@@ -87,9 +91,14 @@ function connect(endpoint, { signal, timeoutMs, maxBytes, onFrame }) {
         stop(new Error("hc request exceeded the limit"));
         return;
       }
-      socket.once("connect", () => {
+      const write = () => {
         if (!ending) socket.write(line);
-      });
+      };
+      if (connected) write();
+      else socket.once("connect", write);
+    },
+    established() {
+      clearTimeout(timer);
     },
     subscribed() {
       clearTimeout(timer);
@@ -126,6 +135,51 @@ export function requestHc(
     });
     connection.send(method, params);
   });
+}
+
+/** Bind one operation to one core connection. A closed connection is never reopened. */
+export async function withHcConnection(endpoint, operation, { signal, maxBytes = HC_MAX_FRAME_BYTES } = {}) {
+  let nextId = 0;
+  let closed = false;
+  let pending;
+  const connection = connect(endpoint, {
+    signal,
+    timeoutMs: 5000,
+    maxBytes,
+    onFrame(frame) {
+      if (!pending) throw new Error("Unexpected hc RPC response");
+      const result = response(frame, pending.id);
+      connection.established();
+      const received = pending;
+      pending = undefined;
+      clearTimeout(received.timer);
+      received.resolve(result);
+    },
+  });
+  const disconnected = new AbortController();
+  void connection.closed.then((error) => {
+    closed = true;
+    disconnected.abort();
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pending.reject(error ?? new Error("hc connection closed before acknowledgement"));
+    pending = undefined;
+  });
+  function request(method, params = {}, { timeoutMs = 5000 } = {}) {
+    if (closed || signal?.aborted || pending) throw new Error("hc connection is not available");
+    return new Promise((resolve, reject) => {
+      const id = ++nextId;
+      const timer = setTimeout(() => void connection.close(), timeoutMs);
+      timer.unref?.();
+      pending = { id, resolve, reject, timer };
+      connection.send(method, params, id);
+    });
+  }
+  try {
+    return await operation(request, disconnected.signal);
+  } finally {
+    await connection.close();
+  }
 }
 
 /** Plain subscriptions own their socket; use separate requestHc calls for authoritative reads. */

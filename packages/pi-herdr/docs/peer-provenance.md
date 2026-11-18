@@ -1,30 +1,10 @@
-# Peer spawn provenance
+# Legacy Herdr peer provenance
 
-The `pi-herdr` skill starts independent, equal-standing Pi sessions.
-The spawn helper records who initiated a session; the widget reads that record without controlling the agents.
-Neither a spawn edge nor a peer message grants authority.
+The legacy Herdr widget can show existing session-validated spawn records. `pi-herdr` does not write these records or provide a legacy peer launch or messaging path. Legacy Pi status reporting and `/herdr` remain available. There is no `pane.run` fallback. For peer work, use the [hc integration](hc-integration.md).
 
-## Native startup contract
+## Record format
 
-The helper keeps Herdr's official `pane split` → `agent start --kind pi` → `agent prompt` flow.
-It creates an unfocused sibling in the same cwd and requires native `interactive_ready=true`, idle/done state, no pending launch, and matching live identities before recording provenance or submitting a task.
-A failed or incomplete native startup stops the attempt; there is no `pane.run`, manual-launch/rename, or relaxed-readiness fallback.
-Manual launch does not establish native managed-start readiness.
-
-Trust the project, the new pane's shell startup, and its Pi executable/interpreter lookup before creating a pane.
-Herdr selects bare `pi` in that shell; its public native-start API has no absolute-executable override.
-The helper's absolute Node and Herdr paths do not constrain the server-owned shell or its command lookup.
-A project-local executable, shell startup file, or relative/project `PATH` can therefore execute code before identity checks, readiness checks, or Pi project trust apply.
-Those later checks cannot undo an unintended launch, and tests do not establish hostile-checkout protection.
-
-**Release restriction:** the Pi executable-selection security finding remains open regardless of the PR's review state.
-The user chose native managed startup rather than a manual-launch readiness contract; that choice does not fix this risk.
-Herdr upstream must provide a public executable override with supported shell/interpreter semantics, and the package maintainer must then validate trusted executable selection and shell startup without losing native readiness.
-Do not merge or publish this feature while that finding is unresolved.
-
-## Wire record
-
-The helper patches five public Herdr pane tokens with source `pi-herdr:spawn:v1` and no TTL:
+The reader recognizes five public Herdr pane tokens. Existing records used source `pi-herdr:spawn:v1` and no time to live (TTL):
 
 | Token | Value |
 | --- | --- |
@@ -32,109 +12,24 @@ The helper patches five public Herdr pane tokens with source `pi-herdr:spawn:v1`
 | `pi_spawn_origin` | Initiator's terminal ID, at most 80 Unicode characters. |
 | `pi_spawn_from` | Initiator's session fingerprint. |
 | `pi_spawn_to` | Started peer's session fingerprint. |
-| `pi_spawn_label` | Sanitized initiator name or pane ID, at most 80 Unicode characters. |
+| `pi_spawn_label` | Captured initiator name or pane ID, at most 80 Unicode characters. |
 
-A fingerprint is the lowercase hexadecimal SHA-256 digest of UTF-8 `JSON.stringify([terminal_id, source, agent, kind, value])`, using the complete public `agent_session` reference.
-This version accepts only native `herdr:pi` / `pi` references with kind `id` or `path`.
-Missing identity evidence prevents tracked startup; the helper does not invent an identity.
-Only the digest crosses the metadata boundary, not the raw session path or ID.
-Fingerprints are correlation keys, not authentication or a guarantee of anonymity.
+A fingerprint is the lowercase hexadecimal SHA-256 digest of UTF-8 `JSON.stringify([terminal_id, source, agent, kind, value])`, using the public `agent_session` reference. This version accepts only `herdr:pi` / `pi` references with kind `id` or `path`. The record contains the digest, not the raw session path or ID. The digest is a correlation key, not authentication or a guarantee of anonymity.
 
-Herdr tokens share one terminal-level map across sources.
-The source scopes sequence handling, not token ownership; another caller can overwrite a key.
-The helper writes only its five distinct keys and verifies their exact readback and both live session identities before attempting the task prompt.
-Before CLI execution, it selects a canonical absolute Herdr executable outside the checkout and its Git ancestors, rejects project-local symlink targets, and skips relative `PATH` entries.
-The skill's `--cli-path` preflight prints that path without launching Herdr; the probe and default helper runner use the same resolver, including on Windows where a bare command could otherwise use the project cwd.
-The skill requires the verified absolute Node path from trusted Pi launch/runtime information before either helper call; it does not bootstrap through bare `node` or trust a PATH-only lookup.
-Per-command `NODE_OPTIONS=` and `NODE_PATH=` assignments clear late-loaded preload/module lookup settings before Node starts, not inside the helper after preloads could run.
-Each independent shell call repeats its Node/skill path setup and, when needed, CLI resolution rather than relying on prior shell variables.
-CLI-path setup failures name the rejecting project root on stderr with sanitized, bounded text and no stdout path.
-This still requires a trusted launch environment; it does not authenticate the selected external executable or the Herdr socket.
-Before the first tool-shell call, require a trusted host/runner that applies an environment allowlist before child startup, excluding untrusted shell and OS loader hooks such as `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`.
-If this is unknown or unmet, stop and have the operator prepare a clean environment outside the session. Inline assignments, an `env` command, and helper validation cannot protect earlier shell/loader startup.
-The extension cannot change the existing built-in Bash tool at its pre-spawn boundary; the shell-startup finding remains open.
-It leaves a partially created pane available for inspection after failure or cancellation and never retries an ambiguous submission automatically.
-Stopping its CLI subprocess does not undo server-side changes or terminate the independent peer.
+Herdr tokens share a terminal-level map across sources. A source scopes sequence handling, not token ownership. Another caller can overwrite a token. Records without a TTL remain until a caller overwrites or clears them, or the pane closes. Herdr does not restore them after a server restart.
 
-The widget ignores unsupported, incomplete, self-referential, cyclic, or target-mismatched records.
-It resolves origins against the complete session snapshot before excluding the current pane or limiting visible rows.
-Moves and renames retain a relationship when terminal and session identities still match.
-A replacement target session cannot inherit the previous session's edge.
-An absent, ambiguous, or replaced origin is shown as an unavailable captured origin, not attached to a different current occupant.
+## Display rules
 
-Omitted TTL means tokens remain in the running Herdr server until overwritten, cleared, or their pane closes.
-They are not restored after a Herdr server restart.
-The widget then shows ordinary unrelated agents rather than inferring history from layout or names.
-There is no shared registry, background coordinator, or dependency on another extension.
-Within one Pi process, copies of this package coordinate registration on the public synchronous `pi-herdr:runtime-claim:v1` event channel: a `{ version: 1, claimed: false }` probe is marked claimed by an already registered copy.
-The claim is released on session shutdown and acquired again for the next session; Pi also disposes factory event subscriptions when its runtime is invalidated.
-This prevents duplicate reporters from source/generated discovery without disabling unrelated extensions; it does not coordinate agents or deduplicate legacy integrations that lack this protocol.
+The widget ignores unsupported, incomplete, self-referential, cyclic, or target-mismatched records. It resolves origins against the complete session snapshot before it excludes the current pane or applies the row limit. It does not infer a relationship from a name or pane layout.
+
+A move or rename preserves the relationship if the terminal and session identities still match. A new target session cannot inherit an old relationship. If the origin is absent, ambiguous, or replaced, the widget uses the captured label and marks it unavailable. It does not attach the record to a different session in the same terminal.
+
+The widget keeps its flat, status-ordered list of at most five agents. It shows the labels `spawned by you`, `spawned you`, or `spawned by <peer>` as secondary text. A label does not grant authority or show who controls the process.
 
 ## Refresh ordering
 
-Token changes emit `pane.updated`, which the existing observer uses to request authoritative snapshots.
-A native session-reference-only update does not necessarily emit an event.
-Therefore each Pi `session_start` refreshes its existing five-key, TTL-bearing display metadata after its session report completes.
-This refresh is forced even if another event published the same metadata while startup was pending.
-Changing the TTL deadline supplies the invalidation after identity reporting without adding a polling loop or a new display token.
+Token changes emit `pane.updated` and cause a fresh read. A session reference update alone does not always emit an event. After each Pi session report completes, the extension refreshes the existing five-key display metadata, which has a TTL. This causes observers to read the current session identity again without polling or adding a token.
 
-The observer retains its coalesced reads, bounded retry, cancellation, generation checks, and passive widget behavior.
-Like the existing status display, relationships describe the latest completed snapshot and can briefly lag newer events.
-The earlier canonical-caller lookup supplies an ID; the later pane list supplies the current pane and sibling identities together. A missing caller triggers topology rediscovery rather than reinserting its earlier identity.
-Reporting remains best-effort; acknowledgement does not guarantee that Herdr applied an identity report.
-There is no atomic compare-and-set against a session identity, so read/check/write cannot exclude every concurrent takeover.
-The native prompt endpoint separately checks known blocked state and foreground-agent ownership before writing terminal input.
-It cannot prove that an unfamiliar dialog or a briefly focused draft is safe.
+The widget uses the latest completed snapshot and can briefly lag new events. The earlier caller lookup supplies an ID. The later pane list supplies the current pane and peer identities together. If the caller is missing, the widget looks up the topology again instead of reusing the earlier identity. Reporting is best-effort: a Herdr acknowledgement does not guarantee that Herdr applied the session identity report.
 
-## Deterministic presentation evidence
-
-The widget keeps its flat status order, five-row bound, workspace information, and existing separator/disclosure behavior.
-Relation text uses the callback-provided muted theme role.
-For an initiator observing two independent peers, the normalized body changes as follows:
-
-```text
-Before
-◐ working  reviewer · p2 · work/w1
-○ idle  researcher · p3 · work/w1
-
-After
-◐ working  reviewer · p2 · work/w1 · spawned by you
-○ idle  researcher · p3 · work/w1 · spawned by you
-```
-
-A peer observing its initiator sees `spawned you` on that initiator's row.
-Other origins use their live name and pane label/ID; unavailable origins use the captured label.
-Tests exercise these normalized strings, nested edges without privileged roles, hidden origins, terminal controls, Unicode, zero/narrow widths, theme invalidation, session replacement, and authoritative refresh after stale events.
-These are deterministic render examples, not physical-terminal screenshots.
-
-## Maintainer verification
-
-From the repository root, after the normal build prerequisites, run `npm run check` and `npm test` separately.
-The package tests include the fake-CLI spawn state machine, producer/consumer round trips, native resource-loader discovery, extracted tarball resources, lifecycle ordering, and widget/observer behavior.
-
-When Herdr is installed and the caller is already in a managed pane, run the repository-only public-contract probe:
-
-```bash
-NODE_OPTIONS= NODE_PATH= "/absolute/path/to/trusted/node" packages/pi-herdr/scripts/probe-provenance.mjs
-```
-
-On a Unix-like host with `/bin/sh`, the probe creates a uniquely named headless session and an inert shell process recognized as Pi, waits for readiness, and uses only that isolated session's public API.
-It opens no TUI and makes no model request.
-It checks native identity acquisition, shared token patches, TTL expiry/cancellation, metadata invalidations, identity replacement, move, rename, unchanged-identity re-report, and owned-key clearing, then stops and deletes its named session.
-The inert fixture uses `pane.run`; this probe validates the public metadata/identity contract, not `agent.start`, its executable selection, or native managed readiness.
-Do not restart a probe containing synthetic native session references because Herdr could try to resume them.
-The contract was checked against the installed Herdr release and its [exact upstream implementation](https://github.com/herdrdev/herdr/tree/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01), including `src/terminal/state.rs`, `src/metadata_tokens.rs`, `src/app/api_helpers.rs`, and `src/app/api/panes.rs`.
-Recheck the installed contract after an upstream compatibility change rather than assuming token or identity behavior from the schema alone.
-
-## Remaining external checks
-
-**Terminal operator:** after loading an updated build, inspect a real Pi peer pair in regular and fullscreen terminals, including narrow widths, labels, cross-workspace moves, rename, collapse/restore, and user takeover of a peer pane.
-Expected result: readable provenance, preserved focus, and unchanged native interaction.
-Physical rendering and subjective usability remain unverified by automated tests; do not claim this acceptance without evidence.
-
-**Account owner:** only after authorization for provider usage and existing local authentication, run two Pi peers on independent tasks and exchange progress, a question/answer, and results.
-Expected result: symmetric communication without a privileged parent, duplicate task submission, or mutual synchronous waits.
-Actual provider latency, entitlement, model compliance, and terminal/keybinding-specific delivery remain unverified without that check.
-Do not request secrets, bypass MFA, incur unauthorized costs, or claim live-provider end-to-end verification.
-
-Package publication, tags, visibility changes, and release workflow dispatch require separate explicit approval.
+Deterministic checks cover record validation, session replacement, and widget refresh. Physical terminal rendering remains unverified.

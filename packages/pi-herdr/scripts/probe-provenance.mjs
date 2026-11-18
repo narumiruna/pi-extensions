@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { resolveHerdrExecutable } from "../skills/pi-herdr/scripts/spawn-peer.mjs";
+import { resolveHerdrExecutable } from "./resolve-herdr-executable.mjs";
 
 const exec = promisify(execFile);
 assert.equal(process.env.HERDR_ENV, "1");

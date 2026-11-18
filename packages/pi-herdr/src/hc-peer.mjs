@@ -1,9 +1,6 @@
-#!/usr/bin/env node
 import { constants } from "node:fs";
 import * as files from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
-import { fileURLToPath } from "node:url";
-import { requestHc } from "./hc-rpc.mjs";
 
 export const MAX_TASK_BYTES = 32 * 1024;
 // JSON escaping can double a valid 32 KiB task before the bounded handoff overhead.
@@ -11,11 +8,6 @@ export const MAX_OUTPUT_BYTES = 128 * 1024;
 export const RPC_TIMEOUT_MS = 5000;
 export const WAIT_TIMEOUT_MS = 35000;
 export const SEND_TIMEOUT_MS = 70000;
-export const USAGE =
-  "<trusted-absolute-node> <skill-dir>/scripts/spawn-hc-peer.mjs --name NAME --task-file /absolute/task.txt --pi-cli /verified/absolute/Pi/dist/cli.js | --help";
-const scriptDirectory = dirname(fileURLToPath(import.meta.url));
-export const skillDirectory = resolve(scriptDirectory, "..");
-export const packageRoot = resolve(scriptDirectory, "../../..");
 const controls = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const validName = (value) => typeof value === "string" && /^[a-z][a-z0-9_-]{0,31}$/u.test(value);
@@ -26,7 +18,7 @@ const identifier = (value) =>
   value.length <= 256 &&
   !controls.test(value);
 // This helper starts local terminals only; native IDs use a digit then base-30 consonants/digits.
-const terminalAddress = (value) => identifier(value) && /^t[1-9][0-9bcdfghjkmnpqrstvwxyz]*$/u.test(value);
+export const terminalAddress = (value) => identifier(value) && /^t[1-9][0-9bcdfghjkmnpqrstvwxyz]*$/u.test(value);
 const natural = (value) => Number.isSafeInteger(value) && value >= 0;
 const sameArgv = (left, right) => left.length === right.length && left.every((arg, index) => arg === right[index]);
 const requiredMethods = ["terminal.get", "terminal.run", "terminal.wait", "terminal.send"];
@@ -47,65 +39,14 @@ function inside(root, path, paths = { relative, isAbsolute, sep }) {
   return local === "" || (local !== ".." && !local.startsWith(`..${paths.sep}`) && !paths.isAbsolute(local));
 }
 
-export function parseArguments(argv) {
-  if (argv.length === 1 && argv[0] === "--help") return { help: true };
-  const options = {};
-  const names = { "--name": "name", "--task-file": "taskFile", "--pi-cli": "piCli" };
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = Object.hasOwn(names, argv[index]) ? names[argv[index]] : undefined;
-    const value = argv[index + 1];
-    if (!key || Object.hasOwn(options, key) || typeof value !== "string" || !value || value.startsWith("--")) {
-      fail("Unknown, duplicate, or missing argument; use --help");
-    }
-    options[key] = value;
-  }
-  validateOptions(options);
-  return options;
-}
-
-function validateOptions(options) {
-  if (!validName(options?.name)) fail("Name must match [a-z][a-z0-9_-]{0,31}");
-  if (!absolutePath(options.taskFile)) fail("An absolute --task-file path without terminal controls is required");
-  if (!absolutePath(options.piCli)) fail("An absolute --pi-cli path without terminal controls is required");
-}
-
-function environment(env) {
+export function checkPeerText(text) {
   if (
-    !terminalAddress(env.HC_TERMINAL_ID) ||
-    typeof env.HC_TERMINAL_SOCKET !== "string" ||
-    !env.HC_TERMINAL_SOCKET.trim()
-  ) {
-    fail("Inherited nonblank HC_TERMINAL_ID and HC_TERMINAL_SOCKET are required before hc calls");
-  }
-  if (controls.test(env.HC_TERMINAL_SOCKET)) fail("Inherited hc endpoint contains terminal controls");
-  return { originId: env.HC_TERMINAL_ID, endpoint: env.HC_TERMINAL_SOCKET };
-}
-
-/** Bounded reads also cover a regular-file-to-FIFO swap without blocking open(). */
-export async function readTaskFile(path, { signal, fs = files } = {}) {
-  checkCancelled(signal);
-  const before = await fs.stat(path);
-  checkCancelled(signal);
-  if (!before.isFile() || before.size > MAX_TASK_BYTES) fail("Invalid task file");
-  const handle = await fs.open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-  try {
-    checkCancelled(signal);
-    const info = await handle.stat();
-    checkCancelled(signal);
-    if (!info.isFile() || info.size > MAX_TASK_BYTES) fail("Invalid task file");
-    const buffer = Buffer.alloc(MAX_TASK_BYTES + 1);
-    let length = 0;
-    while (length < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
-      checkCancelled(signal);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    if (length > MAX_TASK_BYTES) fail("Task file too large");
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, length));
-  } finally {
-    await handle.close();
-  }
+    typeof text !== "string" ||
+    !text.trim() ||
+    Buffer.byteLength(text) > MAX_TASK_BYTES ||
+    controls.test(text.replace(/[\t\r\n]/gu, ""))
+  )
+    fail("Peer text must be nonempty and at most 32768 UTF-8 bytes, without terminal controls except tab/CR/newline");
 }
 
 /** Resolve only; never run a candidate, consult PATH, or execute Git. */
@@ -196,7 +137,7 @@ export async function checkResources(root, skill, { signal, fs = files } = {}) {
 }
 
 // This is a sampled process identity, not authenticated Pi/session/foreground ownership.
-function identity(value) {
+export function identity(value) {
   if (
     !record(value) ||
     !terminalAddress(value.address) ||
@@ -213,7 +154,7 @@ function identity(value) {
     fail("Missing or malformed live terminal identity");
   return { address: value.address, created: value.created_ms, pid: value.pid, argv: [...value.argv] };
 }
-function sameIdentity(value, expected) {
+export function sameIdentity(value, expected) {
   const actual = identity(value);
   if (
     actual.address !== expected.address ||
@@ -223,7 +164,7 @@ function sameIdentity(value, expected) {
   )
     fail("Observed terminal identity changed; inspect the known terminal before retrying");
 }
-function reportedPi(value, states) {
+export function reportedPi(value, states) {
   if (
     value.reported !== true ||
     !record(value.status) ||
@@ -247,7 +188,7 @@ function targetFacts(value, expected, { name, cwd, argv, origin }, ready) {
     fail("Peer launch facts changed or do not match the requested independent terminal");
   if (ready) reportedPi(value, ["idle"]);
 }
-function coreIdentity(value) {
+export function coreIdentity(value) {
   if (
     !record(value) ||
     value.generation !== 1 ||
@@ -274,7 +215,7 @@ function validateWait(value, address) {
   // A message or timeout is not readiness. A fresh get below decides whether sending is safe.
   if (value.reason === "exit") fail("Peer exited during readiness wait; task not submitted");
 }
-function validateSend(value) {
+export function validateSend(value) {
   // Public SendResult has no address/terminal. Do not invent an identity acknowledgement.
   if (
     !record(value) ||
@@ -293,42 +234,30 @@ export class SpawnHcPeerError extends Error {
   }
 }
 
-/** Test seams do not add CLI flags, settings, environment variables, or subprocess execution. */
+/** Bound to an existing connection; the caller must obtain explicit operator confirmation on it. */
 export async function spawnHcPeer(
   options,
   {
-    env = process.env,
+    originId,
     cwd = process.cwd(),
     signal,
-    request = requestHc,
-    readTask = readTaskFile,
+    request,
+    approve,
     assertResources = checkResources,
     resolveExecutables = resolveTrustedExecutables,
-    root = packageRoot,
-    skill = skillDirectory,
-  } = {},
+    root,
+    skill,
+  },
 ) {
   const known = { ...(validName(options?.name) ? { name: options.name } : {}), submissionAttempted: false };
   try {
-    validateOptions(options);
-    const { endpoint, originId } = environment(env);
-    checkCancelled(signal);
+    if (!validName(options?.name)) fail("Name must match [a-z][a-z0-9_-]{0,31}");
+    if (!terminalAddress(originId)) fail("Invalid inherited hc terminal address");
     if (!absolutePath(cwd)) fail("An absolute cwd without terminal controls is required");
-    let task;
-    try {
-      task = await readTask(options.taskFile, { signal });
-    } catch {
-      checkCancelled(signal);
-      fail("Cannot read a bounded regular UTF-8 task file");
-    }
+    if (!absolutePath(options.piCli)) fail("The active Pi CLI must be an absolute path without terminal controls");
     checkCancelled(signal);
-    if (
-      typeof task !== "string" ||
-      !task.trim() ||
-      Buffer.byteLength(task) > MAX_TASK_BYTES ||
-      /\p{Cc}/u.test(task.replace(/[\t\r\n]/gu, ""))
-    )
-      fail("Task must be nonempty UTF-8 text without terminal controls except tab/CR/newline, at most 32768 bytes");
+    const task = options.text;
+    checkPeerText(task);
     let extension;
     try {
       extension = await assertResources(root, skill, { signal });
@@ -354,7 +283,7 @@ export async function spawnHcPeer(
       checkCancelled(signal);
       let result;
       try {
-        result = await request(endpoint, method, params, { signal, timeoutMs, maxBytes: MAX_OUTPUT_BYTES });
+        result = await request(method, params, { timeoutMs });
       } catch {
         checkCancelled(signal);
         fail(`${method} failed or timed out; inspect known state before retrying`);
@@ -377,6 +306,10 @@ export async function spawnHcPeer(
       sameIdentity(current, origin);
       reportedPi(current, ["idle", "working", "done"]);
     }
+    if ((await approve({ core, name: options.name, origin: origin.address })) !== true) {
+      fail("Launch not approved: the operator must verify the hc core launch environment");
+    }
+    checkCancelled(signal);
     await verifyOrigin();
     // Native creation atomically enforces uniqueness among live names; do not retry name_taken.
     const created = await call(
@@ -454,36 +387,4 @@ export async function spawnHcPeer(
       known,
     );
   }
-}
-
-export async function runCli(
-  argv = process.argv.slice(2),
-  { stdout = process.stdout, signals = process, spawn = spawnHcPeer, env = process.env } = {},
-) {
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  signals.on("SIGINT", cancel);
-  signals.on("SIGTERM", cancel);
-  try {
-    const options = parseArguments(argv);
-    stdout.write(
-      `${JSON.stringify(options.help ? { usage: USAGE } : await spawn(options, { env, signal: controller.signal }))}\n`,
-    );
-    return 0;
-  } catch (error) {
-    const details =
-      error instanceof SpawnHcPeerError
-        ? error.details
-        : { error: "Invalid arguments or operation failed; use --help" };
-    stdout.write(`${JSON.stringify(details)}\n`);
-    return 1;
-  } finally {
-    signals.removeListener("SIGINT", cancel);
-    signals.removeListener("SIGTERM", cancel);
-  }
-}
-
-const invokedPath = process.argv[1] ? await files.realpath(process.argv[1]).catch(() => undefined) : undefined;
-if (invokedPath && invokedPath === (await files.realpath(fileURLToPath(import.meta.url)))) {
-  process.exitCode = await runCli();
 }

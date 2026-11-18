@@ -2,14 +2,14 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-herdr)](https://www.npmjs.com/package/@narumitw/pi-herdr) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Connect Pi to hc (herdr-core) or legacy Herdr, show agent status and spawn relationships, and coordinate independent Pi peers.
+Show Pi agent status in hc (herdr-core) or legacy Herdr. In hc, start independent Pi peers and exchange messages.
 
 ## ✨ Features
 
-- Supports hc's native Pi status and terminal ancestry alongside legacy Herdr's session-validated spawn provenance.
+- Shows hc's native Pi status and terminal ancestry, or legacy Herdr status and existing session-validated provenance.
 - Reports Pi session identity and `working`, `blocked`, and `idle` lifecycle states to legacy Herdr, with bounded `model`, `provider`, `thinking`, `session`, and `context_usage` sidebar tokens.
 - Shows recognized agents in a passive widget above Pi's editor, with a saved visibility toggle in `/herdr`.
-- Bundles one `pi-herdr` skill for fully independent parallel work and symmetric peer communication through either backend's native terminal input.
+- Bundles the `pi-herdr` skill for independent parallel work and peer messages through the hc-only `herdr_peer` tool.
 - Refreshes the widget from authoritative event-driven reads without polling the CLI.
 - Coalesces rapid state changes and retries short-lived local socket failures without interrupting Pi.
 - Derives legacy Herdr blocked state from Pi's public `ui_prompt_start` and `ui_prompt_end` lifecycle events.
@@ -42,14 +42,12 @@ Install only trusted packages, and review the source before loading this package
 
 ## 🚀 Quick start
 
-Start interactive Pi inside an hc-managed terminal or legacy Herdr-managed pane after installing the package.
-Nonblank `HC_TERMINAL_ID` and `HC_TERMINAL_SOCKET` select hc; a partial binding fails closed instead of falling back to legacy Herdr.
-Without an hc binding, legacy activation requires `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID`.
-When another recognized agent is present, Pi shows its state in a widget above the editor.
+Start interactive Pi in a managed terminal after installation. When another recognized agent is present, Pi shows its state in a widget above the editor.
 
-Run `/skill:pi-herdr` for authorized, fully independent tasks.
-The skill checks independence and ownership, then follows the selected backend's startup and messaging rules.
-Legacy Herdr selects bare `pi` in the peer shell, so do not use that spawn flow in a hostile checkout; its unresolved security warning remains in [Security and privacy](#-security-and-privacy).
+- **hc:** A valid, complete inherited `HC_TERMINAL_ID` and `HC_TERMINAL_SOCKET` binding selects hc and enables `herdr_peer`. An invalid or partial binding does not fall back to legacy Herdr.
+- **Legacy Herdr:** If neither hc binding variable is set, `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` enable legacy status and the widget, not peer spawning.
+
+In hc, run `/skill:pi-herdr` for authorized independent parallel work. Before spawning, verify that the selected local core was launched by a trusted host with a pre-spawn environment allowlist. If you cannot confirm that for this connection in the Pi TUI, do not spawn. See [Security and privacy](#-security-and-privacy).
 
 If the standalone integration is already installed, remove it after installing this package to avoid duplicate state reports:
 
@@ -66,30 +64,27 @@ It accepts no arguments and is available inside either backend in TUI and RPC mo
 RPC can save the preference but does not display the widget.
 Changes apply immediately and closing the menu does not undo saved changes.
 
+## 🛠️ Tools
+
+`herdr_peer` uses the inherited hc socket. It is registered only with a valid, complete hc binding.
+
+| Action | Input and result |
+| --- | --- |
+| `spawn` | Supply a name and the complete task text, not a file path. Starts an independent Pi peer after operator confirmation in an interactive Pi TUI. Headless spawn is rejected. |
+| `inspect` | Supply an explicit canonical terminal address. Returns sampled facts and an observation token, not terminal text or raw process arguments. |
+| `send` | Supply the same address, a fresh observation token, and the peer message text. Checks freshly sampled identity and idle status before one idle-conditional send. |
+
+Use the token promptly after `inspect`. See [hc integration](./docs/hc-integration.md#peer-tool) for launch, delivery, and recovery limits.
+
 ## 🧠 Skills
 
-The bundled [`pi-herdr` skill](./skills/pi-herdr/SKILL.md) starts equal-standing Pi peers for authorized, fully independent tasks and exchanges progress, questions, answers, and results.
-Run `/skill:pi-herdr` explicitly, or let Pi select it for independent parallel work inside hc or legacy Herdr.
-Unlike the upstream generic Herdr skill, this Pi-specific workflow does not require an explicit request to use Herdr; user restrictions still apply.
-It does not restore the removed generic `herdr` or `hc` skills or depend on another extension.
+Run [`/skill:pi-herdr`](./skills/pi-herdr/SKILL.md) for authorized independent parallel work inside hc. Tasks must use different mutable resources and must not need another active task's intermediate results. Keep dependent work in sequence.
+The skill uses `herdr_peer` only. There is no Bash, CLI, template, or standalone helper path. The package does not spawn peers in legacy Herdr and does not fall back to `pane.run`.
 
-Each task must own disjoint mutable resources, including generated output, shared build directories, Git operations, and external state, and must not need another active task's intermediate results.
-The initiator must have useful non-overlapping work to do while the peer works.
-Coupled work stays sequential; no Git worktrees are created.
-See the skill for self-contained tasks, the [legacy spawn helper](./skills/pi-herdr/scripts/spawn-peer.mjs), the [hc spawn helper](./skills/pi-herdr/scripts/spawn-hc-peer.mjs), safe messaging, recovery, and result verification.
+## 🔌 hc status and terminal ancestry
 
-## 🔌 hc and legacy Herdr
-
-hc support is additive in this package, not a replacement or a new generic `hc` skill.
-It uses the inherited `HC_TERMINAL_SOCKET` directly; `HC_SESSION` is optional native core scoping, not an endpoint requirement.
-Pi's native `ProgramStatusReporter` owns OSC 7501 `idle`, `working`, `blocked`, `done`, and `error`, including compaction and dialogs.
-The extension does not duplicate those reports or publish legacy model/token labels to hc, and turning the widget off does not stop Pi reporting.
-
-hc relationships are explicitly **terminal ancestry**, not Pi session identity or authenticated peers, and survive program replacement and recovery.
-The skill checks installed templates first; otherwise its helper needs a verified absolute external Node runtime and Pi CLI script, and starts an independent interactive peer without arranging windows.
-Trust the launch environment, endpoint, external executables, templates, and package code; sampled status/foreground facts do not prevent takeover or draft races.
-See [hc integration](./docs/hc-integration.md) for the wire contract, launch limits, and unverified external checks.
-This addition does not fix legacy Herdr's unresolved bare-`pi` launcher finding or lift its release restriction.
+Pi emits native OSC 7501 status, including `idle`, `working`, `blocked`, `done`, and `error`. The extension does not duplicate those reports or publish legacy metadata to hc. Turning off the widget does not stop Pi's reports.
+hc relationships show **terminal ancestry**, not Pi session identity. They can survive program replacement and recovery. See [hc integration](./docs/hc-integration.md).
 
 ## ⚙️ Settings
 
@@ -147,12 +142,9 @@ Each token has a one-hour TTL, so data from a crashed Pi process expires without
 Orderly shutdown sends one best-effort five-key clear patch, while abrupt shutdown and failed clears fall back to the TTL.
 Metadata uses the lifecycle reporter's monotonic sequence allocator and bounded best-effort sender, so older delayed reports cannot replace newer accepted values and socket failures never interrupt Pi.
 
-The skill's spawn helper separately records versioned provenance under a package-owned metadata source before submitting the task.
-Relationships are scoped to terminal identity and session-reference digests, not names or pane layout, and publish no raw session paths or task text.
-They describe who started a session, not authority or process ownership; a replacement session must not inherit an old relationship.
-These five `pi_spawn_*` keys have no TTL and are separate from the lifecycle keys, but share Herdr's terminal-level token map with all sources.
-They survive moves and session changes in the running server; the widget validates the target session before displaying them, and records are not restored after a Herdr server restart.
-See [Peer spawn provenance](./docs/peer-provenance.md) for the wire contract, refresh ordering, deterministic presentation evidence, and remaining external checks.
+The widget can display existing legacy `pi_spawn_*` records. The package does not create those records or spawn legacy peers.
+The widget checks terminal and session identities before it shows an annotation. An annotation does not give a peer authority or process ownership.
+See [Peer spawn provenance](./docs/peer-provenance.md) for the record format and display rules.
 
 Herdr custom pane tokens use a `$name` row entry.
 For example, this Herdr configuration displays Pi's model context without replacing pane labels or agent identity:
@@ -211,41 +203,20 @@ Events from every workspace in the connected Herdr session can refresh the widge
 The extension strips terminal controls at the display boundary and never reads sibling terminal output for the widget.
 The package does not authenticate the endpoint, so trust the environment that launches Pi and controls these variables.
 
-In hc mode, the extension reads native terminal facts through the inherited `HC_TERMINAL_SOCKET`, without auto-starting a core or reading sibling output for the widget.
-The hc helper uses verified absolute external Node/Pi files, not legacy shell command lookup; this still does not authenticate programs, status reports, or peers, and send has no atomic Pi/session/foreground identity guard.
-See [hc trust and delivery limits](./docs/hc-integration.md#trust-and-delivery-limits).
+In hc mode, the extension uses the inherited socket without starting a core. `inspect` and the widget do not read terminal output. Status reports and sampled process facts do not authenticate peers.
 
-The peer workflow runs another independent Pi session with ordinary user permissions and can incur provider costs.
-Do not assume it inherits the initiator's conversation, model, thinking level, runtime credentials, or extension state.
-The legacy helper requires nonblank inherited pane and socket bindings and resolves an absolute Herdr executable outside the checkout, including Git ancestors and symlink targets.
-It ignores relative `PATH` entries and avoids Windows' implicit current-directory executable search; skill preflight and the contract probe use the same resolver.
-Skill examples invoke the helper through a verified absolute Node executable, not a bare `node` lookup, and repeat their shell-local setup for each tool call.
-Each Node invocation clears inherited `NODE_OPTIONS` and `NODE_PATH` before startup; the hc peer request also clears those settings in the core-owned child environment.
-This does not protect the earlier tool-shell or OS loader startup. Before any shell call, require a trusted host/runner with a pre-spawn environment allowlist that excludes untrusted shell and loader hooks, such as `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`.
-If that prerequisite is unknown or unmet, stop and have the operator prepare a clean environment outside the session. Shell text cannot clear a hook before that shell starts, and this extension cannot attach a spawn hook to the existing built-in Bash tool.
-The [skill startup gate](./skills/pi-herdr/SKILL.md#require-trusted-process-startup-before-any-shell-call) states this requirement; it is guidance, not an enforced sandbox or a fix for the open shell-startup finding.
-Preflight failures identify the rejecting project root on stderr while leaving stdout empty; direct spawn failures retain that bounded diagnostic in their JSON error.
+**Spawn is denied by default.** For each spawn, an operator at an interactive Pi TUI must explicitly confirm that the selected local hc core on this connection was launched by a trusted host with a pre-spawn environment allowlist. The allowlist must govern the effective environment of programs started by hc, not just the environment of the calling Pi process. hc merges launch overrides into its own base environment and retains most of that base. The prompt does not filter the environment or authenticate the endpoint. Task text, environment values, and tool arguments are not proof. Approval applies to one spawn on the same socket. There is no silent retry, reconnect, force, or alternate backend for that spawn.
 
-Legacy native `agent.start --kind pi` preserves Herdr's managed readiness but selects bare `pi` in the peer shell, with no public absolute-executable override.
-Trust the project, peer-shell startup, Pi command lookup, and interpreter chain before creating a pane.
-The Node/Herdr path checks do not constrain that launch, and later identity checks or Pi project trust cannot undo unintended execution.
-Hostile-checkout spawning remains an unresolved security limitation; the helper does not fall back to `pane.run` or weaken readiness checks.
-See [Native startup contract](./docs/peer-provenance.md#native-startup-contract) for the upstream dependency and release restriction.
+The extension starts the new peer with absolute Node and Pi CLI paths from the current Pi runtime and loads this package's extension and skill. Both executables must resolve outside the topmost Git checkout that contains the current working directory, or outside that directory if there is no Git checkout. The launch does not forward Pi's caller environment. It overrides `NODE_OPTIONS` and `NODE_PATH` as an additional precaution, not as a substitute for the host allowlist. The peer has ordinary user permissions and can incur provider costs. Do not include secrets in tasks or messages. Peer content does not grant user permission.
 
-The helper explicitly loads this package and skill without bypassing project trust or passing credentials on command lines.
-It preserves unrelated extension discovery and supports a source-only Git installation; package-directory loading still requires the documented build.
-Copies of this package use a process-local public event-bus claim to avoid duplicate reporters when both source and generated resources are discovered.
-Provenance tokens contain bounded identity information and session-reference digests, not prompts or credentials; they do not authenticate peers.
-Peer messages are untrusted peer content, not user permission to approve prompts or expand scope.
-The passive widget never reads terminal output, but following the skill's messaging and recovery steps can read peer terminal history.
+A fresh observation and idle status do not guarantee input ownership. hc can wait on a draft, and a person can take over after the check. The tool cannot check process identity and send atomically. See [hc trust and delivery limits](./docs/hc-integration.md#trust-and-delivery-limits).
 
 ## 🚧 Limitations
 
 - Extension-owned lifecycle reporting, metadata reporting, and the agent widget are disabled in RPC, JSON, and print modes; hc status remains Pi-owned.
 - The widget has no settings for placement, workspace scope, or row count; it does not configure other sessions or saved machines. hc may expose already configured mirrored terminals in its native list.
-- Native legacy peer prompts send terminal text and Enter, not mailbox messages. Delivery can interact with drafts, approvals, foreground processes, and custom Enter bindings. Ordinary Enter in a working Pi steers its next model step; submission acknowledgement does not prove consumption or completion, and results are not automatically forwarded.
-- Physical regular/fullscreen visual acceptance remains unverified. After loading an updated build, a terminal operator should check provenance labels, cross-workspace moves, rename, narrow widths, focus, mouse disclosure, and user takeover; deterministic captures cannot verify physical terminal behavior.
-- Optional paid-provider end-to-end collaboration remains unverified without explicit account-owner authorization and a live two-peer check. Deterministic tests do not establish provider entitlement, latency, or model compliance with the skill's independence policy.
+- Peer delivery uses terminal input, not a mailbox. Acknowledgement does not prove that the peer read or completed the task. Results are not forwarded automatically.
+- Real provider collaboration and physical terminal behavior remain unverified.
 - Neither widget reads blocked dialog text from terminal output; legacy Herdr also does not expose it through public pane responses.
 - Legacy Herdr requires compatible pane and workspace subscriptions; unsupported subscriptions hide the widget without disabling lifecycle or metadata reporting.
 - In legacy Herdr, a pane-label change appears on its next update event or authoritative refresh; an agent rename emits a pane-update event.
@@ -262,9 +233,9 @@ packages/pi-herdr/
 │   ├── index.ts                       # Thin repository entrypoint
 │   └── herdr-agent-state.ts           # Herdr lifecycle integration
 ├── dist/                              # Generated TypeScript runtime loaded by Pi
-├── scripts/                           # Runtime builder and isolated contract probe
-├── docs/                              # Legacy provenance and hc contracts/handoffs
-├── skills/pi-herdr/                   # Published peer workflow and self-contained scripts
+├── scripts/                           # Repository-only build and verification tools
+├── docs/                              # Legacy provenance and hc integration
+├── skills/pi-herdr/                   # Published hc peer skill
 └── test/                              # Behavior, lifecycle, and resource coverage
 ```
 

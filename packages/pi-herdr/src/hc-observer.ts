@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createEditorStatusPublisher, type EditorStatusPublisher } from "@narumitw/pi-tui-kit/editor-status-publisher";
-import { type HcSubscription, requestHc, subscribeHc } from "../skills/pi-herdr/scripts/hc-rpc.mjs";
+import { type HcSubscription, requestHc, subscribeHc } from "./hc-rpc.mjs";
 import { createHcWidgetSnapshot, parseHcTerminals } from "./hc-widget.js";
 import type { HerdrWidgetObserver } from "./herdr-observer.js";
 import {

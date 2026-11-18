@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { constants } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 } from "node:path";
@@ -10,29 +7,23 @@ import { afterEach, test } from "vitest";
 
 type Json = Record<string, unknown>;
 type RequestOptions = { signal?: AbortSignal; timeoutMs?: number; maxBytes?: number };
-type Request = (endpoint: string, method: string, params: Json, options?: RequestOptions) => Promise<unknown>;
-type Options = { name: string; taskFile: string; piCli: string };
+type Request = (method: string, params: Json, options?: RequestOptions) => Promise<unknown>;
+type Options = { name: string; text: string; piCli: string };
 type FileInfo = { isFile(): boolean; size: number };
-type Handle = {
-  stat(): Promise<FileInfo>;
-  read(buffer: Buffer, offset: number, length: number, position: null): Promise<{ bytesRead: number }>;
-  close(): Promise<void>;
-};
 type Fs = {
   stat(path: string): Promise<FileInfo>;
   realpath(path: string): Promise<string>;
   access(path: string, mode?: number): Promise<void>;
-  open(path: string, flags: number): Promise<Handle>;
 };
 type IoOptions = { signal?: AbortSignal; fs?: Partial<Fs> };
 type Executables = { node: string; piCli: string };
 type ResolveOptions = IoOptions & { cwd?: string; execPath?: string; platform?: NodeJS.Platform };
 type Dependencies = {
   request?: Request;
-  env?: NodeJS.ProcessEnv;
+  originId?: string;
+  approve?: () => Promise<boolean>;
   cwd?: string;
   signal?: AbortSignal;
-  readTask?: (path: string, options?: IoOptions) => Promise<string>;
   assertResources?: (root: string, skill: string, options?: IoOptions) => Promise<string>;
   resolveExecutables?: (piCli: string, options?: ResolveOptions) => Promise<Executables>;
   root?: string;
@@ -40,19 +31,14 @@ type Dependencies = {
 };
 type Helper = {
   spawnHcPeer(options: Options, dependencies?: Dependencies): Promise<Json>;
-  parseArguments(args: string[]): Options | { help: true };
-  runCli(args: string[], dependencies?: Json): Promise<number>;
-  readTaskFile(path: string, options?: IoOptions): Promise<string>;
   checkResources(root: string, skill: string, options?: IoOptions): Promise<string>;
   resolveTrustedExecutables(piCli: string, options?: ResolveOptions): Promise<Executables>;
-  packageRoot: string;
-  skillDirectory: string;
   MAX_TASK_BYTES: number;
   MAX_OUTPUT_BYTES: number;
   WAIT_TIMEOUT_MS: number;
   SEND_TIMEOUT_MS: number;
 };
-const script = resolve("packages/pi-herdr/skills/pi-herdr/scripts/spawn-hc-peer.mjs");
+const script = resolve("packages/pi-herdr/src/hc-peer.mjs");
 const helper = (await import(pathToFileURL(script).href)) as Helper;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -64,14 +50,11 @@ async function temporaryDirectory() {
   return realpath(directory);
 }
 const cwd = resolve(tmpdir(), "project with ' quotes $(not-executed); space");
-const options: Options = {
-  name: "reviewer",
-  taskFile: resolve(tmpdir(), "task.txt"),
-  piCli: resolve(tmpdir(), "trusted Pi/dist/cli.js"),
-};
-const task =
-  "Task independent-a: inspect only owned file. Do not build, commit, or delegate. $(touch /BAD); ' \" --wait";
-const launchArgv = (entry = helper.packageRoot, skill = helper.skillDirectory) => [
+const task = "Self-contained task: inspect only the owned file. Preserve punctuation: ' $ \".";
+const options: Options = { name: "reviewer", text: task, piCli: resolve(tmpdir(), "trusted Pi/dist/cli.js") };
+const packageRoot = resolve("packages/pi-herdr");
+const skillDirectory = join(packageRoot, "skills/pi-herdr");
+const launchArgv = (entry = packageRoot, skill = skillDirectory) => [
   process.execPath,
   options.piCli,
   "-e",
@@ -79,7 +62,7 @@ const launchArgv = (entry = helper.packageRoot, skill = helper.skillDirectory) =
   "--skill",
   skill,
 ];
-type Call = { endpoint: string; method: string; params: Json; options: RequestOptions };
+type Call = { method: string; params: Json; options: RequestOptions };
 function terminal(address: string, argv: string[]): Json {
   return {
     address,
@@ -118,8 +101,8 @@ function fixture() {
     before: undefined as ((call: Call, count: number) => void) | undefined,
     after: undefined as ((call: Call, result: unknown, count: number) => unknown) | undefined,
   };
-  const request: Request = async (endpoint, method, params, requestOptions = {}) => {
-    const call = { endpoint, method, params: structuredClone(params), options: requestOptions };
+  const request: Request = async (method, params, requestOptions = {}) => {
+    const call = { method, params: structuredClone(params), options: requestOptions };
     calls.push(call);
     state.before?.(call, calls.length);
     let result: unknown;
@@ -132,11 +115,13 @@ function fixture() {
     return structuredClone(state.after ? state.after(call, result, calls.length) : result);
   };
   const dependencies: Dependencies = {
-    env: { HC_TERMINAL_ID: "t1", HC_TERMINAL_SOCKET: "/inherited/terminal.sock", HC_SOCKET: "/must-not-use.sock" },
+    originId: "t1",
+    approve: async () => true,
+    root: packageRoot,
+    skill: skillDirectory,
     cwd,
     request,
-    readTask: async () => task,
-    assertResources: async () => helper.packageRoot,
+    assertResources: async () => packageRoot,
     resolveExecutables: async () => ({ node: process.execPath, piCli: options.piCli }),
   };
   return { calls, state, dependencies };
@@ -186,7 +171,6 @@ test("orders direct argv creation, one wait, fresh observations, and one conditi
     "terminal.get",
     "terminal.send",
   ]);
-  assert.ok(f.calls.every((call) => call.endpoint === "/inherited/terminal.sock"));
   for (const call of f.calls.filter((call) => call.method === "terminal.get")) {
     assert.deepEqual(Object.keys(call.params), ["terminal"]); // caller would mark news seen.
   }
@@ -205,7 +189,6 @@ test("orders direct argv creation, one wait, fresh observations, and one conditi
     wait: false,
   });
   assert.ok(!JSON.stringify(run).includes(task));
-  assert.ok(!JSON.stringify(run).includes(options.taskFile));
   assert.deepEqual(f.calls[5]?.params, { terminal: "t2", caller: "t1", timeout: 30 });
   assert.equal(f.calls[5]?.options.timeoutMs, helper.WAIT_TIMEOUT_MS);
   const send = mutations(f)[1];
@@ -226,9 +209,8 @@ test("orders direct argv creation, one wait, fresh observations, and one conditi
   assert.match(String(send.params.text), /not additional user authorization/u);
   assert.match(String(send.params.text), /Initiator reply terminal: t1/u);
   assert.match(String(send.params.text), /ancestry, not Pi session identity/u);
-  assert.ok(String(send.params.text).includes(join(helper.skillDirectory, "SKILL.md")));
+  assert.ok(String(send.params.text).includes(join(skillDirectory, "SKILL.md")));
   assert.ok(!/sessionDigest|interactive_ready|pi_spawn|temporary.*output/iu.test(String(send.params.text)));
-  assert.ok(f.calls.every((call) => call.options.maxBytes === helper.MAX_OUTPUT_BYTES));
 });
 
 test.each(["idle", "working", "done"])("origin %s is allowed, but the peer must report idle", async (status) => {
@@ -275,42 +257,6 @@ test.each(["message", "timeout"])(
   },
 );
 
-test("argument parsing accepts only the three needed flags and JSON help", () => {
-  const args = ["--name", options.name, "--task-file", options.taskFile, "--pi-cli", options.piCli];
-  assert.deepEqual(helper.parseArguments(args), options);
-  assert.deepEqual(helper.parseArguments(["--help"]), { help: true });
-  for (const argv of [
-    [],
-    ["-h"],
-    args.slice(0, -2),
-    [...args, "--help"],
-    [...args, "--name", "other"],
-    [...args, "--wait"],
-    [...args, "--direction", "right"],
-    [...args, "--node", process.execPath],
-    ["--name", "Upper", ...args.slice(2)],
-    ["--name", "a".repeat(33), ...args.slice(2)],
-    ["--name", "bad;cmd", ...args.slice(2)],
-    ["--name", "1bad", ...args.slice(2)],
-    ["--name", "ok", "--task-file", "relative.txt", "--pi-cli", options.piCli],
-    ["--name", "ok", "--task-file", options.taskFile, "--pi-cli", "pi"],
-    ["--name", "ok", "--task-file", options.taskFile, "--pi-cli", "/bad\u001b.js"],
-  ])
-    assert.throws(() => helper.parseArguments(argv));
-  assert.deepEqual(helper.parseArguments(["--name", "a_1-test", ...args.slice(2)]), { ...options, name: "a_1-test" });
-});
-
-test.each(["HC_TERMINAL_ID", "HC_TERMINAL_SOCKET"])("missing or blank %s fails without fallback", async (key) => {
-  for (const value of [undefined, "", "   ", "\t\n"]) {
-    const f = fixture();
-    assert.ok(f.dependencies.env);
-    if (value === undefined) delete f.dependencies.env[key];
-    else f.dependencies.env[key] = value;
-    await failed(f, /HC_TERMINAL_ID.*HC_TERMINAL_SOCKET/u);
-    assert.equal(f.calls.length, 0);
-  }
-});
-
 test("bad task, controls, resources, and executable errors fail before any RPC and hide injected causes", async () => {
   const badTasks = [
     "",
@@ -323,11 +269,10 @@ test("bad task, controls, resources, and executable errors fail before any RPC a
   ];
   for (const bad of badTasks) {
     const f = fixture();
-    f.dependencies.readTask = async () => bad;
-    await failed(f);
+    await failed(f, undefined, { ...options, text: bad });
     assert.equal(f.calls.length, 0);
   }
-  for (const seam of ["readTask", "assertResources", "resolveExecutables"] as const) {
+  for (const seam of ["assertResources", "resolveExecutables"] as const) {
     const f = fixture();
     f.dependencies[seam] = async () => {
       throw new Error(task);
@@ -338,13 +283,11 @@ test("bad task, controls, resources, and executable errors fail before any RPC a
   }
   const valid = fixture();
   const whitespace = "Task:\tkeep indentation\r\n\nReturn evidence.\n";
-  valid.dependencies.readTask = async () => whitespace;
-  await helper.spawnHcPeer(options, valid.dependencies);
+  await helper.spawnHcPeer({ ...options, text: whitespace }, valid.dependencies);
   assert.ok(String(mutations(valid)[1]?.params.text).endsWith(whitespace));
   const boundary = fixture();
   const fullTask = `x${"\t".repeat(helper.MAX_TASK_BYTES - 1)}`;
-  boundary.dependencies.readTask = async () => fullTask;
-  await helper.spawnHcPeer(options, boundary.dependencies);
+  await helper.spawnHcPeer({ ...options, text: fullTask }, boundary.dependencies);
   const send = mutations(boundary)[1];
   assert.ok(send && Buffer.byteLength(JSON.stringify(send.params)) < helper.MAX_OUTPUT_BYTES);
 });
@@ -551,7 +494,6 @@ test("cancellation after every RPC await stops further work and retains known pa
     assert.equal(f.calls.length, stop);
     assert.equal(details.address, stop >= 5 ? "t2" : undefined);
     assert.equal(details.submissionAttempted, stop === baseline.calls.length);
-    assert.ok(f.calls.every((call) => call.options.signal === controller.signal));
   }
 });
 
@@ -565,11 +507,11 @@ test("cancels an active owned request at every RPC boundary without cleaning up 
     const controller = new AbortController();
     f.dependencies.signal = controller.signal;
     let aborted = false;
-    f.dependencies.request = async (endpoint, method, params, requestOptions) => {
-      const result = await request(endpoint, method, params, requestOptions);
+    f.dependencies.request = async (method, params, requestOptions) => {
+      const result = await request(method, params, requestOptions);
       if (f.calls.length !== stop) return result;
       return new Promise((_resolve, reject) => {
-        requestOptions?.signal?.addEventListener(
+        controller.signal.addEventListener(
           "abort",
           () => {
             aborted = true;
@@ -586,20 +528,15 @@ test("cancels an active owned request at every RPC boundary without cleaning up 
   }
 });
 
-test("task/resource/executable awaits honor cancellation before the first socket call", async () => {
-  for (const seam of ["readTask", "assertResources", "resolveExecutables"] as const) {
+test("resource/executable awaits honor cancellation before the first socket call", async () => {
+  for (const seam of ["assertResources", "resolveExecutables"] as const) {
     const f = fixture();
     const controller = new AbortController();
     f.dependencies.signal = controller.signal;
-    if (seam === "readTask")
-      f.dependencies.readTask = async () => {
-        controller.abort();
-        return task;
-      };
     if (seam === "assertResources")
       f.dependencies.assertResources = async () => {
         controller.abort();
-        return helper.packageRoot;
+        return packageRoot;
       };
     if (seam === "resolveExecutables")
       f.dependencies.resolveExecutables = async () => {
@@ -613,76 +550,6 @@ test("task/resource/executable awaits honor cancellation before the first socket
   preCancelled.dependencies.signal = AbortSignal.abort();
   await failed(preCancelled, /cancelled/u);
   assert.equal(preCancelled.calls.length, 0);
-});
-
-function taskFs({
-  content = Buffer.from(task),
-  stop = "",
-  controller = new AbortController(),
-  changedType = false,
-} = {}) {
-  const calls: string[] = [];
-  let cursor = 0;
-  let flags = 0;
-  const checkpoint = (name: string) => {
-    calls.push(name);
-    if (name === stop) controller.abort();
-  };
-  const info = { isFile: () => true, size: Math.min(content.length, helper.MAX_TASK_BYTES) };
-  const handle: Handle = {
-    stat: async () => {
-      checkpoint("fstat");
-      return changedType ? { ...info, isFile: () => false } : info;
-    },
-    read: async (buffer, offset, length) => {
-      checkpoint(cursor ? "read-eof" : "read");
-      const bytesRead = content.copy(buffer, offset, cursor, cursor + length);
-      cursor += bytesRead;
-      return { bytesRead };
-    },
-    close: async () => {
-      checkpoint("close");
-    },
-  };
-  const fs: Partial<Fs> = {
-    stat: async () => {
-      checkpoint("stat");
-      return info;
-    },
-    open: async (_path, mode) => {
-      flags = mode;
-      checkpoint("open");
-      return handle;
-    },
-  };
-  return { fs, calls, controller, flags: () => flags };
-}
-
-test("bounded reader closes descriptors after every I/O cancellation, including after open and final close", async () => {
-  for (const stop of ["stat", "open", "fstat", "read", "read-eof", "close"]) {
-    const io = taskFs({ stop });
-    const f = fixture();
-    f.dependencies.signal = io.controller.signal;
-    f.dependencies.readTask = (path, ioOptions) => helper.readTaskFile(path, { ...ioOptions, fs: io.fs });
-    await failed(f, /cancelled/u);
-    assert.equal(io.calls.includes("close"), stop !== "stat");
-    assert.equal(f.calls.length, 0);
-    if (stop !== "stat") assert.equal(io.flags() & (constants.O_NONBLOCK ?? 0), constants.O_NONBLOCK ?? 0);
-  }
-});
-
-test("reader fstat rejects a swapped nonregular file and bounded reads reject growth and malformed UTF-8", async () => {
-  for (const io of [
-    taskFs({ changedType: true }),
-    taskFs({ content: Buffer.alloc(helper.MAX_TASK_BYTES + 1) }),
-    taskFs({ content: Buffer.from([0xff]) }),
-  ]) {
-    const f = fixture();
-    f.dependencies.readTask = (path, ioOptions) => helper.readTaskFile(path, { ...ioOptions, fs: io.fs });
-    await failed(f, /bounded regular UTF-8/u);
-    assert.equal(io.calls.at(-1), "close");
-    assert.equal(f.calls.length, 0);
-  }
 });
 
 function resourceFs(stop = 0, controller = new AbortController()) {
@@ -852,64 +719,36 @@ test("Windows direct executable argv uses forward slashes to exclude native temp
   }
 });
 
-test.skipIf(process.platform === "win32")(
-  "FIFO, device, directory, invalid UTF-8, and oversize task inputs fail bounded before RPC",
-  async () => {
-    const directory = await temporaryDirectory();
-    const fifo = join(directory, "task.fifo");
-    await new Promise<void>((resolveCreated, reject) => {
-      execFile("/usr/bin/mkfifo", [fifo], { timeout: 1000 }, (error) => (error ? reject(error) : resolveCreated()));
-    });
-    const input = join(directory, "task.txt");
-    for (const path of [fifo, "/dev/null", directory]) {
-      const f = fixture();
-      delete f.dependencies.readTask;
-      await failed(f, /bounded regular UTF-8/u, { ...options, taskFile: path });
-      assert.equal(f.calls.length, 0);
-    }
-    for (const content of [Buffer.from([0xff]), Buffer.alloc(helper.MAX_TASK_BYTES + 1)]) {
-      await writeFile(input, content);
-      const f = fixture();
-      delete f.dependencies.readTask;
-      await failed(f, /bounded regular UTF-8/u, { ...options, taskFile: input });
-      assert.equal(f.calls.length, 0);
-    }
-  },
-);
-
 test("copied installed helper is self-contained and chooses dist package root or source-only Git entry", async () => {
   const directory = await temporaryDirectory();
   const root = join(directory, "node_modules/@example/pi-herdr");
   const skill = join(root, "skills/pi-herdr");
-  const installed = join(skill, "scripts/spawn-hc-peer.mjs");
+  const installed = join(root, "src/hc-peer.mjs");
   await mkdir(dirname(installed), { recursive: true });
   await mkdir(join(root, "dist"));
   await copyFile(script, installed);
-  await copyFile(join(dirname(script), "hc-rpc.mjs"), join(dirname(installed), "hc-rpc.mjs"));
+  await mkdir(skill, { recursive: true });
   await writeFile(join(root, "dist/index.ts"), "INERT RESOURCE\n");
   await writeFile(join(skill, "SKILL.md"), "# Inert resource\n");
   const imported = (await import(pathToFileURL(installed).href)) as Helper;
-  assert.equal(imported.packageRoot, root);
-  assert.equal(imported.skillDirectory, skill);
-  const input = join(directory, "task ' quoted.txt");
-  await writeFile(input, task);
   for (const source of [false, true]) {
     const f = fixture();
-    delete f.dependencies.readTask;
+    Object.assign(f.dependencies, { root, skill });
     delete f.dependencies.assertResources;
     const entry = source ? join(root, "src/index.ts") : root;
     f.state.target.argv = launchArgv(entry, skill);
-    await imported.spawnHcPeer({ ...options, taskFile: input }, f.dependencies);
+    await imported.spawnHcPeer(options, f.dependencies);
     assert.deepEqual(mutations(f)[0]?.params.argv, launchArgv(entry, skill));
     if (!source) {
       await rm(join(root, "dist"), { recursive: true });
-      await mkdir(join(root, "src"));
+      await mkdir(join(root, "src"), { recursive: true });
       await writeFile(join(root, "src/index.ts"), "INERT SOURCE\n");
     }
   }
   await rm(join(root, "src/index.ts"));
   const missing = fixture();
   delete missing.dependencies.assertResources;
+  Object.assign(missing.dependencies, { root, skill });
   await assert.rejects(imported.spawnHcPeer(options, missing.dependencies), /package entrypoint/u);
   assert.equal(missing.calls.length, 0);
 });
@@ -935,64 +774,3 @@ test.skipIf(process.platform === "win32")(
     await assert.rejects(helper.checkResources(root, directory), /belong/u);
   },
 );
-
-test("CLI JSON help/environment errors are bounded and never start a core; signal listeners are released", async () => {
-  const signals = new EventEmitter();
-  const chunks: string[] = [];
-  const dependencies = { env: {}, signals, stdout: { write: (value: string) => chunks.push(value) } };
-  assert.equal(await helper.runCli(["--help"], dependencies), 0);
-  assert.equal(typeof (JSON.parse(chunks[0] ?? "") as Json).usage, "string");
-  const args = ["--name", options.name, "--task-file", options.taskFile, "--pi-cli", options.piCli];
-  assert.equal(await helper.runCli(args, dependencies), 1);
-  const failure = JSON.parse(chunks[1] ?? "") as Json;
-  assert.match(String(failure.error), /HC_TERMINAL_ID.*HC_TERMINAL_SOCKET/u);
-  assert.equal(failure.submissionAttempted, false);
-  assert.equal(await helper.runCli(["--bad", task], dependencies), 1);
-  assert.ok(!chunks.join("").includes(task));
-  assert.equal(signals.listenerCount("SIGINT"), 0);
-  assert.equal(signals.listenerCount("SIGTERM"), 0);
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    let aborted = false;
-    const code = await helper.runCli(args, {
-      ...dependencies,
-      spawn: async (_opts: Options, deps: Dependencies) => {
-        deps.signal?.addEventListener(
-          "abort",
-          () => {
-            aborted = true;
-          },
-          { once: true },
-        );
-        signals.emit(signal);
-        throw new Error(task);
-      },
-    });
-    assert.equal(code, 1);
-    assert.equal(aborted, true);
-    assert.equal(signals.listenerCount(signal), 0);
-  }
-});
-
-test("standalone trusted Node CLI emits JSON help and rejects missing hc binding without connecting", async () => {
-  const result = await new Promise<{ code: unknown; stdout: string; stderr: string }>((resolveOutput) => {
-    execFile(
-      process.execPath,
-      [script, "--name", options.name, "--task-file", options.taskFile, "--pi-cli", options.piCli],
-      {
-        env: { ...process.env, HC_TERMINAL_ID: "", HC_TERMINAL_SOCKET: "", HC_SOCKET: "/do-not-route.sock" },
-        timeout: 1000,
-      },
-      (error, stdout, stderr) => resolveOutput({ code: error?.code, stdout, stderr }),
-    );
-  });
-  assert.equal(result.code, 1);
-  assert.equal(result.stderr, "");
-  assert.match(String((JSON.parse(result.stdout) as Json).error), /HC_TERMINAL_ID/u);
-  assert.ok(Buffer.byteLength(result.stdout) < 1024);
-  const output = await new Promise<string>((resolveOutput, reject) => {
-    execFile(process.execPath, [script, "--help"], { env: {}, timeout: 1000 }, (error, stdout) =>
-      error ? reject(error) : resolveOutput(stdout),
-    );
-  });
-  assert.equal(typeof (JSON.parse(output) as Json).usage, "string");
-});

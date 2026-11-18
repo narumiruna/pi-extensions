@@ -1,209 +1,65 @@
 # hc integration
 
-hc (herdr-core) is an additive backend in `pi-herdr`.
-Legacy Herdr remains supported with its existing startup contract and unresolved bare-`pi` launcher security finding.
-This backend does not fix that finding or lift the legacy release restriction documented in [Peer spawn provenance](peer-provenance.md#native-startup-contract).
+`pi-herdr` uses hc (herdr-core) to show terminal status and ancestry. It provides `herdr_peer` for independent Pi peers. Legacy Herdr still has status reporting, `/herdr`, and [display of existing provenance](peer-provenance.md), but it does not have a peer tool or a packaged spawn path.
 
-## Authority and backend selection
+## Backend selection
 
-The authoritative hc contract is the [exact upstream source](https://github.com/herdrdev/herdr-core/tree/de97ea5ba5d6877a5e082316b4a1a5b4918e861f).
-Review its `schema/hc.openrpc.json`, `schema/README.md`, and `crates/herdr-core/src/{SKILL.md,api/types.rs,api/run.rs,api/waiting.rs,input.rs,terminals.rs,server.rs}` when compatibility changes.
-Derive installed capabilities from the native schema and `hello` response, not a copied package-version requirement.
-CLI short-form JSON is not the wire contract.
-
-| Inherited binding | Selected behavior |
+| Inherited binding | Result |
 | --- | --- |
-| Both `HC_TERMINAL_ID` and `HC_TERMINAL_SOCKET` nonblank | hc, even when legacy variables also exist. |
-| Incomplete or blank hc binding | Fail closed; do not route to legacy Herdr. |
-| No hc binding | Existing legacy Herdr activation rules apply. |
+| Valid `HC_TERMINAL_ID` and `HC_TERMINAL_SOCKET` | Enable hc and register `herdr_peer`, even if legacy variables are also set. |
+| Either hc variable is set, but the pair is incomplete or invalid | Disable the integration. Do not fall back to legacy Herdr. |
+| Neither hc variable is set | Use legacy Herdr if `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are set as required. |
 
-`HC_SESSION` is optional native core scoping; it is not an invented endpoint requirement.
-The backend uses the inherited terminal socket directly, never private socket discovery or a CLI-selected default core.
-Skill CLI calls bind `HC_SOCKET="$HC_TERMINAL_SOCKET"` per command, using an explicitly verified absolute external hc executable from trusted install configuration.
-Neither the extension nor its helper installs, auto-starts, stops, restarts, updates, or configures a core.
-It does not configure remote machines or sessions.
-Native lists may include mirrors already configured by the user; their complete native addresses remain intact.
-hc does not arrange windows; herdr-app owns layouts and is not integrated here.
+The extension uses the inherited socket directly. `HC_SESSION` is optional native core scoping, not an endpoint requirement. The extension does not select another socket, start or configure a core, or arrange windows. Native lists can include mirrors that the user already configured. Their complete addresses remain intact.
 
-Both backends retain the same package entrypoint, `/herdr`, `herdr:agents` widget key, user `pi-herdr.json`, and synchronous process-local runtime claim.
-There is still exactly one bundled skill, [`pi-herdr`](../skills/pi-herdr/SKILL.md), and no new extension-owned settings or environment variables.
-The existing `widget` setting controls observation/display, not status reporting.
+Both backends use `/herdr`, the same `widget` setting in the user `pi-herdr.json` file, and the same widget. The setting controls display, not status reporting. See the [package README](../README.md) for command modes and settings.
 
-## Pi owns native status
+## Pi status and passive observation
 
-Pi's interactive `ProgramStatusReporter` already emits OSC 7501 `idle`, `working`, `blocked`, `done`, and `error`.
-It covers agent runs, compaction, and user dialogs, and reports the settled outcome.
-The hc backend does not add another stdout emitter, force Pi settings, or mirror legacy model/provider/thinking/session/context tokens into hc labels.
-Reporting remains Pi-owned when the extension widget is hidden or disabled.
-Non-interactive modes do not gain an extension-owned OSC reporter or widget.
+Pi's native `ProgramStatusReporter` emits OSC 7501 `idle`, `working`, `blocked`, `done`, and `error`, including during compaction and dialogs. The extension does not emit duplicate reports, change Pi settings, or send legacy metadata to hc. Pi's status reports continue when the widget is hidden or disabled. The extension does not add a reporter or widget in headless modes.
 
-## Wire and observation
+The [upstream hc source](https://github.com/herdrdev/herdr-core/tree/de97ea5ba5d6877a5e082316b4a1a5b4918e861f) documents the native API in `schema/hc.openrpc.json` and `schema/README.md`. Use the native schema and `hello` response to check compatibility, not CLI JSON output. The extension uses bounded, newline-delimited UTF-8 JSON-RPC on the inherited Unix socket or Windows named pipe. It checks response IDs and rejects malformed responses. It does not use CLI polling or terminal output.
 
-The shared [hc RPC client](../skills/pi-herdr/scripts/hc-rpc.mjs) uses JSON-RPC 2.0 in plain mode: one UTF-8 JSON message per line on the inherited Unix socket or Windows named pipe.
-It validates matching response IDs, bounds requests and frames, rejects malformed JSON/UTF-8 and errors, and closes its sockets on timeout or abort.
-It does not use framed attach streams, CLI polling, CLI auto-start, or sibling terminal output.
-Closing a connection does not undo a remote mutation.
-Native error messages can contain argv or task text; helper errors do not echo those payloads.
-
-The observer subscribes before authoritative reads.
-Native `events.subscribe` returns an initial terminal snapshot and sequence; subsequent `event`, `heartbeat`, and `missed` notifications use the same connection.
-Events invalidate data rather than replacing widget state with partial payloads.
-Serialized, coalesced `terminal.list` reads with `all:true` supply the complete identity graph, including retained finished ancestors without marking child news as seen.
-A `missed` snapshot invalidates the display and triggers an authoritative refresh; stale sequence values are not replayed.
-After reconnect, a fresh subscription/snapshot establishes a new sequence baseline.
-
-An event during a read causes up to two consecutive snapshots to be discarded; the next complete snapshot can publish before another refresh, so sustained events do not starve display updates.
-Unexpected disconnection or invalid data clears the widget before a bounded reconnect attempt.
-A valid authoritative publication resets the consecutive-failure budget, including when no peer row is visible; a subscription acknowledgement alone does not reset it.
-Two attempts that cannot reach a valid publication leave it hidden until another session start, `/reload`, or explicit observer restart.
-Later disconnects after healthy recovery can reconnect again; cancellation still ends the session-owned retry delay.
-Session replacement, widget disable, and shutdown abort subscriptions, reads, and reconnect delays and prevent stale publication.
-The observer is scoped by `sessionManager` and generation, not the shared headless UI object.
+The widget subscribes before its authoritative `terminal.list` reads. Events mark the snapshot stale instead of supplying replacement rows. The reads are serialized and combined when multiple events arrive. If events continue during a read, the observer discards at most two consecutive snapshots. It then publishes a complete snapshot and reads again. A `missed` notification also causes a fresh read. A lost connection clears the widget before a bounded recovery attempt. A valid snapshot resets the failure budget. These read-only recovery rules do not apply to peer mutations. Session replacement, widget disable, and shutdown cancel the observer's pending work.
 
 ## Widget and terminal ancestry
 
-The hc widget preserves the shared flat five-row display, muted relationship text, width bounds, separator, and collapse/restore behavior.
-Its states include native `error`, ordered before `blocked`, `done`, `working`, `idle`, and unknown; this does not widen legacy Herdr's wire status allowlist.
-Rows show live terminals with a reported application, excluding the current terminal.
-Names, application names, addresses, and folder labels are untrusted terminal input and are sanitized before display filtering, sorting, path splitting, or truncation.
-The widget does not read terminal output, send input, focus terminals, or approve dialogs.
+The hc widget uses the same flat, five-row display as legacy Herdr. It orders states as `error`, `blocked`, `done`, `working`, `idle`, and unknown. It shows live terminals with a reported application and excludes the current terminal. It sanitizes names, addresses, application names, and folder labels for display. It does not read terminal text, focus a terminal, send input, or approve a dialog.
 
-Native `parent` is set once when a terminal starts.
-Within its `hello.core.id` scope, an address identifies that terminal forever, not whichever Pi session currently occupies it.
-The parent edge remains immutable while the record exists, including retained-terminal shell recovery and program/session replacement.
-A core restart preserves core identity; wiping native state resets it.
-Names can be reused and are presentation, not identity.
-No Pi model ID, Pi session ID, session fingerprint, or authenticated program identity is synthesized for hc relationships.
+Native `parent` records terminal ancestry. The relation does not change while the terminal record exists, including after program replacement or shell recovery. Within the native core ID, an address identifies a terminal, not the Pi session or person using it. The core ID survives a core restart and does not authenticate the endpoint. Names can be reused.
 
-The projection resolves the full native terminal graph before excluding self, finished/unreported rows, or rows beyond the display limit.
-Ambiguous addresses and cyclic ancestry cannot create a relationship.
-A missing parent is marked unavailable instead of attached to a similarly named process.
-Annotations explicitly describe terminals:
+The widget resolves ancestry before it removes hidden rows or applies the row limit. A missing parent is shown as unavailable. Ambiguous addresses and cycles do not create relationships. The labels say `terminal spawned by you`, `spawned your terminal`, or `terminal spawned by <peer>`. These labels grant no authority or right to end the peer.
 
-```text
-reviewer · t7 · repo · terminal spawned by you
-implementer · t3 · repo · spawned your terminal
-researcher · t9 · repo · terminal spawned by reviewer/t7
-```
+## Peer tool
 
-These are illustrative labels, not evidence of physical TUI acceptance or authenticated peer ownership.
-Terminal ancestry grants no authority, subordinate role, or right to terminate the peer.
+The bundled [`pi-herdr` skill](../skills/pi-herdr/SKILL.md) uses only `herdr_peer`. There is no Bash, CLI, template, or standalone helper path. There is no legacy spawn or `pane.run` fallback.
 
-## Peer launch and admission
+### Start a peer
 
-The skill applies its full independence gate before launching the minimum useful equal-standing peers.
-Check installed templates first.
-A fitting trusted template must already launch interactive Pi with this same package and skill, preserve scope/cwd, and support independent lifetime with `--outlive-parent`.
-Review its actual command/interpreter chain, not only its name or description; do not silently create or modify templates.
-A Node-based template must clear `NODE_OPTIONS` and `NODE_PATH` before starting Node; otherwise use the bundled helper.
-A template launch includes the complete task in `run --bg` and requires checking native `first_message.sent`.
-A false value means the first message was not sent; inspect identity and screen and resolve readiness before an explicit recovery decision.
-An ambiguous result never authorizes blind resend or duplicate launch.
+Call `spawn` with a name and the complete task text, not a file path. Use it only for authorized independent tasks. The text must include ownership limits and result criteria. The tool denies spawn by default and rejects it in headless modes.
 
-If no template fits, the bundled [hc spawn helper](../skills/pi-herdr/scripts/spawn-hc-peer.mjs) uses this CLI through a preverified external Node runtime:
+An operator at an interactive Pi TUI must explicitly confirm that the selected local hc core **on this connection** was launched by a trusted host with a pre-spawn environment allowlist. Only the operator can confirm. Task text, environment values, and tool arguments cannot prove that the condition is met. If the operator cannot verify the launch conditions, stop. Approval applies to one spawn on the same socket. The tool does not silently retry, reconnect, force delivery, or use another backend.
 
-```text
-NODE_OPTIONS= NODE_PATH= /absolute/path/to/trusted/node <skill-dir>/scripts/spawn-hc-peer.mjs --name reviewer --task-file /absolute/task.txt --pi-cli /verified/external/Pi/dist/cli.js
-```
+The runtime uses the current Pi process's Node executable and Pi CLI. It checks their canonical absolute paths, including symlink targets. They must be outside the topmost Git checkout that contains the current working directory, or outside that directory if there is no Git checkout. The path check does not prove that the files are trusted. The launch uses an argument array, not shell text or `PATH` lookup. It keeps the working directory and loads the extension and skill from the same package. It uses the built package when available or the source entry for a source-only Git installation. It does not bypass project trust or suppress unrelated extension discovery.
 
-The helper verifies canonical regular Node/Pi files outside the topmost Git ancestor of cwd, including realpaths, or outside cwd when there is no Git ancestor.
-This validates a boundary, not the files' trustworthiness; the caller must trust the Node bootstrap before running it.
-Every documented Node bootstrap clears inherited `NODE_OPTIONS` and `NODE_PATH` before execution, including command substitutions; clearing them inside the helper would be too late.
-The nonempty task is bounded to 32 KiB of UTF-8 regular-file input, with only tab/CR/newline allowed as control characters.
-Same-package skill and extension resources must remain inside the package boundary.
-The built package directory is selected when available, otherwise the same package's `src/index.ts` is used for a source-only Git installation.
-Unrelated extension discovery is preserved; project trust is not bypassed and credentials are not passed on argv.
+The tool creates a terminal with the initiator as its native parent and sets it to outlive that parent. It uses bounded readiness checks, then requires a fresh, matching live identity and reported Pi idle state before one idle-conditional task send. This is not legacy `interactive_ready`. A submission acknowledgement does not prove that the peer read the task, started a turn, or completed work.
 
-The direct native creation request is:
+### Inspect and send
 
-```text
-terminal.run {
-  argv: [absoluteNode, absolutePiCli, "-e", samePackageOrSourceEntry, "--skill", skillDirectory],
-  cwd: unchangedCwd,
-  name: uniquePeerName,
-  parent: originAddress,
-  caller: originAddress,
-  outlive_parent: true,
-  env: {NODE_OPTIONS: "", NODE_PATH: ""},
-  wait: false,
-  keep: false,
-  rm: false
-}
-```
+Give `inspect` the explicit canonical terminal address. Do not route by name, UI focus, or a guessed ID. The result contains sampled facts and an observation token. It does not expose terminal text or raw process arguments. Use the token promptly; do not keep it for later delivery.
 
-No shell line, bare Node/Pi lookup, UI arrangement, or template task argument is used on this path.
-The explicit native child environment clears Node preload/module lookup settings from the core without forwarding the caller's other environment values or credentials.
-There is no template `first_message` field on a direct run and no claim of legacy `interactive_ready`.
-The helper retains a known returned address even if later validation, cancellation, or startup fails.
-It never automatically kills/removes a partially created or independent peer.
+Give `send` that address, the observation token, and the complete peer message text. The tool requires freshly sampled identity to match the observation and requires reported Pi idle status before it makes one conditional `terminal.send` request. It does not force delivery. This applies in both directions between peers.
 
-Initial and critical `hello` checks require the same native `core.id`.
-The origin and target observations must retain their canonical address, PID, argv, and `created_ms`; target cwd, name, parent, and independent-lifetime facts must match the request.
-A native readiness wait is bounded to 30 seconds, with a 35-second client deadline.
-After it returns, fresh authoritative `terminal.get` checks must show live Pi with an `idle` status report; timeout/message wakeups are not themselves readiness.
-There is one `terminal.send` attempt with `if:"idle"`, `force:false`, and `wait:false`.
-Its client deadline is 70 seconds to cover native draft waiting and started observation.
-Normal helper RPCs use a five-second deadline and 128 KiB message bound; the shared client's default frame bound is 2 MiB.
-
-A successful helper result with `submitted:true` means native admission, not consumption, task completion, or successful checks.
-Native send's `started` records whether working was observed shortly after delivery; false or null/absent is not permission to send again.
-On timeout, cancellation, uncertain run/send, or a malformed acknowledgement, keep all known IDs and inspect current facts and output before deciding what happened.
-Do not automatically retry an ambiguous mutation or clean up a terminal whose ownership is uncertain.
+If the peer is blocked, replaced, or not known to be safe for input, stop and ask the operator to check the terminal. On a timeout, cancellation, or uncertain acknowledgement, keep all known addresses and report uncertainty. Closing a connection does not undo a remote action. Do not automatically resend, start a replacement, or end a peer. Verify actual results separately from status and submission acknowledgements.
 
 ## Trust and delivery limits
 
-Trust the launch environment, inherited endpoint, external executables, templates, and package code.
-Before any tool-shell or CLI startup, require a host-owned environment allowlist that excludes untrusted shell and OS loader hooks, including `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`.
-If that prerequisite is unknown or unmet, stop; an operator must prepare a clean environment outside the current session.
-Inline assignments and helper checks run too late to protect the first shell or its loader. The existing built-in Bash tool has no extension hook for changing its pre-spawn environment.
-This is an unresolved bootstrap boundary, not a guarantee supplied by the direct helper or its Node-only environment overrides.
-The endpoint is not authenticated by this extension.
-Native status is self-reported, and foreground/PID/argv are sampled observations, not authenticated Pi or session identity.
-An unchanged address identifies a terminal, not its current program or user input ownership.
+**The allowlist must govern the effective environment of programs started by hc.** Sanitizing only the calling Pi process is not sufficient. hc merges launch overrides into the core's base environment and retains most of that base. The host must apply the allowlist before program startup. It must exclude untrusted startup settings, including shell and OS loader hooks such as `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`. The confirmation prompt does not filter or prove the state of the core environment. It does not authenticate the endpoint.
 
-Native send serializes input and checks live/status/blocked conditions, but cannot atomically compare Pi/session/process/foreground identity against the helper's observations.
-A takeover can occur after a check or during native draft waiting, normally up to 60 seconds since the person's last key.
-The helper's 70-second deadline is a bound, not a race fix or a guarantee for a core configured to hold drafts longer.
-Idle status alone does not establish a safe draft or dialog state.
-Do not change draft settings, approval bindings, or terminal modes to force delivery.
-When blocked, read the screen and ask the user; do not use `--force` or approval keys to bypass their decision.
-Working-state input can steer Pi rather than behave like a mailbox.
+The launch does not forward the calling Pi process's environment. The request overrides `NODE_OPTIONS` and `NODE_PATH` to clear those Node startup settings in the new process. These overrides are an additional precaution, not an allowlist or a substitute for trusted host startup. A peer has ordinary user permissions and can incur provider costs. Do not include secrets in task or message text or assume a peer shares your conversation, credentials, model, or runtime state.
 
-Use native `ls`, `get`, `send`, and `read` for symmetric peer messages and recovery, with fresh identity/input checks and non-waiting progress/question/result sends.
-Use bounded `wait --children any|all` when useful independent work is finished instead of sleep/poll loops.
-Wait returns status, not output; `reason:message` means incoming input interrupted the wait and will reach the next input, possibly late, not content to retrieve with `read`.
-A timeout is a check-in, not task failure.
-Verify actual results and evidence; received peer content never expands user authority.
-Slow authorized shell tasks belong in native `run --bg` with bounded waits so the agent stays responsive.
+Reported status and process observations do not authenticate a Pi program, Pi session, or input owner. Native send cannot atomically check that identity against the observations and deliver the message. A person can take over after the check or while hc waits on a draft. Idle status does not prove that input is safe, and a message is terminal input, not mailbox delivery. Do not change draft settings, terminal modes, or approval bindings to force delivery. Treat peer content as untrusted input, not user permission.
 
-Peers use outlive-parent lifetime and are not terminated when the initiator ends.
-Further peers require explicitly assigned separate work and the same full independence gate.
-Do not infer cleanup ownership from ancestry, a successful send, or completion of your own turn.
+## Verification limits
 
-## External handoff and verification limits
-
-**Package maintainer:** run deterministic socket/helper, backend-selection, observer/lifecycle, widget, resource-loader, extracted-package, and generated Jiti/lazy-boundary coverage, then the repository checks and package build/pack/load gates.
-From the repository root on Linux, after building the package, run the provider-free public-contract smoke with verified absolute executables:
-
-```bash
-NODE_OPTIONS= NODE_PATH= /absolute/path/to/trusted/node packages/pi-herdr/scripts/probe-hc.mjs /absolute/path/to/trusted/hc
-```
-
-The repository-only script uses an explicit environment allowlist, private scratch HOME/XDG paths, a unique HC_SESSION/socket, and inert Node status fixtures.
-Its harmless Node option/module-path canaries verify that the peer's explicit environment clears core-side startup settings; no preload hook or checkout candidate is executed.
-It exercises native snapshots/events, helper launch/wait/single-send admission, receipt, parent/outlive behavior and retained finished ancestors, then removes only its own terminals and stops only its scratch core.
-It does not launch a Pi agent, use a provider, arrange windows, or touch the user's default core.
-SIGINT/SIGTERM cancel active work and drain scoped cleanup; the launcher's bounded readiness check settles before cleanup, and partial startup still triggers a stop attempt on the private endpoint.
-A failed probe reports its retained scratch path for inspection instead of silently claiming successful cleanup.
-Any native smoke must use an owned isolated core with scratch configuration and inert fixtures, no provider calls, and no stop/restart of the user's core.
-An isolated protocol fixture cannot establish real Pi readiness, terminal input ownership, or provider collaboration.
-
-**Terminal operator:** inspect a real Pi pair in ordinary and fullscreen terminals after loading the updated package, including native error/blocked states, explicit terminal ancestry, rename, narrow widths, disclosure, focus, recovery, and user takeover.
-Physical TUI appearance and terminal/keybinding-specific delivery remain unverified without this check.
-
-**Account owner:** only after explicit provider authorization and existing authentication, run two Pi peers on genuinely independent work and exchange progress, a question/answer, and a final result.
-Provider entitlement, latency, model compliance with independence, and provider/TUI end-to-end behavior remain unverified.
-Do not request secrets, bypass MFA, incur unauthorized costs, or retry a clear entitlement failure.
-
-The legacy native-launch security finding remains open regardless of the PR's review state; hc's direct argv path is not a legacy fix.
-No first publication, npm visibility change, tag, or release workflow is authorized by this integration or its verification handoff.
+Run the repository checks and package artifact checks for release work. Use an isolated core or controlled socket fixture with inert processes for protocol checks. Do not use the user's core for destructive checks. These checks do not verify physical TUI behavior, input ownership, or real provider collaboration. Do not claim those results without separate verification.

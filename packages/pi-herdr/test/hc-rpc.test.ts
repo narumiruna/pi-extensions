@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, test, vi } from "vitest";
-import type { HcRequestOptions } from "../skills/pi-herdr/scripts/hc-rpc.mjs";
+import type { HcRequestOptions } from "../src/hc-rpc.mjs";
 
-const script = pathToFileURL(resolve("packages/pi-herdr/skills/pi-herdr/scripts/hc-rpc.mjs")).href;
-const { HC_MAX_FRAME_BYTES, requestHc, subscribeHc } = (await import(
+const script = pathToFileURL(resolve("packages/pi-herdr/src/hc-rpc.mjs")).href;
+const { HC_MAX_FRAME_BYTES, requestHc, subscribeHc, withHcConnection } = (await import(
   script
-)) as typeof import("../skills/pi-herdr/scripts/hc-rpc.mjs");
+)) as typeof import("../src/hc-rpc.mjs");
 const cleanups: Array<() => Promise<void>> = [];
 
 function spyOnConnections() {
@@ -47,7 +47,7 @@ afterEach(async () => {
 type RpcRequest = { jsonrpc: string; id: number; method: string; params: Record<string, unknown> };
 type Peer = { socket: net.Socket; request: RpcRequest; closed: Promise<void> };
 
-async function listen() {
+async function listen(onRequest?: (peer: Peer) => void) {
   const directory = await mkdtemp(join(tmpdir(), "hc-rpc-"));
   const endpoint =
     process.platform === "win32"
@@ -77,7 +77,9 @@ async function listen() {
         try {
           const request = JSON.parse(line) as RpcRequest;
           requests.push(request);
-          received.resolve({ socket, request, closed });
+          const peer = { socket, request, closed };
+          received.resolve(peer);
+          onRequest?.(peer);
         } catch (error) {
           received.reject(error);
         }
@@ -122,6 +124,41 @@ function assertReleased(socket: net.Socket, signal?: AbortSignal) {
 }
 
 const options = { timeoutMs: 1000 };
+
+test("sequential peer requests share one bounded socket and match distinct IDs", async () => {
+  const fixture = await listen(({ socket, request }) => socket.write(wire({ ...ack(request.method), id: request.id })));
+  const controller = new AbortController();
+  await withHcConnection(
+    fixture.endpoint,
+    async (request) => {
+      assert.equal(await request("hello"), "hello");
+      assert.equal(await request("terminal.get"), "terminal.get");
+    },
+    { signal: controller.signal },
+  );
+  assert.equal(connections.mock.calls.length, 1);
+  assert.deepEqual(
+    fixture.requests.map(({ id }) => id),
+    [1, 2],
+  );
+  assertReleased(client(), controller.signal);
+});
+
+test("a disconnect before approval cannot reopen the connection for a mutation", async () => {
+  const fixture = await listen(({ socket, request }) => {
+    socket.end(wire({ ...ack(request.method), id: request.id }));
+  });
+  await withHcConnection(fixture.endpoint, async (request, disconnected) => {
+    assert.equal(await request("hello"), "hello");
+    if (!disconnected.aborted) await once(disconnected, "abort");
+    assert.throws(() => request("terminal.run"), /not available/u);
+  });
+  assert.equal(connections.mock.calls.length, 1);
+  assert.deepEqual(
+    fixture.requests.map(({ method }) => method),
+    ["hello"],
+  );
+});
 
 test("sends one JSON-RPC 2.0 request with id 1 and settles only the first acknowledgement", async () => {
   const fixture = await listen();
