@@ -1,5 +1,19 @@
 # @narumitw/pi-sync
 
+## 0.60.3
+
+### Patch Changes
+
+- b7d9e1c: Fix a hang after accepting a resource reload following a pull or rollback. Finish the sync operation and close its dialogs before reloading Pi.
+- b4d548c: Treat an empty session path as absent instead of invalid, so `pi --no-session` runs stop reporting `Pi session paths must be absolute` on startup while still syncing nothing for that ephemeral session.
+- 223b0ba: Restore a live Pi session after its heartbeat expires without reloading Pi. The
+  daemon distinguishes heartbeat expiry from deliberate disconnection and keeps
+  file-queue and session protection in place. Pi Sync reconnects to the same owner
+  without resubmitting interrupted operations, and checks participation before
+  reporting that it is connected.
+- Updated dependencies [223b0ba]
+  - @narumitw/pi-sync-daemon@0.4.0
+
 ## 0.60.2
 
 ### Patch Changes
