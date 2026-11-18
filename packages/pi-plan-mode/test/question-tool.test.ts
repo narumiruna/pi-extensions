@@ -39,13 +39,13 @@ const numberedQuestion: PlanModeQuestion = {
   options: [
     { label: "1. 同 major 升版", description: "Update compatible dependencies." },
     { label: "\u001b[31m 2. 只改 lockfile", description: "Keep existing version constraints." },
-    { label: "3. 允許跨 major", description: "Require a compatibility review." },
+    { label: "3. 允許跨 major 👩\u200d💻", description: "Require a compatibility review." },
   ],
 };
 const numberedRows = [
   "1. 同 major 升版 — Update compatible dependencies.",
   "2. 只改 lockfile — Keep existing version constraints.",
-  "3. 允許跨 major — Require a compatibility review.",
+  "3. 允許跨 major 👩\u200d💻 — Require a compatibility review.",
   "4. Other (free-form)",
 ];
 
@@ -241,6 +241,27 @@ test.each([1, 2])("TUI review identifies option %i when labels match after prefi
   assert.partialDeepStrictEqual(answers?.[0], { answer: `${optionIndex}) Use defaults`, optionIndex });
 });
 
+test("TUI keeps the full sequence when a label has no visible text after its marker", async () => {
+  const label = "2) \u200b \u200d";
+  const question: PlanModeQuestion = {
+    ...questions[0],
+    options: [{ label: "1) Small" }, { label }],
+  };
+  const tui = createTuiHarness({ width: 80, rows: 30 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = askPlanModeQuestions([question], context.ctx);
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  const choices = stripVTControlCharacters(tui.render().join("\n"));
+  tui.press("tui.select.down");
+  tui.press("tui.select.confirm");
+
+  const answers = await running;
+  assert.match(choices, /1\. 1\) Small/u);
+  assert.match(choices, /2\. 2\) /u);
+  assert.partialDeepStrictEqual(answers?.[0], { answer: label, optionIndex: 2 });
+});
+
 test.each([
   { name: "mixed labels", labels: ["\u001b[31m 1. Same major", "Lockfile only"] },
   { name: "mismatched positions", labels: ["1. Same major", "3. Across major"] },
@@ -250,6 +271,7 @@ test.each([
   { name: "zero-width space after a prefix", labels: ["1) Same major", "2) \u200b"] },
   { name: "variation selector after a prefix", labels: ["1) Same major", "2) \ufe0f"] },
   { name: "mixed invisible remainder", labels: ["1) Same major", "2) \u200b \u2060\u00ad\u034f\ufe0f "] },
+  { name: "non-printing marks and spaces after a prefix", labels: ["1. Same major", "2. \u0301 \u{e0100}"] },
   { name: "numeric content", labels: ["1.5 GiB", "2 MB", "2026. Plan"] },
 ])("RPC preserves $name instead of removing a partial sequence", async ({ labels }) => {
   let offeredChoices: string[] = [];
