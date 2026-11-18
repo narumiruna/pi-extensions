@@ -431,3 +431,43 @@ test("passive attach returns false for a closing owner without launching or wait
     assert.deepEqual(f.events, ["old:attach", "old:dispose"]);
     assert.equal(f.connections[0]?.run.mock.calls.length, 0);
   }));
+
+test("an older compatible owner is protection-only unless an interactive replacement opts into upgrade", () =>
+  withClient(async (f) => {
+    const [oldOwner, newOwner] = f.addresses;
+    assert.ok(oldOwner && newOwner);
+    f.attachErrors.length = 0;
+    transport.find.mockResolvedValue({ ...oldOwner, needsUpgrade: true });
+    transport.ensure.mockResolvedValueOnce({ ...newOwner, needsUpgrade: false });
+
+    const assertProtectionOnly = async (client: typeof f.client, options?: { allowUpgrade: boolean }) => {
+      const start = f.events.length;
+      try {
+        assert.equal(await client.attachExisting(options), false);
+        await assert.rejects(client.run("sync", {}), /only protecting/iu);
+        assert.deepEqual(f.events.slice(start), ["old:attach"]);
+        assert.equal(f.connections.at(-1)?.facts.ready, false);
+        assert.equal(transport.ensure.mock.calls.length, 0);
+      } finally {
+        await client.dispose();
+      }
+    };
+
+    await assertProtectionOnly(f.client);
+    for (const mode of ["print", "json"] as const) {
+      const headless = f.bindPiDaemonClient({ ...f.ctx, mode, hasUI: false }, f.session.signal);
+      await assertProtectionOnly(headless, { allowUpgrade: true });
+    }
+
+    const replacement = f.bindPiDaemonClient(f.ctx, f.session.signal);
+    try {
+      const start = f.events.length;
+      assert.equal(await replacement.attachExisting({ allowUpgrade: true }), true);
+      assert.deepEqual(transport.ensure.mock.calls, [[replacement.root, f.session.signal]]);
+      assert.deepEqual(f.events.slice(start), ["new:attach"]);
+      assert.equal(transport.stop.mock.calls.length, 0);
+      assert.equal(transport.wait.mock.calls.length, 0);
+    } finally {
+      await replacement.dispose();
+    }
+  }));

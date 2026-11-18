@@ -4,9 +4,31 @@ This daemon extraction is experimental. Deterministic Linux verification passed,
 
 ## Ownership and upgrade
 
-The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. Stop an existing installation with `sync-daemon stop --root <agent-directory>` before replacing it, then use `pi-sync-daemon` after installation. The rename changes package identity, imports, the package directory, and executable names, not IPC names, authorization digests, or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; the daemon, not an individual Pi shutdown hook, decides when the shared owner can exit. No OS service or supervisor is installed.
+The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. The rename changes the package and executable names, not the IPC names, authorization digests, or
+settings and state formats. The Pi extension remains `@narumitw/pi-sync`. Pi uses one detached service
+per canonical agent directory. It does not install an OS service.
 
-Stop the service before updating its package or rebuilding a local checkout: a surviving Node process can otherwise combine cached code with newly loaded modules from the replaced directory. A compatible protocol handshake does not upgrade the running implementation; restart explicitly after installation.
+After an update, use `/reload` in open Pi sessions. On the next active connection, the new client
+authenticates the owner and checks the build version. An older or unversioned owner acknowledges a
+stop request and releases its identity. The client waits for that process to exit before starting the
+replacement. This prevents the old owner from trying to load modules from a removed package. The
+upgrade does not run a transfer, replay an operation, or change sync settings. Passive print, JSON,
+and shutdown paths do not replace an older owner.
+
+Manual recovery:
+
+1. If Pi Sync reports retained unattended permission, review it before restarting. Revoke it
+   from a client that can still use the existing daemon. For uncertain consent or failed revocation,
+   follow [Diagnostics and rollback](#diagnostics-and-rollback) instead of clearing state.
+2. Check the owner with `pi-sync-daemon status --root <agent-directory>`. For a recognized,
+   compatible owner, use `pi-sync-daemon stop --root <agent-directory>` to request a stop. This works
+   for the old package even if its executable was removed. If the old executable is still installed,
+   you can use `sync-daemon stop --root <agent-directory>` before updating.
+3. Once the old process has exited, use `/reload`, then `/sync daemon status`. Do not force a second
+   owner or delete recovery files if the stop cannot be verified.
+
+Stop the service before rebuilding a local checkout in place. A source rebuild without a package
+version change does not trigger automatic replacement.
 
 Before the first daemon-owned transfer, close or upgrade every older Pi process and review `/sync daemon handover`. The existing operation lock excludes observed transfers, but an idle older client cannot be detected from an absent lock. Older binaries cannot be made to honor a new handover record retroactively. Do not run an old and new engine as interchangeable writers.
 

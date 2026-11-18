@@ -14,6 +14,7 @@ import {
   requestDaemon,
   waitForDaemonExit,
 } from "../dist/client.js";
+import { DAEMON_BUILD_VERSION } from "../src/build-version.js";
 import {
   daemonPaths,
   privateDirectory,
@@ -27,8 +28,9 @@ import type { Identity } from "../src/protocol.js";
 // The child owns the socket and stays alive after transport closure until explicitly released.
 // IPC, not a wall-clock delay, controls each closing-owner race.
 const ownerProgram = `
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
-const { endpoint, identity, mode } = JSON.parse(process.argv[1]);
+const { endpoint, identity, identityFile, mode, buildVersion } = JSON.parse(process.argv[1]);
 identity.pid = process.pid;
 let attached = false;
 const pendingAttach = [];
@@ -61,6 +63,12 @@ const server = createServer(async (request, response) => {
   } else if (mode === "attached" && (!attached || body.method === "poll")) {
     if (body.method === "attach") attached = true;
     value = { result: { cursor: 0, callbacks: [], events: [] } };
+  } else if (mode === "upgrade" && body.method === "hello") {
+    const { version, root, instance, pid } = identity;
+    value = { result: { version, root, instance, pid, buildVersion } };
+  } else if (mode === "upgrade" && body.method === "stop") {
+    response.once("finish", () => process.send({ type: "stop", authenticated }));
+    value = { result: { stopping: true } };
   } else if (mode === "incompatible") {
     value = { result: { ...identity, version: 2 } };
   } else if (mode === "malformed") {
@@ -75,7 +83,12 @@ const server = createServer(async (request, response) => {
   response.once("finish", () => process.send({ type: "hello", authenticated }));
   response.end(JSON.stringify(value));
 });
-process.on("message", (message) => {
+process.on("message", async (message) => {
+  if (message === "release") {
+    await rm(identityFile);
+    server.close(() => process.send({ type: "release" }));
+  }
+  if (message === "exit") process.exit(0);
   if (message === "probe") process.send({ type: "probe" });
   if (message === "close") server.close(() => process.send({ type: "closed" }));
   if (message === "reject") {
@@ -97,7 +110,8 @@ type Mode =
   | "attached"
   | "generic-attach"
   | "admitted-event"
-  | "callbacks";
+  | "callbacks"
+  | "upgrade";
 
 function message(child: ChildProcess, type: string) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -129,12 +143,16 @@ async function terminate(child: ChildProcess) {
   await exited;
 }
 
-async function fixture(run: (owner: Awaited<ReturnType<typeof createOwner>>) => Promise<void>, mode: Mode = "closing") {
+async function fixture(
+  run: (owner: Awaited<ReturnType<typeof createOwner>>) => Promise<void>,
+  mode: Mode = "closing",
+  buildVersion?: string,
+) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-closing-")));
   const paths = await runtimePaths(root);
   let owner: Awaited<ReturnType<typeof createOwner>> | undefined;
   try {
-    owner = await createOwner(root, mode);
+    owner = await createOwner(root, mode, buildVersion);
     await run(owner);
   } finally {
     // Discover a replacement even when the assertion immediately after startup failed.
@@ -162,7 +180,7 @@ async function fixture(run: (owner: Awaited<ReturnType<typeof createOwner>>) => 
   }
 }
 
-async function createOwner(root: string, mode: Mode) {
+async function createOwner(root: string, mode: Mode, buildVersion?: string) {
   const paths = await runtimePaths(root);
   await privateDirectory(paths.directory);
   const identity: Identity = {
@@ -195,7 +213,9 @@ async function createOwner(root: string, mode: Mode) {
       JSON.stringify({
         endpoint: endpoint.endpoint,
         identity,
+        identityFile: paths.identity,
         mode,
+        buildVersion,
       }),
     ],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
@@ -208,7 +228,7 @@ async function createOwner(root: string, mode: Mode) {
     await publishIdentity(paths, identity);
     const identityBytes = await fs.readFile(paths.identity);
     const rootEntries = (await fs.readdir(root, { recursive: true })).sort();
-    const command = async (type: "probe" | "close" | "reject") => {
+    const command = async (type: "probe" | "close" | "reject" | "release") => {
       const reply = message(child, type === "close" ? "closed" : type);
       child.send(type);
       await reply;
@@ -230,6 +250,96 @@ async function createOwner(root: string, mode: Mode) {
     if (endpoint.endpointDirectory) await fs.rm(endpoint.endpointDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+for (const buildVersion of [undefined, "0.0.0"]) {
+  test(`concurrent startup replaces ${buildVersion ?? "an unversioned"} owner only after drain and exit`, () =>
+    fixture(
+      async (owner) => {
+        assert.equal((await findDaemon(owner.root))?.needsUpgrade, true);
+        await owner.unchanged(); // Discovery alone does not stop the service.
+        const stopped = message(owner.child, "stop");
+        const first = ensureDaemon(owner.root);
+        const second = ensureDaemon(owner.root);
+        void Promise.allSettled([first, second]);
+        assert.equal((await stopped).authenticated, true);
+        assert.equal((await readIdentity(owner.paths))?.instance, owner.identity.instance);
+        await owner.command("release");
+        assert.equal(await readIdentity(owner.paths), undefined);
+        assert.equal(processExists(owner.identity.pid), true);
+        const exited = once(owner.child, "exit");
+        owner.child.send("exit");
+        await exited;
+        const [next, other] = await Promise.all([first, second]);
+        assert.notEqual(next.identity.instance, owner.identity.instance);
+        assert.equal(next.identity.instance, other.identity.instance);
+        assert.equal(next.needsUpgrade, false);
+        await owner.preserved();
+      },
+      "upgrade",
+      buildVersion,
+    ));
+}
+
+for (const buildVersion of [DAEMON_BUILD_VERSION, "999.0.0"]) {
+  test(`startup reuses an owner on build ${buildVersion} without a downgrade`, () =>
+    fixture(
+      async (owner) => {
+        assert.equal((await ensureDaemon(owner.root)).identity.instance, owner.identity.instance);
+        await owner.unchanged();
+      },
+      "upgrade",
+      buildVersion,
+    ));
+}
+
+test("cancelling an upgrade wait does not start a replacement", () =>
+  fixture(async (owner) => {
+    const controller = new AbortController();
+    const stopped = message(owner.child, "stop");
+    const result = assert.rejects(ensureDaemon(owner.root, controller.signal), { name: "AbortError" });
+    await stopped;
+    controller.abort();
+    await result;
+    await owner.unchanged();
+  }, "upgrade"));
+
+test("an older owner that exits without releasing its identity is not replaced", () =>
+  fixture(async (owner) => {
+    const stopped = message(owner.child, "stop");
+    const result = assert.rejects(ensureDaemon(owner.root), /could not upgrade the older daemon safely/u);
+    await stopped;
+    const exited = once(owner.child, "exit");
+    owner.child.send("exit");
+    await exited;
+    assert.equal(processExists(owner.identity.pid), false);
+    await result;
+    assert.deepEqual(await fs.readFile(owner.paths.identity), owner.identityBytes);
+    await owner.preserved();
+  }, "upgrade"));
+
+for (const stateDirectory of ["pi-sync", ".pisync"]) {
+  test(`an unattended grant in ${stateDirectory} blocks implicit upgrade`, () =>
+    fixture(async (owner) => {
+      const dir = path.join(owner.root, stateDirectory);
+      const target = path.join(dir, "daemon.json");
+      const consent = JSON.stringify({
+        version: 1,
+        root: owner.root,
+        handover: true,
+        nonce: "0".repeat(64),
+        setups: { active: { fingerprint: "1".repeat(64), afterExit: true } },
+      });
+      await fs.mkdir(dir);
+      await fs.writeFile(target, consent, { mode: 0o600 });
+      const messages: unknown[] = [];
+      owner.child.on("message", (value) => messages.push(value));
+      await assert.rejects(ensureDaemon(owner.root), /revoke unattended Pi Sync permission/iu);
+      await owner.command("probe");
+      assert.ok(!messages.some((value) => (value as { type?: string }).type === "stop"));
+      assert.deepEqual(await fs.readFile(owner.paths.identity), owner.identityBytes);
+      assert.equal(await fs.readFile(target, "utf8"), consent);
+    }, "upgrade"));
 }
 
 function connection(owner: Awaited<ReturnType<typeof createOwner>>, event?: () => void) {

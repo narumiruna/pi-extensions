@@ -45,6 +45,10 @@ The package declares `dist/index.ts`, so an unbuilt checkout must run the build 
 
 Extensions run with Pi's permissions, so install only packages from sources you trust.
 
+After an update, use `/reload` in open Pi sessions. Pi Sync normally stops an older daemon and
+starts the new build on the next active connection. If the stop cannot be verified or unattended
+permission needs review, follow the [daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
+
 Use a Pi runtime that satisfies this package’s declared peer floor. Installing an extension dependency does not upgrade a separately installed Pi runtime. The declared Kit floor supplies exact scrolling/paginated review and configured-keybinding support.
 
 ## 🚀 Quick start

@@ -27,8 +27,8 @@ interface Consent {
     { fingerprint: string; model?: ClientFacts["model"]; sessionDir?: string; cwd?: string; afterExit: boolean }
   >;
 }
-function file() {
-  return path.join(stateDir(), "daemon.json");
+function file(root?: string) {
+  return path.join(stateDir(root), "daemon.json");
 }
 export class ConsentPublicationError extends Error {}
 
@@ -92,7 +92,7 @@ export function revokeChangedBindings(root: string, peers: readonly ClientFacts[
 }
 
 export function readConsent(root: string): Consent | undefined {
-  const target = file();
+  const target = file(root);
   let handle: number | undefined;
   try {
     const before = lstatSync(target);

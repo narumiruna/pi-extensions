@@ -38,7 +38,9 @@ node packages/pi-sync-daemon/dist/cli.js status --root /tmp/my-pi-sync-daemon-sm
 node packages/pi-sync-daemon/dist/cli.js stop --root /tmp/my-pi-sync-daemon-smoke
 ```
 
-`start` reports the same instance when a compatible service already owns the directory. Connecting alone does not configure a backend or authorize transfers. Use the Pi client's reviewed setup flow for synchronization.
+`start` reuses a compatible owner on the same or a newer build. It stops an older owner and waits
+for it to exit before launching the new build, unless the stop cannot be verified or unattended
+permission needs review. Connecting alone does not configure a backend or authorize transfers. Use the Pi client's reviewed setup flow for synchronization.
 
 ## 💬 Commands
 
@@ -70,7 +72,9 @@ Close or upgrade every old Pi process before reviewed handover. An absent operat
 
 Automatic exit first stops new automatic work, cancels cancellable work, and drains writes, queue-release acknowledgements, persistence, and owned callbacks before releasing ownership. It adds no final sync or model request. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused with evidence retained; automatic restart must not restore an older grant. Repair persistence and use the existing revocation/repair path before explicit restart. The next eligible interactive client or explicit command can restart through singleton startup only after the old owner's exit is proven; print/JSON never launch a replacement.
 
-Stop the service before package updates, local rebuilds, or rollback, verify owner exit, and preserve pending journals and backups. A compatible connection does not upgrade a running implementation; restart explicitly after installation. Do not downgrade over pending/newer recovery evidence or restore old settings over newer bytes. Expired or old-instance operation IDs must reconcile existing journals rather than replay a possible commit. The bounded per-instance result ledger requires an explicit drained restart when full.
+Stop the service and verify owner exit before an in-place rebuild or rollback. Preserve pending
+journals and backups. Rebuilding without changing the package version does not replace the running
+owner. See the [daemon upgrade guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#ownership-and-upgrade) for package updates and manual recovery. Do not downgrade over pending/newer recovery evidence or restore old settings over newer bytes. Expired or old-instance operation IDs must reconcile existing journals rather than replay a possible commit. The bounded per-instance result ledger requires an explicit drained restart when full.
 
 CLI `status` reports the private lifecycle-log path. It retains at most 8 KiB of timestamps and lifecycle phases, not exception text, credentials, model output, or sync content; older entries roll over. It is diagnostic evidence, not a recovery journal. Child stdio is detached and discarded.
 
