@@ -219,6 +219,18 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     plan.providerPayload.messages.slice(0, normal.providerPayload.messages.length),
     normal.providerPayload.messages,
   );
+  const nextPlanMessages = [...plan.messages, { role: "user", content: "C" }];
+  const nextPlan = await captureRequest("plan", mock, context.ctx, nextPlanMessages);
+  assert.equal(nextPlan.systemPrompt, plan.systemPrompt);
+  assert.deepEqual(nextPlan.activeTools, plan.activeTools);
+  assert.equal(nextPlan.providerPayload.instructions, plan.providerPayload.instructions);
+  assert.deepEqual(nextPlan.providerPayload.tools, plan.providerPayload.tools);
+  assert.deepEqual(nextPlan.providerPayload.messages, normalizedMessages(nextPlanMessages));
+  assert.deepEqual(
+    nextPlan.providerPayload.messages.slice(0, plan.providerPayload.messages.length),
+    plan.providerPayload.messages,
+  );
+
   await completePlan(mock, context.ctx);
   await mock.commands.get("plan")?.handler("implement", context.ctx);
   const transitions = sentCustomMessages(mock);
@@ -227,15 +239,15 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     [MODE_CONTRACT_MESSAGE_TYPE, INTERACTION_CONTRACT_MESSAGE_TYPE, MODE_CONTRACT_MESSAGE_TYPE],
   );
   const implementationMessages = [
-    ...plan.messages,
+    ...nextPlan.messages,
     ...transitions.slice(activation.length),
     ...mock.sentUserMessages.map(({ text }) => ({ role: "user", content: text })),
   ];
   const implementation = await captureRequest("implementation", mock, context.ctx, implementationMessages);
   assert.deepEqual(implementation.providerPayload.messages, normalizedMessages(implementationMessages));
   assert.deepEqual(
-    implementation.providerPayload.messages.slice(0, plan.providerPayload.messages.length),
-    plan.providerPayload.messages,
+    implementation.providerPayload.messages.slice(0, nextPlan.providerPayload.messages.length),
+    nextPlan.providerPayload.messages,
   );
 
   assert.deepEqual(plan.activeTools, normal.activeTools);
@@ -255,7 +267,7 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     implementation.messages
       .filter((message) => (message as { role?: string }).role === "user")
       .map((message) => (message as { content?: unknown }).content),
-    ["A", "B", "Implement the plan."],
+    ["A", "B", "C", "Implement the plan."],
   );
   const helperMetadata = normal.activePromptMetadata.filter((tool) => tool.name.startsWith("plan_mode_"));
   assert.equal(helperMetadata.length, 2);
@@ -267,4 +279,26 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     ),
   );
   assert.ok(helperDefinitions.every((tool) => /writing-plans skill/i.test(String(tool.description))));
+  const questionDefinition = nextPlan.providerPayload.tools.find((tool) => tool.name === "plan_mode_question");
+  assert.partialDeepStrictEqual(questionDefinition?.parameters, {
+    properties: {
+      questions: {
+        items: {
+          properties: {
+            options: {
+              items: {
+                properties: {
+                  label: {
+                    type: "string",
+                    description:
+                      "Plain-text label (1-5 words) with no list numbers or bullets. The questionnaire adds the numbers.",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
 });

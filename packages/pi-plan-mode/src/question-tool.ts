@@ -76,7 +76,11 @@ export const PLAN_MODE_QUESTION_PARAMS = {
               additionalProperties: false,
               required: ["label", "description"],
               properties: {
-                label: { type: "string", description: "User-facing label (1-5 words)." },
+                label: {
+                  type: "string",
+                  description:
+                    "Plain-text label (1-5 words) with no list numbers or bullets. The questionnaire adds the numbers.",
+                },
                 description: {
                   type: "string",
                   description: "One short sentence explaining impact/tradeoff if selected.",
@@ -207,10 +211,7 @@ export async function askPlanModeQuestions(
     id: String(index),
     header: displayText(question.header, `Question ${index + 1}`, sanitizeTerminalText),
     prompt: displayText(question.question, `Question ${index + 1}`, sanitizeTerminalText),
-    options: question.options.map((option, optionIndex) => ({
-      ...option,
-      label: displayText(option.label, `Option ${optionIndex + 1}`, sanitizeTerminalText),
-    })),
+    options: displayOptions(question.options, sanitizeTerminalText),
   }));
   const result = await runQuestionnaire(ctx, {
     blocked: { kind: "question", message: "Answer Plan mode questions" },
@@ -263,6 +264,26 @@ function mapQuestionnaireResult(
       note: answer.note,
     });
   });
+}
+
+function displayOptions(
+  options: PlanModeQuestionOption[],
+  sanitize: (value: string) => string,
+): PlanModeQuestionOption[] {
+  const sanitized = options.map((option, index) => ({
+    ...option,
+    label: displayText(option.label, `Option ${index + 1}`, sanitize),
+  }));
+  if (sanitized.length < 2) return sanitized;
+
+  // Strip a prefix only from a complete sequence. Kit adds the visible numbers.
+  const unnumbered: PlanModeQuestionOption[] = [];
+  for (const [index, option] of sanitized.entries()) {
+    const match = /^(\d+)\.\s+(\S.*)$/u.exec(option.label);
+    if (!match?.[2] || match[1] !== String(index + 1)) return sanitized;
+    unnumbered.push({ ...option, label: match[2] });
+  }
+  return unnumbered;
 }
 
 function displayText(value: string, fallback: string, sanitize: (value: string) => string): string {
