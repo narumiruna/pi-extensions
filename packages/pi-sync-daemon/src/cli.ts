@@ -102,7 +102,11 @@ export async function main(args: readonly string[]) {
   const identity = await readIdentity(paths);
   if (command === "status") {
     const pending = await readUpgradeOwner(paths);
-    const summary = { root: paths.root, ...(pending && { pendingUpgradePid: pending.pid }) };
+    const summary = {
+      root: paths.root,
+      ...(identity && { recordedPid: identity.pid }),
+      ...(pending && { pendingUpgradePid: pending.pid }),
+    };
     if (
       !identity ||
       (pending?.instance === identity.instance && pending.pid === identity.pid && (await processExited(pending)))
@@ -132,9 +136,8 @@ export async function main(args: readonly string[]) {
           lifecycleLog: path.join(paths.directory, "lifecycle.log"),
         }),
       );
-    } catch (error) {
-      if (!pending) throw error;
-      // A pending owner can stop answering before it releases identity. Do not claim exit.
+    } catch {
+      // A failed hello does not prove the recorded owner exited.
       console.log(JSON.stringify({ running: null, ...summary }));
     }
     return;

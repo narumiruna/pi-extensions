@@ -20,15 +20,23 @@ after recovery.
 
 Manual recovery:
 
-1. If Pi Sync reports retained unattended permission and the old daemon still responds, revoke
-   permission from a client that can still use it before stopping it. If revocation fails, follow
-   [Diagnostics and rollback](#diagnostics-and-rollback) instead of clearing state.
-2. Run `pi-sync-daemon status --root <agent-directory>` and record the old owner's PID. Use
-   `pendingUpgradePid` to check a pending upgrade even if `running` is `false` or `null`. Otherwise
-   record `pid` before stopping the daemon. For a recognized, compatible owner, request a stop
-   with `pi-sync-daemon stop --root <agent-directory>`. This works even if the old executable was
-   removed. If it is still installed, you can use `sync-daemon stop --root <agent-directory>` before
-   updating.
+1. Revoke retained unattended permission with `/sync daemon revoke-after-exit` before updating.
+   If the upgraded client blocks on consent before creating a pending upgrade record, use an
+   already available compatible Pi client to revoke permission from the still-running owner.
+   Without a pending record, `repair-upgrade` returns `repaired: false` and does not revoke permission.
+   If no compatible client is available or revocation fails, stop here and preserve the consent,
+   identity, and recovery files.
+2. Run `pi-sync-daemon status --root <agent-directory>`.
+   - A verified `pid` identifies the owner that answered the handshake. Record it before stopping
+     that owner. Check `pendingUpgradePid` for any pending owner, even if `running` is `false` or `null`.
+   - `running: null` means the handshake failed, even if there is no pending upgrade. `recordedPid`
+     comes from the validated identity file and is only a lead. Unknown status does not prove exit
+     or compatibility. Use diagnostics from an already available compatible version to identify the
+     owner. If you cannot identify it, stop here and preserve the records.
+
+   To stop an identified, running owner, use `pi-sync-daemon stop --root <agent-directory>` if
+   compatible. This works even if the old executable was removed. If the old executable is still
+   installed and compatible, you can use `sync-daemon stop --root <agent-directory>` instead.
 3. Check the recorded PID in the operating system. On macOS or Linux, use `ps -p <pid> -o pid,args`.
    On Windows, look up the PID in Task Manager's **Details** tab. A successful `stop` confirms
    identity release, not process exit. Wait for the old process to exit. If exit is uncertain, do
@@ -80,9 +88,9 @@ stop or restart the service, and it does not extend transfer or model permission
 
 If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
 
-Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers.
+Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers. If the initial consent check blocked the update before a pending record was created, follow step 1 of [manual recovery](#ownership-and-upgrade); `repair-upgrade` cannot help in that case.
 
-CLI `status` includes an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
+A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
 
 Before rollback:
 

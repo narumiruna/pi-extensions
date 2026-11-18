@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { test } from "vitest";
 import { ensureDaemon, requestDaemon } from "../dist/client.js";
-import { runtimePaths } from "../src/identity.js";
+import { privateDirectory, publishIdentity, recordUpgradeOwner, runtimePaths, upgradeFile } from "../src/identity.js";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -75,12 +76,47 @@ test("simultaneous first clients share a detached owner that survives launcher e
     assert.notEqual(identities[0]?.pid, process.pid);
     const connected = await ensureDaemon(root);
     assert.equal(connected.identity.instance, identities[0]?.instance);
-    const status = JSON.parse((await exec(process.execPath, [cli, "status", "--root", root])).stdout) as {
-      running: boolean;
-    };
+    const { stdout, stderr } = await exec(process.execPath, [cli, "status", "--root", root]);
+    const status = JSON.parse(stdout);
     assert.equal(status.running, true);
+    assert.equal(status.pid, connected.identity.pid);
+    assert.equal(status.recordedPid, connected.identity.pid);
+    assert.equal(Object.hasOwn(status, "token"), false);
+    assert.equal(stdout.includes(connected.identity.token), false);
+    assert.equal(stderr, "");
     assert.deepEqual(await fs.readdir(root), []); // No backend, credential, or sync data activity on connect.
   }));
+
+for (const pending of [false, true]) {
+  test(`status reports an unreachable owner as unknown ${pending ? "with" : "without"} a pending upgrade`, () =>
+    fixture(async (root) => {
+      const paths = await runtimePaths(root);
+      await privateDirectory(paths.directory);
+      const identity = {
+        version: 1 as const,
+        root,
+        instance: randomUUID(),
+        pid: process.pid,
+        token: randomBytes(32).toString("hex"),
+      };
+      await publishIdentity(paths, identity); // Valid record for a live PID, but no hello endpoint.
+      if (pending) await recordUpgradeOwner(paths, identity);
+      const before = await fs.readFile(paths.identity);
+      const { stdout, stderr } = await exec(process.execPath, [cli, "status", "--root", root]);
+      assert.equal(stderr, "");
+      assert.deepEqual(JSON.parse(stdout), {
+        running: null,
+        root,
+        recordedPid: identity.pid,
+        ...(pending && { pendingUpgradePid: identity.pid }),
+      });
+      assert.deepEqual(await fs.readFile(paths.identity), before);
+      assert.deepEqual(
+        (await fs.readdir(paths.directory)).sort(),
+        [path.basename(paths.identity), ...(pending ? [path.basename(upgradeFile(paths))] : [])].sort(),
+      );
+    }));
+}
 
 test("status, stop, and repair-upgrade never start an absent daemon", () =>
   fixture(async (root) => {

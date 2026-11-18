@@ -21,6 +21,7 @@ import {
   recordUpgradeOwner,
   runtimePaths,
   type UpgradeOwner,
+  upgradeRepairStarted,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
 import {
@@ -200,6 +201,8 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
     for (;;) {
       signal?.throwIfAborted();
       const upgrade = await readUpgradeOwner(paths);
+      if (upgrade && (await upgradeRepairStarted(paths, upgrade)))
+        throw new Error("A daemon upgrade repair is incomplete. Run `pi-sync-daemon repair-upgrade` for this root.");
       const existing = await readIdentity(paths);
       if (upgrade && existing?.instance === upgrade.instance && existing.pid !== upgrade.pid)
         throw new Error("The recorded upgrade owner changed; private state was retained.");

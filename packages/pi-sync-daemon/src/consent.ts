@@ -31,13 +31,25 @@ function file(root: string) {
   return path.join(stateDir(root), "daemon.json");
 }
 export class ConsentPublicationError extends Error {}
+const MAX_CONSENT_BYTES = 65_536;
+
+function syncConsentDirectory(target: string) {
+  if (process.platform === "win32") return;
+  const directory = openSync(path.dirname(target), "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
 
 /** A small synchronous publication keeps approval, metadata revocation, and rename in one event-loop turn. */
 function publishConsent(value: Consent) {
   try {
     const target = file(value.root);
-    const content = `${JSON.stringify(value, null, "\t")}\n`;
-    if (Buffer.byteLength(content) > 65_536)
+    const formatted = `${JSON.stringify(value, null, "\t")}\n`;
+    const content = Buffer.byteLength(formatted) <= MAX_CONSENT_BYTES ? formatted : JSON.stringify(value);
+    if (Buffer.byteLength(content) > MAX_CONSENT_BYTES)
       throw new Error("Daemon consent exceeds its storage bound; existing evidence retained.");
     mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     const temporary = `${target}.${process.pid}.${randomBytes(16).toString("hex")}.tmp`;
@@ -50,14 +62,7 @@ function publishConsent(value: Consent) {
         closeSync(handle);
       }
       renameSync(temporary, target);
-      if (process.platform !== "win32") {
-        const directory = openSync(path.dirname(target), "r");
-        try {
-          fsyncSync(directory);
-        } finally {
-          closeSync(directory);
-        }
-      }
+      syncConsentDirectory(target);
     } finally {
       rmSync(temporary, { force: true });
     }
@@ -102,6 +107,8 @@ export function revokeRetainedGrants(root: string) {
     revoked += 1;
   }
   if (revoked) publishConsent(consent);
+  // A prior attempt may have renamed the synced file but failed to sync the directory.
+  else syncConsentDirectory(file(root));
   return revoked;
 }
 
@@ -113,7 +120,7 @@ export function readConsent(root: string): Consent | undefined {
     if (
       !before.isFile() ||
       before.isSymbolicLink() ||
-      before.size > 65_536 ||
+      before.size > MAX_CONSENT_BYTES ||
       (process.getuid && before.uid !== process.getuid()) ||
       (process.platform !== "win32" && before.mode & 0o077)
     )

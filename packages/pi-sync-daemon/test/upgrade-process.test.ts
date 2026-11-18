@@ -44,7 +44,10 @@ function procfs() {
   });
   const readlink = fs.readlink.bind(fs);
   vi.spyOn(fs, "readlink").mockImplementation(async (...args) => {
-    if (args[0] === "/proc/self/ns/pid") return `pid:[${linux.namespace}]`;
+    if (args[0] === "/proc/self/ns/pid") {
+      if (!linux.namespace) throw errno("ENOENT");
+      return `pid:[${linux.namespace}]`;
+    }
     if (args[0] === "/proc/self/ns/time") return `time:[${linux.timeNamespace}]`;
     return readlink(...args);
   });
@@ -135,11 +138,30 @@ test("only ESRCH proves exit without a usable birth marker", async () => {
     error = "EINVAL";
     assert.equal(await processExited({ pid }), false);
     error = "ESRCH";
-    assert.equal(await processExited({ pid, birth }), true);
+    assert.equal(await processExited({ pid }), true);
   } finally {
     spy.mockRestore();
   }
 });
+
+test.runIf(process.platform === "linux")(
+  "ESRCH proves a marked owner's exit only in the same PID namespace",
+  async () => {
+    const linux = procfs();
+    linux.available = false;
+    const kill = process.kill.bind(process);
+    vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === pid && signal === 0) throw errno("ESRCH");
+      return kill(target, signal);
+    });
+    linux.namespace = "11";
+    assert.equal(await processExited({ pid, birth }), false);
+    linux.namespace = "";
+    assert.equal(await processExited({ pid, birth }), false);
+    linux.namespace = "10";
+    assert.equal(await processExited({ pid, birth }), true);
+  },
+);
 
 test("validates persisted births and still accepts legacy PID-only upgrade records", async () => {
   const {

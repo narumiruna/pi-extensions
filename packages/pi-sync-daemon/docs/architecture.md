@@ -145,9 +145,9 @@ The authenticated `hello` response reports the running package build separately 
 version. Older releases did not report a build. During active startup, the client holds the existing
 startup lock, sends an authenticated `stop` to an older or unversioned owner, and waits for owner exit
 and identity release. A private exit record survives cancellation and timeout. It keeps the PID
-and, when available, a verified Linux process birth marker. If the marker cannot be verified,
-only `ESRCH` from the PID probe confirms absence. Later callers use the record even if the old
-identity file is gone. Concurrent startup can wait for the drain
+and, when available, a verified Linux process birth marker. For a marked owner, `ESRCH` confirms
+absence only in the recorded PID namespace. A PID-only record still requires `ESRCH`. Later callers
+use the record even if the old identity file is gone. Concurrent startup can wait for the drain
 under a bounded, cancellable lock wait. The client checks the root again before launching a replacement.
 It does not stop a newer build or start a replacement for an unreachable live owner. A retained unattended grant blocks
 implicit replacement because a legacy owner cannot report a failed revocation. The client reads
@@ -156,9 +156,10 @@ protect live sessions without starting a replacement or submitting sync operatio
 An interactive session switch attempts the same protection-only attachment if the upgrade fails.
 
 For a blocked pending upgrade, `repair-upgrade` checks exit under the startup and owner locks.
-It revokes retained unattended grants under the state migration guard and archives recovery
-records. It does not load or start the service. Clean shutdowns still clear the barrier
-without manual repair.
+It revokes retained unattended grants and verifies consent persistence under the state migration
+guard before archiving the upgrade barrier. It reuses the same private archive if repair is
+interrupted. Normal startup cannot clear an incomplete repair. The command does not start the
+daemon. Clean shutdowns still clear the barrier without manual repair.
 
 ## Cross-process apply protocol
 

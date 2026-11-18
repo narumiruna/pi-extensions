@@ -280,6 +280,13 @@ async function cliResult(command: string, root: string) {
   }
 }
 
+function beforeStartupSettles<T>(step: Promise<T>, label: string, ...startups: Promise<unknown>[]) {
+  return Promise.race([
+    step,
+    ...startups.map((startup) => startup.then(() => assert.fail(`Startup completed before ${label}.`))),
+  ]);
+}
+
 function observeExitPoll(owner: Awaited<ReturnType<typeof createOwner>>) {
   const polled = Promise.withResolvers<void>();
   const kill = process.kill.bind(process);
@@ -312,19 +319,15 @@ for (const buildVersion of [undefined, "0.0.0"]) {
         const both = Promise.all([first, second]);
         void both.catch(() => {});
         try {
-          assert.equal((await stopped).authenticated, true);
+          assert.equal(
+            (await beforeStartupSettles(stopped, "stop acknowledgement", first, second)).authenticated,
+            true,
+          );
           assert.equal((await readIdentity(owner.paths))?.instance, owner.identity.instance);
           await owner.command("release");
           const observer = observeExitPoll(owner);
           try {
-            assert.equal(
-              await Promise.race([
-                observer.first,
-                first.then(() => assert.fail("First startup completed before the exit probe.")),
-                second.then(() => assert.fail("Second startup completed before the exit probe.")),
-              ]),
-              "poll",
-            );
+            assert.equal(await beforeStartupSettles(observer.first, "the exit probe", first, second), "poll");
             assert.equal(await readIdentity(owner.paths), undefined);
             assert.equal(launches.mock.calls.length, 0);
           } finally {
@@ -366,10 +369,15 @@ test("a new caller waits for the old PID after cancellation and identity release
     launches.mockClear();
     const controller = new AbortController();
     const stopped = message(owner.child, "stop");
-    const first = assert.rejects(ensureDaemon(owner.root, controller.signal), { name: "AbortError" });
-    await stopped;
-    await owner.command("release");
-    controller.abort();
+    const startup = ensureDaemon(owner.root, controller.signal);
+    const first = assert.rejects(startup, { name: "AbortError" });
+    void first.catch(() => {});
+    try {
+      await beforeStartupSettles(stopped, "stop acknowledgement", startup);
+      await owner.command("release");
+    } finally {
+      controller.abort();
+    }
     await first;
     assert.equal(await readIdentity(owner.paths), undefined);
     const pending = await readUpgradeOwner(owner.paths);
@@ -392,10 +400,7 @@ test("a new caller waits for the old PID after cancellation and identity release
     const next = ensureDaemon(owner.root, waiting.signal);
     void next.catch(() => {});
     try {
-      assert.equal(
-        await Promise.race([observer.first, next.then(() => assert.fail("Startup completed before the exit probe."))]),
-        "poll",
-      );
+      assert.equal(await beforeStartupSettles(observer.first, "the exit probe", next), "poll");
       assert.equal(launches.mock.calls.length, 0);
       const exited = once(owner.child, "exit");
       owner.child.send("exit");
@@ -432,7 +437,7 @@ test("another startup keeps waiting beyond the former five-second lock budget an
     const next = assert.rejects(ensureDaemon(owner.root, controller.signal), { name: "AbortError" });
     void next.catch(() => {});
     try {
-      await secondAttempt.promise;
+      await beforeStartupSettles(secondAttempt.promise, "the second startup lock attempt", next);
       controller.abort();
       await next;
     } finally {
@@ -449,8 +454,10 @@ test("only explicit repair clears a pending owner that exited without releasing 
   fixture(async (owner) => {
     launches.mockClear();
     const stopped = message(owner.child, "stop");
-    const result = assert.rejects(ensureDaemon(owner.root), /without releasing its identity/u);
-    await stopped;
+    const startup = ensureDaemon(owner.root);
+    const result = assert.rejects(startup, /without releasing its identity/u);
+    void result.catch(() => {});
+    await beforeStartupSettles(stopped, "stop acknowledgement", startup);
     const active = await cliResult("status", owner.root);
     assert.equal(active.running, true);
     assert.equal(active.pid, owner.identity.pid);
@@ -480,8 +487,10 @@ test("offline upgrade repair revokes grants written during drain without launchi
   fixture(async (owner) => {
     launches.mockClear();
     const stopped = message(owner.child, "stop");
-    const result = assert.rejects(ensureDaemon(owner.root), /review or revoke unattended/iu);
-    await stopped;
+    const startup = ensureDaemon(owner.root);
+    const result = assert.rejects(startup, /review or revoke unattended/iu);
+    void result.catch(() => {});
+    await beforeStartupSettles(stopped, "stop acknowledgement", startup);
     const state = path.join(owner.root, ".pisync");
     const file = path.join(state, "daemon.json");
     const consent = {
@@ -568,7 +577,7 @@ test("the upgrade waits for the migration guard before selecting and reading con
     );
     void result.catch(() => {});
     try {
-      await tried.promise;
+      await beforeStartupSettles(tried.promise, "the migration guard attempt", result);
       await fs.rename(legacy, canonical);
     } finally {
       await release();

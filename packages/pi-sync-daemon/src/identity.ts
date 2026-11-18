@@ -84,6 +84,20 @@ const birthPattern =
 export function upgradeFile(paths: RuntimePaths) {
   return path.join(paths.directory, "upgrade-owner.json");
 }
+/** One private archive per upgrade instance, including across partial repair retries. */
+export function upgradeArchivePath(paths: RuntimePaths, owner: Pick<UpgradeOwner, "instance">) {
+  return path.join(paths.directory, `upgrade-recovery-${owner.instance}`);
+}
+/** A repair must finish explicitly once it starts changing consent or moving evidence. */
+export async function upgradeRepairStarted(paths: RuntimePaths, owner: Pick<UpgradeOwner, "instance">) {
+  try {
+    await fs.lstat(upgradeArchivePath(paths, owner));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
 export async function readUpgradeOwner(paths: RuntimePaths): Promise<UpgradeOwner | undefined> {
   const value = await readPrivateRecord(upgradeFile(paths));
   if (value === undefined) return;
@@ -158,19 +172,23 @@ export function processExists(pid: number) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
+async function readPidNamespace() {
+  const scope = await fs.readlink("/proc/self/ns/pid");
+  return /^pid:\[([0-9]+)\]$/u.exec(scope)?.[1];
+}
+
 /** Linux start ticks from a procfs view that agrees with the caller's PID namespace. */
 export async function readProcessBirth(pid: number): Promise<string | undefined> {
   if (process.platform !== "linux") return;
   try {
-    const [status, pidScope, timeScope, boot, stat] = await Promise.all([
+    const [status, pidNamespace, timeScope, boot, stat] = await Promise.all([
       fs.readFile("/proc/self/status", "utf8"),
-      fs.readlink("/proc/self/ns/pid"),
+      readPidNamespace(),
       fs.readlink("/proc/self/ns/time"),
       fs.readFile("/proc/sys/kernel/random/boot_id", "utf8"),
       fs.readFile(`/proc/${pid}/stat`, "utf8"),
     ]);
     if (/^NSpid:[\t ]+([0-9]+)[\t ]*$/mu.exec(status)?.[1] !== String(process.pid)) return;
-    const pidNamespace = /^pid:\[([0-9]+)\]$/u.exec(pidScope)?.[1];
     // The kernel offsets start ticks using the reader's time namespace.
     const timeNamespace = /^time:\[([0-9]+)\]$/u.exec(timeScope)?.[1];
     if (pidNamespace === undefined || timeNamespace === undefined || !stat.startsWith(`${pid} (`)) return;
@@ -187,12 +205,21 @@ export async function readProcessBirth(pid: number): Promise<string | undefined>
     // Missing or unreadable procfs is not evidence of process exit.
   }
 }
-/** Only ESRCH or a verifiably different occupant proves that the recorded owner exited. */
+/** A marked owner must be visible in the same PID namespace before absence proves exit. */
 export async function processExited({ pid, birth }: ProcessIdentity): Promise<boolean> {
-  if (!processExists(pid)) return true;
-  if (!validBirth(birth)) return false;
+  const exists = processExists(pid);
+  if (birth === undefined) return !exists; // Legacy PID-only records.
+  if (process.platform !== "linux" || !validBirth(birth)) return false;
+  const namespaces = birth.split(":")[1];
+  if (!exists) {
+    try {
+      return (await readPidNamespace()) === namespaces.split(".")[0];
+    } catch {
+      return false;
+    }
+  }
   const current = await readProcessBirth(pid);
-  return current !== undefined && current !== birth && current.split(":")[1] === birth.split(":")[1];
+  return current !== undefined && current !== birth && current.split(":")[1] === namespaces;
 }
 export function publishIdentity(paths: RuntimePaths, identity: Identity) {
   return publishPrivateRecord(paths, paths.identity, identity);

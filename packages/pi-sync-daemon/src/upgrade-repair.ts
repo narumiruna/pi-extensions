@@ -11,6 +11,7 @@ import {
   readIdentity,
   readUpgradeOwner,
   runtimePaths,
+  upgradeArchivePath,
   upgradeFile,
 } from "./identity.js";
 
@@ -36,14 +37,16 @@ export async function repairUpgrade(root: string) {
         throw new Error("The recorded upgrade owner changed; private state was retained.");
       if (!(await processExited(pending)))
         throw new Error("Cannot verify that the old Pi Sync daemon has exited; private state was retained.");
+      assertRoot();
+      // The archive also marks a repair in progress before consent or recovery records change.
+      const archive = upgradeArchivePath(paths, pending);
+      await privateDirectory(archive);
       const revokedGrants = await withStateDirectoryGuardForRoot(paths.root, () => {
         assertRoot();
         return revokeRetainedGrants(paths.root);
       });
       assertRoot();
       // Keep the original bytes private. Move the barrier last so interrupted repair can be retried.
-      const archive = await fs.mkdtemp(path.join(paths.directory, "upgrade-recovery-"));
-      assertRoot();
       if (identity) await fs.rename(paths.identity, path.join(archive, path.basename(paths.identity)));
       assertRoot();
       const barrier = upgradeFile(paths);
