@@ -627,57 +627,61 @@ test.each([
   }
 });
 
-test("caller moves between current and list clear stale rows and rediscover without spending outage retries", async () => {
-  const f = fixture();
-  let pending: ReturnType<typeof deferred<unknown>> | undefined;
-  let held: unknown;
-  f.observer.start(f.ctx);
-  try {
-    await f.ready();
-    for (const id of ["w1:p9", "w1:p1"]) {
-      pending = deferred<unknown>();
-      held = undefined;
-      let moved = false;
-      f.state.override = (request, result) => {
-        if (request.method === "pane.list" && !moved) {
-          moved = true;
-          // The earlier canonical ID is absent from the later native list.
-          f.state.current = { ...f.state.current, pane_id: id };
-          f.state.panes = [f.state.current, pane("w1:p2")];
-          return Promise.resolve({ type: "pane_list", panes: [...f.state.panes] });
-        }
-        if (request.method === "pane.current" && moved && held === undefined) {
-          held = result;
-          return pending?.promise;
-        }
-        return undefined;
-      };
+test.each(["absent", "reused"])(
+  "caller moves with %s old pane ID; rediscover without spending outage retries",
+  async (oldId) => {
+    const f = fixture();
+    let pending: ReturnType<typeof deferred<unknown>> | undefined;
+    let held: unknown;
+    f.observer.start(f.ctx);
+    try {
+      await f.ready();
+      for (const id of ["w1:p9", "w1:p1"]) {
+        pending = deferred<unknown>();
+        held = undefined;
+        let moved = false;
+        f.state.override = (request, result) => {
+          if (request.method === "pane.list" && !moved) {
+            moved = true;
+            const previousId = f.state.current.pane_id;
+            f.state.current = { ...f.state.current, pane_id: id };
+            f.state.panes = [f.state.current, pane("w1:p2")];
+            if (oldId === "reused") f.state.panes.push(pane(previousId, { terminal_id: "other-terminal" }));
+            return Promise.resolve({ type: "pane_list", panes: [...f.state.panes] });
+          }
+          if (request.method === "pane.current" && moved && held === undefined) {
+            held = result;
+            return pending?.promise;
+          }
+          return undefined;
+        };
+        const subscriptions = f.subscriptions.length;
+        f.emit(updated());
+        await until(() => held !== undefined);
+        assert.equal(f.widgets.get(HERDR_WIDGET_KEY), undefined);
+        assert.equal(f.subscriptions.at(-1)?.signal.aborted, true);
+        pending.resolve(held);
+        await until(() => f.subscriptions.length === subscriptions + 1);
+        await f.ready();
+        assert.doesNotMatch(f.text(), new RegExp(`${id.split(":")[1]} ·`, "u"));
+        f.state.override = undefined;
+      }
       const subscriptions = f.subscriptions.length;
-      f.emit(updated());
-      await until(() => held !== undefined);
-      assert.equal(f.widgets.get(HERDR_WIDGET_KEY), undefined);
-      assert.equal(f.subscriptions.at(-1)?.signal.aborted, true);
-      pending.resolve(held);
+      f.subscriptions.at(-1)?.fail();
       await until(() => f.subscriptions.length === subscriptions + 1);
       await f.ready();
-      assert.doesNotMatch(f.text(), /p1 ·|p9 ·/);
+      f.subscriptions.at(-1)?.fail();
+      await until(() => f.widgets.get(HERDR_WIDGET_KEY) === undefined);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(f.subscriptions.length, subscriptions + 1);
+    } finally {
       f.state.override = undefined;
+      pending?.resolve(held);
+      await f.observer.shutdown(f.ctx);
     }
-    const subscriptions = f.subscriptions.length;
-    f.subscriptions.at(-1)?.fail();
-    await until(() => f.subscriptions.length === subscriptions + 1);
-    await f.ready();
-    f.subscriptions.at(-1)?.fail();
-    await until(() => f.widgets.get(HERDR_WIDGET_KEY) === undefined);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(f.subscriptions.length, subscriptions + 1);
-  } finally {
-    f.state.override = undefined;
-    pending?.resolve(held);
-    await f.observer.shutdown(f.ctx);
-  }
-  assert.equal(f.state.activeLists, 0);
-});
+    assert.equal(f.state.activeLists, 0);
+  },
+);
 
 test("metadata invalidations re-read spawn identities and cannot replay stale relationships", async () => {
   const f = fixture();
