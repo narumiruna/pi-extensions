@@ -144,13 +144,21 @@ Do not rebuild while a smoke-owned daemon is running. Linux containers need an i
 The authenticated `hello` response reports the running package build separately from its protocol
 version. Older releases did not report a build. During active startup, the client holds the existing
 startup lock, sends an authenticated `stop` to an older or unversioned owner, and waits for owner exit
-and identity release. A private exit record survives cancellation and timeout. Later callers wait
-for the same PID even if the old identity file is gone. Concurrent startup can wait for the drain
+and identity release. A private exit record survives cancellation and timeout. It keeps the PID
+and, when available, a verified Linux process birth marker. If the marker cannot be verified,
+only `ESRCH` from the PID probe confirms absence. Later callers use the record even if the old
+identity file is gone. Concurrent startup can wait for the drain
 under a bounded, cancellable lock wait. The client checks the root again before launching a replacement.
 It does not stop a newer build or start a replacement for an unreachable live owner. A retained unattended grant blocks
 implicit replacement because a legacy owner cannot report a failed revocation. The client reads
 consent under the state migration guard and releases it before sending stop. Passive attachment can
 protect live sessions without starting a replacement or submitting sync operations on the old build.
+An interactive session switch attempts the same protection-only attachment if the upgrade fails.
+
+For a blocked pending upgrade, `repair-upgrade` checks exit under the startup and owner locks.
+It revokes retained unattended grants under the state migration guard and archives recovery
+records. It does not load or start the service. Clean shutdowns still clear the barrier
+without manual repair.
 
 ## Cross-process apply protocol
 

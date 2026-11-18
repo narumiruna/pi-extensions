@@ -44,7 +44,7 @@ permission needs review. Connecting alone does not configure a backend or author
 
 ## 💬 Commands
 
-`pi-sync-daemon <start|status|stop|restart|serve> --root <agent-directory>` uses an explicit root. `status` and `stop` never launch an absent service. `restart` drains the compatible owner before replacement; an incompatible or unreachable live owner fails closed. `serve` is the internal foreground launch target, not an OS registration command.
+`pi-sync-daemon <start|status|stop|restart|repair-upgrade|serve> --root <agent-directory>` uses an explicit root. `status`, `stop`, and `repair-upgrade` never launch a service. `restart` drains the compatible owner before replacement; an incompatible or unreachable live owner fails closed. `serve` is the internal foreground launch target, not an OS registration command. Use `repair-upgrade` only for a blocked, pending upgrade. It verifies the old owner's exit, revokes all retained unattended grants for the root, and archives the recovery records.
 
 Pi starts the service only after configured interactive synchronization is needed or an explicit setup/command authorizes it. Closing Pi detaches that client; the daemon owns the shared lifetime decision. After no registered live client PID remains for that canonical root, a fixed 30-second grace period starts unless a valid after-exit grant keeps the service running. Explicit CLI `start` without clients follows the same rule. A client arriving before shutdown becomes final cancels automatic exit. `/new`, `/reload`, fork, and resume retain protection while their Pi process is alive. Use `/sync daemon` for status, reviewed old-process handover, and setup-bound unattended authorization.
 
@@ -76,7 +76,7 @@ Stop the service and verify owner exit before an in-place rebuild or rollback. P
 journals and backups. Rebuilding without changing the package version does not replace the running
 owner. See the [daemon upgrade guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#ownership-and-upgrade) for package updates and manual recovery. Do not downgrade over pending/newer recovery evidence or restore old settings over newer bytes. Expired or old-instance operation IDs must reconcile existing journals rather than replay a possible commit. The bounded per-instance result ledger requires an explicit drained restart when full.
 
-CLI `status` reports the private lifecycle-log path. It retains at most 8 KiB of timestamps and lifecycle phases, not exception text, credentials, model output, or sync content; older entries roll over. It is diagnostic evidence, not a recovery journal. Child stdio is detached and discarded.
+CLI `status` reports a pending owner's PID as `pendingUpgradePid`, separate from the running daemon's `pid`. `running: null` means a pending upgrade exists but the recorded service did not pass the status handshake. Status does not expose the IPC token. For a running daemon, it also reports the private lifecycle-log path. It retains at most 8 KiB of timestamps and lifecycle phases, not exception text, credentials, model output, or sync content; older entries roll over. It is diagnostic evidence, not a recovery journal. Child stdio is detached and discarded.
 
 The source-linked [architecture and safety contract](docs/architecture.md) defines ownership, resolver capability checks, write coordination, and the decision matrix. It distinguishes required checks from completed evidence.
 

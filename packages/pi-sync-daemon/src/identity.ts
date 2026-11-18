@@ -75,19 +75,25 @@ export async function privateDirectory(directory: string) {
   )
     throw new Error("Unsafe daemon runtime directory.");
 }
+type OwnerRecord = Pick<Identity, "version" | "root" | "instance" | "pid">;
+type ProcessIdentity = { pid: number; birth?: string };
 /** The exit barrier records an authenticated owner without keeping its IPC token. */
-type UpgradeOwner = Pick<Identity, "version" | "root" | "instance" | "pid">;
-function upgradeFile(paths: RuntimePaths) {
+export type UpgradeOwner = OwnerRecord & ProcessIdentity;
+const birthPattern =
+  /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}:([1-9][0-9]{0,9})\.([1-9][0-9]{0,9}):(0|[1-9][0-9]{0,19})$/u;
+export function upgradeFile(paths: RuntimePaths) {
   return path.join(paths.directory, "upgrade-owner.json");
 }
 export async function readUpgradeOwner(paths: RuntimePaths): Promise<UpgradeOwner | undefined> {
   const value = await readPrivateRecord(upgradeFile(paths));
   if (value === undefined) return;
-  if (!validOwner(value, paths.root)) throw new Error("Invalid daemon upgrade record; state retained.");
-  return value;
+  if (!validOwner(value, paths.root) || (value.birth !== undefined && !validBirth(value.birth)))
+    throw new Error("Invalid daemon upgrade record; state retained.");
+  const { version, root, instance, pid, birth } = value;
+  return birth === undefined ? { version, root, instance, pid } : { version, root, instance, pid, birth };
 }
-export function recordUpgradeOwner(paths: RuntimePaths, { version, root, instance, pid }: UpgradeOwner) {
-  return publishPrivateRecord(paths, upgradeFile(paths), { version, root, instance, pid });
+export function recordUpgradeOwner(paths: RuntimePaths, { version, root, instance, pid, birth }: UpgradeOwner) {
+  return publishPrivateRecord(paths, upgradeFile(paths), { version, root, instance, pid, birth });
 }
 export function clearUpgradeOwner(paths: RuntimePaths) {
   return fs.rm(upgradeFile(paths), { force: true });
@@ -99,7 +105,16 @@ export async function readIdentity(paths: RuntimePaths): Promise<Identity | unde
     throw new Error("Invalid or incompatible daemon identity; state retained.");
   return { ...value, token: value.token };
 }
-function validOwner(value: unknown, root: string): value is UpgradeOwner & Record<string, unknown> {
+function validBirth(value: unknown): value is string {
+  const fields = typeof value === "string" && birthPattern.exec(value);
+  return (
+    !!fields &&
+    Number(fields[1]) <= 0xffff_ffff &&
+    Number(fields[2]) <= 0xffff_ffff &&
+    BigInt(fields[3]) <= 0xffff_ffff_ffff_ffffn
+  );
+}
+function validOwner(value: unknown, root: string): value is OwnerRecord & Record<string, unknown> {
   return (
     record(value) &&
     value.version === 1 &&
@@ -142,6 +157,42 @@ export function processExists(pid: number) {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
+}
+/** Linux start ticks from a procfs view that agrees with the caller's PID namespace. */
+export async function readProcessBirth(pid: number): Promise<string | undefined> {
+  if (process.platform !== "linux") return;
+  try {
+    const [status, pidScope, timeScope, boot, stat] = await Promise.all([
+      fs.readFile("/proc/self/status", "utf8"),
+      fs.readlink("/proc/self/ns/pid"),
+      fs.readlink("/proc/self/ns/time"),
+      fs.readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+      fs.readFile(`/proc/${pid}/stat`, "utf8"),
+    ]);
+    if (/^NSpid:[\t ]+([0-9]+)[\t ]*$/mu.exec(status)?.[1] !== String(process.pid)) return;
+    const pidNamespace = /^pid:\[([0-9]+)\]$/u.exec(pidScope)?.[1];
+    // The kernel offsets start ticks using the reader's time namespace.
+    const timeNamespace = /^time:\[([0-9]+)\]$/u.exec(timeScope)?.[1];
+    if (pidNamespace === undefined || timeNamespace === undefined || !stat.startsWith(`${pid} (`)) return;
+    // The parenthesized comm can contain spaces, parentheses, and newlines. Starttime is field 22.
+    const end = stat.lastIndexOf(") ");
+    if (end < String(pid).length + 2) return;
+    const ticks = stat
+      .slice(end + 2)
+      .trim()
+      .split(/\s+/u)[19];
+    const birth = `${boot.trim()}:${pidNamespace}.${timeNamespace}:${ticks}`;
+    if (validBirth(birth)) return birth;
+  } catch {
+    // Missing or unreadable procfs is not evidence of process exit.
+  }
+}
+/** Only ESRCH or a verifiably different occupant proves that the recorded owner exited. */
+export async function processExited({ pid, birth }: ProcessIdentity): Promise<boolean> {
+  if (!processExists(pid)) return true;
+  if (!validBirth(birth)) return false;
+  const current = await readProcessBirth(pid);
+  return current !== undefined && current !== birth && current.split(":")[1] === birth.split(":")[1];
 }
 export function publishIdentity(paths: RuntimePaths, identity: Identity) {
   return publishPrivateRecord(paths, paths.identity, identity);

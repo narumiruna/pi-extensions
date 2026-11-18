@@ -146,9 +146,9 @@ async function acquireSharedStateDirectoryGuard(): Promise<StateDirectoryGuard> 
   }
 }
 
-/** Protect path selection and the read for a process outside the engine host. */
-export async function withStateDirectoryRead<T>(root: string, read: () => T): Promise<T> {
-  return runWithStateDirectoryGuard(await acquireStateDirectoryGuard(root), async () => read());
+/** Protect path selection and a synchronous access outside the engine host. */
+export async function withStateDirectoryGuardForRoot<T>(root: string, access: () => T): Promise<T> {
+  return runWithStateDirectoryGuard(await acquireStateDirectoryGuard(root), async () => access());
 }
 
 async function acquireStateDirectoryGuard(root = getAgentDir()): Promise<StateDirectoryGuard> {

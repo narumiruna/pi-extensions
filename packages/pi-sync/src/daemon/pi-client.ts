@@ -28,7 +28,7 @@ import { validateSettingsDocument } from "@narumitw/pi-sync-daemon/engine/settin
 import { sessionDirFromContext } from "@narumitw/pi-sync-daemon/engine/snapshot/session-paths";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { StartupTimingPublisher } from "../sync/startup-timings.js";
-import { SyncDecisionRequiredError } from "../sync/sync-errors.js";
+import { errorMessage, SyncDecisionRequiredError } from "../sync/sync-errors.js";
 import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
 import { type SyncStatusPresentation, setSyncStatus, showSyncConnectionStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -331,16 +331,33 @@ export class PiDaemonClient {
     this.validate();
     if (!address) return false;
     const upgrade = allowUpgrade && address.needsUpgrade && this.ctx.hasUI && ["tui", "rpc"].includes(this.ctx.mode);
+    let upgradeFailure: string | undefined;
+    if (upgrade) {
+      try {
+        await this.connect();
+        this.validate();
+        return true;
+      } catch (error) {
+        this.validate();
+        if (this.paused) throw error;
+        upgradeFailure = safeTerminalText(errorMessage(error));
+      }
+    }
     try {
-      await this.connect(upgrade ? undefined : address);
+      // If upgrade failed, try only the original owner, with its protection-only facts.
+      await this.connect(address);
     } catch (error) {
       this.validate();
-      if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return false;
+      if (remoteErrorNamed(error, "DaemonStoppingError")) return false;
       throw error;
+    } finally {
+      if (upgradeFailure !== undefined) {
+        this.validate();
+        this.ctx.ui.notify(`pi-sync daemon upgrade failed: ${upgradeFailure}`, "error");
+      }
     }
     this.validate();
-    // Headless and shutdown paths can register session protection without
-    // replacing the owner or scheduling a transfer on an older build.
+    // Headless, shutdown, and failed-upgrade paths must not schedule transfers on an older build.
     return !this.protectionOnly;
   }
   async finishReattachment() {

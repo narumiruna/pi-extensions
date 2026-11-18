@@ -1,8 +1,16 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { valid } from "semver";
 import { ensureDaemon, requestDaemon } from "./client.js";
-import { privateDirectory, processExists, readIdentity, runtimePaths } from "./identity.js";
+import {
+  privateDirectory,
+  processExists,
+  processExited,
+  readIdentity,
+  readUpgradeOwner,
+  runtimePaths,
+} from "./identity.js";
 import { openLifecycleLog } from "./lifecycle-log.js";
 import { record } from "./protocol.js";
 
@@ -10,12 +18,22 @@ export async function main(args: readonly string[]) {
   const [command = "help", flag, root, ...extra] = args;
   if (["help", "--help", "-h"].includes(command)) {
     console.log(
-      "pi-sync-daemon <start|status|stop|restart|serve> --root <canonical-agent-directory>\nLocal synchronization owner; no OS service registration. status/stop never start a service.",
+      "pi-sync-daemon <start|status|stop|restart|repair-upgrade|serve> --root <canonical-agent-directory>\nLocal synchronization owner; no OS service registration. status/stop/repair-upgrade never start a service.\nrepair-upgrade revokes all retained unattended grants after verified exit and archives the pending upgrade records.",
     );
     return;
   }
-  if (!["start", "status", "stop", "restart", "serve"].includes(command) || flag !== "--root" || !root || extra.length)
+  if (
+    !["start", "status", "stop", "restart", "repair-upgrade", "serve"].includes(command) ||
+    flag !== "--root" ||
+    !root ||
+    extra.length
+  )
     throw new Error("Use pi-sync-daemon --help for the supported commands.");
+  if (command === "repair-upgrade") {
+    const { repairUpgrade } = await import("./upgrade-repair.js");
+    console.log(JSON.stringify(await repairUpgrade(root)));
+    return;
+  }
   if (command === "serve") {
     process.send?.({ type: "booting" });
     const { createEngineService } = await import("./engine-service.js");
@@ -82,21 +100,51 @@ export async function main(args: readonly string[]) {
   }
   const paths = await runtimePaths(root);
   const identity = await readIdentity(paths);
+  if (command === "status") {
+    const pending = await readUpgradeOwner(paths);
+    const summary = { root: paths.root, ...(pending && { pendingUpgradePid: pending.pid }) };
+    if (
+      !identity ||
+      (pending?.instance === identity.instance && pending.pid === identity.pid && (await processExited(pending)))
+    ) {
+      console.log(JSON.stringify({ running: false, ...summary }));
+      return;
+    }
+    try {
+      const status = await requestDaemon(paths, identity, "hello", {});
+      if (
+        !record(status) ||
+        status.version !== 1 ||
+        status.root !== paths.root ||
+        status.instance !== identity.instance ||
+        status.pid !== identity.pid
+      )
+        throw new Error("Daemon identity mismatch; no replacement was attempted.");
+      const build = typeof status.buildVersion === "string" ? valid(status.buildVersion) : null;
+      console.log(
+        JSON.stringify({
+          running: true,
+          ...summary,
+          version: status.version,
+          instance: identity.instance,
+          pid: identity.pid,
+          ...(build && { buildVersion: build }),
+          lifecycleLog: path.join(paths.directory, "lifecycle.log"),
+        }),
+      );
+    } catch (error) {
+      if (!pending) throw error;
+      // A pending owner can stop answering before it releases identity. Do not claim exit.
+      console.log(JSON.stringify({ running: null, ...summary }));
+    }
+    return;
+  }
   if (!identity) {
     if (command === "restart") {
       await main(["start", "--root", root]);
       return;
     }
     console.log(JSON.stringify({ running: false, root: paths.root }));
-    return;
-  }
-  if (command === "status") {
-    const status = await requestDaemon(paths, identity, "hello", {});
-    if (!record(status) || status.instance !== identity.instance)
-      throw new Error("Daemon identity mismatch; no replacement was attempted.");
-    console.log(
-      JSON.stringify({ running: true, ...status, lifecycleLog: path.join(paths.directory, "lifecycle.log") }),
-    );
     return;
   }
   await requestDaemon(paths, identity, "stop", {});
@@ -121,7 +169,9 @@ if (import.meta.main) {
         "Daemon initialization failed; private state retained. Check endpoint ownership and compatible versions.",
     });
     console.error(
-      "pi-sync-daemon failed; private state retained. Check root, endpoint ownership, and version compatibility.",
+      process.argv[2] === "repair-upgrade"
+        ? "Pi Sync upgrade repair failed. Check the pending PID, wait for confirmed exit, and check consent storage. Do not delete recovery files."
+        : "pi-sync-daemon failed; private state retained. Check root, endpoint ownership, and version compatibility.",
     );
     process.exitCode = 1;
   });

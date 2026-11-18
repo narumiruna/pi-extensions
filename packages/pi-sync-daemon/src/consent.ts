@@ -27,7 +27,7 @@ interface Consent {
     { fingerprint: string; model?: ClientFacts["model"]; sessionDir?: string; cwd?: string; afterExit: boolean }
   >;
 }
-function file(root?: string) {
+function file(root: string) {
   return path.join(stateDir(root), "daemon.json");
 }
 export class ConsentPublicationError extends Error {}
@@ -35,7 +35,7 @@ export class ConsentPublicationError extends Error {}
 /** A small synchronous publication keeps approval, metadata revocation, and rename in one event-loop turn. */
 function publishConsent(value: Consent) {
   try {
-    const target = file();
+    const target = file(value.root);
     const content = `${JSON.stringify(value, null, "\t")}\n`;
     if (Buffer.byteLength(content) > 65_536)
       throw new Error("Daemon consent exceeds its storage bound; existing evidence retained.");
@@ -89,6 +89,20 @@ export function revokeChangedBindings(root: string, peers: readonly ClientFacts[
     }
   }
   if (changed) publishConsent(consent);
+}
+
+/** Explicit offline repair only. The caller must exclude daemon owners and state migration. */
+export function revokeRetainedGrants(root: string) {
+  const consent = readConsent(root);
+  if (!consent) return 0;
+  let revoked = 0;
+  for (const saved of Object.values(consent.setups)) {
+    if (!saved.afterExit) continue;
+    saved.afterExit = false;
+    revoked += 1;
+  }
+  if (revoked) publishConsent(consent);
+  return revoked;
 }
 
 export function readConsent(root: string): Consent | undefined {

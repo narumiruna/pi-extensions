@@ -12,12 +12,15 @@ import {
   daemonPaths,
   privateDirectory,
   processExists,
+  processExited,
   type RuntimePaths,
   readIdentity,
   readJsonBody,
+  readProcessBirth,
   readUpgradeOwner,
   recordUpgradeOwner,
   runtimePaths,
+  type UpgradeOwner,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
 import {
@@ -111,9 +114,9 @@ async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSign
 
 async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
   const { readConsent } = await import("./consent.js");
-  const { withStateDirectoryRead } = await import("./engine/state/state-directory.js");
+  const { withStateDirectoryGuardForRoot } = await import("./engine/state/state-directory.js");
   signal?.throwIfAborted();
-  await withStateDirectoryRead(paths.root, () => {
+  await withStateDirectoryGuardForRoot(paths.root, () => {
     signal?.throwIfAborted();
     assertRoot();
     // An older owner cannot report an in-memory revocation failure.
@@ -125,13 +128,8 @@ async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, 
   assertRoot();
 }
 
-async function finishUpgrade(
-  paths: RuntimePaths,
-  owner: Pick<Identity, "pid" | "instance">,
-  assertRoot: () => void,
-  signal?: AbortSignal,
-) {
-  await waitForDaemonExit(owner, signal);
+async function finishUpgrade(paths: RuntimePaths, owner: UpgradeOwner, assertRoot: () => void, signal?: AbortSignal) {
+  await waitForProcessExit(owner, signal);
   if ((await readIdentity(paths))?.instance === owner.instance)
     throw new Error("The daemon exited without releasing its identity.");
   await checkUpgradeConsent(paths, assertRoot, signal);
@@ -140,11 +138,18 @@ async function finishUpgrade(
   assertRoot();
 }
 
-async function drainForUpgrade(paths: RuntimePaths, owner: Identity, assertRoot: () => void, signal?: AbortSignal) {
+async function drainForUpgrade(
+  paths: RuntimePaths,
+  owner: Identity,
+  { recorded, birth }: { recorded?: UpgradeOwner; birth?: string },
+  assertRoot: () => void,
+  signal?: AbortSignal,
+) {
   await checkUpgradeConsent(paths, assertRoot, signal);
+  const barrier = recorded ?? { ...owner, birth };
   try {
-    // Publish this before stop can remove the identity. Cancellation leaves it in place.
-    await recordUpgradeOwner(paths, owner);
+    // Publish this before stop can remove the identity. A retry keeps the original evidence.
+    if (!recorded) await recordUpgradeOwner(paths, barrier);
     assertRoot();
     const reply = await requestDaemon(paths, owner, "stop", {}, signal);
     if (!record(reply) || reply.stopping !== true) throw new Error("Daemon did not acknowledge stop.");
@@ -155,10 +160,10 @@ async function drainForUpgrade(paths: RuntimePaths, owner: Identity, assertRoot:
       { cause: error },
     );
   }
-  await finishUpgrade(paths, owner, assertRoot, signal);
+  await finishUpgrade(paths, barrier, assertRoot, signal);
 }
 
-async function acquireStartupLock(paths: RuntimePaths, signal?: AbortSignal) {
+export async function acquireStartupLock(paths: RuntimePaths, signal?: AbortSignal) {
   // Include the handshake, stop, exit wait, boot, and final handshake budgets.
   const deadline = performance.now() + 150_000;
   for (;;) {
@@ -198,12 +203,14 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
       const existing = await readIdentity(paths);
       if (upgrade && existing?.instance === upgrade.instance && existing.pid !== upgrade.pid)
         throw new Error("The recorded upgrade owner changed; private state was retained.");
-      if (upgrade && (existing?.instance !== upgrade.instance || !processExists(upgrade.pid))) {
+      if (upgrade && (existing?.instance !== upgrade.instance || (await processExited(upgrade)))) {
         await finishUpgrade(paths, upgrade, assertRoot, signal);
         upgraded = true;
         continue;
       }
       if (!existing) break;
+      // A sample taken only after hello could describe an unrelated process reusing the PID.
+      const beforeHello = upgrade ? undefined : await readProcessBirth(existing.pid);
       let status: Awaited<ReturnType<typeof hello>>;
       try {
         status = await hello(paths, existing, signal);
@@ -235,7 +242,10 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
       }
       if (upgraded)
         throw new Error("An older Pi Sync daemon started again. Close or upgrade other Pi sessions, then use /reload.");
-      await drainForUpgrade(paths, existing, assertRoot, signal);
+      const birth = beforeHello === undefined ? undefined : await readProcessBirth(existing.pid);
+      if (birth !== undefined && birth !== beforeHello)
+        throw new Error("The daemon process changed during authentication; private state was retained.");
+      await drainForUpgrade(paths, existing, { recorded: upgrade, birth }, assertRoot, signal);
       upgraded = true;
     }
     signal?.throwIfAborted();
@@ -303,10 +313,15 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
 }
 
 /** Wait only for a previously authenticated owner; never kill it or infer exit from lost contact. */
-export async function waitForDaemonExit(identity: Pick<Identity, "pid">, signal?: AbortSignal) {
+export async function waitForDaemonExit({ pid }: Pick<Identity, "pid">, signal?: AbortSignal) {
+  await waitForProcessExit({ pid }, signal);
+}
+
+async function waitForProcessExit(owner: Parameters<typeof processExited>[0], signal?: AbortSignal) {
   const deadline = Date.now() + 30_000;
   signal?.throwIfAborted();
-  while (processExists(identity.pid)) {
+  while (!(await processExited(owner))) {
+    signal?.throwIfAborted();
     if (Date.now() >= deadline) throw new Error("Closing daemon is still alive; replacement was not attempted.");
     await delay(25, undefined, { signal });
   }
