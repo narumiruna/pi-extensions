@@ -30,15 +30,13 @@ interface SharedStateDirectoryGuard {
 
 const sharedStateDirectoryGuards = new Map<string, SharedStateDirectoryGuard>();
 
-export function stateDir() {
-  const roots = inspectStateRoots();
-  if (roots.canonical) return canonicalStateDir();
-  if (roots.legacy) return legacyStateDir();
-  return canonicalStateDir();
+export function stateDir(root = getAgentDir()) {
+  const roots = inspectStateRoots(root);
+  return roots.legacy ? legacyStateDir(root) : canonicalStateDir(root);
 }
 
-export function legacyStateDir() {
-  return path.join(getAgentDir(), LEGACY_DIRECTORY_NAME);
+export function legacyStateDir(root = getAgentDir()) {
+  return path.join(root, LEGACY_DIRECTORY_NAME);
 }
 
 export function stateDirectoryMigrationNotice() {
@@ -148,11 +146,16 @@ async function acquireSharedStateDirectoryGuard(): Promise<StateDirectoryGuard> 
   }
 }
 
-async function acquireStateDirectoryGuard(): Promise<StateDirectoryGuard> {
+/** Protect path selection and a synchronous access outside the engine host. */
+export async function withStateDirectoryGuardForRoot<T>(root: string, access: () => T): Promise<T> {
+  return runWithStateDirectoryGuard(await acquireStateDirectoryGuard(root), async () => access());
+}
+
+async function acquireStateDirectoryGuard(root = getAgentDir()): Promise<StateDirectoryGuard> {
   let compromisedError: Error | undefined;
-  const release = await lockfile.lock(getAgentDir(), {
+  const release = await lockfile.lock(root, {
     fs: LOCKFILE_FS_ADAPTER,
-    lockfilePath: migrationLockPath(),
+    lockfilePath: migrationLockPath(root),
     realpath: false,
     stale: MIGRATION_LOCK_STALE_MS,
     update: MIGRATION_LOCK_UPDATE_MS,
@@ -197,20 +200,22 @@ function isLockHeldError(error: unknown) {
   return (error as NodeJS.ErrnoException).code === "ELOCKED";
 }
 
-function canonicalStateDir() {
-  return path.join(getAgentDir(), CANONICAL_DIRECTORY_NAME);
+function canonicalStateDir(root = getAgentDir()) {
+  return path.join(root, CANONICAL_DIRECTORY_NAME);
 }
 
-function migrationLockPath() {
-  return path.join(getAgentDir(), MIGRATION_LOCK_NAME);
+function migrationLockPath(root = getAgentDir()) {
+  return path.join(root, MIGRATION_LOCK_NAME);
 }
 
-function inspectStateRoots() {
-  const canonical = isDirectoryRoot(canonicalStateDir(), "canonical");
-  const legacy = isDirectoryRoot(legacyStateDir(), "legacy");
+function inspectStateRoots(root = getAgentDir()) {
+  const canonicalPath = canonicalStateDir(root);
+  const legacyPath = legacyStateDir(root);
+  const canonical = isDirectoryRoot(canonicalPath, "canonical");
+  const legacy = isDirectoryRoot(legacyPath, "legacy");
   if (canonical && legacy) {
     throw new Error(
-      `Both legacy ${legacyStateDir()} and canonical ${canonicalStateDir()} pi-sync state directories exist. Close all Pi sessions and reconcile the directories manually; pi-sync will not merge or delete either directory.`,
+      `Both legacy ${legacyPath} and canonical ${canonicalPath} pi-sync state directories exist. Close all Pi sessions and reconcile the directories manually; pi-sync will not merge or delete either directory.`,
     );
   }
   return { canonical, legacy };

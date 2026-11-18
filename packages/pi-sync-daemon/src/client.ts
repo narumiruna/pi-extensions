@@ -4,14 +4,24 @@ import { request as httpRequest } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
+import { lt, valid } from "semver";
+import { DAEMON_BUILD_VERSION } from "./build-version.js";
 import {
+  canonicalRootGuard,
+  clearUpgradeOwner,
   daemonPaths,
   privateDirectory,
   processExists,
+  processExited,
   type RuntimePaths,
   readIdentity,
   readJsonBody,
+  readProcessBirth,
+  readUpgradeOwner,
+  recordUpgradeOwner,
   runtimePaths,
+  type UpgradeOwner,
+  upgradeRepairStarted,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
 import {
@@ -96,32 +106,125 @@ async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSign
     value.pid !== identity.pid
   )
     throw new Error("Daemon handshake mismatch.");
+  const version = value.buildVersion;
+  if (Object.hasOwn(value, "buildVersion") && (typeof version !== "string" || valid(version) !== version))
+    throw new Error("Invalid daemon build version.");
+  // The old @narumitw/sync-daemon used the same wire protocol without a build version.
+  return { needsUpgrade: typeof version !== "string" || lt(version, DAEMON_BUILD_VERSION) };
 }
+
+async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
+  const { readConsent } = await import("./consent.js");
+  const { withStateDirectoryGuardForRoot } = await import("./engine/state/state-directory.js");
+  signal?.throwIfAborted();
+  await withStateDirectoryGuardForRoot(paths.root, () => {
+    signal?.throwIfAborted();
+    assertRoot();
+    // An older owner cannot report an in-memory revocation failure.
+    const consent = readConsent(paths.root);
+    if (consent && Object.values(consent.setups).some((setup) => setup.afterExit))
+      throw new Error("Review or revoke unattended Pi Sync permission before restarting the older daemon.");
+  });
+  signal?.throwIfAborted();
+  assertRoot();
+}
+
+async function finishUpgrade(paths: RuntimePaths, owner: UpgradeOwner, assertRoot: () => void, signal?: AbortSignal) {
+  await waitForProcessExit(owner, signal);
+  if ((await readIdentity(paths))?.instance === owner.instance)
+    throw new Error("The daemon exited without releasing its identity.");
+  await checkUpgradeConsent(paths, assertRoot, signal);
+  await clearUpgradeOwner(paths);
+  signal?.throwIfAborted();
+  assertRoot();
+}
+
+async function drainForUpgrade(
+  paths: RuntimePaths,
+  owner: Identity,
+  { recorded, birth }: { recorded?: UpgradeOwner; birth?: string },
+  assertRoot: () => void,
+  signal?: AbortSignal,
+) {
+  await checkUpgradeConsent(paths, assertRoot, signal);
+  const barrier = recorded ?? { ...owner, birth };
+  try {
+    // Publish this before stop can remove the identity. A retry keeps the original evidence.
+    if (!recorded) await recordUpgradeOwner(paths, barrier);
+    assertRoot();
+    const reply = await requestDaemon(paths, owner, "stop", {}, signal);
+    if (!record(reply) || reply.stopping !== true) throw new Error("Daemon did not acknowledge stop.");
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw new Error(
+      "Pi Sync could not upgrade the older daemon safely. Check `pi-sync-daemon status --root <agent-directory>`. Do not force a second owner or remove recovery files.",
+      { cause: error },
+    );
+  }
+  await finishUpgrade(paths, barrier, assertRoot, signal);
+}
+
+export async function acquireStartupLock(paths: RuntimePaths, signal?: AbortSignal) {
+  // Include the handshake, stop, exit wait, boot, and final handshake budgets.
+  const deadline = performance.now() + 150_000;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      return await lockfile.lock(paths.directory, {
+        realpath: false,
+        lockfilePath: paths.startup,
+        stale: 30_000,
+        update: 5_000,
+      });
+    } catch (error) {
+      signal?.throwIfAborted();
+      if ((error as NodeJS.ErrnoException).code !== "ELOCKED") throw error;
+      if (performance.now() >= deadline)
+        throw new Error("Timed out waiting to start the Pi Sync daemon.", { cause: error });
+      await delay(50, undefined, { signal });
+    }
+  }
+}
+
 /** Explicit startup only: callers decide whether configuration or a user action authorizes it. */
 export async function ensureDaemon(root: string, signal?: AbortSignal) {
   const paths = await runtimePaths(root);
+  const assertRoot = canonicalRootGuard(paths.root);
   signal?.throwIfAborted();
   await privateDirectory(paths.directory);
   signal?.throwIfAborted();
-  const release = await lockfile.lock(paths.directory, {
-    realpath: false,
-    lockfilePath: paths.startup,
-    stale: 30_000,
-    update: 5_000,
-    retries: { retries: 100, factor: 1, minTimeout: 50, maxTimeout: 50 },
-  });
+  const release = await acquireStartupLock(paths, signal);
   try {
     signal?.throwIfAborted();
     let waited = false;
+    let upgraded = false;
     for (;;) {
+      signal?.throwIfAborted();
+      const upgrade = await readUpgradeOwner(paths);
+      if (upgrade && (await upgradeRepairStarted(paths, upgrade)))
+        throw new Error("A daemon upgrade repair is incomplete. Run `pi-sync-daemon repair-upgrade` for this root.");
       const existing = await readIdentity(paths);
+      if (upgrade && existing?.instance === upgrade.instance && existing.pid !== upgrade.pid)
+        throw new Error("The recorded upgrade owner changed; private state was retained.");
+      if (upgrade && (existing?.instance !== upgrade.instance || (await processExited(upgrade)))) {
+        await finishUpgrade(paths, upgrade, assertRoot, signal);
+        upgraded = true;
+        continue;
+      }
       if (!existing) break;
+      // A sample taken only after hello could describe an unrelated process reusing the PID.
+      const beforeHello = upgrade ? undefined : await readProcessBirth(existing.pid);
+      let status: Awaited<ReturnType<typeof hello>>;
       try {
-        await hello(paths, existing, signal);
-        signal?.throwIfAborted();
-        return { paths: daemonPaths(paths, existing.instance), identity: existing };
+        status = await hello(paths, existing, signal);
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
+        if (upgrade) {
+          // The stop may have been accepted even if the old endpoint no longer replies.
+          await finishUpgrade(paths, upgrade, assertRoot, signal);
+          upgraded = true;
+          continue;
+        }
         if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError" && !waited) {
           waited = true;
           await waitForDaemonExit(existing, signal);
@@ -134,7 +237,22 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
           );
         break;
       }
+      signal?.throwIfAborted();
+      assertRoot();
+      if (!status.needsUpgrade) {
+        if (upgrade) throw new Error("The recorded upgrade owner changed; private state was retained.");
+        return { paths: daemonPaths(paths, existing.instance), identity: existing, ...status };
+      }
+      if (upgraded)
+        throw new Error("An older Pi Sync daemon started again. Close or upgrade other Pi sessions, then use /reload.");
+      const birth = beforeHello === undefined ? undefined : await readProcessBirth(existing.pid);
+      if (birth !== undefined && birth !== beforeHello)
+        throw new Error("The daemon process changed during authentication; private state was retained.");
+      await drainForUpgrade(paths, existing, { recorded: upgrade, birth }, assertRoot, signal);
+      upgraded = true;
     }
+    signal?.throwIfAborted();
+    assertRoot();
     const executable = process.versions.bun ? "node" : process.execPath;
     const child = spawn(
       executable,
@@ -187,26 +305,33 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
       child.unref();
     });
     // Never kill a published shared daemon on caller cancellation.
-    await hello(paths, ready, signal);
+    const status = await hello(paths, ready, signal);
     signal?.throwIfAborted();
-    return { paths: daemonPaths(paths, ready.instance), identity: ready };
+    assertRoot();
+    if (status.needsUpgrade) throw new Error("The daemon installation changed during startup. Use /reload to retry.");
+    return { paths: daemonPaths(paths, ready.instance), identity: ready, ...status };
   } finally {
     await release();
   }
 }
 
 /** Wait only for a previously authenticated owner; never kill it or infer exit from lost contact. */
-export async function waitForDaemonExit(identity: Identity, signal?: AbortSignal) {
+export async function waitForDaemonExit({ pid }: Pick<Identity, "pid">, signal?: AbortSignal) {
+  await waitForProcessExit({ pid }, signal);
+}
+
+async function waitForProcessExit(owner: Parameters<typeof processExited>[0], signal?: AbortSignal) {
   const deadline = Date.now() + 30_000;
   signal?.throwIfAborted();
-  while (processExists(identity.pid)) {
+  while (!(await processExited(owner))) {
+    signal?.throwIfAborted();
     if (Date.now() >= deadline) throw new Error("Closing daemon is still alive; replacement was not attempted.");
     await delay(25, undefined, { signal });
   }
   signal?.throwIfAborted();
 }
 
-/** Inspect an existing compatible owner without starting one. */
+/** Inspect an existing protocol-compatible owner without starting or replacing it. */
 export async function findDaemon(root: string) {
   let paths: RuntimePaths;
   try {
@@ -218,12 +343,12 @@ export async function findDaemon(root: string) {
   const identity = await readIdentity(paths);
   if (!identity || !processExists(identity.pid)) return undefined;
   try {
-    await hello(paths, identity);
+    const status = await hello(paths, identity);
+    return { paths: daemonPaths(paths, identity.instance), identity, ...status };
   } catch (error) {
     if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return undefined;
     throw error;
   }
-  return { paths: daemonPaths(paths, identity.instance), identity };
 }
 
 /** Gracefully stop an existing compatible owner without creating a new service. */

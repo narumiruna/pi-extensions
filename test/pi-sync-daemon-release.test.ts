@@ -39,13 +39,13 @@ test("scoped daemon versioning updates Pi Sync's floor and plans a public depend
     // Versioning consumes pending Changesets, so keep the release input local to this fixture.
     writeFileSync(
       path.join(root, ".changeset/scoped-daemon.md"),
-      `---\n"${daemon.name}": minor\n"${client.name}": minor\n---\n\nRelease the scoped daemon and Pi Sync.\n`,
+      `---\n"${daemon.name}": minor\n"${client.name}": patch\n---\n\nRelease the scoped daemon and Pi Sync.\n`,
     );
     execFileSync(process.execPath, [cli, "version"], { cwd: root, stdio: "pipe" });
     const versionedDaemon = read(path.join(root, "packages/pi-sync-daemon/package.json"));
     const versionedClient = read(path.join(root, "packages/pi-sync/package.json"));
     assert.equal(versionedDaemon.version, inc(daemon.version, "minor"));
-    assert.equal(versionedClient.version, inc(client.version, "minor"));
+    assert.equal(versionedClient.version, inc(client.version, "patch"));
     assert.deepEqual(versionedDaemon.bin, daemon.bin);
     assert.deepEqual(versionedClient.dependencies, { [daemon.name]: `^${versionedDaemon.version}` });
 

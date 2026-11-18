@@ -130,9 +130,9 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       try {
         await check.stop();
         if (previousClient) {
-          // Register the replacement before removing old session protection.
+          // Protect the replacement session before removing old session protection.
           try {
-            await client.attachExisting();
+            await client.attachExisting({ allowUpgrade: true });
           } catch {
             /* Initialization below reports an unavailable owner. */
           }

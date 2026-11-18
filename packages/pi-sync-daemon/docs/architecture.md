@@ -103,7 +103,7 @@ When no registered live PID remains and no valid explicit after-exit grant cover
 
 After grace, stop new automatic work and cancel cancellable work. Drain foreground and monitor work, committed writes, admission, queue-release acknowledgements, peer persistence, and owned callbacks before endpoint and owner-lock release. Do not add a closing sync or model request. Preserve journals, backups, request accounting, and existing transfer permissions. Recheck liveness, consent, generation, and ownership after asynchronous reads or drains; the final admission boundary must let an earlier queued attach win and make a later attach observe closing. Cleanup failure is not successful exit.
 
-After quiescence, the authenticated final fence returns `RemoteError.name = "DaemonStoppingError"` to rejected admissions and handshakes on the existing version-1 protocol. `ensureDaemon()` recognizes only this error and waits at most 30 seconds for the recorded PID to exit before singleton startup. The lightweight public `waitForDaemonExit(identity, signal)` helper provides the same cancellable process-exit check for an attach race; it never kills the owner or treats lost contact as exit. Pi Sync retries only an unpublished connection, at most once, and does not replay submitted operations. A rejected first attach preserves this stopping error after local disposal when no callbacks or prior attachment can own grants; a failed cleanup transport remains available as the error cause. Other combined attach and cleanup failures remain aggregate errors and do not authorize a retry. `DaemonConnection.attach(signal)` cancels queued admission without stopping the shared owner; the signal does not own the established connection's lifetime. The next eligible interactive client or explicit command may start after proven owner exit. An incompatible identity, uncertain ownership, or unreachable live owner still fails closed. Print/JSON never launch a service. Manual stop and restart retain explicit behavior. Authorization uncertainty and failed revocation remain paused, not cleared by an implicit restart that could restore an older persisted grant.
+After quiescence, the authenticated final fence returns `RemoteError.name = "DaemonStoppingError"` to rejected admissions and handshakes on the existing version-1 protocol. `ensureDaemon()` recognizes this idle-stop error and waits at most 30 seconds for the recorded PID to exit before singleton startup. The lightweight public `waitForDaemonExit(identity, signal)` helper provides the same cancellable process-exit check for an attach race; it never kills the owner or treats lost contact as exit. Pi Sync retries only an unpublished connection, at most once, and does not replay submitted operations. A rejected first attach preserves this stopping error after local disposal when no callbacks or prior attachment can own grants; a failed cleanup transport remains available as the error cause. Other combined attach and cleanup failures remain aggregate errors and do not authorize a retry. `DaemonConnection.attach(signal)` cancels queued admission without stopping the shared owner; the signal does not own the established connection's lifetime. The next eligible interactive client or explicit command may start after proven owner exit. An incompatible identity, uncertain ownership, or unreachable live owner still fails closed. Print/JSON never launch a service. Manual stop and restart retain explicit behavior. Authorization uncertainty and failed revocation remain paused, not cleared by an implicit restart that could restore an older persisted grant.
 
 A later command can reconnect after a cancelled or failed unpublished attach. First, Pi Sync confirms the old connection's detach and drain, then releases its local queue grants. It uses a fresh client ID and generation for the next connection. Daemon retirement records stay intact, so late requests cannot revive the old attempt. Failed cleanup blocks a new identity and operation; it does not release uncertain grants. A cancelled or submitted operation is never replayed by this recovery.
 
@@ -138,6 +138,30 @@ node node_modules/.cache/pi-extensions-test/packages/pi-sync/test/idle-exit-cli-
 ```
 
 Do not rebuild while a smoke-owned daemon is running. Linux containers need an init process to reap detached children. This smoke does not verify native Windows behavior, terminal logout, physical power loss, or real-data cutover.
+
+## Package upgrades
+
+The authenticated `hello` response reports the running package build separately from its protocol
+version. Older releases did not report a build. During active startup, the client holds the existing
+startup lock, sends an authenticated `stop` to an older or unversioned owner, and waits for owner exit
+and identity release. A private exit record survives cancellation and timeout. It keeps the PID
+and, when available, a verified Linux process birth marker. For a marked owner, `ESRCH` confirms
+absence only in the recorded PID namespace. A PID-only record still requires `ESRCH`. Later callers
+use the record even if the old identity file is gone. Concurrent startup can wait for the drain
+under a bounded, cancellable lock wait. The client checks the root again before launching a replacement.
+It does not stop a newer build or start a replacement for an unreachable live owner. A retained unattended grant blocks
+implicit replacement because a legacy owner cannot report a failed revocation. The client reads
+consent under the state migration guard and releases it before sending stop. Passive attachment can
+protect live sessions without starting a replacement or submitting sync operations on the old build.
+An interactive session switch attempts the same protection-only attachment if the upgrade fails.
+
+For a blocked pending upgrade, `repair-upgrade` checks exit under the startup and owner locks.
+It revokes retained unattended grants under the state migration guard on all platforms. On
+non-Windows platforms, it also syncs the consent directory before archiving the upgrade barrier.
+Consent storage reserves one byte per retained grant so that revocation fits even for compact JSON
+at the old size limit. Repair reuses the same private archive if interrupted. Normal startup
+cannot clear an incomplete repair. The command does not start the daemon. Clean shutdowns still
+clear the barrier without manual repair.
 
 ## Cross-process apply protocol
 

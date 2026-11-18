@@ -4,9 +4,54 @@ This daemon extraction is experimental. Deterministic Linux verification passed,
 
 ## Ownership and upgrade
 
-The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. Stop an existing installation with `sync-daemon stop --root <agent-directory>` before replacing it, then use `pi-sync-daemon` after installation. The rename changes package identity, imports, the package directory, and executable names, not IPC names, authorization digests, or settings/state formats. The existing Pi extension remains `@narumitw/pi-sync`, with `/sync` as its user interface. Pi starts or connects to one detached service per canonical agent directory; the daemon, not an individual Pi shutdown hook, decides when the shared owner can exit. No OS service or supervisor is installed.
+The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. The rename changes the package and executable names, not the IPC names, authorization digests, or
+settings and state formats. The Pi extension remains `@narumitw/pi-sync`. Pi uses one detached service
+per canonical agent directory. It does not install an OS service.
 
-Stop the service before updating its package or rebuilding a local checkout: a surviving Node process can otherwise combine cached code with newly loaded modules from the replaced directory. A compatible protocol handshake does not upgrade the running implementation; restart explicitly after installation.
+After an update, use `/reload` in open Pi sessions. On the next active connection, the new client
+checks the owner's build over compatible, authenticated IPC. For an older or unversioned owner, the
+client checks that no retained unattended permission blocks the upgrade. It then requests a stop
+and starts the replacement only after the owner releases its identity and exits. If any check fails,
+follow manual recovery. The upgrade does not run a transfer, replay an operation, or change sync
+settings. Passive print, JSON, and shutdown paths do not replace an older owner. If an upgrade fails
+while switching sessions, Pi Sync reports the failure and tries to attach the new session to the
+same owner for file protection only. That attachment cannot submit sync work. Use `/reload`
+after recovery.
+
+Manual recovery:
+
+1. Revoke all retained unattended grants before updating. `/sync daemon revoke-after-exit` applies
+   only to the active setup. For each setup with a retained grant, make it active, run the command,
+   and confirm revocation. If the upgraded client blocks on consent before creating a pending
+   upgrade record, use an already available compatible Pi client to revoke each grant from the
+   still-running owner.
+   Without a pending record, `repair-upgrade` returns `repaired: false` and does not revoke permission.
+   If no compatible client is available or revocation fails, stop here and preserve the consent,
+   identity, and recovery files.
+2. Run `pi-sync-daemon status --root <agent-directory>`.
+   - A verified `pid` identifies the owner that answered the handshake. Record it before stopping
+     that owner. Check `pendingUpgradePid` for any pending owner, even if `running` is `false` or `null`.
+   - `running: null` means the handshake failed, even if there is no pending upgrade. `recordedPid`
+     comes from the validated identity file and is only a lead. Unknown status does not prove exit
+     or compatibility. Use diagnostics from an already available compatible version to identify the
+     owner. If you cannot identify it, stop here and preserve the records.
+
+   To stop an identified, running owner, use `pi-sync-daemon stop --root <agent-directory>` if
+   compatible. This works even if the old executable was removed. If the old executable is still
+   installed and compatible, you can use `sync-daemon stop --root <agent-directory>` instead.
+3. Check the recorded PID in the operating system. On macOS or Linux, use `ps -p <pid> -o pid,args`.
+   On Windows, look up the PID in Task Manager's **Details** tab. A successful `stop` confirms
+   identity release, not process exit. Wait for the old process to exit. If exit is uncertain, do
+   not force a second owner or delete recovery files.
+4. If a pending upgrade still blocks restart after exit, close other Pi sessions for that root.
+   Run `pi-sync-daemon repair-upgrade --root <agent-directory>`. It verifies exit, revokes all
+   retained after-exit grants for that root, and moves the upgrade record and any stale identity
+   to the private archive path it reports. It does not start a daemon or transfer data. If repair
+   fails, keep the records. Do not edit or delete them to force startup.
+5. Use `/reload`, then `/sync daemon status`. Review after-exit permission again if you need it.
+
+Stop the service before rebuilding a local checkout in place. A source rebuild without a package
+version change does not trigger automatic replacement.
 
 Before the first daemon-owned transfer, close or upgrade every older Pi process and review `/sync daemon handover`. The existing operation lock excludes observed transfers, but an idle older client cannot be detected from an absent lock. Older binaries cannot be made to honor a new handover record retroactively. Do not run an old and new engine as interchangeable writers.
 
@@ -45,16 +90,19 @@ stop or restart the service, and it does not extend transfer or model permission
 
 If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
 
-Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers.
+Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers. If the initial consent check blocked the update before a pending record was created, follow step 1 of [manual recovery](#ownership-and-upgrade); `repair-upgrade` cannot help in that case.
 
-CLI `status` includes an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
+A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
 
 Before rollback:
 
 1. Stop the daemon explicitly and verify owner exit.
 2. Close all upgraded clients and retain settings, state, journals, and backups.
 3. Reconcile pending or uncertain publication through the supported engine recovery path.
-4. Only then consider a compatible code/package rollback; do not blindly restore old local or remote bytes.
+4. Check consent compatibility before rolling back. A repair can leave `daemon.json` larger than
+   65,536 bytes because it keeps all other fields when revoking grants. Builds with the old
+   65,536-byte limit cannot read that file. Preserve it and use a build that supports the larger
+   file. Do not delete it or restore an older copy to make the rollback work.
 
 Operation retries are instance-bound and deduplicated. An expired result or old instance requires journal reconciliation, not blind replay. A full bounded result ledger requires an explicit drained restart.
 

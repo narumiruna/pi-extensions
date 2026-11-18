@@ -28,7 +28,7 @@ import { validateSettingsDocument } from "@narumitw/pi-sync-daemon/engine/settin
 import { sessionDirFromContext } from "@narumitw/pi-sync-daemon/engine/snapshot/session-paths";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { StartupTimingPublisher } from "../sync/startup-timings.js";
-import { SyncDecisionRequiredError } from "../sync/sync-errors.js";
+import { errorMessage, SyncDecisionRequiredError } from "../sync/sync-errors.js";
 import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
 import { type SyncStatusPresentation, setSyncStatus, showSyncConnectionStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -218,6 +218,7 @@ function remoteErrorNamed(error: unknown, name: string) {
 
 export class PiDaemonClient {
   private connection?: DaemonConnection;
+  private protectionOnly = false;
   private partialConnection?: DaemonConnection;
   private work = Promise.resolve();
   private closing = false;
@@ -284,7 +285,7 @@ export class PiDaemonClient {
       return undefined;
     return { provider: model.provider, id: model.id, signature: modelSignature(model), authSource: source };
   }
-  private facts(): ClientFacts {
+  private facts(protectionOnly = this.protectionOnly): ClientFacts {
     const manager = this.ctx.sessionManager;
     return {
       id: this.id,
@@ -292,14 +293,14 @@ export class PiDaemonClient {
       pid: process.pid,
       cwd: this.ctx.cwd,
       mode: this.ctx.mode,
-      hasUI: this.ctx.hasUI,
-      idle: !this.paused && !this.busy.size && this.ctx.isIdle(),
-      ready: this.initialized,
+      hasUI: !protectionOnly && this.ctx.hasUI,
+      idle: !protectionOnly && !this.paused && !this.busy.size && this.ctx.isIdle(),
+      ready: !protectionOnly && this.initialized,
       startupDebug: this.startupDebug,
       sessionFile: canonicalPath(manager.getSessionFile?.()),
       sessionId: manager.getSessionId?.(),
       sessionDir: canonicalPath(sessionDirFromContext(this.ctx)),
-      model: this.modelBinding(),
+      model: protectionOnly ? undefined : this.modelBinding(),
     };
   }
   async configured() {
@@ -324,21 +325,40 @@ export class PiDaemonClient {
     })();
     return this.pausing;
   }
-  async attachExisting() {
+  async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
     const address = await findDaemon(this.root);
     this.validate();
-    if (address) {
+    if (!address) return false;
+    const upgrade = allowUpgrade && address.needsUpgrade && this.ctx.hasUI && ["tui", "rpc"].includes(this.ctx.mode);
+    let upgradeFailure: string | undefined;
+    if (upgrade) {
       try {
-        await this.connect(address);
+        await this.connect();
+        this.validate();
+        return true;
       } catch (error) {
         this.validate();
-        if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return false;
-        throw error;
+        if (this.paused) throw error;
+        upgradeFailure = safeTerminalText(errorMessage(error));
+      }
+    }
+    try {
+      // If upgrade failed, try only the original owner, with its protection-only facts.
+      await this.connect(address);
+    } catch (error) {
+      this.validate();
+      if (remoteErrorNamed(error, "DaemonStoppingError")) return false;
+      throw error;
+    } finally {
+      if (upgradeFailure !== undefined) {
+        this.validate();
+        this.ctx.ui.notify(`pi-sync daemon upgrade failed: ${upgradeFailure}`, "error");
       }
     }
     this.validate();
-    return Boolean(address);
+    // Headless, shutdown, and failed-upgrade paths must not schedule transfers on an older build.
+    return !this.protectionOnly;
   }
   async finishReattachment() {
     this.validate();
@@ -356,7 +376,13 @@ export class PiDaemonClient {
       startupSignal.throwIfAborted();
     };
     validateStartup();
-    if (this.connection) return this.connection;
+    if (this.connection) {
+      if (!existing && this.protectionOnly)
+        throw new Error(
+          "This session is only protecting its files on an older Pi Sync daemon. Use /reload to upgrade.",
+        );
+      return this.connection;
+    }
     this.connecting ??= (async () => {
       if (this.partialConnection) {
         // A failed unpublished attempt may already be retired or own queue grants.
@@ -377,8 +403,9 @@ export class PiDaemonClient {
         const daemon = existing ?? (await ensureDaemon(this.root, startupSignal));
         validateStartup();
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
-        const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(), {
-          callback: (callback, signal) => this.callback(callback, signal),
+        const protectionOnly = daemon.needsUpgrade === true;
+        const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
+          callback: (callback, signal) => this.callback(callback, signal, protectionOnly),
           event: (event) => {
             if (event.kind === "commit") return;
             if (this.signal.aborted || this.disposed || this.closing || clients.get(this.manager) !== this) return;
@@ -428,6 +455,7 @@ export class PiDaemonClient {
         }
         this.validate();
         this.connection = connection;
+        this.protectionOnly = protectionOnly;
         this.partialConnection = undefined;
         return connection;
       }
@@ -435,7 +463,11 @@ export class PiDaemonClient {
       this.connecting = undefined;
       throw error;
     });
-    return this.connecting;
+    const connection = await this.connecting;
+    validateStartup();
+    if (!existing && this.protectionOnly)
+      throw new Error("This session is only protecting its files on an older Pi Sync daemon. Use /reload to upgrade.");
+    return connection;
   }
   private ownsContactUI() {
     return (
@@ -670,7 +702,7 @@ export class PiDaemonClient {
     if (this.connection && !this.paused && !this.disposed && !this.signal.aborted)
       await this.publishFacts(this.connection);
   }
-  private async callback(callback: Callback, signal: AbortSignal) {
+  private async callback(callback: Callback, signal: AbortSignal, protectionOnly: boolean) {
     const payload = callback.payload as {
       reservation?: string;
       targets?: string[];
@@ -706,6 +738,7 @@ export class PiDaemonClient {
     const ctx = this.uiContext;
     const combined = AbortSignal.any([signal, this.signal]);
     if (callback.kind === "model-binding") {
+      if (protectionOnly) return null;
       const facts = this.facts();
       const connection = this.connection ?? this.partialConnection;
       if (connection && JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {

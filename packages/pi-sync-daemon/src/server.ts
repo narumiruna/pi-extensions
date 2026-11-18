@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import lockfile from "proper-lockfile";
+import { DAEMON_BUILD_VERSION } from "./build-version.js";
 import { endpointOwner } from "./endpoint.js";
 import {
   canonicalRootGuard,
@@ -13,6 +14,7 @@ import {
   publishIdentity,
   readIdentity,
   readJsonBody,
+  readUpgradeOwner,
   runtimePaths,
 } from "./identity.js";
 import { createIdleExit, type IdleExitPolicy } from "./idle-exit.js";
@@ -570,7 +572,13 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (!published && !cleanup) throw new Error("Daemon readiness is not published.");
     if (!cleanup) assertOwner();
     if (method === "hello")
-      return { version: PROTOCOL_VERSION, root: identity.root, instance: identity.instance, pid: identity.pid };
+      return {
+        version: PROTOCOL_VERSION,
+        buildVersion: DAEMON_BUILD_VERSION,
+        root: identity.root,
+        instance: identity.instance,
+        pid: identity.pid,
+      };
     if (method === "attach") {
       const attached = await admission.run(async () => {
         assertOwner();
@@ -803,6 +811,9 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   server.headersTimeout = 10_000;
   const endpoint = endpointOwner(server, paths);
   try {
+    assertOwner();
+    if (await readUpgradeOwner(paths))
+      throw new Error("A daemon upgrade is pending; use normal startup to verify the previous owner.");
     assertOwner();
     await endpoint.listen();
     assertOwner();

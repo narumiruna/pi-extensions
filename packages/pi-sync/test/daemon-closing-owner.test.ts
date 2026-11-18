@@ -54,8 +54,13 @@ async function fixture(agentDir: string) {
   await fs.mkdir(agentDir, { recursive: true });
   const root = await fs.realpath(agentDir);
   const manager = SessionManager.create(root, path.join(root, "sessions"));
-  const ctx = createMockContext({ cwd: root, mode: "rpc", hasUI: true, sessionManager: manager })
-    .ctx as ExtensionContext;
+  const { ctx: context, notifications } = createMockContext({
+    cwd: root,
+    mode: "rpc",
+    hasUI: true,
+    sessionManager: manager,
+  });
+  const ctx = context as ExtensionContext;
   const session = new AbortController();
   const enteredWait = Promise.withResolvers<void>();
   const exited = Promise.withResolvers<void>();
@@ -72,6 +77,7 @@ async function fixture(agentDir: string) {
   }));
   const attachErrors: unknown[] = [stopping()];
   let operationError: Error | undefined;
+  let onAttach: (() => Promise<void>) | undefined;
   const result = { completed: true };
   const connections: ReturnType<typeof connection>[] = [];
   function connection(
@@ -90,9 +96,11 @@ async function fixture(agentDir: string) {
       attach: vi.fn(async (_signal?: AbortSignal) => {
         events.push(`${label}:attach`);
         if (attachError) throw attachError;
+        await onAttach?.();
       }),
-      update: vi.fn(async () => {
+      update: vi.fn(async (next: ClientFacts) => {
         events.push(`${label}:update`);
+        Object.assign(facts, next);
       }),
       run: vi.fn(async (..._args: Parameters<DaemonConnection["run"]>) => {
         events.push(`${label}:run`);
@@ -136,6 +144,7 @@ async function fixture(agentDir: string) {
   return {
     client,
     ctx,
+    notifications,
     session,
     bindPiDaemonClient,
     addresses,
@@ -145,6 +154,9 @@ async function fixture(agentDir: string) {
     enteredWait,
     exited,
     result,
+    duringAttach(action: () => Promise<void>) {
+      onAttach = action;
+    },
     failOperation(error: Error) {
       operationError = error;
     },
@@ -431,3 +443,184 @@ test("passive attach returns false for a closing owner without launching or wait
     assert.deepEqual(f.events, ["old:attach", "old:dispose"]);
     assert.equal(f.connections[0]?.run.mock.calls.length, 0);
   }));
+
+test("a protection-only connection cannot publish a model binding during attach", () =>
+  withClient(async (f) => {
+    const [oldOwner] = f.addresses;
+    f.attachErrors.length = 0;
+    transport.find.mockResolvedValue({ ...oldOwner, needsUpgrade: true });
+    const client = f.bindPiDaemonClient(
+      {
+        ...f.ctx,
+        model: { provider: "fixture", id: "fixture" } as ExtensionContext["model"],
+        modelRegistry: {
+          getRegisteredProviderIds: () => [],
+          getProviderAuthStatus: () => ({ source: "stored" }),
+        } as unknown as ExtensionContext["modelRegistry"],
+      },
+      f.session.signal,
+    );
+    f.duringAttach(async () => {
+      const connection = f.connections[0];
+      assert.ok(connection);
+      const binding = await connection.callback(
+        { id: "callback", job: "job", kind: "model-binding", payload: {} },
+        f.session.signal,
+      );
+      assert.equal(binding, null);
+      assert.equal(connection.update.mock.calls.length, 0);
+    });
+    try {
+      assert.equal(await client.attachExisting(), false);
+    } finally {
+      await client.dispose();
+    }
+  }));
+
+test("an older compatible owner is protection-only unless an interactive replacement opts into upgrade", () =>
+  withClient(async (f) => {
+    const [oldOwner, newOwner] = f.addresses;
+    assert.ok(oldOwner && newOwner);
+    f.attachErrors.length = 0;
+    transport.find.mockResolvedValue({ ...oldOwner, needsUpgrade: true });
+    transport.ensure.mockResolvedValueOnce({ ...newOwner, needsUpgrade: false });
+
+    const assertProtectionOnly = async (client: typeof f.client, options?: { allowUpgrade: boolean }) => {
+      const start = f.events.length;
+      try {
+        assert.equal(await client.attachExisting(options), false);
+        await assert.rejects(client.run("sync", {}), /only protecting/iu);
+        assert.deepEqual(f.events.slice(start), ["old:attach"]);
+        assert.equal(f.connections.at(-1)?.facts.ready, false);
+        assert.equal(transport.ensure.mock.calls.length, 0);
+      } finally {
+        await client.dispose();
+      }
+    };
+
+    await assertProtectionOnly(f.client);
+    for (const mode of ["print", "json"] as const) {
+      const headless = f.bindPiDaemonClient({ ...f.ctx, mode, hasUI: false }, f.session.signal);
+      await assertProtectionOnly(headless, { allowUpgrade: true });
+    }
+
+    const replacement = f.bindPiDaemonClient(f.ctx, f.session.signal);
+    try {
+      const start = f.events.length;
+      assert.equal(await replacement.attachExisting({ allowUpgrade: true }), true);
+      assert.deepEqual(transport.ensure.mock.calls, [[replacement.root, f.session.signal]]);
+      assert.deepEqual(f.events.slice(start), ["new:attach"]);
+      assert.equal(transport.stop.mock.calls.length, 0);
+      assert.equal(transport.wait.mock.calls.length, 0);
+    } finally {
+      await replacement.dispose();
+    }
+  }));
+
+test("a failed interactive upgrade reports its error and protects the replacement session on the old owner", () =>
+  withClient(async (f) => {
+    const [oldOwner] = f.addresses;
+    assert.ok(oldOwner);
+    transport.find.mockResolvedValue({ ...oldOwner, needsUpgrade: true });
+    transport.ensure.mockRejectedValue(new Error("Unattended permission needs review\u001b"));
+    f.attachErrors.length = 0;
+
+    assert.equal(await f.client.attachExisting({ allowUpgrade: true }), false);
+    assert.deepEqual(f.notifications, [
+      { message: "pi-sync daemon upgrade failed: Unattended permission needs review?", level: "error" },
+    ]);
+    const [fallback] = f.connections;
+    assert.ok(fallback);
+    assert.equal(fallback.identity, oldOwner.identity);
+    assert.equal(fallback.facts.sessionFile, f.ctx.sessionManager.getSessionFile());
+    assert.equal(fallback.facts.sessionId, f.ctx.sessionManager.getSessionId());
+    assert.deepEqual(f.events, ["old:attach"]);
+
+    // The session handoff can refresh protection and facts, but cannot start active work.
+    await f.client.finishReattachment();
+    await f.client.markReady(false);
+    assert.equal(fallback.facts.hasUI, false);
+    assert.equal(fallback.facts.ready, false);
+    assert.equal(fallback.facts.idle, false);
+    assert.equal(fallback.facts.model, undefined);
+    await assert.rejects(f.client.verifyConnection(), /only protecting/iu);
+    await assert.rejects(f.client.run("sync", {}), /only protecting/iu);
+    assert.deepEqual(f.events, ["old:attach", "old:attach", "old:update"]);
+    assert.equal(fallback.dispose.mock.calls.length, 0);
+    assert.equal(fallback.run.mock.calls.length, 0);
+    assert.equal(transport.ensure.mock.calls.length, 1);
+    assert.equal(transport.find.mock.calls.length, 1);
+    assert.equal(transport.wait.mock.calls.length, 0);
+  }));
+
+for (const attachError of [stopping(), Object.assign(new Error("Owner has exited"), { code: "ECONNREFUSED" })])
+  test(`a failed upgrade is reported even when fallback cannot attach: ${attachError.message}`, () =>
+    withClient(async (f) => {
+      transport.find.mockResolvedValue({ ...f.addresses[0], needsUpgrade: true });
+      transport.ensure.mockRejectedValue(new Error("Upgrade refused"));
+      f.attachErrors[0] = attachError;
+
+      const attaching = f.client.attachExisting({ allowUpgrade: true });
+      if (attachError instanceof DaemonError) assert.equal(await attaching, false);
+      else await assert.rejects(attaching, (error) => error === attachError);
+      assert.deepEqual(f.notifications, [
+        { message: "pi-sync daemon upgrade failed: Upgrade refused", level: "error" },
+      ]);
+      assert.equal(transport.find.mock.calls.length, 1);
+      assert.equal(transport.ensure.mock.calls.length, 1);
+      assert.equal(f.connections.length, 1);
+      assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+    }));
+
+for (const [phase, invalidate] of [
+  ["upgrade", "cancellation"],
+  ["upgrade", "replacement"],
+  ["upgrade", "disposal"],
+  ["fallback", "cancellation"],
+  ["fallback", "replacement"],
+] as const)
+  test(`${invalidate} during ${phase} cannot publish stale protection or report the old error`, () =>
+    withClient(async (f) => {
+      transport.find.mockResolvedValue({ ...f.addresses[0], needsUpgrade: true });
+      f.attachErrors.length = 0;
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const failUpgrade = async () => {
+        if (phase === "upgrade") {
+          entered.resolve();
+          await release.promise;
+        }
+        throw new Error("Upgrade refused");
+      };
+      transport.ensure.mockImplementation(failUpgrade);
+      if (phase === "fallback") {
+        f.duringAttach(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+      }
+      const attaching = f.client.attachExisting({ allowUpgrade: true });
+      let replacement: ReturnType<typeof f.bindPiDaemonClient> | undefined;
+      let disposal: Promise<void> | undefined;
+      try {
+        await Promise.race([entered.promise, attaching]);
+        assert.equal(f.connections.length, phase === "upgrade" ? 0 : 1);
+        if (invalidate === "cancellation") f.session.abort(new Error("Session cancelled"));
+        else if (invalidate === "replacement") replacement = f.bindPiDaemonClient(f.ctx, new AbortController().signal);
+        else disposal = f.client.dispose();
+        release.resolve();
+        await assert.rejects(attaching, /session was replaced|session cancelled/iu);
+        await disposal;
+        assert.equal(transport.ensure.mock.calls.length, 1);
+        assert.equal(f.connections.length, phase === "upgrade" ? 0 : 1);
+        assert.deepEqual(f.notifications, []);
+        for (const connection of f.connections) {
+          assert.equal(connection.run.mock.calls.length, 0);
+          assert.equal(connection.update.mock.calls.length, 0);
+        }
+      } finally {
+        release.resolve();
+        await attaching.catch(() => {});
+        await replacement?.dispose();
+      }
+    }));

@@ -45,6 +45,10 @@ The package declares `dist/index.ts`, so an unbuilt checkout must run the build 
 
 Extensions run with Pi's permissions, so install only packages from sources you trust.
 
+Revoke retained unattended permission before updating. After updating, use `/reload` in open Pi
+sessions. If the upgrade is blocked or the old owner's exit is uncertain, follow the
+[daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
+
 Use a Pi runtime that satisfies this package’s declared peer floor. Installing an extension dependency does not upgrade a separately installed Pi runtime. The declared Kit floor supplies exact scrolling/paginated review and configured-keybinding support.
 
 ## 🚀 Quick start
