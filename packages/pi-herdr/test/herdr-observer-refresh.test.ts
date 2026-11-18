@@ -4,6 +4,7 @@ import { test, vi } from "vitest";
 import { createMockContext as createBaseContext } from "../../../test/support.js";
 import type { HerdrRequest } from "../src/herdr-client.js";
 import { createHerdrWidgetObserver } from "../src/herdr-observer.js";
+import { herdrSessionFingerprint } from "../src/herdr-spawn-provenance.js";
 import { HERDR_WIDGET_KEY } from "../src/herdr-widget.js";
 
 function createMockContext(overrides: Parameters<typeof createBaseContext>[0]) {
@@ -554,6 +555,180 @@ test("subscription rejection without a topology change remains bounded", async (
   } finally {
     await f.observer.shutdown(f.ctx);
   }
+});
+
+test.each([
+  ["A to B", "A", "B"],
+  ["B to A", "B", "A"],
+  ["native to non-native", "A", "custom"],
+  ["non-native to native", "custom", "B"],
+])("later list alone determines caller relations: %s", async (_label, earlier, later) => {
+  const f = fixture();
+  const nativeSession = (value: string) => ({ source: "herdr:pi", agent: "pi", kind: "id", value });
+  const parent = pane("w1:p0", { agent_session: nativeSession("parent") });
+  const spawn = (
+    origin: ReturnType<typeof pane> & { agent_session?: unknown },
+    target: ReturnType<typeof pane> & { agent_session?: unknown },
+  ) => ({
+    ...target,
+    tokens: {
+      pi_spawn_v: "1",
+      pi_spawn_origin: origin.terminal_id,
+      pi_spawn_from: herdrSessionFingerprint(origin.terminal_id, origin.agent_session),
+      pi_spawn_to: herdrSessionFingerprint(target.terminal_id, target.agent_session),
+      pi_spawn_label: "captured",
+    },
+  });
+  const caller = (identity: string) =>
+    spawn(
+      parent,
+      pane("w1:p1", {
+        agent_session: { ...nativeSession(identity), source: identity === "custom" ? "custom" : "herdr:pi" },
+      }),
+    );
+  const childA = spawn(caller("A"), pane("w1:p2", { agent_session: nativeSession("child-A") }));
+  const childB = spawn(caller("B"), pane("w1:p3", { agent_session: nativeSession("child-B") }));
+  const peer = pane("w1:p4", { agent_session: nativeSession("peer") });
+  const peerChild = spawn(peer, pane("w1:p5", { agent_session: nativeSession("peer-child") }));
+  const peers = [parent, childA, childB, peer, peerChild];
+  f.state.current = caller(earlier);
+  f.state.panes = [f.state.current, ...peers];
+  const pending = deferred<unknown>();
+  let held: unknown;
+  f.observer.start(f.ctx);
+  try {
+    await f.ready();
+    f.state.panes = [caller(later), ...peers];
+    f.state.override = (request, result) => {
+      if (request.method !== "pane.list" || held !== undefined) return undefined;
+      held = result;
+      return pending.promise;
+    };
+    const reads = f.state.listReads;
+    f.emit(updated());
+    await until(() => held !== undefined);
+    pending.resolve(held);
+    await until(() => f.state.activeLists === 0);
+    const row = (id: string) =>
+      f
+        .text()
+        .split("\n")
+        .find((line) => line.includes(`· ${id} ·`)) ?? "";
+    assert.match(row("p2"), later === "A" ? /spawned by you/ : /spawned by captured \(unavailable\)/);
+    assert.match(row("p3"), later === "B" ? /spawned by you/ : /spawned by captured \(unavailable\)/);
+    if (later === "custom") assert.doesNotMatch(row("p0"), /spawned you/);
+    else assert.match(row("p0"), /spawned you/);
+    assert.match(row("p5"), /spawned by reviewer\/p4/);
+    assert.equal(f.state.listReads, reads + 1, "no extra invalidation hides the mixed-read result");
+    assert.equal(f.subscriptions.length, 1);
+  } finally {
+    pending.resolve(held);
+    await f.observer.shutdown(f.ctx);
+  }
+});
+
+test.each(["absent", "reused"])(
+  "caller moves with %s old pane ID; rediscover without spending outage retries",
+  async (oldId) => {
+    const f = fixture();
+    let pending: ReturnType<typeof deferred<unknown>> | undefined;
+    let held: unknown;
+    f.observer.start(f.ctx);
+    try {
+      await f.ready();
+      for (const id of ["w1:p9", "w1:p1"]) {
+        pending = deferred<unknown>();
+        held = undefined;
+        let moved = false;
+        f.state.override = (request, result) => {
+          if (request.method === "pane.list" && !moved) {
+            moved = true;
+            const previousId = f.state.current.pane_id;
+            f.state.current = { ...f.state.current, pane_id: id };
+            f.state.panes = [f.state.current, pane("w1:p2")];
+            if (oldId === "reused") f.state.panes.push(pane(previousId, { terminal_id: "other-terminal" }));
+            return Promise.resolve({ type: "pane_list", panes: [...f.state.panes] });
+          }
+          if (request.method === "pane.current" && moved && held === undefined) {
+            held = result;
+            return pending?.promise;
+          }
+          return undefined;
+        };
+        const subscriptions = f.subscriptions.length;
+        f.emit(updated());
+        await until(() => held !== undefined);
+        assert.equal(f.widgets.get(HERDR_WIDGET_KEY), undefined);
+        assert.equal(f.subscriptions.at(-1)?.signal.aborted, true);
+        pending.resolve(held);
+        await until(() => f.subscriptions.length === subscriptions + 1);
+        await f.ready();
+        assert.doesNotMatch(f.text(), new RegExp(`${id.split(":")[1]} ·`, "u"));
+        f.state.override = undefined;
+      }
+      const subscriptions = f.subscriptions.length;
+      f.subscriptions.at(-1)?.fail();
+      await until(() => f.subscriptions.length === subscriptions + 1);
+      await f.ready();
+      f.subscriptions.at(-1)?.fail();
+      await until(() => f.widgets.get(HERDR_WIDGET_KEY) === undefined);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(f.subscriptions.length, subscriptions + 1);
+    } finally {
+      f.state.override = undefined;
+      pending?.resolve(held);
+      await f.observer.shutdown(f.ctx);
+    }
+    assert.equal(f.state.activeLists, 0);
+  },
+);
+
+test("metadata invalidations re-read spawn identities and cannot replay stale relationships", async () => {
+  const f = fixture();
+  const originSession = { source: "herdr:pi", agent: "pi", kind: "id", value: "origin" };
+  const targetSession = { ...originSession, value: "target" };
+  f.state.current = pane("w1:p1", { agent_session: originSession });
+  const target = pane("w1:p2", { agent_session: targetSession });
+  const tokens = {
+    pi_spawn_v: "1",
+    pi_spawn_origin: f.state.current.terminal_id,
+    pi_spawn_from: herdrSessionFingerprint(f.state.current.terminal_id, originSession),
+    pi_spawn_to: herdrSessionFingerprint(target.terminal_id, targetSession),
+    pi_spawn_label: "initiator",
+  };
+  const recordedTarget = pane("w1:p2", { agent_session: targetSession, tokens });
+  f.state.panes = [f.state.current, target];
+  f.observer.start(f.ctx);
+  try {
+    await f.ready();
+    assert.doesNotMatch(f.text(), /spawned/);
+    const initialReads = f.state.listReads;
+    f.state.panes = [f.state.current, recordedTarget];
+    f.emit({ event: "pane_updated", data: { pane: target } });
+    await until(() => f.state.listReads > initialReads && f.text().includes("spawned by you"));
+    const reads = f.state.listReads;
+    f.state.panes = [
+      f.state.current,
+      pane("w1:p2", { agent_session: { ...targetSession, value: "replacement" }, tokens }),
+    ];
+    f.emit({ event: "pane_updated", data: { pane: recordedTarget } });
+    await until(() => f.state.listReads > reads && !f.text().includes("spawned"));
+    assert.equal(f.state.maxActiveLists, 1);
+    const afterReplacement = f.state.listReads;
+    f.state.current = pane("w1:p1", { agent_session: { ...originSession, value: "new-origin" } });
+    f.state.panes = [f.state.current, recordedTarget];
+    f.emit({ event: "pane_updated", data: { pane: recordedTarget } });
+    await until(() => f.state.listReads > afterReplacement && f.text().includes("unavailable"));
+    assert.doesNotMatch(f.text(), /spawned by you/);
+    f.subscriptions.at(-1)?.fail();
+    await until(() => f.state.subscribeAttempts === 2);
+    await f.ready();
+    assert.match(f.text(), /unavailable/);
+  } finally {
+    await f.observer.shutdown(f.ctx);
+  }
+  assert.equal(f.widgets.get(HERDR_WIDGET_KEY), undefined);
+  assert.equal(f.state.activeLists, 0);
 });
 
 test("shutdown cancels reconnect backoff and repeated cleanup leaves no resources", async () => {

@@ -1,7 +1,7 @@
 {
   "name": "@narumitw/pi-herdr",
   "version": "0.5.0",
-  "description": "Herdr lifecycle reporting, pane metadata, and agent widget for Pi.",
+  "description": "Herdr and hc agent status, independent Pi peers, and spawn relationships.",
   "type": "module",
   "license": "MIT",
   "private": false,
@@ -10,12 +10,16 @@
     "pi-extension",
     "pi",
     "herdr",
+    "hc",
+    "herdr-core",
     "terminal-multiplexer",
     "agent-orchestration"
   ],
   "files": [
     "src",
     "dist",
+    "docs",
+    "skills",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -23,6 +27,9 @@
   "pi": {
     "extensions": [
       "./dist/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "scripts": {
@@ -36,14 +43,18 @@
     "@narumitw/pi-tui-kit": "^0.70.0"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-coding-agent": "1.5.0",
     "@earendil-works/pi-tui": "1.5.0",
     "@types/node": "26.6.6",
     "esbuild": "0.28.2",
+    "typebox": "1.4.5",
     "typescript": "7.0.2"
   },
   "repository": {

@@ -10,6 +10,7 @@ import {
   herdrMetadataSnapshotsEqual,
 } from "./herdr-metadata.js";
 import { createHerdrWidgetObserver, type HerdrWidgetObserver } from "./herdr-observer.js";
+import { claimHerdrRuntime } from "./herdr-runtime-claim.js";
 
 import { createHerdrSettingsController, type HerdrSettingsOptions } from "./herdr-settings-controller.js";
 
@@ -68,7 +69,7 @@ function readEnvironment(environment: NodeJS.ProcessEnv = process.env): HerdrEnv
   const socketPath = environment.HERDR_SOCKET_PATH;
   const paneId = environment.HERDR_PANE_ID;
   return {
-    enabled: environment.HERDR_ENV === "1" && !!socketPath && !!paneId,
+    enabled: environment.HERDR_ENV === "1" && !!socketPath?.trim() && !!paneId?.trim(),
     paneId: paneId ?? "",
     socketEndpoint: resolveSocketEndpoint(socketPath),
   };
@@ -89,6 +90,8 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
 
   return function herdrAgentState(pi: ExtensionAPI): void {
     if (!environment.enabled) return;
+    let releaseClaim = claimHerdrRuntime(pi);
+    if (!releaseClaim) return;
     const widget = createHerdrSettingsController(pi, widgetObserver, options);
 
     let sessionGeneration = 0;
@@ -298,9 +301,9 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
       return rootSession && ctx.sessionManager === activeSession;
     }
 
-    function publishMetadata(ctx: ExtensionContext): void {
+    function publishMetadata(ctx: ExtensionContext, force = false): void {
       if (!owns(ctx)) return;
-      queueMetadata(readMetadataSnapshot(ctx));
+      queueMetadata(readMetadataSnapshot(ctx), force);
     }
 
     function desiredState(): { state: AgentState; message?: string } {
@@ -332,6 +335,8 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
     });
 
     pi.on("session_start", async (event, ctx) => {
+      releaseClaim ??= claimHerdrRuntime(pi);
+      if (!releaseClaim) return;
       const generation = ++sessionGeneration;
       const replaced = new DOMException("Herdr session replaced", "AbortError");
       sessionController.abort(replaced);
@@ -359,7 +364,6 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
 
       updateSessionRef(ctx);
       const sessionReport = reportSession(event.reason);
-      publishMetadata(ctx);
       await Promise.all([sessionReport, widgetStart]);
       if (
         generation !== sessionGeneration ||
@@ -369,6 +373,10 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
       ) {
         return;
       }
+      // Session-only changes do not guarantee a Herdr event. Refresh the existing
+      // TTL metadata after the identity report, even if another event sent it
+      // during startup, so observers re-read the new session before showing edges.
+      publishMetadata(ctx, true);
       agentActive = !ctx.isIdle();
       publishState(true);
     });
@@ -404,6 +412,8 @@ export function createHerdrAgentStateExtension(options: HerdrAgentStateOptions =
         return;
       }
 
+      releaseClaim?.();
+      releaseClaim = undefined;
       const session = ctx.sessionManager;
       const task = (async () => {
         const shouldClearMetadata = rootSession;
