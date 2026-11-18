@@ -9,23 +9,26 @@ settings and state formats. The Pi extension remains `@narumitw/pi-sync`. Pi use
 per canonical agent directory. It does not install an OS service.
 
 After an update, use `/reload` in open Pi sessions. On the next active connection, the new client
-authenticates the owner and checks the build version. An older or unversioned owner acknowledges a
-stop request and releases its identity. The client waits for that process to exit before starting the
-replacement. This prevents the old owner from trying to load modules from a removed package. The
-upgrade does not run a transfer, replay an operation, or change sync settings. Passive print, JSON,
-and shutdown paths do not replace an older owner.
+checks the owner's build over compatible, authenticated IPC. For an older or unversioned owner, the
+client checks that no retained unattended permission blocks the upgrade. It then requests a stop
+and starts the replacement only after the owner releases its identity and exits. If any check fails,
+follow manual recovery. The upgrade does not run a transfer, replay an operation, or change sync
+settings. Passive print, JSON, and shutdown paths do not replace an older owner.
 
 Manual recovery:
 
 1. If Pi Sync reports retained unattended permission, review it before restarting. Revoke it
    from a client that can still use the existing daemon. For uncertain consent or failed revocation,
    follow [Diagnostics and rollback](#diagnostics-and-rollback) instead of clearing state.
-2. Check the owner with `pi-sync-daemon status --root <agent-directory>`. For a recognized,
-   compatible owner, use `pi-sync-daemon stop --root <agent-directory>` to request a stop. This works
-   for the old package even if its executable was removed. If the old executable is still installed,
-   you can use `sync-daemon stop --root <agent-directory>` before updating.
-3. Once the old process has exited, use `/reload`, then `/sync daemon status`. Do not force a second
-   owner or delete recovery files if the stop cannot be verified.
+2. Run `pi-sync-daemon status --root <agent-directory>` and record the old owner's `pid`. For a
+   recognized, compatible owner, request a stop with `pi-sync-daemon stop --root <agent-directory>`.
+   This works even if the old executable was removed. If it is still installed, you can use
+   `sync-daemon stop --root <agent-directory>` before updating.
+3. Check the recorded PID in the operating system. On macOS or Linux, use `ps -p <pid> -o pid,args`.
+   On Windows, look up the PID in Task Manager's **Details** tab. Wait until the old process is gone.
+   A successful `stop` means the daemon released its identity. It does not prove that the process
+   exited. If you cannot verify exit, do not force a second owner or delete recovery files.
+4. Once you verify exit, use `/reload`, then `/sync daemon status`.
 
 Stop the service before rebuilding a local checkout in place. A source rebuild without a package
 version change does not trigger automatic replacement.

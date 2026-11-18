@@ -388,7 +388,7 @@ export class PiDaemonClient {
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
         const protectionOnly = daemon.needsUpgrade === true;
         const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
-          callback: (callback, signal) => this.callback(callback, signal),
+          callback: (callback, signal) => this.callback(callback, signal, protectionOnly),
           event: (event) => {
             if (event.kind === "commit") return;
             if (this.signal.aborted || this.disposed || this.closing || clients.get(this.manager) !== this) return;
@@ -685,7 +685,7 @@ export class PiDaemonClient {
     if (this.connection && !this.paused && !this.disposed && !this.signal.aborted)
       await this.publishFacts(this.connection);
   }
-  private async callback(callback: Callback, signal: AbortSignal) {
+  private async callback(callback: Callback, signal: AbortSignal, protectionOnly: boolean) {
     const payload = callback.payload as {
       reservation?: string;
       targets?: string[];
@@ -721,6 +721,7 @@ export class PiDaemonClient {
     const ctx = this.uiContext;
     const combined = AbortSignal.any([signal, this.signal]);
     if (callback.kind === "model-binding") {
+      if (protectionOnly) return null;
       const facts = this.facts();
       const connection = this.connection ?? this.partialConnection;
       if (connection && JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {

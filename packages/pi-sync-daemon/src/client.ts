@@ -8,12 +8,15 @@ import { lt, valid } from "semver";
 import { DAEMON_BUILD_VERSION } from "./build-version.js";
 import {
   canonicalRootGuard,
+  clearUpgradeOwner,
   daemonPaths,
   privateDirectory,
   processExists,
   type RuntimePaths,
   readIdentity,
   readJsonBody,
+  readUpgradeOwner,
+  recordUpgradeOwner,
   runtimePaths,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
@@ -106,25 +109,45 @@ async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSign
   return { needsUpgrade: typeof version !== "string" || lt(version, DAEMON_BUILD_VERSION) };
 }
 
-async function drainForUpgrade(paths: RuntimePaths, owner: Identity, assertRoot: () => void, signal?: AbortSignal) {
+async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
   const { readConsent } = await import("./consent.js");
-  function checkConsent() {
+  const { withStateDirectoryRead } = await import("./engine/state/state-directory.js");
+  signal?.throwIfAborted();
+  await withStateDirectoryRead(paths.root, () => {
     signal?.throwIfAborted();
     assertRoot();
-    // Older owners cannot report an in-memory revocation failure. Do not
-    // implicitly restart with a retained unattended grant that may be stale.
+    // An older owner cannot report an in-memory revocation failure.
     const consent = readConsent(paths.root);
     if (consent && Object.values(consent.setups).some((setup) => setup.afterExit))
       throw new Error("Review or revoke unattended Pi Sync permission before restarting the older daemon.");
-  }
+  });
+  signal?.throwIfAborted();
+  assertRoot();
+}
 
-  checkConsent();
+async function finishUpgrade(
+  paths: RuntimePaths,
+  owner: Pick<Identity, "pid" | "instance">,
+  assertRoot: () => void,
+  signal?: AbortSignal,
+) {
+  await waitForDaemonExit(owner, signal);
+  if ((await readIdentity(paths))?.instance === owner.instance)
+    throw new Error("The daemon exited without releasing its identity.");
+  await checkUpgradeConsent(paths, assertRoot, signal);
+  await clearUpgradeOwner(paths);
+  signal?.throwIfAborted();
+  assertRoot();
+}
+
+async function drainForUpgrade(paths: RuntimePaths, owner: Identity, assertRoot: () => void, signal?: AbortSignal) {
+  await checkUpgradeConsent(paths, assertRoot, signal);
   try {
+    // Publish this before stop can remove the identity. Cancellation leaves it in place.
+    await recordUpgradeOwner(paths, owner);
+    assertRoot();
     const reply = await requestDaemon(paths, owner, "stop", {}, signal);
     if (!record(reply) || reply.stopping !== true) throw new Error("Daemon did not acknowledge stop.");
-    await waitForDaemonExit(owner, signal);
-    if ((await readIdentity(paths))?.instance === owner.instance)
-      throw new Error("The daemon exited without releasing its identity.");
   } catch (error) {
     signal?.throwIfAborted();
     throw new Error(
@@ -132,7 +155,29 @@ async function drainForUpgrade(paths: RuntimePaths, owner: Identity, assertRoot:
       { cause: error },
     );
   }
-  checkConsent();
+  await finishUpgrade(paths, owner, assertRoot, signal);
+}
+
+async function acquireStartupLock(paths: RuntimePaths, signal?: AbortSignal) {
+  // Include the handshake, stop, exit wait, boot, and final handshake budgets.
+  const deadline = performance.now() + 150_000;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      return await lockfile.lock(paths.directory, {
+        realpath: false,
+        lockfilePath: paths.startup,
+        stale: 30_000,
+        update: 5_000,
+      });
+    } catch (error) {
+      signal?.throwIfAborted();
+      if ((error as NodeJS.ErrnoException).code !== "ELOCKED") throw error;
+      if (performance.now() >= deadline)
+        throw new Error("Timed out waiting to start the Pi Sync daemon.", { cause: error });
+      await delay(50, undefined, { signal });
+    }
+  }
 }
 
 /** Explicit startup only: callers decide whether configuration or a user action authorizes it. */
@@ -142,26 +187,34 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
   await privateDirectory(paths.directory);
   signal?.throwIfAborted();
-  const release = await lockfile.lock(paths.directory, {
-    realpath: false,
-    lockfilePath: paths.startup,
-    stale: 30_000,
-    update: 5_000,
-    retries: { retries: 100, factor: 1, minTimeout: 50, maxTimeout: 50 },
-  });
+  const release = await acquireStartupLock(paths, signal);
   try {
     signal?.throwIfAborted();
     let waited = false;
     let upgraded = false;
     for (;;) {
       signal?.throwIfAborted();
+      const upgrade = await readUpgradeOwner(paths);
       const existing = await readIdentity(paths);
+      if (upgrade && existing?.instance === upgrade.instance && existing.pid !== upgrade.pid)
+        throw new Error("The recorded upgrade owner changed; private state was retained.");
+      if (upgrade && (existing?.instance !== upgrade.instance || !processExists(upgrade.pid))) {
+        await finishUpgrade(paths, upgrade, assertRoot, signal);
+        upgraded = true;
+        continue;
+      }
       if (!existing) break;
       let status: Awaited<ReturnType<typeof hello>>;
       try {
         status = await hello(paths, existing, signal);
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
+        if (upgrade) {
+          // The stop may have been accepted even if the old endpoint no longer replies.
+          await finishUpgrade(paths, upgrade, assertRoot, signal);
+          upgraded = true;
+          continue;
+        }
         if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError" && !waited) {
           waited = true;
           await waitForDaemonExit(existing, signal);
@@ -176,7 +229,10 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
       }
       signal?.throwIfAborted();
       assertRoot();
-      if (!status.needsUpgrade) return { paths: daemonPaths(paths, existing.instance), identity: existing, ...status };
+      if (!status.needsUpgrade) {
+        if (upgrade) throw new Error("The recorded upgrade owner changed; private state was retained.");
+        return { paths: daemonPaths(paths, existing.instance), identity: existing, ...status };
+      }
       if (upgraded)
         throw new Error("An older Pi Sync daemon started again. Close or upgrade other Pi sessions, then use /reload.");
       await drainForUpgrade(paths, existing, assertRoot, signal);
@@ -247,7 +303,7 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
 }
 
 /** Wait only for a previously authenticated owner; never kill it or infer exit from lost contact. */
-export async function waitForDaemonExit(identity: Identity, signal?: AbortSignal) {
+export async function waitForDaemonExit(identity: Pick<Identity, "pid">, signal?: AbortSignal) {
   const deadline = Date.now() + 30_000;
   signal?.throwIfAborted();
   while (processExists(identity.pid)) {

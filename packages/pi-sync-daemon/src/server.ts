@@ -14,6 +14,7 @@ import {
   publishIdentity,
   readIdentity,
   readJsonBody,
+  readUpgradeOwner,
   runtimePaths,
 } from "./identity.js";
 import { createIdleExit, type IdleExitPolicy } from "./idle-exit.js";
@@ -810,6 +811,9 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   server.headersTimeout = 10_000;
   const endpoint = endpointOwner(server, paths);
   try {
+    assertOwner();
+    if (await readUpgradeOwner(paths))
+      throw new Error("A daemon upgrade is pending; use normal startup to verify the previous owner.");
     assertOwner();
     await endpoint.listen();
     assertOwner();

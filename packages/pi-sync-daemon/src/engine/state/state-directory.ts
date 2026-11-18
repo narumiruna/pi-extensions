@@ -146,11 +146,16 @@ async function acquireSharedStateDirectoryGuard(): Promise<StateDirectoryGuard> 
   }
 }
 
-async function acquireStateDirectoryGuard(): Promise<StateDirectoryGuard> {
+/** Protect path selection and the read for a process outside the engine host. */
+export async function withStateDirectoryRead<T>(root: string, read: () => T): Promise<T> {
+  return runWithStateDirectoryGuard(await acquireStateDirectoryGuard(root), async () => read());
+}
+
+async function acquireStateDirectoryGuard(root = getAgentDir()): Promise<StateDirectoryGuard> {
   let compromisedError: Error | undefined;
-  const release = await lockfile.lock(getAgentDir(), {
+  const release = await lockfile.lock(root, {
     fs: LOCKFILE_FS_ADAPTER,
-    lockfilePath: migrationLockPath(),
+    lockfilePath: migrationLockPath(root),
     realpath: false,
     stale: MIGRATION_LOCK_STALE_MS,
     update: MIGRATION_LOCK_UPDATE_MS,
@@ -199,8 +204,8 @@ function canonicalStateDir(root = getAgentDir()) {
   return path.join(root, CANONICAL_DIRECTORY_NAME);
 }
 
-function migrationLockPath() {
-  return path.join(getAgentDir(), MIGRATION_LOCK_NAME);
+function migrationLockPath(root = getAgentDir()) {
+  return path.join(root, MIGRATION_LOCK_NAME);
 }
 
 function inspectStateRoots(root = getAgentDir()) {

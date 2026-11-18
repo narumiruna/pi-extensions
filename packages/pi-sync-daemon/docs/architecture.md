@@ -144,9 +144,12 @@ Do not rebuild while a smoke-owned daemon is running. Linux containers need an i
 The authenticated `hello` response reports the running package build separately from its protocol
 version. Older releases did not report a build. During active startup, the client holds the existing
 startup lock, sends an authenticated `stop` to an older or unversioned owner, and waits for owner exit
-and identity release. It checks the root again before launching a replacement. It does not stop a
-newer build or start a replacement for an unreachable live owner. A retained unattended grant blocks
-implicit replacement because a legacy owner cannot report a failed revocation. Passive attachment can
+and identity release. A private exit record survives cancellation and timeout. Later callers wait
+for the same PID even if the old identity file is gone. Concurrent startup can wait for the drain
+under a bounded, cancellable lock wait. The client checks the root again before launching a replacement.
+It does not stop a newer build or start a replacement for an unreachable live owner. A retained unattended grant blocks
+implicit replacement because a legacy owner cannot report a failed revocation. The client reads
+consent under the state migration guard and releases it before sending stop. Passive attachment can
 protect live sessions without starting a replacement or submitting sync operations on the old build.
 
 ## Cross-process apply protocol

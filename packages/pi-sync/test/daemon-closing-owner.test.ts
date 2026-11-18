@@ -72,6 +72,7 @@ async function fixture(agentDir: string) {
   }));
   const attachErrors: unknown[] = [stopping()];
   let operationError: Error | undefined;
+  let onAttach: (() => Promise<void>) | undefined;
   const result = { completed: true };
   const connections: ReturnType<typeof connection>[] = [];
   function connection(
@@ -90,6 +91,7 @@ async function fixture(agentDir: string) {
       attach: vi.fn(async (_signal?: AbortSignal) => {
         events.push(`${label}:attach`);
         if (attachError) throw attachError;
+        await onAttach?.();
       }),
       update: vi.fn(async () => {
         events.push(`${label}:update`);
@@ -145,6 +147,9 @@ async function fixture(agentDir: string) {
     enteredWait,
     exited,
     result,
+    duringAttach(action: () => Promise<void>) {
+      onAttach = action;
+    },
     failOperation(error: Error) {
       operationError = error;
     },
@@ -430,6 +435,39 @@ test("passive attach returns false for a closing owner without launching or wait
     assert.equal(transport.wait.mock.calls.length, 0);
     assert.deepEqual(f.events, ["old:attach", "old:dispose"]);
     assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+  }));
+
+test("a protection-only connection cannot publish a model binding during attach", () =>
+  withClient(async (f) => {
+    const [oldOwner] = f.addresses;
+    f.attachErrors.length = 0;
+    transport.find.mockResolvedValue({ ...oldOwner, needsUpgrade: true });
+    const client = f.bindPiDaemonClient(
+      {
+        ...f.ctx,
+        model: { provider: "fixture", id: "fixture" } as ExtensionContext["model"],
+        modelRegistry: {
+          getRegisteredProviderIds: () => [],
+          getProviderAuthStatus: () => ({ source: "stored" }),
+        } as unknown as ExtensionContext["modelRegistry"],
+      },
+      f.session.signal,
+    );
+    f.duringAttach(async () => {
+      const connection = f.connections[0];
+      assert.ok(connection);
+      const binding = await connection.callback(
+        { id: "callback", job: "job", kind: "model-binding", payload: {} },
+        f.session.signal,
+      );
+      assert.equal(binding, null);
+      assert.equal(connection.update.mock.calls.length, 0);
+    });
+    try {
+      assert.equal(await client.attachExisting(), false);
+    } finally {
+      await client.dispose();
+    }
   }));
 
 test("an older compatible owner is protection-only unless an interactive replacement opts into upgrade", () =>
