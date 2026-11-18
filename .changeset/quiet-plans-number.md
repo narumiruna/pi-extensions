@@ -3,7 +3,7 @@
 "@narumitw/pi-tui-kit": patch
 ---
 
-Fix duplicate option numbers in Plan mode questionnaires in TUI and RPC,
-including when terminal sanitization leaves leading spaces. Show the selected
-option number on the TUI review page when option labels match. Leave selected
-answers unchanged.
+Fix duplicate option numbers in Plan mode questionnaires in TUI and RPC.
+Recognize complete sequences that use `1.` or `1)`, even with leading spaces.
+Show predefined option numbers apart from the answer text on the TUI review
+page. Leave selected answers unchanged.

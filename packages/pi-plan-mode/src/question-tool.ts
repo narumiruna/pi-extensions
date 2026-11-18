@@ -276,12 +276,16 @@ function displayOptions(
   }));
   if (sanitized.length < 2) return sanitized;
 
-  // Strip a prefix only from a complete sequence. Kit adds the visible numbers.
+  // Strip a prefix only from a complete sequence with one marker style. Kit adds the visible numbers.
   const unnumbered: PlanModeQuestionOption[] = [];
+  let marker: string | undefined;
   for (const [index, option] of sanitized.entries()) {
-    const match = option.label.trimStart().match(/^(\d+)\.\s+(\S.*)$/u);
-    if (!match?.[2] || match[1] !== String(index + 1)) return sanitized;
-    unnumbered.push({ ...option, label: match[2] });
+    const match = option.label.trimStart().match(/^(\d+)([.)])\s+(\S.*)$/u);
+    if (!match?.[3] || match[1] !== String(index + 1) || (marker !== undefined && match[2] !== marker)) {
+      return sanitized;
+    }
+    marker = match[2];
+    unnumbered.push({ ...option, label: match[3] });
   }
   return unnumbered;
 }

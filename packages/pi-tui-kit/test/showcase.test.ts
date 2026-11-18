@@ -98,7 +98,9 @@ describe("Pi TUI Kit showcase", () => {
     expect(tui.render().join("\n")).toMatch(/\[Layout\] {2}Validation {2}Review/u);
     tui.press("tui.select.confirm");
     tui.press("tui.select.confirm");
-    expect(tui.render().join("\n")).toMatch(/1\. Layout — Compact[\s\S]*2\. Validation — Strict/u);
+    expect(tui.render().join("\n")).toMatch(
+      /1\. Layout \(Option 1\) — Compact[\s\S]*2\. Validation \(Option 1\) — Strict/u,
+    );
     tui.press("tui.select.confirm");
 
     await tui.waitForOpen();
