@@ -281,7 +281,12 @@ function displayOptions(
   let marker: string | undefined;
   for (const [index, option] of sanitized.entries()) {
     const match = option.label.trimStart().match(/^(\d+)([.)])\s+(\S.*)$/u);
-    if (!match?.[3] || match[1] !== String(index + 1) || (marker !== undefined && match[2] !== marker)) {
+    if (
+      !match?.[3] ||
+      !/[^\s\p{Default_Ignorable_Code_Point}]/u.test(match[3]) ||
+      match[1] !== String(index + 1) ||
+      (marker !== undefined && match[2] !== marker)
+    ) {
       return sanitized;
     }
     marker = match[2];

@@ -246,6 +246,10 @@ test.each([
   { name: "mismatched positions", labels: ["1. Same major", "3. Across major"] },
   { name: "mixed markers", labels: ["1) Same major", "2. Across major"] },
   { name: "a missing label after a prefix", labels: ["1) Same major", "2) \u001b[31m"] },
+  { name: "whitespace after a prefix", labels: ["1) Same major", "2)   "] },
+  { name: "zero-width space after a prefix", labels: ["1) Same major", "2) \u200b"] },
+  { name: "variation selector after a prefix", labels: ["1) Same major", "2) \ufe0f"] },
+  { name: "mixed invisible remainder", labels: ["1) Same major", "2) \u200b \u2060\u00ad\u034f\ufe0f "] },
   { name: "numeric content", labels: ["1.5 GiB", "2 MB", "2026. Plan"] },
 ])("RPC preserves $name instead of removing a partial sequence", async ({ labels }) => {
   let offeredChoices: string[] = [];
@@ -262,6 +266,29 @@ test.each([
     ...labels.map((label, index) => `${index + 1}. ${stripVTControlCharacters(label)}`),
     `${labels.length + 1}. Other (free-form)`,
   ]);
+});
+
+test("RPC keeps visible remainders unchanged when removing option prefixes", async () => {
+  const remainders = ["\u200b Visible\ufe0f", "保留\u2060文字"];
+  let offeredChoices: string[] = [];
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    select: async (_title: string, choices: string[]) => {
+      offeredChoices = choices;
+      return choices[0];
+    },
+  });
+  const labels = remainders.map((remainder, index) => `${index + 1}) ${remainder}`);
+  const answers = await askPlanModeQuestions(
+    [{ ...numberedQuestion, options: labels.map((label) => ({ label })) }],
+    context.ctx,
+  );
+  assert.deepEqual(offeredChoices, [
+    ...remainders.map((remainder, index) => `${index + 1}. ${remainder}`),
+    "3. Other (free-form)",
+  ]);
+  assert.equal(answers?.[0]?.answer, labels[0]);
 });
 
 test("the adapter sanitizes mixed display text without mutating raw domain answers", async () => {
