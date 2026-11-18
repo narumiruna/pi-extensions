@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { QuestionnaireAnswer, QuestionnaireQuestion, RunQuestionnaireResult } from "@narumitw/pi-tui-kit";
 
 export const PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
@@ -281,11 +282,14 @@ function displayOptions(
   let marker: string | undefined;
   for (const [index, option] of sanitized.entries()) {
     const match = option.label.trimStart().match(/^(\d+)([.)])\s+(\S.*)$/u);
-    if (!match?.[3] || match[1] !== String(index + 1) || (marker !== undefined && match[2] !== marker)) {
+    const label = match?.[3];
+    if (!label || match[1] !== String(index + 1) || (marker !== undefined && match[2] !== marker)) {
       return sanitized;
     }
+    // Measure without whitespace, but keep the original label text.
+    if (visibleWidth(label.replace(/\s/gu, "")) === 0) return sanitized;
     marker = match[2];
-    unnumbered.push({ ...option, label: match[3] });
+    unnumbered.push({ ...option, label });
   }
   return unnumbered;
 }
