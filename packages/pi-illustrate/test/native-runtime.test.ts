@@ -447,11 +447,20 @@ it.each([false, true])("exports a saved SVG result as text (sendToModel=%s)", as
   await f.session.exportToHtml(path);
   expect(renderResult).toHaveBeenCalled();
   expect(renderResult.mock.calls.every(([, , , context]) => context.showImages === false)).toBe(true);
-  for (const result of renderResult.mock.results) {
-    assert.ok(result.type === "return");
-    expect(result.value.render(80).map((line) => line.trimEnd())).toEqual([resultText]);
+  const html = await readFile(path, "utf8");
+  expect(html).not.toContain("\x1b_G");
+  // Pi stores the pre-rendered tool output in the base64 session payload.
+  const payload = /<script id="session-data" type="application\/json">([^<]+)<\/script>/.exec(html)?.[1];
+  assert.ok(payload, "Expected session data in the exported HTML.");
+  const { renderedTools } = JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as {
+    renderedTools?: Record<string, { resultHtmlExpanded?: string; resultHtmlCollapsed?: string }>;
+  };
+  const rendered = renderedTools?.[tool.id];
+  assert.ok(rendered?.resultHtmlExpanded, "Expected the saved SVG result in the exported HTML.");
+  for (const resultHtml of [rendered.resultHtmlExpanded, rendered.resultHtmlCollapsed ?? rendered.resultHtmlExpanded]) {
+    expect(resultHtml).toContain(resultText);
+    expect(resultHtml).not.toContain("\x1b_G");
   }
-  expect(await readFile(path, "utf8")).not.toContain("\x1b_G");
   expect(f.captured).toEqual([]);
   expect(f.errors).toEqual([]);
 });
