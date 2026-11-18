@@ -29,13 +29,13 @@ test("collection prunes excluded directories before any content reads, including
   withTempHome(async (root) => {
     for (const name of ["skills/private", "skills/public", "custom/nested", "conversation-store/project"])
       await fs.mkdir(path.join(root, name), { recursive: true });
-    for (const name of [
+    const excludedFiles = [
       "settings.json",
       "skills/private/a.md",
       "custom/nested/a.log",
       "conversation-store/project/scratch-a.jsonl",
-    ])
-      await fs.writeFile(path.join(root, name), "sk-123456789012345678901234567890");
+    ].map((name) => path.join(root, name));
+    for (const file of excludedFiles) await fs.writeFile(file, "sk-123456789012345678901234567890");
     for (const name of ["skills/public/a.md", "custom/nested/keep.txt", "conversation-store/project/keep.jsonl"])
       await fs.writeFile(path.join(root, name), "keep");
     const read = vi.spyOn(fs, "readFile");
@@ -52,8 +52,9 @@ test("collection prunes excluded directories before any content reads, including
         result.files.map((file) => file.path),
         ["custom/nested/keep.txt", "sessions/project/keep.jsonl", "skills/public/a.md"],
       );
-      assert.ok(read.mock.calls.every(([file]) => !/private|\.log$|scratch-|settings\.json$/u.test(String(file))));
-      assert.ok(list.mock.calls.every(([file]) => !String(file).endsWith("skills/private")));
+      const readFiles = read.mock.calls.map(([file]) => String(file));
+      for (const file of excludedFiles) assert.ok(!readFiles.includes(file), `unexpected read: ${file}`);
+      assert.ok(list.mock.calls.every(([file]) => String(file) !== path.join(root, "skills/private")));
     } finally {
       read.mockRestore();
       list.mockRestore();

@@ -466,7 +466,9 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
     this.options.questions.forEach((question, index) => {
       const answer = this.answers[index];
       const header = sanitizeQuestionnaireText(question.header) || `Question ${index + 1}`;
-      const label = `${index + 1}. ${header}`;
+      const optionIndex = answer?.optionIndex;
+      const choice = optionIndex === undefined || answer?.wasCustom ? "" : ` (Option ${optionIndex})`;
+      const label = `${index + 1}. ${header}${choice}`;
       const summary = ` — ${inlineSummary(answer?.answer ?? "Unanswered")}${
         answer?.note ? ` · ${noteLabel}: ${inlineSummary(answer.note)}` : ""
       }`;

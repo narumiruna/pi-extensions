@@ -372,10 +372,18 @@ test("portable settings disclose only conflicting units and retain newer local-o
     const settings = { ...v3S3Settings(), version: 4 };
     Object.assign(settings.syncSetups.home.sync, { agentMode: true, localFields: ["shellPath"] });
     await fs.writeFile(localConfigPath(), JSON.stringify(settings));
-    await fs.writeFile(path.join(agentDir, "settings.json"), '{"theme":"base","shellPath":"/private/base"}');
+    const baseShellPath = "/private/base";
+    const localShellPath = "/private/newer";
+    await fs.writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ theme: "base", shellPath: baseShellPath }),
+    );
     const backend = new MemorySyncBackend();
     const mock = agentContext((units, context) => {
-      assert.doesNotMatch(JSON.stringify(context), /shellPath|private/);
+      const request = JSON.stringify(context);
+      assert.doesNotMatch(request, /shellPath/u);
+      assert.ok(!request.includes(baseShellPath), "resolver must not receive the baseline shell path");
+      assert.ok(!request.includes(localShellPath), "resolver must not receive the current shell path");
       return selectRemote(units);
     });
     await push(mock.ctx, mergeOptions, undefined, () => backend);
@@ -391,14 +399,17 @@ test("portable settings disclose only conflicting units and retain newer local-o
       }),
       { kind: "revision", revision: head.revision },
     );
-    await fs.writeFile(path.join(agentDir, "settings.json"), '{"theme":"local","shellPath":"/private/newer"}');
+    await fs.writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ theme: "local", shellPath: localShellPath }),
+    );
     await withStateDirectoryAccess(() =>
       withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => backend)),
     );
     assert.equal(mock.requests.length, 1);
     assert.deepEqual(JSON.parse(await fs.readFile(path.join(agentDir, "settings.json"), "utf8")), {
       theme: "remote",
-      shellPath: "/private/newer",
+      shellPath: localShellPath,
     });
   }));
 

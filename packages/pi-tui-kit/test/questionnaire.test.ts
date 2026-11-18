@@ -142,6 +142,67 @@ test("runQuestionnaire preserves select framing, theme hierarchy, and read-only 
   assert.deepEqual(await running, { kind: "stale" });
 });
 
+test("the review identifies matching option labels without changing custom answers", async () => {
+  const options = [{ label: "Defaults" }, { label: "\u001b[31mDefaults" }];
+  const { tui, running } = tuiRun(questions.map((question) => ({ ...question, options })));
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.press("tui.select.down");
+  tui.press("tui.select.confirm");
+  tui.press("tui.select.up");
+  tui.press("tui.select.confirm");
+  paste(tui, "Defaults");
+  tui.press("tui.input.submit");
+  const review = stripVTControlCharacters(tui.render().join("\n"));
+  for (const width of [1, 8, 25]) {
+    for (const line of tui.resize({ width })) assert.ok(visibleWidth(line) <= width);
+  }
+  tui.press("tui.select.confirm");
+
+  assert.match(review, /1\. Scope \(Option 2\) — Defaults/u);
+  assert.match(review, /2\. Tests — Defaults/u);
+  assert.deepEqual(await running, {
+    kind: "submitted",
+    answers: [
+      { questionId: "scope", answer: "\u001b[31mDefaults", wasCustom: false, optionIndex: 2 },
+      { questionId: "tests", answer: "Defaults", wasCustom: true },
+    ],
+  });
+});
+
+test.each([
+  { optionIndex: 2, label: "Use Defaults", summary: "Use Defaults" },
+  { optionIndex: 3, label: "Option 2: Use Defaults", summary: "Option 2: Use Defaults" },
+  { optionIndex: 4, label: "Use\nDefaults", summary: "Use ↵ Defaults" },
+])("the review separates option $optionIndex from its label", async ({ optionIndex, label, summary }) => {
+  const options = [
+    { label: "Use Defaults" },
+    { label: "Use Defaults" },
+    { label: "Option 2: Use Defaults" },
+    { label: "Use\nDefaults" },
+  ];
+  const { tui, running } = tuiRun([{ ...questions[0], options }, questions[1]]);
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  const choices = stripVTControlCharacters(tui.render().join("\n"));
+  for (let index = 1; index < optionIndex; index += 1) tui.press("tui.select.down");
+  tui.press("tui.select.confirm");
+  tui.press("tui.select.confirm");
+  const review = stripVTControlCharacters(tui.render().join("\n"));
+  tui.press("tui.select.confirm");
+
+  const result = await running;
+  assert.match(choices, /4\. Use Defaults/u);
+  assert.ok(review.includes(`1. Scope (Option ${optionIndex}) — ${summary}`));
+  assert.partialDeepStrictEqual(result, {
+    kind: "submitted",
+    answers: [
+      { questionId: "scope", answer: label, wasCustom: false, optionIndex },
+      { questionId: "tests", answer: "Focused", wasCustom: false, optionIndex: 1 },
+    ],
+  });
+});
+
 test("runQuestionnaire renders and submits a single question without review chrome", async () => {
   const singleQuestion = { ...questions[0], header: "Scope\u001b[31m" };
   const foreground: Array<{ color: string; text: string }> = [];
@@ -232,7 +293,10 @@ test("runQuestionnaire retains tabbed review for three questions", async () => {
   tui.press("tui.select.confirm");
   tui.press("tui.select.confirm");
   tui.press("tui.select.confirm");
-  assert.match(tui.render().join("\n"), /1\. Scope — Small\n 2\. Tests — Focused\n 3\. Risk — Low/u);
+  assert.match(
+    tui.render().join("\n"),
+    /1\. Scope \(Option 1\) — Small\n 2\. Tests \(Option 1\) — Focused\n 3\. Risk \(Option 1\) — Low/u,
+  );
   tui.press("tui.select.confirm");
   assert.deepEqual(await running, {
     kind: "submitted",
@@ -523,7 +587,7 @@ test("runQuestionnaire replaces answers, edits notes, accepts custom text, and s
   tui.press("tui.input.submit");
   tui.send("\u001b[C");
   tui.send("\u001b[C");
-  assert.match(tui.render().join("\n"), /1\. Scope — Broad · Note: final note/u);
+  assert.match(tui.render().join("\n"), /1\. Scope \(Option 2\) — Broad · Note: final note/u);
   tui.press("tui.select.confirm");
 
   assert.deepEqual(await running, {

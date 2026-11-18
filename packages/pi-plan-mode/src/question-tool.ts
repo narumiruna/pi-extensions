@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { QuestionnaireAnswer, QuestionnaireQuestion, RunQuestionnaireResult } from "@narumitw/pi-tui-kit";
 
 export const PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
@@ -76,7 +77,11 @@ export const PLAN_MODE_QUESTION_PARAMS = {
               additionalProperties: false,
               required: ["label", "description"],
               properties: {
-                label: { type: "string", description: "User-facing label (1-5 words)." },
+                label: {
+                  type: "string",
+                  description:
+                    "Plain-text label (1-5 words) with no list numbers or bullets. The questionnaire adds the numbers.",
+                },
                 description: {
                   type: "string",
                   description: "One short sentence explaining impact/tradeoff if selected.",
@@ -207,10 +212,7 @@ export async function askPlanModeQuestions(
     id: String(index),
     header: displayText(question.header, `Question ${index + 1}`, sanitizeTerminalText),
     prompt: displayText(question.question, `Question ${index + 1}`, sanitizeTerminalText),
-    options: question.options.map((option, optionIndex) => ({
-      ...option,
-      label: displayText(option.label, `Option ${optionIndex + 1}`, sanitizeTerminalText),
-    })),
+    options: displayOptions(question.options, sanitizeTerminalText),
   }));
   const result = await runQuestionnaire(ctx, {
     blocked: { kind: "question", message: "Answer Plan mode questions" },
@@ -263,6 +265,34 @@ function mapQuestionnaireResult(
       note: answer.note,
     });
   });
+}
+
+function displayOptions(
+  options: PlanModeQuestionOption[],
+  sanitize: (value: string) => string,
+): PlanModeQuestionOption[] {
+  const sanitized = options.map((option, index) => ({
+    ...option,
+    label: displayText(option.label, `Option ${index + 1}`, sanitize),
+  }));
+  if (sanitized.length < 2) return sanitized;
+
+  // Strip a prefix only from a complete sequence with one marker style. Kit adds the visible numbers.
+  const unnumbered: PlanModeQuestionOption[] = [];
+  let marker: string | undefined;
+  for (const [index, option] of sanitized.entries()) {
+    const match = option.label.trimStart().match(/^(\d+)([.)])\s+(\S.*)$/u);
+    const label = match?.[3];
+    if (!label || match[1] !== String(index + 1) || (marker !== undefined && match[2] !== marker)) {
+      return sanitized;
+    }
+    if (!/[^\s\p{Default_Ignorable_Code_Point}]/u.test(label)) return sanitized;
+    // Measure without whitespace, but keep the original label text.
+    if (visibleWidth(label.replace(/\s/gu, "")) === 0) return sanitized;
+    marker = match[2];
+    unnumbered.push({ ...option, label });
+  }
+  return unnumbered;
 }
 
 function displayText(value: string, fallback: string, sanitize: (value: string) => string): string {
