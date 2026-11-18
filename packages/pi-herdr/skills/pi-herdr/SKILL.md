@@ -16,6 +16,17 @@ Without an hc binding, use the legacy chapter only with `HERDR_ENV=1` and nonbla
 Keep hc terminal addresses and legacy pane IDs separate; never send legacy pane commands to an hc address.
 The independence, task, message, and verification rules below apply to both backends.
 
+## Require trusted process startup before any shell call
+
+Before the first Bash, helper, or CLI call, require a trusted host or runner that supplies an explicit environment allowlist before it starts any child process.
+The allowlist must exclude untrusted shell and OS loader hooks, including `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`; review platform-specific startup controls too.
+A selected dotenv file is environment input, not evidence of trust.
+If this prerequisite is unknown or unmet, stop and ask the operator to prepare a clean launch environment outside this session.
+Do not start a shell to inspect or clear these variables: Bash and the OS loader can act before the first command, including an `env`, `unset`, or inline assignment.
+The current built-in Bash tool inherits the Pi environment; this skill cannot attach a pre-spawn allowlist to that existing tool.
+Do not replace the tool, mutate the Pi process environment, or add an execution tool to work around this limit.
+The commands below apply only after this prerequisite is established; their Node assignments protect later Node startup, not the earlier shell or OS loader.
+
 ## Establish independence before spawning
 
 Use this Pi-specific workflow for authorized independent work without requiring an explicit request to use Herdr.
@@ -69,7 +80,7 @@ Report partial work, failures, and unverified paths instead of inferring success
 
 Before each Node helper invocation, clear inherited `NODE_OPTIONS` and `NODE_PATH` with the per-command assignments shown below.
 An absolute executable path does not block Node preload modules; clearing these variables inside JavaScript is too late.
-Keep the existing tool shell and external runtime trusted; do not copy project startup options back into the child environment.
+Do not copy project startup options back into the child environment; the pre-shell prerequisite above still applies.
 
 ## hc backend
 

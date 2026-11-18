@@ -50,6 +50,9 @@ Per-command `NODE_OPTIONS=` and `NODE_PATH=` assignments clear late-loaded prelo
 Each independent shell call repeats its Node/skill path setup and, when needed, CLI resolution rather than relying on prior shell variables.
 CLI-path setup failures name the rejecting project root on stderr with sanitized, bounded text and no stdout path.
 This still requires a trusted launch environment; it does not authenticate the selected external executable or the Herdr socket.
+Before the first tool-shell call, require a trusted host/runner that applies an environment allowlist before child startup, excluding untrusted shell and OS loader hooks such as `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`.
+If this is unknown or unmet, stop and have the operator prepare a clean environment outside the session. Inline assignments, an `env` command, and helper validation cannot protect earlier shell/loader startup.
+The extension cannot change the existing built-in Bash tool at its pre-spawn boundary; the shell-startup finding remains open.
 It leaves a partially created pane available for inspection after failure or cancellation and never retries an ambiguous submission automatically.
 Stopping its CLI subprocess does not undo server-side changes or terminate the independent peer.
 

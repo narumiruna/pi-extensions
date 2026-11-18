@@ -2,7 +2,7 @@
 import { constants } from "node:fs";
 import * as files from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { requestHc } from "./hc-rpc.mjs";
 
 export const MAX_TASK_BYTES = 32 * 1024;
@@ -483,6 +483,7 @@ export async function runCli(
   }
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+const invokedPath = process.argv[1] ? await files.realpath(process.argv[1]).catch(() => undefined) : undefined;
+if (invokedPath && invokedPath === (await files.realpath(fileURLToPath(import.meta.url)))) {
   process.exitCode = await runCli();
 }

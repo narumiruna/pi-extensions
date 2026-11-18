@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -39,7 +39,7 @@ afterEach(async () => {
 async function temporaryDirectory() {
   const directory = await mkdtemp(join(tmpdir(), "pi-herdr-spawn-"));
   cleanups.push(() => rm(directory, { force: true, recursive: true }));
-  return directory;
+  return realpath(directory);
 }
 
 const cwd = "/repo/space ' $(not-a-command); project";

@@ -221,6 +221,9 @@ The legacy helper requires nonblank inherited pane and socket bindings and resol
 It ignores relative `PATH` entries and avoids Windows' implicit current-directory executable search; skill preflight and the contract probe use the same resolver.
 Skill examples invoke the helper through a verified absolute Node executable, not a bare `node` lookup, and repeat their shell-local setup for each tool call.
 Each Node invocation clears inherited `NODE_OPTIONS` and `NODE_PATH` before startup; the hc peer request also clears those settings in the core-owned child environment.
+This does not protect the earlier tool-shell or OS loader startup. Before any shell call, require a trusted host/runner with a pre-spawn environment allowlist that excludes untrusted shell and loader hooks, such as `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`.
+If that prerequisite is unknown or unmet, stop and have the operator prepare a clean environment outside the session. Shell text cannot clear a hook before that shell starts, and this extension cannot attach a spawn hook to the existing built-in Bash tool.
+The [skill startup gate](./skills/pi-herdr/SKILL.md#require-trusted-process-startup-before-any-shell-call) states this requirement; it is guidance, not an enforced sandbox or a fix for the open shell-startup finding.
 Preflight failures identify the rejecting project root on stderr while leaving stdout empty; direct spawn failures retain that bounded diagnostic in their JSON error.
 
 Legacy native `agent.start --kind pi` preserves Herdr's managed readiness but selects bare `pi` in the peer shell, with no public absolute-executable override.

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, open, realpath, stat } from "node:fs/promises";
 import { delimiter, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 
 export const MAX_TASK_BYTES = 32 * 1024;
@@ -557,6 +557,7 @@ export async function runCli(
   }
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+const invokedPath = process.argv[1] ? await realpath(process.argv[1]).catch(() => undefined) : undefined;
+if (invokedPath && invokedPath === (await realpath(fileURLToPath(import.meta.url)))) {
   process.exitCode = await runCli();
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -55,6 +55,40 @@ test("all documented Node helper calls clear preload settings before startup", a
   assert.ok(calls.some((line) => line.includes("spawn-hc-peer.mjs")));
   assert.ok(calls.some((line) => line.includes('spawn-peer.mjs" --name')));
 });
+
+test("the pre-shell stop rule precedes every executable skill example", async () => {
+  const skill = await readFile(skillPath, "utf8");
+  const gate = skill.indexOf("## Require trusted process startup before any shell call");
+  assert.ok(gate > 0 && gate < skill.indexOf("```bash"));
+  const rule = skill.slice(gate, skill.indexOf("## Establish independence", gate));
+  for (const hook of ["BASH_ENV", "ENV", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_*"]) {
+    assert.ok(rule.includes(`\`${hook}\``));
+  }
+  assert.match(rule, /unknown or unmet, stop/u);
+  assert.match(rule, /outside this session/u);
+  assert.match(rule, /cannot attach a pre-spawn allowlist/u);
+});
+
+for (const script of ["spawn-peer.mjs", "spawn-hc-peer.mjs"]) {
+  test.skipIf(process.platform === "win32")(`standalone ${script} accepts a symlinked script directory`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-peer-entry-"));
+    try {
+      const alias = join(directory, "scripts");
+      await symlink(resolve("packages/pi-herdr/skills/pi-herdr/scripts"), alias, "dir");
+      for (const flags of [[], ["--preserve-symlinks-main"]]) {
+        const help = await exec(process.execPath, [...flags, join(alias, script), "--help"], {
+          env: { PATH: "/usr/bin:/bin", HOME: directory, TMPDIR: directory },
+          timeout: 1000,
+          maxBuffer: 4096,
+        });
+        assert.match(JSON.parse(help.stdout).usage, /--name NAME --task-file /u);
+        assert.equal(help.stderr, "");
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test.skipIf(process.platform === "win32")(
   "the hc template example passes apostrophes and shell signs as one task argument",

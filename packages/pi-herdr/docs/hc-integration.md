@@ -153,6 +153,10 @@ Do not automatically retry an ambiguous mutation or clean up a terminal whose ow
 ## Trust and delivery limits
 
 Trust the launch environment, inherited endpoint, external executables, templates, and package code.
+Before any tool-shell or CLI startup, require a host-owned environment allowlist that excludes untrusted shell and OS loader hooks, including `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `DYLD_*`.
+If that prerequisite is unknown or unmet, stop; an operator must prepare a clean environment outside the current session.
+Inline assignments and helper checks run too late to protect the first shell or its loader. The existing built-in Bash tool has no extension hook for changing its pre-spawn environment.
+This is an unresolved bootstrap boundary, not a guarantee supplied by the direct helper or its Node-only environment overrides.
 The endpoint is not authenticated by this extension.
 Native status is self-reported, and foreground/PID/argv are sampled observations, not authenticated Pi or session identity.
 An unchanged address identifies a terminal, not its current program or user input ownership.
