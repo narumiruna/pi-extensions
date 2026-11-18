@@ -20,8 +20,8 @@ test.skipIf(process.platform === "win32")(
       const alias = path.join(directory, "pi-sync-daemon");
       await fs.symlink(cli, alias);
       const help = (await exec(alias, ["--help"])).stdout;
-      assert.match(help, /^pi-sync-daemon <start\|status\|stop\|restart\|serve>/u);
-      assert.match(help, /status\/stop never start/u);
+      assert.match(help, /^pi-sync-daemon <start\|status\|stop\|restart\|repair-upgrade\|serve>/u);
+      assert.match(help, /status\/stop\/repair-upgrade never start/u);
       assert.equal(
         (
           await exec(process.execPath, [
@@ -82,12 +82,12 @@ test("simultaneous first clients share a detached owner that survives launcher e
     assert.deepEqual(await fs.readdir(root), []); // No backend, credential, or sync data activity on connect.
   }));
 
-test("status and stop never start an absent daemon", () =>
+test("status, stop, and repair-upgrade never start an absent daemon", () =>
   fixture(async (root) => {
-    for (const command of ["status", "stop"]) {
-      const result = await exec(process.execPath, [cli, command, "--root", root]);
-      assert.equal(JSON.parse(result.stdout).running, false);
-    }
+    const run = async (command: string) =>
+      JSON.parse((await exec(process.execPath, [cli, command, "--root", root])).stdout);
+    assert.deepEqual(await run("repair-upgrade"), { repaired: false });
+    for (const command of ["status", "stop"]) assert.equal((await run(command)).running, false);
     assert.deepEqual(await fs.readdir(root), []);
   }));
 
