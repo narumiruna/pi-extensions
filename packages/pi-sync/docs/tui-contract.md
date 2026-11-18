@@ -70,6 +70,12 @@ Startup transfer summaries report the preference and prerequisites, not a claim 
 
 TUI Pull and Push reviews reuse the existing scrollable safe-default confirmation and exact Details document; RPC and History rollback retain their observable confirmation protocols. The existing History dialog ownership/cancellation flow is not replaced. All changed counts come from effective snapshot differences rather than raw merge decisions. Protected paths, preserved remote files, merged bytes, and withheld paths must be accounted for before rendering. Cancellation performs no transfer; pre-commit preparation may retain recovery evidence. After the commit boundary, existing completion/recovery rules apply instead of promising undo.
 
+## Resource reload after a transfer
+
+If the user accepts the reload prompt after a pull or rollback, `/sync` waits for the daemon job and closes its dialogs before asking Pi to reload. Declining leaves the completed transfer in place without reloading. Reload still waits for session shutdown and daemon cleanup.
+
+RPC and the TUI harness verify this ordering. The native Fedora/tmux flow from [issue #1935](https://github.com/narumiruna/pi-extensions/issues/1935) was not run. To verify it, repeat the issue's loopback WebDAV steps with a temporary agent directory. After accepting reload, check that the progress display closes and the next editor input or `/sync` command works.
+
 ## Review boundaries
 
 This change does not touch model prompts, tool exposure, shared-terminal handoff, settings formats, credentials, or default sync policies. Existing startup/session signals and Kit/custom-interaction disposal own new UI calls. Any awaited review is followed by owner validation, and each mutating operation revalidates its mutable inputs before its existing commit boundary. Status and differences actions use existing routes; manager opening/refresh remains observational and does not contact the remote. Diagnostics discloses its WebDAV write/repair behavior before execution.

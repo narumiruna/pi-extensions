@@ -17,6 +17,7 @@ export class SyncRpc {
   readonly child: ChildProcess;
   readonly records: RecordValue[] = [];
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  sessionStarts = 0;
   private ready: Promise<void>;
   private pending = new Map<string, ResponseWaiter>();
   private listeners = new Set<(record: RecordValue) => void>();
@@ -97,7 +98,10 @@ export class SyncRpc {
     this.child.once("error", fail);
     this.child.stdin?.on("error", fail);
     this.child.on("message", (message) => {
-      if (typeof message === "object" && message !== null && "type" in message && message.type === "ready") ready();
+      if (typeof message === "object" && message !== null && "type" in message && message.type === "ready") {
+        this.sessionStarts++;
+        ready();
+      }
     });
     this.child.stderr?.setEncoding("utf8").on("data", (data: string) => {
       this.stderr = (this.stderr + data).slice(-16_384);

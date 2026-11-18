@@ -35,13 +35,13 @@ import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 
-const scope = new AsyncLocalStorage<PiDaemonClient>();
+const scope = new AsyncLocalStorage<{ client: PiDaemonClient; reload?: AbortController }>();
 const clients = new WeakMap<ExtensionContext["sessionManager"], PiDaemonClient>();
 export function currentPiDaemonClient() {
   return current();
 }
 function current() {
-  const client = scope.getStore();
+  const client = scope.getStore()?.client;
   if (!client) throw new Error("Pi synchronization requires a current session-bound daemon client.");
   client.validate();
   return client;
@@ -126,7 +126,7 @@ const authority: ConfigAuthority = {
 /** Factory registration installs only adapters; it starts no process and performs no I/O. */
 export function installPiDaemonHost() {
   configureEngineHost({
-    root: () => scope.getStore()?.root ?? path.resolve(getAgentDir()),
+    root: () => scope.getStore()?.client.root ?? path.resolve(getAgentDir()),
     config: authority,
     mutate: async () => {
       throw new Error("File mutation belongs to pi-sync-daemon; no in-process fallback is permitted.");
@@ -150,8 +150,9 @@ export function piDaemonClient(ctx: ExtensionContext) {
 export function withPiDaemonClient<Context extends ExtensionContext, T>(
   ctx: Context,
   action: (owned: Context) => Promise<T>,
+  reload?: AbortController,
 ) {
-  const client = piDaemonClient(ctx);
+  const owner = { client: piDaemonClient(ctx), reload };
   // TUI input arrives from Pi's event loop, outside the command's async call tree.
   // Bind public component methods so later menu actions retain this exact owner,
   // never a replacement session selected through a global fallback.
@@ -168,14 +169,14 @@ export function withPiDaemonClient<Context extends ExtensionContext, T>(
               if (typeof value !== "function") return value;
               const saved = methods.get(key);
               if (saved?.source === value) return saved.bound;
-              const bound = (...values: unknown[]) => scope.run(client, () => Reflect.apply(value, original, values));
+              const bound = (...values: unknown[]) => scope.run(owner, () => Reflect.apply(value, original, values));
               methods.set(key, { source: value, bound });
               return bound;
             },
           });
         };
         const invoke = (...provided: Parameters<typeof factory>) => {
-          const component = scope.run(client, () => factory(...provided));
+          const component = scope.run(owner, () => factory(...provided));
           return component instanceof Promise ? component.then(wrap) : wrap(component);
         };
         // Do not turn synchronous editors/reviews into asynchronous factories.
@@ -191,11 +192,14 @@ export function withPiDaemonClient<Context extends ExtensionContext, T>(
       return key === "ui" ? ui : Reflect.get(target, key, target);
     },
   });
-  return scope.run(client, () => action(owned));
+  return scope.run(owner, () => action(owned));
 }
 export async function remoteOperation(ctx: ExtensionContext, operation: string, options: CommandOptions) {
   const client = piDaemonClient(ctx);
   const { signal, onCommit, args, setup } = options;
+  const owner = scope.getStore();
+  const reload = options.reload && owner?.client === client ? owner.reload : undefined;
+  reload?.signal.throwIfAborted();
   const payload = {
     args,
     ...(setup === undefined ? {} : { setup }),
@@ -203,10 +207,10 @@ export async function remoteOperation(ctx: ExtensionContext, operation: string, 
     force: options.force,
     stale: options.stale,
     silent: options.silent,
-    reload: options.reload,
+    reload: reload !== undefined,
     ...(options.agentRetryRefusal ? { agentRetryRefusal: true } : {}),
   };
-  return client.run(operation, payload, signal, ctx, onCommit);
+  return client.run(operation, payload, signal, ctx, onCommit, reload);
 }
 function remoteErrorNamed(error: unknown, name: string) {
   return error instanceof DaemonError && error.remote.name === name;
@@ -227,7 +231,8 @@ export class PiDaemonClient {
   private disposed = false;
   private disposing?: Promise<void>;
   private uiContext: ExtensionContext;
-  private reloadRequested = false;
+  private reloadRequest?: { received: boolean };
+  private pendingReload?: AbortController;
   private readonly busy = new Set<string>();
   private initialized = false;
   private startupDebug = false;
@@ -558,8 +563,15 @@ export class PiDaemonClient {
     }
     return decode(await this.run(repair ? "settings.repair-read" : "settings.read", {}));
   }
-  run(operation: string, payload: unknown, signal?: AbortSignal, ctx = this.ctx, onCommit?: () => void) {
-    const result = this.work.then(() => this.runCurrent(operation, payload, signal, ctx, onCommit));
+  run(
+    operation: string,
+    payload: unknown,
+    signal?: AbortSignal,
+    ctx = this.ctx,
+    onCommit?: () => void,
+    reload?: AbortController,
+  ) {
+    const result = this.work.then(() => this.runCurrent(operation, payload, signal, ctx, onCommit, reload));
     this.work = result.then(
       () => {},
       () => {},
@@ -572,9 +584,12 @@ export class PiDaemonClient {
     signal?: AbortSignal,
     ctx = this.ctx,
     onCommit?: () => void,
+    reload?: AbortController,
   ) {
     this.validate();
     signal?.throwIfAborted();
+    reload?.signal.throwIfAborted();
+    if (this.pendingReload) throw new Error("Pi resources are about to reload.");
     if (this.paused && operation !== "shutdown")
       throw new Error("Synchronization is paused for a session change; if it was cancelled, use /reload to reattach.");
     const connection = await this.connect(undefined, signal);
@@ -591,13 +606,23 @@ export class PiDaemonClient {
     this.validate();
     signal?.throwIfAborted();
     this.uiContext = ctx;
+    // The daemon directs reload only to the submitting client, and run() serializes its jobs.
+    const request = reload ? { received: false } : undefined;
+    this.reloadRequest = request;
     try {
-      return await connection.run(
+      const result = await connection.run(
         operation,
         payload,
         signal ? AbortSignal.any([signal, this.signal]) : this.signal,
         onCommit,
       );
+      if (request?.received && reload && !this.paused && !reload.signal.aborted && !signal?.aborted) {
+        this.validate();
+        this.pendingReload = reload;
+        // Close the command's UI, not the session. Pi reload must run after this job and its UI drain.
+        reload.abort(new DOMException("Pi resource reload requested", "AbortError"));
+      }
+      return result;
     } catch (error) {
       if (error instanceof DaemonError) {
         const prototype =
@@ -616,17 +641,16 @@ export class PiDaemonClient {
       throw error;
     } finally {
       this.uiContext = this.ctx;
-      if (
-        this.reloadRequested &&
-        !this.signal.aborted &&
-        !this.disposed &&
-        !this.closing &&
-        clients.get(this.manager) === this
-      ) {
-        this.reloadRequested = false;
-        if ("reload" in ctx && typeof ctx.reload === "function") await ctx.reload();
-      }
+      this.reloadRequest = undefined;
     }
+  }
+  canReload(owner: AbortController) {
+    if (this.pendingReload !== owner || this.paused) return false;
+    this.validate();
+    return true;
+  }
+  releaseReload(owner: AbortController) {
+    if (this.pendingReload === owner) this.pendingReload = undefined;
   }
   async markReady(debug: boolean) {
     this.validate();
@@ -669,6 +693,7 @@ export class PiDaemonClient {
     signal.throwIfAborted();
     if (this.paused) throw new Error("Pi session is changing; no new work is authorized.");
     if (callback.kind === "queue-acquire") {
+      if (this.pendingReload) throw new Error("Pi resources are about to reload.");
       if (payload.background && !this.facts().idle) throw new Error("Pi is busy; background apply was not granted.");
       if (
         payload.generation !== this.generation ||
@@ -690,7 +715,8 @@ export class PiDaemonClient {
       return payload.background && !facts.idle ? null : (facts.model ?? null);
     }
     if (callback.kind === "reload") {
-      this.reloadRequested = true;
+      if (!this.reloadRequest) throw new Error("No active Pi command can reload resources.");
+      this.reloadRequest.received = true;
       return true;
     }
     if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) throw new Error("This client cannot present safety reviews.");
