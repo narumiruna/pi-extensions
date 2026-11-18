@@ -25,13 +25,22 @@ pass_filenames = true
 priority = 1
 
 [[repos.hooks]]
+id = "check-readmes"
+name = "Check package READMEs"
+entry = "uv run scripts/check_readmes.py"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 2
+
+[[repos.hooks]]
 id = "zizmor"
 name = "Check GitHub Actions with zizmor"
 entry = "uvx zizmor --pedantic .github"
 language = "system"
 pass_filenames = false
 always_run = true
-priority = 2
+priority = 3
 
 [[repos.hooks]]
 id = "typecheck-staged"
@@ -40,4 +49,4 @@ entry = "npm run typecheck -- --staged"
 language = "system"
 pass_filenames = false
 always_run = true
-priority = 3
+priority = 4

@@ -188,8 +188,8 @@ npm run check
 and stops before consumers if a prerequisite fails; workspace-list order is not a build contract.
 Staged typechecks use the same build planner.
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to provide `uvx`,
-then install [prek](https://prek.j178.dev/) and enable the Git pre-commit hook:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
+install [prek](https://prek.j178.dev/) and enable the Git pre-commit hook:
 
 ```bash
 uv tool install prek
@@ -200,15 +200,17 @@ For an existing Husky checkout, run `git config --local --unset-all core.hooksPa
 before `prek install` if the local hook path is still `.husky/_`.
 Hook installation is explicit; `npm install` does not install Git hooks.
 
-[`prek.toml`](./prek.toml) defines separate local hooks for Biome configuration
-migration, Biome checks, `uvx zizmor --pedantic .github`, and staged typechecks,
-in that order. The migration hook runs `npx @biomejs/biome migrate --write` on
-every commit before file checks.
+[`prek.toml`](./prek.toml) runs Biome configuration migration, Biome checks,
+the package README linter, `uvx zizmor --pedantic .github`, and staged
+typechecks, in that order. The migration hook runs
+`npx @biomejs/biome migrate --write` on every commit before file checks.
 The Biome check hook uses the installed `@biomejs/biome` dependency and receives
 matching staged text files: JavaScript, TypeScript, JSON/JSONC, and CSS.
 `biome check --write` applies formatting and safe fixes in one pass without
 scanning all of `packages/` on every commit.
 The other hooks run without filename arguments, even when no files match.
+The README linter scans every package so it can catch deleted READMEs.
+Run it on its own with `uv run scripts/check_readmes.py`.
 Distinct priorities keep the hooks sequential, and `fail_fast` stops later hooks
 when a check fails or modifies files.
 Run `prek run --all-files` to run all hooks manually, or select one by ID, such as
