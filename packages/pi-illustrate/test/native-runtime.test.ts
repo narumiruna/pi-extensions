@@ -4,12 +4,14 @@ import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  type Api,
   type AssistantMessage,
   createAssistantMessageEventStream,
   getCurrentSystemPrompt,
   getCurrentTools,
   InMemoryCredentialStore,
   type Message,
+  type Model,
   type ToolCall,
   type TranscriptContext,
   toToolDeclaration,
@@ -43,6 +45,11 @@ const PACKAGE = resolve("packages/pi-illustrate");
 const TOOLS = ["illustrate_svg", "illustrate_mermaid"];
 const SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#2277bb"/></svg>';
+const PNG = {
+  png: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+  width: 1,
+  height: 1,
+};
 type ResponseContent = AssistantMessage["content"];
 type JsonRecord = Record<string, unknown>;
 
@@ -140,6 +147,26 @@ afterEach(async () => {
   }
 });
 
+function assistantResponse(model: Model<Api>, content: ResponseContent): AssistantMessage {
+  return {
+    role: "assistant",
+    content,
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    stopReason: content.some((block) => block.type === "toolCall") ? "toolUse" : "stop",
+    timestamp: Date.now(),
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
+}
+
 async function fixture(mode: ExtensionContext["mode"] = "print", imageInput = true) {
   // Set PI_CODING_AGENT_DIR before each fresh Jiti evaluation of the extension graph.
   const modelRuntime = await ModelRuntime.create({
@@ -169,23 +196,7 @@ async function fixture(mode: ExtensionContext["mode"] = "print", imageInput = tr
     streamSimple(model, context) {
       captured.push(cacheInput(context));
       const content = responses.shift() ?? [{ type: "text" as const, text: "done" }];
-      const result: AssistantMessage = {
-        role: "assistant",
-        content,
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        stopReason: content.some((block) => block.type === "toolCall") ? "toolUse" : "stop",
-        timestamp: Date.now(),
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-      };
+      const result = assistantResponse(model, content);
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "start", partial: result });
       if (result.stopReason === "toolUse") stream.push({ type: "done", reason: "toolUse", message: result });
@@ -286,7 +297,7 @@ async function fixture(mode: ExtensionContext["mode"] = "print", imageInput = tr
     },
   };
 }
-function call(name: string, args: ToolCall["arguments"]): ResponseContent[number] {
+function call(name: string, args: ToolCall["arguments"]): ToolCall {
   return { type: "toolCall", id: crypto.randomUUID(), name, arguments: args };
 }
 function resultFor(session: AgentSession, name: string) {
@@ -403,31 +414,63 @@ it.each([false, true])(
       samePrefix(before, after);
     }
     expect(f.captured[0]?.tools.map((tool) => tool.name)).toEqual(TOOLS);
-    const definition = f.session.getToolDefinition(result.toolName);
-    assert.ok(definition?.renderResult);
-    const renderResult = vi.spyOn(definition, "renderResult");
-    const path = join(directory, "session.html");
-    await f.session.exportToHtml(path);
-    expect(renderResult).toHaveBeenCalled();
-    expect(renderResult.mock.calls.every(([, , , context]) => context.showImages === false)).toBe(true);
-    expect(await readFile(path, "utf8")).not.toContain("\x1b_G");
     expect(f.errors).toEqual([]);
     await f.shutdown();
     expect(previews(remounted.component.render(80))).toBe(0);
   },
 );
 
+it.each([false, true])("exports a saved SVG result as text (sendToModel=%s)", async (sendToModel) => {
+  const f = await fixture("tui");
+  const { model, sessionManager } = f.session;
+  assert.ok(model);
+  const tool = call("illustrate_svg", { svg: SVG, cols: 24, ...(sendToModel ? { sendToModel: true } : {}) });
+  const details = createRecord({ kind: "svg", svg: SVG, width: 120, height: 60 }, 24, sendToModel ? PNG : undefined);
+  const resultText = "Rendered SVG diagram.";
+  // Export reads persisted tool results. Seed one without launching the rendering workers again.
+  sessionManager.appendMessage({ role: "user", content: "Render the local static diagram.", timestamp: 0 });
+  sessionManager.appendMessage(assistantResponse(model, [tool]));
+  sessionManager.appendMessage({
+    role: "toolResult",
+    toolCallId: tool.id,
+    toolName: tool.name,
+    content: [{ type: "text", text: resultText }],
+    details,
+    isError: false,
+    timestamp: Date.now(),
+  });
+
+  const definition = f.session.getToolDefinition(tool.name);
+  assert.ok(definition?.renderResult);
+  const renderResult = vi.spyOn(definition, "renderResult");
+  const path = join(directory, "session.html");
+  await f.session.exportToHtml(path);
+  expect(renderResult).toHaveBeenCalled();
+  expect(renderResult.mock.calls.every(([, , , context]) => context.showImages === false)).toBe(true);
+  const html = await readFile(path, "utf8");
+  expect(html).not.toContain("\x1b_G");
+  // Pi stores the pre-rendered tool output in the base64 session payload.
+  const payload = /<script id="session-data" type="application\/json">([^<]+)<\/script>/.exec(html)?.[1];
+  assert.ok(payload, "Expected session data in the exported HTML.");
+  const { renderedTools } = JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as {
+    renderedTools?: Record<string, { resultHtmlExpanded?: string; resultHtmlCollapsed?: string }>;
+  };
+  const rendered = renderedTools?.[tool.id];
+  assert.ok(rendered?.resultHtmlExpanded, "Expected the saved SVG result in the exported HTML.");
+  for (const resultHtml of [rendered.resultHtmlExpanded, rendered.resultHtmlCollapsed ?? rendered.resultHtmlExpanded]) {
+    expect(resultHtml).toContain(resultText);
+    expect(resultHtml).not.toContain("\x1b_G");
+  }
+  expect(f.captured).toEqual([]);
+  expect(f.errors).toEqual([]);
+});
+
 it("preserves Pi system and additive-tool patches when projecting an earlier model image", async () => {
   const f = await fixture();
   const tool = f.session.getToolDefinition("illustrate_svg");
   assert.ok(tool);
   const declaration = toToolDeclaration(tool);
-  const snapshot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
-  const details = createRecord({ kind: "svg", svg: SVG, width: 120, height: 60 }, "auto", {
-    png: snapshot,
-    width: 1,
-    height: 1,
-  });
+  const details = createRecord({ kind: "svg", svg: SVG, width: 120, height: 60 }, "auto", PNG);
   const transcript: Parameters<typeof f.session.extensionRunner.emitContext>[0] = [
     { role: "system", content: "Original prompt", toolsAdded: [declaration], timestamp: 0 },
     { role: "user", content: "Render", timestamp: 1 },
