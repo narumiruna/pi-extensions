@@ -31,7 +31,18 @@ function file(root: string) {
   return path.join(stateDir(root), "daemon.json");
 }
 export class ConsentPublicationError extends Error {}
-const MAX_CONSENT_BYTES = 65_536;
+const FORMATTED_CONSENT_BYTES = 65_536;
+// Each legacy grant already uses at least 64 bytes for its fingerprint. Reserving one byte per
+// grant covers all legacy writes, including compact files, when `true` becomes `false`.
+const MAX_CONSENT_BYTES = FORMATTED_CONSENT_BYTES + FORMATTED_CONSENT_BYTES / 64;
+
+function compactConsentWithRevocationReserve(value: Consent) {
+  const compact = JSON.stringify(value);
+  const grantCount = Object.values(value.setups).filter((setup) => setup.afterExit).length;
+  if (Buffer.byteLength(compact) + grantCount > MAX_CONSENT_BYTES)
+    throw new Error("Daemon consent exceeds its storage bound; existing evidence retained.");
+  return compact;
+}
 
 function syncConsentDirectory(target: string) {
   if (process.platform === "win32") return;
@@ -47,10 +58,9 @@ function syncConsentDirectory(target: string) {
 function publishConsent(value: Consent) {
   try {
     const target = file(value.root);
+    const compact = compactConsentWithRevocationReserve(value);
     const formatted = `${JSON.stringify(value, null, "\t")}\n`;
-    const content = Buffer.byteLength(formatted) <= MAX_CONSENT_BYTES ? formatted : JSON.stringify(value);
-    if (Buffer.byteLength(content) > MAX_CONSENT_BYTES)
-      throw new Error("Daemon consent exceeds its storage bound; existing evidence retained.");
+    const content = Buffer.byteLength(formatted) <= FORMATTED_CONSENT_BYTES ? formatted : compact;
     mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     const temporary = `${target}.${process.pid}.${randomBytes(16).toString("hex")}.tmp`;
     const handle = openSync(temporary, "wx", 0o600);
@@ -162,7 +172,9 @@ export function readConsent(root: string): Consent | undefined {
       )
         throw new Error("Invalid daemon setup consent.");
     }
-    return value as unknown as Consent;
+    const consent = value as unknown as Consent;
+    compactConsentWithRevocationReserve(consent);
+    return consent;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

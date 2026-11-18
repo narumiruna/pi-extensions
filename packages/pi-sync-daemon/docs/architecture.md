@@ -156,10 +156,12 @@ protect live sessions without starting a replacement or submitting sync operatio
 An interactive session switch attempts the same protection-only attachment if the upgrade fails.
 
 For a blocked pending upgrade, `repair-upgrade` checks exit under the startup and owner locks.
-It revokes retained unattended grants and verifies consent persistence under the state migration
-guard before archiving the upgrade barrier. It reuses the same private archive if repair is
-interrupted. Normal startup cannot clear an incomplete repair. The command does not start the
-daemon. Clean shutdowns still clear the barrier without manual repair.
+It revokes retained unattended grants under the state migration guard on all platforms. On
+non-Windows platforms, it also syncs the consent directory before archiving the upgrade barrier.
+Consent storage reserves one byte per retained grant so that revocation fits even for compact JSON
+at the old size limit. Repair reuses the same private archive if interrupted. Normal startup
+cannot clear an incomplete repair. The command does not start the daemon. Clean shutdowns still
+clear the barrier without manual repair.
 
 ## Cross-process apply protocol
 

@@ -20,9 +20,11 @@ after recovery.
 
 Manual recovery:
 
-1. Revoke retained unattended permission with `/sync daemon revoke-after-exit` before updating.
-   If the upgraded client blocks on consent before creating a pending upgrade record, use an
-   already available compatible Pi client to revoke permission from the still-running owner.
+1. Revoke all retained unattended grants before updating. `/sync daemon revoke-after-exit` applies
+   only to the active setup. For each setup with a retained grant, make it active, run the command,
+   and confirm revocation. If the upgraded client blocks on consent before creating a pending
+   upgrade record, use an already available compatible Pi client to revoke each grant from the
+   still-running owner.
    Without a pending record, `repair-upgrade` returns `repaired: false` and does not revoke permission.
    If no compatible client is available or revocation fails, stop here and preserve the consent,
    identity, and recovery files.
