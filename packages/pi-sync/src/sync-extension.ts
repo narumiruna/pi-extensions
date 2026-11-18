@@ -47,46 +47,59 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
         await commands.handleCommand(args, ctx, signal, loaders, attention);
         return;
       }
-      await withPiDaemonClient(ctx, async (ownedContext) => {
-        ctx = ownedContext;
-        const command = splitArgs(args)[0];
-        const ready = await initialization;
-        if (signal.aborted || owner !== client) return;
-        await client.setBusy("command", true);
-        try {
-          await check.stop();
-          if (signal.aborted || owner !== client) return;
-          if (
-            ready === false &&
-            command !== "help" &&
-            command !== "unlock" &&
-            command !== "migrate-state" &&
-            command !== "daemon"
-          ) {
-            ctx.ui.notify(
-              "pi-sync recovery required. Repair the startup error, then /reload before syncing. Use /sync help for recovery guidance.",
-              "error",
-            );
-            return;
-          }
-          if (command === "unlock" || command === "migrate-state") {
-            const { stateDirectoryMigrationNotice } = await import("./state/state-directory.js");
+      const reload = new AbortController();
+      const commandSignal = combineSignals(signal, reload.signal);
+      try {
+        await withPiDaemonClient(
+          ctx,
+          async (ctx) => {
+            const command = splitArgs(args)[0];
+            const ready = await initialization;
             if (signal.aborted || owner !== client) return;
-            // Recovery cannot guess an authoritative root when roots coexist or are unsafe.
-            stateDirectoryMigrationNotice();
-          }
-          const commands = await loaders.commands();
-          if (signal.aborted || owner !== client) return;
-          await commands.handleCommand(args, ctx, signal, loaders, attention);
-        } catch (error) {
-          if (!signal.aborted) {
-            ctx.ui.notify(`pi-sync command unavailable: ${safeTerminalText(errorMessage(error))}`, "error");
-            if (command === "unlock" || command === "migrate-state") throw error;
-          }
-        } finally {
-          if (!signal.aborted && owner === client) await client.setBusy("command", false);
-        }
-      });
+            await client.setBusy("command", true);
+            try {
+              if (signal.aborted || owner !== client) return;
+              await check.stop();
+              if (signal.aborted || owner !== client) return;
+              if (
+                ready === false &&
+                command !== "help" &&
+                command !== "unlock" &&
+                command !== "migrate-state" &&
+                command !== "daemon"
+              ) {
+                ctx.ui.notify(
+                  "pi-sync recovery required. Repair the startup error, then /reload before syncing. Use /sync help for recovery guidance.",
+                  "error",
+                );
+                return;
+              }
+              if (command === "unlock" || command === "migrate-state") {
+                const { stateDirectoryMigrationNotice } = await import("./state/state-directory.js");
+                if (signal.aborted || owner !== client) return;
+                // Recovery cannot guess an authoritative root when roots coexist or are unsafe.
+                stateDirectoryMigrationNotice();
+              }
+              const commands = await loaders.commands();
+              if (signal.aborted || owner !== client) return;
+              await commands.handleCommand(args, ctx, commandSignal, loaders, attention);
+            } catch (error) {
+              if (!commandSignal.aborted && owner === client) {
+                ctx.ui.notify(`pi-sync command unavailable: ${safeTerminalText(errorMessage(error))}`, "error");
+                if (command === "unlock" || command === "migrate-state") throw error;
+              }
+            } finally {
+              if (!signal.aborted && owner === client) await client.setBusy("command", false);
+            }
+          },
+          reload,
+        );
+        // Pi reload awaits our shutdown hook. Neither daemon work nor old UI may await reload.
+        if (!signal.aborted && owner === client && client.canReload(reload)) await ctx.reload();
+      } finally {
+        client.releaseReload(reload);
+        reload.abort();
+      }
     },
   });
   pi.on("session_start", async (_event, ctx) => {

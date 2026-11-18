@@ -74,13 +74,19 @@ async function fixture(agentDir: string) {
   let operationError: Error | undefined;
   const result = { completed: true };
   const connections: ReturnType<typeof connection>[] = [];
-  function connection(paths: DaemonConnection["paths"], identity: Identity, facts: ClientFacts) {
+  function connection(
+    paths: DaemonConnection["paths"],
+    identity: Identity,
+    facts: ClientFacts,
+    callback: ConstructorParameters<typeof DaemonConnection>[3]["callback"],
+  ) {
     const label = identity.instance;
     const attachError = attachErrors[connections.length];
     return {
       paths,
       identity,
       facts,
+      callback,
       attach: vi.fn(async (_signal?: AbortSignal) => {
         events.push(`${label}:attach`);
         if (attachError) throw attachError;
@@ -103,8 +109,9 @@ async function fixture(agentDir: string) {
     paths: DaemonConnection["paths"],
     identity: Identity,
     facts: ClientFacts,
+    options: ConstructorParameters<typeof DaemonConnection>[3],
   ) {
-    const created = connection(paths, identity, facts);
+    const created = connection(paths, identity, facts, options.callback);
     connections.push(created);
     return created;
   });
@@ -335,6 +342,85 @@ test("cancellation during prior cleanup cannot publish a new identity or operati
       await f.client.dispose();
     }
   }));
+
+const reloadCallback = { id: "reload", job: "pull", kind: "reload", payload: {} };
+
+test("a completed reload request fences queued work until its command releases it", () =>
+  withClient(async (f) => {
+    f.attachErrors.length = 0;
+    await f.client.connect();
+    const connection = f.connections[0];
+    assert.ok(connection);
+    const reload = new AbortController();
+    const other = new AbortController();
+    let closes = 0;
+    reload.signal.addEventListener("abort", () => closes++);
+    const requested = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    connection.run.mockImplementationOnce(async (_operation, _payload, signal) => {
+      assert.ok(signal);
+      assert.equal(await connection.callback(reloadCallback, signal), true);
+      assert.equal(await connection.callback({ ...reloadCallback, id: "duplicate" }, signal), true);
+      requested.resolve();
+      await finish.promise;
+      return f.result;
+    });
+    const pull = f.client.run("pull", {}, undefined, f.ctx, undefined, reload);
+    try {
+      await Promise.race([requested.promise, pull]);
+      assert.equal(reload.signal.aborted, false);
+      const blocked = assert.rejects(f.client.run("settings.cas", {}), /about to reload/u);
+      finish.resolve();
+      assert.equal(await pull, f.result);
+      await blocked;
+      assert.equal(connection.run.mock.calls.length, 1);
+      assert.equal(closes, 1);
+      f.client.releaseReload(other);
+      assert.equal(f.client.canReload(other), false);
+      assert.equal(f.client.canReload(reload), true);
+      f.client.releaseReload(reload);
+      assert.equal(f.client.canReload(reload), false);
+      assert.equal(await f.client.run("settings.cas", {}), f.result);
+    } finally {
+      finish.resolve();
+      await pull.catch(() => {});
+    }
+  }));
+
+for (const outcome of ["failed", "cancelled", "closed", "stale"] as const) {
+  test(`a ${outcome} pull cannot hand off its reload`, () =>
+    withClient(async (f) => {
+      f.attachErrors.length = 0;
+      await f.client.connect();
+      const connection = f.connections[0];
+      assert.ok(connection);
+      const reload = new AbortController();
+      const request = new AbortController();
+      const failure = new Error("Operation failed after the callback");
+      connection.run.mockImplementationOnce(async (_operation, _payload, signal) => {
+        assert.ok(signal);
+        await connection.callback(reloadCallback, signal);
+        if (outcome === "failed") throw failure;
+        if (outcome === "cancelled") request.abort();
+        if (outcome === "closed") reload.abort();
+        if (outcome === "stale") f.session.abort();
+        return f.result;
+      });
+      const pull = f.client.run("pull", {}, request.signal, f.ctx, undefined, reload);
+      if (outcome === "failed") await assert.rejects(pull, (error) => error === failure);
+      else if (outcome === "stale") await assert.rejects(pull, { name: "AbortError" });
+      else assert.equal(await pull, f.result);
+      assert.equal(reload.signal.aborted, outcome === "closed");
+      assert.equal(f.client.canReload(reload), false);
+      if (outcome !== "stale") {
+        assert.equal(await f.client.run("status", {}), f.result);
+        await assert.rejects(
+          connection.callback(reloadCallback, new AbortController().signal),
+          /No active Pi command/u,
+        );
+      }
+    }));
+}
 
 test("passive attach returns false for a closing owner without launching or waiting", () =>
   withClient(async (f) => {

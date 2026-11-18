@@ -49,6 +49,45 @@ describe("shared daemon lifecycle", () => {
   });
 });
 
+describe("resource reload after a changed WebDAV pull", () => {
+  let client: SyncRpc;
+  let file: string;
+  let original: string;
+
+  beforeEach(() =>
+    owned.prepare(async () => {
+      client = await owned.connect();
+      await client.start();
+      file = path.join(owned.agent, "AGENTS.md");
+      original = await fs.readFile(file, "utf8");
+      await client.command("/sync push --yes", () => true);
+      await fs.writeFile(file, "Local edit before pull.\n");
+    }),
+  );
+
+  for (const accept of [true, false]) {
+    test(`${accept ? "accepting" : "declining"} reload returns control`, async () => {
+      const starts = client.sessionStarts;
+      const confirmations: string[] = [];
+      const pull = client.command("/sync pull --force --yes", (title) => {
+        confirmations.push(title);
+        return accept;
+      });
+      // The apply and confirmation must succeed even on the deadlocking baseline.
+      try {
+        await pull;
+      } finally {
+        assert.deepEqual(confirmations, ["Reload Pi resources now?"]);
+        assert.equal(await fs.readFile(file, "utf8"), original);
+      }
+      await client.call({ type: "get_state" });
+      await client.command("/sync status", () => false);
+      assert.equal(client.sessionStarts, starts + (accept ? 1 : 0));
+      assert.equal(owned.requests.length, 0);
+    });
+  }
+});
+
 for (const transition of [false, true])
   describe(`peer session roots (new destination: ${transition})`, () => {
     let first: SyncRpc;
