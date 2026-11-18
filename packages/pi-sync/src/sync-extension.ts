@@ -88,8 +88,10 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
           }
         } finally {
           if (!signal.aborted && owner === client) {
+            // Recovery can publish busy facts after bypassing the initial contact check.
+            const publish = busyPublished || command === "unlock" || command === "migrate-state";
             // Release local busy state even if contact failed; do not mask the command result.
-            await client.setBusy("command", false, busyPublished).catch(() => {});
+            await client.setBusy("command", false, publish).catch(() => {});
           }
         }
       });

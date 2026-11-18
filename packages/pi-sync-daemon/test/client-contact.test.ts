@@ -239,6 +239,81 @@ test("update expiry and resume publication fence older polls; repair serializes 
   );
 });
 
+test("a newer expired poll fences an active update reply without blocking its queued repair", async () => {
+  const enteredUpdate = Promise.withResolvers<void>();
+  const releaseUpdate = Promise.withResolvers<void>();
+  let contact: ContactState = "active";
+  const observations: ContactState[] = [];
+  await fixture(
+    async ({ method }) => {
+      if (method === "update") {
+        enteredUpdate.resolve();
+        await releaseUpdate.promise;
+        return poll("active");
+      }
+      if (method === "resume-contact") contact = "active";
+      return poll(contact);
+    },
+    async (client, calls) => {
+      await client.attach();
+      const updating = client.update({ ...client.facts, ready: false });
+      try {
+        await enteredUpdate.promise;
+        contact = "expired";
+        await vi.waitFor(() => assert.ok(observations.filter((state) => state === "expired").length >= 2));
+        const repairing = client.resumeContact({ ...client.facts, idle: false });
+        releaseUpdate.resolve();
+        const [update, repair] = await Promise.allSettled([updating, repairing]);
+        assert.equal(update.status, "rejected");
+        if (update.status === "rejected") assert.match(String(update.reason), /changed during update/u);
+        assert.equal(repair.status, "fulfilled");
+        assert.equal(client.contactState, "active");
+        assert.equal(client.contactResumeState, "idle");
+        assert.equal(client.facts.ready, true);
+        assert.equal(calls.filter(({ method }) => method === "resume-contact").length, 1);
+      } finally {
+        releaseUpdate.resolve();
+        await Promise.allSettled([updating]);
+      }
+    },
+    { contact: (state) => observations.push(state) },
+  );
+});
+
+test.each(["active", "expired", "inactive", undefined] as const)(
+  "repeated %s polls do not invalidate an in-flight facts update",
+  async (contact) => {
+    const enteredUpdate = Promise.withResolvers<void>();
+    const releaseUpdate = Promise.withResolvers<void>();
+    let polls = 0;
+    await fixture(
+      async ({ method }) => {
+        if (method === "update") {
+          enteredUpdate.resolve();
+          await releaseUpdate.promise;
+        }
+        if (method === "poll") polls++;
+        return poll(contact);
+      },
+      async (client) => {
+        await client.attach();
+        const updating = client.update({ ...client.facts, ready: false });
+        try {
+          await enteredUpdate.promise;
+          const before = polls;
+          // Later requests prove that earlier repeated observations were consumed.
+          await vi.waitFor(() => assert.ok(polls >= before + 3));
+        } finally {
+          releaseUpdate.resolve();
+          await updating;
+        }
+        assert.equal(client.contactState, contact);
+        assert.equal(client.facts.ready, false);
+      },
+    );
+  },
+);
+
 test("an expired client keeps polling the original job and waits for its terminal result before repair", async () => {
   let contact: ContactState = "active";
   let job: string | undefined;

@@ -15,7 +15,7 @@ interface WireRecord {
 
 export async function startObservableRpcOwner(agent: string, signal: AbortSignal) {
   signal.throwIfAborted();
-  const child = fork(new URL("./fixtures/rpc-daemon.mjs", import.meta.url), [agent], {
+  const child = fork(new URL("../../pi-sync-daemon/test/fixtures/rpc-daemon.mjs", import.meta.url), [agent], {
     cwd: agent,
     execArgv: [],
     stdio: ["ignore", "ignore", "pipe", "ipc"],

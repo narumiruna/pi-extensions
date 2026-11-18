@@ -681,7 +681,8 @@ export class DaemonConnection {
             !this.disposing &&
             !this.closed
           ) {
-            this.observedContact = contact;
+            // A new observation fences older facts replies; identical polls do not.
+            if (contact !== this.observedContact) this.publishContact(contact);
             if (contact !== undefined) this.options.contact?.(contact);
           }
         }

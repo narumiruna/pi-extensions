@@ -1,11 +1,9 @@
 import "./local-network.mjs";
 import http from "node:http";
 import { syncBuiltinESMExports } from "node:module";
+import { createEngineService } from "../../dist/engine-service.js";
+import { startServer } from "../../dist/server.js";
 
-// Resolve the same build as Pi, including the service through its internal launch modules.
-const entry = import.meta.resolve("@narumitw/pi-sync-daemon");
-const { startServer } = await import(new URL("./server.js", entry));
-const { createEngineService } = await import(new URL("./engine-service.js", entry));
 const root = process.argv[2];
 process.chdir(root);
 const engine = createEngineService(root);

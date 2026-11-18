@@ -86,6 +86,37 @@ async function checkSameSession() {
   return wire;
 }
 
+test.each([
+  ["unlock", "No pi-sync lock is present."],
+  ["migrate-state --yes", "canonical pi-sync/ state directory"],
+])("real Pi RPC recovery command %s publishes cleared busy facts", async (command, expected) => {
+  await checkedCommand(`/sync ${command}`, expected);
+  const wire = (await daemon.inspect()).slice(before);
+  const submitted = wire.findIndex(({ method }) => method === "submit");
+  assert.ok(submitted >= 0, JSON.stringify(wire));
+  assert.equal(wire[submitted]?.operation, command.split(" ")[0]);
+  const busy = wire.slice(0, submitted).filter(({ method }) => method === "update");
+  assert.ok(busy.length > 0);
+  assert.ok(busy.every(({ facts }) => facts?.idle === false));
+  const cleared = wire.slice(submitted + 1).filter(({ method }) => method === "update");
+  assert.equal(cleared.at(-1)?.facts?.idle, true, JSON.stringify(wire));
+  assert.equal(cleared.at(-1)?.facts?.id, attached.id);
+});
+
+test("real Pi RPC help does not publish facts or repair expired contact", async () => {
+  await daemon.expire(true);
+  try {
+    await checkedCommand("/sync help", "Usage: /sync");
+    const wire = (await daemon.inspect()).slice(before);
+    assert.ok(
+      wire.every(({ method }) => !["attach", "update", "submit", "resume-contact"].includes(method)),
+      JSON.stringify(wire),
+    );
+  } finally {
+    await daemon.release();
+  }
+});
+
 test("the first real Pi RPC daemon status repairs idle heartbeat expiry in the same session", async () => {
   const retained = await daemon.expire(true);
   assert.ok(retained.some(({ id, pid }) => id === attached.id && pid === client.child.pid));
