@@ -99,7 +99,10 @@ Before rollback:
 1. Stop the daemon explicitly and verify owner exit.
 2. Close all upgraded clients and retain settings, state, journals, and backups.
 3. Reconcile pending or uncertain publication through the supported engine recovery path.
-4. Only then consider a compatible code/package rollback; do not blindly restore old local or remote bytes.
+4. Check consent compatibility before rolling back. A repair can leave `daemon.json` larger than
+   65,536 bytes because it keeps all other fields when revoking grants. Builds with the old
+   65,536-byte limit cannot read that file. Preserve it and use a build that supports the larger
+   file. Do not delete it or restore an older copy to make the rollback work.
 
 Operation retries are instance-bound and deduplicated. An expired result or old instance requires journal reconciliation, not blind replay. A full bounded result ledger requires an explicit drained restart.
 
