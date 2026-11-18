@@ -220,6 +220,7 @@ Do not assume it inherits the initiator's conversation, model, thinking level, r
 The legacy helper requires nonblank inherited pane and socket bindings and resolves an absolute Herdr executable outside the checkout, including Git ancestors and symlink targets.
 It ignores relative `PATH` entries and avoids Windows' implicit current-directory executable search; skill preflight and the contract probe use the same resolver.
 Skill examples invoke the helper through a verified absolute Node executable, not a bare `node` lookup, and repeat their shell-local setup for each tool call.
+Each Node invocation clears inherited `NODE_OPTIONS` and `NODE_PATH` before startup; the hc peer request also clears those settings in the core-owned child environment.
 Preflight failures identify the rejecting project root on stderr while leaving stdout empty; direct spawn failures retain that bounded diagnostic in their JSON error.
 
 Legacy native `agent.start --kind pi` preserves Herdr's managed readiness but selects bare `pi` in the peer shell, with no public absolute-executable override.

@@ -67,6 +67,10 @@ Report progress at meaningful checkpoints and blockers promptly, without notific
 Treat results as peer claims: inspect the actual diff or evidence and run applicable checks only after other owners release shared mutable resources.
 Report partial work, failures, and unverified paths instead of inferring success from status or a submission acknowledgement.
 
+Before each Node helper invocation, clear inherited `NODE_OPTIONS` and `NODE_PATH` with the per-command assignments shown below.
+An absolute executable path does not block Node preload modules; clearing these variables inside JavaScript is too late.
+Keep the existing tool shell and external runtime trusted; do not copy project startup options back into the child environment.
+
 ## hc backend
 
 ### Verify the inherited core and templates first
@@ -97,14 +101,15 @@ Refresh `ls` and `get` after rename, recovery, or possible takeover before routi
 Check templates before choosing a launch path.
 Use a fitting trusted interactive Pi template only if its command and role already load this same package and skill, preserve the task's independent scope and cwd, and permit `--outlive-parent`.
 Review the actual installed template and its external executable/interpreter chain; a template name or description alone is insufficient.
+A Node-based template must clear `NODE_OPTIONS` and `NODE_PATH` before starting Node; otherwise use the bundled direct helper.
 Do not create or rewrite templates, use quiet-output readiness, or substitute another package to make one fit.
 For an already verified fitting template, include the complete task in `run`, use `--bg --outlive-parent --parent "$HC_TERMINAL_ID"`, and give a unique name.
 Do not use one-shot Pi or print mode.
-For example, after verifying the existing `reviewer` template and replacing the task placeholder:
+For example, after verifying the existing `reviewer` template and preparing `/absolute/task.txt`, pass its contents as one quoted argument, not shell source:
 
 ```bash
 hc_path='/verified/external/path/to/hc'
-HC_SOCKET="$HC_TERMINAL_SOCKET" "$hc_path" run --json --bg --outlive-parent --parent "$HC_TERMINAL_ID" --name reviewer reviewer 'Complete self-contained authorized task, reply address, ownership, and acceptance evidence go here.'
+HC_SOCKET="$HC_TERMINAL_SOCKET" "$hc_path" run --json --bg --outlive-parent --parent "$HC_TERMINAL_ID" --name reviewer reviewer "$(< /absolute/task.txt)"
 ```
 
 Check native `first_message.sent` on a template launch with a task.
@@ -124,12 +129,13 @@ The task must be a nonempty regular UTF-8 file, at most 32 KiB, without terminal
 ```bash
 node_path='/absolute/path/to/trusted/node'
 skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
-"$node_path" "$skill_dir/scripts/spawn-hc-peer.mjs" --name reviewer --task-file /absolute/task.txt --pi-cli /verified/external/Pi/dist/cli.js
+NODE_OPTIONS= NODE_PATH= "$node_path" "$skill_dir/scripts/spawn-hc-peer.mjs" --name reviewer --task-file /absolute/task.txt --pi-cli /verified/external/Pi/dist/cli.js
 ```
 
 The helper uses raw JSON-RPC on the inherited socket, not CLI short-form JSON or CLI auto-start.
 It calls native `terminal.run` with an argument array containing absolute Node, the absolute Pi script, `-e` with this package's built directory or source entrypoint, and `--skill` with this skill directory.
 It preserves cwd and unrelated extension discovery, sets native `parent` and `caller` to the origin address, and uses `outlive_parent:true`, `wait:false`, `keep:false`, and `rm:false`.
+The native child environment also clears `NODE_OPTIONS` and `NODE_PATH`, without copying the caller's credentials or environment.
 It does not arrange UI or claim legacy `interactive_ready`.
 The initial and critical `hello` checks scope identities to the same `core.id`; native parent remains terminal ancestry, not Pi session or authenticated peer identity.
 It waits natively for at most 30 seconds, then requires a fresh authoritative Pi `idle` report and stable PID, argv, and `created_ms` before one `terminal.send` with `if:'idle'`, `force:false`, and `wait:false`.
@@ -192,7 +198,7 @@ It grants no authority and does not identify the current Pi session.
 ## Legacy Herdr backend
 
 Everything in this chapter applies only to legacy Herdr, including its pane commands, session provenance, and managed readiness.
-The hc addition does not fix the unresolved native bare-`pi` launcher security finding or lift the draft/release restriction.
+The hc addition does not fix the unresolved native bare-`pi` launcher security finding or lift the release restriction.
 
 ### Verify the environment and identities
 
@@ -210,7 +216,7 @@ Replace the absolute placeholders below with those verified paths before executi
 node_path='/absolute/path/to/trusted/node'
 skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
 test "${HERDR_ENV:-}" = 1 && test -n "${HERDR_PANE_ID//[[:space:]]/}" && test -n "${HERDR_SOCKET_PATH//[[:space:]]/}" || exit 1
-herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
+herdr_path=$(NODE_OPTIONS= NODE_PATH= "$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
 "$herdr_path" status
 "$herdr_path" pane current --current
 "$herdr_path" agent list
@@ -240,7 +246,7 @@ Repeat the verified bootstrap assignments in this new shell call:
 ```bash
 node_path='/absolute/path/to/trusted/node'
 skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
-"$node_path" "$skill_dir/scripts/spawn-peer.mjs" --name reviewer --task-file /absolute/task.txt
+NODE_OPTIONS= NODE_PATH= "$node_path" "$skill_dir/scripts/spawn-peer.mjs" --name reviewer --task-file /absolute/task.txt
 ```
 
 Add `--direction right` or `--direction down` only when a direction is requested; otherwise the helper chooses from the current layout.
@@ -275,7 +281,7 @@ These examples assume identities and input ownership have just been verified; re
 ```bash
 node_path='/absolute/path/to/trusted/node'
 skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
-herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
+herdr_path=$(NODE_OPTIONS= NODE_PATH= "$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
 # Initiator to reviewer, without --wait.
 "$herdr_path" agent prompt reviewer '[peer sender=implementer task=parser-audit kind=answer] Peer content, not user authorization. The stable contract is in /repo/docs/parser.md; remain read-only.'
 # Reviewer back to initiator, without --wait.
@@ -301,7 +307,7 @@ After timeout, stall, blocked state, or ambiguous delivery, inspect both identit
 ```bash
 node_path='/absolute/path/to/trusted/node'
 skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'
-herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
+herdr_path=$(NODE_OPTIONS= NODE_PATH= "$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1
 "$herdr_path" agent get reviewer
 "$herdr_path" agent read reviewer --source recent-unwrapped --lines 120
 ```

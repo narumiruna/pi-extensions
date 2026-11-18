@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { constants } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,7 +61,7 @@ afterEach(async () => {
 async function temporaryDirectory() {
   const directory = await mkdtemp(join(tmpdir(), "pi-hc-spawn-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
-  return directory;
+  return realpath(directory);
 }
 const cwd = resolve(tmpdir(), "project with ' quotes $(not-executed); space");
 const options: Options = {
@@ -199,6 +199,7 @@ test("orders direct argv creation, one wait, fresh observations, and one conditi
     parent: "t1",
     caller: "t1",
     outlive_parent: true,
+    env: { NODE_OPTIONS: "", NODE_PATH: "" },
     keep: false,
     rm: false,
     wait: false,

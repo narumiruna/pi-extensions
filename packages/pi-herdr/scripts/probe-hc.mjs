@@ -26,6 +26,9 @@ const env = {
   XDG_CONFIG_HOME: join(root, "config"),
   PI_CODING_AGENT_DIR: join(root, "pi"),
   PI_OFFLINE: "1",
+  // Harmless canaries verify that explicit peer env overrides the core's startup environment.
+  NODE_OPTIONS: "--no-warnings",
+  NODE_PATH: join(root, "nonexistent-module-canary"),
 };
 for (const key of ["HOME", "XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR"])
   await mkdir(env[key], { mode: 0o700 });
@@ -61,7 +64,9 @@ try {
       'status("idle");',
       'readline.createInterface({input:process.stdin}).on("line", line => {',
       '  if (line.includes("HC_PROBE_TASK")) {',
-      '    status("working"); console.log("HC_FIXTURE_RECEIVED"); status("done");',
+      '    status("working"); console.log("HC_FIXTURE_RECEIVED");',
+      '    console.log(process.env.NODE_OPTIONS === "" && process.env.NODE_PATH === "" ? "HC_ENV_CLEAN" : "HC_ENV_UNCLEARED");',
+      '    status("done");',
       "  }",
       "});",
       "",
@@ -107,6 +112,8 @@ try {
   );
   const output = await call(endpoint, "terminal.read", { terminal: peer.address, lines: 20 });
   assert.match(output.text, /HC_FIXTURE_RECEIVED/u);
+  assert.match(output.text, /HC_ENV_CLEAN/u);
+  assert.doesNotMatch(output.text, /HC_ENV_UNCLEARED/u);
   const facts = await call(endpoint, "terminal.get", { terminal: peer.address });
   assert.equal(facts.parent, origin.address);
   assert.equal(facts.die_with_parent, false);
@@ -125,6 +132,7 @@ try {
           "subscription snapshot and native status events",
           "absolute argv fixture startup/readiness",
           "one idle-conditional task send",
+          "Node preload environment cleared for the peer",
           "fixture receipt",
           "native parent provenance",
           "peer outlives initiator",

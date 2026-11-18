@@ -53,8 +53,10 @@ A `missed` snapshot invalidates the display and triggers an authoritative refres
 After reconnect, a fresh subscription/snapshot establishes a new sequence baseline.
 
 An event during a read causes up to two consecutive snapshots to be discarded; the next complete snapshot can publish before another refresh, so sustained events do not starve display updates.
-Unexpected disconnection or invalid data clears the widget before one bounded reconnect attempt.
-A second failure leaves it hidden until another session start, `/reload`, or explicit observer restart.
+Unexpected disconnection or invalid data clears the widget before a bounded reconnect attempt.
+A valid authoritative publication resets the consecutive-failure budget, including when no peer row is visible; a subscription acknowledgement alone does not reset it.
+Two attempts that cannot reach a valid publication leave it hidden until another session start, `/reload`, or explicit observer restart.
+Later disconnects after healthy recovery can reconnect again; cancellation still ends the session-owned retry delay.
 Session replacement, widget disable, and shutdown abort subscriptions, reads, and reconnect delays and prevent stale publication.
 The observer is scoped by `sessionManager` and generation, not the shared headless UI object.
 
@@ -93,6 +95,7 @@ The skill applies its full independence gate before launching the minimum useful
 Check installed templates first.
 A fitting trusted template must already launch interactive Pi with this same package and skill, preserve scope/cwd, and support independent lifetime with `--outlive-parent`.
 Review its actual command/interpreter chain, not only its name or description; do not silently create or modify templates.
+A Node-based template must clear `NODE_OPTIONS` and `NODE_PATH` before starting Node; otherwise use the bundled helper.
 A template launch includes the complete task in `run --bg` and requires checking native `first_message.sent`.
 A false value means the first message was not sent; inspect identity and screen and resolve readiness before an explicit recovery decision.
 An ambiguous result never authorizes blind resend or duplicate launch.
@@ -100,11 +103,12 @@ An ambiguous result never authorizes blind resend or duplicate launch.
 If no template fits, the bundled [hc spawn helper](../skills/pi-herdr/scripts/spawn-hc-peer.mjs) uses this CLI through a preverified external Node runtime:
 
 ```text
-/absolute/path/to/trusted/node <skill-dir>/scripts/spawn-hc-peer.mjs --name reviewer --task-file /absolute/task.txt --pi-cli /verified/external/Pi/dist/cli.js
+NODE_OPTIONS= NODE_PATH= /absolute/path/to/trusted/node <skill-dir>/scripts/spawn-hc-peer.mjs --name reviewer --task-file /absolute/task.txt --pi-cli /verified/external/Pi/dist/cli.js
 ```
 
 The helper verifies canonical regular Node/Pi files outside the topmost Git ancestor of cwd, including realpaths, or outside cwd when there is no Git ancestor.
 This validates a boundary, not the files' trustworthiness; the caller must trust the Node bootstrap before running it.
+Every documented Node bootstrap clears inherited `NODE_OPTIONS` and `NODE_PATH` before execution, including command substitutions; clearing them inside the helper would be too late.
 The nonempty task is bounded to 32 KiB of UTF-8 regular-file input, with only tab/CR/newline allowed as control characters.
 Same-package skill and extension resources must remain inside the package boundary.
 The built package directory is selected when available, otherwise the same package's `src/index.ts` is used for a source-only Git installation.
@@ -120,6 +124,7 @@ terminal.run {
   parent: originAddress,
   caller: originAddress,
   outlive_parent: true,
+  env: {NODE_OPTIONS: "", NODE_PATH: ""},
   wait: false,
   keep: false,
   rm: false
@@ -127,6 +132,7 @@ terminal.run {
 ```
 
 No shell line, bare Node/Pi lookup, UI arrangement, or template task argument is used on this path.
+The explicit native child environment clears Node preload/module lookup settings from the core without forwarding the caller's other environment values or credentials.
 There is no template `first_message` field on a direct run and no claim of legacy `interactive_ready`.
 The helper retains a known returned address even if later validation, cancellation, or startup fails.
 It never automatically kills/removes a partially created or independent peer.
@@ -176,10 +182,11 @@ Do not infer cleanup ownership from ancestry, a successful send, or completion o
 From the repository root on Linux, after building the package, run the provider-free public-contract smoke with verified absolute executables:
 
 ```bash
-/absolute/path/to/trusted/node packages/pi-herdr/scripts/probe-hc.mjs /absolute/path/to/trusted/hc
+NODE_OPTIONS= NODE_PATH= /absolute/path/to/trusted/node packages/pi-herdr/scripts/probe-hc.mjs /absolute/path/to/trusted/hc
 ```
 
-The repository-only script clears inherited identity, credential and runtime-injection variables; it uses private scratch HOME/XDG paths, an explicit unique HC_SESSION and socket, and inert Node status fixtures.
+The repository-only script uses an explicit environment allowlist, private scratch HOME/XDG paths, a unique HC_SESSION/socket, and inert Node status fixtures.
+Its harmless Node option/module-path canaries verify that the peer's explicit environment clears core-side startup settings; no preload hook or checkout candidate is executed.
 It exercises native snapshots/events, helper launch/wait/single-send admission, receipt, parent/outlive behavior and retained finished ancestors, then removes only its own terminals and stops only its scratch core.
 It does not launch a Pi agent, use a provider, arrange windows, or touch the user's default core.
 SIGINT/SIGTERM cancel active work and drain scoped cleanup; the launcher's bounded readiness check settles before cleanup, and partial startup still triggers a stop attempt on the private endpoint.

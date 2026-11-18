@@ -75,7 +75,7 @@ export function createHcWidgetObserver(options: HcObserverOptions): HerdrWidgetO
     fingerprint = next;
   }
 
-  async function attempt(ctx: ExtensionContext, expected: number, signal: AbortSignal) {
+  async function attempt(ctx: ExtensionContext, expected: number, signal: AbortSignal, healthy: () => void) {
     const attemptController = new AbortController();
     const abort = () => attemptController.abort();
     signal.addEventListener("abort", abort, { once: true });
@@ -164,6 +164,8 @@ export function createHcWidgetObserver(options: HcObserverOptions): HerdrWidgetO
         }
         discarded = 0;
         publish(ctx, expected, createHcWidgetSnapshot(terminals, options.environment.terminalId));
+        // A validated no-peer snapshot is healthy too; a subscription acknowledgement is not.
+        healthy();
       }
       if (failure !== undefined && owns(ctx, expected) && !signal.aborted) throw failure;
     } finally {
@@ -183,14 +185,18 @@ export function createHcWidgetObserver(options: HcObserverOptions): HerdrWidgetO
   }
 
   async function run(ctx: ExtensionContext, expected: number, signal: AbortSignal) {
-    for (let failures = 0; failures < 2 && owns(ctx, expected) && !signal.aborted; failures += 1) {
+    let failures = 0;
+    while (owns(ctx, expected) && !signal.aborted) {
       try {
-        await attempt(ctx, expected, signal);
+        await attempt(ctx, expected, signal, () => {
+          failures = 0;
+        });
         return;
       } catch {
         if (!owns(ctx, expected) || signal.aborted) return;
         publish(ctx, expected, undefined);
-        if (failures === 1) return;
+        failures += 1;
+        if (failures >= 2) return;
         try {
           await retryDelay(options.retryDelayMs ?? 200, signal);
         } catch {

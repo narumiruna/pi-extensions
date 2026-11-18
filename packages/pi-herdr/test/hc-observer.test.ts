@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { createHcWidgetObserver } from "../src/hc-observer.js";
 import { HERDR_WIDGET_KEY } from "../src/herdr-widget.js";
@@ -33,7 +33,7 @@ async function until(predicate: () => boolean) {
   }
   throw new Error("hc observer did not reach the expected state");
 }
-function fixture() {
+function fixture(retryDelayMs = 0) {
   const context = createMockContext({ mode: "tui", hasUI: true, theme });
   const state = {
     terminals: [terminal("t1"), terminal("t2", "t1")],
@@ -44,11 +44,14 @@ function fixture() {
     attempts: 0,
     read: undefined as ((signal: AbortSignal) => Promise<unknown>) | undefined,
     subscribeGate: undefined as Promise<void> | undefined,
+    subscribeError: undefined as Error | undefined,
+    snapshot: undefined as unknown,
+    closeError: undefined as Error | undefined,
   };
   const subscriptions: Array<{ emit(frame: unknown): void; fail(): void; signal: AbortSignal }> = [];
   const observer = createHcWidgetObserver({
     environment: { terminalId: "t1", socketEndpoint: "/unused" },
-    retryDelayMs: 0,
+    retryDelayMs,
     async request(_endpoint, method, params, options) {
       assert.equal(method, "terminal.list");
       assert.deepEqual(params, { all: true }); // Retain finished ancestors, without a caller that marks news seen.
@@ -63,6 +66,7 @@ function fixture() {
     },
     async subscribe(_endpoint, options) {
       state.attempts += 1;
+      if (state.subscribeError) throw state.subscribeError;
       const finished = deferred<Error | undefined>();
       const signal = options?.signal as AbortSignal;
       const abort = () => finished.resolve(undefined);
@@ -74,12 +78,13 @@ function fixture() {
       });
       await state.subscribeGate;
       return {
-        snapshot: { seq: 0, terminals: structuredClone(state.terminals) },
+        snapshot: state.snapshot ?? { seq: 0, terminals: structuredClone(state.terminals) },
         closed: finished.promise,
         async close() {
           state.closes += 1;
           signal.removeEventListener("abort", abort);
           finished.resolve(undefined);
+          if (state.closeError) throw state.closeError;
         },
       };
     },
@@ -196,21 +201,107 @@ test("hc coalesces bursts into serialized reads and never publishes a held stale
   }
 });
 
-test("hc clears before one bounded reconnect and hides after a second failure", async () => {
-  const f = fixture();
+for (const peers of [true, false]) {
+  test(`hc renews its consecutive-failure budget after healthy snapshots (peers: ${peers})`, async () => {
+    const f = fixture();
+    if (!peers) f.state.terminals = [terminal("t1")];
+    let pending: ReturnType<typeof deferred<unknown>> | undefined;
+    try {
+      f.observer.start(f.ctx);
+      await until(() => f.state.lists === 1 && f.state.active === 0);
+      for (let episode = 1; episode <= 3; episode += 1) {
+        const held = deferred<unknown>();
+        pending = held;
+        f.state.read = () => held.promise;
+        f.subscriptions.at(-1)?.fail();
+        await until(() => f.state.attempts === episode + 1 && f.state.active === 1);
+        assert.equal(f.text(), "");
+        f.state.read = undefined;
+        held.resolve({ terminals: f.state.terminals });
+        await until(() => f.state.active === 0);
+        assert.equal(f.state.closes, episode);
+        if (peers) await f.ready();
+        else assert.equal(f.text(), "");
+      }
+      assert.equal(f.state.attempts, 4);
+    } finally {
+      pending?.resolve({ terminals: f.state.terminals });
+      await f.observer.shutdown(f.ctx);
+    }
+  });
+}
+
+for (const failure of ["subscription", "list", "invalid-list", "snapshot"] as const) {
+  test(`hc stops and hides after two unhealthy ${failure} attempts`, async () => {
+    const f = fixture();
+    try {
+      f.observer.start(f.ctx);
+      await f.ready();
+      if (failure === "subscription") f.state.subscribeError = new Error("unavailable");
+      if (failure === "list")
+        f.state.read = async () => {
+          throw new Error("list unavailable");
+        };
+      if (failure === "invalid-list") f.state.read = async () => ({ terminals: [{}] });
+      if (failure === "snapshot") f.state.snapshot = { seq: -1, terminals: [] };
+      f.subscriptions[0]?.fail();
+      // The healthy connection's disconnect starts the outage; one failed retry exhausts it.
+      await until(() => f.state.attempts === 2 && f.state.closes === (failure === "subscription" ? 1 : 2));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(f.state.attempts, 2);
+      assert.equal(f.text(), "");
+    } finally {
+      await f.observer.shutdown(f.ctx);
+    }
+  });
+}
+
+for (const failure of ["subscription", "list", "invalid-list", "snapshot"] as const) {
+  test(`hc bounds initial ${failure} failures without treating acknowledgement as healthy`, async () => {
+    const f = fixture();
+    if (failure === "subscription") f.state.subscribeError = new Error("unavailable");
+    if (failure === "list")
+      f.state.read = async () => {
+        throw new Error("list unavailable");
+      };
+    if (failure === "invalid-list") f.state.read = async () => ({ terminals: [{}] });
+    if (failure === "snapshot") f.state.snapshot = { seq: -1, terminals: [] };
+    try {
+      f.observer.start(f.ctx);
+      await until(() => f.state.attempts === 2 && (failure === "subscription" || f.state.closes === 2));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(f.state.attempts, 2);
+      assert.equal(f.state.lists, failure === "list" || failure === "invalid-list" ? 2 : 0);
+      assert.equal(f.text(), "");
+    } finally {
+      await f.observer.shutdown(f.ctx);
+    }
+  });
+}
+
+test("hc waits 200ms per outage and shutdown cancels a pending retry", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const f = fixture(200);
   try {
     f.observer.start(f.ctx);
     await f.ready();
     f.subscriptions[0]?.fail();
-    await until(() => f.state.attempts === 2);
-    await f.ready();
-    assert.equal(f.state.closes, 1);
-    f.subscriptions[1]?.fail();
-    await until(() => f.state.closes === 2);
+    await until(() => f.state.closes === 1 && vi.getTimerCount() === 1);
     assert.equal(f.text(), "");
+    await vi.advanceTimersByTimeAsync(199);
+    assert.equal(f.state.attempts, 1);
+    await vi.advanceTimersByTimeAsync(1);
+    await f.ready();
+    assert.equal(f.state.attempts, 2);
+    f.subscriptions[1]?.fail();
+    await until(() => f.state.closes === 2 && vi.getTimerCount() === 1);
+    await f.observer.shutdown(f.ctx);
+    assert.equal(vi.getTimerCount(), 0);
+    await vi.advanceTimersByTimeAsync(1000);
     assert.equal(f.state.attempts, 2);
   } finally {
     await f.observer.shutdown(f.ctx);
+    vi.useRealTimers();
   }
 });
 
@@ -231,8 +322,65 @@ test("hc shutdown aborts pending reads, drains late subscription acquisition, an
   await shutdown;
   assert.equal(f.state.closes, 1);
   assert.equal(f.state.lists, 0);
+  f.subscriptions[0]?.emit({ jsonrpc: "2.0", method: "event", params: { seq: 10, type: "status", terminal: "t2" } });
   assert.equal(f.text(), "");
+  assert.equal(f.state.attempts, 1);
   await f.observer.shutdown(f.ctx);
+});
+
+test("hc drains a held stale read without reviving a replaced session", async () => {
+  const f = fixture();
+  const pending = deferred<unknown>();
+  f.state.read = () => pending.promise;
+  f.observer.start(f.ctx);
+  await until(() => f.state.active === 1);
+  const replacement = createMockContext({ mode: "tui", hasUI: true, theme });
+  try {
+    f.state.read = undefined;
+    f.observer.start(replacement.ctx);
+    await until(() => typeof replacement.widgets.get(HERDR_WIDGET_KEY) === "function");
+    pending.resolve({ terminals: f.state.terminals });
+    await until(() => f.state.active === 0 && f.state.closes === 1);
+    f.subscriptions[0]?.emit({ jsonrpc: "2.0", method: "event", params: { seq: 100, type: "status", terminal: "t2" } });
+    assert.equal(f.text(), "");
+    assert.equal(f.state.attempts, 2);
+    assert.equal(f.state.lists, 2);
+    assert.equal(typeof replacement.widgets.get(HERDR_WIDGET_KEY), "function");
+  } finally {
+    pending.resolve({ terminals: f.state.terminals });
+    await f.observer.shutdown(replacement.ctx);
+  }
+});
+
+test("hc shutdown reports background task and subscription cleanup errors", async () => {
+  const f = fixture();
+  const taskError = new Error("widget clear failed");
+  const closeError = new Error("subscription close failed");
+  const ui = (f.ctx as ExtensionContext).ui;
+  const setWidget = ui.setWidget;
+  try {
+    f.observer.start(f.ctx);
+    await f.ready();
+    f.state.closeError = closeError;
+    ui.setWidget = () => {
+      throw taskError;
+    };
+    f.subscriptions[0]?.fail();
+    await until(() => f.state.closes === 1);
+    // Restore UI cleanup so shutdown must report the retained background error itself.
+    ui.setWidget = setWidget;
+    await assert.rejects(f.observer.shutdown(f.ctx), (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(error.errors.includes(taskError));
+      assert.ok(error.errors.includes(closeError));
+      return true;
+    });
+    assert.equal(f.text(), "");
+    assert.equal(f.state.attempts, 1);
+  } finally {
+    ui.setWidget = setWidget;
+    await f.observer.shutdown(f.ctx);
+  }
 });
 
 test("hc pending read cancellation and replacement cannot publish through stale contexts", async () => {

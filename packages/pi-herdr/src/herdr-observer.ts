@@ -130,7 +130,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
       signal,
     );
     if (!owns(ctx, expectedGeneration) || signal.aborted) return undefined;
-    const currentPane = parsePaneCurrentResult(currentResult);
+    const currentPaneId = parsePaneCurrentResult(currentResult).paneId;
     const [listResult, agentResult, workspaceResult] = await Promise.all([
       request(
         options.environment.socketEndpoint,
@@ -159,6 +159,9 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     if (!owns(ctx, expectedGeneration) || signal.aborted) return undefined;
     const panes = parsePaneListResult(listResult);
     const panesById = new Map(panes.map((pane) => [pane.paneId, pane]));
+    // The earlier current read identifies the caller, not its later session identity.
+    const currentPane = panesById.get(currentPaneId);
+    if (!currentPane) throw new HerdrTopologyChangedError();
     const namesByPane = new Map(
       parseAgentListResult(agentResult)
         .filter((pane) => panesById.get(pane.paneId)?.workspaceId === pane.workspaceId)

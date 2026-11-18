@@ -205,7 +205,8 @@ test("the skill links both backends and keeps each shell bootstrap and resource 
       node_path: "node_path='/absolute/path/to/trusted/node'",
       skill_dir: "skill_dir='/absolute/path/to/pi-herdr/skills/pi-herdr'",
       hc_path: "hc_path='/verified/external/path/to/hc'",
-      herdr_path: 'herdr_path=$("$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1',
+      herdr_path:
+        'herdr_path=$(NODE_OPTIONS= NODE_PATH= "$node_path" "$skill_dir/scripts/spawn-peer.mjs" --cli-path) || exit 1',
     };
     for (const [variable, assignment] of Object.entries(assignments)) {
       const used = new RegExp(`\\$${variable}\\b|\\$\\{${variable}(?:\\}|:)`, "u").test(block);
@@ -214,6 +215,9 @@ test("the skill links both backends and keeps each shell bootstrap and resource 
         used,
         `repeat only the ${variable} setup used in this independent shell`,
       );
+    }
+    for (const line of block.split("\n").filter((line) => line.includes('"$node_path"'))) {
+      assert.ok(line.includes('NODE_OPTIONS= NODE_PATH= "$node_path"'), "clear Node preloads before helper startup");
     }
     assert.doesNotMatch(block, /(?:^|[;&|])\s*(?:node|hc|herdr)(?=\s|$)/mu);
     assert.doesNotMatch(block, /\b(?:command -v|which)\s+(?:node|hc|herdr)\b/u);

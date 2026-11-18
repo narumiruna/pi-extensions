@@ -388,6 +388,8 @@ export async function spawnHcPeer(
         parent: origin.address,
         caller: origin.address,
         outlive_parent: true,
+        // The core has its own environment; do not inherit Node preload/module lookup settings from it.
+        env: { NODE_OPTIONS: "", NODE_PATH: "" },
         keep: false,
         rm: false,
         wait: false,

@@ -46,6 +46,7 @@ The helper writes only its five distinct keys and verifies their exact readback 
 Before CLI execution, it selects a canonical absolute Herdr executable outside the checkout and its Git ancestors, rejects project-local symlink targets, and skips relative `PATH` entries.
 The skill's `--cli-path` preflight prints that path without launching Herdr; the probe and default helper runner use the same resolver, including on Windows where a bare command could otherwise use the project cwd.
 The skill requires the verified absolute Node path from trusted Pi launch/runtime information before either helper call; it does not bootstrap through bare `node` or trust a PATH-only lookup.
+Per-command `NODE_OPTIONS=` and `NODE_PATH=` assignments clear late-loaded preload/module lookup settings before Node starts, not inside the helper after preloads could run.
 Each independent shell call repeats its Node/skill path setup and, when needed, CLI resolution rather than relying on prior shell variables.
 CLI-path setup failures name the rejecting project root on stderr with sanitized, bounded text and no stdout path.
 This still requires a trusted launch environment; it does not authenticate the selected external executable or the Herdr socket.
@@ -76,6 +77,7 @@ Changing the TTL deadline supplies the invalidation after identity reporting wit
 
 The observer retains its coalesced reads, bounded retry, cancellation, generation checks, and passive widget behavior.
 Like the existing status display, relationships describe the latest completed snapshot and can briefly lag newer events.
+The earlier canonical-caller lookup supplies an ID; the later pane list supplies the current pane and sibling identities together. A missing caller triggers topology rediscovery rather than reinserting its earlier identity.
 Reporting remains best-effort; acknowledgement does not guarantee that Herdr applied an identity report.
 There is no atomic compare-and-set against a session identity, so read/check/write cannot exclude every concurrent takeover.
 The native prompt endpoint separately checks known blocked state and foreground-agent ownership before writing terminal input.
@@ -110,7 +112,7 @@ The package tests include the fake-CLI spawn state machine, producer/consumer ro
 When Herdr is installed and the caller is already in a managed pane, run the repository-only public-contract probe:
 
 ```bash
-"/absolute/path/to/trusted/node" packages/pi-herdr/scripts/probe-provenance.mjs
+NODE_OPTIONS= NODE_PATH= "/absolute/path/to/trusted/node" packages/pi-herdr/scripts/probe-provenance.mjs
 ```
 
 On a Unix-like host with `/bin/sh`, the probe creates a uniquely named headless session and an inert shell process recognized as Pi, waits for readiness, and uses only that isolated session's public API.

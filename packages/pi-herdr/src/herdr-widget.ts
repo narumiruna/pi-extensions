@@ -179,7 +179,7 @@ export class HerdrWidgetModel {
     this.currentPaneId = currentPane.paneId;
     this.workspaces = new Map(workspaces.map((workspace) => [workspace.workspaceId, { ...workspace }]));
     this.panes = new Map(panes.map((pane) => [pane.paneId, observedPane(pane)]));
-    if (!this.panes.has(currentPane.paneId)) this.panes.set(currentPane.paneId, observedPane(currentPane));
+    this.panes.set(currentPane.paneId, observedPane(currentPane));
   }
 
   clear(): void {

@@ -140,6 +140,57 @@ test("shows both directions involving the current agent and peer-to-peer nested 
   );
 });
 
+test.each(["replacement", "missing identity", "non-native identity"] as const)(
+  "explicit current pane replaces conflicting list identity: %s",
+  (kind) => {
+    const parent = wire("w1:p0");
+    const oldCurrent = spawned(parent, wire("w1:p1"));
+    const child = spawned(oldCurrent, wire("w1:p2"));
+    const peer = wire("w1:p3");
+    const peerChild = spawned(peer, wire("w1:p4"));
+    const current = {
+      ...oldCurrent,
+      agent_session:
+        kind === "replacement"
+          ? session("/sessions/replacement.jsonl")
+          : kind === "missing identity"
+            ? undefined
+            : { ...session(), source: "custom" },
+    };
+    const model = new HerdrWidgetModel();
+    const listed = [oldCurrent, parent, child, peer, peerChild].map(parsed);
+    model.reset(parsed(oldCurrent), listed);
+    assert.equal(model.snapshot()?.rows.find((row) => row.paneId === parent.pane_id)?.relation, "spawned you");
+    assert.equal(model.snapshot()?.rows.find((row) => row.paneId === child.pane_id)?.relation, "spawned by you");
+    model.reset(parsed(current), listed);
+    const rows = model.snapshot()?.rows;
+    assert.equal(rows?.find((row) => row.paneId === parent.pane_id)?.relation, undefined);
+    assert.equal(
+      rows?.find((row) => row.paneId === child.pane_id)?.relation,
+      "spawned by captured-origin (unavailable)",
+    );
+    assert.equal(rows?.find((row) => row.paneId === peerChild.pane_id)?.relation, "spawned by w1:p3/p3");
+  },
+);
+
+test("explicit current provenance replaces or clears a conflicting list edge without merging", () => {
+  const firstParent = wire("w1:p0");
+  const secondParent = wire("w1:p2");
+  const current = wire("w1:p1");
+  const listedCurrent = spawned(firstParent, current);
+  const child = spawned(current, wire("w1:p3"));
+  const model = new HerdrWidgetModel();
+  const listed = [listedCurrent, firstParent, secondParent, child].map(parsed);
+  model.reset(parsed(spawned(secondParent, current)), listed);
+  assert.equal(model.snapshot()?.rows.find((row) => row.paneId === firstParent.pane_id)?.relation, undefined);
+  assert.equal(model.snapshot()?.rows.find((row) => row.paneId === secondParent.pane_id)?.relation, "spawned you");
+  assert.equal(model.snapshot()?.rows.find((row) => row.paneId === child.pane_id)?.relation, "spawned by you");
+  model.reset(parsed(current), listed);
+  assert.equal(model.snapshot()?.rows.find((row) => row.paneId === secondParent.pane_id)?.relation, undefined);
+  assert.equal(model.snapshot()?.rows.find((row) => row.paneId === firstParent.pane_id)?.relation, undefined);
+  assert.equal(model.snapshot()?.rows.find((row) => row.paneId === child.pane_id)?.relation, "spawned by you");
+});
+
 test("moves and renames resolve by terminal/session, not old pane IDs or captured names", () => {
   const origin = wire("w1:p1", { name: "old" });
   const target = spawned(origin, wire("w1:p2"));
