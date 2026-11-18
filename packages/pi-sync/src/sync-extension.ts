@@ -56,8 +56,11 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
             const command = splitArgs(args)[0];
             const ready = await initialization;
             if (signal.aborted || owner !== client) return;
-            await client.setBusy("command", true);
+            const requiresContact = !["help", "unlock", "migrate-state"].includes(command ?? "");
+            let busyPublished = false;
             try {
+              await client.setBusy("command", true, requiresContact);
+              busyPublished = requiresContact;
               if (signal.aborted || owner !== client) return;
               await check.stop();
               if (signal.aborted || owner !== client) return;
@@ -89,7 +92,12 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
                 if (command === "unlock" || command === "migrate-state") throw error;
               }
             } finally {
-              if (!signal.aborted && owner === client) await client.setBusy("command", false);
+              if (!signal.aborted && owner === client) {
+                // Recovery can publish busy facts after bypassing the initial contact check.
+                const publish = busyPublished || command === "unlock" || command === "migrate-state";
+                // Release local busy state even if contact failed; do not mask the command result.
+                await client.setBusy("command", false, publish).catch(() => {});
+              }
             }
           },
           reload,

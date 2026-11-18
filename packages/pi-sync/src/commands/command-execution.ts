@@ -104,7 +104,7 @@ export async function executeCommand(
             options.signal,
           );
         } else if (action === "status") {
-          const connection = await client.connect();
+          const connection = await client.verifyConnection(options.signal);
           ctx.ui.notify(
             `pi-sync-daemon: connected\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\nUse pi-sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.`,
             "info",

@@ -28,6 +28,19 @@ The service owns synchronization scheduling and execution, not every writer on t
 
 Protect the union of all registered live-PID sessions, including ambiguously disconnected and orderly retired clients. Retired clients cannot authorize work or hold back zero-client scheduling, but their protection survives another attach and daemon restart until confirmed PID exit. A contact timeout revokes work; it is not permission to overwrite that session or release an acquired mutation grant. An uncertain grant remains quarantined until explicit release or confirmed daemon exit. Unregistered editors, shell commands, older clients, and extensions remain independent writers; preimages, conditional publication, backups, and journal recovery are still required.
 
+When a running daemon expires a Pi client's heartbeat (for example, during
+computer sleep), the TUI or RPC client tries to reconnect to that same daemon
+without reloading Pi. The next `/sync` command also checks contact before
+submitting work. `/sync daemon status` reports `connected` only after the daemon
+accepts the current participant's facts. An older daemon can stay reachable
+without supporting this repair; a healthy CLI status alone does not confirm Pi
+participation.
+
+Reconnect does not replay a submitted operation or restart startup transfers.
+If a write or file-queue release cannot be confirmed, preserve the journals and
+use the existing recovery path before retrying a transfer. Reconnect does not
+stop or restart the service, and it does not extend transfer or model permission.
+
 ## Diagnostics and rollback
 
 If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
@@ -66,6 +79,20 @@ The semantic audit used `docs/extension-conventions.md`, `docs/extension-setting
 
 Intentional compatibility limits are explicit: there is no legacy in-process fallback; unsupported parent-only providers remain unavailable; print/JSON do not launch a service but protect sessions in an existing one; a cancelled SDK switch/fork stays paused until reload; arbitrary external writers are not covered by a universal filesystem compare-and-swap. Normal closed clients retain live-PID protection without blocking reviewed zero-client work. No package publication, tag, release dispatch, paid provider request, or production-storage action was performed.
 
+### Heartbeat recovery verification
+
+An isolated daemon clock and real Pi RPC clients reproduced the stuck first
+command before the fix. Regression tests now verify same-owner, same-session
+recovery with and without a command, and no replay or remote write after an
+interrupted loopback WebDAV push. Daemon tests exercise admission, lifecycle
+cancellation, legacy replies, committed work, and uncertain queue release.
+The Jiti tests load the built extension and exercise its lazy command path.
+
+Physical suspend and wake timing on target devices remains unverified. See
+[External handoff](#external-handoff) before making a platform claim or
+preparing a release. This change neither publishes a package nor authorizes
+production cutover.
+
 ## Measured process cost
 
 These are same-host observations on Linux with Node `v26.11.1`, not limits or statistically controlled performance claims. The baseline was reconstructed from archived commit `a01c1d75` after implementation, rather than measured before editing. Both Pi cases loaded generated Jiti entries through real offline RPC processes with the same installed parent SDK and synthetic loopback WebDAV/model endpoints. No production stores, credentials, or paid model calls were used.
@@ -92,6 +119,7 @@ The archived previous engine also held its real operation lock in a separate pro
 | Responsible role | Prerequisite and action | Expected result | Unverified behavior and restriction |
 | --- | --- | --- | --- |
 | npm/release account owner | Passing package gates and explicit approval; verify publication rights for `@narumitw/pi-sync-daemon` and dependency-first publication | The daemon resolves before the dependent Pi client is released | Scope permissions and first publication are not verified; no publication, visibility change, tags, or workflow dispatch without approval |
+| Device operator | Verified builds and an isolated setup; suspend and wake the target device, then run `/sync daemon status` and `/sync status` in the same Pi session | Both commands work without reload; the daemon and session stay the same | Physical wake timing is not verified by clock-controlled tests; do not claim tested platforms without this check |
 | Deployment operator | Verified cutover/recovery evidence and backups; close older Pi processes and authorize each real root | One recognized owner with unchanged compatible data | Only the explicitly approved checkout-service stop/restart was used for package-identity and runtime maintenance; no production-storage transfer or settings change was made, and no real-data cutover is included |
 | Native platform maintainer | Prepared transport/process tests; run native Windows/macOS checks | Correct local transport, permissions, independent lifetime, and recovery | Native ACL/named-pipe, logout, and physical power-loss behavior remain unverified; do not advertise new unverified guarantees or silently remove previous support |
 | Provider/storage account owner | Explicit cost/network authorization and isolated data; optional live smoke | Authorized dispatch/publication without exposed credentials | Entitlements and custom-provider/production behavior remain unverified; deterministic providers and loopback stores are the default |

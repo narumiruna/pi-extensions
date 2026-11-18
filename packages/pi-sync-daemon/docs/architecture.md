@@ -105,7 +105,27 @@ After grace, stop new automatic work and cancel cancellable work. Drain foregrou
 
 After quiescence, the authenticated final fence returns `RemoteError.name = "DaemonStoppingError"` to rejected admissions and handshakes on the existing version-1 protocol. `ensureDaemon()` recognizes only this error and waits at most 30 seconds for the recorded PID to exit before singleton startup. The lightweight public `waitForDaemonExit(identity, signal)` helper provides the same cancellable process-exit check for an attach race; it never kills the owner or treats lost contact as exit. Pi Sync retries only an unpublished connection, at most once, and does not replay submitted operations. A rejected first attach preserves this stopping error after local disposal when no callbacks or prior attachment can own grants; a failed cleanup transport remains available as the error cause. Other combined attach and cleanup failures remain aggregate errors and do not authorize a retry. `DaemonConnection.attach(signal)` cancels queued admission without stopping the shared owner; the signal does not own the established connection's lifetime. The next eligible interactive client or explicit command may start after proven owner exit. An incompatible identity, uncertain ownership, or unreachable live owner still fails closed. Print/JSON never launch a service. Manual stop and restart retain explicit behavior. Authorization uncertainty and failed revocation remain paused, not cleared by an implicit restart that could restore an older persisted grant.
 
-A later command can reconnect after a cancelled or failed unpublished attach. First, Pi Sync confirms the old connection's detach and drain, then releases its local queue grants. It uses a fresh client ID and generation for the next connection. Daemon retirement records stay intact, so late requests cannot revive the old attempt. Failed cleanup blocks a new identity and operation; it does not release uncertain grants. The established connection keeps its identity. A cancelled or submitted operation is never replayed by this recovery.
+A later command can reconnect after a cancelled or failed unpublished attach. First, Pi Sync confirms the old connection's detach and drain, then releases its local queue grants. It uses a fresh client ID and generation for the next connection. Daemon retirement records stay intact, so late requests cannot revive the old attempt. Failed cleanup blocks a new identity and operation; it does not release uncertain grants. A cancelled or submitted operation is never replayed by this recovery.
+
+### Recovering expired contact
+
+A running daemon can expire a Pi session's heartbeat after a computer sleeps. A
+cleanup poll still returns callbacks and job results. Its optional version-1
+`contact` field distinguishes `expired` from `active` and `inactive`. Only a
+heartbeat expired by this daemon instance gets `expired`. A facts update from
+the matching expired client returns `ClientContactExpiredError`. An older
+service can omit `contact`, which does not authorize repair.
+
+`DaemonConnection.resumeContact()` sends the same client's current facts to
+the authenticated owner with `resume-contact`. The daemon retains the existing
+participant, protects the live session, and fences publication with the same
+admission gate used by attach. Deliberate pauses, handoffs, retired identities,
+and peers loaded from disk are not eligible. Cleanup polling stays available
+while admission waits. Unknown work outcomes and unconfirmed queue releases
+block repair. Pi Sync supplies non-ready, busy facts during admission, then
+publishes fresh facts after confirmation. The binding and consent checks still
+apply. A failed or uncertain repair does not start a replacement owner, release
+uncertain grants, or resubmit work.
 
 ## Repository lifetime smoke
 

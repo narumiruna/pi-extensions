@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -19,6 +20,8 @@ import { withCleanup } from "./lifecycle.js";
 import { ParticipantAdmission } from "./participant-admission.js";
 import {
   type Callback,
+  type ClientContact,
+  ClientContactExpiredError,
   type ClientEvent,
   type ClientFacts,
   type ClientHandoff,
@@ -30,6 +33,7 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_REVIEW_BYTES,
   operationPrefix,
+  type PollReply,
   PROTOCOL_VERSION,
   REVIEW_PAGE_CHARS,
   record,
@@ -49,6 +53,11 @@ interface Participant {
   seen: number;
   publishing?: boolean;
   handoff?: ClientHandoff;
+  // This instance's expiry episode; never restored from clients.json.
+  expiry?: AbortController;
+  resumeFacts?: ClientFacts;
+  reservations?: Set<string>;
+  resumeUnsafe?: boolean;
 }
 interface Job {
   view: JobView;
@@ -116,6 +125,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   const peersFile = path.join(paths.directory, "clients.json");
   let sequence = 0;
   let closed = false;
+  let stopRequested = false;
   let automaticClosing = false;
   let peerWriteFailed = false;
   let idleExit: ReturnType<typeof createIdleExit> | undefined;
@@ -125,23 +135,23 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   let closing: Promise<void> | undefined;
   let peerWrites = Promise.resolve();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
-  function savePeers() {
+  function savePeers(candidate?: { peer: Participant; facts: ClientFacts }) {
     idleExit?.changed();
-    const operation = peerWrites.then(writePeers);
+    const operation = peerWrites.then(() => writePeers(candidate));
     peerWrites = operation.catch(() => {
       peerWriteFailed = true;
       hooks.failure?.();
     });
     return operation;
   }
-  async function writePeers() {
+  async function writePeers(candidate?: { peer: Participant; facts: ClientFacts }) {
     const temporary = path.join(paths.directory, `.${randomUUID()}.clients`);
     const data = {
       version: 1,
       root: paths.root,
       clients: [...participants.values()]
         .filter((peer) => processExists(peer.facts.pid))
-        .map((peer) => ({ ...peer.facts, handoff: peer.handoff })),
+        .map((peer) => ({ ...(candidate?.peer === peer ? candidate.facts : peer.facts), handoff: peer.handoff })),
     };
     const handle = await fs.open(temporary, "wx", 0o600);
     try {
@@ -248,8 +258,17 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   const participantFacts = () =>
     [...participants.values()]
       .filter((peer) => !peer.publishing && (peer.connected || peer.suspected) && processExists(peer.facts.pid))
-      .map((peer) => (peer.closing || peer.suspected ? { ...peer.facts, idle: false } : peer.facts));
-  const poll = (peer: Participant, cursor: unknown, job?: Job) => ({
+      .map((peer) =>
+        peer.closing || peer.suspected ? { ...(peer.resumeFacts ?? peer.facts), idle: false } : peer.facts,
+      );
+  const contactState = (peer: Participant): ClientContact => {
+    if (closed || stopRequested || compromised || peer.publishing || peer.closing || !processExists(peer.facts.pid))
+      return "inactive";
+    if (peer.connected) return "active";
+    return peer.expiry ? "expired" : "inactive";
+  };
+  const poll = (peer: Participant, cursor: unknown, job?: Job): PollReply => ({
+    contact: contactState(peer),
     cursor: sequence,
     callbacks: [...peer.callbacks.values()],
     events: peer.events.filter(
@@ -302,6 +321,15 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       )
         throw new Error("Callback exceeds its byte limit; no review was approved.");
       job.peers.add(target);
+      const reservation = record(data) && typeof data.reservation === "string" ? data.reservation : undefined;
+      if (kind === "queue-acquire" || cleanup) {
+        // A lost acquire response is not proof that Pi never acquired the queue.
+        // Bound retained evidence even if a failing or malformed executor keeps requesting grants.
+        peer.reservations ??= new Set();
+        if (!reservation) peer.resumeUnsafe = true;
+        else if (peer.reservations.size < 64) peer.reservations.add(reservation);
+        else if (!peer.reservations.has(reservation)) peer.resumeUnsafe = true;
+      }
       return new Promise<unknown>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const effectiveSignal = cleanup ? undefined : signal;
@@ -311,6 +339,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           effectiveSignal?.removeEventListener("abort", abort);
           if (!pending.delete(callback.id)) return;
           peer.callbacks.delete(callback.id);
+          if (cleanup && reservation && error === undefined && value === true) peer.reservations?.delete(reservation);
           sequence++;
           if (error) reject(error);
           else resolve(value);
@@ -409,6 +438,11 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       .catch((error) => {
         job.view.phase = "failed";
         job.view.error = remoteError(error);
+        if (job.committed)
+          for (const id of new Set([client, ...job.peers])) {
+            const affected = participants.get(id);
+            if (affected) affected.resumeUnsafe = true;
+          }
       })
       .finally(() => {
         for (const waiting of [...pending.values()])
@@ -419,14 +453,98 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     jobs.set(id, job);
     return job;
   }
+  function invalidateExpiry(peer: Participant) {
+    peer.expiry?.abort(new DOMException("Client is no longer eligible to resume contact", "AbortError"));
+    peer.expiry = undefined;
+    peer.resumeFacts = undefined;
+  }
+  async function resumeContact(facts: ClientFacts, disconnect?: AbortSignal) {
+    const peer = requireParticipant(facts.id, true);
+    const expiry = peer.expiry;
+    const matchesSession = (old: ClientFacts) =>
+      old.pid === facts.pid &&
+      old.generation === facts.generation &&
+      old.cwd === facts.cwd &&
+      old.sessionId === facts.sessionId &&
+      old.sessionFile === facts.sessionFile &&
+      old.sessionDir === facts.sessionDir &&
+      old.mode === facts.mode &&
+      old.hasUI === facts.hasUI;
+    if (!expiry || contactState(peer) !== "expired" || peer.resumeFacts || !matchesSession(peer.facts))
+      throw new Error("Client is not eligible to resume contact for this session.");
+    const signal = disconnect ? AbortSignal.any([disconnect, expiry.signal]) : expiry.signal;
+    const candidate = structuredClone(facts);
+    const recheck = () => {
+      assertOwner();
+      signal.throwIfAborted();
+      if (peerWriteFailed)
+        throw new Error(
+          "Daemon client ledger persistence is uncertain; reconcile with the existing owner before reconnecting.",
+        );
+      if (
+        participants.get(facts.id) !== peer ||
+        peer.expiry !== expiry ||
+        contactState(peer) !== "expired" ||
+        !matchesSession(peer.facts)
+      )
+        throw new Error("Client is no longer eligible to resume contact.");
+    };
+    const affected = (job: Job) => job.client === facts.id || job.peers.has(facts.id);
+    const running = (job: Job) => affected(job) && job.view.phase === "running";
+    const stopped = Promise.withResolvers<never>();
+    const abort = addAbortListener(signal, () => stopped.reject(signal.reason));
+    try {
+      recheck();
+      // Expose the new binding to the monitor, but only as a non-ready, busy suspect.
+      peer.resumeFacts = { ...candidate, ready: false };
+      // Never wait for jobs or monitor transitions inside admission: they can need the fence.
+      await Promise.race([
+        Promise.all([hooks.factsChanged?.(), ...[...jobs.values()].filter(running).map((job) => job.promise)]),
+        stopped.promise,
+      ]);
+      recheck();
+      return await admission.run(async () => {
+        const safe = () => {
+          recheck();
+          if (
+            peer.resumeUnsafe ||
+            peer.reservations?.size ||
+            peer.callbacks.size ||
+            [...jobs.values()].some(running) ||
+            [...backgroundJobs].some((job) => job.committed && affected(job))
+          )
+            throw new Error(
+              "Client work or file-queue cleanup is uncertain; reconcile with the existing owner before reconnecting.",
+            );
+        };
+        safe();
+        // The staged facts have the same location and identity. Even if cancelled mid-write,
+        // the on-disk record does not authorize work or confer expiry eligibility on restart.
+        await savePeers({ peer, facts: candidate });
+        safe();
+        peer.facts = candidate;
+        peer.seen = Date.now();
+        peer.expiry = undefined;
+        peer.resumeFacts = undefined;
+        peer.suspected = false;
+        peer.connected = true;
+        hooks.idle?.();
+        return poll(peer, 0);
+      }, signal);
+    } finally {
+      abort[Symbol.dispose]();
+      if (peer.expiry === expiry) peer.resumeFacts = undefined;
+    }
+  }
   async function detach(id: string, retain = false, handoff?: ClientHandoff) {
     const peer = participants.get(id);
     if (!peer) {
       if (closedClients.size < 10_000) closedClients.add(id);
-      return { cursor: sequence, callbacks: [], events: [] };
+      return { contact: "inactive", cursor: sequence, callbacks: [], events: [] } satisfies PollReply;
     }
     if (closedClients.has(id)) return poll(peer, 0);
     peer.closing = true;
+    invalidateExpiry(peer);
     for (const waiting of [...pending.values()])
       if (waiting.target === id && !waiting.callback.kind.startsWith("queue-"))
         waiting.reject(new Error("Client detaching."));
@@ -471,8 +589,11 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
             ((old.connected || old.suspected) && old.facts.generation !== params.generation))
         )
           throw new Error("Client identity collision.");
+        if (old) invalidateExpiry(old);
         participants.set(params.id, {
           facts: structuredClone(params),
+          reservations: old?.reservations,
+          resumeUnsafe: old?.resumeUnsafe,
           callbacks: old?.callbacks ?? new Map(),
           events: old?.events ?? [],
           connected: true,
@@ -516,6 +637,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       assertOwner();
       return poll(attached, 0);
     }
+    if (method === "resume-contact") {
+      validateFacts(params);
+      return resumeContact(params, signal);
+    }
     if (!record(params)) throw new Error("Invalid request parameters.");
     const contact = typeof params.client === "string" ? participants.get(params.client) : undefined;
     if (contact) contact.seen = Date.now();
@@ -525,10 +650,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     }
     if (method === "update") {
       validateFacts(params.facts);
-      const peer = requireParticipant(params.facts.id);
+      const peer = requireParticipant(params.facts.id, true);
       const old = peer.facts;
       if (old.pid !== params.facts.pid || old.generation !== params.facts.generation)
         throw new Error("Client generation mismatch.");
+      if (contactState(peer) === "expired") throw new ClientContactExpiredError();
+      requireParticipant(params.facts.id);
       peer.facts = structuredClone(params.facts);
       const published = peer.facts;
       try {
@@ -538,7 +665,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         throw error;
       }
       await hooks.factsChanged?.();
-      return poll(peer, 0);
+      assertOwner();
+      if (participants.get(params.facts.id) !== peer) throw new Error("Client changed during update.");
+      const reply = poll(peer, 0);
+      if (reply.contact === "expired") throw new ClientContactExpiredError();
+      if (reply.contact !== "active") throw new Error("Client is not attached or is closing.");
+      return reply;
     }
     if (["detach", "pause", "handoff"].includes(method)) {
       if (!validId(params.client)) throw new Error("Invalid client.");
@@ -611,6 +743,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       return job.view;
     }
     if (method === "stop") {
+      stopRequested = true;
       setImmediate(() => {
         void close().catch(() => {});
       });
@@ -649,12 +782,13 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         respond(response, 403, { error: { name: "Error", message: "Invalid daemon identity or protocol." } });
         return;
       }
-      if (body.method === "attach") {
+      if (body.method === "attach" || body.method === "resume-contact") {
         admissionController = new AbortController();
         response.once("close", disconnect);
+        if (response.destroyed) disconnect();
       }
       const operation = handle(body.method, body.params, admissionController?.signal);
-      if (["attach", "update", "detach", "pause", "handoff"].includes(body.method)) {
+      if (["attach", "resume-contact", "update", "detach", "pause", "handoff"].includes(body.method)) {
         peerOperations.add(operation);
         void operation.finally(() => peerOperations.delete(operation)).catch(() => {});
       }
@@ -698,6 +832,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       if (!exited && (!peer.connected || Date.now() - peer.seen <= 5_000)) continue;
       peer.connected = false;
       peer.suspected = !exited;
+      if (exited) invalidateExpiry(peer);
+      else if (!peer.closing && !peer.publishing) peer.expiry = new AbortController();
       changed = true;
       for (const job of [...jobs.values(), ...backgroundJobs])
         if (!job.committed && (job.client === id || job.peers.has(id)))
@@ -775,6 +911,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (closing) return closing;
     closing = (async () => {
       closed = true;
+      for (const peer of participants.values()) invalidateExpiry(peer);
       clearInterval(heartbeat);
       for (const waiting of [...pending.values()])
         if (!waiting.callback.kind.startsWith("queue-")) waiting.reject(new Error("Daemon stopping."));

@@ -23,6 +23,10 @@ export interface RpcFixture {
 export async function createRpcFixture(
   context: { signal: AbortSignal; onTestFinished(cleanup: () => Promise<void>): void },
   extension = path.resolve("packages/pi-sync/src/index.ts"),
+  startOwner: (agent: string) => Promise<() => Promise<unknown>> = async (agent) => {
+    await ensureDaemon(agent);
+    return () => stopDaemon(agent);
+  },
 ): Promise<RpcFixture> {
   context.signal.throwIfAborted();
   let root: string | undefined;
@@ -31,8 +35,8 @@ export async function createRpcFixture(
   let closing = false;
   let storageStarted = false;
   let daemonAttempted = false;
-  let daemonReady = false;
-  let daemonStartup: Promise<unknown> | undefined;
+  let stopOwner: (() => Promise<unknown>) | undefined;
+  let daemonStartup: Promise<void> | undefined;
   let disposal: Promise<void> | undefined;
   const clients: SyncRpc[] = [];
   const preparations = new Set<Promise<unknown>>();
@@ -68,9 +72,9 @@ export async function createRpcFixture(
       const closed = await Promise.allSettled(clients.map((client) => client.dispose()));
       for (const result of closed) if (result.status === "rejected") failures.push(result.reason);
       let stopped = !daemonAttempted;
-      if (daemonReady) {
+      if (stopOwner) {
         try {
-          await stopDaemon(agent);
+          await stopOwner();
           assert.equal(await findDaemon(agent), undefined);
           stopped = true;
         } catch (error) {
@@ -180,8 +184,8 @@ export async function createRpcFixture(
     return prepare(async () => {
       // Own startup before either adoption or a Pi child can create a detached owner.
       daemonAttempted = true;
-      daemonStartup ??= ensureDaemon(agent).then(() => {
-        daemonReady = true;
+      daemonStartup ??= startOwner(agent).then((stop) => {
+        stopOwner = stop;
       });
       await daemonStartup;
       if (closing) throw new Error("Pi RPC fixture is closing.");
