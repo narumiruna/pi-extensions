@@ -357,7 +357,7 @@ test("browser settings cancellation and invalid files remain read-only", async (
     const invalid = showChromeDevtoolsBrowserSettings(createMockPi().pi, ctx, generation);
     await tui.waitForOpen();
     assert.match(tui.render().join("\n"), /Read only/);
-    assert.match(tui.render().join("\n"), /invalid JSON/);
+    assert.match(tui.render().join("\n"), /invalid\s+JSON/u);
     tui.press("tui.select.cancel");
     await invalid;
     assert.equal(readFileSync(settingsFilePath(), "utf8"), "{ invalid\n");
@@ -380,7 +380,7 @@ test("an invalid trusted project file warns without blocking user browser settin
     await tui.waitForOpen();
     const rendered = tui.render().join("\n");
     assert.match(rendered, /DevTools endpoint/);
-    assert.match(rendered, /invalid JSON/);
+    assert.match(rendered, /invalid\s+JSON/u);
     assert.doesNotMatch(rendered, /Read only/);
 
     tui.press("tui.select.confirm");
