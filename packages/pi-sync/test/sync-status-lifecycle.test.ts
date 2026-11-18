@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import { createEventBus, type EventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { createSyncStatusPublisher, setSyncStatus } from "../src/ui/sync-status.js";
+import {
+  configureSyncStatus,
+  createSyncStatusPublisher,
+  setSyncStatus,
+  showSyncConnectionStatus,
+} from "../src/ui/sync-status.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
@@ -55,6 +60,42 @@ test("initial and reload snapshots work in either load order without replaying a
   } finally {
     reloadedRelease();
     late.stop();
+  }
+});
+
+test.each(["tui", "rpc"] as const)("connection status respects work and session ownership in %s", (mode) => {
+  const bus = createEventBus();
+  const mock = createMockContext({ mode });
+  const publisher = createSyncStatusPublisher(bus);
+  const observed = capture(bus);
+  const release = publisher.start(mock.ctx);
+  try {
+    const retry = showSyncConnectionStatus(mock.ctx, "sync reconnecting", { activity: "retry", reason: "temp" });
+    assert.equal(mock.statuses.get("sync"), "sync reconnecting");
+    assert.equal(observed.snapshot(mock.ctx)[0]?.activity, "retry");
+    setSyncStatus(mock.ctx, "sync resolving", { activity: "review" });
+    const blocked = showSyncConnectionStatus(mock.ctx, "sync reconnect blocked", {
+      activity: "blocked",
+      reason: "repair",
+    });
+    retry();
+    assert.equal(mock.statuses.get("sync"), "sync resolving");
+    setSyncStatus(mock.ctx, undefined);
+    assert.equal(mock.statuses.get("sync"), "sync reconnect blocked");
+    blocked();
+    assert.equal(mock.statuses.get("sync"), undefined);
+    const late = showSyncConnectionStatus(mock.ctx, "sync reconnecting", { activity: "retry", reason: "temp" });
+    const current = publisher.start(mock.ctx);
+    setSyncStatus(mock.ctx, "sync pulling", { activity: "pulling" });
+    late();
+    assert.equal(mock.statuses.get("sync"), "sync pulling");
+    configureSyncStatus(mock.ctx, false);
+    showSyncConnectionStatus(mock.ctx, "sync reconnecting", { activity: "retry", reason: "temp" });
+    assert.equal(mock.statuses.get("sync"), undefined);
+    current();
+  } finally {
+    release();
+    observed.stop();
   }
 });
 

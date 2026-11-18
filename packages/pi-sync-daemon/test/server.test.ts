@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { test, vi } from "vitest";
-import { DaemonConnection, requestDaemon } from "../src/client.js";
+import { DaemonConnection, DaemonError, requestDaemon } from "../src/client.js";
 import { daemonPaths, privateDirectory, readIdentity, runtimePaths } from "../src/identity.js";
-import { type ClientFacts, type Execute, type JobView, operationPrefix } from "../src/protocol.js";
+import { type ClientFacts, type Execute, type JobView, operationPrefix, type PollReply } from "../src/protocol.js";
 import { startServer } from "../src/server.js";
 
 function facts(root: string): ClientFacts {
@@ -39,6 +39,25 @@ async function terminal(server: Awaited<ReturnType<typeof startServer>>, client:
     if (value.job.phase === "done" || value.job.phase === "failed") return value.job;
     await setImmediate();
   }
+}
+
+type Server = Awaited<ReturnType<typeof startServer>>;
+
+async function expireContact(server: Server) {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+  try {
+    await server.expireClients();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
+function poll(server: Server, client: string, job?: string) {
+  return requestDaemon(server.paths, server.identity, "poll", { client, job }) as Promise<PollReply>;
+}
+
+function expiredError(error: unknown) {
+  return error instanceof DaemonError && error.remote.name === "ClientContactExpiredError";
 }
 
 test("root-bound local handshake rejects a second live daemon and authenticates calls", () =>
@@ -188,12 +207,19 @@ test("restarted service protects an ambiguously disconnected live client", () =>
   fixture(async (root) => {
     const peer = facts(root);
     const first = await startServer(root, async () => null);
-    await requestDaemon(first.paths, first.identity, "attach", peer);
-    await first.close();
+    try {
+      await requestDaemon(first.paths, first.identity, "attach", peer);
+      await expireContact(first);
+      assert.equal((await poll(first, peer.id)).contact, "expired");
+    } finally {
+      await first.close();
+    }
     const second = await startServer(root, async () => null);
     try {
       assert.equal(second.participants()[0]?.sessionFile, peer.sessionFile);
       assert.equal(second.participants()[0]?.idle, false);
+      assert.equal((await poll(second, peer.id)).contact, "inactive");
+      await assert.rejects(requestDaemon(second.paths, second.identity, "resume-contact", peer), /not eligible/u);
       await requestDaemon(second.paths, second.identity, "attach", peer);
       assert.equal(second.participants()[0]?.idle, true);
       await requestDaemon(second.paths, second.identity, "detach", { client: peer.id });
@@ -300,23 +326,273 @@ test("expired contact cancels work but never treats a live client session as saf
       await requestDaemon(server.paths, server.identity, "attach", peer);
       await requestDaemon(server.paths, server.identity, "submit", { id, client: peer.id, operation: "wait" });
       await ready;
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 6_000);
-      try {
-        await server.expireClients();
-      } finally {
-        clock.mockRestore();
-      }
-      assert.equal((await terminal(server, peer.id, id)).phase, "failed");
+      await expireContact(server);
+      const interrupted = await terminal(server, peer.id, id);
+      assert.equal(interrupted.phase, "failed");
+      assert.equal((await poll(server, peer.id)).contact, "expired");
       assert.equal(server.participants()[0]?.sessionFile, peer.sessionFile);
       assert.equal(server.participants()[0]?.idle, false);
-      await assert.rejects(requestDaemon(server.paths, server.identity, "update", { facts: peer }), /not attached/u);
-      await requestDaemon(server.paths, server.identity, "attach", peer);
-      assert.equal(server.participants()[0]?.idle, true);
+      await assert.rejects(requestDaemon(server.paths, server.identity, "update", { facts: peer }), expiredError);
+      for (const mismatch of [
+        { id: randomUUID() },
+        { generation: randomUUID() },
+        { pid: peer.pid + 1 },
+        { cwd: path.dirname(root) },
+        { sessionId: randomUUID() },
+        { sessionFile: path.join(root, "other.jsonl") },
+        { sessionDir: path.join(root, "other") },
+      ]) {
+        await assert.rejects(requestDaemon(server.paths, server.identity, "resume-contact", { ...peer, ...mismatch }));
+        assert.equal((await poll(server, peer.id)).contact, "expired");
+      }
+      await assert.rejects(
+        requestDaemon(server.paths, server.identity, "update", { facts: { ...peer, generation: randomUUID() } }),
+        /generation mismatch/u,
+      );
+      const resumed = (await requestDaemon(server.paths, server.identity, "resume-contact", {
+        ...peer,
+        ready: true,
+      })) as PollReply;
+      assert.equal(resumed.contact, "active");
+      assert.deepEqual(server.participants(), [{ ...peer, ready: true }]);
+      assert.deepEqual((await poll(server, peer.id, id)).job, interrupted);
+      await assert.rejects(requestDaemon(server.paths, server.identity, "resume-contact", peer), /not eligible/u);
+      await requestDaemon(server.paths, server.identity, "update", { facts: { ...peer, idle: false } });
+      assert.equal(server.participants()[0]?.idle, false);
     } finally {
       await server.close();
     }
   }));
+
+test("a poll that beats the heartbeat sweep renews active contact without a resume", () =>
+  fixture(async (root) => {
+    const server = await startServer(root, async () => null);
+    const peer = facts(root);
+    try {
+      await requestDaemon(server.paths, server.identity, "attach", peer);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+      try {
+        assert.equal((await poll(server, peer.id)).contact, "active");
+        await server.expireClients();
+        assert.equal((await poll(server, peer.id)).contact, "active");
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      await server.close();
+    }
+  }));
+
+for (const method of ["pause", "handoff", "detach"] as const)
+  test(`${method} ends expiry eligibility without removing live session protection`, () =>
+    fixture(async (root) => {
+      const server = await startServer(root, async () => null);
+      const peer = facts(root);
+      try {
+        await requestDaemon(server.paths, server.identity, "attach", peer);
+        await expireContact(server);
+        const cleanup = (await requestDaemon(server.paths, server.identity, method, {
+          client: peer.id,
+          generation: peer.generation,
+          pid: peer.pid,
+          handoff: { kind: "replace", file: peer.sessionFile },
+        })) as PollReply;
+        assert.equal(cleanup.contact, "inactive");
+        assert.equal((await poll(server, peer.id)).contact, "inactive");
+        await assert.rejects(requestDaemon(server.paths, server.identity, "resume-contact", peer), /not eligible/u);
+        await assert.rejects(requestDaemon(server.paths, server.identity, "update", { facts: peer }), /not attached/u);
+        assert.equal(server.liveClients()[0]?.sessionFile, peer.sessionFile);
+      } finally {
+        await server.close();
+      }
+    }));
+
+for (const failCommit of [false, true])
+  test(`expiry cancels queued work and fences ${failCommit ? "uncertain" : "settled"} committed work`, () =>
+    fixture(async (root) => {
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const observedResume = Promise.withResolvers<void>();
+      let watching = false;
+      const executions: string[] = [];
+      const server = await startServer(
+        root,
+        async (operation, _payload, execution) => {
+          executions.push(operation);
+          if (operation !== "first") return "new result";
+          execution.committed();
+          entered.resolve();
+          await finish.promise;
+          assert.equal(execution.signal.aborted, false);
+          if (failCommit) throw new Error("Retained journal after commit failure");
+          return "existing result";
+        },
+        {
+          factsChanged: async () => {
+            if (watching) observedResume.resolve();
+          },
+        },
+      );
+      const peer = { ...facts(root), ready: true };
+      const request = (method: string, params: unknown) => requestDaemon(server.paths, server.identity, method, params);
+      const first = `${operationPrefix(server.identity)}${randomUUID()}`;
+      const queued = `${operationPrefix(server.identity)}${randomUUID()}`;
+      let resuming: Promise<unknown> | undefined;
+      try {
+        await request("attach", peer);
+        await request("submit", { client: peer.id, id: first, operation: "first" });
+        await entered.promise;
+        await request("submit", { client: peer.id, id: queued, operation: "queued" });
+        await expireContact(server);
+        watching = true;
+        resuming = request("resume-contact", peer);
+        void resuming.catch(() => {});
+        await observedResume.promise;
+        const interrupted = await poll(server, peer.id, first);
+        assert.equal(interrupted.contact, "expired");
+        assert.equal(interrupted.job?.phase, "running");
+        assert.equal(interrupted.events.filter(({ kind }) => kind === "commit").length, 1);
+        assert.equal(server.participants()[0]?.idle, false);
+        assert.equal(server.participants()[0]?.ready, false);
+        assert.equal((await poll(server, peer.id, queued)).job?.phase, "queued");
+        finish.resolve();
+        if (failCommit) {
+          await assert.rejects(resuming, /cleanup is uncertain/u);
+          assert.equal((await poll(server, peer.id)).contact, "expired");
+          assert.equal((await terminal(server, peer.id, first)).phase, "failed");
+        } else {
+          assert.equal(((await resuming) as PollReply).contact, "active");
+          assert.equal((await terminal(server, peer.id, first)).result, "existing result");
+          const next = `${operationPrefix(server.identity)}${randomUUID()}`;
+          await request("submit", { client: peer.id, id: next, operation: "next" });
+          assert.equal((await terminal(server, peer.id, next)).result, "new result");
+        }
+        assert.equal((await terminal(server, peer.id, queued)).error?.message, "Client contact expired");
+        assert.deepEqual(executions, failCommit ? ["first"] : ["first", "next"]);
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([resuming]);
+        await server.close();
+      }
+    }));
+
+for (const interrupted of ["expiry", "pause"] as const)
+  test(`an update interrupted by ${interrupted} cannot report active contact after waiting for monitoring`, () =>
+    fixture(async (root) => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let block = false;
+      const server = await startServer(root, async () => undefined, {
+        factsChanged: async () => {
+          if (!block) return;
+          block = false;
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      const peer = facts(root);
+      const request = (method: string, params: unknown) => requestDaemon(server.paths, server.identity, method, params);
+      let updating: Promise<unknown> | undefined;
+      try {
+        await request("attach", peer);
+        block = true;
+        updating = request("update", { facts: peer });
+        void updating.catch(() => {});
+        await entered.promise;
+        if (interrupted === "expiry") await expireContact(server);
+        else await request("pause", { client: peer.id });
+        release.resolve();
+        if (interrupted === "expiry") await assert.rejects(updating, expiredError);
+        else await assert.rejects(updating, /not attached/u);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([updating]);
+        await server.close();
+      }
+    }));
+
+test("contact resume checks changed consent binding before publishing and does not activate on monitor failure", () =>
+  fixture(async (root) => {
+    const peer = { ...facts(root), ready: true };
+    const current: ClientFacts = {
+      ...peer,
+      model: { provider: "fixture", id: "current", signature: "0".repeat(64), authSource: "stored" },
+    };
+    let check = false;
+    let fail = true;
+    const server = await startServer(root, async () => undefined, {
+      factsChanged: async () => {
+        if (!check) return;
+        assert.deepEqual(server.participants(), [{ ...current, ready: false, idle: false }]);
+        assert.deepEqual(server.liveClients(), [peer]);
+        if (fail) throw new Error("Consent persistence failed");
+      },
+    });
+    const request = (method: string, params: unknown) => requestDaemon(server.paths, server.identity, method, params);
+    try {
+      await request("attach", peer);
+      await expireContact(server);
+      check = true;
+      await assert.rejects(request("resume-contact", current), /Consent persistence failed/u);
+      assert.equal((await poll(server, peer.id)).contact, "expired");
+      assert.deepEqual(server.participants(), [{ ...peer, idle: false }]);
+      fail = false;
+      assert.equal(((await request("resume-contact", current)) as PollReply).contact, "active");
+      assert.deepEqual(server.participants(), [current]);
+    } finally {
+      await server.close();
+    }
+  }));
+
+for (const failure of ["persistence", "owner-root-change"] as const)
+  test(`contact resume does not publish after ${failure} at the peer ledger fence`, () =>
+    fixture(async (root) => {
+      const server = await startServer(root, async () => undefined);
+      const peer = { ...facts(root), ready: false };
+      const candidate = { ...peer, ready: true };
+      const request = (method: string, params: unknown) => requestDaemon(server.paths, server.identity, method, params);
+      const ledger = path.join(server.paths.directory, "clients.json");
+      const movedRoot = `${root}-moved`;
+      const rename = fs.rename;
+      let failed = false;
+      let moved = false;
+      let restoreRename: (() => void) | undefined;
+      try {
+        await request("attach", peer);
+        await expireContact(server);
+        const previous = await fs.readFile(ledger, "utf8");
+        const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (to === ledger && !failed) {
+            failed = true;
+            if (failure === "persistence") throw new Error("Peer persistence failed");
+            await rename(root, movedRoot);
+            moved = true;
+            await fs.mkdir(root);
+          }
+          await rename(from, to);
+        });
+        restoreRename = () => spy.mockRestore();
+        await assert.rejects(
+          request("resume-contact", candidate),
+          failure === "persistence" ? /Peer persistence failed/u : /Canonical agent root changed/u,
+        );
+        assert.equal(failed, true);
+        assert.equal((await poll(server, peer.id)).contact, "expired");
+        assert.deepEqual(server.liveClients(), [peer]);
+        if (failure === "persistence") {
+          assert.equal(await fs.readFile(ledger, "utf8"), previous);
+          await assert.rejects(request("resume-contact", candidate), /ledger persistence is uncertain/u);
+          assert.equal((await poll(server, peer.id)).contact, "expired");
+        }
+      } finally {
+        restoreRename?.();
+        if (moved) {
+          await fs.rmdir(root);
+          await rename(movedRoot, root);
+        }
+        await server.close();
+      }
+    }));
 
 test("evicted results and old-instance operation IDs cannot dispatch another commit", () =>
   fixture(async (root) => {

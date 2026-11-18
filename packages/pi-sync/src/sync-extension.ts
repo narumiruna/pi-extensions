@@ -52,8 +52,11 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
         const command = splitArgs(args)[0];
         const ready = await initialization;
         if (signal.aborted || owner !== client) return;
-        await client.setBusy("command", true);
+        const requiresContact = !["help", "unlock", "migrate-state"].includes(command ?? "");
+        let busyPublished = false;
         try {
+          await client.setBusy("command", true, requiresContact);
+          busyPublished = requiresContact;
           await check.stop();
           if (signal.aborted || owner !== client) return;
           if (
@@ -84,7 +87,10 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
             if (command === "unlock" || command === "migrate-state") throw error;
           }
         } finally {
-          if (!signal.aborted && owner === client) await client.setBusy("command", false);
+          if (!signal.aborted && owner === client) {
+            // Release local busy state even if contact failed; do not mask the command result.
+            await client.setBusy("command", false, busyPublished).catch(() => {});
+          }
         }
       });
     },

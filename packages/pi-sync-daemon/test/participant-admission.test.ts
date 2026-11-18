@@ -12,7 +12,7 @@ import { engineHost } from "../src/engine/host.js";
 import { runtimePaths } from "../src/identity.js";
 import { withCleanup } from "../src/lifecycle.js";
 import { ParticipantAdmission } from "../src/participant-admission.js";
-import type { ClientFacts } from "../src/protocol.js";
+import type { ClientFacts, PollReply } from "../src/protocol.js";
 import { startServer } from "../src/server.js";
 import { installServiceHost } from "../src/service-host.js";
 
@@ -51,6 +51,146 @@ function observeAdmission() {
   });
   return { entered: entered.promise, restore: () => spy.mockRestore() };
 }
+
+async function expireContact(server: Awaited<ReturnType<typeof startServer>>) {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+  try {
+    await server.expireClients();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
+for (const releaseFails of [false, true])
+  test(`expired contact waits for ${releaseFails ? "failed" : "acknowledged"} reservation cleanup`, () =>
+    fixture(async (root) => {
+      const server = await startServer(root, async () => undefined);
+      const owner = new AbortController();
+      const granted = Promise.withResolvers<void>();
+      const releaseQueued = Promise.withResolvers<void>();
+      const reservation = randomUUID();
+      const peer = { ...facts(root), ready: true };
+      const call = (method: string, params: unknown) => requestDaemon(server.paths, server.identity, method, params);
+      const poll = () => call("poll", { client: peer.id }) as Promise<PollReply>;
+      let reservationWork: Promise<void> | undefined;
+      let resuming: Promise<unknown> | undefined;
+      let observer: ReturnType<typeof observeAdmission> | undefined;
+      try {
+        await call("attach", peer);
+        const execution = server.backgroundExecution(owner.signal);
+        reservationWork = execution.withParticipants(async () => {
+          try {
+            await execution.request("queue-acquire", { reservation }, peer.id);
+            granted.resolve();
+            await once(execution.signal, "abort");
+          } finally {
+            const release = execution.request("queue-release", { reservation }, peer.id);
+            releaseQueued.resolve();
+            await release;
+          }
+        });
+        void reservationWork.catch(() => {});
+        let acquire: PollReply["callbacks"][number] | undefined;
+        while (!acquire) acquire = (await poll()).callbacks.find(({ kind }) => kind === "queue-acquire");
+        await call("answer", { client: peer.id, id: acquire.id, value: true });
+        await granted.promise;
+        await expireContact(server);
+        await releaseQueued.promise;
+        observer = observeAdmission();
+        resuming = call("resume-contact", peer);
+        void resuming.catch(() => {});
+        await observer.entered;
+        observer.restore();
+        const pendingRelease = await poll();
+        assert.equal(pendingRelease.contact, "expired");
+        assert.equal(server.participants()[0]?.ready, false);
+        const release = pendingRelease.callbacks.find(({ kind }) => kind === "queue-release");
+        assert.ok(release);
+        assert.equal(release.job, acquire.job);
+        assert.deepEqual(release.payload, { reservation });
+        assert.equal((await poll()).callbacks[0]?.id, release.id);
+        await call("answer", {
+          client: peer.id,
+          id: release.id,
+          ...(releaseFails ? { error: "Pi could not confirm release" } : { value: true }),
+        });
+        if (releaseFails) {
+          await assert.rejects(reservationWork, /could not confirm/u);
+          await assert.rejects(resuming, /cleanup is uncertain/u);
+          assert.equal((await poll()).contact, "expired");
+          assert.equal(server.participants()[0]?.idle, false);
+        } else {
+          await reservationWork;
+          assert.equal(((await resuming) as PollReply).contact, "active");
+          assert.deepEqual((await poll()).callbacks, []);
+          assert.equal(server.participants()[0]?.ready, true);
+        }
+      } finally {
+        observer?.restore();
+        owner.abort();
+        for (const callback of (await poll()).callbacks)
+          if (callback.kind === "queue-release")
+            await call("answer", { client: peer.id, id: callback.id, value: true });
+        await Promise.allSettled([reservationWork, resuming]);
+        await server.close();
+      }
+    }));
+
+for (const cancellation of ["disconnect", "pause", "handoff", "stop"] as const)
+  test(`a queued contact resume cancelled by ${cancellation} cannot publish after the fence`, () =>
+    fixture(async (root) => {
+      const server = await startServer(root, async () => undefined);
+      const peer = { ...facts(root), ready: true };
+      const call = (method: string, params: unknown, signal?: AbortSignal) =>
+        requestDaemon(server.paths, server.identity, method, params, signal);
+      const owner = new AbortController();
+      const request = new AbortController();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let observer: ReturnType<typeof observeAdmission> | undefined;
+      let held: Promise<void> | undefined;
+      let resuming: Promise<unknown> | undefined;
+      try {
+        await call("attach", peer);
+        await expireContact(server);
+        held = server.backgroundExecution(owner.signal).withParticipants(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
+        observer = observeAdmission();
+        resuming = call("resume-contact", peer, request.signal);
+        void resuming.catch(() => {});
+        const signal = await observer.entered;
+        assert.ok(signal);
+        observer.restore();
+        const aborted = once(signal, "abort");
+        if (cancellation === "disconnect") request.abort();
+        else await call(cancellation, { client: peer.id, handoff: { kind: "replace", cwd: root } });
+        await assert.rejects(resuming);
+        await aborted;
+        assert.equal(server.participants()[0]?.idle, false);
+        release.resolve();
+        await held;
+        if (cancellation === "disconnect") {
+          assert.equal(((await call("poll", { client: peer.id })) as PollReply).contact, "expired");
+          assert.equal(((await call("resume-contact", peer)) as PollReply).contact, "active");
+        } else if (cancellation !== "stop") {
+          assert.equal(((await call("poll", { client: peer.id })) as PollReply).contact, "inactive");
+          await assert.rejects(call("resume-contact", peer), /not eligible/u);
+        } else {
+          await server.close();
+          assert.equal(server.participants()[0]?.idle, false);
+        }
+      } finally {
+        observer?.restore();
+        request.abort();
+        owner.abort();
+        release.resolve();
+        await Promise.allSettled([held, resuming]);
+        await server.close();
+      }
+    }));
 
 for (const mode of ["print", "json", "rpc"] as const)
   for (const phase of ["grant", "apply", "release"] as const)

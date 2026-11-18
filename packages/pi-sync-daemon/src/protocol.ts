@@ -11,6 +11,13 @@ export class DaemonStoppingError extends Error {
     super("Daemon is closing after its idle grace period; wait for owner exit before reconnecting.");
   }
 }
+/** This owner expired this client's heartbeat; a normal facts update cannot restore participation. */
+export class ClientContactExpiredError extends Error {
+  override name = "ClientContactExpiredError";
+  constructor() {
+    super("Client contact expired; resume the same session before publishing facts.");
+  }
+}
 export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 export const REVIEW_PAGE_CHARS = 64 * 1024;
 export const MAX_REVIEW_BYTES = 16 * 1024 * 1024;
@@ -90,6 +97,15 @@ export interface JobView {
   phase: "queued" | "running" | "done" | "failed";
   result?: unknown;
   error?: RemoteError;
+}
+export type ClientContact = "active" | "expired" | "inactive";
+export interface PollReply {
+  cursor: number;
+  callbacks: Callback[];
+  events: ClientEvent[];
+  job?: JobView;
+  /** Absent on owners without protocol-v1 contact resume support. */
+  contact?: ClientContact;
 }
 export interface Execution {
   readonly root: string;

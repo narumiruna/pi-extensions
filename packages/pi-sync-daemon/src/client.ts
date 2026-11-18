@@ -19,6 +19,7 @@ import {
   type ClientEvent,
   type ClientFacts,
   type ClientHandoff,
+  type ClientContact as ContactState,
   type Identity,
   type JobView,
   MAX_MESSAGE_BYTES,
@@ -76,9 +77,11 @@ export async function requestDaemon(
           .catch(reject);
       },
     );
-    // Attach can wait behind a complete apply. Its connection-owned signal/dispose
-    // cancels that wait; an idle timeout must not let startup escape the admission fence.
-    request.setTimeout(method === "attach" ? 0 : 30_000, () => request.destroy(new Error("Daemon request timed out.")));
+    // Admission can wait behind a complete apply. The request owner's signal
+    // cancels that wait; an idle timeout must not let admission escape the fence.
+    request.setTimeout(method === "attach" || method === "resume-contact" ? 0 : 30_000, () =>
+      request.destroy(new Error("Daemon request timed out.")),
+    );
     request.once("error", reject);
     request.end(body);
   });
@@ -244,6 +247,8 @@ export interface ConnectionOptions {
   callback(callback: Callback, signal: AbortSignal): Promise<unknown>;
   event?(event: ClientEvent): void;
   error?(error: unknown): void;
+  /** Each current background observation after admission, including repeated states. */
+  contact?(state: ContactState): void;
 }
 export class DaemonConnection {
   private cursor = 0;
@@ -253,10 +258,18 @@ export class DaemonConnection {
   private callbackTasks = new Set<Promise<void>>();
   private updates = Promise.resolve();
   private attached = false;
+  private admitting = false;
+  private observedContact: ContactState | undefined;
+  private contactRevision = 0;
+  private lifecycleRevision = 0;
+  private resuming: AbortController | undefined;
+  private resumeUncertain = false;
+  private pendingJobs = 0;
   private uncertain = false;
   private reportedError = false;
   private commits = new Map<string, { notify(): void; signal?: AbortSignal }>();
   private completedCallbacks = new Set<string>();
+  private pausing: Promise<void> | undefined;
   private disposing: Promise<void> | undefined;
   private polling: Promise<void> | undefined;
   private closed = false;
@@ -266,8 +279,31 @@ export class DaemonConnection {
     readonly facts: ClientFacts,
     private readonly options: ConnectionOptions,
   ) {}
+  /** Latest owner observation, or undefined if contact is unsupported or not observed. */
+  get contactState(): ContactState | undefined {
+    return this.observedContact;
+  }
+  /** An uncertain attempt must not be retried or turned into a new attach. */
+  get contactResumeState(): "idle" | "running" | "uncertain" {
+    return this.resumeUncertain ? "uncertain" : this.resuming ? "running" : "idle";
+  }
+  /** Original submitted jobs must finish (or be reconciled) before repairing contact. */
+  get hasPendingWork(): boolean {
+    return this.pendingJobs > 0 || this.uncertain;
+  }
   async attach(signal?: AbortSignal) {
-    if (this.closed || this.uncertain) throw new Error("Daemon client is unavailable; reconnect after draining work.");
+    if (
+      this.closed ||
+      this.hasPendingWork ||
+      this.contactResumeState !== "idle" ||
+      this.admitting ||
+      this.pausing ||
+      this.disposing
+    )
+      throw new Error("Daemon client is unavailable; reconnect after draining work.");
+    this.admitting = true;
+    this.lifecycleRevision++;
+    this.contactRevision++;
     const request = requestDaemon(
       this.paths,
       this.identity,
@@ -282,7 +318,7 @@ export class DaemonConnection {
     try {
       const result = await request;
       admitted = true;
-      this.consume(result);
+      this.publishContact(this.consume(result));
       this.attached = true;
       return this;
     } catch (error) {
@@ -313,23 +349,105 @@ export class DaemonConnection {
           }
         },
       );
+    } finally {
+      this.admitting = false;
     }
   }
-  update(facts: ClientFacts) {
+  async update(facts: ClientFacts) {
+    const lifecycle = this.lifecycleRevision;
+    if (this.admitting || this.pausing || this.disposing)
+      throw new Error("Daemon client is changing; wait before updating facts.");
     const update = this.updates.then(async () => {
-      if (this.closed || this.uncertain)
+      if (this.closed || this.uncertain || this.resumeUncertain || lifecycle !== this.lifecycleRevision)
         throw new Error("Daemon client is unavailable; reconnect after draining work.");
-      const result = await requestDaemon(this.paths, this.identity, "update", { facts }, this.controller.signal);
+      const revision = this.contactRevision;
+      let result: unknown;
+      try {
+        result = await requestDaemon(this.paths, this.identity, "update", { facts }, this.controller.signal);
+      } catch (error) {
+        if (
+          this.attached &&
+          revision === this.contactRevision &&
+          this.sameClient(facts) &&
+          error instanceof DaemonError &&
+          error.remote.name === "ClientContactExpiredError"
+        )
+          this.publishContact("expired");
+        throw error;
+      }
       if (this.closed) throw new Error("Daemon client closed during update.");
+      if (revision !== this.contactRevision) throw new Error("Daemon client changed during update.");
+      const contact = this.consume(result);
+      if (revision !== this.contactRevision) throw new Error("Daemon client changed during update.");
       Object.assign(this.facts, facts);
-      this.consume(result);
+      this.publishContact(contact);
     });
     this.updates = update.catch(() => {});
     return update;
   }
-  async run(operation: string, payload: unknown, signal?: AbortSignal, onCommit?: () => void): Promise<unknown> {
-    if (this.closed || this.uncertain) throw new Error("Daemon client is unavailable; reconnect after draining work.");
+  /** Resume this participant without replacing its callbacks, jobs, or polling. */
+  async resumeContact(facts: ClientFacts, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
+    if (this.contactResumeState !== "idle") throw new Error("Daemon contact resume is running or uncertain.");
+    const check = () => {
+      if (!this.attached || this.admitting || this.pausing || this.disposing || this.closed || this.hasPendingWork)
+        throw new Error("Daemon client is unavailable; reconnect after draining work.");
+      if (!this.sameClient(facts) || this.contactState !== "expired")
+        throw new Error("No confirmed contact expiry for this daemon client.");
+    };
+    facts = structuredClone(facts);
+    check();
+    const resume = new AbortController();
+    this.resuming = resume;
+    const ownedSignal = signal ? AbortSignal.any([signal, resume.signal]) : resume.signal;
+    let sent = false;
+    const attempt = this.updates.then(async () => {
+      ownedSignal.throwIfAborted();
+      check();
+      sent = true;
+      const reply = await requestDaemon(this.paths, this.identity, "resume-contact", facts, ownedSignal);
+      ownedSignal.throwIfAborted();
+      const contact = this.consume(reply);
+      ownedSignal.throwIfAborted();
+      if (contact !== "active") throw new Error("Daemon did not confirm resumed contact.");
+      Object.assign(this.facts, facts);
+      this.publishContact(contact);
+    });
+    this.updates = attempt.catch(() => {});
+    // Reject a queued repair on cancellation even if the earlier update has not finished.
+    const cancellation = Promise.withResolvers<never>();
+    const abort = () => cancellation.reject(ownedSignal.reason);
+    ownedSignal.addEventListener("abort", abort, { once: true });
+    try {
+      await Promise.race([attempt, cancellation.promise]);
+    } catch (error) {
+      if (sent) {
+        // The protocol does not distinguish definite pre-publication refusal from a lost acknowledgement.
+        this.resumeUncertain = true;
+        for (const { controller, kind } of this.callbacks.values()) if (kind !== "queue-release") controller.abort();
+      }
+      throw error;
+    } finally {
+      this.resuming = undefined;
+      ownedSignal.removeEventListener("abort", abort);
+    }
+  }
+  private sameClient(facts: ClientFacts) {
+    return facts.id === this.facts.id && facts.pid === this.facts.pid && facts.generation === this.facts.generation;
+  }
+  async run(operation: string, payload: unknown, signal?: AbortSignal, onCommit?: () => void): Promise<unknown> {
+    if (
+      this.closed ||
+      this.uncertain ||
+      this.contactResumeState !== "idle" ||
+      this.pausing ||
+      this.disposing ||
+      this.contactState === "expired" ||
+      this.contactState === "inactive"
+    )
+      throw new Error("Daemon client is unavailable; confirm contact and drain work before submitting.");
+    signal?.throwIfAborted();
+    this.pendingJobs++;
     const id = `${operationPrefix(this.identity)}${randomUUID()}`;
     const abort = () => {
       void requestDaemon(
@@ -363,11 +481,11 @@ export class DaemonConnection {
           );
           this.consume(reply);
           const job = record(reply) ? (reply.job as JobView | undefined) : undefined;
-          if (job?.phase === "failed") {
+          if (job?.id === id && job.phase === "failed") {
             terminal = true;
             throw new DaemonError(job.error ?? { name: "Error", message: "Daemon operation failed." });
           }
-          if (job?.phase === "done") {
+          if (job?.id === id && job.phase === "done") {
             terminal = true;
             signal?.throwIfAborted();
             return job.result;
@@ -395,9 +513,13 @@ export class DaemonConnection {
           }
         }
       },
-    );
+    ).finally(() => this.pendingJobs--);
   }
-  private consume(reply: unknown) {
+  private publishContact(contact: ContactState | undefined) {
+    this.contactRevision++;
+    this.observedContact = contact;
+  }
+  private consume(reply: unknown): ContactState | undefined {
     if (
       !record(reply) ||
       typeof reply.cursor !== "number" ||
@@ -407,7 +529,10 @@ export class DaemonConnection {
       !Array.isArray(reply.events)
     )
       throw new Error("Invalid daemon poll response.");
-    if (reply.cursor < this.cursor) return;
+    const { contact } = reply;
+    if (contact !== undefined && contact !== "active" && contact !== "expired" && contact !== "inactive")
+      throw new Error("Invalid daemon contact state.");
+    if (reply.cursor < this.cursor) return contact;
     for (const event of reply.events as ClientEvent[])
       if (event.id > this.cursor) {
         if (event.kind === "commit" && record(event.payload) && typeof event.payload.job === "string") {
@@ -430,7 +555,7 @@ export class DaemonConnection {
         let value: unknown;
         let failed = false;
         try {
-          if (this.uncertain && callback.kind !== "queue-release")
+          if ((this.uncertain || this.resumeUncertain) && callback.kind !== "queue-release")
             throw new Error("Client is draining uncertain work.");
           value = await this.performCallback(callback, controller.signal);
         } catch {
@@ -458,6 +583,7 @@ export class DaemonConnection {
         });
       this.callbackTasks.add(task);
     }
+    return contact;
   }
   private async performCallback(callback: Callback, signal: AbortSignal) {
     const reference = callback.review;
@@ -535,6 +661,7 @@ export class DaemonConnection {
   private async poll() {
     while (!this.closed) {
       try {
+        const revision = this.contactRevision;
         const reply = await requestDaemon(
           this.paths,
           this.identity,
@@ -542,8 +669,22 @@ export class DaemonConnection {
           { client: this.facts.id, cursor: this.cursor },
           this.controller.signal,
         );
-        this.consume(reply);
-        this.reportedError = false;
+        // An older poll must not undo typed update expiry or a successful resume.
+        if (revision === this.contactRevision) {
+          const contact = this.consume(reply);
+          this.reportedError = false;
+          if (
+            revision === this.contactRevision &&
+            this.attached &&
+            !this.admitting &&
+            !this.pausing &&
+            !this.disposing &&
+            !this.closed
+          ) {
+            this.observedContact = contact;
+            if (contact !== undefined) this.options.contact?.(contact);
+          }
+        }
         await this.wait(100);
       } catch (error) {
         if (this.closed) return;
@@ -557,13 +698,26 @@ export class DaemonConnection {
     }
   }
   async pause() {
-    if (this.closed) throw new Error("Daemon client is closed.");
-    const reply = await requestDaemon(this.paths, this.identity, "pause", { client: this.facts.id });
-    this.consume(reply);
+    if (this.closed || this.disposing) throw new Error("Daemon client is closed.");
+    if (this.pausing) return this.pausing;
+    this.resuming?.abort(new DOMException("Client paused", "AbortError"));
+    this.lifecycleRevision++;
+    this.contactRevision++;
+    this.pausing = (async () => {
+      const reply = await requestDaemon(this.paths, this.identity, "pause", { client: this.facts.id });
+      const contact = this.consume(reply);
+      if (!this.disposing) this.publishContact(contact);
+    })().finally(() => {
+      this.pausing = undefined;
+    });
+    return this.pausing;
   }
   async dispose(handoff?: ClientHandoff) {
     if (this.disposing) return this.disposing;
     if (this.closed) return;
+    this.resuming?.abort(new DOMException("Client disposed", "AbortError"));
+    this.lifecycleRevision++;
+    this.contactRevision++;
     this.disposing = (async () => {
       this.polling ??= this.poll();
       // Cancel UI before drain, but keep polling for acknowledged queue-release callbacks.
