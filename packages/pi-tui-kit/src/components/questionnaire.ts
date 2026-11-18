@@ -467,7 +467,7 @@ export class QuestionnaireComponent<QuestionId extends string> implements Compon
       const answer = this.answers[index];
       const header = sanitizeQuestionnaireText(question.header) || `Question ${index + 1}`;
       const label = `${index + 1}. ${header}`;
-      const summary = ` — ${inlineSummary(answer?.answer ?? "Unanswered")}${
+      const summary = ` — ${reviewAnswer(question, answer)}${
         answer?.note ? ` · ${noteLabel}: ${inlineSummary(answer.note)}` : ""
       }`;
       const line = `${this.options.theme.fg("text", label)}${this.options.theme.fg("muted", summary)}`;
@@ -760,6 +760,19 @@ function formatHintKey(key: string): string {
 
 function inlineSummary(value: string): string {
   return value.split("\n").map(sanitizeQuestionnaireText).join(" ↵ ");
+}
+
+function reviewAnswer(question: QuestionnaireQuestion<string>, answer?: QuestionnaireAnswer<string>): string {
+  if (!answer) return "Unanswered";
+  const text = inlineSummary(answer.answer);
+  const optionIndex = answer.optionIndex;
+  if (answer.wasCustom || optionIndex === undefined) return text;
+
+  const label = text.trim();
+  const hasDuplicate = question.options.some(
+    (option, index) => index + 1 !== optionIndex && inlineSummary(option.label).trim() === label,
+  );
+  return hasDuplicate ? `Option ${optionIndex}: ${text}` : text;
 }
 
 function labeledRaw(label: string, value: string, width: number, theme: Theme): string[] {

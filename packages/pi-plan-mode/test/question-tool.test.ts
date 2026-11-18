@@ -38,7 +38,7 @@ const numberedQuestion: PlanModeQuestion = {
   question: "自動升版可以改到什麼程度？",
   options: [
     { label: "1. 同 major 升版", description: "Update compatible dependencies." },
-    { label: "2. 只改 lockfile", description: "Keep existing version constraints." },
+    { label: "\u001b[31m 2. 只改 lockfile", description: "Keep existing version constraints." },
     { label: "3. 允許跨 major", description: "Require a compatibility review." },
   ],
 };
@@ -171,7 +171,7 @@ test("TUI shows one number per choice and returns the original numbered label", 
       id: numberedQuestion.id,
       header: numberedQuestion.header,
       question: numberedQuestion.question,
-      answer: "2. 只改 lockfile",
+      answer: "\u001b[31m 2. 只改 lockfile",
       wasCustom: false,
       optionIndex: 2,
       note: "keep this note",
@@ -198,7 +198,7 @@ test("RPC shows one number per choice and returns the original numbered label", 
       id: numberedQuestion.id,
       header: numberedQuestion.header,
       question: numberedQuestion.question,
-      answer: "2. 只改 lockfile",
+      answer: "\u001b[31m 2. 只改 lockfile",
       wasCustom: false,
       optionIndex: 2,
     },
@@ -206,8 +206,36 @@ test("RPC shows one number per choice and returns the original numbered label", 
   assert.deepEqual(offeredChoices, numberedRows);
 });
 
+test.each([1, 2])("TUI review identifies option %i when labels match after prefix removal", async (optionIndex) => {
+  const scope: PlanModeQuestion = {
+    ...questions[0],
+    options: [
+      { label: "1. Use defaults", description: "Use workspace defaults." },
+      { label: "2. Use defaults", description: "Use user defaults." },
+    ],
+  };
+  const tui = createTuiHarness({ width: 80, rows: 30 });
+  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const running = askPlanModeQuestions([scope, questions[1]], context.ctx);
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  const choices = stripVTControlCharacters(tui.render().join("\n"));
+  if (optionIndex === 2) tui.press("tui.select.down");
+  tui.press("tui.select.confirm");
+  tui.press("tui.select.confirm");
+  const summary = stripVTControlCharacters(tui.render().join("\n"));
+  tui.press("tui.select.confirm");
+
+  const answers = await running;
+  assert.match(choices, /1\. Use defaults — Use workspace defaults\./u);
+  assert.match(choices, /2\. Use defaults — Use user defaults\./u);
+  assert.ok(summary.includes(`1. Scope — Option ${optionIndex}: Use defaults`));
+  assert.match(summary, /2\. Tests — Focused/u);
+  assert.partialDeepStrictEqual(answers?.[0], { answer: `${optionIndex}. Use defaults`, optionIndex });
+});
+
 test.each([
-  { name: "mixed labels", labels: ["1. Same major", "Lockfile only"] },
+  { name: "mixed labels", labels: ["\u001b[31m 1. Same major", "Lockfile only"] },
   { name: "mismatched positions", labels: ["1. Same major", "3. Across major"] },
   { name: "a missing label after a prefix", labels: ["1. Same major", "2. \u001b[31m"] },
   { name: "numeric content", labels: ["1.5 GiB", "2 MB", "2026. Plan"] },

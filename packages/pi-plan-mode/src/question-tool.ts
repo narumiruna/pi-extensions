@@ -279,7 +279,7 @@ function displayOptions(
   // Strip a prefix only from a complete sequence. Kit adds the visible numbers.
   const unnumbered: PlanModeQuestionOption[] = [];
   for (const [index, option] of sanitized.entries()) {
-    const match = /^(\d+)\.\s+(\S.*)$/u.exec(option.label);
+    const match = option.label.trimStart().match(/^(\d+)\.\s+(\S.*)$/u);
     if (!match?.[2] || match[1] !== String(index + 1)) return sanitized;
     unnumbered.push({ ...option, label: match[2] });
   }

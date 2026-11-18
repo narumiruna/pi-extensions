@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { INTERACTION_CONTRACT_MESSAGE_TYPE } from "../src/interaction-contract.js";
-import { MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
+import { MODE_CONTRACT_MESSAGE_TYPE, modeContractContent } from "../src/mode-contract.js";
 import planMode from "../src/plan-mode.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
@@ -27,7 +27,7 @@ interface CapturedRequest {
 function normalizedMessages(messages: unknown[]) {
   return convertToLlm(messages as Parameters<typeof convertToLlm>[0]).map(({ role, content }) => ({
     role,
-    content,
+    content: structuredClone(content),
   }));
 }
 
@@ -53,15 +53,7 @@ async function captureRequest(
   const toolByName = new Map(
     allTools.map((tool) => [(tool as { name: string }).name, tool as Record<string, unknown>]),
   );
-  const orderedDefinitions = activeTools.map((name) => {
-    const tool = toolByName.get(name);
-    return {
-      name,
-      description: tool?.description,
-      parameters: tool?.parameters,
-      constrainedSampling: tool?.constrainedSampling,
-    };
-  });
+  const orderedDefinitions = activeTools.map((name) => snapshotToolDefinition(name, toolByName.get(name)));
   const systemPrompt = beforeResult?.systemPrompt ?? baseSystemPrompt;
   const visibleMessages = contextResult?.messages ?? messages;
   return {
@@ -85,6 +77,15 @@ async function captureRequest(
   };
 }
 
+function snapshotToolDefinition(name: string, tool: Record<string, unknown> | undefined) {
+  return structuredClone({
+    name,
+    description: tool?.description,
+    parameters: tool?.parameters,
+    constrainedSampling: tool?.constrainedSampling,
+  });
+}
+
 async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown) {
   const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
     | ((...args: unknown[]) => Promise<unknown>)
@@ -92,6 +93,21 @@ async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown)
   assert.ok(complete);
   await complete("complete", { plan: "# Cache-stable plan" }, undefined, undefined, ctx);
 }
+
+test("captured tool definitions retain their values after nested schema changes", async () => {
+  const label = { type: "string", description: "Original label" };
+  const tool = { ...builtinTool("read"), parameters: { properties: { label } } };
+  const mock = createMockPi({ activeTools: ["read"], allTools: [tool] });
+  const context = createMockContext();
+  const first = await captureRequest("normal", mock, context.ctx, []);
+  label.description = "New label";
+  const second = await captureRequest("normal", mock, context.ctx, []);
+
+  assert.notDeepEqual(first.providerPayload.tools, second.providerPayload.tools);
+  assert.partialDeepStrictEqual(first.providerPayload.tools[0]?.parameters, {
+    properties: { label: { description: "Original label" } },
+  });
+});
 
 test("first-context policy resolution does not mutate late active tool schemas", async () => {
   const allTools = [builtinTool("read")];
@@ -118,12 +134,7 @@ test("first-context policy resolution does not mutate late active tool schemas",
     const tool = [...allTools, ...mock.tools].find((candidate) => candidate.name === name) as
       | Record<string, unknown>
       | undefined;
-    return {
-      name,
-      description: tool?.description,
-      parameters: tool?.parameters,
-      constrainedSampling: tool?.constrainedSampling,
-    };
+    return snapshotToolDefinition(name, tool);
   });
 
   const request = await captureRequest("plan", mock, context.ctx, [
@@ -214,6 +225,11 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
   );
   const planMessages = [...normal.messages, ...activation, { role: "user", content: "B" }];
   const plan = await captureRequest("plan", mock, context.ctx, planMessages);
+  // Plan mode adds a message to the request without changing the leading system prompt.
+  assert.deepEqual(plan.providerPayload.messages[normal.providerPayload.messages.length], {
+    role: "user",
+    content: [{ type: "text", text: modeContractContent("plan") }],
+  });
   assert.deepEqual(plan.providerPayload.messages, normalizedMessages(planMessages));
   assert.deepEqual(
     plan.providerPayload.messages.slice(0, normal.providerPayload.messages.length),
@@ -260,9 +276,10 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
   assert.deepEqual(implementation.activePromptMetadata, normal.activePromptMetadata);
   assert.equal(plan.providerPayload.instructions, normal.providerPayload.instructions);
   assert.equal(implementation.providerPayload.instructions, normal.providerPayload.instructions);
-  assert.match(JSON.stringify(plan.messages), /CONTRACT v1: PLAN/u);
-  assert.match(JSON.stringify(implementation.messages), /CONTRACT v1: NORMAL/u);
-  assert.match(JSON.stringify(implementation.messages), /CONTRACT v1: PLAN/u);
+  assert.deepEqual(implementation.providerPayload.messages[nextPlan.providerPayload.messages.length], {
+    role: "user",
+    content: [{ type: "text", text: modeContractContent("normal") }],
+  });
   assert.deepEqual(
     implementation.messages
       .filter((message) => (message as { role?: string }).role === "user")

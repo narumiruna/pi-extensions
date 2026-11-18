@@ -142,6 +142,34 @@ test("runQuestionnaire preserves select framing, theme hierarchy, and read-only 
   assert.deepEqual(await running, { kind: "stale" });
 });
 
+test("the review identifies matching option labels without changing custom answers", async () => {
+  const options = [{ label: "Defaults" }, { label: "\u001b[31mDefaults" }];
+  const { tui, running } = tuiRun(questions.map((question) => ({ ...question, options })));
+  await tui.waitForOpen();
+  tui.setFocused(true);
+  tui.press("tui.select.down");
+  tui.press("tui.select.confirm");
+  tui.press("tui.select.up");
+  tui.press("tui.select.confirm");
+  paste(tui, "Defaults");
+  tui.press("tui.input.submit");
+  const review = stripVTControlCharacters(tui.render().join("\n"));
+  for (const width of [1, 8, 25]) {
+    for (const line of tui.resize({ width })) assert.ok(visibleWidth(line) <= width);
+  }
+  tui.press("tui.select.confirm");
+
+  assert.match(review, /1\. Scope — Option 2: Defaults/u);
+  assert.match(review, /2\. Tests — Defaults/u);
+  assert.deepEqual(await running, {
+    kind: "submitted",
+    answers: [
+      { questionId: "scope", answer: "\u001b[31mDefaults", wasCustom: false, optionIndex: 2 },
+      { questionId: "tests", answer: "Defaults", wasCustom: true },
+    ],
+  });
+});
+
 test("runQuestionnaire renders and submits a single question without review chrome", async () => {
   const singleQuestion = { ...questions[0], header: "Scope\u001b[31m" };
   const foreground: Array<{ color: string; text: string }> = [];
