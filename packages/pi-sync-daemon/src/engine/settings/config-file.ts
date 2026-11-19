@@ -305,12 +305,19 @@ async function replaceLocalConfigDocumentUnlocked(
     if (previous.dev !== document.identity.dev || previous.ino !== document.identity.ino) {
       throw settingsChangedError();
     }
+    let previousBytesRead: Promise<Buffer> | undefined;
+    const readPreviousBytes = () => (previousBytesRead ??= previousHandle.readFile());
+    if (process.platform === "win32") {
+      // Windows cannot replace an open destination. Pin rollback bytes and close our reader;
+      // the publication guard still checks the live path. POSIX keeps the reader to detect
+      // writes through the retired inode after replacement.
+      if (!(await readPreviousBytes()).equals(document.bytes)) throw settingsChangedError();
+      await previousHandle.close();
+    }
     await writePrivateConfigBytes(recoveryPath, document.bytes, "wx");
     await syncParentDirectory(canonicalPath);
     await withPrivateConfigTemporary(canonicalPath, nextBytes, async (temporaryPath, installed) => {
       let published = false;
-      let previousBytesRead: Promise<Buffer> | undefined;
-      const readPreviousBytes = () => (previousBytesRead ??= previousHandle.readFile());
       try {
         signal?.throwIfAborted();
         await publishConfigFile(temporaryPath, canonicalPath, document, signal);
