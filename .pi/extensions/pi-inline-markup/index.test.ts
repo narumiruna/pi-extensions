@@ -25,6 +25,7 @@ import {
   type TUI,
   TuiAltScreen,
   TuiMainScreen,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { readExcerpt, resolveLinkPath } from "./filelinks.ts";
@@ -39,7 +40,6 @@ let extension: typeof import("./index.ts").default;
 beforeAll(async () => {
   fixtureRoot = await mkdtemp(join(tmpdir(), "pi-inline-markup-"));
   vi.stubEnv("PI_CODING_AGENT_DIR", fixtureRoot);
-  vi.stubEnv("TERM_PROGRAM", "");
   ({ default: extension } = await import("./index.ts"));
   initTheme("dark");
   setCapabilityOverrides({ hyperlinks: true });
@@ -105,6 +105,18 @@ test("only rewrites wikilinks in user and assistant prose", async ({ onTestFinis
   }
 });
 
+test.for(["herdr", undefined])("renders rounded chips with TERM_PROGRAM=%s", async (terminal, { onTestFinished }) => {
+  const previous = process.env.TERM_PROGRAM;
+  vi.stubEnv("TERM_PROGRAM", terminal);
+  onTestFinished(() => {
+    vi.stubEnv("TERM_PROGRAM", previous);
+  });
+  const session = await startSession();
+  onTestFinished(session.stop);
+  const [line] = new Markdown(session.render("[[README.md|Wiki]]"), 0, 0, getMarkdownTheme()).render(80);
+  expect(stripTerminalSequences(line).trimEnd()).toBe("\uE0B6\u00a0Wiki\u00a0\uE0B4");
+});
+
 test("renders both link syntaxes in the same message and releases the shared input listener", async ({
   onTestFinished,
 }) => {
@@ -117,7 +129,7 @@ test("renders both link syntaxes in the same message and releases the shared inp
   const output = session.render(source, "assistant");
   const lines = new Markdown(output, 0, 0, getMarkdownTheme()).render(80);
   const visible = stripTerminalSequences(lines.join("\n")).replaceAll("\u2060", "").trimEnd();
-  expect(visible).toBe("📄\u00a0Manifest\u00a0Wiki");
+  expect(visible).toBe("📄\u00a0Manifest\uE0B6\u00a0Wiki\u00a0\uE0B4");
   expect(output).toContain("./package.json");
   expect(session.render(`\`${source}\``)).toBe(`\`${source}\``);
   expect(session.render("[[README.md|Wiki]][Manifest](./package.json)")).toContain("📄");
@@ -142,9 +154,9 @@ test.for([
 });
 
 test.for([
-  ["[[README.md|Note]]`after`", ["\u00a0Note\u00a0", "after"]],
-  ["`before`[[README.md|Note]]", ["before", "\u00a0Note\u00a0"]],
-  ["`before`[[README.md|Note`v2]]``after``", ["before", "\u00a0Note`v2\u00a0", "after"]],
+  ["[[README.md|Note]]`after`", ["\uE0B6\u00a0Note\u00a0\uE0B4", "after"]],
+  ["`before`[[README.md|Note]]", ["before", "\uE0B6\u00a0Note\u00a0\uE0B4"]],
+  ["`before`[[README.md|Note`v2]]``after``", ["before", "\uE0B6\u00a0Note`v2\u00a0\uE0B4", "after"]],
 ] as const)("keeps inline code separate from the chip in %s", async ([source, expected], { onTestFinished }) => {
   const session = await startSession();
   onTestFinished(session.stop);
@@ -170,9 +182,12 @@ test("repaints after the first snapshot and clears the widget and timer on shutd
   expect(session.render("[[README.md]]")).not.toContain("file://");
   await frame.promise;
   expect(session.invalidate).toHaveBeenCalledTimes(2);
-  const rendered = session.render("[[README.md]]");
-  expect(rendered).toContain("file://");
-  expect(rendered).toContain("/README.md");
+  const [line] = new Markdown(session.render("[[README.md]]"), 0, 0, getMarkdownTheme()).render(80);
+  const chip = stripTerminalSequences(line).trimEnd();
+  expect(chip).toBe("\uE0B6\u00a0README\u00a0\uE0B4");
+  const href = new URL("../../../README.md", import.meta.url).href;
+  expect(getOsc8LinkAtColumn(line, 0)).toBe(href);
+  expect(getOsc8LinkAtColumn(line, visibleWidth(chip) - 1)).toBe(href);
   expect(vi.getTimerCount()).toBe(1);
   await session.stop();
   expect(session.setWidget).toHaveBeenLastCalledWith("pi-inline-markup.preview", undefined);
