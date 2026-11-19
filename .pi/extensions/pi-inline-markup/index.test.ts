@@ -28,7 +28,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { type PreviewExcerpt, readExcerpt, resolveLinkPath } from "./filelinks.ts";
+import { type PreviewExcerpt, parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
 import { createHoverPreview } from "./hover-preview.ts";
 import { createFileIndex } from "./wikilink-index.ts";
 import { createWikilinks, renderWikiPreview } from "./wikilinks.ts";
@@ -216,6 +216,49 @@ test("only resolves eligible workspace paths", () => {
   }
 });
 
+test.for([
+  ["./notes.md#L12", { start: 12, end: 12 }],
+  ["./notes.md#L12-L20", { start: 12, end: 20 }],
+  ["./notes.md#L12-20", { start: 12, end: 20 }],
+  ["./notes.md#heading", undefined],
+  ["./notes.md#heading#L12", undefined],
+  ["./notes.md#L0", undefined],
+  ["./notes.md#L20-L12", undefined],
+  ["./notes.md#L9007199254740992", undefined],
+] as const)("parses the source-line selection in %s", ([href, expected]) => {
+  expect(parseLineRange(href)).toEqual(expected);
+});
+
+test("reads literal source lines using file line endings, not Markdown or terminal wrapping", async () => {
+  const path = join(fixtureRoot, "source-lines.md");
+  await writeFile(path, "Skipped\r\n# Heading\r\n  **bold**\n\x1b[31mLast\x1b[0m");
+  const signal = new AbortController().signal;
+  expect(await readExcerpt(fixtureRoot, path, signal, { start: 4, end: 4 })).toMatchObject({
+    text: "Last",
+    clipped: false,
+  });
+  expect(await readExcerpt(fixtureRoot, path, signal, { start: 5, end: 5 })).toBeUndefined();
+  const excerpt = await readExcerpt(fixtureRoot, path, signal, { start: 2, end: 3 });
+  expect(excerpt).toMatchObject({ text: "# Heading\n  **bold**\n", clipped: false });
+  if (!excerpt) throw new Error("Expected a source excerpt");
+  const lines = renderFilePreview(previewTheme, excerpt, 30, 5);
+  expect(lines.every((line) => visibleWidth(line) <= 30)).toBe(true);
+  expect(lines).toHaveLength(5);
+  expect(lines[1]).toContain("source-lines.md#L2-L3");
+  expect(lines[2]).toContain("# Heading");
+  expect(lines[3]).toContain("│   **bold**");
+});
+
+test("scans beyond the first excerpt while bounding the source search and output", async () => {
+  const path = join(fixtureRoot, "long-source.txt");
+  const wide = "x".repeat(16 * 1024 - 1);
+  await writeFile(path, `${wide}\n${wide}界\n${"x".repeat(256 * 1024)}\nOutside the scan\n`);
+  const signal = new AbortController().signal;
+  const later = await readExcerpt(fixtureRoot, path, signal, { start: 2, end: 2 });
+  expect(later).toMatchObject({ text: wide, clipped: true });
+  expect(await readExcerpt(fixtureRoot, path, signal, { start: 4, end: 4 })).toBeUndefined();
+});
+
 test("does not read directories or symlinks", async () => {
   const project = await mkdtemp(join(fixtureRoot, "project-"));
   const outside = join(fixtureRoot, "outside.md");
@@ -314,6 +357,39 @@ test.for(["leave", "dispose", "show and leave"] as const)(
     expect(hide).toHaveBeenCalledTimes(action === "show and leave" ? 1 : 0);
   },
 );
+
+test("hovers a line-range link with an inline code label", async ({ onTestFinished }) => {
+  await writeFile(join(fixtureRoot, "example.ts"), "first\nsecond\nthird\nfourth\n");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(stubRawInput());
+  const terminal = new ProcessTerminal();
+  vi.spyOn(terminal, "columns", "get").mockReturnValue(80);
+  vi.spyOn(terminal, "rows", "get").mockReturnValue(24);
+  const tui = new TuiAltScreen(terminal);
+  const session = await startSession(tui);
+  onTestFinished(session.stop);
+  const displayed = Promise.withResolvers<void>();
+  const show = vi.spyOn(tui, "showOverlay").mockImplementation(() => {
+    displayed.resolve();
+    return { hide: vi.fn() } as unknown as OverlayHandle;
+  });
+  const link = "[`readExcerpt()`](./example.ts#L2-L3)";
+  expect(session.render("[**bold**](./example.ts#L2-L3)")).toBe("[**bold**](./example.ts#L2-L3)");
+  const screen = new Markdown(session.render(link), 0, 0, getMarkdownTheme()).render(80);
+  expect(stripTerminalSequences(screen[0]).trimEnd()).toBe("📄\u00a0readExcerpt()");
+  expect(getOsc8LinkAtColumn(screen[0], 0)).toBe("./example.ts#L2-L3");
+  vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+
+  process.stdin.emit("data", "\x1b[<35;6;1M");
+  await vi.advanceTimersByTimeAsync(250);
+  await displayed.promise;
+  const [[overlay]] = show.mock.calls;
+  const card = overlay.render(60).map(stripTerminalSequences).join("\n");
+  expect(card).toContain("example.ts#L2-L3");
+  expect(card).toContain("second");
+  expect(card).toContain("third");
+  expect(card).not.toMatch(/first|fourth/);
+});
 
 async function setupWikiHover(columns: number, rows: number, paths: string[]) {
   const root = await mkdtemp(join(fixtureRoot, "wiki-hover-"));
