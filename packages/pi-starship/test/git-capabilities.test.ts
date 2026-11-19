@@ -937,7 +937,9 @@ function result(stdout: string) {
 }
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], {
+  // Keep detached Git maintenance from changing the fixture while inventory reads it.
+  const config = ["-c", "maintenance.auto=false", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"];
+  return execFileSync("git", [...config, ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
