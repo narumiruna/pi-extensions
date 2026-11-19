@@ -5,6 +5,7 @@
 - Lead with the most important information and use concise, accurate prose without repetition.
 - Use concise paragraphs for human-facing narrative and lists only when separate items are easier to scan.
 - Keep `AGENTS.md` instructions as one-sentence, enforceable bullet points.
+- Prefer static checks or linters over written agent rules when a required workflow runs the check and it fully covers the rule.
 - Follow `docs/readme-conventions.md` for active package READMEs, including its required sections, warnings, scope rules, and verification checklist.
 - Keep package versions out of long-lived guidance and derive them from manifests, lockfiles, or workflows.
 
@@ -35,7 +36,6 @@
 - Keep publishable extension packages and reusable libraries under `packages/<package>/`, with implementation source under `packages/<package>/src/`.
 - Keep deprecated references under `deprecated/`, which active checks exclude.
 - Keep each package's manifest, README, license, and TypeScript configuration inside that package.
-- Preserve each README's emoji title; npm, Pi, and license badges; and applicable `✨ Features`, `📦 Install`, `🚀 Quick start`, `⚙️ Settings`, `💬 Commands`, `🗂️ Package layout`, `🔎 Keywords`, and `📄 License` sections.
 - Keep small repository-only extensions and their helpers, documentation, and requested tests under `.pi/extensions/<extension>/`, with `index.ts` as the entrypoint.
 - Treat `.pi/extensions/` as a self-contained project-resource boundary unrelated to packages under `packages/`.
 - Do not add package manifests, workspaces, Changesets, package tests, root test support, or shared TypeScript configuration for a project-local extension unless the user explicitly asks.

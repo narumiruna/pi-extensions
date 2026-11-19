@@ -125,8 +125,12 @@ Do not repeat the same fields in a menu inventory, a defaults dump, and a refere
 For every README change:
 
 1. Review the documented interfaces against the package implementation and tests.
-2. Run a fenced-code-aware heading audit over `packages/*/README.md`.
-3. Confirm every active package has Features, Install, Quick start, Package layout, Keywords, and License.
+2. Run `uv run scripts/check_readmes.py` from the repository root.
+   It checks that every directory with a `packages/*/package.json` has a
+   `README.md` with the six required top-level `##` headings.
+   Headings inside fenced code blocks do not count.
+3. Review the title, badges, summary, section order, and applicable sections
+   against this guide; the linter does not check them.
 4. Confirm standard labels and emojis are used where applicable.
 5. Review section scope and duplication: keep one detailed explanation per topic and justify repeated examples or warnings by their local purpose.
 6. Confirm Commands remains a syntax-and-outcome reference, and that moved interface, compatibility, and safety details remain accessible through working links.
