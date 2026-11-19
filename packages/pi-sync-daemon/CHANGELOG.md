@@ -1,5 +1,11 @@
 # @narumitw/pi-sync-daemon
 
+## 0.5.1
+
+### Patch Changes
+
+- 06b470f: Fix Windows settings saves that fail with `EPERM` during atomic replacement by closing the previous settings handle before rename. Preserve source validation, rollback bytes, and POSIX concurrent-edit checks.
+
 ## 0.5.0
 
 ### Minor Changes
