@@ -130,7 +130,7 @@ test("a replacement staging failure preserves canonical bytes and removes its un
   });
 });
 
-test("a post-publication source read failure restores the validated prior bytes", async () => {
+test("a source read failure preserves the validated prior bytes", async () => {
   await withTempHome(async (agentDir) => {
     await fs.mkdir(agentDir, { recursive: true });
     const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
@@ -157,6 +157,93 @@ test("a post-publication source read failure restores the validated prior bytes"
     assert.equal((await readLocalConfigObject())?.debug, true);
   });
 });
+
+for (const operation of ["read", "close"] as const) {
+  test.skipIf(process.platform !== "win32")(
+    `Windows source ${operation} failure stops publication and releases the handle`,
+    async () => {
+      await withTempHome(async (agentDir) => {
+        await fs.mkdir(agentDir, { recursive: true });
+        const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+        await fs.writeFile(localConfigPath(), before, { mode: 0o600 });
+        const original = fs.open.bind(fs);
+        let canonicalReads = 0;
+        let source: fs.FileHandle | undefined;
+        let publicationReached = false;
+        const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await original(...args);
+          if (args[0] === localConfigPath() && args[1] === "r" && ++canonicalReads === 2) {
+            source = handle;
+            const failure = new Error(`injected source ${operation} failure`);
+            if (operation === "read") vi.spyOn(handle, "readFile").mockRejectedValueOnce(failure);
+            else vi.spyOn(handle, "close").mockRejectedValueOnce(failure);
+          }
+          return handle;
+        });
+        try {
+          await assert.rejects(
+            withConfigPublicationReadyHookForTest(
+              async () => {
+                publicationReached = true;
+              },
+              () => updateLocalConfig((settings) => ({ ...settings, debug: true })),
+            ),
+            new RegExp(`injected source ${operation} failure`, "u"),
+          );
+          assert.equal(publicationReached, false);
+          assert.ok(source);
+          assert.equal(source.fd, -1);
+          assert.deepEqual(await fs.readFile(localConfigPath()), before);
+          assert.deepEqual(
+            (await fs.readdir(agentDir)).filter((name) => name.startsWith(".pi-sync.json.")),
+            [],
+          );
+        } finally {
+          open.mockRestore();
+          await source?.close();
+        }
+        await updateLocalConfig((settings) => ({ ...settings, debug: true }));
+        assert.equal((await readLocalConfigObject())?.debug, true);
+      });
+    },
+  );
+}
+
+for (const mode of ["r", "r+"] as const) {
+  test.skipIf(process.platform !== "win32")(
+    `Windows replacement refuses an external ${mode} handle and succeeds after closure`,
+    async () => {
+      await withTempHome(async (agentDir) => {
+        await fs.mkdir(agentDir, { recursive: true });
+        const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+        await fs.writeFile(localConfigPath(), before, { mode: 0o600 });
+        const external = await fs.open(localConfigPath(), mode);
+        let publicationFinished = false;
+        try {
+          await assert.rejects(
+            withConfigReplacementInstalledHookForTest(
+              async () => {
+                publicationFinished = true;
+              },
+              () => updateLocalConfig((settings) => ({ ...settings, debug: true })),
+            ),
+            { code: "EPERM", syscall: "rename" },
+          );
+          assert.equal(publicationFinished, false);
+          assert.deepEqual(await fs.readFile(localConfigPath()), before);
+          assert.deepEqual(
+            (await fs.readdir(agentDir)).filter((name) => name.startsWith(".pi-sync.json.")),
+            [],
+          );
+        } finally {
+          await external.close();
+        }
+        await updateLocalConfig((settings) => ({ ...settings, debug: true }));
+        assert.equal((await readLocalConfigObject())?.debug, true);
+      });
+    },
+  );
+}
 
 for (const editKind of ["in-place", "replacement"] as const) {
   test(`replacement rejects a noncooperating ${editKind} edit before publication`, async () => {
@@ -215,33 +302,36 @@ for (const editKind of ["in-place", "replacement"] as const) {
   });
 }
 
-test("replacement detects writes through the old inode and atomically restores the external edit", async () => {
-  await withTempHome(async (agentDir) => {
-    await fs.mkdir(agentDir, { recursive: true });
-    const before = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "before" }))}\n`);
-    const concurrent = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "concurrent-open-handle" }))}\n`);
-    await fs.writeFile(localConfigPath(), before, { mode: 0o600 });
-    const external = await fs.open(localConfigPath(), "r+");
-    try {
-      await assert.rejects(
-        withConfigReplacementInstalledHookForTest(
-          async () => {
-            await external.truncate(0);
-            await external.writeFile(concurrent);
-            await external.sync();
-          },
-          () => updateLocalConfig((settings) => ({ ...settings, debug: true })),
-        ),
-        /settings changed during migration/u,
-      );
-      assert.deepEqual(await fs.readFile(localConfigPath()), concurrent);
-      assert.deepEqual(
-        (await fs.readdir(agentDir)).filter((name) => name.startsWith(".pi-sync.json.")),
-        [],
-      );
-      if (process.platform !== "win32") assert.equal((await fs.stat(localConfigPath())).mode & 0o777, 0o600);
-    } finally {
-      await external.close();
-    }
-  });
-});
+test.skipIf(process.platform === "win32")(
+  "replacement detects writes through the old inode and atomically restores the external edit",
+  async () => {
+    await withTempHome(async (agentDir) => {
+      await fs.mkdir(agentDir, { recursive: true });
+      const before = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "before" }))}\n`);
+      const concurrent = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "concurrent-open-handle" }))}\n`);
+      await fs.writeFile(localConfigPath(), before, { mode: 0o600 });
+      const external = await fs.open(localConfigPath(), "r+");
+      try {
+        await assert.rejects(
+          withConfigReplacementInstalledHookForTest(
+            async () => {
+              await external.truncate(0);
+              await external.writeFile(concurrent);
+              await external.sync();
+            },
+            () => updateLocalConfig((settings) => ({ ...settings, debug: true })),
+          ),
+          /settings changed during migration/u,
+        );
+        assert.deepEqual(await fs.readFile(localConfigPath()), concurrent);
+        assert.deepEqual(
+          (await fs.readdir(agentDir)).filter((name) => name.startsWith(".pi-sync.json.")),
+          [],
+        );
+        if (process.platform !== "win32") assert.equal((await fs.stat(localConfigPath())).mode & 0o777, 0o600);
+      } finally {
+        await external.close();
+      }
+    });
+  },
+);

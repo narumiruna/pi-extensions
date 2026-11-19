@@ -79,6 +79,24 @@ test("two clients share one authoritative settings writer and preserve unknown f
     if (process.platform !== "win32") assert.equal((await fs.stat(path.join(root, "pi-sync.json"))).mode & 0o077, 0);
   }));
 
+test("repeated canonical saves round-trip exact bytes without temporary files", () =>
+  fixture(async (root, connect) => {
+    const client = await connect();
+    const file = path.join(root, "pi-sync.json");
+    await client.run("settings.cas", { expected: null, next: template });
+    const before = await fs.readFile(file);
+    for (const next of [{ ...template, debug: true }, template]) {
+      const source = (await client.run("settings.read", {})) as DocumentView;
+      await client.run("settings.cas", { expected: documentFingerprint(source), next });
+      assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), next);
+      assert.deepEqual(
+        (await fs.readdir(root)).filter((name) => name.startsWith(".pi-sync.json.")),
+        [],
+      );
+    }
+    assert.deepEqual(await fs.readFile(file), before);
+  }));
+
 test("formatting-only source changes invalidate an exact settings approval", () =>
   fixture(async (root, connect) => {
     const client = await connect();
