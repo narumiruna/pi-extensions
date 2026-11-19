@@ -5,13 +5,18 @@ messages. It does not change saved messages or model input.
 
 ```markdown
 [Project manifest](./package.json)
+[`runTests()`](./scripts/run-tests.mjs#L12-L20)
 [[README.md]]
 [[README.md|Project guide]]
 ```
 
 - Markdown file links use a file emoji (📄) and the theme's link color. Use a
-  plain-text label and a path relative to Pi's working directory, or an absolute
-  path inside it. Encode spaces as `%20`.
+  plain-text or inline-code label and a path relative to Pi's working directory,
+  or an absolute path inside it. Encode spaces as `%20`.
+- Add `#L12` for one source line or `#L12-L20` for an inclusive range.
+  Hover also accepts `#L12-20`. The card shows literal source, even for Markdown
+  files, and looks for the first requested line within the first 256 KiB.
+  If that line is not available, no card appears.
 - Wikilinks use colored chips with rounded ends in every terminal. The terminal
   or its font must support the round Powerline glyphs to display them correctly.
   Paths are relative to the checkout. You can omit `.md`; a bare filename also

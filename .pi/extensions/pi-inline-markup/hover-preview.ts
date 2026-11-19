@@ -8,7 +8,7 @@ import {
   type TUI,
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
-import { readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
+import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
 import {
   hoverLinkLine,
   renderWikiGroupPreview,
@@ -83,7 +83,8 @@ export function createHoverPreview(
       draw = () => renderWikiGroupPreview(preview, excerpts, theme, width, height);
     } else {
       if (!path) return;
-      const excerpt = await readExcerpt(preview ? checkout : cwd, path, controller.signal);
+      const lineRange = preview ? undefined : parseLineRange(target.href);
+      const excerpt = await readExcerpt(preview ? checkout : cwd, path, controller.signal, lineRange);
       if (!excerpt) return;
       draw = () =>
         preview

@@ -27,9 +27,11 @@ interface Replacement {
   text: string;
 }
 
-function renderLabel(label: string, href: string, theme: Theme): string {
+function renderLabel(label: string, href: string, theme: Theme, inlineCode: boolean): string {
   // Keep the icon with the first word but allow longer labels to wrap naturally.
-  const text = theme.fg("mdLink", `📄\u00a0${label}`);
+  const text = inlineCode
+    ? theme.fg("mdLink", "📄\u00a0") + theme.fg("mdCode", label)
+    : theme.fg("mdLink", `📄\u00a0${label}`);
   const styled = getCapabilities().hyperlinks ? hyperlink(text, href) : text;
   // A code span carries the terminal styles through Pi's Markdown renderer.
   let ticks = 1;
@@ -78,18 +80,26 @@ export function renderFileLinks(markdown: string, root: string, theme: Theme): s
     // A title or destination can contain other tagged candidates.
     const href = untag(token.href);
     if (!token.text.startsWith(start.marker) || !resolveLinkPath(root, href)) return;
-    // Preserve Markdown formatting in rich labels by leaving them to Pi.
+    // Support a single inline code label; leave other rich labels to Pi.
     const parts = token.tokens;
-    if (!parts || parts.some(({ type }) => type !== "text" && type !== "escape")) return;
-    const label = parts
-      .map((part) => ("text" in part ? part.text : ""))
-      .join("")
-      .slice(start.marker.length)
-      .trim();
+    if (!parts) return;
+    const [marker, span] = parts;
+    const code =
+      parts.length === 2 && marker?.type === "text" && marker.text === start.marker && span?.type === "codespan"
+        ? span.text
+        : undefined;
+    if (code === undefined && parts.some(({ type }) => type !== "text" && type !== "escape")) return;
+    const label =
+      code ??
+      parts
+        .map((part) => ("text" in part ? part.text : ""))
+        .join("")
+        .slice(start.marker.length)
+        .trim();
     if (!label || /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u.test(label)) return;
     replacements.set(id, {
       end: start.offset + untag(token.raw).length,
-      text: renderLabel(label, href, theme),
+      text: renderLabel(label, href, theme, code !== undefined),
     });
   });
 
@@ -109,13 +119,20 @@ export function renderFileLinks(markdown: string, root: string, theme: Theme): s
 }
 
 const MAX_BYTES = 16 * 1024;
+const MAX_LINE_SCAN_BYTES = 256 * 1024;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: OSC 8 uses ESC and BEL.
 const OSC_8 = /\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+export interface LineRange {
+  start: number;
+  end: number;
+}
 
 export interface PreviewExcerpt {
   filename: string;
   text: string;
   clipped: boolean;
+  lineRange?: LineRange;
 }
 
 function workspacePath(root: string, path: string): string | undefined {
@@ -142,10 +159,44 @@ export function resolveLinkPath(root: string, href: string): string | undefined 
   }
 }
 
+export function parseLineRange(href: string): LineRange | undefined {
+  const match = /#L([1-9]\d*)(?:-L?([1-9]\d*))?$/.exec(href);
+  if (!match || match.index !== href.indexOf("#")) return undefined;
+  const start = Number(match[1]);
+  const end = match[2] ? Number(match[2]) : start;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) return undefined;
+  return { start, end };
+}
+
+function selectLines(
+  bytes: Buffer,
+  { start, end }: LineRange,
+  moreBytes: boolean,
+): { bytes: Buffer; clipped: boolean } | undefined {
+  let line = 1;
+  let offset = 0;
+  let from = 0;
+  while (offset < bytes.length) {
+    const byte = bytes[offset++];
+    if (byte !== 10 && byte !== 13) continue;
+    if (byte === 13 && bytes[offset] === 10) offset++;
+    if (line === end) {
+      return { bytes: bytes.subarray(from, Math.min(offset, from + MAX_BYTES)), clipped: offset - from > MAX_BYTES };
+    }
+    if (++line === start) from = offset;
+  }
+  if (line < start || from === bytes.length) return undefined;
+  return {
+    bytes: bytes.subarray(from, from + MAX_BYTES),
+    clipped: moreBytes || bytes.length - from > MAX_BYTES,
+  };
+}
+
 export async function readExcerpt(
   root: string,
   path: string,
   signal: AbortSignal,
+  lineRange?: LineRange,
 ): Promise<PreviewExcerpt | undefined> {
   try {
     const local = workspacePath(root, path);
@@ -161,11 +212,15 @@ export async function readExcerpt(
       if (signal.aborted) return undefined;
       const stat = await file.stat();
       if (signal.aborted || !stat.isFile()) return undefined;
-      const buffer = Buffer.alloc(MAX_BYTES);
+      const buffer = Buffer.alloc(Math.min(stat.size, lineRange ? MAX_LINE_SCAN_BYTES : MAX_BYTES));
       const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
       if (signal.aborted) return undefined;
-      const clipped = stat.size > bytesRead;
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead), { stream: clipped });
+      const bytes = buffer.subarray(0, bytesRead);
+      const moreBytes = stat.size > bytesRead;
+      const excerpt = lineRange ? selectLines(bytes, lineRange, moreBytes) : { bytes, clipped: moreBytes };
+      if (!excerpt) return undefined;
+      const { clipped } = excerpt;
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(excerpt.bytes, { stream: clipped });
       if (text.includes("\0")) return undefined;
       const clean = stripTerminalSequences(text)
         .replace(/\r\n?/g, "\n")
@@ -175,6 +230,7 @@ export async function readExcerpt(
         filename: basename(candidate).replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, " "),
         text: clean,
         clipped,
+        lineRange,
       };
     } finally {
       await file.close();
@@ -188,7 +244,8 @@ export async function readExcerpt(
 export function renderFilePreview(theme: Theme, excerpt: PreviewExcerpt, width: number, height: number): string[] {
   if (width < 5 || height < 4) return [];
   const contentWidth = width - 4;
-  const markdown = /\.(md|markdown)$/i.test(excerpt.filename);
+  // Anchors refer to source lines, not to the rendered Markdown document.
+  const markdown = !excerpt.lineRange && /\.(md|markdown)$/i.test(excerpt.filename);
   const lines = markdown
     ? new Markdown(
         excerpt.text,
@@ -210,7 +267,11 @@ export function renderFilePreview(theme: Theme, excerpt: PreviewExcerpt, width: 
     const last = body.pop() ?? "";
     body.push(truncateToWidth(last, contentWidth - 1, "") + theme.fg("muted", "…"));
   }
-  return renderPreviewFrame(theme, [theme.fg("accent", excerpt.filename), ...body], width, 1);
+  const { filename, lineRange } = excerpt;
+  const caption = lineRange
+    ? `${filename}#L${lineRange.start}${lineRange.end === lineRange.start ? "" : `-L${lineRange.end}`}`
+    : filename;
+  return renderPreviewFrame(theme, [theme.fg("accent", caption), ...body], width, 1);
 }
 
 export function renderPreviewFrame(
