@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
 import { posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getMarkdownTheme, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
@@ -19,6 +17,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { type PreviewExcerpt, renderPreviewFrame } from "./filelinks.ts";
+import { createFileIndex } from "./wikilink-index.ts";
 
 const parser = new Marked();
 const wikilinks = /(?<![![])\[\[([^[\]\r\n]+)\]\](?![[\](])/g;
@@ -203,89 +202,6 @@ export function createWikilinks(root: string, onChange: () => void) {
     dispose() {
       index.dispose();
       notes.clear();
-    },
-  };
-}
-
-const refreshIntervalMs = 5_000;
-
-async function scanFiles(root: string, signal: AbortSignal): Promise<Set<string>> {
-  const paths = new Set<string>();
-  const directories = [""];
-  for (const directory of directories) {
-    if (signal.aborted) return paths;
-    let entries: Dirent[];
-    try {
-      entries = await readdir(resolve(root, directory), { withFileTypes: true });
-    } catch {
-      // A directory can disappear during a scan. Retry it in the next snapshot.
-      continue;
-    }
-    if (signal.aborted) return paths;
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      const path = posix.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        directories.push(path);
-      } else if (entry.isFile()) {
-        paths.add(path);
-      }
-    }
-  }
-  return paths;
-}
-
-interface FileIndex {
-  find(target: string): string | undefined;
-  dispose(): void;
-}
-
-function samePaths(previous: Set<string>, next: Set<string>): boolean {
-  if (previous.size !== next.size) return false;
-  for (const path of next) {
-    if (!previous.has(path)) return false;
-  }
-  return true;
-}
-
-export function createFileIndex(root: string, onChange: () => void): FileIndex {
-  const controller = new AbortController();
-  let paths = new Set<string>();
-  let names = new Map<string, string | undefined>();
-  let started = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  async function refresh(): Promise<void> {
-    const next = await scanFiles(root, controller.signal);
-    if (controller.signal.aborted) return;
-    timer = setTimeout(() => void refresh(), refreshIntervalMs).unref();
-    if (samePaths(paths, next)) return;
-
-    paths = next;
-    names = new Map();
-    for (const path of paths) {
-      const name = posix.basename(path);
-      names.set(name, names.has(name) ? undefined : path);
-    }
-    onChange();
-  }
-
-  return {
-    find(target) {
-      const path = target.replace(/^\.\//, "");
-      if (controller.signal.aborted || !path || /[\\\p{Cc}]/u.test(path)) return undefined;
-      if (!started) {
-        started = true;
-        void refresh();
-      }
-      const note = `${path}.md`;
-      if (paths.has(path)) return path;
-      if (paths.has(note)) return note;
-      return path.includes("/") ? undefined : (names.get(path) ?? names.get(note));
-    },
-    dispose() {
-      controller.abort();
-      clearTimeout(timer);
     },
   };
 }
