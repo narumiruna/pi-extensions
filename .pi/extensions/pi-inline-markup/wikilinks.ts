@@ -25,7 +25,7 @@ const wikilinks = /(?<![![])\[\[([^[\]\r\n]+)\]\](?![[\](])/g;
 const taggedLinks = /\[\[(\uE000+)(\d+)\]\]/g;
 const nonBreakingSpace = "\u00a0";
 const wordJoiner = "\u2060";
-// Ghostty-based renderers draw these Powerline caps to the full cell height.
+// Round Powerline caps require glyph support from the terminal or its font.
 const leftCap = "\uE0B6";
 const rightCap = "\uE0B4";
 const palette: readonly ThemeColor[] = [
@@ -74,11 +74,7 @@ function renderChip(label: string, fill: Color, url: string | undefined, userBac
   const body = backgroundAnsi(fill, mode) + foregroundAnsi(textColorForFill(fill), mode);
   const resetFill = userBackground || "\x1b[49m";
   const padded = `${nonBreakingSpace}${label.replace(/ /g, nonBreakingSpace)}${nonBreakingSpace}`;
-  const terminal = process.env.TERM_PROGRAM?.toLowerCase();
-  const rounded = terminal === "rex" || terminal === "ghostty";
-  const chip = rounded
-    ? `${edge}${leftCap}${body}${padded}${resetFill}${edge}${rightCap}\x1b[39m`
-    : `${body}${padded}${resetFill}\x1b[39m`;
+  const chip = `${edge}${leftCap}${body}${padded}${resetFill}${edge}${rightCap}\x1b[39m`;
   const styled = url && caps.hyperlinks ? hyperlink(chip, url) : chip;
   // An inline code span carries the ANSI through Markdown without parsing the label.
   let ticks = 1;

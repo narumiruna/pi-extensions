@@ -12,10 +12,12 @@ messages. It does not change saved messages or model input.
 - Markdown file links use a file emoji (📄) and the theme's link color. Use a
   plain-text label and a path relative to Pi's working directory, or an absolute
   path inside it. Encode spaces as `%20`.
-- Wikilinks use colored chips. Paths are relative to the checkout. You can omit
-  `.md`; a bare filename also matches a unique file in a subdirectory. The file
-  index starts on first use and refreshes every five seconds after each scan.
-  Unresolved wikilinks are not clickable.
+- Wikilinks use colored chips with rounded ends in every terminal. The terminal
+  or its font must support the round Powerline glyphs to display them correctly.
+  Paths are relative to the checkout. You can omit `.md`; a bare filename also
+  matches a unique file in a subdirectory. The file index starts on first use and
+  refreshes every five seconds after each scan. Unresolved wikilinks are not
+  clickable.
 
 Hover over a link in fullscreen mode to preview up to 16 KiB of a regular UTF-8
 file. Markdown file links show Markdown or plain text. Wikilinks preview
