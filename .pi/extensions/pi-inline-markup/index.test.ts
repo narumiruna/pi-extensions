@@ -29,7 +29,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { readExcerpt, resolveLinkPath } from "./filelinks.ts";
-import { createFileIndex, renderWikiPreview } from "./wikilinks.ts";
+import { createFileIndex } from "./wikilink-index.ts";
+import { renderWikiPreview } from "./wikilinks.ts";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("./filelinks.ts", { spy: true });
@@ -179,15 +180,17 @@ test("repaints after the first snapshot and clears the widget and timer on shutd
   const frame = Promise.withResolvers<void>();
   session.requestRender.mockImplementation(() => frame.resolve());
   expect(session.invalidate).toHaveBeenCalledOnce();
-  expect(session.render("[[README.md]]")).not.toContain("file://");
+  expect(session.render("[[README]]")).not.toContain("file://");
   await frame.promise;
   expect(session.invalidate).toHaveBeenCalledTimes(2);
-  const [line] = new Markdown(session.render("[[README.md]]"), 0, 0, getMarkdownTheme()).render(80);
-  const chip = stripTerminalSequences(line).trimEnd();
-  expect(chip).toBe("\uE0B6\u00a0README\u00a0\uE0B4");
   const href = new URL("../../../README.md", import.meta.url).href;
-  expect(getOsc8LinkAtColumn(line, 0)).toBe(href);
-  expect(getOsc8LinkAtColumn(line, visibleWidth(chip) - 1)).toBe(href);
+  for (const source of ["[[README]]", "[[README.md]]"]) {
+    const [line] = new Markdown(session.render(source), 0, 0, getMarkdownTheme()).render(80);
+    const chip = stripTerminalSequences(line).trimEnd();
+    expect(chip).toBe("\uE0B6\u00a0README\u00a0\uE0B4");
+    expect(getOsc8LinkAtColumn(line, 0)).toBe(href);
+    expect(getOsc8LinkAtColumn(line, visibleWidth(chip) - 1)).toBe(href);
+  }
   expect(vi.getTimerCount()).toBe(1);
   await session.stop();
   expect(session.setWidget).toHaveBeenLastCalledWith("pi-inline-markup.preview", undefined);
