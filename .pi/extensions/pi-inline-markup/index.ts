@@ -1,34 +1,25 @@
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { renderFileLinks } from "./filelinks.ts";
 import { createHoverPreview } from "./hover-preview.ts";
-import { createWikilinks } from "./wikilinks.ts";
+import { renderInlineMarkup } from "./inline-markup.ts";
 
 const WIDGET_KEY = "pi-inline-markup.preview";
 
 export default function inlineMarkupExtension(pi: ExtensionAPI): void {
-  const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-  let session: { cwd: string; theme: Theme; wiki: ReturnType<typeof createWikilinks> } | undefined;
+  let session: { cwd: string; theme: Theme } | undefined;
 
   pi.on("session_start", (_event, { mode, cwd, ui }) => {
     if (mode !== "tui") return;
     ui.setWidget(
       WIDGET_KEY,
       (tui, theme) => {
-        const wiki = createWikilinks(checkout, () => {
-          tui.invalidate();
-          tui.requestRender();
-        });
-        const preview = createHoverPreview(tui, theme, cwd, checkout, wiki.findPreview);
-        const current = { cwd, theme, wiki };
+        const preview = createHoverPreview(tui, theme, cwd);
+        const current = { cwd, theme };
         session = current;
         const widget = {
           ...preview,
           dispose() {
             if (session === current) session = undefined;
             preview.dispose();
-            wiki.dispose();
           },
         };
         try {
@@ -48,10 +39,16 @@ export default function inlineMarkupExtension(pi: ExtensionAPI): void {
     if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
   });
 
+  pi.on("before_agent_start", (event, ctx) => {
+    if (ctx.mode !== "tui" || !session) return;
+    event.systemPromptOptions.sections.pi_inline_markup =
+      "Cite files with Markdown links (#L12-L20 for line ranges); [[label]] is decorative, and [[[label](./path)]] styles a link as a badge.";
+  });
+
   // Pi 1.5.0 does not accept messageTypes registration options.
   pi.registerMarkdownTransformer((markdown, { messageType }) => {
     if (!session || (messageType !== "user" && messageType !== "assistant")) return markdown;
-    const { cwd, theme, wiki } = session;
-    return wiki.render(renderFileLinks(markdown, cwd, theme), theme, messageType === "user");
+    const { cwd, theme } = session;
+    return renderInlineMarkup(markdown, cwd, theme, messageType === "user");
   });
 }
