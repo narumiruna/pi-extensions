@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-sync-daemon",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A local synchronization daemon with a versioned client API.",
   "type": "module",
   "license": "MIT",
