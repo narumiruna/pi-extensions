@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
@@ -8,7 +9,13 @@ import {
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import { readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
-import { renderWikiPreview, type WikiNote } from "./wikilinks.ts";
+import {
+  hoverLinkLine,
+  renderWikiGroupPreview,
+  renderWikiPreview,
+  type WikiPreview,
+  wikiGroupSourceLimit,
+} from "./wikilinks.ts";
 
 const HOVER_DELAY_MS = 250;
 const MAX_HEIGHT = 12;
@@ -21,8 +28,8 @@ interface Point {
 
 interface Hover extends Point {
   href: string;
-  path: string;
-  note?: WikiNote;
+  path?: string;
+  preview?: WikiPreview;
   controller: AbortController;
 }
 
@@ -31,7 +38,7 @@ export function createHoverPreview(
   theme: Theme,
   cwd: string,
   checkout: string,
-  findWikiNote: (href: string) => WikiNote | undefined,
+  findWikiPreview: (href: string) => WikiPreview | undefined,
 ): Component & { dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -50,33 +57,44 @@ export function createHoverPreview(
 
   function linkAt({ row, col }: Point): string | undefined {
     if (!(tui instanceof TuiAltScreen)) return undefined;
-    return getOsc8LinkAtColumn(tui.getScreenLines()[row] ?? "", col);
+    return getOsc8LinkAtColumn(hoverLinkLine(tui.getScreenLines()[row] ?? ""), col);
   }
 
   function stillOnLink(target: Hover): boolean {
-    return linkAt(target) === target.href && (!target.note || findWikiNote(target.href) === target.note);
+    return linkAt(target) === target.href && findWikiPreview(target.href) === target.preview;
   }
 
   async function show(target: Hover): Promise<void> {
-    const { note, path, controller } = target;
-    const excerpt = await readExcerpt(note ? checkout : cwd, path, controller.signal);
-    if (!excerpt || hover !== target || tui.hasOverlay() || !stillOnLink(target)) return;
-
+    const { preview, path, controller } = target;
     const { columns, rows } = tui.terminal;
     const below = rows - target.row - 1;
     const above = target.row;
     const placeBelow = below >= MAX_HEIGHT || below >= above;
-    const width = Math.min(columns, note ? 56 : 60);
+    const width = Math.min(columns, preview ? 56 : 60);
     const height = Math.min(placeBelow ? below : above, MAX_HEIGHT);
-    if (width < (note ? 20 : 16) || height < MIN_HEIGHT) return;
+    if (width < (preview ? 20 : 16) || height < MIN_HEIGHT) return;
 
-    const draw = () =>
-      note
-        ? renderWikiPreview(note, excerpt, theme, width, height)
-        : {
-            width,
-            lines: renderFilePreview(theme, excerpt, width, height),
-          };
+    let draw: () => { width: number; lines: string[] } | undefined;
+    if (preview && "sources" in preview) {
+      const candidates = preview.sources.slice(0, wikiGroupSourceLimit(preview.sources.length, height));
+      const excerpts = await Promise.all(
+        candidates.map((source) => readExcerpt(checkout, resolve(checkout, source), controller.signal)),
+      );
+      draw = () => renderWikiGroupPreview(preview, excerpts, theme, width, height);
+    } else {
+      if (!path) return;
+      const excerpt = await readExcerpt(preview ? checkout : cwd, path, controller.signal);
+      if (!excerpt) return;
+      draw = () =>
+        preview
+          ? renderWikiPreview(preview, excerpt, theme, width, height)
+          : { width, lines: renderFilePreview(theme, excerpt, width, height) };
+    }
+    if (hover !== target || tui.hasOverlay() || !stillOnLink(target)) return;
+    if (tui.terminal.columns !== columns || tui.terminal.rows !== rows) {
+      hide();
+      return;
+    }
     const card = draw();
     if (!card) return;
 
@@ -114,17 +132,17 @@ export function createHoverPreview(
       return;
     }
     const href = linkAt(point);
-    const note = href ? findWikiNote(href) : undefined;
-    if (hover && href === hover.href && point.row === hover.row && note === hover.note) {
+    const preview = href ? findWikiPreview(href) : undefined;
+    if (hover && href === hover.href && point.row === hover.row && preview === hover.preview) {
       hover.col = point.col;
       return;
     }
     hide();
     if (!href || tui.hasOverlay()) return;
-    const path = note?.path ?? resolveLinkPath(cwd, href);
-    if (!path) return;
+    const path = preview ? ("path" in preview ? preview.path : undefined) : resolveLinkPath(cwd, href);
+    if (!preview && !path) return;
 
-    const target: Hover = { ...point, href, path, note, controller: new AbortController() };
+    const target: Hover = { ...point, href, path, preview, controller: new AbortController() };
     hover = target;
     timer = setTimeout(() => void show(target), HOVER_DELAY_MS);
   }

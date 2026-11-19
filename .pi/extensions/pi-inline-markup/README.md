@@ -15,12 +15,20 @@ messages. It does not change saved messages or model input.
 - Wikilinks use colored chips with rounded ends in every terminal. The terminal
   or its font must support the round Powerline glyphs to display them correctly.
   Paths are relative to the checkout. You can omit `.md`; a bare filename also
-  matches a unique file in a subdirectory. The file index starts on first use and
-  refreshes every five seconds after each scan. Unresolved wikilinks are not
-  clickable.
+  matches a file in a subdirectory if the name is unique. The file index starts
+  on first use and refreshes every five seconds after each scan. Unresolved
+  wikilinks are not clickable.
 
-Hover over a link in fullscreen mode to preview up to 16 KiB of a regular UTF-8
-file. Markdown file links show Markdown or plain text. Wikilinks preview
+Hover over a bare wikilink such as `[[README.md]]` to see up to three short
+excerpts stacked in one card. Each excerpt shows its checkout-relative path.
+The root file appears first when present, followed by other matches in path
+order. The card counts any matches it cannot show. Clicking the chip still
+opens the root file if present; if there are multiple matches and no root file,
+the chip offers a preview but does not open a file. Use `[[./README.md]]` or
+`[[packages/pi-lsp/README.md]]` to preview only that file.
+
+Hover previews are available in fullscreen mode and read up to 16 KiB per
+regular UTF-8 file. Markdown file links show Markdown or plain text. Wikilinks preview
 Markdown files and omit YAML front matter. Paths outside the applicable root,
 hidden paths, `node_modules`, and symbolic links are not read. Previews need OSC 8
 hyperlinks and mouse movement reports without a button press. Pi does not request

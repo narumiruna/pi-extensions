@@ -28,9 +28,10 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { readExcerpt, resolveLinkPath } from "./filelinks.ts";
+import { type PreviewExcerpt, readExcerpt, resolveLinkPath } from "./filelinks.ts";
+import { createHoverPreview } from "./hover-preview.ts";
 import { createFileIndex } from "./wikilink-index.ts";
-import { renderWikiPreview } from "./wikilinks.ts";
+import { createWikilinks, renderWikiPreview } from "./wikilinks.ts";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("./filelinks.ts", { spy: true });
@@ -56,6 +57,14 @@ afterAll(async () => {
   await rm(fixtureRoot, { recursive: true, force: true });
 });
 
+const previewTheme = {
+  colors: new Proxy({}, { get: () => rgbColor(88, 60, 137) }),
+  getBgAnsi: () => "",
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  style: (text: string) => text,
+} as unknown as ExtensionUIContext["theme"];
+
 async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal())) {
   const on = vi.fn<(event: string, handler: unknown) => void>();
   const registerMarkdownTransformer = vi.fn<(transform: MarkdownTransformer) => void>();
@@ -64,18 +73,12 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
   const shutdown = on.mock.calls.find(
     ([event]) => event === "session_shutdown",
   )?.[1] as ExtensionHandler<SessionShutdownEvent>;
-  const theme = {
-    colors: new Proxy({}, { get: () => rgbColor(88, 60, 137) }),
-    getBgAnsi: () => "",
-    fg: (_color: string, text: string) => text,
-    bg: (_color: string, text: string) => text,
-  } as unknown as ExtensionUIContext["theme"];
   const invalidate = vi.spyOn(tui, "invalidate");
   const requestRender = vi.spyOn(tui, "requestRender").mockImplementation(() => {});
   let disposeWidget: (() => void) | undefined;
   const setWidget = vi.fn<ExtensionUIContext["setWidget"]>((_key, content) => {
     disposeWidget?.();
-    disposeWidget = typeof content === "function" ? content(tui, theme).dispose : undefined;
+    disposeWidget = typeof content === "function" ? content(tui, previewTheme).dispose : undefined;
   });
   const ctx = { cwd: fixtureRoot, mode: "tui", ui: { setWidget } } as unknown as ExtensionContext;
   await start({ type: "session_start", reason: "startup" }, ctx);
@@ -257,16 +260,20 @@ test("does not show a note whose front matter extends past the read limit", asyn
   ).toBeUndefined();
 });
 
+function stubRawInput(): () => void {
+  const raw = Object.getOwnPropertyDescriptor(process.stdin, "isRaw");
+  Object.defineProperty(process.stdin, "isRaw", { configurable: true, value: true });
+  return () => {
+    if (raw) Object.defineProperty(process.stdin, "isRaw", raw);
+    else Reflect.deleteProperty(process.stdin, "isRaw");
+  };
+}
+
 test.for(["leave", "dispose", "show and leave"] as const)(
   "handles hover preview action: %s",
   async (action, { onTestFinished }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const raw = Object.getOwnPropertyDescriptor(process.stdin, "isRaw");
-    Object.defineProperty(process.stdin, "isRaw", { configurable: true, value: true });
-    onTestFinished(() => {
-      if (raw) Object.defineProperty(process.stdin, "isRaw", raw);
-      else Reflect.deleteProperty(process.stdin, "isRaw");
-    });
+    onTestFinished(stubRawInput());
     const terminal = new ProcessTerminal();
     vi.spyOn(terminal, "columns", "get").mockReturnValue(80);
     vi.spyOn(terminal, "rows", "get").mockReturnValue(24);
@@ -308,6 +315,141 @@ test.for(["leave", "dispose", "show and leave"] as const)(
   },
 );
 
+async function setupWikiHover(columns: number, rows: number, paths: string[]) {
+  const root = await mkdtemp(join(fixtureRoot, "wiki-hover-"));
+  for (const path of paths) {
+    const directory = path.split("/").slice(0, -1).join("/");
+    if (directory) await mkdir(join(root, directory), { recursive: true });
+    await writeFile(
+      join(root, path),
+      `---\nsecret: hidden\n---\n# ${directory || "Root"} overview\n\nSee [docs](https://example.com).\n\nMore text.\n`,
+    );
+  }
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const restoreRaw = stubRawInput();
+  const terminal = new ProcessTerminal();
+  vi.spyOn(terminal, "columns", "get").mockReturnValue(columns);
+  vi.spyOn(terminal, "rows", "get").mockReturnValue(rows);
+  const tui = new TuiAltScreen(terminal);
+  vi.spyOn(tui, "requestRender").mockImplementation(() => {});
+  const displayed = Promise.withResolvers<void>();
+  const hide = vi.fn();
+  const show = vi.spyOn(tui, "showOverlay").mockImplementation(() => {
+    displayed.resolve();
+    return { hide } as unknown as OverlayHandle;
+  });
+  const ready = Promise.withResolvers<void>();
+  const wiki = createWikilinks(root, () => ready.resolve());
+  const preview = createHoverPreview(tui, previewTheme, root, root, wiki.findPreview);
+  const screen = vi.spyOn(tui, "getScreenLines");
+  function render(markdown: string): string[] {
+    return new Markdown(wiki.render(markdown, previewTheme, true), 0, 0, getMarkdownTheme()).render(columns);
+  }
+  return {
+    root,
+    show,
+    hide,
+    screen,
+    render,
+    ready: ready.promise,
+    displayed: displayed.promise,
+    dispose() {
+      preview.dispose();
+      wiki.dispose();
+      restoreRaw();
+    },
+  };
+}
+
+const readmePaths = ["Z/README.md", "C/README.md", "B/README.md", "A/README.md"];
+
+test.for([
+  { columns: 80, rows: 24, primary: true, visible: ["README.md", "A/README.md", "B/README.md"] },
+  { columns: 80, rows: 24, primary: false, visible: ["A/README.md", "B/README.md", "C/README.md"] },
+  { columns: 24, rows: 8, primary: true, visible: ["README.md"] },
+  { columns: 24, rows: 5, primary: true, visible: [] },
+])(
+  "bounds the stacked preview and preserves click behavior: %j",
+  async ({ columns, rows, primary, visible }, { onTestFinished }) => {
+    const paths = primary ? [...readmePaths, "README.md"] : readmePaths;
+    const hover = await setupWikiHover(columns, rows, paths);
+    onTestFinished(hover.dispose);
+    hover.render("[[README]]");
+    await hover.ready;
+    const screen = hover.render("[[README]]");
+    const clickHref = primary ? new URL("README.md", `file://${hover.root}/`).href : undefined;
+    expect(getOsc8LinkAtColumn(screen[0], 0)).toBe(clickHref);
+    expect(getOsc8LinkAtColumn(hover.render("[[README.md|Guide]]")[0], 0)).toBe(clickHref);
+    hover.screen.mockReturnValue(screen);
+
+    const read = vi.mocked(readExcerpt).mockClear();
+    process.stdin.emit("data", "\x1b[<35;2;1M");
+    await vi.advanceTimersByTimeAsync(250);
+    await hover.displayed;
+
+    expect(read.mock.calls.map(([, path]) => path)).toEqual(visible.map((path) => join(hover.root, path)));
+    expect(hover.show).toHaveBeenCalledOnce();
+    const [[overlay, options]] = hover.show.mock.calls;
+    expect(options?.nonCapturing).toBe(true);
+    const lines = overlay.render(columns);
+    expect(lines.length).toBeLessThanOrEqual(Math.min(rows - 1, 12));
+    expect(lines.every((line) => visibleWidth(line) <= columns)).toBe(true);
+    expect(lines.every((line) => !line.includes("\x1b]8;") && !line.includes("hidden"))).toBe(true);
+    const plain = lines.map(stripTerminalSequences).join("\n");
+    let offset = 0;
+    for (const path of visible) {
+      const caption = path.includes("/") ? path : `./${path}`;
+      const index = plain.indexOf(caption, offset);
+      expect(index).toBeGreaterThanOrEqual(offset);
+      const text = `${path.split("/").length === 1 ? "Root" : path.split("/")[0]} overview`;
+      expect(plain.slice(index).split("\n")[1]).toContain(text);
+      offset = index + caption.length;
+    }
+    const remaining = paths.length - visible.length;
+    expect(plain).toContain(visible.length ? `… ${remaining} more file` : `${remaining} matching files`);
+    overlay.invalidate();
+    expect(overlay.render(columns)).toEqual(lines);
+    process.stdin.emit("data", `\x1b[<35;${columns};1M`);
+    expect(hover.hide).toHaveBeenCalledOnce();
+  },
+);
+
+test("switching to an explicit link for the same file aborts every grouped read", async ({ onTestFinished }) => {
+  const hover = await setupWikiHover(80, 24, [...readmePaths, "README.md"]);
+  onTestFinished(hover.dispose);
+  hover.render("[[README.md]]");
+  await hover.ready;
+  hover.screen.mockReturnValue(hover.render("[[README.md]]"));
+  const pending = Promise.withResolvers<PreviewExcerpt>();
+  onTestFinished(() => pending.resolve({ filename: "README.md", text: "Grouped excerpt", clipped: false }));
+  const read = vi.mocked(readExcerpt).mockClear();
+  for (let i = 0; i < 3; i++) read.mockReturnValueOnce(pending.promise);
+
+  process.stdin.emit("data", "\x1b[<35;1;1M");
+  await vi.advanceTimersByTimeAsync(250);
+  expect(read).toHaveBeenCalledTimes(3);
+  const signals = read.mock.calls.map(([, , signal]) => signal);
+  expect(signals.every((signal) => !signal.aborted)).toBe(true);
+
+  hover.screen.mockReturnValue(hover.render("[[./README.md]]"));
+  process.stdin.emit("data", "\x1b[<35;1;1M");
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+  pending.resolve({ filename: "README.md", text: "Grouped excerpt", clipped: false });
+  await pending.promise;
+  expect(hover.show).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(250);
+  await hover.displayed;
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(read.mock.calls[3][1]).toBe(join(hover.root, "README.md"));
+  const [[overlay]] = hover.show.mock.calls;
+  const lines = overlay.render(80).join("\n");
+  expect(lines).toContain("Root overview");
+  expect(lines).not.toContain("A/README.md");
+  expect(lines).not.toContain("Grouped excerpt");
+});
+
 test("refreshes cached paths after a file is created, renamed, or deleted", async ({ onTestFinished }) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const root = join(fixtureRoot, "notes");
@@ -320,7 +462,7 @@ test("refreshes cached paths after a file is created, renamed, or deleted", asyn
 
   expect(index.find("existing")).toBeUndefined();
   await change.promise;
-  expect(index.find("existing")).toBe("existing.md");
+  expect(index.find("existing")).toEqual({ path: "existing.md" });
 
   async function refresh() {
     change = Promise.withResolvers<void>();
@@ -330,13 +472,20 @@ test("refreshes cached paths after a file is created, renamed, or deleted", asyn
 
   await writeFile(join(root, "folder", "new.md"), "");
   await refresh();
-  expect(index.find("new")).toBe("folder/new.md");
-  expect(index.find("./folder/new")).toBe("folder/new.md");
+  expect(index.find("new")).toEqual({ path: "folder/new.md" });
+  expect(index.find("./folder/new")).toEqual({ path: "folder/new.md" });
+  expect(index.find("./new")).toBeUndefined();
 
+  await writeFile(join(root, "new.md"), "");
+  await refresh();
+  expect(index.find("new")).toEqual({ path: "new.md", sources: ["new.md", "folder/new.md"] });
+  expect(index.find("./new")).toEqual({ path: "new.md" });
+
+  await rm(join(root, "new.md"));
   await rename(join(root, "folder", "new.md"), join(root, "folder", "renamed.md"));
   await refresh();
   expect(index.find("new")).toBeUndefined();
-  expect(index.find("renamed")).toBe("folder/renamed.md");
+  expect(index.find("renamed")).toEqual({ path: "folder/renamed.md" });
 
   await rm(join(root, "folder", "renamed.md"));
   await refresh();

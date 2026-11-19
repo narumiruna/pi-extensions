@@ -30,8 +30,14 @@ async function scanFiles(root: string, signal: AbortSignal): Promise<Set<string>
   return paths;
 }
 
+interface FileMatch {
+  path?: string;
+  /** Markdown matches for an ambiguous bare filename, including the root file if present. */
+  sources?: readonly string[];
+}
+
 interface FileIndex {
-  find(target: string): string | undefined;
+  find(target: string): FileMatch | undefined;
   dispose(): void;
 }
 
@@ -47,7 +53,7 @@ function samePaths(previous: Set<string>, next: Set<string>): boolean {
 export function createFileIndex(root: string, onChange: () => void): FileIndex {
   const controller = new AbortController();
   let paths = new Set<string>();
-  let names = new Map<string, string | undefined>();
+  let names = new Map<string, string[]>();
   let started = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -59,9 +65,12 @@ export function createFileIndex(root: string, onChange: () => void): FileIndex {
 
     paths = next;
     names = new Map();
-    for (const path of paths) {
+    for (const path of [...paths].sort()) {
       const name = posix.basename(path);
-      names.set(name, names.has(name) ? undefined : path);
+      const matches = names.get(name);
+      if (!matches) names.set(name, [path]);
+      else if (name === path) matches.unshift(path);
+      else matches.push(path);
     }
     onChange();
   }
@@ -75,9 +84,16 @@ export function createFileIndex(root: string, onChange: () => void): FileIndex {
         void refresh();
       }
       const note = `${path}.md`;
-      if (paths.has(path)) return path;
-      if (paths.has(note)) return note;
-      return path.includes("/") ? undefined : (names.get(path) ?? names.get(note));
+      const exact = paths.has(path) ? path : paths.has(note) ? note : undefined;
+      if (target.includes("/")) return exact ? { path: exact } : undefined;
+
+      const literal = names.get(path);
+      const name = exact ?? (literal && (literal.length === 1 || /\.md$/i.test(path)) ? path : note);
+      const matches = names.get(name);
+      if (!matches) return undefined;
+      const primary = exact ?? (matches.length === 1 ? matches[0] : undefined);
+      if (matches.length > 1 && /\.md$/i.test(name)) return { path: primary, sources: matches };
+      return primary ? { path: primary } : undefined;
     },
     dispose() {
       controller.abort();

@@ -42,9 +42,32 @@ const cardInset = 6; // Two borders and two spaces on each side.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: OSC 8 uses literal ESC and BEL bytes.
 const osc8 = /\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 
+/** Preview metadata for a wikilink to one Markdown file. */
 export interface WikiNote {
   path: string;
   color: ThemeColor;
+}
+
+/** Preview metadata for a bare filename that matches multiple Markdown files. */
+interface WikiGroup {
+  filename: string;
+  sources: readonly string[];
+  color: ThemeColor;
+}
+
+/** The file or group to show when hovering over a wikilink chip. */
+export type WikiPreview = WikiNote | WikiGroup;
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: Match the OSC 8 group ID, not its click destination.
+const groupLink = /\x1b\]8;id=(pi-inline-markup-[\w-]+);[^\x07\x1b]*/g;
+
+/** Substitutes hover IDs for click URLs in a copy of the screen line. */
+export function hoverLinkLine(line: string): string {
+  return line.replace(groupLink, "\x1b]8;;wiki:$1");
+}
+
+function displayPath(path: string): string {
+  return stripTerminalSequences(path).replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, " ");
 }
 
 function themeColorForKey(key: string): ThemeColor {
@@ -66,7 +89,13 @@ function textColorForFill(fill: Color): Color {
   return rgbColor(channel, channel, channel);
 }
 
-function renderChip(label: string, fill: Color, url: string | undefined, userBackground?: string): string {
+function renderChip(
+  label: string,
+  fill: Color,
+  url: string | undefined,
+  groupId: string | undefined,
+  userBackground?: string,
+): string {
   const caps = getCapabilities();
   const mode = caps.trueColor ? "truecolor" : "256color";
   const edge = foregroundAnsi(fill, mode);
@@ -74,7 +103,14 @@ function renderChip(label: string, fill: Color, url: string | undefined, userBac
   const resetFill = userBackground || "\x1b[49m";
   const padded = `${nonBreakingSpace}${label.replace(/ /g, nonBreakingSpace)}${nonBreakingSpace}`;
   const chip = `${edge}${leftCap}${body}${padded}${resetFill}${edge}${rightCap}\x1b[39m`;
-  const styled = url && caps.hyperlinks ? hyperlink(chip, url) : chip;
+  // An empty OSC 8 URL leaves a group without a primary file non-clickable.
+  const styled = !caps.hyperlinks
+    ? chip
+    : groupId
+      ? `\x1b]8;id=${groupId};${url ?? ""}\x1b\\${chip}\x1b]8;;\x1b\\`
+      : url
+        ? hyperlink(chip, url)
+        : chip;
   // An inline code span carries the ANSI through Markdown without parsing the label.
   let ticks = 1;
   for (const [run] of styled.matchAll(/`+/g)) ticks = Math.max(ticks, run.length + 1);
@@ -121,21 +157,13 @@ function transformLinks(markdown: string, render: (body: string) => string | und
   });
 }
 
-export function renderWikiPreview(
-  note: WikiNote,
-  excerpt: PreviewExcerpt,
-  theme: Theme,
-  width: number,
-  height: number,
-): { width: number; lines: string[] } | undefined {
+function renderWikiBody(excerpt: PreviewExcerpt, theme: Theme, width: number): string[] {
   const hasFrontmatter = /^---[ \t]*\n/.test(excerpt.text);
   const bodyText = hasFrontmatter ? excerpt.text.replace(/^---[ \t]*\n[\s\S]*?^---[ \t]*(?:\n|$)/m, "") : excerpt.text;
   // Do not show frontmatter that runs past the read limit.
-  if (hasFrontmatter && bodyText === excerpt.text) return undefined;
+  if (hasFrontmatter && bodyText === excerpt.text) return [];
   const text = bodyText.replace(/^(?:[ \t]*\n)+/, "").trimEnd();
-  if (!text) return undefined;
-
-  const caption = `${theme.fg(note.color, "▎")} ${theme.fg("muted", excerpt.filename)}`;
+  if (!text) return [];
   const markdown = new Markdown(
     text,
     0,
@@ -151,57 +179,128 @@ export function renderWikiPreview(
     { color: (text) => theme.fg("text", text) },
     { renderLatex: false },
   );
-  const rendered = markdown.render(width - cardInset).map((line) => line.replace(osc8, "").trimEnd());
-  while (rendered.length && !stripTerminalSequences(rendered.at(-1) ?? "").trim()) rendered.pop();
+  const lines = markdown.render(width).map((line) => line.replace(osc8, "").trimEnd());
+  while (lines.length && isBlank(lines.at(-1) ?? "")) lines.pop();
+  return lines;
+}
 
-  const spacer = height >= 7 ? [""] : [];
-  const limit = height - 3 - spacer.length;
-  const body = rendered.slice(0, limit);
-  if (excerpt.clipped || rendered.length > limit) {
-    while (body.length && !stripTerminalSequences(body.at(-1) ?? "").trim()) body.pop();
+function isBlank(line: string): boolean {
+  return !stripTerminalSequences(line).trim();
+}
+
+function clipBody(lines: string[], clipped: boolean, theme: Theme, width: number, limit: number): string[] {
+  const body = lines.slice(0, limit);
+  if (clipped || lines.length > limit) {
+    while (body.length && isBlank(body.at(-1) ?? "")) body.pop();
     const last = body.pop() ?? "";
-    body.push(truncateToWidth(last, width - cardInset - 1, "") + theme.fg("muted", "…"));
+    body.push(truncateToWidth(last, width - 1, "") + theme.fg("muted", "…"));
   }
+  return body;
+}
 
-  const content = [caption, ...spacer, ...body];
+/** Renders one Markdown note, omitting its YAML front matter. */
+export function renderWikiPreview(
+  note: WikiNote,
+  excerpt: PreviewExcerpt,
+  theme: Theme,
+  width: number,
+  height: number,
+): { width: number; lines: string[] } | undefined {
+  const bodyWidth = width - cardInset;
+  const rendered = renderWikiBody(excerpt, theme, bodyWidth);
+  if (!rendered.length) return undefined;
+
+  const caption = `${theme.fg(note.color, "▎")} ${theme.fg("muted", excerpt.filename)}`;
+  const spacer = height >= 7 ? [""] : [];
+  const body = clipBody(rendered, excerpt.clipped, theme, bodyWidth, height - 3 - spacer.length);
+  return renderWikiCard([caption, ...spacer, ...body], theme, width);
+}
+
+/** Determines how many sources to read, reserving rows for paths and overflow. */
+export function wikiGroupSourceLimit(total: number, height: number): number {
+  const slots = Math.min(3, total, Math.floor((height - 3) / 2));
+  return Math.max(0, slots === total ? slots : Math.min(slots, Math.floor((height - 4) / 2)));
+}
+
+/** Stacks brief excerpts in candidate order, with a count for sources not shown. */
+export function renderWikiGroupPreview(
+  group: WikiGroup,
+  excerpts: readonly (PreviewExcerpt | undefined)[],
+  theme: Theme,
+  width: number,
+  height: number,
+): { width: number; lines: string[] } {
+  const { filename, sources, color } = group;
+  const count = excerpts.length;
+  const remaining = sources.length - count;
+  const content = [`${theme.fg(color, "▎")} ${theme.fg("muted", displayPath(filename))}`];
+  const bodyWidth = width - cardInset - 2;
+  if (count > 0) {
+    const limit = Math.min(2, Math.floor((height - 3 - Number(remaining > 0)) / count) - 1);
+    for (const [index, excerpt] of excerpts.entries()) {
+      const path = displayPath(sources[index]);
+      content.push(theme.fg("accent", path.includes("/") ? path : `./${path}`));
+      const rendered = excerpt ? renderWikiBody(excerpt, theme, bodyWidth).filter((line) => !isBlank(line)) : [];
+      const body = rendered.length
+        ? clipBody(rendered, excerpt?.clipped ?? false, theme, bodyWidth, limit)
+        : [theme.fg("muted", "Preview unavailable")];
+      content.push(...body.map((line) => `  ${line}`));
+    }
+  }
+  if (remaining > 0) {
+    const footer =
+      count === 0 ? `${remaining} matching files` : `… ${remaining} more ${remaining === 1 ? "file" : "files"}`;
+    content.push(theme.fg("muted", footer));
+  }
+  return renderWikiCard(content, theme, width);
+}
+
+function renderWikiCard(content: string[], theme: Theme, width: number): { width: number; lines: string[] } {
   const usedWidth = Math.max(...content.map(visibleWidth)) + cardInset;
   const cardWidth = Math.min(width, Math.max(30, usedWidth));
   return { width: cardWidth, lines: renderPreviewFrame(theme, content, cardWidth, 2, true) };
 }
 
+/** Creates display-only wikilinks and tracks their previews for one session. */
 export function createWikilinks(root: string, onChange: () => void) {
-  const notes = new Map<string, WikiNote>();
+  const previews = new Map<string, WikiPreview>();
   const index = createFileIndex(root, () => {
-    notes.clear();
+    previews.clear();
     onChange();
   });
   return {
-    findPreview: (href: string) => notes.get(href),
+    findPreview: (href: string) => previews.get(href),
     render(markdown: string, theme: Theme, userMessage: boolean): string {
       return transformLinks(markdown, (body) => {
         const [name, alias] = body.split("|", 2);
         const target = name.replace(/\\$/, "").split("#", 1)[0].trim();
         if (!target) return undefined;
-        const path = index.find(target);
-        const label = (alias?.trim() || (path ? posix.basename(path, ".md") : target))
-          .replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, " ")
-          .trim();
+        const { path, sources } = index.find(target) ?? {};
+        const filename = sources ? posix.basename(sources[0]) : undefined;
+        const displayTarget = path ?? filename;
+        const label = displayPath(
+          alias?.trim() || (displayTarget ? posix.basename(displayTarget, ".md") : target),
+        ).trim();
         if (!label) return undefined;
 
-        const color = themeColorForKey(path ?? target);
-        let url: string | undefined;
-        if (path) {
-          const absolutePath = resolve(root, path);
-          url = pathToFileURL(absolutePath).href;
-          if (/\.md$/i.test(path) && !notes.has(url)) notes.set(url, { path: absolutePath, color });
+        const color = themeColorForKey(path ?? filename ?? target);
+        const absolutePath = path ? resolve(root, path) : undefined;
+        const url = absolutePath ? pathToFileURL(absolutePath).href : undefined;
+        let groupId: string | undefined;
+        if (sources && filename) {
+          groupId = `pi-inline-markup-${Buffer.from(filename).toString("base64url")}`;
+          const href = `wiki:${groupId}`;
+          if (!previews.has(href)) previews.set(href, { filename, sources, color });
+        } else if (url && absolutePath && /\.md$/i.test(absolutePath) && !previews.has(url)) {
+          previews.set(url, { path: absolutePath, color });
         }
         const userBackground = userMessage ? theme.getBgAnsi("userMessageBg") : undefined;
-        return renderChip(label, theme.colors[color], url, userBackground);
+        return renderChip(label, theme.colors[color], url, groupId, userBackground);
       });
     },
     dispose() {
       index.dispose();
-      notes.clear();
+      previews.clear();
     },
   };
 }
