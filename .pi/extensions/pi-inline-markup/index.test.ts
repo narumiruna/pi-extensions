@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,18 +14,24 @@ import {
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
+  getOsc8LinkAtColumn,
   Markdown,
   Marked,
+  type OverlayHandle,
   ProcessTerminal,
   rgbColor,
   setCapabilityOverrides,
   stripTerminalSequences,
+  type TUI,
+  TuiAltScreen,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { createFileIndex } from "./wikilinks.ts";
+import { readExcerpt, resolveLinkPath } from "./filelinks.ts";
+import { createFileIndex, renderWikiPreview } from "./wikilinks.ts";
 
 vi.mock("node:fs/promises", { spy: true });
+vi.mock("./filelinks.ts", { spy: true });
 
 let fixtureRoot: string;
 let extension: typeof import("./index.ts").default;
@@ -49,7 +55,7 @@ afterAll(async () => {
   await rm(fixtureRoot, { recursive: true, force: true });
 });
 
-async function startSession() {
+async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal())) {
   const on = vi.fn<(event: string, handler: unknown) => void>();
   const registerMarkdownTransformer = vi.fn<(transform: MarkdownTransformer) => void>();
   extension({ on, registerMarkdownTransformer } as unknown as ExtensionAPI);
@@ -57,11 +63,11 @@ async function startSession() {
   const shutdown = on.mock.calls.find(
     ([event]) => event === "session_shutdown",
   )?.[1] as ExtensionHandler<SessionShutdownEvent>;
-  const tui = new TuiMainScreen(new ProcessTerminal());
   const theme = {
     colors: new Proxy({}, { get: () => rgbColor(88, 60, 137) }),
     getBgAnsi: () => "",
     fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
   } as unknown as ExtensionUIContext["theme"];
   const invalidate = vi.spyOn(tui, "invalidate");
   const requestRender = vi.spyOn(tui, "requestRender").mockImplementation(() => {});
@@ -123,6 +129,19 @@ test("renders both link syntaxes in the same message and releases the shared inp
 });
 
 test.for([
+  { source: '[Note](./notes.md "see [x](y) and [a](b)") tail', href: "./notes.md" },
+  { source: "[Note](<./[draft](1).md>) tail", href: "./[draft](1).md" },
+  { source: "[Note](./notes.md) tail", href: "./notes.md" },
+])("preserves text and link destinations for $source", async ({ source, href }, { onTestFinished }) => {
+  const session = await startSession();
+  onTestFinished(session.stop);
+  const output = session.render(`${source} [Next](./next.md)`);
+  const [line] = new Markdown(output, 0, 0, getMarkdownTheme()).render(80);
+  expect(stripTerminalSequences(line).trimEnd()).toBe("📄\u00a0Note tail 📄\u00a0Next");
+  expect(getOsc8LinkAtColumn(line, 0)).toBe(href);
+});
+
+test.for([
   ["[[README.md|Note]]`after`", ["\u00a0Note\u00a0", "after"]],
   ["`before`[[README.md|Note]]", ["before", "\u00a0Note\u00a0"]],
   ["`before`[[README.md|Note`v2]]``after``", ["before", "\u00a0Note`v2\u00a0", "after"]],
@@ -160,6 +179,116 @@ test("repaints after the first snapshot and clears the widget and timer on shutd
   expect(vi.getTimerCount()).toBe(0);
   expect(session.render("[[README.md]]")).toBe("[[README.md]]");
 });
+
+test("only resolves eligible workspace paths", () => {
+  expect(resolveLinkPath(fixtureRoot, "./notes/a%20b.md#part")).toBe(join(fixtureRoot, "notes", "a b.md"));
+  for (const href of [
+    "https://example.test/a.md",
+    `file://${join(fixtureRoot, "a.md")}`,
+    "//example.test/a.md",
+    "../outside.md",
+    "./%2e%2e/outside.md",
+    "./notes/.hidden.md",
+    "./node_modules/pkg/README.md",
+  ]) {
+    expect(resolveLinkPath(fixtureRoot, href), href).toBeUndefined();
+  }
+});
+
+test("does not read directories or symlinks", async () => {
+  const project = await mkdtemp(join(fixtureRoot, "project-"));
+  const outside = join(fixtureRoot, "outside.md");
+  const plain = join(project, "plain.md");
+  await writeFile(outside, "Outside the project");
+  await writeFile(plain, "Inside the project");
+  await symlink(outside, join(project, "outside-link.md"));
+  await symlink(plain, join(project, "inside-link.md"));
+  await mkdir(join(project, "folder"));
+  const { signal } = new AbortController();
+  await expect(readExcerpt(project, plain, signal)).resolves.toMatchObject({ text: "Inside the project" });
+  for (const path of [outside, ...["outside-link.md", "inside-link.md", "folder"].map((name) => join(project, name))]) {
+    await expect(readExcerpt(project, path, signal)).resolves.toBeUndefined();
+  }
+});
+
+test("stops resolving a preview path after abort", async ({ onTestFinished }) => {
+  const pending = Promise.withResolvers<string>();
+  const controller = new AbortController();
+  const resolvePath = vi.mocked(realpath);
+  resolvePath.mockClear();
+  resolvePath.mockReturnValueOnce(pending.promise);
+  const stat = vi.mocked(lstat);
+  stat.mockClear();
+  const resolving = readExcerpt(fixtureRoot, join(fixtureRoot, "no-read.md"), controller.signal);
+  onTestFinished(() => pending.resolve(fixtureRoot));
+  controller.abort();
+  pending.resolve(fixtureRoot);
+  await expect(resolving).resolves.toBeUndefined();
+  expect(resolvePath).toHaveBeenCalledExactlyOnceWith(fixtureRoot);
+  expect(stat).not.toHaveBeenCalled();
+});
+
+test("does not show a note whose front matter extends past the read limit", async () => {
+  const path = join(fixtureRoot, "long-front-matter.md");
+  await writeFile(path, `---\nkey: ${"a".repeat(16 * 1024)}\n---\n# Visible body\n`);
+  const excerpt = await readExcerpt(fixtureRoot, path, new AbortController().signal);
+  expect(excerpt?.clipped).toBe(true);
+  if (!excerpt) throw new Error("Expected a clipped excerpt");
+  expect(
+    renderWikiPreview({ path, color: "accent" }, excerpt, {} as ExtensionUIContext["theme"], 50, 12),
+  ).toBeUndefined();
+});
+
+test.for(["leave", "dispose", "show and leave"] as const)(
+  "handles hover preview action: %s",
+  async (action, { onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const raw = Object.getOwnPropertyDescriptor(process.stdin, "isRaw");
+    Object.defineProperty(process.stdin, "isRaw", { configurable: true, value: true });
+    onTestFinished(() => {
+      if (raw) Object.defineProperty(process.stdin, "isRaw", raw);
+      else Reflect.deleteProperty(process.stdin, "isRaw");
+    });
+    const terminal = new ProcessTerminal();
+    vi.spyOn(terminal, "columns", "get").mockReturnValue(80);
+    vi.spyOn(terminal, "rows", "get").mockReturnValue(24);
+    const tui = new TuiAltScreen(terminal);
+    const hide = vi.fn();
+    const show = vi.spyOn(tui, "showOverlay").mockReturnValue({ hide } as unknown as OverlayHandle);
+    const session = await startSession(tui);
+    onTestFinished(session.stop);
+    const screen = new Markdown(session.render("[Local](./local.txt)"), 0, 0, getMarkdownTheme()).render(80);
+    vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof readExcerpt>>>();
+    const read = vi.mocked(readExcerpt);
+    read.mockClear();
+    read.mockReturnValueOnce(pending.promise);
+    onTestFinished(() => pending.resolve(undefined));
+    process.stdin.emit("data", "\x1b[<35;1;1M");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(read).toHaveBeenCalledOnce();
+    const signal = read.mock.calls[0][2];
+    expect(signal.aborted).toBe(false);
+
+    if (action === "show and leave") {
+      pending.resolve({ filename: "local.txt", text: "Preview text", clipped: false });
+      await pending.promise;
+      expect(show).toHaveBeenCalledOnce();
+      const [overlay, options] = show.mock.calls[0];
+      expect(options?.nonCapturing).toBe(true);
+      expect(overlay.render(60).join("\n")).toContain("Preview text");
+    }
+
+    if (action === "dispose") await session.stop();
+    else process.stdin.emit("data", "\x1b[<35;80;1M");
+    expect(signal.aborted).toBe(true);
+    pending.resolve({ filename: "local.txt", text: "Preview text", clipped: false });
+    await pending.promise;
+    expect(show).toHaveBeenCalledTimes(action === "show and leave" ? 1 : 0);
+    expect(hide).toHaveBeenCalledTimes(action === "show and leave" ? 1 : 0);
+  },
+);
 
 test("refreshes cached paths after a file is created, renamed, or deleted", async ({ onTestFinished }) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

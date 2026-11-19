@@ -57,6 +57,7 @@ export function renderFileLinks(markdown: string, root: string, theme: Theme): s
   });
   if (!starts.length) return markdown;
 
+  const untag = (text: string) => text.replace(LINK_MARKER, (tag, marker: string) => (marker === prefix ? "[" : tag));
   const blocked = new Set<number>();
   const replacements = new Map<number, Replacement>();
   parser.walkTokens(parser.lexer(tagged), (token) => {
@@ -74,7 +75,9 @@ export function renderFileLinks(markdown: string, root: string, theme: Theme): s
     const id = Number(match[2]);
     const start = starts[id];
     if (!start || !tagged.startsWith(token.raw, start.taggedOffset)) return;
-    if (!token.text.startsWith(start.marker) || !resolveLinkPath(root, token.href)) return;
+    // A title or destination can contain other tagged candidates.
+    const href = untag(token.href);
+    if (!token.text.startsWith(start.marker) || !resolveLinkPath(root, href)) return;
     // Preserve Markdown formatting in rich labels by leaving them to Pi.
     const parts = token.tokens;
     if (!parts || parts.some(({ type }) => type !== "text" && type !== "escape")) return;
@@ -85,8 +88,8 @@ export function renderFileLinks(markdown: string, root: string, theme: Theme): s
       .trim();
     if (!label || /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u.test(label)) return;
     replacements.set(id, {
-      end: start.offset + token.raw.length - start.marker.length,
-      text: renderLabel(label, token.href, theme),
+      end: start.offset + untag(token.raw).length,
+      text: renderLabel(label, href, theme),
     });
   });
 
