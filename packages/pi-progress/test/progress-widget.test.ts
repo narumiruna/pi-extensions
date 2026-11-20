@@ -35,7 +35,7 @@ const summary = (text = "Earlier work was compacted."): ContextEvent["messages"]
   timestamp: 0,
 });
 
-function renderedBody(current: ReturnType<typeof createContext>): string[] | undefined {
+function renderedBody(current: ReturnType<typeof createContext>): readonly string[] | undefined {
   return current.widgets.at(-1)?.content?.(current.tui, identityTheme().theme).render(80);
 }
 

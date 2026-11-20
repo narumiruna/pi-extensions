@@ -10,7 +10,10 @@ export interface ConversationResult {
 
 export type JobPayload = Record<string, unknown> & { jobId: string; state: SubagentJobState };
 
-export function boundedView(render: (width: number) => string[], invalidate: () => void = () => {}): Component {
+export function boundedView(
+  render: (width: number) => readonly string[],
+  invalidate: () => void = () => {},
+): Component {
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];

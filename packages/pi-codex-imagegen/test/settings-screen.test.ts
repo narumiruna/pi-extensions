@@ -58,7 +58,7 @@ it("frames exactly two native settings, sanitizes paths and retains focused rows
     },
   });
   const { owner } = fixture();
-  let zeroWidth: string[] = [];
+  let zeroWidth: readonly string[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, bindings, done) => {
       const component = await factory(host, theme, bindings, done);

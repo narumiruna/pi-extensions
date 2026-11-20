@@ -81,7 +81,10 @@ function createContext(mode: ExtensionContext["mode"] = "tui", hasUI = true) {
   return { ctx, widgets };
 }
 
-function renderWidgetRecord(record: WidgetRecord | undefined, width = 80): WidgetRecord | undefined {
+function renderWidgetRecord(
+  record: WidgetRecord | undefined,
+  width = 80,
+): [key: string, lines: readonly string[] | undefined, options: WidgetRecord[2]] | undefined {
   if (!record) return undefined;
   const [key, content, options] = record;
   const rendered = typeof content === "function" ? content(undefined as never, IDENTITY_THEME).render(width) : content;

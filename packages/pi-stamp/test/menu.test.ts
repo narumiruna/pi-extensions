@@ -538,7 +538,7 @@ test.each(["main", "presets", "settings", "status", "help", "invalid"] as const)
   async (screen) => {
     const runtime = memorySettingsRuntime({ invalid: screen === "invalid" });
     const roles = new Set<string>();
-    const zeroFrames: string[][] = [];
+    const zeroFrames: (readonly string[])[] = [];
     const tui = createTuiHarness({
       width: 80,
       rows: 40,

@@ -34,7 +34,7 @@ interface Slot {
   wanted: string;
   appearance?: Appearance;
   artifact?: RasterResult;
-  image?: { key: string; lines: string[] };
+  image?: { key: string; lines: readonly string[] };
   timer?: ReturnType<typeof setTimeout>;
   controller?: AbortController;
   invalidate?: WeakRef<() => void>;

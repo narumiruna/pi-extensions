@@ -32,7 +32,7 @@ function harness(bindings: KeybindingsConfig = {}) {
   const keys = new KeybindingsManager(TUI_KEYBINDINGS, bindings);
   setKeybindings(keys);
   const roles = new Set<string>();
-  const zeroFrames: string[][] = [];
+  const zeroFrames: (readonly string[])[] = [];
   const tui = createTuiHarness({
     width: 90,
     rows: 30,

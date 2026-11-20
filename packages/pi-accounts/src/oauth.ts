@@ -195,7 +195,7 @@ export async function loginWithOAuthUI(
 type NativeOAuthLoginResult = { ok: true; credential: OAuthCredential } | { ok: false; error: unknown };
 
 type NativeOAuthComponent = {
-  render(width: number): string[];
+  render: LoginDialogComponent["render"];
   handleInput?(data: string): void;
   invalidate(): void;
   dispose?(): void;
@@ -251,7 +251,7 @@ class NativeOAuthLoginFlow {
     );
   }
 
-  render(width: number): string[] {
+  render(width: number) {
     return this.current.render(width);
   }
 

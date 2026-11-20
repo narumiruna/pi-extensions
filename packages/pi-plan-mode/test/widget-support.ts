@@ -7,7 +7,7 @@ const IDENTITY_THEME = {
   fg: (_role: string, text: string) => text,
 } as unknown as Theme;
 
-export function renderMockWidget(value: unknown, width = 80): string[] {
+export function renderMockWidget(value: unknown, width = 80): readonly string[] {
   if (Array.isArray(value)) return value.map(String);
   return createMockWidget(value).render(width);
 }

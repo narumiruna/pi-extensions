@@ -121,7 +121,7 @@ function successfulResponse(input: string | URL | Request): Promise<Response> {
   );
 }
 
-function render(record: WidgetRecord | undefined, width = 80): string[] | undefined {
+function render(record: WidgetRecord | undefined, width = 80): readonly string[] | undefined {
   if (!record) return undefined;
   const content = record[1];
   return typeof content === "function" ? content(undefined as never, identityTheme).render(width) : content;

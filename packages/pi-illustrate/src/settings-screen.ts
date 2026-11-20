@@ -164,8 +164,8 @@ export async function showIllustrateSettings(
             const safeWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
             renderedLabel = 0;
             listTheme.cursor = theme.fg("accent", "→ ");
-            const content = list.render(safeWidth);
-            if (pendingCount > 0) content.push(theme.fg("muted", "Saving…"));
+            const nativeContent: readonly string[] = list.render(safeWidth);
+            const content = pendingCount > 0 ? [...nativeContent, theme.fg("muted", "Saving…")] : nativeContent;
             const focusedRow = submenu ? submenuFocusedRow() : focusedListRow;
             const rows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
             const frame = renderBoundedFrameLayout({

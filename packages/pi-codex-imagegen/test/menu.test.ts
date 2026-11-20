@@ -130,7 +130,7 @@ it("preserves native editing, multiline paste expansion, focused cursor and boun
   setKeybindings(keys);
   const tui = createTuiHarness({ keybindings: keys });
   const { owner } = fixture();
-  let zeroWidth: string[] = [];
+  let zeroWidth: readonly string[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, bindings, done) => {
       const component = await factory(host, theme, bindings, done);
@@ -328,7 +328,7 @@ it.each([
   // Native Editor accepts a printable-leading input chunk verbatim. Native paste
   // has its own C0 filter, so do not change that behavior to exercise this boundary.
   const prompt = `left${attack}right`;
-  const frames: { width: number; focused: boolean; lines: string[] }[] = [];
+  const frames: { width: number; focused: boolean; lines: readonly string[] }[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, bindings, done) => {
       const component = await factory(host, theme, bindings, done);
@@ -375,7 +375,7 @@ it.each([
 
 it("keeps the prompt hardware cursor and fake cell at the native position after editing", async () => {
   const tui = createTuiHarness();
-  let frame: string[] = [];
+  let frame: readonly string[] = [];
   let reference: string[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, bindings, done) => {

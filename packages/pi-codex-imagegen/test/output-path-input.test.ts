@@ -162,7 +162,7 @@ it("forwards focus and keeps zero, narrow, short and resized frames bounded", as
     },
   });
   const { owner } = fixture();
-  let zeroWidth: string[] = [];
+  let zeroWidth: readonly string[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, keys, done) => {
       const component = await factory(host, theme, keys, done);
@@ -286,7 +286,7 @@ it.each([
     theme: { fg: (_role, text) => `\x1b[36m${text}\x1b[39m`, bold: (text) => text },
   });
   const path = `left${attack}right`;
-  const frames: { width: number; focused: boolean; lines: string[] }[] = [];
+  const frames: { width: number; focused: boolean; lines: readonly string[] }[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, bindings, done) => {
       const component = await factory(host, theme, bindings, done);
@@ -330,7 +330,7 @@ it.each([
 
 it("keeps the path hardware cursor and fake cell at the native position after editing", async () => {
   const tui = createTuiHarness();
-  let frame: string[] = [];
+  let frame: readonly string[] = [];
   let reference: string[] = [];
   const custom = (factory: Parameters<typeof tui.custom>[0]) =>
     tui.custom(async (host, theme, bindings, done) => {

@@ -218,7 +218,7 @@ test.for(["show", "cancel"] as const)(
     const screen = new Markdown(session.render("[[README]]"), 0, 0, getMarkdownTheme()).render(80);
     const rootReadme = join(fixtureRoot, "README.md");
     expect(getOsc8LinkAtColumn(screen[0], 0)).toBe(pathToFileURL(rootReadme).href);
-    vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+    vi.spyOn(tui, "getScreenLines").mockImplementation(() => [...screen]);
 
     const pending = Promise.withResolvers<Awaited<ReturnType<typeof readExcerpt>>>();
     onTestFinished(() => pending.resolve(undefined));
@@ -429,7 +429,7 @@ test("plain badges do not index, link, or preview an existing file", async ({ on
   for (const source of ["[[README]]", "[[README.md]]", "[[./README.md]]"]) {
     const lines = new Markdown(session.render(source), 0, 0, getMarkdownTheme()).render(80);
     expect(getOsc8LinkAtColumn(lines[0], 1)).toBeUndefined();
-    screen.mockReturnValue(lines);
+    screen.mockImplementation(() => [...lines]);
     process.stdin.emit("data", "\x1b[<35;2;1M");
     await vi.advanceTimersByTimeAsync(250);
   }
@@ -564,7 +564,7 @@ test.for(["leave", "dispose", "resize", "show and leave"] as const)(
     const session = await startSession(tui);
     onTestFinished(session.stop);
     const screen = new Markdown(session.render("[Local](./local.txt)"), 0, 0, getMarkdownTheme()).render(80);
-    vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+    vi.spyOn(tui, "getScreenLines").mockImplementation(() => [...screen]);
 
     const pending = Promise.withResolvers<Awaited<ReturnType<typeof readExcerpt>>>();
     const read = vi.mocked(readExcerpt);
@@ -625,7 +625,7 @@ test.for([
   for (const col of [0, visibleWidth(label) - 1]) {
     expect(getOsc8LinkAtColumn(screen[0], col)).toBe(`./${file}#L2-L3`);
   }
-  vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+  vi.spyOn(tui, "getScreenLines").mockImplementation(() => [...screen]);
 
   process.stdin.emit("data", "\x1b[<35;6;1M");
   await vi.advanceTimersByTimeAsync(250);
@@ -894,7 +894,7 @@ test("cancels a pending image read when the session widget is replaced", async (
   const session = await startSession(tui);
   onTestFinished(session.stop);
   const screen = new Markdown(session.render("[Cat Photo](./cat.png)"), 0, 0, getMarkdownTheme()).render(80);
-  vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+  vi.spyOn(tui, "getScreenLines").mockImplementation(() => [...screen]);
   const overlay = vi.spyOn(tui, "showOverlay");
   const pending = Promise.withResolvers<string>();
   onTestFinished(() => pending.resolve(fixtureRoot));

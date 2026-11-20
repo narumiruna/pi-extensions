@@ -150,6 +150,10 @@ These conventions preserve cache-eligible request prefixes but cannot guarantee 
   **Verification:** `Test` for rendering, input, user cancellation, and disposal behavior plus
   `Review` against Pi's TUI contract.
 
+Treat rows returned by Pi components as read-only, even when older typings allow mutation. Pi may
+reuse an unchanged frame. Forward rows unchanged when possible and compose into a new array when
+adding or rewriting rows, or when a boundary requires an owned mutable array.
+
 #### Shared terminal handoffs
 
 Use this section only when specialized UI temporarily transfers one terminal between a parent TUI and an extension-owned TUI.

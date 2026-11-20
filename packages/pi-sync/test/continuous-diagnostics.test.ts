@@ -464,7 +464,7 @@ test("Continuous diagnostics keep the manager bounded at zero and narrow termina
     const before = await tree(agentDir);
     for (const width of [1, 12, 32, 60]) {
       const tui = createTuiHarness({ width, rows: 16 });
-      const zeroFrames: string[][] = [];
+      const zeroFrames: (readonly string[])[] = [];
       // The harness requires positive terminal dimensions; exercise the component's zero-width contract directly.
       const custom: typeof tui.custom = (factory, options) =>
         tui.custom(async (...args) => {

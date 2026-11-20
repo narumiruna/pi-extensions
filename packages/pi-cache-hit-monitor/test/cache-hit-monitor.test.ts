@@ -123,7 +123,7 @@ function createContext(mode: ExtensionContext["mode"] = "tui", initialEntries: S
   };
 }
 
-function renderWidget(record: WidgetRecord | undefined, width = 100): string[] | undefined {
+function renderWidget(record: WidgetRecord | undefined, width = 100): readonly string[] | undefined {
   if (!record) return undefined;
   const content = record[1];
   return typeof content === "function" ? content(undefined as never, THEME).render(width) : content;

@@ -146,7 +146,7 @@ function fixture(onTestFinished: (cleanup: () => void) => void) {
     dispose: () => widget?.dispose?.(),
     link(source: string) {
       const lines = new Markdown(render(source), 0, 0, getMarkdownTheme()).render(120);
-      screen.mockReturnValue(lines);
+      screen.mockImplementation(() => [...lines]);
       return lines[0];
     },
     async hover() {
