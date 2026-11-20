@@ -1,109 +1,168 @@
 import assert from "node:assert/strict";
-import type { LangfuseSpanProcessorParams } from "@langfuse/otel";
-import { LangfuseOtelSpanAttributes, setLangfuseTracerProvider, startObservation } from "@langfuse/tracing";
-import { ROOT_CONTEXT, trace } from "@opentelemetry/api";
-import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { Buffer } from "node:buffer";
+import { once } from "node:events";
+import { createServer, type IncomingHttpHeaders } from "node:http";
+import { gunzipSync } from "node:zlib";
+import { context, ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import { StackContextManager, TracerProvider } from "@opentelemetry/sdk-trace";
 import { test, vi } from "vitest";
 import { createProductionBackend } from "../src/runtime.js";
-import type { ObservationType } from "../src/tracing.js";
+import type { ObservationType, TraceBackend } from "../src/tracing.js";
 
-const exporter = new InMemorySpanExporter();
+interface WireSpan {
+  name: string;
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  startTimeUnixNano: string;
+  endTimeUnixNano: string;
+  attributes: { key: string; value: { boolValue?: boolean; stringValue?: string; arrayValue?: unknown } }[];
+}
 
-// Keep the production predicate and real Langfuse processing; replace only network export.
-vi.mock("@langfuse/otel", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@langfuse/otel")>();
-  return {
-    ...actual,
-    LangfuseSpanProcessor: class extends actual.LangfuseSpanProcessor {
-      constructor(params: LangfuseSpanProcessorParams) {
-        super({ ...params, exporter, exportMode: "immediate", mediaUploadEnabled: false });
-      }
-    },
-  };
-});
+interface WireTrace {
+  resourceSpans: { scopeSpans: { scope: { name: string }; spans: WireSpan[] }[] }[];
+}
 
-test("production filter marks Langfuse app roots at start without exporting unrelated spans", async () => {
-  let provider: NodeTracerProvider | undefined;
-  const backend = await createProductionBackend(
-    {
-      publicKey: "pk-app-root",
-      secretKey: "sk-app-root",
-      baseUrl: "https://example.test",
-      captureContent: true,
-    },
-    {
-      createProvider: (processor) => {
-        provider = new NodeTracerProvider({ spanProcessors: [processor] });
-        return provider;
-      },
-    },
-  );
+test.each([
+  { override: undefined, encoding: "gzip" },
+  { override: " NONE ", encoding: undefined },
+])("production OTLP flush and shutdown export only Pi spans ($encoding)", async ({ override, encoding }) => {
+  vi.stubEnv("LANGFUSE_OTEL_COMPRESSION", override);
+  vi.stubEnv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", override ? "gzip" : undefined);
+  vi.stubEnv("OTEL_EXPORTER_OTLP_COMPRESSION", undefined);
+  const requests: { method?: string; url?: string; headers: IncomingHttpHeaders; body: Buffer }[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk);
+    requests.push({ method: request.method, url: request.url, headers: request.headers, body: Buffer.concat(chunks) });
+    response.writeHead(200, { "content-type": "application/json" }).end("{}");
+  });
+  const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
+  let backend: TraceBackend | undefined;
+  const secretKey = 'sk-test"with\\escapes';
   try {
-    assert.ok(provider);
-    for (const type of ["agent", "generation", "tool", "span"] satisfies ObservationType[]) {
-      const root = backend.start(`root-${type}`, { input: "request", output: "response" }, { asType: type });
-      const child = backend.start(`child-${type}`, {}, { asType: type, parent: root });
-      const backdated = backend.start(
-        `backdated-${type}`,
-        {},
-        { asType: type, parent: root, startTime: new Date(1_000) },
-      );
-      child.end();
-      backdated.end();
-      root.end();
-    }
-
-    // Default Langfuse smart filtering would also export GenAI and known LLM instrumentors.
-    for (const [scope, attributes] of [
-      ["unrelated", {}],
-      ["unrelated-genai", { "gen_ai.operation.name": "chat" }],
-      ["openinference.instrumentation.openai", {}],
-    ] as const) {
-      provider.getTracer(scope).startSpan(scope, { attributes }, ROOT_CONTEXT).end();
-    }
-
-    const external = provider.getTracer("unrelated").startSpan("external-parent", {}, ROOT_CONTEXT);
-    const attached = startObservation("attached-root", {}, { parentSpanContext: external.spanContext() });
-    const attachedChild = attached.startObservation("attached-child");
-    attachedChild.end();
-    attached.end();
-    external.end();
-
-    // An ended parent is no longer tracked as expected-exported; the SDK marks a new app root.
-    const ended = backend.start("ended-parent", {}, { asType: "agent" });
-    ended.end();
-    backend.start("late-child", {}, { asType: "span", parent: ended }).end();
-    await backend.forceFlush();
-
-    const spans = exporter.getFinishedSpans();
-    assert.equal(spans.length, 16);
-    for (const span of spans) {
-      assert.equal(span.instrumentationScope.name, "langfuse-sdk");
-      const isRoot =
-        span.name.startsWith("root-") || ["attached-root", "ended-parent", "late-child"].includes(span.name);
-      assert.equal(span.attributes[LangfuseOtelSpanAttributes.IS_APP_ROOT], isRoot ? true : undefined, span.name);
-      if (span.name.startsWith("root-")) {
-        assert.equal(span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_INPUT], "request");
-        assert.equal(span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT], "response");
-      }
-      if (span.name.startsWith("child-") || span.name.startsWith("backdated-")) {
-        const type = span.name.slice(span.name.indexOf("-") + 1);
-        const root = spans.find((candidate) => candidate.name === `root-${type}`);
-        assert.equal(span.parentSpanContext?.spanId, root?.spanContext().spanId, span.name);
-        assert.equal(span.spanContext().traceId, root?.spanContext().traceId, span.name);
-      }
-    }
-    assert.equal(
-      spans.find((span) => span.name === "attached-root")?.parentSpanContext?.spanId,
-      external.spanContext().spanId,
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    let provider: TracerProvider | undefined;
+    backend = await createProductionBackend(
+      {
+        publicKey: "pk-app-root",
+        secretKey,
+        baseUrl: `http://127.0.0.1:${address.port}/self-hosted/`,
+        captureContent: true,
+        environment: "test-env",
+        release: "test-release",
+      },
+      {
+        createProvider: (processor) => {
+          provider = new TracerProvider({ spanProcessors: [processor] });
+          return provider;
+        },
+      },
     );
-    assert.equal(trace.getSpan(ROOT_CONTEXT), undefined);
-  } finally {
+    assert.ok(provider);
+    const external = provider.getTracer("unrelated").startSpan("external-parent", {}, ROOT_CONTEXT);
+    assert.equal(context.setGlobalContextManager(new StackContextManager().enable()), true);
+    const attached = context.with(trace.setSpan(ROOT_CONTEXT, external), () =>
+      backend?.start("attached-root", {}, { asType: "span" }),
+    );
+    attached?.end();
+    external.end();
+    // Neither GenAI attributes nor known LLM instrumentation are enough to export other spans.
+    provider
+      .getTracer("openinference.instrumentation.openai")
+      .startSpan("unrelated-genai", { attributes: { "gen_ai.operation.name": "chat" } }, ROOT_CONTEXT)
+      .end();
+
+    for (const type of ["agent", "generation", "tool", "span"] satisfies ObservationType[]) {
+      const root = backend.start(
+        `root-${type}`,
+        { input: { [secretKey]: secretKey }, output: "response", sessionId: "test-session", userId: "test-user" },
+        { asType: type },
+      );
+      root.updateTrace?.({ name: "trace name", input: "trace request", tags: ["test-tag"] });
+      const child = backend.start(`child-${type}`, {}, { asType: type, parent: root, startTime: new Date(1_000) });
+      child.end(2_000);
+      root.end();
+      backend.start(`late-${type}`, {}, { asType: type, parent: root }).end();
+    }
+
+    await backend.forceFlush();
+    assert.equal(requests.length, 1);
+    backend.start("shutdown-span", {}, { asType: "agent" }).end();
     await backend.shutdown();
-    setLangfuseTracerProvider(null);
-    const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
-    delete globals[Symbol.for("@narumitw/pi-langfuse/runtime/v2")];
-    delete globals[Symbol.for("@narumitw/pi-langfuse/runtime/v1")];
+    assert.equal(requests.length, 2);
+
+    const batches = requests.map(({ method, url, headers, body }) => {
+      assert.equal(method, "POST");
+      assert.equal(url, "/self-hosted/api/public/otel/v1/traces");
+      assert.equal(headers.authorization, `Basic ${Buffer.from(`pk-app-root:${secretKey}`).toString("base64")}`);
+      assert.equal(headers["x-langfuse-ingestion-version"], "4");
+      assert.equal(headers["content-type"], "application/json");
+      assert.equal(headers["content-encoding"], encoding);
+      const json = (encoding === "gzip" ? gunzipSync(body) : body).toString();
+      const payload = JSON.parse(json) as WireTrace;
+      return payload.resourceSpans
+        .flatMap((resource) => resource.scopeSpans)
+        .flatMap(({ scope, spans }) => {
+          assert.equal(scope.name, "@narumitw/pi-langfuse");
+          return spans;
+        });
+    });
+    const [flushed, drained] = batches;
+    assert.equal(flushed?.length, 13);
+    assert.deepEqual(
+      drained?.map((span) => span.name),
+      ["shutdown-span"],
+    );
+
+    const attributes = (span: WireSpan) => Object.fromEntries(span.attributes.map(({ key, value }) => [key, value]));
+    for (const span of flushed ?? []) {
+      const { name } = span;
+      const attrs = attributes(span);
+      assert.equal(attrs["langfuse.environment"]?.stringValue, "test-env");
+      assert.equal(attrs["langfuse.release"]?.stringValue, "test-release");
+      assert.equal(attrs["langfuse.internal.is_app_root"]?.boolValue, name.startsWith("child-") ? undefined : true);
+      if (name === "attached-root") {
+        assert.equal(span.parentSpanId, external.spanContext().spanId);
+        assert.equal(span.traceId, external.spanContext().traceId);
+        continue;
+      }
+      const type = name.slice(name.indexOf("-") + 1);
+      assert.equal(attrs["langfuse.observation.type"]?.stringValue, type);
+      if (name.startsWith("root-")) {
+        assert.equal(
+          attrs["langfuse.observation.input"]?.stringValue,
+          '{"[LANGFUSE_KEY_REDACTED]":"[LANGFUSE_KEY_REDACTED]"}',
+        );
+        assert.equal(attrs["langfuse.observation.output"]?.stringValue, "response");
+        assert.equal(attrs["langfuse.trace.name"]?.stringValue, "trace name");
+        assert.equal(attrs["langfuse.trace.input"]?.stringValue, "trace request");
+        assert.deepEqual(attrs["langfuse.trace.tags"]?.arrayValue, { values: [{ stringValue: "test-tag" }] });
+        assert.equal(attrs["session.id"]?.stringValue, "test-session");
+        assert.equal(attrs["user.id"]?.stringValue, "test-user");
+      } else {
+        const root = flushed?.find((candidate) => candidate.name === `root-${type}`);
+        assert.equal(span.parentSpanId, root?.spanId);
+        assert.equal(span.traceId, root?.traceId);
+      }
+      if (name.startsWith("child-")) {
+        assert.equal(span.startTimeUnixNano, "1000000000");
+        assert.equal(span.endTimeUnixNano, "2000000000");
+      }
+    }
+  } finally {
+    try {
+      await backend?.shutdown();
+    } finally {
+      context.disable();
+      vi.unstubAllEnvs();
+      delete globals[Symbol.for("@narumitw/pi-langfuse/runtime/v2")];
+      delete globals[Symbol.for("@narumitw/pi-langfuse/runtime/v1")];
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   }
 });

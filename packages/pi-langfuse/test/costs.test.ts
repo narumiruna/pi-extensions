@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fauxAssistantMessage, type Usage } from "@earendil-works/pi-ai";
-import { setLangfuseTracerProvider } from "@langfuse/tracing";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace";
 import { test } from "vitest";
 import { durableUsage } from "../src/durable-projection.js";
 import { createProductionBackend } from "../src/runtime.js";
@@ -172,7 +171,7 @@ test("production observations serialize cost totals and provenance without serve
   const exporter = new InMemorySpanExporter();
   const backend = await createProductionBackend(
     { publicKey: "pk-cost-test", secretKey: "sk-cost-test", baseUrl: "https://example.test", captureContent: false },
-    { createProcessor: () => new SimpleSpanProcessor(exporter) },
+    { createProcessor: () => new SimpleSpanProcessor({ exporter }) },
   );
   try {
     for (const { name, cost, expected, provenance } of cases) {
@@ -209,6 +208,5 @@ test("production observations serialize cost totals and provenance without serve
     }
   } finally {
     await backend.shutdown();
-    setLangfuseTracerProvider(null);
   }
 });

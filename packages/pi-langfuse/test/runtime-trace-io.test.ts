@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { setLangfuseTracerProvider } from "@langfuse/tracing";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace";
 import { test } from "vitest";
 import { createProductionBackend } from "../src/runtime.js";
 import { TraceRecorder } from "../src/tracing.js";
 
 test("trace IO preserves legacy serialization, receiver scope, and sanitized recorder content", async () => {
   const exporter = new InMemorySpanExporter();
-  const processor = new SimpleSpanProcessor(exporter);
+  const processor = new SimpleSpanProcessor({ exporter });
   const backend = await createProductionBackend(
     {
       publicKey: "pk-trace-io",
@@ -121,6 +120,5 @@ test("trace IO preserves legacy serialization, receiver scope, and sanitized rec
     assert.equal(JSON.stringify(agent.attributes).includes("c2VjcmV0"), false);
   } finally {
     await backend.shutdown();
-    setLangfuseTracerProvider(null);
   }
 });

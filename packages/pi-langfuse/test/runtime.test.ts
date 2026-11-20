@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { context as otelContext, trace } from "@opentelemetry/api";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
 import { test } from "vitest";
 import {
   createLangfuseRuntime,
@@ -85,8 +84,8 @@ test("v2 runtime reserves the legacy slot against reverse-order provider initial
   const runtimeKey = Symbol.for("@narumitw/pi-langfuse/runtime/v2");
   const legacyKey = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
   const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
-  const processor = new SimpleSpanProcessor(new InMemorySpanExporter());
-  const provider = new NodeTracerProvider({ spanProcessors: [processor] });
+  const processor = new SimpleSpanProcessor({ exporter: new InMemorySpanExporter() });
+  const provider = new TracerProvider({ spanProcessors: [processor] });
   const config = {
     publicKey: "pk-reverse-order",
     secretKey: "sk-reverse-order",
@@ -99,7 +98,6 @@ test("v2 runtime reserves the legacy slot against reverse-order provider initial
     backend = await createProductionBackend(config, {
       createProcessor: () => processor,
       createProvider: () => provider,
-      selectProvider: () => undefined,
     });
     const legacySlot = (await globals[legacyKey]) as { shutdown?: boolean };
 
@@ -136,11 +134,11 @@ test("runtime flush serialization recovers after failure and shutdown remains id
 });
 
 test("isolated runtime preserves the global provider and exports native observation hierarchy", async () => {
-  const existingGlobalProvider = new NodeTracerProvider();
+  const existingGlobalProvider = new TracerProvider();
   assert.equal(trace.setGlobalTracerProvider(existingGlobalProvider), true);
   const globalProvider = trace.getTracerProvider();
   const exporter = new InMemorySpanExporter();
-  const processor = new SimpleSpanProcessor(exporter);
+  const processor = new SimpleSpanProcessor({ exporter });
   let providers = 0;
   const config = {
     publicKey: "pk-runtime-test",
@@ -150,7 +148,7 @@ test("isolated runtime preserves the global provider and exports native observat
   };
   await assert.rejects(
     createProductionBackend(config, {
-      createProcessor: () => new SimpleSpanProcessor(new InMemorySpanExporter()),
+      createProcessor: () => new SimpleSpanProcessor({ exporter: new InMemorySpanExporter() }),
       createProvider: () => {
         throw new Error("provider initialization failed");
       },
@@ -161,7 +159,7 @@ test("isolated runtime preserves the global provider and exports native observat
     createProcessor: () => processor,
     createProvider: (spanProcessor) => {
       providers += 1;
-      return new NodeTracerProvider({ spanProcessors: [spanProcessor] });
+      return new TracerProvider({ spanProcessors: [spanProcessor] });
     },
   });
   assert.equal(await createProductionBackend(config), backend);

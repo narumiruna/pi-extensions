@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { fauxAssistantMessage, type Message, type Usage } from "@earendil-works/pi-ai";
 import type { ConversationId, EntryId, EntryRecord, SubmissionId, TaskId } from "@earendil-works/pi-durable";
-import { setLangfuseTracerProvider } from "@langfuse/tracing";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace";
 import { test } from "vitest";
 import { durableAttributes, durableUsage } from "../src/durable-projection.js";
 import { DurableRecorder } from "../src/durable-recorder.js";
@@ -219,7 +218,7 @@ test("durable production exporter preserves provenance, completion metadata and 
       baseUrl: "https://example.test",
       captureContent: true,
     },
-    { createProcessor: () => new SimpleSpanProcessor(exporter) },
+    { createProcessor: () => new SimpleSpanProcessor({ exporter }) },
   );
   try {
     for (const { name, cost, expected, provenance } of cases) {
@@ -251,6 +250,5 @@ test("durable production exporter preserves provenance, completion metadata and 
     }
   } finally {
     await backend.shutdown();
-    setLangfuseTracerProvider(null);
   }
 });
