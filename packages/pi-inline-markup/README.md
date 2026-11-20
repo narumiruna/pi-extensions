@@ -81,8 +81,10 @@ seconds after each scan.
 
 Previews are local. They exclude files outside Pi's working directory, hidden
 paths, `node_modules`, and symbolic links. The extension does not add file
-contents to the model context. In the terminal UI it adds one fixed system
-prompt hint about link syntax, independent of the wikilink toggle.
+contents to the model context. In the terminal UI it adds a fixed system prompt
+hint about badge labels and Markdown file citations. The hint uses a
+placeholder path and contains no extension name or workspace data. Updating the hint does not
+rewrite existing session history.
 
 ## 🚧 Limitations
 

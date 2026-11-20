@@ -131,16 +131,15 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
   };
 }
 
-test("adds a stable badge hint only while the TUI widget is active", async ({ onTestFinished }) => {
+test("adds generic formatting guidance only while the TUI widget is active", async ({ onTestFinished }) => {
   const session = await startSession();
   onTestFinished(session.stop);
   const first = await session.promptSections();
   expect(first).toEqual({
     other: "Keep this section.",
-    pi_inline_markup: expect.stringContaining("[[label]] is decorative"),
+    inline_formatting: `Use [[label]] for badges.
+Use Markdown links with workspace-relative paths for file citations, for example [file](./path/to/file#L12-L20).`,
   });
-  expect(first.pi_inline_markup).toContain("[[[label](./path)]]");
-  expect(first.pi_inline_markup).toContain("#L12-L20");
   expect(await session.promptSections()).toEqual(first);
   expect(await session.promptSections("rpc")).toEqual({ other: "Keep this section." });
   await session.stop();
