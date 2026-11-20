@@ -137,6 +137,10 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
         },
       });
       if (!changed || !live()) return;
+      if (changed === "saved-after-cancel") {
+        ctx.ui.notify("The prompt hint was saved. Run /reload to apply it.", "info");
+        return;
+      }
       const reload = await ctx.ui.confirm("Reload Pi now?", "The prompt hint setting was saved.", {
         signal: menu.signal,
       });

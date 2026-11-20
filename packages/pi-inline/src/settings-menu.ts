@@ -1,25 +1,13 @@
 import { stripVTControlCharacters } from "node:util";
-import {
-  type ExtensionCommandContext,
-  getSettingsListTheme,
-  type KeybindingsManager,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
-import {
-  CURSOR_MARKER,
-  Editor,
-  matchesKey,
-  type SettingItem,
-  SettingsList,
-  type TUI,
-  type TuiMouseEvent,
-} from "@earendil-works/pi-tui";
+import { type ExtensionCommandContext, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, matchesKey, type SettingItem, SettingsList, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import {
   HorizontalRule,
   renderBoundedFrameLayout,
   runCustomInteraction,
   sanitizeTerminalDocument,
 } from "@narumitw/pi-tui-kit";
+import { createPromptHintEditor } from "./prompt-hint-editor.js";
 import type { PromptHintChange, PromptHintSettings } from "./settings.js";
 
 interface InlineSettingsOptions {
@@ -33,8 +21,6 @@ interface InlineSettingsOptions {
 }
 
 const VALUES = ["On", "Off"];
-const PASTE_START = "\x1b[200~";
-const PASTE_END = "\x1b[201~";
 
 function onOff(enabled: boolean) {
   return enabled ? "On" : "Off";
@@ -43,7 +29,8 @@ function onOff(enabled: boolean) {
 export async function showInlineSettings(
   ctx: ExtensionCommandContext,
   options: InlineSettingsOptions,
-): Promise<boolean> {
+): Promise<boolean | "saved-after-cancel"> {
+  let savedWhileClosing = false;
   const result = await runCustomInteraction<boolean>(ctx, {
     blocked: { kind: "question", message: "Edit Inline settings" },
     signal: options.signal,
@@ -61,13 +48,16 @@ export async function showInlineSettings(
       let mousePressed = false;
       const mouseRows = new Map<number, number>();
 
-      function save(change: PromptHintChange, unchanged?: () => void) {
+      function save(change: () => PromptHintChange, unchanged?: () => void) {
         if (signal.aborted || pending || options.saveBlocked) return;
         pending = Promise.resolve().then(async () => {
           try {
             if (signal.aborted) return;
-            const changed = await options.save(change, signal);
-            if (signal.aborted) return;
+            const changed = await options.save(change(), signal);
+            if (signal.aborted) {
+              savedWhileClosing = changed;
+              return;
+            }
             if (changed) complete(true);
             else unchanged?.();
           } catch (error) {
@@ -113,8 +103,10 @@ export async function showInlineSettings(
                   mouseRows.clear();
                   finish();
                 };
-                editor = createPromptHintEditor(tui, theme, keybindings, options.saved.text, back, (value) => {
-                  save({ key: "promptHintText", value }, back);
+                editor = createPromptHintEditor(tui, theme, keybindings, options.saved.text, {
+                  back,
+                  cancel: () => complete(false),
+                  save: (draft) => save(() => ({ key: "promptHintText", value: draft() }), back),
                 });
                 editor.focused = focused;
                 mouseRows.clear();
@@ -138,7 +130,7 @@ export async function showInlineSettings(
           if (id === "promptHintEnabled") {
             // Native SettingsList cycles first; keep the displayed value until a save succeeds.
             list.updateValue(id, promptValue);
-            save({ key: id, value: value === "On" });
+            save(() => ({ key: id, value: value === "On" }));
           }
         },
         () => complete(false),
@@ -193,9 +185,7 @@ export async function showInlineSettings(
           mousePressed = false;
           mouseRows.clear();
           if (matchesKey(data, "ctrl+c") && !editor?.pasting) complete(false);
-          else if (pending) {
-            if (keybindings.matches(data, "tui.select.cancel")) complete(false);
-          } else list.handleInput(data);
+          else if (!pending) list.handleInput(data);
           if (!signal.aborted) tui.requestRender();
         },
         handleMouse(event: TuiMouseEvent) {
@@ -224,99 +214,6 @@ export async function showInlineSettings(
       };
     },
   });
-  return result.kind === "completed" && result.value;
-}
-
-function createPromptHintEditor(
-  tui: TUI,
-  theme: Theme,
-  keybindings: KeybindingsManager,
-  initialText: string,
-  back: () => void,
-  save: (text: string) => void,
-) {
-  const muted = (text: string) => theme.fg("muted", text);
-  const editor = new Editor(tui, {
-    borderColor: (text) => theme.fg("borderMuted", text),
-    selectList: {
-      selectedPrefix: (text) => theme.fg("accent", text),
-      selectedText: (text) => theme.fg("accent", text),
-      description: muted,
-      scrollInfo: muted,
-      noMatch: muted,
-    },
-  });
-  editor.setText(initialText);
-  // Pi expands tabs to four spaces in the editor. Do not write that expansion on an untouched submit.
-  const initialDraft = editor.getExpandedText();
-  let pasteTail: string | undefined;
-  const displaySafe = () => sanitizeTerminalDocument(editor.getText()) === editor.getText();
-
-  function handleInput(data: string) {
-    if (data.includes(PASTE_START)) pasteTail = "";
-    if (pasteTail !== undefined) {
-      const packet = pasteTail + data;
-      const end = packet.indexOf(PASTE_END);
-      if (end < 0) {
-        pasteTail = packet.slice(1 - PASTE_END.length);
-        editor.handleInput(data);
-        return;
-      }
-      const boundary = end + PASTE_END.length - pasteTail.length;
-      pasteTail = undefined;
-      editor.handleInput(data.slice(0, boundary));
-      if (boundary < data.length) handleInput(data.slice(boundary));
-      return;
-    }
-    if (keybindings.matches(data, "tui.select.cancel")) {
-      back();
-      return;
-    }
-    if (!keybindings.matches(data, "tui.input.submit") && !matchesKey(data, "enter")) {
-      editor.handleInput(data);
-      return;
-    }
-    // Delegate key priority and newline fallbacks to Pi. Its submit clears and trims the draft.
-    // Keep the exact state before that clear, including any Backspace Pi performed before submit.
-    let draft = editor.getExpandedText();
-    let previous = draft;
-    editor.onChange = () => {
-      previous = draft;
-      draft = editor.getExpandedText();
-    };
-    editor.onSubmit = () => {
-      editor.onChange = undefined;
-      if (previous === initialDraft && initialDraft !== initialText) {
-        back();
-        return;
-      }
-      editor.setText(previous);
-      save(previous);
-    };
-    try {
-      editor.handleInput(data);
-    } finally {
-      editor.onChange = undefined;
-      editor.onSubmit = undefined;
-    }
-  }
-
-  return {
-    get focused() {
-      return editor.focused;
-    },
-    set focused(value: boolean) {
-      editor.focused = value;
-    },
-    get pasting() {
-      return pasteTail !== undefined;
-    },
-    render: (width: number) =>
-      displaySafe()
-        ? editor.render(width)
-        : [theme.fg("warning", "Draft contains unsafe terminal text. Undo or edit it.")],
-    invalidate: () => editor.invalidate(),
-    handleInput,
-    handleMouse: (event: TuiMouseEvent) => (displaySafe() ? editor.handleMouse(event) : undefined),
-  };
+  if (result.kind !== "completed") return false;
+  return savedWhileClosing ? "saved-after-cancel" : result.value;
 }

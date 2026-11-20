@@ -152,6 +152,20 @@ test("does not ask for reload for an unchanged value or a cancelled menu", async
   expect(host.reload).not.toHaveBeenCalled();
 });
 
+test("reports a save that committed during hard cancel without reopening the UI", async ({ onTestFinished }) => {
+  const host = await fixture(onTestFinished);
+  host.menu.mockImplementationOnce(async (_, options) => {
+    await options.save({ key: "promptHintEnabled", value: false }, options.signal);
+    return "saved-after-cancel";
+  });
+  await host.run();
+  expect(await host.readSettings()).toEqual({ promptHintEnabled: false });
+  expect(host.notify).toHaveBeenCalledExactlyOnceWith("The prompt hint was saved. Run /reload to apply it.", "info");
+  expect(host.confirm).not.toHaveBeenCalled();
+  expect(host.reload).not.toHaveBeenCalled();
+  expect(await host.currentHint()).toBe(INLINE_FORMATTING_PROMPT);
+});
+
 test("loads saved text on accepted reload and reports a failed reload without applying it", async ({
   onTestFinished,
 }) => {

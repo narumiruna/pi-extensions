@@ -116,6 +116,20 @@ test("normalizes CRLF and leaves significant whitespace and unknown fields intac
   });
 });
 
+test("updates only prompt keys and preserves unrecognized JSON values byte for byte", async () => {
+  const unknown = '"future": [9007199254740993, -0, 1e400, {"promptHintText":"unchanged","more":1.2300}]';
+  const source = `{\n  ${unknown},\n  "promptHintText": "shadowed",\n  "promptHint\\u0054ext": "Current"\n}\n`;
+  await setSource(source);
+  await expect(settings.savePromptHint({ ...defaults, text: "Current" }, textChange("New"), signal)).resolves.toBe(
+    true,
+  );
+  const replaced = source.replace('"Current"', '"New"');
+  await expectIntact(replaced);
+  await expect(settings.savePromptHint(defaults, disable, signal)).resolves.toBe(true);
+  await expectIntact(replaced.replace('"New"\n', '"New",\n  "promptHintEnabled": false\n'));
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: { enabled: false, text: "New" } });
+});
+
 test.for(["{broken\x1b[31msecret", "null", "[]", '"string"'])("does not replace invalid JSON (%j)", async (source) => {
   await setSource(source);
   await expect(settings.loadSettings(signal)).resolves.toEqual({

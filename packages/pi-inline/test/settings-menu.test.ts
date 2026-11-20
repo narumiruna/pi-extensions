@@ -29,6 +29,9 @@ const DOWN = "\x1b[B";
 const ENTER = "\r";
 const CANCEL = "\x1b";
 const HARD_CANCEL = "\x03";
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+const CTRL_UNDERSCORE = "\x1f";
 const text = (lines: readonly string[]) => lines.map(stripVTControlCharacters).join("\n");
 
 beforeAll(() => initTheme("dark"));
@@ -152,7 +155,8 @@ test("uses remapped editor bindings and keeps spaces, multiline input, and expan
   menu.send(DOWN, DOWN, ENTER, "x", "\x7f", ENTER, "Second ");
   const largePaste = "   pasted line \n".repeat(12);
   menu.send(`\x1b[200~${largePaste}`, HARD_CANCEL, "\x1b[20", "1~");
-  expect(text(menu.component.render(60))).toContain("[paste #1");
+  expect(text(menu.component.render(60))).toContain("pasted line");
+  expect(text(menu.component.render(60))).not.toContain("[paste #");
   expect(menu.closed).not.toHaveBeenCalled();
   expect(menu.save).not.toHaveBeenCalled();
   menu.send("\x1bOQ");
@@ -161,6 +165,77 @@ test("uses remapped editor bindings and keeps spaces, multiline input, and expan
     { key: "promptHintText", value: `  Original\nSecond ${largePaste}` },
     expect.any(AbortSignal),
   );
+});
+
+test("keeps literal paste markers in the prefill and inside a multiline paste", async () => {
+  const original = "Keep [paste #1] and [paste #2 +11 lines].\n";
+  const pasted = `[paste #1]\n${"Pasted line\n".repeat(10)}`;
+  const menu = await openMenu({ saved: { enabled: true, text: original } });
+  menu.send(DOWN, DOWN, ENTER, PASTE_START + pasted + PASTE_END, ENTER);
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith(
+    { key: "promptHintText", value: original + pasted },
+    expect.any(AbortSignal),
+  );
+});
+
+test("preserves tabs before and after edits and leaves ordinary spaces unchanged", async () => {
+  const menu = await openMenu({ saved: { enabled: true, text: "\tKeep this line\n    Change this line\t" } });
+  menu.send(DOWN, DOWN, ENTER, "!");
+  const row = menu.component.render(60).findIndex((line) => line.includes("Change this line"));
+  click(menu.component, 4, row);
+  menu.send("Do not ", ENTER);
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith(
+    { key: "promptHintText", value: "\tKeep this line\n    Do not Change this line\t!" },
+    expect.any(AbortSignal),
+  );
+});
+
+test("uses the native backslash newline fallback with the default submit key", async () => {
+  const menu = await openMenu();
+  menu.send(DOWN, DOWN, ENTER, "\\", ENTER, "Next line");
+  expect(menu.save).not.toHaveBeenCalled();
+  menu.send(ENTER);
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith(
+    { key: "promptHintText", value: "Original\nNext line" },
+    expect.any(AbortSignal),
+  );
+});
+
+test("submits without the backslash with the native remapped newline fallback", async () => {
+  const menu = await openMenu({}, { "tui.input.newLine": "enter", "tui.input.submit": "shift+enter" });
+  menu.send(DOWN, DOWN, ENTER, "\\", ENTER);
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith(
+    { key: "promptHintText", value: "Original" },
+    expect.any(AbortSignal),
+  );
+});
+
+test("preserves native editing priority when the save and Backspace bindings overlap", async () => {
+  const menu = await openMenu({}, { "tui.input.submit": ["f2", "backspace"] });
+  menu.send(DOWN, DOWN, ENTER, "\x7f");
+  expect(menu.save).not.toHaveBeenCalled();
+  menu.send("\x1bOQ");
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith(
+    { key: "promptHintText", value: "Origina" },
+    expect.any(AbortSignal),
+  );
+});
+
+test("uses a remapped printable submit key as the target of a native character jump", async () => {
+  const menu = await openMenu(
+    { saved: { enabled: true, text: "one" } },
+    { "tui.editor.jumpBackward": "f2", "tui.input.submit": "o" },
+  );
+  menu.send(DOWN, DOWN, ENTER, "\x1bOQ", "o", "A");
+  expect(menu.save).not.toHaveBeenCalled();
+  menu.send("o");
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith({ key: "promptHintText", value: "Aone" }, expect.any(AbortSignal));
 });
 
 test("backs out with remapped cancel and hard-cancels from the editor", async () => {
@@ -186,6 +261,69 @@ test("keeps the editor draft after failure and does not submit a second save whi
   await expect(menu.result).resolves.toBe(true);
   expect(menu.save).toHaveBeenCalledTimes(2);
 });
+
+test("Undo after a failed save removes the paste, not the draft", async () => {
+  const menu = await openMenu({}, { "tui.editor.undo": "ctrl+_" });
+  menu.save.mockRejectedValueOnce(new Error("Fix the file."));
+  const pasted = "\nPasted line".repeat(11);
+  menu.send(DOWN, DOWN, ENTER, " changed", PASTE_START + pasted + PASTE_END, ENTER);
+  await menu.component.waitForPending?.();
+  expect(menu.save).toHaveBeenCalledExactlyOnceWith(
+    { key: "promptHintText", value: `Original changed${pasted}` },
+    expect.any(AbortSignal),
+  );
+  menu.send(CTRL_UNDERSCORE, ENTER);
+  await expect(menu.result).resolves.toBe(true);
+  expect(menu.save).toHaveBeenLastCalledWith(
+    { key: "promptHintText", value: "Original changed" },
+    expect.any(AbortSignal),
+  );
+});
+
+test.for([
+  { cancelKey: CANCEL, bindings: undefined },
+  { cancelKey: "\x18", bindings: { "tui.select.cancel": "ctrl+x" } },
+])("ignores configured cancel during a save and completes with the saved result", async ({ cancelKey, bindings }) => {
+  const started = Promise.withResolvers<AbortSignal>();
+  const saved = Promise.withResolvers<boolean>();
+  const menu = await openMenu(
+    {
+      save(_change, signal) {
+        started.resolve(signal);
+        return saved.promise;
+      },
+    },
+    bindings as KeybindingsConfig | undefined,
+  );
+  menu.send(DOWN, ENTER);
+  const signal = await started.promise;
+  menu.send(cancelKey);
+  expect(menu.closed).not.toHaveBeenCalled();
+  expect(signal.aborted).toBe(false);
+  saved.resolve(true);
+  await expect(menu.result).resolves.toBe(true);
+});
+
+test.for([true, false])(
+  "hard-cancels immediately and reports whether an in-flight save committed (%j)",
+  async (committed) => {
+    const started = Promise.withResolvers<AbortSignal>();
+    const saved = Promise.withResolvers<boolean>();
+    const menu = await openMenu({
+      save(_change, signal) {
+        started.resolve(signal);
+        return saved.promise;
+      },
+    });
+    menu.send(DOWN, ENTER);
+    const signal = await started.promise;
+    menu.send(HARD_CANCEL);
+    expect(menu.closed).toHaveBeenCalledOnce();
+    expect(signal.aborted).toBe(true);
+    saved.resolve(committed);
+    await expect(menu.result).resolves.toBe(committed ? "saved-after-cancel" : false);
+  },
+);
 
 test("does not close the menu for an unchanged save or rewrite an untouched prefill with tabs", async () => {
   const menu = await openMenu({ saved: { enabled: true, text: "\tOriginal" } });

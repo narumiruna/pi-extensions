@@ -4,6 +4,7 @@ import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "n
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { parseTree } from "jsonc-parser";
 import { type ExternalPreviewRoot, relativePreviewPath } from "./filelinks.js";
 import { INLINE_FORMATTING_PROMPT } from "./prompt.js";
 
@@ -16,7 +17,7 @@ type PromptSettings = { prompt: PromptHintSettings; saveBlocked?: true };
 type Settings = PromptSettings & { roots: readonly ExternalPreviewRoot[]; invalid?: true };
 type SettingsDocument = Record<string, unknown>;
 
-type DocumentSnapshot = { document: SettingsDocument; stat?: BigIntStats };
+type DocumentSnapshot = { document: SettingsDocument; source?: string; stat?: BigIntStats };
 const repair = "Settings cannot be saved. Repair the user pi-inline.json file and reopen the menu.";
 const stale = "Settings changed. Reopen the menu before saving.";
 const writeFailed = "Settings were not saved. Check file permissions and available disk space.";
@@ -61,11 +62,12 @@ async function readDocument(path: string, signal: AbortSignal): Promise<Document
     const opened = await handle.stat({ bigint: true });
     signal.throwIfAborted();
     if (!opened.isFile() || !sameFile(stat, opened)) throw new Error(repair);
-    const source = await readFile(handle, { signal });
+    const bytes = await readFile(handle, { signal });
     signal.throwIfAborted();
-    const document: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(source));
+    const source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const document: unknown = JSON.parse(source);
     if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error(repair);
-    return { document: document as SettingsDocument, stat };
+    return { document: document as SettingsDocument, source, stat };
   } finally {
     await handle.close();
   }
@@ -162,7 +164,35 @@ export async function loadPromptSettings(signal: AbortSignal): Promise<PromptSet
   return describePrompt(document && readPromptHint(document), document && readRootPaths(document));
 }
 
-async function publishDocument(path: string, snapshot: DocumentSnapshot, signal: AbortSignal): Promise<boolean> {
+function editPromptSetting(source: string | undefined, key: PromptHintChange["key"], value: boolean | string): string {
+  if (source === undefined) return `${JSON.stringify({ [key]: value }, null, 2)}\n`;
+
+  // The source already passed strict JSON validation. Edit the last matching property
+  // to agree with JSON.parse on duplicate keys, without reserializing other values.
+  const root = parseTree(source);
+  if (root?.type !== "object") throw new Error(repair);
+  const properties = root.children ?? [];
+  const property = properties.findLast(({ children }) => children?.[0]?.value === key);
+  const current = property?.children?.[1];
+  if (current) {
+    return source.slice(0, current.offset) + JSON.stringify(value) + source.slice(current.offset + current.length);
+  }
+
+  const last = properties.at(-1);
+  const offset = last ? last.offset + last.length : root.offset + 1;
+  return (
+    source.slice(0, offset) +
+    `${last ? "," : ""}\n  ${JSON.stringify(key)}: ${JSON.stringify(value)}` +
+    source.slice(offset)
+  );
+}
+
+async function publishDocument(
+  path: string,
+  snapshot: DocumentSnapshot,
+  updated: string,
+  signal: AbortSignal,
+): Promise<boolean> {
   const directory = dirname(path);
   const temporary = join(directory, `.pi-inline-${randomUUID()}.tmp`);
   let ownsTemporary = false;
@@ -173,7 +203,7 @@ async function publishDocument(path: string, snapshot: DocumentSnapshot, signal:
     ownsTemporary = true;
     try {
       signal.throwIfAborted();
-      await writeFile(handle, `${JSON.stringify(snapshot.document, null, 2)}\n`, { encoding: "utf8", signal });
+      await writeFile(handle, updated, { encoding: "utf8", signal });
       signal.throwIfAborted();
       await handle.sync();
     } finally {
@@ -232,9 +262,9 @@ export async function savePromptHint(
         throw new Error();
       }
       if (value === current) return false;
-      snapshot.document[key] = value;
+      const updated = editPromptSetting(snapshot.source, key, value);
       fail = writeFailed;
-      const published = await publishDocument(path, snapshot, signal);
+      const published = await publishDocument(path, snapshot, updated, signal);
       if (!published) {
         fail = stale;
         throw new Error();

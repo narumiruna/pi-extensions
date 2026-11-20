@@ -68,7 +68,9 @@ compatibility alias.
 After a prompt hint change is saved, Pi asks whether to reload. Choose No to
 keep the saved change without applying it to the current session. Apply it later
 with `/reload` or by starting another session. Cancelling an edit or submitting
-an unchanged value does not save or ask for reload.
+an unchanged value does not save or ask for reload. While a save is pending,
+Escape does not close the menu, but Ctrl+C closes it immediately. If the save
+still goes through, Pi tells you to run `/reload`.
 
 ## 🔗 Link and badge syntax
 
@@ -107,6 +109,7 @@ Both settings groups use `pi-inline.json` in Pi's agent directory (by default
 `~/.pi/agent/`). Project settings are ignored. Use a regular file, not a
 symbolic link. If its content is invalid, repair it before saving through the
 menu. Settings writes are ordered within one Pi process, not between processes.
+Finish saving before editing the file by hand or from another Pi process.
 
 ### Prompt hint
 
