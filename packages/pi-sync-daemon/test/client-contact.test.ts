@@ -199,6 +199,7 @@ test.each(["request", "response", "response with stale retry"] as const)(
     let finished = false;
     const callback = { ...releaseCallback(), payload: { reservation: randomUUID() } };
     let signal: AbortSignal | undefined;
+    if (drop === "response") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     await fixture(
       async ({ method, params }, response) => {
         if (method === "submit") job = String(params.id);
@@ -236,16 +237,17 @@ test.each(["request", "response", "response with stale retry"] as const)(
       async (client, calls) => {
         await client.attach();
         const result = client.run("fixture", {});
-        const settled = Promise.withResolvers<void>();
-        void result.finally(() => settled.resolve()).catch(() => {});
         try {
-          await vi.waitFor(() => assert.ok(released && (drop === "response" || finished)));
-          assert.equal(await result, "original");
-        } finally {
-          if (!released || (drop !== "response" && !finished)) await client.dispose();
-          await settled.promise;
+          // Drive polling without reaching the two-second answer attempt timeout.
+          // The other cases use real time to exercise the retry path.
+          await vi.waitFor(async () => {
+            assert.equal(await result, "original");
+            assert.ok(released && (drop === "response" || finished));
+          });
+        } catch (error) {
+          await client.dispose();
+          throw error;
         }
-        assert.ok(released);
         assert.equal(handled, 1);
         assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
         if (drop === "response") assert.equal(signal?.aborted, true);
@@ -261,7 +263,9 @@ test.each(["request", "response", "response with stale retry"] as const)(
           if (state === "finished") finished = true;
         },
       },
-    );
+    ).finally(() => {
+      if (drop === "response") vi.useRealTimers();
+    });
   },
 );
 
