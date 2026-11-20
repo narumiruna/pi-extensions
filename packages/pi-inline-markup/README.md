@@ -65,7 +65,8 @@ stops file indexing and closes any open preview.
   destinations and support hover previews whether or not wikilinks are enabled.
 - Ordinary Markdown links use a file icon (📄). Use a plain-text or inline-code
   label and a path relative to Pi's working directory or an absolute path within
-  it. Encode spaces as `%20`.
+  it. Hidden paths work too, for example `[CI workflow](./.github/workflows/ci.yml#L1)`.
+  Encode spaces as `%20`.
 - Use `#L12` for one source line or `#L12-L20` for an inclusive range. Hover also
   accepts `#L12-20`. These previews show literal source rather than rendered Markdown.
 
@@ -75,17 +76,20 @@ path. If a bare filename matches several Markdown files, the badge previews up
 to three. Clicking opens the file at the working directory root if present, or
 the only match if the filename is unique. If there is no root match and several
 files match, the badge previews files but is not clickable. Unresolved names
-also stay non-clickable. The index starts on first lookup and refreshes five
-seconds after each scan.
+also stay non-clickable. The index skips hidden paths, starts on first lookup,
+and refreshes five seconds after each scan.
 
 ## 🔒 Security and privacy
 
-Previews are local. They exclude files outside Pi's working directory, hidden
-paths, `node_modules`, and symbolic links. The extension does not add file
-contents to the model context. In the terminal UI it adds a fixed system prompt
-hint about badge labels and Markdown file citations. The hint uses a
-placeholder path and contains no extension name or workspace data. Updating the hint does not
-rewrite existing session history.
+Previews are local. They exclude files outside Pi's working directory,
+`node_modules`, and symbolic links. Hovering over an explicit Markdown link
+can display a hidden workspace file, including dotfiles that may contain secrets.
+The extension does not add file contents to the model context.
+
+In the terminal UI, the extension adds a fixed system prompt hint about badge
+labels and Markdown file citations. The hint uses a placeholder path and contains
+no extension name or workspace data. Updating the hint does not rewrite existing
+session history.
 
 ## 🚧 Limitations
 

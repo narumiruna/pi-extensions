@@ -1,6 +1,6 @@
 import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type BeforeAgentStartEvent,
@@ -416,14 +416,17 @@ test("plain badges do not index, link, or preview an existing file", async ({ on
 
 test("only resolves eligible workspace paths", () => {
   expect(resolveLinkPath(fixtureRoot, "./notes/a%20b.md#part")).toBe(join(fixtureRoot, "notes", "a b.md"));
+  expect(resolveLinkPath(fixtureRoot, "./notes/.hidden.md")).toBe(join(fixtureRoot, "notes", ".hidden.md"));
+  const workflow = join(fixtureRoot, ".github", "workflows", "ci.yml");
+  expect(resolveLinkPath(fixtureRoot, `${workflow}#L1`)).toBe(workflow);
   for (const href of [
     "https://example.test/a.md",
     `file://${join(fixtureRoot, "a.md")}`,
     "//example.test/a.md",
     "../outside.md",
-    "./%2e%2e/outside.md",
-    "./notes/.hidden.md",
-    "./node_modules/pkg/README.md",
+    "./%2e%2e/.outside.md",
+    join(dirname(fixtureRoot), ".outside.md"),
+    "./.hidden/node_modules/pkg/README.md",
   ]) {
     expect(resolveLinkPath(fixtureRoot, href), href).toBeUndefined();
   }
@@ -472,18 +475,24 @@ test("scans beyond the first excerpt while bounding the source search and output
   expect(await readExcerpt(fixtureRoot, path, signal, { start: 4, end: 4 })).toBeUndefined();
 });
 
-test("does not read directories or symlinks", async () => {
+test("still excludes files outside the workspace, node_modules, directories, and symlinks", async () => {
   const project = await mkdtemp(join(fixtureRoot, "project-"));
-  const outside = join(fixtureRoot, "outside.md");
-  const plain = join(project, "plain.md");
+  const outside = join(fixtureRoot, ".outside.md");
+  const hidden = join(project, ".hidden.md");
+  const dependency = join(project, "node_modules", "dependency.md");
   await writeFile(outside, "Outside the project");
-  await writeFile(plain, "Inside the project");
-  await symlink(outside, join(project, "outside-link.md"));
-  await symlink(plain, join(project, "inside-link.md"));
-  await mkdir(join(project, "folder"));
+  await writeFile(hidden, "Inside the project");
+  await mkdir(dirname(dependency));
+  await writeFile(dependency, "Inside node_modules");
+  const outsideLink = join(project, ".outside-link.md");
+  const insideLink = join(project, ".inside-link.md");
+  await symlink(outside, outsideLink);
+  await symlink(hidden, insideLink);
+  const folder = join(project, ".folder");
+  await mkdir(folder);
   const { signal } = new AbortController();
-  await expect(readExcerpt(project, plain, signal)).resolves.toMatchObject({ text: "Inside the project" });
-  for (const path of [outside, ...["outside-link.md", "inside-link.md", "folder"].map((name) => join(project, name))]) {
+  await expect(readExcerpt(project, hidden, signal)).resolves.toMatchObject({ text: "Inside the project" });
+  for (const path of [outside, dependency, folder, outsideLink, insideLink]) {
     await expect(readExcerpt(project, path, signal)).resolves.toBeUndefined();
   }
 });
@@ -562,11 +571,14 @@ test.for(["leave", "dispose", "resize", "show and leave"] as const)(
 );
 
 test.for([
-  ["[`readExcerpt()`](./example.ts#L2-L3)", "📄\u00a0readExcerpt()"],
-  ["[[[`readExcerpt()`](./example.ts#L2-L3)]]", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4"],
-  ["[[[readExcerpt()]]](./example.ts#L2-L3)", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4"],
-] as const)("hovers the line-range link %s", async ([link, label], { onTestFinished }) => {
-  await writeFile(join(fixtureRoot, "example.ts"), "first\nsecond\nthird\nfourth\n");
+  ["[`readExcerpt()`](./example.ts#L2-L3)", "📄\u00a0readExcerpt()", "example.ts"],
+  ["[[[`readExcerpt()`](./example.ts#L2-L3)]]", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4", "example.ts"],
+  ["[[[readExcerpt()]]](./example.ts#L2-L3)", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4", "example.ts"],
+  ["[CI workflow](./.github/workflows/ci.yml#L2-L3)", "📄\u00a0CI workflow", ".github/workflows/ci.yml"],
+] as const)("hovers the line-range link %s", async ([link, label, file], { onTestFinished }) => {
+  const path = join(fixtureRoot, file);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, "first\nsecond\nthird\nfourth\n");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   onTestFinished(stubRawInput());
   const terminal = new ProcessTerminal();
@@ -584,7 +596,7 @@ test.for([
   const screen = new Markdown(session.render(link), 0, 0, getMarkdownTheme()).render(80);
   expect(stripTerminalSequences(screen[0]).trimEnd()).toBe(label);
   for (const col of [0, visibleWidth(label) - 1]) {
-    expect(getOsc8LinkAtColumn(screen[0], col)).toBe("./example.ts#L2-L3");
+    expect(getOsc8LinkAtColumn(screen[0], col)).toBe(`./${file}#L2-L3`);
   }
   vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
 
@@ -597,7 +609,7 @@ test.for([
   overlay.invalidate();
   expect(overlay.render(60)).toEqual(lines);
   const card = lines.map(stripTerminalSequences).join("\n");
-  expect(card).toContain("example.ts#L2-L3");
+  expect(card).toContain(`${basename(file)}#L2-L3`);
   expect(card).toContain("second");
   expect(card).toContain("third");
   expect(card).not.toMatch(/first|fourth/);

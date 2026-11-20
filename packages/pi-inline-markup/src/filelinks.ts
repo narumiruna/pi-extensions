@@ -23,8 +23,8 @@ export interface PreviewExcerpt {
 
 function workspacePath(root: string, path: string): string | undefined {
   const local = relative(root, path);
-  if (!local || isAbsolute(local)) return undefined;
-  if (local.split(sep).some((part) => part.startsWith(".") || part === "node_modules")) return undefined;
+  if (!local || isAbsolute(local) || local === ".." || local.startsWith(`..${sep}`)) return undefined;
+  if (local.split(sep).includes("node_modules")) return undefined;
   return local;
 }
 
