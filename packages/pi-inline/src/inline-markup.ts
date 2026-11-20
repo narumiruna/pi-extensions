@@ -1,7 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, hyperlink, Marked } from "@earendil-works/pi-tui";
 import { cleanBadgeLabel, renderBadge } from "./badge.js";
-import { resolveLinkPath } from "./filelinks.js";
+import type { createExternalLinkMarker } from "./external-link-marker.js";
+import { classifyLinkPath } from "./filelinks.js";
 import type { createWikilinks } from "./wikilinks.js";
 
 const START =
@@ -67,6 +68,7 @@ export function renderInlineMarkup(
   theme: Theme,
   userMessage: boolean,
   wiki?: ReturnType<typeof createWikilinks>,
+  externalLinkMarker?: ReturnType<typeof createExternalLinkMarker>,
 ): string {
   if (!markdown.includes("[[") && !markdown.includes("](")) return markdown;
 
@@ -124,12 +126,14 @@ export function renderInlineMarkup(
     const start = starts[id];
     if (!start || start.badge !== undefined || !tagged.startsWith(token.raw, start.taggedOffset)) return;
     const href = untag(token.href);
-    if (!token.text.startsWith(start.marker) || !resolveLinkPath(root, href)) return;
+    const target = classifyLinkPath(root, href);
+    if (!token.text.startsWith(start.marker) || !target) return;
+    const mark = (text: string) => (target.kind === "external" ? (externalLinkMarker?.mark(text, href) ?? text) : text);
     const { offset } = start;
     const end = offset + untag(token.raw).length;
     if (start.linkedBadge !== undefined) {
       const label = cleanBadgeLabel(start.linkedBadge);
-      if (label) replacements.set(id, { offset, end, text: renderBadge(label, theme, userMessage, href) });
+      if (label) replacements.set(id, { offset, end, text: mark(renderBadge(label, theme, userMessage, href)) });
       return;
     }
     const parts = token.tokens;
@@ -153,9 +157,11 @@ export function renderInlineMarkup(
     replacements.set(id, {
       offset: wrapped ? offset - 2 : offset,
       end: wrapped ? end + 2 : end,
-      text: wrapped
-        ? renderBadge(label, theme, userMessage, href)
-        : renderFileLabel(label, href, theme, code !== undefined),
+      text: mark(
+        wrapped
+          ? renderBadge(label, theme, userMessage, href)
+          : renderFileLabel(label, href, theme, code !== undefined),
+      ),
     });
   });
 

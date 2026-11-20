@@ -303,7 +303,7 @@ test.for([
   "![See [[README.md]]](./photo.png)",
   "![See [[[README]]](./README.md)](./photo.png)",
   "[[[README](https://example.com)]]",
-  "[[[README]]](../README.md)",
+  "[[[README]]](file:///README.md)",
   "\\[[README.md]]",
 ])("leaves unsupported or literal markup unchanged: %s", async (source, { onTestFinished }) => {
   const session = await startSession();

@@ -8,7 +8,16 @@ import {
   type TUI,
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
-import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.js";
+import type { createExternalLinkMarker } from "./external-link-marker.js";
+import {
+  classifyLinkPath,
+  type ExternalPreviewRoot,
+  parseLineRange,
+  readExcerpt,
+  relativePreviewPath,
+  renderFilePreview,
+  resolveLinkPath,
+} from "./filelinks.js";
 import { prepareImagePreview, previewImageMime } from "./image-preview.js";
 import {
   hoverLinkLine,
@@ -30,6 +39,7 @@ interface Point {
 interface Hover extends Point {
   href: string;
   path?: string;
+  externalRoot?: ExternalPreviewRoot;
   preview?: WikiPreview;
   controller: AbortController;
 }
@@ -39,6 +49,10 @@ export function createHoverPreview(
   theme: Theme,
   cwd: string,
   findWikiPreview: (href: string) => WikiPreview | undefined,
+  external: {
+    marker: ReturnType<typeof createExternalLinkMarker>;
+    roots(): readonly ExternalPreviewRoot[];
+  },
 ): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -55,27 +69,41 @@ export function createHoverPreview(
     viewport = undefined;
   }
 
-  function linkAt({ row, col }: Point): string | undefined {
-    if (!(tui instanceof TuiAltScreen)) return undefined;
-    return getOsc8LinkAtColumn(hoverLinkLine(tui.getScreenLines()[row] ?? ""), col);
+  function screenLine(row: number): string {
+    return tui instanceof TuiAltScreen ? (tui.getScreenLines()[row] ?? "") : "";
   }
 
-  function stillOnLink(target: Hover): boolean {
-    return linkAt(target) === target.href && findWikiPreview(target.href) === target.preview;
+  function stillOnLink({ row, col, href, preview, externalRoot }: Hover): boolean {
+    const line = screenLine(row);
+    return (
+      getOsc8LinkAtColumn(hoverLinkLine(line), col) === href &&
+      findWikiPreview(href) === preview &&
+      (!externalRoot || external.marker.matches(line, col, href))
+    );
   }
 
   async function show(target: Hover): Promise<void> {
-    const { preview, path, controller } = target;
+    const { preview, path, controller, externalRoot } = target;
+    if (hover !== target) return;
+    if (
+      !viewport ||
+      viewport.columns !== tui.terminal.columns ||
+      viewport.rows !== tui.terminal.rows ||
+      tui.hasOverlay() ||
+      !stillOnLink(target)
+    ) {
+      hide();
+      return;
+    }
     const { columns, rows } = tui.terminal;
     const below = rows - target.row - 1;
     const above = target.row;
-    const imageMime = !preview && path ? previewImageMime(path) : undefined;
+    const imageMime = !externalRoot && !preview && path ? previewImageMime(path) : undefined;
     const placeBelow = below >= above || (!imageMime && below >= MAX_HEIGHT);
     const availableRows = placeBelow ? below : above;
     const width = imageMime ? columns : Math.min(columns, preview ? 56 : 60);
     const height = imageMime ? availableRows : Math.min(availableRows, MAX_HEIGHT);
     if (width < (imageMime ? 2 : preview ? 20 : 16) || height < (imageMime ? 1 : MIN_HEIGHT)) return;
-    viewport = { columns, rows };
 
     // The image moves its terminal cursor to an absolute column, so use the
     // same column for rendering and placement even if the pointer moves.
@@ -96,7 +124,7 @@ export function createHoverPreview(
     } else {
       if (!path) return;
       const lineRange = preview ? undefined : parseLineRange(target.href);
-      const excerpt = await readExcerpt(cwd, path, controller.signal, lineRange);
+      const excerpt = await readExcerpt(externalRoot ?? cwd, path, controller.signal, lineRange);
       if (!excerpt) return;
       draw = () =>
         preview
@@ -143,19 +171,34 @@ export function createHoverPreview(
       hide();
       return;
     }
-    const href = linkAt(point);
+    const line = screenLine(point.row);
+    const href = getOsc8LinkAtColumn(hoverLinkLine(line), point.col);
     const preview = href ? findWikiPreview(href) : undefined;
-    if (hover && href === hover.href && point.row === hover.row && preview === hover.preview) {
+    if (
+      hover &&
+      href === hover.href &&
+      point.row === hover.row &&
+      preview === hover.preview &&
+      (!hover.externalRoot || external.marker.matches(line, point.col, href))
+    ) {
       hover.col = point.col;
       return;
     }
     hide();
     if (!href || tui.hasOverlay()) return;
-    const path = preview ? ("path" in preview ? preview.path : undefined) : resolveLinkPath(cwd, href);
-    if (!preview && !path) return;
+    let path = preview ? ("path" in preview ? preview.path : undefined) : resolveLinkPath(cwd, href);
+    let externalRoot: ExternalPreviewRoot | undefined;
+    if (!preview && !path) {
+      const local = classifyLinkPath(cwd, href);
+      if (local?.kind !== "external" || previewImageMime(local.path)) return;
+      externalRoot = external.roots().find((root) => relativePreviewPath(root.path, local.path));
+      if (!externalRoot || !external.marker.matches(line, point.col, href)) return;
+      path = local.path;
+    }
 
-    const target: Hover = { ...point, href, path, preview, controller: new AbortController() };
+    const target: Hover = { ...point, href, path, externalRoot, preview, controller: new AbortController() };
     hover = target;
+    viewport = { columns: tui.terminal.columns, rows: tui.terminal.rows };
     timer = setTimeout(() => void show(target), HOVER_DELAY_MS);
   }
 

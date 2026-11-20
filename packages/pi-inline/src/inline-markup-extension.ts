@@ -1,7 +1,10 @@
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
+import { createExternalLinkMarker } from "./external-link-marker.js";
+import type { ExternalPreviewRoot } from "./filelinks.js";
 import { createHoverPreview } from "./hover-preview.js";
 import { renderInlineMarkup } from "./inline-markup.js";
+import { loadPreviewSettings } from "./preview-settings.js";
 import { INLINE_FORMATTING_PROMPT } from "./prompt.js";
 import { createWikilinks } from "./wikilinks.js";
 
@@ -11,6 +14,9 @@ interface Session {
   cwd: string;
   theme: Theme;
   tui: TUI;
+  owner: ExtensionContext["sessionManager"];
+  marker: ReturnType<typeof createExternalLinkMarker>;
+  clearWidget(): void;
   dismissPreview(): void;
   wiki?: ReturnType<typeof createWikilinks>;
   menu?: AbortController;
@@ -19,18 +25,35 @@ interface Session {
 export function inlineMarkupExtension(pi: ExtensionAPI): void {
   let session: Session | undefined;
 
-  pi.on("session_start", (_event, { mode, cwd, ui }) => {
+  pi.on("session_start", async (_event, { mode, cwd, ui, hasUI, sessionManager }) => {
+    session?.clearWidget();
     if (mode !== "tui") return;
+    const settings = new AbortController();
+    const marker = createExternalLinkMarker();
+    let roots: readonly ExternalPreviewRoot[] = [];
     ui.setWidget(
       WIDGET_KEY,
       (tui, theme) => {
-        const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href));
-        const current: Session = { cwd, theme, tui, dismissPreview: preview.dismiss };
+        const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href), {
+          marker,
+          roots: () => roots,
+        });
+        const current: Session = {
+          cwd,
+          theme,
+          tui,
+          owner: sessionManager,
+          marker,
+          clearWidget: () => ui.setWidget(WIDGET_KEY, undefined),
+          dismissPreview: preview.dismiss,
+        };
         session = current;
         const widget = {
           ...preview,
           dispose() {
             if (session === current) session = undefined;
+            settings.abort();
+            roots = [];
             current.menu?.abort();
             preview.dispose();
             current.wiki?.dispose();
@@ -48,10 +71,15 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
       },
       { placement: "belowEditor" },
     );
+    const snapshot = await loadPreviewSettings(settings.signal);
+    if (settings.signal.aborted || session?.marker !== marker) return;
+    roots = snapshot.roots;
+    if (snapshot.invalid && hasUI)
+      ui.notify("pi-inline: Invalid or unreadable settings. External previews are off.", "warning");
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
+    if (session && ctx.mode === "tui" && session.owner === ctx.sessionManager) session.clearWidget();
   });
 
   pi.registerCommand("inline-markup", {
@@ -96,7 +124,7 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
   // Pi 1.5.0 does not accept messageTypes registration options.
   pi.registerMarkdownTransformer((markdown, { messageType }) => {
     if (!session || (messageType !== "user" && messageType !== "assistant")) return markdown;
-    const { cwd, theme, wiki } = session;
-    return renderInlineMarkup(markdown, cwd, theme, messageType === "user", wiki);
+    const { cwd, theme, wiki, marker } = session;
+    return renderInlineMarkup(markdown, cwd, theme, messageType === "user", wiki, marker);
   });
 }
