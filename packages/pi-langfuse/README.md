@@ -305,6 +305,7 @@ Images and embedded base64 data URIs are represented without their payloads, inc
 Opaque `thinkingSignature`, `textSignature`, and `thoughtSignature` continuity values are always removed.
 Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers.
 The OpenTelemetry backend masks Langfuse credentials before writing span attributes.
+Trace and observation fields, such as output and usage, take priority if there is too much metadata to export.
 
 The root agent begins before the first agent loop and remains open across retries, overflow-compaction recovery, and queued continuations.
 `agent_end` closes only the current attempt; `agent_settled` closes the root after no automatic work remains.

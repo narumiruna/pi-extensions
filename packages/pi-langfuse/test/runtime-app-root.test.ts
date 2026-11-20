@@ -76,15 +76,17 @@ test.each([
       .startSpan("unrelated-genai", { attributes: { "gen_ai.operation.name": "chat" } }, ROOT_CONTEXT)
       .end();
 
+    const childStart = Date.UTC(2025, 0, 1, 0, 0, 1);
+    const childEnd = childStart + 1_000;
     for (const type of ["agent", "generation", "tool", "span"] satisfies ObservationType[]) {
       const root = backend.start(
         `root-${type}`,
         { input: { [secretKey]: secretKey }, output: "response", sessionId: "test-session", userId: "test-user" },
-        { asType: type },
+        { asType: type, startTime: new Date(childStart - 1_000) },
       );
       root.updateTrace?.({ name: "trace name", input: "trace request", tags: ["test-tag"] });
-      const child = backend.start(`child-${type}`, {}, { asType: type, parent: root, startTime: new Date(1_000) });
-      child.end(2_000);
+      const child = backend.start(`child-${type}`, {}, { asType: type, parent: root, startTime: new Date(childStart) });
+      child.end(childEnd);
       root.end();
       backend.start(`late-${type}`, {}, { asType: type, parent: root }).end();
     }
@@ -149,8 +151,8 @@ test.each([
         assert.equal(span.traceId, root?.traceId);
       }
       if (name.startsWith("child-")) {
-        assert.equal(span.startTimeUnixNano, "1000000000");
-        assert.equal(span.endTimeUnixNano, "2000000000");
+        assert.equal(span.startTimeUnixNano, (BigInt(childStart) * 1_000_000n).toString());
+        assert.equal(span.endTimeUnixNano, (BigInt(childEnd) * 1_000_000n).toString());
       }
     }
   } finally {

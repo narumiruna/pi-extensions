@@ -26,6 +26,7 @@ const LEGACY_RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
 const INSTRUMENTATION_SCOPE = "@narumitw/pi-langfuse";
 const TRACE = "langfuse.trace";
 const OBSERVATION = "langfuse.observation";
+const MAX_PENDING_METADATA_ATTRIBUTES = 128;
 
 interface ResolvedRuntimeConfig {
   publicKey: string;
@@ -53,6 +54,7 @@ interface RuntimeFactories {
 
 class ProductionObservation implements Observation {
   readonly traceId: string;
+  private readonly metadata = new Map<string, string>();
 
   constructor(
     readonly span: Span,
@@ -112,6 +114,9 @@ class ProductionObservation implements Observation {
   }
 
   end(endTime?: number): Observation {
+    // Write metadata last so it can only use slots left by trace and observation fields.
+    for (const [key, value] of this.metadata) this.span.setAttribute(key, value);
+    this.metadata.clear();
     this.span.end(endTime);
     return this;
   }
@@ -121,12 +126,13 @@ class ProductionObservation implements Observation {
   }
 
   private setMetadata(scope: string, metadata: Record<string, unknown> | undefined): void {
-    for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (!metadata || !this.span.isRecording()) return;
+    for (const [key, value] of Object.entries(metadata)) {
       if (scope === OBSERVATION && value == null) continue;
+      const attribute = `${scope}.metadata.${maskSecretString(key, this.secrets)}`;
+      if (this.metadata.size >= MAX_PENDING_METADATA_ATTRIBUTES && !this.metadata.has(attribute)) continue;
       const serialized = serializeMetadataValue(value, this.secrets);
-      if (serialized !== undefined) {
-        this.span.setAttribute(`${scope}.metadata.${maskSecretString(key, this.secrets)}`, serialized);
-      }
+      if (serialized !== undefined) this.metadata.set(attribute, serialized);
     }
   }
 }
