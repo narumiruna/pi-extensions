@@ -43,7 +43,7 @@
     "@narumitw/pi-tui-kit": "^0.70.0",
     "@tursodatabase/database": "0.8.3",
     "agentfs-sdk": "0.6.4",
-    "just-bash": "3.6.0"
+    "just-bash": "3.6.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
