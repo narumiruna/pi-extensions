@@ -10,6 +10,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
 - Hover over a file link in fullscreen mode to preview a workspace image or text file, or text in an approved external directory.
 - Turn on filename lookup for wikilinks in the current session.
+- Edit or turn off the system prompt hint for badges and file citations.
 
 ## 📦 Install
 
@@ -41,7 +42,8 @@ for a project install.
 
 If you load the old checkout path, replace it with `./packages/pi-inline`.
 Remove any explicit entry for the former `.pi/extensions/pi-inline-markup/`
-extension. Do not load both copies. The `/inline-markup` command is unchanged.
+extension. Do not load both copies. Use `/inline` to open the settings menu.
+`/inline-markup` still opens the same menu.
 
 ## 🚀 Quick start
 
@@ -52,10 +54,21 @@ hover over an image link such as `[Cat Photo](./cat.png)` to see the image.
 
 ## 💬 Commands
 
-Run `/inline-markup` with no arguments in the terminal UI. Select **On** or **Off**
-to toggle wikilinks immediately, or press Escape to leave the value unchanged.
-Wikilinks start off in each new session and after `/reload`. Turning them off
-stops file indexing and closes any open preview.
+Run `/inline` with no arguments in the terminal UI. `/inline-markup` is a
+compatibility alias.
+
+- **Wikilinks** changes filename lookup immediately for the current session.
+  It starts Off in each new session and after `/reload`. Turning it Off stops
+  file indexing and closes any open preview.
+- **Prompt Hint** turns system prompt guidance On or Off. Turning it Off keeps
+  the saved text.
+- **Edit Prompt Hint…** opens a multiline editor with the saved text, even if
+  the hint is Off.
+
+After a prompt hint change is saved, Pi asks whether to reload. Choose No to
+keep the saved change without applying it to the current session. Apply it later
+with `/reload` or by starting another session. Cancelling an edit or submitting
+an unchanged value does not save or ask for reload.
 
 ## 🔗 Link and badge syntax
 
@@ -90,8 +103,26 @@ and refreshes five seconds after each scan.
 
 ## ⚙️ Settings
 
-To allow external text previews, edit the user file `pi-inline.json` in Pi's agent
-directory (by default `~/.pi/agent/`):
+Both settings groups use `pi-inline.json` in Pi's agent directory (by default
+`~/.pi/agent/`). Project settings are ignored. Use a regular file, not a
+symbolic link. If its content is invalid, repair it before saving through the
+menu. Settings writes are ordered within one Pi process, not between processes.
+
+### Prompt hint
+
+`promptHintEnabled` accepts a boolean and defaults to `true`. `promptHintText`
+accepts a non-blank string, including multiple lines. Line endings are saved as
+LF. Do not include terminal or bidirectional controls. Remove both keys and
+reload to restore the default:
+
+```text
+Use [[label]] for badges.
+Use Markdown links with workspace-relative paths for file citations, for example [file](./path/to/file#L12-L20).
+```
+
+### External text previews
+
+To allow external text previews, set `externalPreviewRoots`:
 
 ```json
 {
@@ -105,11 +136,10 @@ directories. Use existing absolute directories without symbolic links. Do not
 use globs, a filesystem root, your home directory, or a directory that contains
 your home directory.
 
-The default is `[]` and project settings are ignored. Invalid or unreadable
-settings leave external previews off. Use a regular file, not a symbolic link.
-Changes take effect on session start or
-`/reload`. To revoke access, remove the field or set it to `[]`, then run
-`/reload`. Link icons do not depend on this setting.
+The default is `[]`. Invalid roots or an unreadable file leave external
+previews off. Changes take effect on session start or `/reload`. To revoke
+access, remove the field or set it to `[]`, then run `/reload`. Link icons do not
+depend on this setting.
 
 ## 🔒 Security and privacy
 
@@ -119,10 +149,9 @@ External PNG, JPEG, GIF, and WebP links can be opened but never start an image
 preview. The extension does not add preview contents to model context or
 stored messages.
 
-In the terminal UI, the extension adds a fixed system prompt hint about badge
-labels and Markdown file citations. The hint uses a placeholder path and contains
-no extension name or workspace data. Updating the hint does not rewrite existing
-session history.
+In the terminal UI, Pi sends the enabled prompt hint to the model provider and
+can retain it in session history. Do not put secrets in the hint. Editing or
+turning it off does not remove text from earlier requests or stored history.
 
 ## 🚧 Limitations
 
@@ -142,8 +171,8 @@ session history.
 ## 🗂️ Package layout
 
 - `src/index.ts` forwards the extension factory to Pi. The rest of `src/` owns
-  transcript rendering, hover previews, and the wikilink index.
-- `test/` covers rendering, session cleanup, file boundaries, and workspace lookups.
+  settings, transcript rendering, hover previews, and the wikilink index.
+- `test/` covers settings, rendering, session cleanup, and preview boundaries.
 
 The package ships its TypeScript source and needs no build step.
 

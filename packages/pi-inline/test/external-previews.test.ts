@@ -55,7 +55,7 @@ let agentDir: string;
 let settingsFile: string;
 let plan: string;
 let extension: typeof import("../src/index.js").default;
-let loadSettings: typeof import("../src/preview-settings.js").loadPreviewSettings;
+let loadSettings: typeof import("../src/settings.js").loadSettings;
 
 beforeEach(async () => {
   base = await realpath(await mkdtemp(join(tmpdir(), "pi-inline-external-")));
@@ -71,7 +71,7 @@ beforeEach(async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
   vi.resetModules();
   ({ default: extension } = await import("../src/index.js"));
-  ({ loadPreviewSettings: loadSettings } = await import("../src/preview-settings.js"));
+  ({ loadSettings } = await import("../src/settings.js"));
   initTheme("dark");
   setCapabilityOverrides({ hyperlinks: true, images: "kitty" });
 });
@@ -227,7 +227,7 @@ test("only loads the user settings file, without writing missing defaults or loa
   for (const fn of io) expect(fn).not.toHaveBeenCalled();
   expect(session.setWidget).not.toHaveBeenCalled();
   await session.start();
-  expect(lstat).toHaveBeenCalledExactlyOnceWith(settingsFile);
+  expect(lstat).toHaveBeenCalledExactlyOnceWith(settingsFile, { bigint: true });
   expect(readFile).not.toHaveBeenCalled();
   await expect(lstat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
   expect(session.notify).not.toHaveBeenCalled();
@@ -245,7 +245,7 @@ test("warns without echoing malformed settings or read errors", async ({ onTestF
   vi.mocked(readFile).mockRejectedValueOnce(new Error("secret settings path"));
   await session.start();
   expect(session.notify.mock.calls).toEqual(
-    Array(2).fill(["pi-inline: Invalid or unreadable settings. External previews are off.", "warning"]),
+    Array(2).fill(["pi-inline: Invalid or unreadable settings were ignored.", "warning"]),
   );
   session.link("[Note](../plans/rename%20plan.md)");
   await session.hover();
@@ -265,7 +265,7 @@ test("rejects the entire allowlist when a root is invalid", async () => {
     ),
   ]) {
     await writeSettings(value);
-    await expect(loadSettings(signal)).resolves.toEqual({ roots: [], invalid: true });
+    await expect(loadSettings(signal)).resolves.toMatchObject({ roots: [], invalid: true });
   }
   await writeSettings({ externalPreviewRoots: [plans, `${plans}/`], unrelated: true });
   await expect(loadSettings(signal)).resolves.toMatchObject({ roots: [{ path: plans }, { path: plans }] });
@@ -276,7 +276,7 @@ test.for(["replacement", "shutdown"] as const)(
   async (action, { onTestFinished }) => {
     const session = fixture(onTestFinished);
     await writeSettings({ externalPreviewRoots: [plans] });
-    const pending = Promise.withResolvers<string>();
+    const pending = Promise.withResolvers<Buffer<ArrayBuffer>>();
     const entered = Promise.withResolvers<AbortSignal | undefined>();
     vi.mocked(readFile).mockImplementationOnce((_file, options) => {
       entered.resolve(typeof options === "object" ? options?.signal : undefined);
@@ -284,13 +284,14 @@ test.for(["replacement", "shutdown"] as const)(
     });
     const old = session.start();
     const signal = await entered.promise;
-    if (action === "replacement") {
-      await writeSettings({ externalPreviewRoots: [] });
-      await session.start();
-    } else await session.stop();
+    if (action === "replacement") await writeSettings({ externalPreviewRoots: [] });
+    const next = action === "replacement" ? session.start() : session.stop();
     expect(signal?.aborted).toBe(true);
-    pending.resolve(action === "shutdown" ? "invalid JSON" : JSON.stringify({ externalPreviewRoots: [plans] }));
-    await old;
+    pending.resolve(
+      Buffer.from(action === "shutdown" ? "invalid JSON" : JSON.stringify({ externalPreviewRoots: [plans] })),
+    );
+    await Promise.all([old, next]);
+    clearIo();
     session.link("[Note](../plans/rename%20plan.md)");
     await session.hover();
     expect(readExcerpt).not.toHaveBeenCalled();
@@ -372,6 +373,7 @@ test("rejects unauthorized targets before reads and unsafe paths before open", a
     roots: [root],
   } = await loadSettings(signal);
   expect(root).toBeDefined();
+  clearIo();
   for (const path of ["escape/other.md", "missing.md", "directory", "pipe", "../plans-other/other.md"]) {
     await expect(readExcerpt(root, join(plans, path), signal)).resolves.toBeUndefined();
   }
