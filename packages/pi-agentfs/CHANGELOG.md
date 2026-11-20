@@ -1,5 +1,11 @@
 # @narumitw/pi-agentfs
 
+## 0.2.6
+
+### Patch Changes
+
+- 25eef0a: Update the runtime libraries for AgentFS shell execution, Langfuse trace export, Starship pattern matching, subagent ignore rules, and sync daemon XML parsing and glob matching.
+
 ## 0.2.5
 
 ### Patch Changes
