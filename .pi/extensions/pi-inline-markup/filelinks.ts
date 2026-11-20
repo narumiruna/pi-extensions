@@ -157,14 +157,27 @@ export function renderFilePreview(theme: Theme, excerpt: PreviewExcerpt, width: 
   const caption = lineRange
     ? `${filename}#L${lineRange.start}${lineRange.end === lineRange.start ? "" : `-L${lineRange.end}`}`
     : filename;
+  return renderPreviewFrame(theme, [theme.fg("accent", caption), ...body], width, 1);
+}
+
+export function renderPreviewFrame(
+  theme: Theme,
+  content: string[],
+  width: number,
+  padding: number,
+  rounded = false,
+): string[] {
   const border = (text: string) => theme.fg("borderMuted", text);
   const edge = "─".repeat(width - 2);
-  const rows = [theme.fg("accent", caption), ...body].map(
-    (text) => `${border("│")} ${truncateToWidth(text, contentWidth, "…", true)} ${border("│")}`,
+  const gap = " ".repeat(padding);
+  const contentWidth = width - 2 - 2 * padding;
+  const rows = content.map(
+    (text) => `${border("│")}${gap}${truncateToWidth(text, contentWidth, "…", true)}${gap}${border("│")}`,
   );
+  const [topLeft, topRight, bottomLeft, bottomRight] = rounded ? "╭╮╰╯" : "┌┐└┘";
   const background = theme.getBgAnsi("toolPendingBg");
   // Truncation adds full SGR resets before the ellipsis and padding.
-  return [border(`┌${edge}┐`), ...rows, border(`└${edge}┘`)].map((line) =>
+  return [border(`${topLeft}${edge}${topRight}`), ...rows, border(`${bottomLeft}${edge}${bottomRight}`)].map((line) =>
     theme.bg("toolPendingBg", line.replaceAll("\x1b[0m", `\x1b[0m${background}`)),
   );
 }

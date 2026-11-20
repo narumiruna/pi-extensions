@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
@@ -8,6 +9,13 @@ import {
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
+import {
+  hoverLinkLine,
+  renderWikiGroupPreview,
+  renderWikiPreview,
+  type WikiPreview,
+  wikiGroupSourceLimit,
+} from "./wikilinks.ts";
 
 const HOVER_DELAY_MS = 250;
 const MAX_HEIGHT = 12;
@@ -20,11 +28,18 @@ interface Point {
 
 interface Hover extends Point {
   href: string;
-  path: string;
+  path?: string;
+  preview?: WikiPreview;
   controller: AbortController;
 }
 
-export function createHoverPreview(tui: TUI, theme: Theme, cwd: string): Component & { dispose(): void } {
+export function createHoverPreview(
+  tui: TUI,
+  theme: Theme,
+  cwd: string,
+  checkout: string,
+  findWikiPreview: (href: string) => WikiPreview | undefined,
+): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let overlay: OverlayHandle | undefined;
@@ -42,44 +57,62 @@ export function createHoverPreview(tui: TUI, theme: Theme, cwd: string): Compone
 
   function linkAt({ row, col }: Point): string | undefined {
     if (!(tui instanceof TuiAltScreen)) return undefined;
-    return getOsc8LinkAtColumn(tui.getScreenLines()[row] ?? "", col);
+    return getOsc8LinkAtColumn(hoverLinkLine(tui.getScreenLines()[row] ?? ""), col);
   }
 
   function stillOnLink(target: Hover): boolean {
-    return linkAt(target) === target.href;
+    return linkAt(target) === target.href && findWikiPreview(target.href) === target.preview;
   }
 
   async function show(target: Hover): Promise<void> {
-    const { href, path, controller } = target;
+    const { preview, path, controller } = target;
     const { columns, rows } = tui.terminal;
     const below = rows - target.row - 1;
     const above = target.row;
     const placeBelow = below >= MAX_HEIGHT || below >= above;
-    const width = Math.min(columns, 60);
+    const width = Math.min(columns, preview ? 56 : 60);
     const height = Math.min(placeBelow ? below : above, MAX_HEIGHT);
-    if (width < 16 || height < MIN_HEIGHT) return;
+    if (width < (preview ? 20 : 16) || height < MIN_HEIGHT) return;
 
-    const excerpt = await readExcerpt(cwd, path, controller.signal, parseLineRange(href));
-    if (!excerpt || hover !== target || tui.hasOverlay() || !stillOnLink(target)) return;
+    let draw: () => { width: number; lines: string[] } | undefined;
+    if (preview && "sources" in preview) {
+      const candidates = preview.sources.slice(0, wikiGroupSourceLimit(preview.sources.length, height));
+      const excerpts = await Promise.all(
+        candidates.map((source) => readExcerpt(checkout, resolve(checkout, source), controller.signal)),
+      );
+      draw = () => renderWikiGroupPreview(preview, excerpts, theme, width, height);
+    } else {
+      if (!path) return;
+      const lineRange = preview ? undefined : parseLineRange(target.href);
+      const excerpt = await readExcerpt(preview ? checkout : cwd, path, controller.signal, lineRange);
+      if (!excerpt) return;
+      draw = () =>
+        preview
+          ? renderWikiPreview(excerpt, theme, width, height)
+          : { width, lines: renderFilePreview(theme, excerpt, width, height) };
+    }
+    if (hover !== target || tui.hasOverlay() || !stillOnLink(target)) return;
     if (tui.terminal.columns !== columns || tui.terminal.rows !== rows) {
       hide();
       return;
     }
-    const draw = () => renderFilePreview(theme, excerpt, width, height);
-    let lines = draw();
+    const card = draw();
+    if (!card) return;
+
+    let lines = card.lines;
     viewport = { columns, rows };
     overlay = tui.showOverlay(
       {
         render: () => lines,
         invalidate() {
-          lines = draw();
+          lines = draw()?.lines ?? [];
         },
       },
       {
         nonCapturing: true,
-        width,
+        width: card.width,
         row: placeBelow ? target.row + 1 : target.row - lines.length,
-        col: Math.min(target.col, columns - width),
+        col: Math.min(target.col, columns - card.width),
         visible: (w, h) => w === columns && h === rows,
       },
     );
@@ -100,16 +133,17 @@ export function createHoverPreview(tui: TUI, theme: Theme, cwd: string): Compone
       return;
     }
     const href = linkAt(point);
-    if (hover && href === hover.href && point.row === hover.row) {
+    const preview = href ? findWikiPreview(href) : undefined;
+    if (hover && href === hover.href && point.row === hover.row && preview === hover.preview) {
       hover.col = point.col;
       return;
     }
     hide();
     if (!href || tui.hasOverlay()) return;
-    const path = resolveLinkPath(cwd, href);
-    if (!path) return;
+    const path = preview ? ("path" in preview ? preview.path : undefined) : resolveLinkPath(cwd, href);
+    if (!preview && !path) return;
 
-    const target: Hover = { ...point, href, path, controller: new AbortController() };
+    const target: Hover = { ...point, href, path, preview, controller: new AbortController() };
     hover = target;
     timer = setTimeout(() => void show(target), HOVER_DELAY_MS);
   }
@@ -125,6 +159,7 @@ export function createHoverPreview(tui: TUI, theme: Theme, cwd: string): Compone
   process.stdin.on("data", onData);
 
   return {
+    dismiss: hide,
     render(): string[] {
       if (hover && viewport) {
         const current = hover;

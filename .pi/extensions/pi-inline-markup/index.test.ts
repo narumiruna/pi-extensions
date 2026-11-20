@@ -1,9 +1,11 @@
 import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   type BeforeAgentStartEvent,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionHandler,
   type ExtensionUIContext,
@@ -66,7 +68,8 @@ const previewTheme = {
 async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal())) {
   const on = vi.fn<(event: string, handler: unknown) => void>();
   const registerMarkdownTransformer = vi.fn<(transform: MarkdownTransformer) => void>();
-  extension({ on, registerMarkdownTransformer } as unknown as ExtensionAPI);
+  const registerCommand = vi.fn<ExtensionAPI["registerCommand"]>();
+  extension({ on, registerCommand, registerMarkdownTransformer } as unknown as ExtensionAPI);
   const start = on.mock.calls.find(([event]) => event === "session_start")?.[1] as ExtensionHandler<SessionStartEvent>;
   const shutdown = on.mock.calls.find(
     ([event]) => event === "session_shutdown",
@@ -81,8 +84,12 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
     disposeWidget?.();
     disposeWidget = typeof content === "function" ? content(tui, previewTheme).dispose : undefined;
   });
-  const ctx = { cwd: fixtureRoot, mode: "tui", ui: { setWidget } } as unknown as ExtensionContext;
-  await start({ type: "session_start", reason: "startup" }, ctx);
+  const select = vi.fn<ExtensionUIContext["select"]>().mockResolvedValue(undefined);
+  const ctx = { cwd: fixtureRoot, mode: "tui", ui: { select, setWidget } } as unknown as ExtensionCommandContext;
+  const startWidget = () => start({ type: "session_start", reason: "startup" }, ctx);
+  await startWidget();
+  expect(registerCommand).toHaveBeenCalledWith("inline-markup", expect.any(Object));
+  const [[, command]] = registerCommand.mock.calls;
   expect(registerMarkdownTransformer).toHaveBeenCalledOnce();
   expect(setWidget).toHaveBeenCalledOnce();
   const [[transform]] = registerMarkdownTransformer.mock.calls;
@@ -90,7 +97,10 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
   return {
     invalidate,
     requestRender,
+    select,
     setWidget,
+    startWidget,
+    runCommand: (args = "", mode: ExtensionContext["mode"] = "tui") => command.handler(args, { ...ctx, mode }),
     render(markdown: string, messageType: MarkdownTransformContext["messageType"] = "user") {
       return transform(markdown, { messageType, isStreaming: false, availableWidth: 80 });
     },
@@ -122,6 +132,136 @@ test("adds a stable badge hint only while the TUI widget is active", async ({ on
   expect(await session.promptSections("rpc")).toEqual({ other: "Keep this section." });
   await session.stop();
   expect(await session.promptSections()).toEqual({ other: "Keep this section." });
+});
+
+test("changes only wikilinks and keeps the system prompt stable across toggles", async ({ onTestFinished }) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const session = await startSession();
+  onTestFinished(session.stop);
+  const scan = vi.mocked(readdir).mockClear();
+  const normalBadge = "[[[README]]](./README.md)";
+  const plain = "[[./README.md|Guide]]";
+  const baseline = session.render(plain);
+  const explicit = session.render(normalBadge);
+  const prompt = await session.promptSections();
+  expect(scan).not.toHaveBeenCalled();
+
+  await session.runCommand();
+  expect(session.select).toHaveBeenLastCalledWith("Wikilinks: Off (this session)", ["On", "Off"], expect.any(Object));
+  expect(session.render(plain)).toBe(baseline);
+
+  session.select.mockResolvedValueOnce("On");
+  await session.runCommand();
+  expect(scan).not.toHaveBeenCalled();
+  const ready = Promise.withResolvers<void>();
+  session.requestRender.mockImplementationOnce(() => ready.resolve());
+  session.render(plain);
+  await ready.promise;
+
+  const [linked] = new Markdown(session.render(plain), 0, 0, getMarkdownTheme()).render(80);
+  const href = new URL("../../../README.md", import.meta.url).href;
+  expect(getOsc8LinkAtColumn(linked, 0)).toBe(href);
+  expect(stripTerminalSequences(linked).trimEnd()).toBe("\uE0B6\u00a0Guide\u00a0\uE0B4");
+  expect(session.render(normalBadge)).toBe(explicit);
+  expect(await session.promptSections()).toEqual(prompt);
+  expect(vi.getTimerCount()).toBe(1);
+
+  await session.runCommand();
+  expect(session.select).toHaveBeenLastCalledWith("Wikilinks: On (this session)", ["On", "Off"], expect.any(Object));
+  expect(session.render(plain)).not.toBe(baseline);
+  session.select.mockResolvedValueOnce("Off");
+  await session.runCommand();
+  expect(session.render(plain)).toBe(baseline);
+  expect(session.render(normalBadge)).toBe(explicit);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(await session.promptSections()).toEqual(prompt);
+});
+
+test.for(["show", "cancel"] as const)(
+  "handles a grouped preview on toggle off: %s",
+  async (action, { onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(stubRawInput());
+    const terminal = new ProcessTerminal();
+    vi.spyOn(terminal, "columns", "get").mockReturnValue(80);
+    vi.spyOn(terminal, "rows", "get").mockReturnValue(24);
+    const tui = new TuiAltScreen(terminal);
+    const session = await startSession(tui);
+    onTestFinished(session.stop);
+    const hide = vi.fn();
+    const show = vi.spyOn(tui, "showOverlay").mockReturnValue({ hide } as unknown as OverlayHandle);
+    session.select.mockResolvedValueOnce("On");
+    await session.runCommand();
+    const ready = Promise.withResolvers<void>();
+    session.requestRender.mockImplementationOnce(() => ready.resolve());
+    session.render("[[README]]");
+    await ready.promise;
+    const screen = new Markdown(session.render("[[README]]"), 0, 0, getMarkdownTheme()).render(80);
+    const rootReadme = new URL("../../../README.md", import.meta.url);
+    expect(getOsc8LinkAtColumn(screen[0], 0)).toBe(rootReadme.href);
+    vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof readExcerpt>>>();
+    onTestFinished(() => pending.resolve(undefined));
+    const read = vi.mocked(readExcerpt).mockClear();
+    for (let i = 0; i < 3; i++) read.mockReturnValueOnce(pending.promise);
+    process.stdin.emit("data", "\x1b[<35;2;1M");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(read).toHaveBeenCalledTimes(3);
+    const [[, firstPath, signal]] = read.mock.calls;
+    expect(firstPath).toBe(fileURLToPath(rootReadme));
+    expect(read.mock.calls.every(([, , other]) => other === signal)).toBe(true);
+    const excerpt = { filename: "README.md", text: "---\nkey: hidden\n---\n# Preview body\n", clipped: false };
+
+    if (action === "show") {
+      pending.resolve(excerpt);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(show).toHaveBeenCalledOnce();
+      const [[overlay, options]] = show.mock.calls;
+      const lines = overlay.render(56);
+      expect(lines.length).toBeLessThanOrEqual(12);
+      expect(lines.every((line) => visibleWidth(line) <= (options?.width as number))).toBe(true);
+      const card = lines.map(stripTerminalSequences).join("\n");
+      expect(card).toContain("./README.md");
+      expect(card).toContain("Preview body");
+      expect(card).not.toContain("hidden");
+    }
+
+    session.select.mockResolvedValueOnce("Off");
+    await session.runCommand();
+    expect(signal.aborted).toBe(true);
+    pending.resolve(excerpt);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(show).toHaveBeenCalledTimes(action === "show" ? 1 : 0);
+    expect(hide).toHaveBeenCalledTimes(action === "show" ? 1 : 0);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+test("rejects unsupported arguments and non-terminal modes before prompting", async ({ onTestFinished }) => {
+  const session = await startSession();
+  onTestFinished(session.stop);
+  await expect(session.runCommand("on")).rejects.toThrow("no arguments");
+  for (const mode of ["rpc", "print", "json"] as const) {
+    await expect(session.runCommand("", mode)).rejects.toThrow("terminal UI");
+  }
+  expect(session.select).not.toHaveBeenCalled();
+});
+
+test("dismisses a pending menu on replacement and ignores its late answer", async ({ onTestFinished }) => {
+  const session = await startSession();
+  onTestFinished(session.stop);
+  const pending = Promise.withResolvers<string>();
+  session.select.mockReturnValueOnce(pending.promise);
+  const command = session.runCommand();
+  const [[, , options]] = session.select.mock.calls;
+  expect(options?.signal?.aborted).toBe(false);
+  await session.startWidget();
+  expect(options?.signal?.aborted).toBe(true);
+  pending.resolve("On");
+  await command;
+  await session.runCommand();
+  expect(session.select).toHaveBeenLastCalledWith("Wikilinks: Off (this session)", ["On", "Off"], expect.any(Object));
 });
 
 test.for(["[[README.md]]", "[[[README](./README.md)]]", "[[[README]]](./README.md)"])(

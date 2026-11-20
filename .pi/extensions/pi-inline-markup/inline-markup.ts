@@ -12,6 +12,7 @@ import {
   stripTerminalSequences,
 } from "@earendil-works/pi-tui";
 import { resolveLinkPath } from "./filelinks.ts";
+import type { createWikilinks } from "./wikilinks.ts";
 
 const START =
   /(?<![![])\[\[\[([^[\]\r\n]+)\]\]\]\(|(?<![![])\[\[([^[\]\r\n]+)\]\](?![\](])|\[(?:\\[^\r\n]|[^[\]\\\r\n])+\]\(/g;
@@ -73,7 +74,7 @@ function cleanBadgeLabel(label: string): string {
     .trim();
 }
 
-function renderBadge(label: string, theme: Theme, userMessage: boolean, href?: string): string {
+function renderBadge(label: string, theme: Theme, userMessage: boolean, href?: string, groupId?: string): string {
   const caps = getCapabilities();
   const mode = caps.trueColor ? "truecolor" : "256color";
   const key = createHash("sha256").update(label.normalize("NFC")).digest()[0];
@@ -84,7 +85,10 @@ function renderBadge(label: string, theme: Theme, userMessage: boolean, href?: s
   const padded = `\u00a0${label.replaceAll(" ", "\u00a0")}\u00a0`;
   // Rounded Powerline caps require glyph support from the terminal or its font.
   const badge = `${edge}\uE0B6${body}${padded}${resetFill}${edge}\uE0B4\x1b[39m`;
-  return asCodeSpan(href && caps.hyperlinks ? hyperlink(badge, href) : badge);
+  if (!caps.hyperlinks) return asCodeSpan(badge);
+  // An empty group URL allows a preview without a click destination.
+  if (groupId) return asCodeSpan(`\x1b]8;id=${groupId};${href ?? ""}\x1b\\${badge}\x1b]8;;\x1b\\`);
+  return asCodeSpan(href ? hyperlink(badge, href) : badge);
 }
 
 function renderFileLabel(label: string, href: string, theme: Theme, inlineCode: boolean): string {
@@ -114,7 +118,13 @@ function isWrappedLink(source: string, offset: number, end: number): boolean {
 }
 
 /** Styles prose badges and local Markdown links without changing their destinations. */
-export function renderInlineMarkup(markdown: string, root: string, theme: Theme, userMessage: boolean): string {
+export function renderInlineMarkup(
+  markdown: string,
+  root: string,
+  theme: Theme,
+  userMessage: boolean,
+  wiki?: ReturnType<typeof createWikilinks>,
+): string {
   if (!markdown.includes("[[") && !markdown.includes("](")) return markdown;
 
   // Tag each occurrence so the lexer can separate prose from code, link titles, and image labels.
@@ -212,8 +222,15 @@ export function renderInlineMarkup(markdown: string, root: string, theme: Theme,
     if (blocked.has(id)) continue;
     let replacement = replacements.get(id);
     if (start.badge !== undefined && proseBadges.has(id)) {
-      const label = cleanBadgeLabel(start.badge);
-      if (label) replacement = { offset: start.offset, end: start.end, text: renderBadge(label, theme, userMessage) };
+      const note = wiki?.resolve(start.badge);
+      const label = cleanBadgeLabel(note?.label ?? start.badge);
+      if (label) {
+        replacement = {
+          offset: start.offset,
+          end: start.end,
+          text: renderBadge(label, theme, userMessage, note?.href, note?.groupId),
+        };
+      }
     }
     if (!replacement || replacement.offset < cursor) continue;
     result += markdown.slice(cursor, replacement.offset);
