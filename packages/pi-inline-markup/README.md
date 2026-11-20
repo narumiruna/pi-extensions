@@ -8,7 +8,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 ## ✨ Features
 
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
-- Hover over a file link in fullscreen mode to preview the file or a specific range of source lines.
+- Hover over a file link in fullscreen mode to preview an image, a text file, or a range of source lines.
 - Turn on filename lookup for wikilinks in the current session.
 
 ## 📦 Install
@@ -41,7 +41,8 @@ If you explicitly configured the old path, remove that entry before loading the 
 
 Start Pi in a directory with a `README.md` file. Send a message containing
 `[README](./README.md)` to see a file icon next to the label. In fullscreen mode,
-hover over the link to preview the file.
+hover over the link to preview the file. If Pi detects Kitty graphics support,
+hover over an image link such as `[Cat Photo](./cat.png)` to see the image.
 
 ## 💬 Commands
 
@@ -97,8 +98,11 @@ session history.
 - Hover previews require fullscreen mode, OSC 8 hyperlinks, and mouse movement
   reports without a button press. Pi does not request these reports in tmux,
   Zellij, or GNU Screen.
-- Previews show up to 16 KiB of a regular UTF-8 file. For a line-anchored preview,
-  the first requested line must start within the first 256 KiB.
+- Text previews show up to 16 KiB of a regular UTF-8 file. For a line-anchored
+  preview, the first requested line must start within the first 256 KiB.
+- Image previews require Kitty graphics and display a static PNG, JPEG, GIF, or
+  WebP image. The file and any converted PNG must each be at most 4 MiB and
+  4 million pixels. The link remains usable when no image preview is available.
 
 ## 🗂️ Package layout
 
