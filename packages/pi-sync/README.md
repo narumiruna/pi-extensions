@@ -317,6 +317,12 @@ Read the [settings reference](./skills/configure-pi-sync/references/configuratio
 | `/sync migrate-state` | Migrate the legacy local state directory. |
 | `/sync unlock --stale` | Recover an abandoned local lock after guarded ownership checks. |
 
+Brief interruptions to file-write queue acknowledgements recover in the
+background when possible, without replaying a transfer. Longer waits can
+show `sync recovering`. If cleanup remains uncertain, review
+[daemon recovery](./docs/daemon-migration.md#write-coordination-and-disconnection)
+before retrying.
+
 Use the installed CLI, `pi-sync-daemon stop --root <agent-directory>` or `pi-sync-daemon restart --root <agent-directory>`, for explicit service lifecycle control; these are not `/sync daemon` actions. Stop drains the service; reload Pi to reattach its session afterward. Explicit CLI start without clients also follows the 30-second grace policy. The next eligible interactive client or explicit command can restart only after the old owner's exit is proven; print/JSON never launch a service. Uncertain consent, failed revocation, or cleanup failure remains paused for the existing repair/revocation path, not silently cleared by automatic restart. No new setting, environment variable, or keep-alive flag is added. See [lifetime and recovery](./docs/daemon-migration.md).
 
 All routes support TUI and RPC; RPC settings and included-content screens are read-only.

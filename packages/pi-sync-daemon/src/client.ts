@@ -368,17 +368,39 @@ export async function stopDaemon(root: string): Promise<boolean> {
   }
 }
 
+export interface QueueReleaseDelivery {
+  id: string;
+  job: string;
+  state: "retrying" | "finished" | "unconfirmed";
+  foreground: boolean;
+}
+
+interface PendingCallback {
+  controller: AbortController;
+  kind: string;
+  job: string;
+  releaseCursor?: number;
+}
+
+const MAX_COMPLETED_CALLBACKS = 4096;
+const RELEASE_ATTEMPT_MS = 2_000;
+const RELEASE_BUDGET_MS = 25_000;
+const RELEASE_MAX_ATTEMPTS = 20;
+const TRANSIENT_RELEASE_ERRORS = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ENOENT", "ETIMEDOUT", "EAGAIN"]);
+
 export interface ConnectionOptions {
   callback(callback: Callback, signal: AbortSignal): Promise<unknown>;
   event?(event: ClientEvent): void;
   error?(error: unknown): void;
   /** Each current background observation after admission, including repeated states. */
   contact?(state: ContactState): void;
+  /** Observes local delivery only. Finished does not establish a job's outcome. */
+  queueRelease?(event: QueueReleaseDelivery): void;
 }
 export class DaemonConnection {
   private cursor = 0;
   private controller = new AbortController();
-  private callbacks = new Map<string, { controller: AbortController; kind: string; job: string }>();
+  private callbacks = new Map<string, PendingCallback>();
   private callbackIO = new AbortController();
   private callbackTasks = new Set<Promise<void>>();
   private updates = Promise.resolve();
@@ -389,7 +411,7 @@ export class DaemonConnection {
   private lifecycleRevision = 0;
   private resuming: AbortController | undefined;
   private resumeUncertain = false;
-  private pendingJobs = 0;
+  private pendingJobs = new Set<string>();
   private uncertain = false;
   private reportedError = false;
   private commits = new Map<string, { notify(): void; signal?: AbortSignal }>();
@@ -414,7 +436,7 @@ export class DaemonConnection {
   }
   /** Original submitted jobs must finish (or be reconciled) before repairing contact. */
   get hasPendingWork(): boolean {
-    return this.pendingJobs > 0 || this.uncertain;
+    return this.pendingJobs.size > 0 || this.uncertain;
   }
   async attach(signal?: AbortSignal) {
     if (
@@ -572,8 +594,8 @@ export class DaemonConnection {
     )
       throw new Error("Daemon client is unavailable; confirm contact and drain work before submitting.");
     signal?.throwIfAborted();
-    this.pendingJobs++;
     const id = `${operationPrefix(this.identity)}${randomUUID()}`;
+    this.pendingJobs.add(id);
     const abort = () => {
       void requestDaemon(
         this.paths,
@@ -638,7 +660,7 @@ export class DaemonConnection {
           }
         }
       },
-    ).finally(() => this.pendingJobs--);
+    ).finally(() => this.pendingJobs.delete(id));
   }
   private publishContact(contact: ContactState | undefined) {
     this.contactRevision++;
@@ -667,15 +689,37 @@ export class DaemonConnection {
         }
         this.options.event?.(event);
       }
+    const latest = reply.cursor >= this.cursor;
     this.cursor = Math.max(this.cursor, reply.cursor);
     const present = new Set((reply.callbacks as Callback[]).map((callback) => callback.id));
-    for (const [id, { controller }] of this.callbacks)
-      if (!present.has(id)) controller.abort(new DOMException("Callback is no longer current", "AbortError"));
+    for (const [id, pending] of this.callbacks) {
+      if (pending.releaseCursor !== undefined) {
+        // A job poll and the background poll can arrive out of order.
+        if (!latest || reply.cursor <= pending.releaseCursor) continue;
+        if (present.has(id)) {
+          pending.releaseCursor = reply.cursor;
+          continue;
+        }
+      } else if (present.has(id)) continue;
+      pending.controller.abort(new DOMException("Callback is no longer current", "AbortError"));
+    }
     for (const callback of reply.callbacks as Callback[]) {
       if (this.callbacks.has(callback.id) || this.completedCallbacks.has(callback.id)) continue;
-      if (this.completedCallbacks.size >= 4096) this.uncertain = true;
+      const release = callback.kind === "queue-release";
+      if (release && !latest) continue;
+      if (this.completedCallbacks.size + this.callbacks.size >= MAX_COMPLETED_CALLBACKS) {
+        // Never execute a release whose result we cannot deduplicate.
+        this.uncertain = true;
+        if (release) continue;
+      }
       const controller = new AbortController();
-      this.callbacks.set(callback.id, { controller, kind: callback.kind, job: callback.job });
+      const foreground = this.pendingJobs.has(callback.job);
+      this.callbacks.set(callback.id, {
+        controller,
+        kind: callback.kind,
+        job: callback.job,
+        ...(release && { releaseCursor: reply.cursor }),
+      });
       const task = (async () => {
         let value: unknown;
         let failed = false;
@@ -686,29 +730,99 @@ export class DaemonConnection {
         } catch {
           failed = true;
         }
-        await requestDaemon(
-          this.paths,
-          this.identity,
-          "answer",
-          {
-            client: this.facts.id,
-            id: callback.id,
-            ...(failed ? { error: "Client callback cancelled or failed." } : { value }),
-          },
-          this.callbackIO.signal,
-        );
+        if (release) {
+          if (!failed && value === true) {
+            await this.deliverRelease(callback, foreground, controller.signal);
+            return;
+          }
+          failed = true;
+        }
+        try {
+          await requestDaemon(
+            this.paths,
+            this.identity,
+            "answer",
+            {
+              client: this.facts.id,
+              id: callback.id,
+              ...(failed ? { error: "Client callback cancelled or failed." } : { value }),
+            },
+            this.callbackIO.signal,
+          );
+        } finally {
+          if (release) this.reportRelease(callback, foreground, "unconfirmed");
+        }
       })()
         .catch((error) => {
           if (!this.closed && !controller.signal.aborted) this.reportError(error);
         })
         .finally(() => {
-          if (this.completedCallbacks.size < 4096) this.completedCallbacks.add(callback.id);
+          if (this.completedCallbacks.size < MAX_COMPLETED_CALLBACKS) this.completedCallbacks.add(callback.id);
           this.callbacks.delete(callback.id);
           this.callbackTasks.delete(task);
         });
       this.callbackTasks.add(task);
     }
     return contact;
+  }
+  private reportRelease(callback: Callback, foreground: boolean, state: QueueReleaseDelivery["state"]) {
+    if (this.callbackIO.signal.aborted) return;
+    try {
+      this.options.queueRelease?.({ id: callback.id, job: callback.job, foreground, state });
+    } catch {
+      // Presentation must not own a queue or a callback task.
+    }
+  }
+  private async deliverRelease(callback: Callback, foreground: boolean, pending: AbortSignal) {
+    const signal = AbortSignal.any([pending, this.callbackIO.signal]);
+    const deadline = performance.now() + RELEASE_BUDGET_MS;
+    let retrying = false;
+    let state: QueueReleaseDelivery["state"] = "unconfirmed";
+    try {
+      for (let attempt = 0; attempt < RELEASE_MAX_ATTEMPTS; attempt++) {
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining <= 0 || signal.aborted) break;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), Math.min(remaining, RELEASE_ATTEMPT_MS));
+        timer.unref?.();
+        try {
+          await requestDaemon(
+            this.paths,
+            this.identity,
+            "answer",
+            { client: this.facts.id, id: callback.id, value: true },
+            AbortSignal.any([signal, controller.signal]),
+          );
+          state = "finished";
+          return;
+        } catch (error) {
+          if (signal.aborted) break;
+          if (error instanceof DaemonError) {
+            // The v1 server uses this reply for absent as well as foreign callbacks.
+            // Do not infer whether the original release succeeded.
+            if (error.message === "Stale or foreign callback response.") state = "finished";
+            return;
+          }
+          if (
+            !controller.signal.aborted &&
+            (!(error instanceof Error) || !TRANSIENT_RELEASE_ERRORS.has((error as NodeJS.ErrnoException).code ?? ""))
+          )
+            return;
+        } finally {
+          clearTimeout(timer);
+        }
+        if (!retrying) {
+          retrying = true;
+          this.reportRelease(callback, foreground, "retrying");
+        }
+        const wait = Math.min(100 * 2 ** attempt, 2_000, deadline - performance.now());
+        if (wait <= 0 || attempt + 1 >= RELEASE_MAX_ATTEMPTS) break;
+        await delay(wait, undefined, { signal, ref: false }).catch(() => {});
+      }
+    } finally {
+      if (pending.aborted && !this.callbackIO.signal.aborted) state = "finished";
+      if (retrying || state === "unconfirmed") this.reportRelease(callback, foreground, state);
+    }
   }
   private async performCallback(callback: Callback, signal: AbortSignal) {
     const reference = callback.review;

@@ -1,4 +1,4 @@
-export type { ConnectionOptions } from "./client.js";
+export type { ConnectionOptions, QueueReleaseDelivery } from "./client.js";
 export {
   DaemonConnection,
   DaemonError,

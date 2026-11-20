@@ -3,14 +3,25 @@ import { fork } from "node:child_process";
 import path from "node:path";
 import type { ClientFacts, JobView } from "@narumitw/pi-sync-daemon";
 
+type QueueReleaseFault = "before-accept" | "after-accept";
+
 interface WireRecord {
   method: string;
   id?: string;
   operation?: string;
   facts?: ClientFacts;
   contact?: string;
-  job?: Pick<JobView, "id" | "phase" | "error">;
+  job?: Pick<JobView, "id" | "phase" | "error" | "result">;
   error?: { name: string; message: string };
+  release?: {
+    job: string;
+    reservation: string;
+    client: string;
+    value: unknown;
+    error?: string;
+    accepted: boolean;
+    dropped?: QueueReleaseFault;
+  };
 }
 
 export async function startObservableRpcOwner(agent: string, signal: AbortSignal) {
@@ -69,13 +80,13 @@ export async function startObservableRpcOwner(agent: string, signal: AbortSignal
   }
 
   let sequence = 0;
-  async function control<T>(command: string, gate?: boolean) {
+  async function control<T>(command: string, option?: boolean | QueueReleaseFault) {
     const id = ++sequence;
     const waiter = Promise.withResolvers<unknown>();
     pending.set(id, waiter);
     const timer = setTimeout(() => waiter.reject(new Error(`Daemon ${command} deadline exceeded: ${stderr}`)), 3_000);
     try {
-      child.send({ id, command, gate }, (error) => {
+      child.send({ id, command, option }, (error) => {
         if (error) waiter.reject(error);
       });
       return (await waiter.promise) as T;
@@ -88,7 +99,9 @@ export async function startObservableRpcOwner(agent: string, signal: AbortSignal
     pid: child.pid,
     expire: (holdIdlePolls = false) => control<ClientFacts[]>("expire", holdIdlePolls),
     release: () => control<void>("release"),
+    dropQueueRelease: (fault: QueueReleaseFault) => control<void>("drop-queue-release", fault),
     inspect: () => control<WireRecord[]>("inspect"),
+    installs: () => control<number>("installs"),
     async stop() {
       const deadline = setTimeout(() => child.kill("SIGKILL"), 4_000);
       try {

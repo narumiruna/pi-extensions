@@ -130,6 +130,181 @@ test("poll notifies repeated contact states only after admission but serves clea
   );
 });
 
+test.each(["request", "response"] as const)(
+  "a lost queue-release %s does not replay the job or callback",
+  async (drop) => {
+    let job: string | undefined;
+    let released = false;
+    let answers = 0;
+    let handled = 0;
+    const callback = { ...releaseCallback(), payload: { reservation: randomUUID() } };
+    await fixture(
+      ({ method, params }, response) => {
+        if (method === "submit") job = String(params.id);
+        if (method === "poll") {
+          return poll("active", {
+            cursor: released ? 2 : 1,
+            callbacks: job && !released ? [{ ...callback, job }] : [],
+            ...(params.job === job &&
+              job && {
+                job: released ? { id: job, phase: "done", result: "original" } : { id: job, phase: "running" },
+              }),
+          });
+        }
+        if (method === "answer") {
+          answers++;
+          assert.deepEqual(params, { client: params.client, id: callback.id, value: true });
+          if (answers === 1) {
+            released = drop === "response";
+            response.destroy();
+          } else if (released) {
+            return failure("Stale or foreign callback response.");
+          } else {
+            released = true;
+            return { result: {} };
+          }
+        }
+        if (method === "cancel") return { result: {} };
+        return poll("active");
+      },
+      async (client, calls) => {
+        await client.attach();
+        const result = client.run("fixture", {});
+        const settled = Promise.withResolvers<void>();
+        void result.finally(() => settled.resolve()).catch(() => {});
+        try {
+          await vi.waitFor(() => assert.ok(released));
+          assert.equal(await result, "original");
+        } finally {
+          if (!released) released = true;
+          await settled.promise;
+        }
+        assert.ok(released);
+        assert.equal(handled, 1);
+        assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
+        assert.equal(answers, drop === "request" ? 2 : 1);
+      },
+      {
+        callback: async () => {
+          handled++;
+          return true;
+        },
+      },
+    );
+  },
+);
+
+test.each(["failed", "rejected", "exhausted", "detached"] as const)(
+  "queue release delivery handles %s without re-running the callback",
+  async (scenario) => {
+    const release = releaseCallback();
+    const clock = vi.spyOn(performance, "now");
+    const states: string[] = [];
+    let answers = 0;
+    let callbacks = 0;
+    const confirmed = Promise.withResolvers<void>();
+    try {
+      await fixture(
+        async ({ method, params }, response) => {
+          if (method === "detach" && scenario === "detached") await confirmed.promise;
+          if (method === "poll") return poll(undefined, { callbacks: [release] });
+          if (method === "answer") {
+            answers++;
+            assert.equal(params.id, release.id);
+            if (scenario === "failed") {
+              assert.equal(typeof params.error, "string");
+              return { result: {} };
+            }
+            assert.equal(params.value, true);
+            if (scenario === "rejected") return failure("Rejected");
+            if (scenario === "exhausted") clock.mockReturnValue(performance.now() + 26_000);
+            if (answers === 1) response.destroy();
+            else return { result: {} };
+          }
+          return poll();
+        },
+        async (client) => {
+          if (scenario === "detached") {
+            // A detached recovery has no attach or foreground context, but still polls to drain.
+            await client.dispose();
+            assert.deepEqual(states, ["retrying", "finished"]);
+          } else {
+            await client.attach();
+            await vi.waitFor(() => assert.equal(states.at(-1), "unconfirmed"));
+          }
+          assert.equal(callbacks, 1);
+          assert.equal(answers, scenario === "detached" ? 2 : 1);
+          assert.equal(states.includes("finished"), scenario === "detached");
+        },
+        {
+          callback: async () => {
+            callbacks++;
+            if (scenario === "failed") throw new Error("release failed");
+            return true;
+          },
+          queueRelease: ({ state }) => {
+            states.push(state);
+            if (state !== "retrying") confirmed.resolve();
+          },
+        },
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
+
+test("an old background poll cannot cancel a newer queue-release delivery", async () => {
+  const release = releaseCallback();
+  const oldPoll = Promise.withResolvers<void>();
+  const oldPollEntered = Promise.withResolvers<void>();
+  let answers = 0;
+  let handled = 0;
+  let job: string | undefined;
+  await fixture(
+    async ({ method, params }, response) => {
+      if (method === "submit") job = String(params.id);
+      if (method === "poll" && !params.job) {
+        oldPollEntered.resolve();
+        await oldPoll.promise;
+        return poll("active", { cursor: 1 });
+      }
+      if (method === "answer") {
+        answers++;
+        if (answers === 1) {
+          oldPoll.resolve();
+          response.destroy();
+        } else return { result: {} };
+      }
+      if (method === "poll" && job) {
+        return poll("active", {
+          cursor: answers === 2 ? 3 : 2,
+          callbacks: answers === 2 ? [] : [{ ...release, job }],
+          job: answers === 2 ? { id: job, phase: "done", result: true } : { id: job, phase: "running" },
+        });
+      }
+      return poll("active", { cursor: 1 });
+    },
+    async (client) => {
+      await client.attach();
+      await oldPollEntered.promise;
+      try {
+        assert.equal(await client.run("fixture", {}), true);
+        assert.equal(answers, 2);
+        assert.equal(handled, 1);
+      } finally {
+        oldPoll.resolve();
+      }
+    },
+    {
+      callback: async () => {
+        handled++;
+        return true;
+      },
+    },
+  );
+});
+
 test("legacy replies and transport failures do not make contact eligible", async () => {
   let failPoll = false;
   const errors: unknown[] = [];

@@ -6,6 +6,7 @@ import { ClientRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import lockfile from "proper-lockfile";
 import { test, vi } from "vitest";
 import { DaemonConnection, requestDaemon } from "../src/client.js";
 import { engineHost } from "../src/engine/host.js";
@@ -280,6 +281,46 @@ for (const mode of ["print", "json", "rpc"] as const)
           );
         }
       }));
+
+test.each(["Pi queue", "settings lock"] as const)("a failed %s release blocks later mutations", (failure) =>
+  fixture(async (root) => {
+    const target = path.join(root, "settings.json");
+    await fs.writeFile(target, "{}");
+    const host = installServiceHost(root);
+    const lockFile = lockfile.lock;
+    const lock = vi.spyOn(lockfile, "lock").mockImplementation(async (file, options) => {
+      if (file !== target || failure !== "settings lock") return lockFile(file, options);
+      return async () => {
+        throw new Error("settings lock release failed");
+      };
+    });
+    let writes = 0;
+    const server = await startServer(root, async (_operation, _payload, execution) =>
+      host.run(execution, () => engineHost().mutate(target, async () => ++writes)),
+    );
+    const client = new DaemonConnection(server.paths, server.identity, facts(root), {
+      callback: async ({ kind }) => {
+        if (failure === "Pi queue" && kind === "queue-release") throw new Error("queue release failed");
+        return true;
+      },
+    });
+    try {
+      await client.attach();
+      await assert.rejects(
+        client.run("write", {}),
+        failure === "Pi queue" ? /File-queue release is uncertain/u : /settings lock release failed/u,
+      );
+      await assert.rejects(client.run("write", {}), /Daemon ownership cleanup is uncertain/u);
+      assert.equal(writes, 1);
+    } finally {
+      lock.mockRestore();
+      await withCleanup(
+        () => client.dispose(),
+        () => server.close(),
+      );
+    }
+  }),
+);
 
 test("attach has a cancellable admission wait rather than an idle timeout; other requests stay bounded", () =>
   fixture(async (root) => {
