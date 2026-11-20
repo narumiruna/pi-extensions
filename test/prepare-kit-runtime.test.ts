@@ -175,9 +175,11 @@ for (const kind of ["file", "symlink", "dangling symlink"] as const) {
   });
 }
 
-describe("clean production Git preparation", () => {
+type SmokeOperation = { surface: "files" } | { surface: "sync"; daemonPID: number };
+
+describe.for(["files", "sync"] as const)("clean production Git preparation: %s", (surface) => {
   let smoke: ReturnType<typeof runSmoke>;
-  let service: ReturnType<typeof startProductionDaemon>;
+  let operation: SmokeOperation;
 
   beforeEach(async ({ onTestFinished }) => {
     const checkout = await mkdtemp(join(tmpdir(), "prepare-git-production-"));
@@ -275,14 +277,19 @@ describe("clean production Git preparation", () => {
     await writeFile(join(checkout, "smoke.mjs"), productionSmoke);
     ownedSmoke = smoke = runSmoke(checkout);
     await smoke.ready;
-    // Own the foreground service directly, including when the smoke child times out.
-    ownedDaemon = service = startProductionDaemon(checkout);
-    await service.ready;
+    if (surface === "sync") {
+      // Own the foreground service directly, including when the smoke child times out.
+      ownedDaemon = startProductionDaemon(checkout);
+      await ownedDaemon.ready;
+      operation = { surface, daemonPID: ownedDaemon.pid };
+    } else {
+      operation = { surface };
+    }
   });
 
-  test("loads root-listed Files source and its lazy menus through native Jiti", async () => {
-    const evidence = await smoke.run(service.pid);
-    assert.match(evidence, /PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle/u);
+  test("loads and exercises root-listed source through native Jiti", async () => {
+    const evidence = await smoke.run(operation);
+    assert.match(evidence, surface === "files" ? /PASS Files and Kit lazy menus/u : /PASS Sync source and daemon/u);
   });
 });
 
@@ -326,11 +333,11 @@ function runSmoke(checkout: string) {
       rejectReady(error);
       reject(error);
     });
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       clearTimeout(deadline);
       if (code === 0 && deadline) resolveSmoke(output);
       else {
-        const error = new Error(`Production Git Jiti smoke failed (${code}): ${output}`);
+        const error = new Error(`Production Git Jiti smoke failed (${signal ?? code}): ${output}`);
         rejectReady(error);
         reject(error);
       }
@@ -340,10 +347,10 @@ function runSmoke(checkout: string) {
   void completion.catch(() => {});
   return {
     ready,
-    run: async (daemonPID: number) => {
+    run: async (operation: SmokeOperation) => {
       await ready;
       deadline = setTimeout(() => child.kill("SIGKILL"), 4000);
-      child.send({ type: "run", daemonPID });
+      child.send({ type: "run", ...operation });
       return completion;
     },
     dispose: async () => {
@@ -434,89 +441,109 @@ for (const tool of ["typescript", "tsc-rs", "@biomejs/biome", "vitest"]) {
 }
 assert.ok(require.resolve("esbuild"));
 const manifest = JSON.parse(await readFile("package.json", "utf8"));
-const entries = manifest.pi.extensions.filter((file) => /\/pi-(?:files|file-context|edit-scope)\//u.test(file));
-assert.deepEqual(entries, ["./packages/pi-files/src/index.ts"]);
-const [entry] = entries;
-assert.ok(entry);
-const loader = new sdk.DefaultResourceLoader({
-  cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR,
-  settingsManager: sdk.SettingsManager.inMemory({}),
-  additionalExtensionPaths: [join(process.cwd(), entry)],
-});
-await loader.reload();
-const loaded = loader.getExtensions();
-assert.deepEqual(loaded.errors, []);
-assert.equal(loaded.extensions.length, 1);
-const extension = loaded.extensions[0];
-assert.deepEqual([...extension.commands.keys()].sort(), ["edit-scope", "file-context", "files", "scope"]);
-for (const type of ["tool_call", "context_with_system", "session_start", "session_shutdown"]) {
-  assert.ok(extension.handlers.has(type), type);
-}
-assert.equal(extension.tools.size, 0);
-assert.equal(extension.path, join(process.cwd(), entry));
-const { createTuiHarness } = await import("@narumitw/pi-tui-kit/testing");
-const { runQuestionnaire } = await import("@narumitw/pi-tui-kit");
-const harness = createTuiHarness();
-const notices = [];
 const ctx = {
-  cwd: process.cwd(), mode: "tui", hasUI: true,
+  cwd: process.cwd(), hasUI: true,
   isIdle: () => true, hasPendingMessages: () => false, isProjectTrusted: () => false,
-  sessionManager: { getBranch: () => [], getEntries: () => [], getSessionId: () => "production-git" },
-  // Geometry is exercised by native package host tests; this harness verifies the lazy artifact.
-  ui: { custom: (factory) => harness.custom(factory), notify: (message, type) => notices.push({ message, type }), setWidget() {}, setStatus() {} },
 };
-const emit = async (type) => {
-  for (const handler of extension.handlers.get(type) ?? []) await handler({ type, reason: "startup" }, ctx);
-};
-try {
-  await emit("session_start");
-  for (const [name, title] of [["files", /Files/u], ["scope", /Edit Scope/u]]) {
-    const menu = extension.commands.get(name).handler("", ctx);
-    await Promise.race([harness.waitForOpen(), menu.then(() => { throw new Error("Menu closed before opening"); })]);
-    const frame = harness.render().join("\n");
-    harness.send("\x03");
-    await menu;
-    assert.match(frame, title);
-    assert.equal(harness.isOpen, false);
-  }
-  const questionnaire = runQuestionnaire(ctx, {
-    questions: [{ id: "proof", header: "Lazy", prompt: "Generated lazy boundary", options: [{ label: "Ready" }] }],
+if (run.surface === "files") {
+  await smokeFiles();
+  console.log("PASS Files and Kit lazy menus");
+} else {
+  assert.equal(run.surface, "sync");
+  await smokeSync(run.daemonPID);
+  console.log("PASS Sync source and daemon");
+}
+
+async function smokeFiles() {
+  const entries = manifest.pi.extensions.filter((file) => /\/pi-(?:files|file-context|edit-scope)\//u.test(file));
+  assert.deepEqual(entries, ["./packages/pi-files/src/index.ts"]);
+  const [entry] = entries;
+  assert.ok(entry);
+  const loader = new sdk.DefaultResourceLoader({
+    cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR,
+    settingsManager: sdk.SettingsManager.inMemory({}),
+    additionalExtensionPaths: [join(process.cwd(), entry)],
   });
-  await Promise.race([harness.waitForOpen(), questionnaire.then(() => { throw new Error("Questionnaire closed before opening"); })]);
-  const questionFrame = harness.render().join("\n");
-  harness.send("\x03");
-  assert.equal((await questionnaire).kind, "closed");
-  assert.match(questionFrame, /Generated lazy boundary/u);
-  assert.deepEqual(notices, []);
-  for (const file of ["pi-file-context.json", "pi-scope.json", "pi-files.json"]) {
-    assert.equal(existsSync(join(process.env.PI_CODING_AGENT_DIR, file)), false, file);
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.extensions.length, 1);
+  const extension = loaded.extensions[0];
+  assert.deepEqual([...extension.commands.keys()].sort(), ["edit-scope", "file-context", "files", "scope"]);
+  for (const type of ["tool_call", "context_with_system", "session_start", "session_shutdown"]) {
+    assert.ok(extension.handlers.has(type), type);
   }
-} finally {
-  harness.dispose();
-  await emit("session_shutdown");
-  loaded.runtime.invalidate("production Git smoke complete");
-}
-const syncEntry = manifest.pi.extensions.find(file => file === "./packages/pi-sync/src/index.ts");
-assert.ok(syncEntry);
-const syncLoader = new sdk.DefaultResourceLoader({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, settingsManager: sdk.SettingsManager.inMemory({}), additionalExtensionPaths: [join(process.cwd(), syncEntry)] });
-await syncLoader.reload(); const syncLoaded = syncLoader.getExtensions(); assert.deepEqual(syncLoaded.errors, []);
-const syncExtension = syncLoaded.extensions[0]; assert.ok(syncExtension);
-const syncNotices=[]; const syncCtx={...ctx, mode:"rpc", sessionManager:{getSessionId:()=>"production-sync"}, ui:{...ctx.ui,notify:message=>syncNotices.push(message)}};
-try {
-  for(const handler of syncExtension.handlers.get("session_start")??[]) await handler({type:"session_start",reason:"startup"},syncCtx);
-  await syncExtension.commands.get("sync").handler("help",syncCtx);
-  assert.ok(syncNotices.some(message=>message.includes("daemon [")));
-  const api=await import("@narumitw/pi-sync-daemon");
-  assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.pid,run.daemonPID);
-  const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
+  assert.equal(extension.tools.size, 0);
+  assert.equal(extension.path, join(process.cwd(), entry));
+  const { createTuiHarness } = await import("@narumitw/pi-tui-kit/testing");
+  const { runQuestionnaire } = await import("@narumitw/pi-tui-kit");
+  const harness = createTuiHarness();
+  const notices = [];
+  const filesCtx = {
+    ...ctx, mode: "tui",
+    sessionManager: { getBranch: () => [], getEntries: () => [], getSessionId: () => "production-git" },
+    // Geometry is exercised by native package host tests; this harness verifies the lazy artifact.
+    ui: { custom: (factory) => harness.custom(factory), notify: (message, type) => notices.push({ message, type }), setWidget() {}, setStatus() {} },
+  };
+  const emit = async (type) => {
+    for (const handler of extension.handlers.get(type) ?? []) await handler({ type, reason: "startup" }, filesCtx);
+  };
   try {
-    assert.equal(owner.identity.pid,run.daemonPID);
-    assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance);
+    await emit("session_start");
+    for (const [name, title] of [["files", /Files/u], ["scope", /Edit Scope/u]]) {
+      const menu = extension.commands.get(name).handler("", filesCtx);
+      await Promise.race([harness.waitForOpen(), menu.then(() => { throw new Error("Menu closed before opening"); })]);
+      const frame = harness.render().join("\n");
+      harness.send("\x03");
+      await menu;
+      assert.match(frame, title);
+      assert.equal(harness.isOpen, false);
+    }
+    const questionnaire = runQuestionnaire(filesCtx, {
+      questions: [{ id: "proof", header: "Lazy", prompt: "Generated lazy boundary", options: [{ label: "Ready" }] }],
+    });
+    await Promise.race([harness.waitForOpen(), questionnaire.then(() => { throw new Error("Questionnaire closed before opening"); })]);
+    const questionFrame = harness.render().join("\n");
+    harness.send("\x03");
+    assert.equal((await questionnaire).kind, "closed");
+    assert.match(questionFrame, /Generated lazy boundary/u);
+    assert.deepEqual(notices, []);
+    for (const file of ["pi-file-context.json", "pi-scope.json", "pi-files.json"]) {
+      assert.equal(existsSync(join(process.env.PI_CODING_AGENT_DIR, file)), false, file);
+    }
+  } finally {
+    harness.dispose();
+    await emit("session_shutdown");
+    loaded.runtime.invalidate("production Git smoke complete");
   }
-  finally { await api.stopDaemon(process.env.PI_CODING_AGENT_DIR); }
-} finally {
-  for(const handler of syncExtension.handlers.get("session_shutdown")??[]) await handler({type:"session_shutdown",reason:"reload"},syncCtx);
-  syncLoaded.runtime.invalidate("production sync Git smoke complete");
 }
-console.log("PASS clean Git source, merged commands, lazy menus, Kit lazy questionnaire, lifecycle, Sync source and daemon JavaScript without dev tools");
+
+async function smokeSync(daemonPID) {
+  const syncEntry = manifest.pi.extensions.find(file => file === "./packages/pi-sync/src/index.ts");
+  assert.ok(syncEntry);
+  const syncLoader = new sdk.DefaultResourceLoader({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, settingsManager: sdk.SettingsManager.inMemory({}), additionalExtensionPaths: [join(process.cwd(), syncEntry)] });
+  await syncLoader.reload(); const syncLoaded = syncLoader.getExtensions(); assert.deepEqual(syncLoaded.errors, []);
+  const syncExtension = syncLoaded.extensions[0]; assert.ok(syncExtension);
+  const syncNotices = [];
+  const syncCtx = {
+    ...ctx, mode: "rpc", sessionManager: { getSessionId: () => "production-sync" },
+    ui: { notify: (message) => syncNotices.push(message), setWidget() {}, setStatus() {} },
+  };
+  try {
+    for(const handler of syncExtension.handlers.get("session_start")??[]) await handler({type:"session_start",reason:"startup"},syncCtx);
+    await syncExtension.commands.get("sync").handler("help",syncCtx);
+    assert.ok(syncNotices.some(message=>message.includes("daemon [")));
+    const api=await import("@narumitw/pi-sync-daemon");
+    assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.pid, daemonPID);
+    const owner=await api.ensureDaemon(process.env.PI_CODING_AGENT_DIR);
+    try {
+      assert.equal(owner.identity.pid, daemonPID);
+      assert.equal((await api.findDaemon(process.env.PI_CODING_AGENT_DIR)).identity.instance,owner.identity.instance);
+    }
+    finally { await api.stopDaemon(process.env.PI_CODING_AGENT_DIR); }
+  } finally {
+    for(const handler of syncExtension.handlers.get("session_shutdown")??[]) await handler({type:"session_shutdown",reason:"reload"},syncCtx);
+    syncLoaded.runtime.invalidate("production sync Git smoke complete");
+  }
+}
 `;
