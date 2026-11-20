@@ -348,6 +348,8 @@ test("renders badges next to file links and releases the shared input listener",
 test.for([
   ['[[[Read me](./note%20one.md "[[title]]")]]', "./note%20one.md"],
   ['[[[Read me]]](./note%20one.md "[[title]]")', "./note%20one.md"],
+  ["[[[Read me](./cat.png)]]", "./cat.png"],
+  ["[[[Read me]]](./cat.png)", "./cat.png"],
 ] as const)(
   "keeps the badge and its destination intact before trailing text: %s",
   async ([link, href], { onTestFinished }) => {
@@ -359,6 +361,24 @@ test.for([
     expect(getOsc8LinkAtColumn(line, visibleWidth(stripTerminalSequences(line).trimEnd()) - 1)).toBeUndefined();
   },
 );
+
+test.for([
+  { href: "./cat.png", label: "Photo", icon: "🖼️" },
+  { href: "./cat.jpg", label: "Photo", icon: "🖼️" },
+  { href: "./cat%2EJPEG?size=full#L2", label: "`Photo`", icon: "🖼️" },
+  { href: "./cat.gif", label: "Photo", icon: "🖼️" },
+  { href: "./cat.webp", label: "Photo", icon: "🖼️" },
+  { href: "./notes.md?name=cat.png", label: "Photo", icon: "📄" },
+])("uses $icon for $href without changing the destination", async ({ href, label, icon }, { onTestFinished }) => {
+  const session = await startSession();
+  onTestFinished(session.stop);
+  const rendered = session.render(`[${label}](${href})`);
+  const [line] = new Markdown(rendered, 0, 0, getMarkdownTheme()).render(80);
+  const visible = `${icon}\u00a0Photo`;
+  expect(stripTerminalSequences(line).trimEnd()).toBe(visible);
+  expect(getOsc8LinkAtColumn(line, 0)).toBe(href);
+  expect(getOsc8LinkAtColumn(line, visibleWidth(visible) - 1)).toBe(href);
+});
 
 test.for([
   { source: '[Note](./notes.md "see [x](y) and [a](b)") tail', href: "./notes.md" },

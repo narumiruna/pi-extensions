@@ -71,10 +71,11 @@ stops file indexing and closes any open preview.
   badge does not look up, open, or preview a file.
 - The two linked badge forms are equivalent. Both use standard local Markdown
   destinations and support hover previews whether or not wikilinks are enabled.
-- Ordinary Markdown links use a file icon (📄). Use a plain-text or inline-code
+- Ordinary Markdown file links use an image icon (🖼️) for PNG, JPEG, GIF, and
+  WebP paths and a file icon (📄) for other paths. Use a plain-text or inline-code
   label with an absolute path or a path relative to Pi's working directory.
   Paths can point outside that directory, including with `../`. Encode spaces
-  as `%20`. The icon does not indicate that a file exists.
+  as `%20`. The icon does not indicate that a file exists or has a preview.
 - Use `#L12` for one source line or `#L12-L20` for an inclusive range. Hover also
   accepts `#L12-20`. These previews show literal source rather than rendered Markdown.
 

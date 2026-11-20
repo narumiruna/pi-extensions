@@ -3,6 +3,7 @@ import { getCapabilities, hyperlink, Marked } from "@earendil-works/pi-tui";
 import { cleanBadgeLabel, renderBadge } from "./badge.js";
 import type { createExternalLinkMarker } from "./external-link-marker.js";
 import { classifyLinkPath } from "./filelinks.js";
+import { previewImageMime } from "./image-preview.js";
 import type { createWikilinks } from "./wikilinks.js";
 
 const START =
@@ -35,10 +36,9 @@ function asCodeSpan(text: string): string {
   return fence + text + fence;
 }
 
-function renderFileLabel(label: string, href: string, theme: Theme, inlineCode: boolean): string {
-  const text = inlineCode
-    ? theme.fg("mdLink", "📄\u00a0") + theme.fg("mdCode", label)
-    : theme.fg("mdLink", `📄\u00a0${label}`);
+function renderFileLabel(label: string, href: string, path: string, theme: Theme, inlineCode: boolean): string {
+  const prefix = previewImageMime(path) ? "🖼️\u00a0" : "📄\u00a0";
+  const text = inlineCode ? theme.fg("mdLink", prefix) + theme.fg("mdCode", label) : theme.fg("mdLink", prefix + label);
   return getCapabilities().hyperlinks ? hyperlink(text, href) : text;
 }
 
@@ -160,7 +160,7 @@ export function renderInlineMarkup(
       text: mark(
         wrapped
           ? renderBadge(label, theme, userMessage, href)
-          : renderFileLabel(label, href, theme, code !== undefined),
+          : renderFileLabel(label, href, target.path, theme, code !== undefined),
       ),
     });
   });
