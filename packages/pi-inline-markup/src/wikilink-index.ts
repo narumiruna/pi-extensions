@@ -49,7 +49,7 @@ function samePaths(previous: Set<string>, next: Set<string>): boolean {
   return true;
 }
 
-/** Indexes checkout files on first lookup and refreshes until disposed. */
+/** Indexes workspace files on first lookup and refreshes until disposed. */
 export function createFileIndex(root: string, onChange: () => void): FileIndex {
   const controller = new AbortController();
   let paths = new Set<string>();

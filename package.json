@@ -28,6 +28,7 @@
       "./packages/pi-goal/src/index.ts",
       "./packages/pi-herdr/src/index.ts",
       "./packages/pi-illustrate/src/index.ts",
+      "./packages/pi-inline-markup/src/index.ts",
       "./packages/pi-inspect/src/index.ts",
       "./packages/pi-langfuse/src/index.ts",
       "./packages/pi-lsp/src/index.ts",

@@ -8,14 +8,14 @@ import {
   type TUI,
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
-import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
+import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.js";
 import {
   hoverLinkLine,
   renderWikiGroupPreview,
   renderWikiPreview,
   type WikiPreview,
   wikiGroupSourceLimit,
-} from "./wikilinks.ts";
+} from "./wikilinks.js";
 
 const HOVER_DELAY_MS = 250;
 const MAX_HEIGHT = 12;
@@ -37,7 +37,6 @@ export function createHoverPreview(
   tui: TUI,
   theme: Theme,
   cwd: string,
-  checkout: string,
   findWikiPreview: (href: string) => WikiPreview | undefined,
 ): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
@@ -78,13 +77,13 @@ export function createHoverPreview(
     if (preview && "sources" in preview) {
       const candidates = preview.sources.slice(0, wikiGroupSourceLimit(preview.sources.length, height));
       const excerpts = await Promise.all(
-        candidates.map((source) => readExcerpt(checkout, resolve(checkout, source), controller.signal)),
+        candidates.map((source) => readExcerpt(cwd, resolve(cwd, source), controller.signal)),
       );
       draw = () => renderWikiGroupPreview(preview, excerpts, theme, width, height);
     } else {
       if (!path) return;
       const lineRange = preview ? undefined : parseLineRange(target.href);
-      const excerpt = await readExcerpt(preview ? checkout : cwd, path, controller.signal, lineRange);
+      const excerpt = await readExcerpt(cwd, path, controller.signal, lineRange);
       if (!excerpt) return;
       draw = () =>
         preview

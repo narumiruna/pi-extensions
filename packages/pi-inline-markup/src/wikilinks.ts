@@ -2,8 +2,8 @@ import { posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type PreviewExcerpt, renderPreviewFrame } from "./filelinks.ts";
-import { createFileIndex } from "./wikilink-index.ts";
+import { type PreviewExcerpt, renderPreviewFrame } from "./filelinks.js";
+import { createFileIndex } from "./wikilink-index.js";
 
 const cardInset = 6; // Two borders and two spaces on each side.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: OSC 8 uses literal ESC and BEL bytes.
