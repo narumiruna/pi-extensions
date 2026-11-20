@@ -1,7 +1,8 @@
-import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import {
   type BeforeAgentStartEvent,
   type ExtensionAPI,
@@ -18,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  getCellDimensions,
   getOsc8LinkAtColumn,
   Markdown,
   Marked,
@@ -25,12 +27,14 @@ import {
   ProcessTerminal,
   rgbColor,
   setCapabilityOverrides,
+  setCellDimensions,
   stripTerminalSequences,
   type TUI,
   TuiAltScreen,
   TuiMainScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "../src/filelinks.js";
 import { prepareImagePreview, previewImageMime } from "../src/image-preview.js";
@@ -620,9 +624,20 @@ test.for([
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAEklEQVR4nGP8z4AdMOEQp4sEAJiFAQtsMIKbAAAAAElFTkSuQmCC";
 
+function thumbnailPng(line: string): Buffer {
+  const chunks = line.split("\x1b_G").slice(1);
+  const data = chunks.map((chunk) => chunk.slice(chunk.indexOf(";") + 1).split("\x1b\\")[0]).join("");
+  return Buffer.from(data, "base64");
+}
+
 function useKittyImages(onTestFinished: (cleanup: () => void) => void) {
+  const cell = getCellDimensions();
   setCapabilityOverrides({ hyperlinks: true, images: "kitty" });
-  onTestFinished(() => setCapabilityOverrides({ hyperlinks: true }));
+  setCellDimensions({ widthPx: 9, heightPx: 18 });
+  onTestFinished(() => {
+    setCapabilityOverrides({ hyperlinks: true });
+    setCellDimensions(cell);
+  });
 }
 
 test.for([
@@ -639,36 +654,98 @@ test.for([
   await writeFile(path, Buffer.from(data, "base64"));
   const mime = previewImageMime(path);
   if (!mime) throw new Error("Expected a supported extension");
-  const render = await prepareImagePreview(fixtureRoot, path, mime, new AbortController().signal);
-  if (!render) throw new Error("Expected an image preview");
-  const lines = render(16, 4, 0);
-  expect(lines).toHaveLength(4);
-  expect(lines.every((line) => visibleWidth(line) <= 16)).toBe(true);
-  expect(lines[0]).toContain("\x1b_Ga=T,f=100,q=2,C=1,");
-  expect(lines[0]).toContain(";iVBOR");
-  expect(render(0, 4, 0)).toEqual([]);
+  const { signal } = new AbortController();
+  const image = await prepareImagePreview(fixtureRoot, path, mime, 16, 4, signal);
+  if (!image) throw new Error("Expected an image preview");
+  const lines = image.render(0);
+  expect(image.width).toBe(2);
+  expect(lines).toHaveLength(1);
+  expect(lines.every((line) => visibleWidth(line) <= image.width)).toBe(true);
+  expect(lines[0]).toContain("\x1b_Ga=T,f=100,q=2,C=1,i=");
+  expect(lines[0]).not.toMatch(/,[cr]=\d+/);
+  const output = sharp(thumbnailPng(lines[0]));
+  await expect(output.metadata()).resolves.toMatchObject({ format: "png", width: 8, height: 6 });
+  await expect(output.raw().toBuffer()).resolves.toEqual(await sharp(Buffer.from(data, "base64")).raw().toBuffer());
+  await expect(prepareImagePreview(fixtureRoot, path, mime, 0, 4, signal)).resolves.toBeUndefined();
 });
 
-test("skips invalid, oversized, and disallowed image files", async ({ onTestFinished }) => {
+test("scales an image above the old byte and pixel limits to the terminal cell size", async ({ onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  const currentCellSize = getCellDimensions();
+  setCellDimensions({ widthPx: 10, heightPx: 20 });
+  onTestFinished(() => setCellDimensions(currentCellSize));
+  const path = join(fixtureRoot, "large.png");
+  const input = await sharp({
+    create: {
+      width: 2400,
+      height: 1800,
+      channels: 3,
+      background: "black",
+      noise: { type: "gaussian", mean: 127, sigma: 30 },
+    },
+  })
+    .ensureAlpha(0.5)
+    .png({ compressionLevel: 0 })
+    .toBuffer();
+  expect(input.byteLength).toBeGreaterThan(4 * 1024 * 1024);
+  await writeFile(path, input);
+  const image = await prepareImagePreview(fixtureRoot, path, "image/png", 62, 12, new AbortController().signal);
+  if (!image) throw new Error("Expected an image preview");
+  const lines = image.render(0);
+  expect(image.width).toBe(33);
+  expect(lines).toHaveLength(12);
+  expect(lines.every((line) => visibleWidth(line) <= image.width)).toBe(true);
+  expect(lines[0]).toContain("\x1b_Gm=0;");
+  await expect(sharp(thumbnailPng(lines[0])).metadata()).resolves.toMatchObject({
+    format: "png",
+    width: 320,
+    height: 240,
+    hasAlpha: true,
+  });
+});
+
+test("skips invalid and disallowed image files", async ({ onTestFinished }) => {
   useKittyImages(onTestFinished);
   const root = await mkdtemp(join(fixtureRoot, "images-"));
   const outside = join(fixtureRoot, "outside.png");
   const link = join(root, "symlink.png");
-  const large = join(root, "large.png");
-  const wide = join(root, "wide.png");
   const invalid = join(root, "invalid.png");
-  await writeFile(outside, Buffer.from(PNG, "base64"));
+  const truncated = join(root, "truncated.png");
+  const png = Buffer.from(PNG, "base64");
+  await writeFile(outside, png);
   await symlink(outside, link);
-  await writeFile(large, Buffer.from(PNG, "base64"));
-  await truncate(large, 4 * 1024 * 1024 + 1);
-  const pixels = Buffer.from(PNG, "base64");
-  pixels.writeUInt32BE(1_000_000, 16);
-  await writeFile(wide, pixels);
   await writeFile(invalid, "Not a PNG");
+  await writeFile(truncated, png.subarray(0, 33));
   const { signal } = new AbortController();
-  for (const path of [outside, link, large, wide, invalid]) {
-    await expect(prepareImagePreview(root, path, "image/png", signal), path).resolves.toBeUndefined();
+  for (const path of [outside, link, invalid, truncated]) {
+    await expect(prepareImagePreview(root, path, "image/png", 16, 4, signal), path).resolves.toBeUndefined();
   }
+});
+
+test("terminates the thumbnail worker when the preview is cancelled", async ({ onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  const path = join(fixtureRoot, "cancel.png");
+  await writeFile(path, Buffer.from(PNG, "base64"));
+  const controller = new AbortController();
+  const started = Promise.withResolvers<Worker>();
+  const once = Worker.prototype.once;
+  const listen = vi.spyOn(Worker.prototype, "once").mockImplementation(function (this: Worker, event, listener) {
+    const result = once.call(this, event, listener);
+    if (event === "message") started.resolve(this);
+    return result;
+  });
+  const stop = vi.spyOn(Worker.prototype, "terminate");
+  onTestFinished(() => {
+    controller.abort();
+    listen.mockRestore();
+    stop.mockRestore();
+  });
+
+  const preview = prepareImagePreview(fixtureRoot, path, "image/png", 16, 4, controller.signal);
+  const worker = await started.promise;
+  controller.abort();
+  await expect(preview).resolves.toBeUndefined();
+  expect(stop.mock.contexts).toContain(worker);
 });
 
 test("does not read an image without Kitty graphics", async ({ onTestFinished }) => {
@@ -677,7 +754,7 @@ test("does not read an image without Kitty graphics", async ({ onTestFinished })
   const resolvePath = vi.mocked(realpath).mockClear();
   const path = join(fixtureRoot, "cat.png");
   await expect(
-    prepareImagePreview(fixtureRoot, path, "image/png", new AbortController().signal),
+    prepareImagePreview(fixtureRoot, path, "image/png", 16, 4, new AbortController().signal),
   ).resolves.toBeUndefined();
   expect(resolvePath).not.toHaveBeenCalled();
 });
@@ -686,7 +763,9 @@ test.for(["leave", "escape", "resize", "shutdown"] as const)(
   "composites and clears the image in a real fullscreen frame on %s",
   async (action, { onTestFinished }) => {
     useKittyImages(onTestFinished);
-    await writeFile(join(fixtureRoot, "cat.png"), Buffer.from(PNG, "base64"));
+    await sharp({ create: { width: 251, height: 300, channels: 3, background: "red" } })
+      .png()
+      .toFile(join(fixtureRoot, "cat.png"));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     onTestFinished(stubRawInput());
     let columns = 80;
@@ -708,13 +787,20 @@ test.for(["leave", "escape", "resize", "shutdown"] as const)(
     const session = await startSession(tui);
     onTestFinished(session.stop);
     const row = action === "resize" ? 20 : 0;
+    const indent = action === "escape" ? 64 : 4;
+    const pointer = indent + 1;
+    const imageWidth = 29;
+    const expectedColumn = Math.min(pointer, columns - imageWidth);
+    const rightColumn = expectedColumn + imageWidth;
+    let backdropText = "Keep this text";
     const message = new Markdown(session.render("[Cat Photo](./cat.png)"), 0, 0, getMarkdownTheme());
     const root = {
-      render: (width: number) => [
-        ...Array<string>(row).fill(""),
-        `    ${message.render(width - 4)[0]}`,
-        ...session.renderWidget(width),
-      ],
+      render: (width: number) => {
+        const backdrop = rightColumn < width ? " ".repeat(rightColumn) + backdropText : "";
+        const lines = Array<string>(terminal.rows).fill(backdrop);
+        lines[row] = " ".repeat(indent) + message.render(width - indent)[0];
+        return [...lines, ...session.renderWidget(width)];
+      },
       invalidate: () => message.invalidate(),
     };
     tui.setLayoutRoot(root);
@@ -722,7 +808,7 @@ test.for(["leave", "escape", "resize", "shutdown"] as const)(
     tui.start();
     onTestFinished(() => tui.stop({ preserveScreen: true }));
     tui.renderNow();
-    expect(getOsc8LinkAtColumn(tui.getScreenLines()[row], 5)).toBe("./cat.png");
+    expect(getOsc8LinkAtColumn(tui.getScreenLines()[row], pointer)).toBe("./cat.png");
 
     const displayed = Promise.withResolvers<OverlayHandle>();
     const mount = tui.showOverlay.bind(tui);
@@ -731,22 +817,39 @@ test.for(["leave", "escape", "resize", "shutdown"] as const)(
       displayed.resolve(handle);
       return handle;
     });
-    process.stdin.emit("data", `\x1b[<35;6;${row + 1}M`);
+    process.stdin.emit("data", `\x1b[<35;${pointer + 1};${row + 1}M`);
     await vi.advanceTimersByTimeAsync(250);
     const handle = await displayed.promise;
     const hide = vi.spyOn(handle, "hide");
     tui.renderNow();
     const imageRow = tui.getScreenLines().findIndex((line) => line.includes("\x1b_Ga=T"));
     expect(imageRow).toBeGreaterThanOrEqual(0);
-    if (row === 0) expect(imageRow).toBe(1);
-    else expect(imageRow + (handle.getBounds()?.height ?? 0)).toBe(row);
-    expect(handle.getBounds()?.col).toBe(5);
-    expect(writes.mock.lastCall?.[0]).toContain(`\x1b[7G\x1b_Ga=T`);
-    expect(writes.mock.lastCall?.[0]).toContain(`;${PNG}\x1b\\\x1b[39G`);
+    expect(imageRow).toBe(row === 0 ? 1 : row - 17);
+    expect(handle.getBounds()).toEqual({ row: imageRow, col: expectedColumn, width: imageWidth, height: 17 });
+    const screen = tui.getScreenLines();
+    if (rightColumn < columns) {
+      for (const line of screen.slice(imageRow, imageRow + 17)) {
+        expect(stripTerminalSequences(line).slice(rightColumn)).toContain("Keep this text");
+      }
+    }
+    expect(writes.mock.lastCall?.[0]).toContain(`\x1b[${expectedColumn + 1}G\x1b_Ga=T`);
+    expect(writes.mock.lastCall?.[0]).toContain(`\x1b\\\x1b[${rightColumn}G`);
+    await expect(sharp(thumbnailPng(screen[imageRow])).metadata()).resolves.toMatchObject({
+      format: "png",
+      width: 251,
+      height: 300,
+    });
     expect(tui.getFocusedComponent()).toBe(root);
 
-    if (action === "leave") process.stdin.emit("data", `\x1b[<35;80;${row + 1}M`);
-    else if (action === "escape") {
+    if (action === "leave") {
+      backdropText = "Keep this edit";
+      tui.renderNow();
+      const redraw = writes.mock.lastCall?.[0];
+      expect(redraw).toContain("Keep this edit");
+      expect(redraw).toContain("\x1b_Ga=p,q=2,C=1,i=");
+      expect(redraw).not.toMatch(/,[cr]=\d+/);
+      process.stdin.emit("data", `\x1b[<35;80;${row + 1}M`);
+    } else if (action === "escape") {
       process.stdin.emit("data", "\x1b");
       await vi.runOnlyPendingTimersAsync();
     } else if (action === "resize") columns = 70;

@@ -69,23 +69,24 @@ export function createHoverPreview(
     const { columns, rows } = tui.terminal;
     const below = rows - target.row - 1;
     const above = target.row;
-    const placeBelow = below >= MAX_HEIGHT || below >= above;
-    const width = Math.min(columns, preview ? 56 : 60);
-    const height = Math.min(placeBelow ? below : above, MAX_HEIGHT);
-    if (width < (preview ? 20 : 16) || height < MIN_HEIGHT) return;
+    const imageMime = !preview && path ? previewImageMime(path) : undefined;
+    const placeBelow = below >= above || (!imageMime && below >= MAX_HEIGHT);
+    const availableRows = placeBelow ? below : above;
+    const width = imageMime ? columns : Math.min(columns, preview ? 56 : 60);
+    const height = imageMime ? availableRows : Math.min(availableRows, MAX_HEIGHT);
+    if (width < (imageMime ? 2 : preview ? 20 : 16) || height < (imageMime ? 1 : MIN_HEIGHT)) return;
     viewport = { columns, rows };
 
     // The image moves its terminal cursor to an absolute column, so use the
     // same column for rendering and placement even if the pointer moves.
     let imageColumn: number | undefined;
     let draw: () => { width: number; lines: string[] } | undefined;
-    const imageMime = !preview && path ? previewImageMime(path) : undefined;
     if (path && imageMime) {
-      const render = await prepareImagePreview(cwd, path, imageMime, controller.signal);
-      if (!render) return;
-      const column = Math.min(target.col, columns - width);
+      const image = await prepareImagePreview(cwd, path, imageMime, width, height, controller.signal);
+      if (!image) return;
+      const column = Math.min(target.col, columns - image.width);
       imageColumn = column;
-      draw = () => ({ width, lines: render(width, height, column) });
+      draw = () => ({ width: image.width, lines: image.render(column) });
     } else if (preview && "sources" in preview) {
       const candidates = preview.sources.slice(0, wikiGroupSourceLimit(preview.sources.length, height));
       const excerpts = await Promise.all(

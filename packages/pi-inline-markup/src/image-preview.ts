@@ -1,17 +1,13 @@
 import { extname } from "node:path";
-import { convertToPng } from "@earendil-works/pi-coding-agent";
+import { Worker } from "node:worker_threads";
 import {
   allocateImageId,
   getCapabilities,
-  getImageDimensions,
+  getCellDimensions,
   type ImageDimensions,
   renderImage,
 } from "@earendil-works/pi-tui";
-import { readPreviewBytes } from "./filelinks.js";
-
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-const MAX_PIXELS = 4_000_000;
-const PNG_HEADER = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+import { openPreviewFile } from "./filelinks.js";
 
 type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
@@ -29,59 +25,100 @@ export function previewImageMime(path: string): ImageMime | undefined {
   }
 }
 
-function fitsPixelBudget(dimensions: ImageDimensions | null): dimensions is ImageDimensions {
-  return (
-    dimensions !== null &&
-    dimensions.widthPx > 0 &&
-    dimensions.heightPx > 0 &&
-    dimensions.widthPx * dimensions.heightPx <= MAX_PIXELS
-  );
+async function readImage(cwd: string, path: string, signal: AbortSignal): Promise<Buffer | undefined> {
+  const source = await openPreviewFile(cwd, path, signal);
+  if (!source) return undefined;
+  try {
+    if (signal.aborted) return undefined;
+    const bytes = await source.file.readFile({ signal });
+    if (!signal.aborted && bytes.length === source.size) return bytes;
+  } catch {
+    // An unreadable or cancelled preview is not shown.
+  } finally {
+    await source.file.close().catch(() => undefined);
+  }
 }
 
-/** Prepares a bounded Kitty overlay; Pi owns the terminal image placement and cleanup. */
+interface Thumbnail extends ImageDimensions {
+  data: string;
+}
+
+async function resizeForTerminal(
+  bytes: Buffer,
+  mime: ImageMime,
+  maxWidth: number,
+  maxHeight: number,
+  signal: AbortSignal,
+): Promise<Thumbnail | undefined> {
+  const worker = new Worker(new URL("./image-thumbnail-worker.mjs", import.meta.url), {
+    workerData: {
+      bytes,
+      format: mime.slice("image/".length),
+      maxWidth,
+      maxHeight,
+    },
+    // Transfer a whole buffer. Do not detach a shared allocation for a slice.
+    transferList:
+      bytes.buffer instanceof ArrayBuffer && bytes.byteLength === bytes.buffer.byteLength ? [bytes.buffer] : [],
+  });
+  const result = Promise.withResolvers<Thumbnail | undefined>();
+  const abort = () => result.resolve(undefined);
+  signal.addEventListener("abort", abort, { once: true });
+  worker.once("message", result.resolve);
+  worker.on("error", abort);
+  worker.once("exit", abort);
+  try {
+    return await result.promise;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    void worker.terminate().catch(() => undefined);
+  }
+}
+
+/** Prepares a viewport-sized PNG; Pi owns the terminal image placement and cleanup. */
 export async function prepareImagePreview(
   cwd: string,
   path: string,
   mime: ImageMime,
+  width: number,
+  height: number,
   signal: AbortSignal,
-): Promise<((width: number, height: number, column: number) => string[]) | undefined> {
-  if (getCapabilities().images !== "kitty") return undefined;
-  const file = await readPreviewBytes(cwd, path, signal, MAX_IMAGE_BYTES);
-  if (!file || signal.aborted) return undefined;
-  if (
-    mime === "image/png" &&
-    (file.bytes.length < 33 || !file.bytes.subarray(0, PNG_HEADER.length).equals(PNG_HEADER))
-  ) {
-    return undefined;
-  }
-  let data = file.bytes.toString("base64");
-  let dimensions = getImageDimensions(data, mime);
-  if (!fitsPixelBudget(dimensions)) return undefined;
-  if (mime !== "image/png") {
-    const converted = await convertToPng(data, mime).catch(() => null);
-    if (signal.aborted || !converted || Buffer.byteLength(converted.data, "base64") > MAX_IMAGE_BYTES) return undefined;
-    data = converted.data;
-    dimensions = getImageDimensions(data, "image/png");
-    if (!fitsPixelBudget(dimensions)) return undefined;
-  }
+): Promise<{ width: number; render(column: number): string[] } | undefined> {
+  if (width < 2 || height < 1 || getCapabilities().images !== "kitty") return undefined;
+  // Pi drops ANSI sequences at the exclusive end of an overlay. Reserve one
+  // column after the image to keep the Kitty upload and cursor restore intact.
+  const maxWidth = width - 1;
+  const bytes = await readImage(cwd, path, signal);
+  if (!bytes?.length || signal.aborted) return undefined;
+  const cell = getCellDimensions();
+  const thumbnail = await resizeForTerminal(bytes, mime, maxWidth * cell.widthPx, height * cell.heightPx, signal).catch(
+    () => undefined,
+  );
+  if (!thumbnail || signal.aborted || getCapabilities().images !== "kitty") return undefined;
 
-  const size = dimensions;
-  const imageId = allocateImageId();
-  return (width, height, column) => {
-    if (width < 3 || height < 1 || getCapabilities().images !== "kitty") return [];
-    const image = renderImage(data, size, {
-      maxWidthCells: width - 2,
-      maxHeightCells: height,
-      imageId,
-      moveCursor: false,
-    });
-    if (!image) return [];
-    // Blank the image cells before placing it, then restore the cursor for the
-    // compositor's trailing text. Pi's slicing preserves absolute column
-    // moves (CSI G), not relative left and right moves (CSI D/C).
-    const { columns, rows, sequence } = image;
-    const start = column + 2; // 1-based terminal column plus one cell of inset.
-    const firstLine = ` ${" ".repeat(columns)}\x1b[${start}G${sequence}\x1b[${start + columns}G`;
-    return [firstLine, ...Array<string>(rows - 1).fill("")];
+  const currentCell = getCellDimensions();
+  const columns = Math.ceil(thumbnail.widthPx / currentCell.widthPx);
+  const rows = Math.ceil(thumbnail.heightPx / currentCell.heightPx);
+  if (columns > maxWidth || rows > height) return undefined;
+  // Register the occupied cells with Pi for redraw and cleanup. Remove the
+  // Kitty sizing controls so the terminal displays the PNG at its pixel size.
+  const image = renderImage(
+    thumbnail.data,
+    { widthPx: columns * currentCell.widthPx, heightPx: rows * currentCell.heightPx },
+    { maxWidthCells: columns, maxHeightCells: rows, imageId: allocateImageId(), moveCursor: false },
+  );
+  if (!image) return undefined;
+  const headerEnd = image.sequence.indexOf(";");
+  const sequence = image.sequence.slice(0, headerEnd).replace(/,[cr]=\d+/g, "") + image.sequence.slice(headerEnd);
+  return {
+    width: columns + 1,
+    render(column) {
+      if (getCapabilities().images !== "kitty") return [];
+      // Clear the covered cells, place the image, and restore the cursor for
+      // the compositor's padding and trailing text. Pi preserves CSI G.
+      const start = column + 1;
+      const firstLine = `${" ".repeat(columns)}\x1b[${start}G${sequence}\x1b[${start + columns}G`;
+      return [firstLine, ...Array<string>(rows - 1).fill("")];
+    },
   };
 }
