@@ -38,9 +38,11 @@ import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "../src/filelinks.js";
 import { prepareImagePreview, previewImageMime } from "../src/image-preview.js";
+import { showInlineSettings } from "../src/settings-menu.js";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("../src/filelinks.js", { spy: true });
+vi.mock("../src/settings-menu.js", () => ({ showInlineSettings: vi.fn() }));
 
 let fixtureRoot: string;
 let extension: typeof import("../src/index.js").default;
@@ -94,12 +96,12 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
     widget?.dispose?.();
     widget = typeof content === "function" ? content(tui, previewTheme) : undefined;
   });
-  const select = vi.fn<ExtensionUIContext["select"]>().mockResolvedValue(undefined);
-  const ctx = { cwd: fixtureRoot, mode: "tui", ui: { select, setWidget } } as unknown as ExtensionCommandContext;
+  const settings = vi.mocked(showInlineSettings).mockReset().mockResolvedValue(false);
+  const ctx = { cwd: fixtureRoot, mode: "tui", ui: { setWidget } } as unknown as ExtensionCommandContext;
   const startWidget = () => start({ type: "session_start", reason: "startup" }, ctx);
   await startWidget();
-  expect(registerCommand).toHaveBeenCalledWith("inline-markup", expect.any(Object));
-  const [[, command]] = registerCommand.mock.calls;
+  const commands = new Map(registerCommand.mock.calls);
+  expect([...commands.keys()]).toEqual(["inline", "inline-markup"]);
   expect(registerMarkdownTransformer).toHaveBeenCalledOnce();
   expect(setWidget).toHaveBeenCalledOnce();
   const [[transform]] = registerMarkdownTransformer.mock.calls;
@@ -107,11 +109,19 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
   return {
     invalidate,
     requestRender,
-    select,
+    settings,
     setWidget,
     startWidget,
     renderWidget: (width: number) => widget?.render(width) ?? [],
-    runCommand: (args = "", mode: ExtensionContext["mode"] = "tui") => command.handler(args, { ...ctx, mode }),
+    runCommand: (args = "", mode: ExtensionContext["mode"] = "tui", route = "inline") =>
+      commands.get(route)?.handler(args, { ...ctx, mode }),
+    setWikilinks(enabled: boolean) {
+      settings.mockImplementationOnce(async (_ctx, { setWikilinks }) => {
+        setWikilinks(enabled);
+        return false;
+      });
+      return commands.get("inline")?.handler("", ctx);
+    },
     render(markdown: string, messageType: MarkdownTransformContext["messageType"] = "user") {
       return transform(markdown, { messageType, isStreaming: false, availableWidth: 80 });
     },
@@ -166,11 +176,10 @@ test("resolves wikilinks in the session workspace and leaves the prompt unchange
   expect(scan).not.toHaveBeenCalled();
 
   await session.runCommand();
-  expect(session.select).toHaveBeenLastCalledWith("Wikilinks: Off (this session)", ["On", "Off"], expect.any(Object));
+  expect(session.settings).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ wikilinks: false }));
   expect(session.render(plain)).toBe(baseline);
 
-  session.select.mockResolvedValueOnce("On");
-  await session.runCommand();
+  await session.setWikilinks(true);
   expect(scan).not.toHaveBeenCalled();
   const ready = Promise.withResolvers<void>();
   session.requestRender.mockImplementationOnce(() => ready.resolve());
@@ -186,10 +195,9 @@ test("resolves wikilinks in the session workspace and leaves the prompt unchange
   expect(vi.getTimerCount()).toBe(1);
 
   await session.runCommand();
-  expect(session.select).toHaveBeenLastCalledWith("Wikilinks: On (this session)", ["On", "Off"], expect.any(Object));
+  expect(session.settings).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ wikilinks: true }));
   expect(session.render(plain)).not.toBe(baseline);
-  session.select.mockResolvedValueOnce("Off");
-  await session.runCommand();
+  await session.setWikilinks(false);
   expect(session.render(plain)).toBe(baseline);
   expect(session.render(normalBadge)).toBe(explicit);
   expect(vi.getTimerCount()).toBe(0);
@@ -209,8 +217,7 @@ test.for(["show", "cancel"] as const)(
     onTestFinished(session.stop);
     const hide = vi.fn();
     const show = vi.spyOn(tui, "showOverlay").mockReturnValue({ hide } as unknown as OverlayHandle);
-    session.select.mockResolvedValueOnce("On");
-    await session.runCommand();
+    await session.setWikilinks(true);
     const ready = Promise.withResolvers<void>();
     session.requestRender.mockImplementationOnce(() => ready.resolve());
     session.render("[[README]]");
@@ -246,8 +253,7 @@ test.for(["show", "cancel"] as const)(
       expect(card).not.toContain("hidden");
     }
 
-    session.select.mockResolvedValueOnce("Off");
-    await session.runCommand();
+    await session.setWikilinks(false);
     expect(signal.aborted).toBe(true);
     pending.resolve(excerpt);
     await vi.advanceTimersByTimeAsync(0);
@@ -257,30 +263,41 @@ test.for(["show", "cancel"] as const)(
   },
 );
 
-test("rejects unsupported arguments and non-terminal modes before prompting", async ({ onTestFinished }) => {
-  const session = await startSession();
-  onTestFinished(session.stop);
-  await expect(session.runCommand("on")).rejects.toThrow("no arguments");
-  for (const mode of ["rpc", "print", "json"] as const) {
-    await expect(session.runCommand("", mode)).rejects.toThrow("terminal UI");
-  }
-  expect(session.select).not.toHaveBeenCalled();
-});
+test.for(["inline", "inline-markup"])(
+  "opens /%s only in the terminal UI without arguments",
+  async (route, { onTestFinished }) => {
+    const session = await startSession();
+    onTestFinished(session.stop);
+    await expect(session.runCommand("on", "tui", route)).rejects.toThrow("no arguments");
+    for (const mode of ["rpc", "print", "json"] as const) {
+      await expect(session.runCommand("", mode, route)).rejects.toThrow("terminal UI");
+    }
+    expect(session.settings).not.toHaveBeenCalled();
+    await session.runCommand("", "tui", route);
+    expect(session.settings).toHaveBeenCalledOnce();
+  },
+);
 
 test("dismisses a pending menu on replacement and ignores its late answer", async ({ onTestFinished }) => {
   const session = await startSession();
   onTestFinished(session.stop);
-  const pending = Promise.withResolvers<string>();
-  session.select.mockReturnValueOnce(pending.promise);
+  const entered = Promise.withResolvers<Parameters<typeof showInlineSettings>[1]>();
+  const pending = Promise.withResolvers<void>();
+  session.settings.mockImplementationOnce(async (_ctx, options) => {
+    entered.resolve(options);
+    await pending.promise;
+    options.setWikilinks(true);
+    return true;
+  });
   const command = session.runCommand();
-  const [[, , options]] = session.select.mock.calls;
-  expect(options?.signal?.aborted).toBe(false);
+  const options = await entered.promise;
+  expect(options.signal.aborted).toBe(false);
   await session.startWidget();
-  expect(options?.signal?.aborted).toBe(true);
-  pending.resolve("On");
+  expect(options.signal.aborted).toBe(true);
+  pending.resolve();
   await command;
   await session.runCommand();
-  expect(session.select).toHaveBeenLastCalledWith("Wikilinks: Off (this session)", ["On", "Off"], expect.any(Object));
+  expect(session.settings).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ wikilinks: false }));
 });
 
 test.for(["[[README.md]]", "[[[README](./README.md)]]", "[[[README]]](./README.md)"])(

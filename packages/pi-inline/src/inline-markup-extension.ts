@@ -1,11 +1,11 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { createExternalLinkMarker } from "./external-link-marker.js";
 import type { ExternalPreviewRoot } from "./filelinks.js";
 import { createHoverPreview } from "./hover-preview.js";
 import { renderInlineMarkup } from "./inline-markup.js";
-import { loadPreviewSettings } from "./preview-settings.js";
-import { INLINE_FORMATTING_PROMPT } from "./prompt.js";
+import { loadPromptSettings, loadSettings, type PromptHintSettings, savePromptHint } from "./settings.js";
+import { showInlineSettings } from "./settings-menu.js";
 import { createWikilinks } from "./wikilinks.js";
 
 const WIDGET_KEY = "pi-inline-markup.preview";
@@ -20,10 +20,28 @@ interface Session {
   dismissPreview(): void;
   wiki?: ReturnType<typeof createWikilinks>;
   menu?: AbortController;
+  prompt?: PromptHintSettings;
+}
+
+function setWikilinks(session: Session, enabled: boolean): void {
+  if (enabled === Boolean(session.wiki)) return;
+  session.dismissPreview();
+  if (enabled) {
+    session.wiki = createWikilinks(session.cwd, () => {
+      session.tui.invalidate();
+      session.tui.requestRender();
+    });
+  } else {
+    session.wiki?.dispose();
+    session.wiki = undefined;
+  }
+  session.tui.invalidate();
+  session.tui.requestRender();
 }
 
 export function inlineMarkupExtension(pi: ExtensionAPI): void {
   let session: Session | undefined;
+  const writes = new Set<Promise<boolean>>();
 
   pi.on("session_start", async (_event, { mode, cwd, ui, hasUI, sessionManager }) => {
     session?.clearWidget();
@@ -71,54 +89,81 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
       },
       { placement: "belowEditor" },
     );
-    const snapshot = await loadPreviewSettings(settings.signal);
+    const snapshot = await loadSettings(settings.signal);
     if (settings.signal.aborted || session?.marker !== marker) return;
     roots = snapshot.roots;
-    if (snapshot.invalid && hasUI)
-      ui.notify("pi-inline: Invalid or unreadable settings. External previews are off.", "warning");
+    session.prompt = snapshot.prompt;
+    if ((snapshot.invalid || snapshot.saveBlocked) && hasUI)
+      ui.notify("pi-inline: Invalid or unreadable settings were ignored.", "warning");
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    if (session && ctx.mode === "tui" && session.owner === ctx.sessionManager) session.clearWidget();
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    if (session && session.owner === ctx.sessionManager) session.clearWidget();
+    // The host may already have disposed the widget. Wait for writes that reached publication.
+    await Promise.allSettled(writes);
   });
 
-  pi.registerCommand("inline-markup", {
-    description: "Turn wikilinks on or off for this session",
-    async handler(args, ctx) {
-      if (args.trim()) throw new Error("Usage: /inline-markup (no arguments)");
-      if (ctx.mode !== "tui") throw new Error("/inline-markup is available only in the terminal UI.");
-      const current = session;
-      if (!current || current.menu) return;
-      const menu = new AbortController();
-      current.menu = menu;
-      try {
-        const choice = await ctx.ui.select(`Wikilinks: ${current.wiki ? "On" : "Off"} (this session)`, ["On", "Off"], {
-          signal: menu.signal,
-        });
-        if (session !== current || menu.signal.aborted || (choice !== "On" && choice !== "Off")) return;
-        if ((choice === "On") === Boolean(current.wiki)) return;
-
-        current.dismissPreview();
-        if (choice === "On") {
-          current.wiki = createWikilinks(current.cwd, () => {
-            current.tui.invalidate();
-            current.tui.requestRender();
-          });
-        } else {
-          current.wiki?.dispose();
-          current.wiki = undefined;
-        }
-        current.tui.invalidate();
-        current.tui.requestRender();
-      } finally {
-        current.menu = undefined;
+  async function handler(args: string, ctx: ExtensionCommandContext): Promise<void> {
+    if (args.trim()) throw new Error("Usage: /inline (no arguments)");
+    if (ctx.mode !== "tui") throw new Error("/inline is available only in the terminal UI.");
+    const current = session;
+    const active = current?.prompt;
+    if (!current || !active || current.owner !== ctx.sessionManager || current.menu) return;
+    const menu = new AbortController();
+    current.menu = menu;
+    const live = () => session === current && current.menu === menu && !menu.signal.aborted;
+    try {
+      const saved = await loadPromptSettings(menu.signal);
+      if (!live()) return;
+      const changed = await showInlineSettings(ctx, {
+        signal: menu.signal,
+        wikilinks: Boolean(current.wiki),
+        setWikilinks: (enabled) => {
+          if (live()) setWikilinks(current, enabled);
+        },
+        saved: saved.prompt,
+        active,
+        saveBlocked: Boolean(saved.saveBlocked),
+        async save(change, signal) {
+          if (!live() || signal.aborted) return false;
+          const pending = savePromptHint(saved.prompt, change, signal);
+          writes.add(pending);
+          try {
+            return await pending;
+          } finally {
+            writes.delete(pending);
+          }
+        },
+      });
+      if (!changed || !live()) return;
+      if (changed === "saved-after-cancel") {
+        ctx.ui.notify("The prompt hint was saved. Run /reload to apply it.", "info");
+        return;
       }
-    },
-  });
+      const reload = await ctx.ui.confirm("Reload Pi now?", "The prompt hint setting was saved.", {
+        signal: menu.signal,
+      });
+      if (!reload || !live()) return;
+      try {
+        await ctx.reload();
+        return;
+      } catch {
+        if (live())
+          ctx.ui.notify("The prompt hint was saved, but Pi could not reload. Run /reload to apply it.", "error");
+      }
+    } finally {
+      if (current.menu === menu) current.menu = undefined;
+      menu.abort();
+    }
+  }
+
+  pi.registerCommand("inline", { description: "Configure inline markup and the prompt hint", handler });
+  pi.registerCommand("inline-markup", { description: "Open /inline (compatibility alias)", handler });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (ctx.mode !== "tui" || !session) return;
-    event.systemPromptOptions.sections.inline_formatting = INLINE_FORMATTING_PROMPT;
+    if (ctx.mode !== "tui" || !session || session.owner !== ctx.sessionManager || !session.prompt?.enabled) return;
+    event.systemPromptOptions.sections.inline_formatting = session.prompt.text;
   });
 
   // Pi 1.5.0 does not accept messageTypes registration options.
