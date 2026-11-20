@@ -24,8 +24,10 @@ export type { DurableCorrelation } from "./durable-recorder.js";
 export {
   type CreateLangfuseRuntimeOptions,
   createLangfuseRuntime,
+  createOtelRuntime,
   type LangfuseRuntime,
   type LangfuseRuntimeConfig,
+  type OtlpRuntimeConfig,
 } from "./runtime-api.js";
 export { createLangfuseRuntimeFromBackend } from "./runtime-core.js";
 export type { Observation, ObservationAttributes, ObservationType, TraceBackend } from "./tracing.js";

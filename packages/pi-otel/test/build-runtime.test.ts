@@ -8,7 +8,7 @@ import { afterAll, beforeAll, test } from "vitest";
 import { listFiles } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
 
-const packageRoot = resolve("packages/pi-langfuse");
+const packageRoot = resolve("packages/pi-otel");
 const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
 const forbiddenEagerInputs: readonly string[] = ["src/runtime.ts"];
 
@@ -48,7 +48,7 @@ function createBuildFixture(build: (output: string, signal: AbortSignal) => Prom
   let root: string | undefined;
   // Retain the task immediately: Vitest does not cancel a timed-out beforeAll continuation.
   const ready = (async () => {
-    root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+    root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
     try {
       controller.signal.throwIfAborted();
       const output = join(root, "dist");
@@ -113,7 +113,7 @@ function validMetadata(): BuildMetadata {
     "dist/index.ts": {
       entryPoint: "src/index.ts",
       imports: entryImports,
-      inputs: { "src/index.ts": {}, "src/langfuse.ts": {} },
+      inputs: { "src/index.ts": {}, "src/otel.ts": {} },
     },
   };
   for (const [index, input] of forbiddenEagerInputs.entries()) {
@@ -223,7 +223,7 @@ test("eager graph validation preserves first-use boundaries and external package
 test("runtime build rejects destructive output paths and symlink escapes", async () => {
   const builder = await loadBuilder();
   const outside = await mkdtemp(join(tmpdir(), "pi-langfuse-build-outside-"));
-  const linkedParent = join(packageRoot, `.pi-langfuse-build-test-link-${crypto.randomUUID()}`);
+  const linkedParent = join(packageRoot, `.pi-otel-build-test-link-${crypto.randomUUID()}`);
   try {
     await assert.rejects(
       builder.buildRuntime({ outputDirectory: packageRoot }),
@@ -246,7 +246,7 @@ test("runtime build rejects destructive output paths and symlink escapes", async
 
 test("runtime builds are deterministic, mapped, external, and remove stale output", async () => {
   const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
   try {
     const { output: first, metadata: firstMetadata } = requireBuildFixture();
     const second = join(root, "second");
@@ -292,7 +292,7 @@ test("runtime builds are deterministic, mapped, external, and remove stale outpu
 });
 
 test("generated JavaScript root exposes the host API without eagerly loading production runtime", async () => {
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
   try {
     const output = join(root, "dist");
     await cp(requireBuildFixture().output, output, { recursive: true });
@@ -311,7 +311,7 @@ test("generated JavaScript root exposes the host API without eagerly loading pro
 });
 
 test("generated host controller remains registered across resource reloads", async () => {
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -363,7 +363,7 @@ test("generated package copies share runtime session capabilities", async () => 
     const key = Symbol.for(`@narumitw/pi-langfuse/runtime/${version}`);
     return { key, descriptor: Object.getOwnPropertyDescriptor(globalThis, key) };
   });
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
   try {
     // Own a fresh runtime without closing any runtime inherited from another test.
     for (const { key } of runtimeSlots) Reflect.deleteProperty(globalThis, key);
@@ -419,8 +419,17 @@ test("generated package copies share runtime session capabilities", async () => 
   }
 });
 
-test("Pi's Jiti loader can initialize and shut down the generated OTLP runtime", async () => {
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+test.each([
+  {
+    filename: "pi-langfuse.json",
+    config: { publicKey: "pk-jiti", secretKey: "sk-jiti", baseUrl: "http://127.0.0.1:1" },
+  },
+  {
+    filename: "pi-otel.json",
+    config: { backend: "otlp", endpoint: "http://127.0.0.1:1/v1/traces" },
+  },
+])("Pi's Jiti loader can initialize and shut down from $filename", async ({ filename, config }) => {
+  const root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -428,11 +437,7 @@ test("Pi's Jiti loader can initialize and shut down the generated OTLP runtime",
   try {
     await cp(requireBuildFixture().output, output, { recursive: true });
     await mkdir(agentDir, { recursive: true });
-    await writeFile(
-      join(agentDir, "pi-langfuse.json"),
-      JSON.stringify({ publicKey: "pk-jiti", secretKey: "sk-jiti", baseUrl: "http://127.0.0.1:1" }),
-      { mode: 0o600 },
-    );
+    await writeFile(join(agentDir, filename), JSON.stringify(config), { mode: 0o600 });
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
       cwd: root,
@@ -446,16 +451,17 @@ test("Pi's Jiti loader can initialize and shut down the generated OTLP runtime",
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.ok(extension?.commands.has("langfuse"));
+    assert.ok(extension?.commands.has("otel"));
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("session_shutdown"));
-    const command = extension?.commands.get("langfuse");
+    const command = extension?.commands.get("otel");
     assert.ok(command);
     const { ctx, notifications } = createMockContext({
       hasUI: true,
       select: async () => "Show setup and privacy help",
     });
     await command?.handler("", ctx);
-    assert.match(notifications.at(-1)?.message ?? "", /Langfuse setup and privacy/u);
+    assert.match(notifications.at(-1)?.message ?? "", /Pi OTel setup and privacy/u);
 
     const start = extension?.handlers.get("session_start")?.[0];
     const shutdown = extension?.handlers.get("session_shutdown")?.[0];
@@ -480,7 +486,7 @@ test("Pi's Jiti loader can initialize and shut down the generated OTLP runtime",
 
 test("failed validation and publication preserve the previous runtime", async () => {
   const builder = await loadBuilder();
-  const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
+  const root = await mkdtemp(join(packageRoot, ".pi-otel-build-test-"));
   try {
     const output = join(root, "dist");
     await mkdir(output, { recursive: true });

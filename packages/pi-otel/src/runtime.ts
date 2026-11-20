@@ -1,10 +1,18 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { context, ROOT_CONTEXT, type Span, type Tracer, trace } from "@opentelemetry/api";
+import { context, ROOT_CONTEXT, type Span, SpanKind, SpanStatusCode, type Tracer, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { CompressionAlgorithm } from "@opentelemetry/otlp-exporter-base";
+import {
+  CompressionAlgorithm,
+  getSharedConfigurationDefaults,
+  OTLPExporterBase,
+} from "@opentelemetry/otlp-exporter-base";
+import { createOtlpHttpExportDelegate, httpAgentFactoryFromOptions } from "@opentelemetry/otlp-exporter-base/node-http";
+import { ProtobufTraceSerializer, TraceExporterMetricsHelper } from "@opentelemetry/otlp-transformer";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchSpanProcessor, type ReadableSpan, type SpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
 import type { LangfuseConfig } from "./config.js";
+import { normalizeOtlpConnection, type OtlpConnection, type OtlpRuntimeConfig, otlpSecrets } from "./otlp-settings.js";
 import {
   type CreateLangfuseRuntimeOptions,
   createLangfuseRuntimeFromBackend,
@@ -21,19 +29,30 @@ export type {
   LangfuseRuntimeConfig,
 } from "./runtime-core.js";
 
+// Keep the process slots and Langfuse instrumentation scope stable across the package rename.
 const RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v2");
 const LEGACY_RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
-const INSTRUMENTATION_SCOPE = "@narumitw/pi-langfuse";
-const TRACE = "langfuse.trace";
-const OBSERVATION = "langfuse.observation";
+const LANGFUSE_SCOPE = "@narumitw/pi-langfuse";
+const OTLP_SCOPE = "@narumitw/pi-otel";
 const MAX_PENDING_METADATA_ATTRIBUTES = 128;
 
-interface ResolvedRuntimeConfig {
+interface ResolvedLangfuseConfig {
   publicKey: string;
   secretKey: string;
   baseUrl: string;
   environment?: string;
   release?: string;
+}
+
+type ResolvedOtlpConfig = OtlpConnection & { backend: "otlp" };
+type ResolvedRuntimeConfig = ResolvedLangfuseConfig | ResolvedOtlpConfig;
+
+function isOtlpConfig(config: ResolvedRuntimeConfig): config is ResolvedOtlpConfig {
+  return "backend" in config;
+}
+
+function instrumentationScope(config: ResolvedRuntimeConfig): string {
+  return isOtlpConfig(config) ? OTLP_SCOPE : LANGFUSE_SCOPE;
 }
 
 interface SharedRuntime {
@@ -49,17 +68,22 @@ type GlobalWithRuntime = typeof globalThis & {
 
 interface RuntimeFactories {
   createProcessor(config: ResolvedRuntimeConfig): SpanProcessor;
-  createProvider(processor: SpanProcessor): TracerProvider;
+  createProvider(processor: SpanProcessor, config: ResolvedRuntimeConfig): TracerProvider;
 }
 
 class ProductionObservation implements Observation {
   readonly traceId: string;
-  private readonly metadata = new Map<string, string>();
+  private readonly metadata = new Map<string, string | number | boolean>();
+  private readonly observationScope: string;
+  private readonly traceScope: string;
 
   constructor(
     readonly span: Span,
     private readonly secrets: readonly string[],
+    private readonly otlp: boolean,
   ) {
+    this.observationScope = otlp ? "pi.observation" : "langfuse.observation";
+    this.traceScope = otlp ? "pi.trace" : "langfuse.trace";
     this.traceId = span.spanContext().traceId;
   }
 
@@ -79,37 +103,40 @@ class ProductionObservation implements Observation {
       sessionId,
       userId,
     } = attributes;
+    const scope = this.observationScope;
     this.span.setAttributes({
-      [`${OBSERVATION}.input`]: serializeIO(input, this.secrets),
-      [`${OBSERVATION}.output`]: serializeIO(output, this.secrets),
-      [`${OBSERVATION}.level`]: level,
-      [`${OBSERVATION}.status_message`]: this.mask(statusMessage),
-      [`${OBSERVATION}.model.name`]: this.mask(model),
-      [`${OBSERVATION}.model.parameters`]: serializeIO(modelParameters, this.secrets),
-      [`${OBSERVATION}.usage_details`]: serializeIO(usageDetails, this.secrets),
-      [`${OBSERVATION}.cost_details`]: serializeIO(costDetails, this.secrets),
-      [`${OBSERVATION}.completion_start_time`]: serializeIO(completionStartTime, this.secrets),
-      "langfuse.version": this.mask(version),
+      [`${scope}.input`]: serializeIO(input, this.secrets),
+      [`${scope}.output`]: serializeIO(output, this.secrets),
+      [`${scope}.level`]: level,
+      [`${scope}.status_message`]: this.mask(statusMessage),
+      [`${scope}.model.name`]: this.mask(model),
+      [`${scope}.model.parameters`]: serializeIO(modelParameters, this.secrets),
+      [`${scope}.usage_details`]: serializeIO(usageDetails, this.secrets),
+      [`${scope}.cost_details`]: serializeIO(costDetails, this.secrets),
+      [`${scope}.completion_start_time`]: serializeIO(completionStartTime, this.secrets),
+      [this.otlp ? "pi.version" : "langfuse.version"]: this.mask(version),
       "session.id": this.mask(sessionId),
       "user.id": this.mask(userId),
     });
-    this.setMetadata(OBSERVATION, metadata);
+    if (this.otlp && level === "ERROR") this.span.setStatus({ code: SpanStatusCode.ERROR });
+    this.setMetadata(scope, metadata);
     return this;
   }
 
   updateTrace(attributes: ObservationAttributes): Observation {
     const { input, output, metadata, name, sessionId, userId, tags, version } = attributes;
     // Trace IO belongs to the receiving span without changing its observation IO.
+    const scope = this.traceScope;
     this.span.setAttributes({
-      [`${TRACE}.input`]: serializeIO(input, this.secrets),
-      [`${TRACE}.output`]: serializeIO(output, this.secrets),
-      [`${TRACE}.name`]: this.mask(name),
-      [`${TRACE}.tags`]: tags?.map((tag) => maskSecretString(tag, this.secrets)),
-      "langfuse.version": this.mask(version),
+      [`${scope}.input`]: serializeIO(input, this.secrets),
+      [`${scope}.output`]: serializeIO(output, this.secrets),
+      [`${scope}.name`]: this.mask(name),
+      [`${scope}.tags`]: tags?.map((tag) => maskSecretString(tag, this.secrets)),
+      [this.otlp ? "pi.version" : "langfuse.version"]: this.mask(version),
       "session.id": this.mask(sessionId),
       "user.id": this.mask(userId),
     });
-    this.setMetadata(TRACE, metadata);
+    this.setMetadata(scope, metadata);
     return this;
   }
 
@@ -128,10 +155,15 @@ class ProductionObservation implements Observation {
   private setMetadata(scope: string, metadata: Record<string, unknown> | undefined): void {
     if (!metadata || !this.span.isRecording()) return;
     for (const [key, value] of Object.entries(metadata)) {
-      if (scope === OBSERVATION && value == null) continue;
+      if (scope === this.observationScope && value == null) continue;
       const attribute = `${scope}.metadata.${maskSecretString(key, this.secrets)}`;
       if (this.metadata.size >= MAX_PENDING_METADATA_ATTRIBUTES && !this.metadata.has(attribute)) continue;
-      const serialized = serializeMetadataValue(value, this.secrets);
+      const serialized =
+        this.otlp && (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value)))
+          ? value
+          : this.otlp && typeof value === "string"
+            ? this.mask(value)
+            : serializeMetadataValue(value, this.secrets);
       if (serialized !== undefined) this.metadata.set(attribute, serialized);
     }
   }
@@ -147,8 +179,10 @@ class ProductionTraceBackend implements TraceBackend {
     private readonly processor: SpanProcessor,
     private readonly config: ResolvedRuntimeConfig,
   ) {
-    this.tracer = provider.getTracer(INSTRUMENTATION_SCOPE);
-    this.secrets = [config.publicKey, config.secretKey].sort((a, b) => b.length - a.length);
+    this.tracer = provider.getTracer(instrumentationScope(config));
+    this.secrets = isOtlpConfig(config)
+      ? otlpSecrets(config.headers)
+      : [config.publicKey, config.secretKey].sort((a, b) => b.length - a.length);
   }
 
   start(
@@ -161,21 +195,26 @@ class ProductionTraceBackend implements TraceBackend {
     const parentSpan = trace.getSpan(parentContext);
     // Preserve the trace ID of an explicit parent even if it ended before this span started.
     const isAppRoot = !parentSpan || !this.spans.has(parentSpan) || !parentSpan.isRecording();
+    const config = this.config;
+    const otlp = isOtlpConfig(config);
     const span = this.tracer.startSpan(
       maskSecretString(name, this.secrets),
       {
         startTime: options.startTime,
-        attributes: {
-          [`${OBSERVATION}.type`]: options.asType,
-          "langfuse.internal.is_app_root": isAppRoot ? true : undefined,
-          "langfuse.environment": this.config.environment && maskSecretString(this.config.environment, this.secrets),
-          "langfuse.release": this.config.release && maskSecretString(this.config.release, this.secrets),
-        },
+        ...(otlp && options.asType === "generation" ? { kind: SpanKind.CLIENT } : {}),
+        attributes: otlp
+          ? { "pi.observation.type": options.asType }
+          : {
+              "langfuse.observation.type": options.asType,
+              "langfuse.internal.is_app_root": isAppRoot ? true : undefined,
+              "langfuse.environment": config.environment && maskSecretString(config.environment, this.secrets),
+              "langfuse.release": config.release && maskSecretString(config.release, this.secrets),
+            },
       },
       parentContext,
     );
     this.spans.add(span);
-    return new ProductionObservation(span, this.secrets).update(attributes);
+    return new ProductionObservation(span, this.secrets, otlp).update(attributes);
   }
 
   forceFlush(): Promise<void> {
@@ -189,6 +228,10 @@ class ProductionTraceBackend implements TraceBackend {
 
 export async function createLangfuseRuntime(options: CreateLangfuseRuntimeOptions = {}): Promise<LangfuseRuntime> {
   return createSharedRuntime(resolveLangfuseRuntimeConfig(options), defaultFactories);
+}
+
+export async function createOtelRuntime(config: OtlpRuntimeConfig): Promise<LangfuseRuntime> {
+  return createSharedRuntime({ backend: "otlp", ...normalizeOtlpConnection({ ...config }) }, defaultFactories);
 }
 
 export async function createProductionBackend(
@@ -217,10 +260,10 @@ async function createSharedRuntime(
     if (legacyRuntime === undefined) globalRuntime[LEGACY_RUNTIME_KEY] = existing;
     const shared = await existing;
     if (shared.runtime.closed) {
-      throw new Error("Langfuse tracing was already shut down; restart the process to enable it again.");
+      throw new Error("Tracing was already shut down; restart the process to enable it again.");
     }
     if (shared.fingerprint !== fingerprint) {
-      throw new Error("Langfuse configuration changed; restart the process to apply the new credentials.");
+      throw new Error("Tracing configuration changed; restart the process to apply the new connection settings.");
     }
     return shared.runtime;
   }
@@ -245,7 +288,7 @@ async function initializeRuntime(
   const processor = factories.createProcessor(config);
   let provider: TracerProvider;
   try {
-    provider = factories.createProvider(processor);
+    provider = factories.createProvider(processor, config);
   } catch (error) {
     await processor.shutdown().catch(() => undefined);
     throw error;
@@ -257,30 +300,69 @@ async function initializeRuntime(
 }
 
 class PiBatchSpanProcessor extends BatchSpanProcessor {
+  constructor(config: ResolvedRuntimeConfig) {
+    super({
+      exporter: isOtlpConfig(config) ? createOtlpExporter(config) : createLangfuseExporter(config),
+      // Keep batches smaller than the SDK default because each span can carry large captured inputs and outputs.
+      maxExportBatchSize: 128,
+      scheduledDelayMillis: 5_000,
+    });
+    this.scope = instrumentationScope(config);
+  }
+
+  private readonly scope: string;
+
   override onEnd(span: ReadableSpan): void {
-    if (span.instrumentationScope.name === INSTRUMENTATION_SCOPE) super.onEnd(span);
+    if (span.instrumentationScope.name === this.scope) super.onEnd(span);
   }
 }
 
 const defaultFactories: RuntimeFactories = {
-  createProcessor: (config) =>
-    new PiBatchSpanProcessor({
-      exporter: new OTLPTraceExporter({
-        url: `${config.baseUrl}/api/public/otel/v1/traces`,
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${config.publicKey}:${config.secretKey}`).toString("base64")}`,
-          "x-langfuse-ingestion-version": "4",
-        },
-        timeoutMillis: 5_000,
-        compression: resolveCompression(),
-      }),
-      // Keep batches smaller than the SDK default because each span can carry large captured inputs and outputs.
-      maxExportBatchSize: 128,
-      scheduledDelayMillis: 5_000,
-    }),
+  createProcessor: (config) => new PiBatchSpanProcessor(config),
   // The provider is private: do not register it with OpenTelemetry or replace the host's provider.
-  createProvider: (processor) => new TracerProvider({ spanProcessors: [processor] }),
+  createProvider: (processor, config) =>
+    new TracerProvider({
+      spanProcessors: [processor],
+      ...(isOtlpConfig(config)
+        ? {
+            resource: resourceFromAttributes({
+              "service.name": maskSecretString(config.serviceName, otlpSecrets(config.headers)),
+            }),
+          }
+        : {}),
+    }),
 };
+
+function createLangfuseExporter(config: ResolvedLangfuseConfig): OTLPTraceExporter {
+  return new OTLPTraceExporter({
+    url: `${config.baseUrl}/api/public/otel/v1/traces`,
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${config.publicKey}:${config.secretKey}`).toString("base64")}`,
+      "x-langfuse-ingestion-version": "4",
+    },
+    timeoutMillis: 5_000,
+    compression: resolveCompression(),
+  });
+}
+
+function createOtlpExporter(config: ResolvedOtlpConfig): OTLPExporterBase<ReadableSpan[]> {
+  // The legacy exporter constructor merges ambient OTLP headers, which can send credentials to the wrong endpoint.
+  return new OTLPExporterBase(
+    createOtlpHttpExportDelegate(
+      {
+        ...getSharedConfigurationDefaults(),
+        url: config.endpoint,
+        headers: async () => ({ ...config.headers, "content-type": "application/x-protobuf" }),
+        timeoutMillis: 5_000,
+        agentFactory: httpAgentFactoryFromOptions({ keepAlive: true }),
+      },
+      ProtobufTraceSerializer,
+      "otlp_http_span_exporter",
+      TraceExporterMetricsHelper,
+      undefined,
+    ),
+  );
+}
 
 function resolveCompression(): CompressionAlgorithm {
   for (const key of [
@@ -294,7 +376,7 @@ function resolveCompression(): CompressionAlgorithm {
   return CompressionAlgorithm.GZIP;
 }
 
-export function resolveLangfuseRuntimeConfig(options: CreateLangfuseRuntimeOptions): ResolvedRuntimeConfig {
+export function resolveLangfuseRuntimeConfig(options: CreateLangfuseRuntimeOptions): ResolvedLangfuseConfig {
   const env = options.env === false ? undefined : (options.env ?? process.env);
   const publicKey = requiredSetting("publicKey", options.config?.publicKey, env?.LANGFUSE_PUBLIC_KEY);
   const secretKey = requiredSetting("secretKey", options.config?.secretKey, env?.LANGFUSE_SECRET_KEY);
@@ -394,7 +476,9 @@ function maskSecretString(value: string, secrets: readonly string[]): string {
 function configFingerprint(config: ResolvedRuntimeConfig): string {
   return createHash("sha256")
     .update(
-      `${config.publicKey}\0${config.secretKey}\0${config.baseUrl}\0${config.environment ?? ""}\0${config.release ?? ""}`,
+      isOtlpConfig(config)
+        ? JSON.stringify([config.backend, config.endpoint, config.headers, config.serviceName])
+        : `${config.publicKey}\0${config.secretKey}\0${config.baseUrl}\0${config.environment ?? ""}\0${config.release ?? ""}`,
     )
     .digest("hex");
 }

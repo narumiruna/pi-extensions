@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { createLangfuseExtension, resolveGitMetadata } from "../src/langfuse.js";
+import { createOtelExtension, resolveGitMetadata } from "../src/otel.js";
 import { FakeBackend } from "./support.js";
 
 function deferred<T>() {
@@ -84,12 +84,12 @@ test("session start ignores ambient Langfuse credentials and suggests setup when
   });
   let backendCreations = 0;
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: false,
-      path: "/config/pi-langfuse.json",
+      path: "/config/pi-otel.json",
       warnings: [],
-      reason: "Configuration file not found: /config/pi-langfuse.json",
+      reason: "Configuration file not found: /config/pi-otel.json",
     }),
     createBackend: async () => {
       backendCreations += 1;
@@ -100,14 +100,14 @@ test("session start ignores ambient Langfuse credentials and suggests setup when
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
 
-  assert.match(notifications.at(-1)?.message ?? "", /run \/langfuse and choose set up langfuse/i);
+  assert.match(notifications.at(-1)?.message ?? "", /run \/otel and choose set up langfuse/i);
   assert.equal(backendCreations, 0);
 });
 
 test("pi-langfuse registers lifecycle hooks and exports completed traces", async () => {
   const backend = new FakeBackend();
   const mock = createMockPi();
-  const extension = createLangfuseExtension({
+  const extension = createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -116,7 +116,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
         baseUrl: "https://cloud.langfuse.com",
         captureContent: true,
       },
-      path: "/config/pi-langfuse.json",
+      path: "/config/pi-otel.json",
       warnings: [],
     }),
     createBackend: async () => backend,
@@ -291,7 +291,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 test("pi-langfuse reconciles the finalized assistant message from agent_end", async () => {
   const backend = new FakeBackend();
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -300,7 +300,7 @@ test("pi-langfuse reconciles the finalized assistant message from agent_end", as
         baseUrl: "https://cloud.langfuse.com",
         captureContent: true,
       },
-      path: "/config/pi-langfuse.json",
+      path: "/config/pi-otel.json",
       warnings: [],
     }),
     createBackend: async () => backend,
@@ -334,7 +334,7 @@ test("pi-langfuse reconciles the finalized assistant message from agent_end", as
 test("pi-langfuse traces executed tool inputs while preserving blocked raw inputs", async () => {
   const backend = new FakeBackend();
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -343,7 +343,7 @@ test("pi-langfuse traces executed tool inputs while preserving blocked raw input
         baseUrl: "https://cloud.langfuse.com",
         captureContent: true,
       },
-      path: "/config/pi-langfuse.json",
+      path: "/config/pi-otel.json",
       warnings: [],
     }),
     createBackend: async () => backend,
@@ -500,7 +500,7 @@ test("agent_end leaves the root agent open and settled never starts a routine fl
   const backend = new FakeBackend();
   backend.forceFlush = () => new Promise<void>(() => undefined);
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -540,7 +540,7 @@ test("agent_end leaves the root agent open and settled never starts a routine fl
 test("pi-langfuse records active compactions without summaries and closes incomplete work", async () => {
   const backend = new FakeBackend();
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -623,7 +623,7 @@ test("reload and session replacement close every active observation once before 
   for (const reason of ["reload", "new", "resume", "fork"] as const) {
     const backend = new FakeBackend();
     const mock = createMockPi();
-    createLangfuseExtension({
+    createOtelExtension({
       loadConfig: async () => ({
         ok: true,
         config: {
@@ -683,7 +683,7 @@ test("final shutdown redacts retained runtime credentials after replacement conf
   };
   let loadCalls = 0;
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => {
       loadCalls += 1;
       if (loadCalls === 1) {
@@ -728,7 +728,7 @@ test("stale owned runtime initialization is released after shutdown or replaceme
     const backendReady = deferred<FakeBackend>();
     const initializationStarted = deferred<void>();
     const mock = createMockPi();
-    createLangfuseExtension({
+    createOtelExtension({
       loadConfig: async () => ({
         ok: true,
         config: {
@@ -775,7 +775,7 @@ test("session shutdown reports stale owned runtime cleanup failures", async () =
   const backendReady = deferred<FakeBackend>();
   const initializationStarted = deferred<void>();
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -810,7 +810,7 @@ test("session shutdown reports stale owned runtime cleanup failures", async () =
 test("session shutdown is idempotent and reports initialization failures", async () => {
   const backend = new FakeBackend();
   const mock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
@@ -859,7 +859,7 @@ test("session shutdown is idempotent and reports initialization failures", async
   );
 
   const failedMock = createMockPi();
-  createLangfuseExtension({
+  createOtelExtension({
     loadConfig: async () => ({
       ok: true,
       config: {
