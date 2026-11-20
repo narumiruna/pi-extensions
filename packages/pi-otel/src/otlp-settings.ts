@@ -1,7 +1,9 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
+import { isIP } from "node:net";
 
 export interface OtlpRuntimeConfig {
   endpoint: string;
+  /** Requires HTTPS unless the endpoint uses a loopback IP. */
   headers?: Readonly<Record<string, string>>;
   serviceName?: string;
 }
@@ -20,23 +22,29 @@ const RESERVED_HEADERS = new Set([
 ]);
 
 export function normalizeOtlpConnection(input: Readonly<Record<string, unknown>>): OtlpConnection {
-  const endpoint = normalizeHttpUrl(input.endpoint);
-  if (!endpoint) {
+  const url = parseHttpUrl(input.endpoint);
+  if (!url) {
     throw new Error("OTLP endpoint must be a full HTTP or HTTPS URL without credentials, a query, or a fragment.");
   }
   const serviceName = input.serviceName === undefined ? "pi" : input.serviceName;
   if (typeof serviceName !== "string" || !serviceName.trim()) {
     throw new Error("OTLP serviceName must be a non-empty string.");
   }
-  return { endpoint, headers: normalizeHeaders(input.headers), serviceName: serviceName.trim() };
+  const headers = normalizeHeaders(input.headers);
+  // URL canonicalizes numeric IPs. Do not trust DNS or hosts-file aliases with cleartext credentials.
+  const loopback = (url.hostname.startsWith("127.") && isIP(url.hostname) === 4) || url.hostname === "[::1]";
+  if (Object.keys(headers).length > 0 && url.protocol === "http:" && !loopback) {
+    throw new Error("OTLP headers require HTTPS unless the endpoint uses a loopback IP (127.0.0.0/8 or [::1]).");
+  }
+  return { endpoint: url.href, headers, serviceName: serviceName.trim() };
 }
 
-function normalizeHttpUrl(value: unknown): string | undefined {
+function parseHttpUrl(value: unknown): URL | undefined {
   if (typeof value !== "string" || !/^https?:\/\//iu.test(value.trim()) || /[?#]/u.test(value)) return undefined;
   try {
     const url = new URL(value.trim());
     if (url.username || url.password) return undefined;
-    return url.href;
+    return url;
   } catch {
     return undefined;
   }

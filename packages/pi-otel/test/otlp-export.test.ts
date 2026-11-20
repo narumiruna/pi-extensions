@@ -69,6 +69,13 @@ test("generic OTLP sends protobuf to the exact endpoint and ignores ambient expo
   vi.stubEnv("OTEL_SERVICE_NAME", "other-service");
   let runtime: Awaited<ReturnType<typeof createOtelRuntime>> | undefined;
   try {
+    await assert.rejects(
+      createOtelRuntime({
+        endpoint: "http://receiver.example/v1/traces",
+        headers: { "x-api-key": "dummy-token" },
+      }),
+      /OTLP headers require HTTPS/u,
+    );
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const address = server.address();
@@ -104,17 +111,20 @@ test("generic OTLP sends protobuf to the exact endpoint and ignores ambient expo
       recorder.beginAgent({ prompt: "prompt-marker private-test-token my-test-key" });
       recorder.beginAttempt();
       recorder.beginTurn(0);
+      recorder.beginTool("call-1", "read", { path: "tool-input-marker" });
+      recorder.finishTool("call-1", { content: "tool-output-marker", isError: true });
       recorder.beginGeneration({ model: { id: "test-model" }, payload: { content: "request-marker" } });
-      recorder.finishAssistant({
+      const message = {
         role: "assistant",
+        stopReason: "error",
+        errorMessage: "provider-error-marker",
         content: "response-marker",
         model: "test-model",
         usage: { input: 9, output: 2, totalTokens: 11 },
-      });
-      recorder.beginTool("call-1", "read", { path: "tool-input-marker" });
-      recorder.finishTool("call-1", { content: "tool-output-marker", isError: true });
-      recorder.finishTurn(0, { message: { role: "assistant" }, toolResultCount: 1 });
-      recorder.finishAttempt();
+      };
+      recorder.finishAssistant(message);
+      recorder.finishTurn(0, { message, toolResultCount: 1 });
+      recorder.finishAttempt(message);
       recorder.settle();
       if (captureContent) await runtime.flush();
     }
@@ -170,6 +180,14 @@ test("generic OTLP sends protobuf to the exact endpoint and ignores ambient expo
       });
       assert.equal(spanAttributes(turn)["pi.observation.metadata.pi.turn.tool_result_count"], 1);
       assert.equal(tool.status?.code, 2); // STATUS_CODE_ERROR.
+      for (const span of [agent, attempt, turn, generation]) {
+        assert.equal(span.status?.code, 2, span.name);
+        assert.equal(
+          spanAttributes(span)["pi.observation.status_message"],
+          index === 0 ? "provider-error-marker" : "The Pi operation failed.",
+          span.name,
+        );
+      }
       const json = JSON.stringify(wire);
       assert.doesNotMatch(json, /private-test-token|my-test-key|langfuse\.observation/u);
       for (const marker of [
@@ -178,6 +196,7 @@ test("generic OTLP sends protobuf to the exact endpoint and ignores ambient expo
         "response-marker",
         "tool-input-marker",
         "tool-output-marker",
+        "provider-error-marker",
       ]) {
         assert.equal(json.includes(marker), index === 0, marker);
       }

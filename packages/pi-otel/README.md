@@ -44,7 +44,7 @@ The durable adapter targets experimental Pi durable APIs within the peer ranges 
 Pi extensions run with your user permissions. Review the [data-export behavior](#-security-and-privacy) before enabling tracing.
 
 If you already use `pi-langfuse`, uninstall it before loading `pi-otel` to avoid duplicate tracing and slash commands.
-Existing Langfuse settings still work; see [Settings](#-settings). Host applications can change their import paths to `@narumitw/pi-otel` or `@narumitw/pi-otel/durable` without renaming their Langfuse factories.
+Existing Langfuse settings still work; see [Settings](#settings). Host applications can change their import paths to `@narumitw/pi-otel` or `@narumitw/pi-otel/durable` without renaming their Langfuse factories.
 
 ## 🚀 Quick start
 
@@ -171,6 +171,8 @@ Tracing never resumes paused recovery or controls execution, and capture bounds 
 See the installed [durable API guide](./docs/durable.md) for the compatibility matrix, ownership, per-request correlation, privacy projections, recovery semantics and limitations.
 The host remains responsible for authorization, storage, execution cancellation/recovery, callback-owned work and shared-runtime shutdown.
 
+<a id="settings"></a>
+
 ## ⚙️ Settings
 
 Settings apply to the Pi agent directory, not a project or an individual conversation. Edit `<getAgentDir()>/pi-otel.json` (normally `~/.pi/agent/pi-otel.json`).
@@ -188,6 +190,7 @@ Use `"backend": "otlp"` with the full HTTP or HTTPS traces URL, including the re
 The exporter sends OTLP/HTTP protobuf, not gRPC. The URL must not contain credentials, a query, or a fragment.
 Optional `serviceName` defaults to `pi`. Optional `headers` is an object of literal header names and values, for example `{"Authorization": "Bearer YOUR_TOKEN"}`.
 Header names are case-insensitive and cannot be duplicated or override transport headers such as `Content-Type`.
+Custom headers require HTTPS, except over HTTP to a loopback IP such as `127.0.0.1` or `[::1]`. Use a loopback IP instead of `localhost` if a local HTTP collector needs headers.
 The exporter does not inherit ambient `OTEL_EXPORTER_OTLP_*` connection settings. `captureContent` defaults to `false`.
 
 ### Langfuse
@@ -335,7 +338,7 @@ A `userId` can identify you if you set it to an email address or real name.
 Choose a pseudonymous value when that matters, or leave `userId` unset to export no user at all.
 
 The built-in mask protects configured export credentials but is not a general secret scanner.
-Set `"captureContent": false` when prompts, provider-request snapshots, responses, and tool content must stay local. Turn it on only for trusted receivers.
+Set `"captureContent": false` when prompts, provider-request snapshots, responses, tool content, and free-form provider error messages must stay local. Traces still record the error status and a generic message. Turn it on only for trusted receivers.
 Compaction summaries, tool partial results, opaque continuation signatures, authorization headers, cookies, and unapproved response headers are never exported in either mode.
 
 ## 🗂️ Package layout

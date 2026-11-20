@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, vi } from "vitest";
 import { DEFAULT_BASE_URL, loadSettings, normalizeLangfuseConfig, writeLangfuseConfig } from "../src/config.js";
+import { normalizeOtlpConnection } from "../src/otlp-settings.js";
 
 test("loadSettings reads pi-otel.json and enforces private permissions", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-config-"));
@@ -121,6 +122,7 @@ test("OTLP settings validate URLs and literal headers without exposing the suppl
     { endpoint: "https://private-marker@receiver.example/v1/traces" },
     { endpoint: "https://receiver.example/v1/traces?private-marker" },
     { endpoint: "https://receiver.example/v1/traces#" },
+    { endpoint: "http://receiver.example/v1/traces", headers: { Authorization: "Bearer private-marker" } },
     { headers: [["authorization", "private-marker"]] },
     { headers: { "private-marker:\n": "secret" } },
     { headers: { "x-api-key": "private-marker\r\nInjected: value" } },
@@ -162,6 +164,35 @@ test("OTLP settings validate URLs and literal headers without exposing the suppl
     },
   });
   assert.equal((await stat(path)).mode & 0o777, 0o600);
+});
+
+test("OTLP headers require HTTPS or a literal loopback address", () => {
+  const remote = "http://receiver.example/v1/traces";
+  assert.deepEqual(normalizeOtlpConnection({ endpoint: remote }).headers, {});
+  assert.deepEqual(normalizeOtlpConnection({ endpoint: remote, headers: {} }).headers, {});
+
+  const headers = { Authorization: "Bearer dummy-token" };
+  for (const endpoint of [
+    "https://receiver.example/v1/traces",
+    "http://127.0.0.2/v1/traces",
+    "http://[0:0:0:0:0:0:0:1]/v1/traces",
+    "http://127.1/v1/traces",
+  ]) {
+    assert.deepEqual(normalizeOtlpConnection({ endpoint, headers }).headers, { authorization: headers.Authorization });
+  }
+  for (const endpoint of [
+    remote,
+    "http://localhost/v1/traces",
+    "http://127.example/v1/traces",
+    "http://128.0.0.1/v1/traces",
+    "http://[::2]/v1/traces",
+  ]) {
+    assert.throws(
+      () => normalizeOtlpConnection({ endpoint, headers }),
+      { message: "OTLP headers require HTTPS unless the endpoint uses a loopback IP (127.0.0.0/8 or [::1])." },
+      endpoint,
+    );
+  }
 });
 
 test("Langfuse updates preserve unknown fields and refuse malformed files", async (t) => {

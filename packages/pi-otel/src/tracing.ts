@@ -372,7 +372,7 @@ export class TraceRecorder {
             level: "WARNING" as const,
             statusMessage: `Turn ${turnIndex} ended while turn ${this.turnIndex} was active.`,
           }
-        : severityForOutcome(outcome, result.message.errorMessage)),
+        : severityForOutcome(outcome, this.captureErrorMessage(result.message.errorMessage))),
     });
     this.turn.end();
     this.turn = undefined;
@@ -482,7 +482,7 @@ export class TraceRecorder {
           ? { "pi.usage.cache_write_1h_tokens": message.usage.cacheWrite1h }
           : {}),
       },
-      ...severityForOutcome(outcome, message.errorMessage),
+      ...severityForOutcome(outcome, this.captureErrorMessage(message.errorMessage)),
     });
     state.observation.end(state.endTime);
     this.generation = undefined;
@@ -656,7 +656,7 @@ export class TraceRecorder {
     const finalAttributes: ObservationAttributes = {
       ...(this.lastOutput !== undefined ? { output: this.lastOutput } : {}),
       metadata: finalMetadata,
-      ...severityForOutcome(baseOutcome, statusMessage ?? this.lastAssistant?.errorMessage),
+      ...severityForOutcome(baseOutcome, statusMessage ?? this.captureErrorMessage(this.lastAssistant?.errorMessage)),
     };
     this.root.update(finalAttributes);
     this.root.updateTrace?.({
@@ -687,7 +687,7 @@ export class TraceRecorder {
         "pi.attempt.outcome": outcome,
         ...(message?.stopReason ? { "pi.attempt.stop_reason": message.stopReason } : {}),
       },
-      ...severityForOutcome(outcome, statusMessage ?? message?.errorMessage),
+      ...severityForOutcome(outcome, statusMessage ?? this.captureErrorMessage(message?.errorMessage)),
     });
     this.attempt.end();
     this.attempt = undefined;
@@ -755,6 +755,12 @@ export class TraceRecorder {
     this.compaction.observation.update({ level: "WARNING", statusMessage });
     this.compaction.observation.end();
     this.compaction = undefined;
+  }
+
+  private captureErrorMessage(message: string | undefined): string | undefined {
+    // Provider error text can include request or response content. Keep the outcome, not the text, when capture is off.
+    if (!this.context.captureContent || typeof message !== "string") return undefined;
+    return String(sanitizeTraceValue(message));
   }
 
   private capture(value: unknown): unknown {
