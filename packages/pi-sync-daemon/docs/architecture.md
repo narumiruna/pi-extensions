@@ -175,6 +175,9 @@ release callback, replay the job, or switch owners. The original daemon
 queue deadline and admission fence stay in force. A newer poll that no longer
 lists the callback, or a stale-answer rejection, ends delivery without
 proving that the job succeeded. Explicit release failures are not retried.
+If the connection reaches its callback history limit, it blocks new work but
+still drains pending queue releases. It keeps their completed IDs only until
+a newer daemon snapshot no longer lists them.
 The optional local `queueRelease` observer reports delivery activity only;
 there is no v1 wire change.
 

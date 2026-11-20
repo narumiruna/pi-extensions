@@ -7,10 +7,12 @@ type ClearStatus = (redraw?: boolean) => void;
 export function createQueueReleaseUI(show: () => ClearStatus | undefined, warn: () => void) {
   const retries = new Map<string, { job: string; foreground: boolean }>();
   const handledJobs = new Set<string>();
+  const deferredWarnings = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let clearStatus: ClearStatus | undefined;
 
   function remember(job: string) {
+    deferredWarnings.delete(job);
     if (handledJobs.has(job)) return false;
     if (handledJobs.size >= 128) {
       const oldest = handledJobs.values().next();
@@ -52,7 +54,21 @@ export function createQueueReleaseUI(show: () => ClearStatus | undefined, warn: 
       const retry = retries.get(id);
       retries.delete(id);
       if (!retries.size) clearPresentation(true);
-      if (state === "unconfirmed" && remember(job) && !foreground && !retry?.foreground && !commandBusy) warn();
+      if (state !== "unconfirmed") return;
+      const background = !foreground && !retry?.foreground;
+      if (background && commandBusy) {
+        if (!handledJobs.has(job)) deferredWarnings.add(job);
+      } else if (remember(job) && background) warn();
+    },
+    flushWarnings() {
+      if (!deferredWarnings.size) return;
+      // One warning covers the background releases deferred by this command.
+      for (const job of deferredWarnings) remember(job);
+      try {
+        warn();
+      } catch {
+        // Presentation must not interrupt publication of the new idle state.
+      }
     },
     finishForeground(redraw: boolean) {
       for (const [id, { job, foreground }] of retries) {
@@ -65,6 +81,7 @@ export function createQueueReleaseUI(show: () => ClearStatus | undefined, warn: 
     clear(redraw: boolean) {
       retries.clear();
       handledJobs.clear();
+      deferredWarnings.clear();
       clearPresentation(redraw);
     },
   };

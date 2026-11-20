@@ -416,6 +416,10 @@ export class DaemonConnection {
   private reportedError = false;
   private commits = new Map<string, { notify(): void; signal?: AbortSignal }>();
   private completedCallbacks = new Set<string>();
+  // Keep drain answers deduplicated even after the lifetime callback ledger fills.
+  // The daemon limits each peer to 64 pending callbacks. A newer snapshot retires
+  // releases it no longer lists, and older snapshots cannot add them back.
+  private completedReleases = new Set<string>();
   private pausing: Promise<void> | undefined;
   private disposing: Promise<void> | undefined;
   private polling: Promise<void> | undefined;
@@ -690,8 +694,11 @@ export class DaemonConnection {
         this.options.event?.(event);
       }
     const latest = reply.cursor >= this.cursor;
-    this.cursor = Math.max(this.cursor, reply.cursor);
     const present = new Set((reply.callbacks as Callback[]).map((callback) => callback.id));
+    if (reply.cursor > this.cursor) {
+      for (const id of this.completedReleases) if (!present.has(id)) this.completedReleases.delete(id);
+      this.cursor = reply.cursor;
+    }
     for (const [id, pending] of this.callbacks) {
       if (pending.releaseCursor !== undefined) {
         // A job poll and the background poll can arrive out of order.
@@ -706,12 +713,8 @@ export class DaemonConnection {
     for (const callback of reply.callbacks as Callback[]) {
       if (this.callbacks.has(callback.id) || this.completedCallbacks.has(callback.id)) continue;
       const release = callback.kind === "queue-release";
-      if (release && !latest) continue;
-      if (this.completedCallbacks.size + this.callbacks.size >= MAX_COMPLETED_CALLBACKS) {
-        // Never execute a release whose result we cannot deduplicate.
-        this.uncertain = true;
-        if (release) continue;
-      }
+      if (release && (!latest || this.completedReleases.has(callback.id))) continue;
+      if (this.completedCallbacks.size + this.callbacks.size >= MAX_COMPLETED_CALLBACKS) this.uncertain = true;
       const controller = new AbortController();
       const foreground = this.pendingJobs.has(callback.job);
       this.callbacks.set(callback.id, {
@@ -758,6 +761,7 @@ export class DaemonConnection {
         })
         .finally(() => {
           if (this.completedCallbacks.size < MAX_COMPLETED_CALLBACKS) this.completedCallbacks.add(callback.id);
+          else if (release && !controller.signal.aborted) this.completedReleases.add(callback.id);
           this.callbacks.delete(callback.id);
           this.callbackTasks.delete(task);
         });

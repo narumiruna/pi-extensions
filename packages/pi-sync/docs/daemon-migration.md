@@ -85,6 +85,8 @@ Reconnect does not replay a submitted operation or restart startup transfers.
 If Pi releases a file queue but the local acknowledgement is lost in transit,
 it retries that acknowledgement with the same daemon. Brief retries stay
 quiet; longer retries show `sync recovering` when sync status is enabled.
+If a background release remains unconfirmed during a command, Pi reports it
+after the command finishes.
 A release acknowledgement alone does not confirm that a transfer succeeded.
 If a write or file-queue release cannot be confirmed, preserve the journals and
 use the existing recovery path before retrying a transfer. Reconnect does not

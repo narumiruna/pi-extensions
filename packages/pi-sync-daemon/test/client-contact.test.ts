@@ -88,6 +88,65 @@ async function fixture(
   }
 }
 
+test("a full callback ledger still drains releases once and retires their cleanup records", async () => {
+  const release = releaseCallback();
+  const later = releaseCallback();
+  let phase: "pending" | "retired" | "older" | "next" = "pending";
+  let observations = 0;
+  const handled: string[] = [];
+  const answers: string[] = [];
+  let unconfirmed = false;
+  await fixture(
+    ({ method, params }) => {
+      if (method === "poll") {
+        if (phase === "retired") return poll("active", { cursor: 2 });
+        if (phase === "next") return poll("active", { cursor: 3, callbacks: [later] });
+        return poll("active", { cursor: 1, callbacks: [release] });
+      }
+      if (method === "answer") {
+        assert.equal(params.value, true);
+        answers.push(String(params.id));
+        // Keep the first callback pending to exercise deduplication after the task ends.
+        return params.id === release.id ? failure("Cannot acknowledge") : { result: {} };
+      }
+      return poll("active");
+    },
+    async (client, calls) => {
+      // Seed completed history to reach the production limit without thousands of IPC calls.
+      const history = Reflect.get(client, "completedCallbacks") as Set<string>;
+      for (let index = 0; index < 4096; index++) history.add(String(index));
+      await client.attach();
+      await vi.waitFor(() => assert.ok(unconfirmed));
+      await assert.rejects(client.run("write", {}), /unavailable/u);
+      assert.ok(!calls.some(({ method }) => method === "submit"));
+      const observePoll = async () => {
+        const previous = observations;
+        await vi.waitFor(() => assert.ok(observations > previous));
+      };
+      await observePoll();
+      assert.deepEqual(answers, [release.id]);
+      phase = "retired";
+      await observePoll();
+      phase = "older";
+      await observePoll();
+      phase = "next";
+      await vi.waitFor(() => assert.deepEqual(answers, [release.id, later.id]));
+      assert.deepEqual(handled, [release.id, later.id]);
+      assert.equal((Reflect.get(client, "completedReleases") as Set<string>).has(release.id), false);
+    },
+    {
+      callback: async ({ id }) => {
+        handled.push(id);
+        return true;
+      },
+      queueRelease: ({ state }) => {
+        if (state === "unconfirmed") unconfirmed = true;
+      },
+      contact: () => observations++,
+    },
+  );
+});
+
 test("poll notifies repeated contact states only after admission but serves cleanup during attach", async () => {
   const queueRelease = releaseCallback();
   const admitted = Promise.withResolvers<void>();
@@ -130,24 +189,28 @@ test("poll notifies repeated contact states only after admission but serves clea
   );
 });
 
-test.each(["request", "response"] as const)(
+test.each(["request", "response", "response with stale retry"] as const)(
   "a lost queue-release %s does not replay the job or callback",
   async (drop) => {
     let job: string | undefined;
     let released = false;
     let answers = 0;
     let handled = 0;
+    let finished = false;
     const callback = { ...releaseCallback(), payload: { reservation: randomUUID() } };
+    let signal: AbortSignal | undefined;
     await fixture(
-      ({ method, params }, response) => {
+      async ({ method, params }, response) => {
         if (method === "submit") job = String(params.id);
         if (method === "poll") {
+          // Force a stale retry in one case by delaying the removal snapshot.
+          const visible = released && (drop === "response" || finished);
           return poll("active", {
-            cursor: released ? 2 : 1,
-            callbacks: job && !released ? [{ ...callback, job }] : [],
+            cursor: visible ? 2 : 1,
+            callbacks: job && !visible ? [{ ...callback, job }] : [],
             ...(params.job === job &&
               job && {
-                job: released ? { id: job, phase: "done", result: "original" } : { id: job, phase: "running" },
+                job: visible ? { id: job, phase: "done", result: "original" } : { id: job, phase: "running" },
               }),
           });
         }
@@ -155,8 +218,11 @@ test.each(["request", "response"] as const)(
           answers++;
           assert.deepEqual(params, { client: params.client, id: callback.id, value: true });
           if (answers === 1) {
-            released = drop === "response";
-            response.destroy();
+            released = drop !== "request";
+            if (drop === "response") {
+              // Only the newer poll confirms removal. The answer gets no response.
+              await new Promise<void>((resolve) => response.once("close", resolve));
+            } else response.destroy();
           } else if (released) {
             return failure("Stale or foreign callback response.");
           } else {
@@ -173,21 +239,26 @@ test.each(["request", "response"] as const)(
         const settled = Promise.withResolvers<void>();
         void result.finally(() => settled.resolve()).catch(() => {});
         try {
-          await vi.waitFor(() => assert.ok(released));
+          await vi.waitFor(() => assert.ok(released && (drop === "response" || finished)));
           assert.equal(await result, "original");
         } finally {
-          if (!released) released = true;
+          if (!released || (drop !== "response" && !finished)) await client.dispose();
           await settled.promise;
         }
         assert.ok(released);
         assert.equal(handled, 1);
         assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
-        assert.equal(answers, drop === "request" ? 2 : 1);
+        if (drop === "response") assert.equal(signal?.aborted, true);
+        assert.equal(answers, drop === "response" ? 1 : 2);
       },
       {
-        callback: async () => {
+        callback: async (_, callbackSignal) => {
+          signal = callbackSignal;
           handled++;
           return true;
+        },
+        queueRelease: ({ state }) => {
+          if (state === "finished") finished = true;
         },
       },
     );
@@ -258,23 +329,33 @@ test("an old background poll cannot cancel a newer queue-release delivery", asyn
   const release = releaseCallback();
   const oldPoll = Promise.withResolvers<void>();
   const oldPollEntered = Promise.withResolvers<void>();
+  const admitPoll = Promise.withResolvers<void>();
+  const allowAnswer = Promise.withResolvers<void>();
+  let backgroundPolls = 0;
+  let consumed = false;
   let answers = 0;
   let handled = 0;
+  let signal: AbortSignal | undefined;
   let job: string | undefined;
   await fixture(
     async ({ method, params }, response) => {
       if (method === "submit") job = String(params.id);
       if (method === "poll" && !params.job) {
-        oldPollEntered.resolve();
-        await oldPoll.promise;
-        return poll("active", { cursor: 1 });
+        backgroundPolls++;
+        if (backgroundPolls === 1) {
+          await admitPoll.promise;
+          return poll("active");
+        }
+        if (backgroundPolls === 2) {
+          oldPollEntered.resolve();
+          await oldPoll.promise;
+          return poll("expired", { cursor: 1 });
+        }
       }
       if (method === "answer") {
         answers++;
-        if (answers === 1) {
-          oldPoll.resolve();
-          response.destroy();
-        } else return { result: {} };
+        if (answers === 1) response.destroy();
+        else return { result: {} };
       }
       if (method === "poll" && job) {
         return poll("active", {
@@ -286,20 +367,34 @@ test("an old background poll cannot cancel a newer queue-release delivery", asyn
       return poll("active", { cursor: 1 });
     },
     async (client) => {
-      await client.attach();
-      await oldPollEntered.promise;
       try {
-        assert.equal(await client.run("fixture", {}), true);
-        assert.equal(answers, 2);
+        await client.attach();
+        admitPoll.resolve();
+        await oldPollEntered.promise;
+        const result = client.run("fixture", {});
+        void result.catch(() => {});
+        await vi.waitFor(() => assert.ok(consumed));
+        assert.equal(signal?.aborted, false);
+        allowAnswer.resolve();
+        await vi.waitFor(() => assert.equal(answers, 2));
+        assert.equal(await result, true);
         assert.equal(handled, 1);
       } finally {
+        admitPoll.resolve();
         oldPoll.resolve();
+        allowAnswer.resolve();
       }
     },
     {
-      callback: async () => {
+      callback: async (_, callbackSignal) => {
+        signal = callbackSignal;
         handled++;
+        oldPoll.resolve();
+        await allowAnswer.promise;
         return true;
+      },
+      contact: (state) => {
+        if (state === "expired") consumed = true;
       },
     },
   );

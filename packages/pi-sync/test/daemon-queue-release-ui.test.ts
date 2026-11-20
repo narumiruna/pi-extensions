@@ -5,7 +5,7 @@ import path from "node:path";
 import type { ClientFacts, ConnectionOptions } from "@narumitw/pi-sync-daemon";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import type { QueueReleaseEvent } from "../src/daemon/queue-release-ui.js";
+import { createQueueReleaseUI, type QueueReleaseEvent } from "../src/daemon/queue-release-ui.js";
 
 function recovering(id = "answer-1", job = "job-1", foreground = false): QueueReleaseEvent {
   return { id, job, foreground, state: "retrying" };
@@ -141,9 +141,21 @@ test("only one actionable warning per background job; foreground failures still 
       assert.equal(mock.notifications[0]?.level, "warning");
       assert.match(mock.notifications[0]?.message ?? "", /confirm.*\/sync daemon status/u);
       await client.setBusy("command", true, false);
-      wire.observe({ ...failed, id: "busy-answer", job: "busy-job" });
-      await client.setBusy("command", false, false);
+      const deferred = { ...failed, id: "busy-answer", job: "busy-job" };
+      const other = { ...failed, id: "other-busy-answer", job: "other-busy-job" };
+      wire.observe(deferred);
+      wire.observe(deferred);
+      wire.observe(other);
       assert.equal(mock.notifications.length, 1);
+      const publishError = new Error("could not publish idle facts");
+      vi.spyOn(wire, "update").mockRejectedValueOnce(publishError);
+      await assert.rejects(client.setBusy("command", false), (error) => error === publishError);
+      assert.equal(mock.notifications.length, 2);
+      assert.deepEqual(mock.notifications[1], mock.notifications[0]);
+      wire.observe(deferred);
+      wire.observe(other);
+      assert.equal(mock.notifications.length, 2);
+      await client.setBusy("command", true, false);
 
       const started = Promise.withResolvers<void>();
       const result = Promise.withResolvers<never>();
@@ -160,12 +172,26 @@ test("only one actionable warning per background job; foreground failures still 
       result.reject(failure);
       await assert.rejects(run, (error) => error === failure);
       wire.options.event?.({ id: 2, kind: "notify", payload: { message: failure.message, level: "error" } });
-      assert.deepEqual(mock.notifications.slice(1), [{ message: failure.message, level: "error" }]);
+      await client.setBusy("command", false, false);
+      assert.deepEqual(mock.notifications.slice(2), [{ message: failure.message, level: "error" }]);
       assert.equal(vi.getTimerCount(), 0);
     } finally {
       await client.dispose();
     }
   }));
+
+test("teardown discards deferred background warnings", () => {
+  const warn = vi.fn();
+  const releaseUI = createQueueReleaseUI(() => undefined, warn);
+  const failed = { ...recovering(), state: "unconfirmed" as const };
+  releaseUI.observe(failed, true, false);
+  releaseUI.clear(false);
+  releaseUI.flushWarnings();
+  assert.equal(warn.mock.calls.length, 0);
+
+  releaseUI.observe(failed, false, false);
+  assert.equal(warn.mock.calls.length, 1);
+});
 
 test("cancelling the foreground wait clears recovery UI and ignores its late observations", () =>
   withRecoveryUI(async ({ bind, connections }) => {

@@ -746,7 +746,10 @@ export class PiDaemonClient {
   async setBusy(reason: string, busy: boolean, publish = true) {
     this.validate();
     if (busy) this.busy.add(reason);
-    else this.busy.delete(reason);
+    else if (this.busy.delete(reason) && reason === "command") {
+      // Local command completion does not depend on publishing idle facts.
+      this.releaseUI.flushWarnings();
+    }
     if (publish) await this.update();
     this.validate();
   }
