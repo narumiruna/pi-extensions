@@ -39,7 +39,7 @@ export function createHoverPreview(
   cwd: string,
   checkout: string,
   findWikiPreview: (href: string) => WikiPreview | undefined,
-): Component & { dispose(): void } {
+): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let overlay: OverlayHandle | undefined;
@@ -88,7 +88,7 @@ export function createHoverPreview(
       if (!excerpt) return;
       draw = () =>
         preview
-          ? renderWikiPreview(preview, excerpt, theme, width, height)
+          ? renderWikiPreview(excerpt, theme, width, height)
           : { width, lines: renderFilePreview(theme, excerpt, width, height) };
     }
     if (hover !== target || tui.hasOverlay() || !stillOnLink(target)) return;
@@ -159,6 +159,7 @@ export function createHoverPreview(
   process.stdin.on("data", onData);
 
   return {
+    dismiss: hide,
     render(): string[] {
       if (hover && viewport) {
         const current = hover;

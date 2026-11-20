@@ -1,42 +1,9 @@
-import { createHash } from "node:crypto";
 import { posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { getMarkdownTheme, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
-import {
-  backgroundAnsi,
-  type Color,
-  colorToRgb,
-  foregroundAnsi,
-  getCapabilities,
-  hyperlink,
-  Markdown,
-  Marked,
-  rgbColor,
-  stripTerminalSequences,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { type PreviewExcerpt, renderPreviewFrame } from "./filelinks.ts";
 import { createFileIndex } from "./wikilink-index.ts";
-
-const parser = new Marked();
-const wikilinks = /(?<![![])\[\[([^[\]\r\n]+)\]\](?![[\](])/g;
-const taggedLinks = /\[\[(\uE000+)(\d+)\]\]/g;
-const nonBreakingSpace = "\u00a0";
-const wordJoiner = "\u2060";
-// Round Powerline caps require glyph support from the terminal or its font.
-const leftCap = "\uE0B6";
-const rightCap = "\uE0B4";
-const palette: readonly ThemeColor[] = [
-  "accent",
-  "mdLink",
-  "success",
-  "mdHeading",
-  "error",
-  "syntaxString",
-  "syntaxVariable",
-  "thinkingXhigh",
-];
 
 const cardInset = 6; // Two borders and two spaces on each side.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: OSC 8 uses literal ESC and BEL bytes.
@@ -45,14 +12,12 @@ const osc8 = /\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 /** Preview metadata for a wikilink to one Markdown file. */
 export interface WikiNote {
   path: string;
-  color: ThemeColor;
 }
 
 /** Preview metadata for a bare filename that matches multiple Markdown files. */
 interface WikiGroup {
   filename: string;
   sources: readonly string[];
-  color: ThemeColor;
 }
 
 /** The file or group to show when hovering over a wikilink chip. */
@@ -68,93 +33,6 @@ export function hoverLinkLine(line: string): string {
 
 function displayPath(path: string): string {
   return stripTerminalSequences(path).replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, " ");
-}
-
-function themeColorForKey(key: string): ThemeColor {
-  const hash = createHash("sha256").update(key.normalize("NFC"), "utf8").digest();
-  return palette[hash[0] % palette.length];
-}
-
-function textColorForFill(fill: Color): Color {
-  // Compare black and white against the fill's relative luminance (WCAG 2.2).
-  const { r, g, b } = colorToRgb(fill);
-  const linear = (channel: number) => {
-    const srgb = Math.round(channel) / 255;
-    return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
-  };
-  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-  const blackContrast = (luminance + 0.05) / 0.05;
-  const whiteContrast = 1.05 / (luminance + 0.05);
-  const channel = blackContrast >= whiteContrast ? 0 : 255;
-  return rgbColor(channel, channel, channel);
-}
-
-function renderChip(
-  label: string,
-  fill: Color,
-  url: string | undefined,
-  groupId: string | undefined,
-  userBackground?: string,
-): string {
-  const caps = getCapabilities();
-  const mode = caps.trueColor ? "truecolor" : "256color";
-  const edge = foregroundAnsi(fill, mode);
-  const body = backgroundAnsi(fill, mode) + foregroundAnsi(textColorForFill(fill), mode);
-  const resetFill = userBackground || "\x1b[49m";
-  const padded = `${nonBreakingSpace}${label.replace(/ /g, nonBreakingSpace)}${nonBreakingSpace}`;
-  const chip = `${edge}${leftCap}${body}${padded}${resetFill}${edge}${rightCap}\x1b[39m`;
-  // An empty OSC 8 URL leaves a group without a primary file non-clickable.
-  const styled = !caps.hyperlinks
-    ? chip
-    : groupId
-      ? `\x1b]8;id=${groupId};${url ?? ""}\x1b\\${chip}\x1b]8;;\x1b\\`
-      : url
-        ? hyperlink(chip, url)
-        : chip;
-  // An inline code span carries the ANSI through Markdown without parsing the label.
-  let ticks = 1;
-  for (const [run] of styled.matchAll(/`+/g)) ticks = Math.max(ticks, run.length + 1);
-  const fence = "`".repeat(ticks);
-  return fence + styled + fence;
-}
-
-function transformLinks(markdown: string, render: (body: string) => string | undefined): string {
-  if (!markdown.includes("[[")) return markdown;
-
-  // Match by occurrence, not label: the same text can be inside prose and code.
-  let marker = "\uE000";
-  while (markdown.includes(marker)) marker += "\uE000";
-  let index = 0;
-  const tagged = markdown.replace(wikilinks, () => `[[${marker}${index++}]]`);
-  if (!index) return markdown;
-
-  const prose = new Set<number>();
-  const otherLinks = new Set<number>();
-  parser.walkTokens(parser.lexer(tagged), (token) => {
-    const indices =
-      token.type === "link" || token.type === "image"
-        ? otherLinks
-        : token.type === "text" && !token.tokens && !token.escaped
-          ? prose
-          : undefined;
-    if (!indices) return;
-    for (const [, prefix, id] of token.raw.matchAll(taggedLinks)) {
-      if (prefix === marker) indices.add(Number(id));
-    }
-  });
-
-  index = 0;
-  return markdown.replace(wikilinks, (original, body: string, offset: number) => {
-    const id = index++;
-    if (!prose.has(id) || otherLinks.has(id)) return original;
-    const chip = render(body);
-    if (chip === undefined) return original;
-
-    // Keep the chip fence and an adjacent backtick run separate without a visible space.
-    const before = markdown[offset - 1] === "`" ? wordJoiner : "";
-    const after = markdown[offset + original.length] === "`" ? wordJoiner : "";
-    return before + chip + after;
-  });
 }
 
 function renderWikiBody(excerpt: PreviewExcerpt, theme: Theme, width: number): string[] {
@@ -200,7 +78,6 @@ function clipBody(lines: string[], clipped: boolean, theme: Theme, width: number
 
 /** Renders one Markdown note, omitting its YAML front matter. */
 export function renderWikiPreview(
-  note: WikiNote,
   excerpt: PreviewExcerpt,
   theme: Theme,
   width: number,
@@ -210,7 +87,7 @@ export function renderWikiPreview(
   const rendered = renderWikiBody(excerpt, theme, bodyWidth);
   if (!rendered.length) return undefined;
 
-  const caption = `${theme.fg(note.color, "▎")} ${theme.fg("muted", excerpt.filename)}`;
+  const caption = `${theme.fg("accent", "▎")} ${theme.fg("muted", excerpt.filename)}`;
   const spacer = height >= 7 ? [""] : [];
   const body = clipBody(rendered, excerpt.clipped, theme, bodyWidth, height - 3 - spacer.length);
   return renderWikiCard([caption, ...spacer, ...body], theme, width);
@@ -230,10 +107,10 @@ export function renderWikiGroupPreview(
   width: number,
   height: number,
 ): { width: number; lines: string[] } {
-  const { filename, sources, color } = group;
+  const { filename, sources } = group;
   const count = excerpts.length;
   const remaining = sources.length - count;
-  const content = [`${theme.fg(color, "▎")} ${theme.fg("muted", displayPath(filename))}`];
+  const content = [`${theme.fg("accent", "▎")} ${theme.fg("muted", displayPath(filename))}`];
   const bodyWidth = width - cardInset - 2;
   if (count > 0) {
     const limit = Math.min(2, Math.floor((height - 3 - Number(remaining > 0)) / count) - 1);
@@ -261,7 +138,13 @@ function renderWikiCard(content: string[], theme: Theme, width: number): { width
   return { width: cardWidth, lines: renderPreviewFrame(theme, content, cardWidth, 2, true) };
 }
 
-/** Creates display-only wikilinks and tracks their previews for one session. */
+interface WikiBadge {
+  label: string;
+  href?: string;
+  groupId?: string;
+}
+
+/** Tracks wikilink targets and their previews while explicitly enabled in a session. */
 export function createWikilinks(root: string, onChange: () => void) {
   const previews = new Map<string, WikiPreview>();
   const index = createFileIndex(root, () => {
@@ -270,33 +153,26 @@ export function createWikilinks(root: string, onChange: () => void) {
   });
   return {
     findPreview: (href: string) => previews.get(href),
-    render(markdown: string, theme: Theme, userMessage: boolean): string {
-      return transformLinks(markdown, (body) => {
-        const [name, alias] = body.split("|", 2);
-        const target = name.replace(/\\$/, "").split("#", 1)[0].trim();
-        if (!target) return undefined;
-        const { path, sources } = index.find(target) ?? {};
-        const filename = sources ? posix.basename(sources[0]) : undefined;
-        const displayTarget = path ?? filename;
-        const label = displayPath(
-          alias?.trim() || (displayTarget ? posix.basename(displayTarget, ".md") : target),
-        ).trim();
-        if (!label) return undefined;
-
-        const color = themeColorForKey(path ?? filename ?? target);
-        const absolutePath = path ? resolve(root, path) : undefined;
-        const url = absolutePath ? pathToFileURL(absolutePath).href : undefined;
-        let groupId: string | undefined;
-        if (sources && filename) {
-          groupId = `pi-inline-markup-${Buffer.from(filename).toString("base64url")}`;
-          const href = `wiki:${groupId}`;
-          if (!previews.has(href)) previews.set(href, { filename, sources, color });
-        } else if (url && absolutePath && /\.md$/i.test(absolutePath) && !previews.has(url)) {
-          previews.set(url, { path: absolutePath, color });
-        }
-        const userBackground = userMessage ? theme.getBgAnsi("userMessageBg") : undefined;
-        return renderChip(label, theme.colors[color], url, groupId, userBackground);
-      });
+    resolve(body: string): WikiBadge | undefined {
+      const [name, alias] = body.split("|", 2);
+      const target = name.replace(/\\$/, "").split("#", 1)[0].trim();
+      if (!target) return undefined;
+      const { path, sources } = index.find(target) ?? {};
+      const filename = sources ? posix.basename(sources[0]) : undefined;
+      const displayTarget = path ?? filename;
+      const label = alias?.trim() || (displayTarget ? posix.basename(displayTarget, ".md") : target);
+      const absolutePath = path ? resolve(root, path) : undefined;
+      const href = absolutePath ? pathToFileURL(absolutePath).href : undefined;
+      if (sources && filename) {
+        const groupId = `pi-inline-markup-${Buffer.from(filename).toString("base64url")}`;
+        const key = `wiki:${groupId}`;
+        if (!previews.has(key)) previews.set(key, { filename, sources });
+        return { label, href, groupId };
+      }
+      if (href && absolutePath && /\.md$/i.test(absolutePath) && !previews.has(href)) {
+        previews.set(href, { path: absolutePath });
+      }
+      return { label, href };
     },
     dispose() {
       index.dispose();
