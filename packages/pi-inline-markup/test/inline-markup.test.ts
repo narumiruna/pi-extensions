@@ -1,7 +1,7 @@
 import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import {
   type BeforeAgentStartEvent,
   type ExtensionAPI,
@@ -31,18 +31,22 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.ts";
+import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "../src/filelinks.js";
 
 vi.mock("node:fs/promises", { spy: true });
-vi.mock("./filelinks.ts", { spy: true });
+vi.mock("../src/filelinks.js", { spy: true });
 
 let fixtureRoot: string;
-let extension: typeof import("./index.ts").default;
+let extension: typeof import("../src/index.js").default;
 
 beforeAll(async () => {
   fixtureRoot = await mkdtemp(join(tmpdir(), "pi-inline-markup-"));
-  vi.stubEnv("PI_CODING_AGENT_DIR", fixtureRoot);
-  ({ default: extension } = await import("./index.ts"));
+  for (const directory of [".", "docs", "examples"]) {
+    await mkdir(join(fixtureRoot, directory), { recursive: true });
+    await writeFile(join(fixtureRoot, directory, "README.md"), "# Preview fixture\n");
+  }
+  vi.stubEnv("PI_CODING_AGENT_DIR", join(fixtureRoot, ".agent"));
+  ({ default: extension } = await import("../src/index.js"));
   initTheme("dark");
   setCapabilityOverrides({ hyperlinks: true });
 });
@@ -105,9 +109,18 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
       return transform(markdown, { messageType, isStreaming: false, availableWidth: 80 });
     },
     async promptSections(mode: ExtensionContext["mode"] = "tui") {
-      const systemPromptOptions = {
+      const systemPromptOptions: BeforeAgentStartEvent["systemPromptOptions"] = {
+        cwd: ctx.cwd,
+        selectedTools: [],
+        hiddenTools: [],
+        toolSnippets: {},
+        toolGuidelines: {},
+        promptGuidelines: [],
+        appendSystemPrompt: "",
         sections: { other: "Keep this section." },
-      } as BeforeAgentStartEvent["systemPromptOptions"];
+        contextFiles: [],
+        skills: [],
+      };
       await beforeAgentStart(
         { type: "before_agent_start", messageType: "user", prompt: "test", systemPrompt: "", systemPromptOptions },
         { ...ctx, mode },
@@ -134,7 +147,7 @@ test("adds a stable badge hint only while the TUI widget is active", async ({ on
   expect(await session.promptSections()).toEqual({ other: "Keep this section." });
 });
 
-test("changes only wikilinks and keeps the system prompt stable across toggles", async ({ onTestFinished }) => {
+test("resolves wikilinks in the session workspace and leaves the prompt unchanged", async ({ onTestFinished }) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const session = await startSession();
   onTestFinished(session.stop);
@@ -159,8 +172,8 @@ test("changes only wikilinks and keeps the system prompt stable across toggles",
   await ready.promise;
 
   const [linked] = new Markdown(session.render(plain), 0, 0, getMarkdownTheme()).render(80);
-  const href = new URL("../../../README.md", import.meta.url).href;
-  expect(getOsc8LinkAtColumn(linked, 0)).toBe(href);
+  expect(scan).toHaveBeenNthCalledWith(1, fixtureRoot, { withFileTypes: true });
+  expect(getOsc8LinkAtColumn(linked, 0)).toBe(pathToFileURL(join(fixtureRoot, "README.md")).href);
   expect(stripTerminalSequences(linked).trimEnd()).toBe("\uE0B6\u00a0Guide\u00a0\uE0B4");
   expect(session.render(normalBadge)).toBe(explicit);
   expect(await session.promptSections()).toEqual(prompt);
@@ -197,8 +210,8 @@ test.for(["show", "cancel"] as const)(
     session.render("[[README]]");
     await ready.promise;
     const screen = new Markdown(session.render("[[README]]"), 0, 0, getMarkdownTheme()).render(80);
-    const rootReadme = new URL("../../../README.md", import.meta.url);
-    expect(getOsc8LinkAtColumn(screen[0], 0)).toBe(rootReadme.href);
+    const rootReadme = join(fixtureRoot, "README.md");
+    expect(getOsc8LinkAtColumn(screen[0], 0)).toBe(pathToFileURL(rootReadme).href);
     vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
 
     const pending = Promise.withResolvers<Awaited<ReturnType<typeof readExcerpt>>>();
@@ -209,8 +222,8 @@ test.for(["show", "cancel"] as const)(
     await vi.advanceTimersByTimeAsync(250);
     expect(read).toHaveBeenCalledTimes(3);
     const [[, firstPath, signal]] = read.mock.calls;
-    expect(firstPath).toBe(fileURLToPath(rootReadme));
-    expect(read.mock.calls.every(([, , other]) => other === signal)).toBe(true);
+    expect(firstPath).toBe(rootReadme);
+    expect(read.mock.calls.every(([root, , other]) => root === fixtureRoot && other === signal)).toBe(true);
     const excerpt = { filename: "README.md", text: "---\nkey: hidden\n---\n# Preview body\n", clipped: false };
 
     if (action === "show") {

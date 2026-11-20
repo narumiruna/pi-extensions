@@ -1,10 +1,8 @@
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
-import { createHoverPreview } from "./hover-preview.ts";
-import { renderInlineMarkup } from "./inline-markup.ts";
-import { createWikilinks } from "./wikilinks.ts";
+import { createHoverPreview } from "./hover-preview.js";
+import { renderInlineMarkup } from "./inline-markup.js";
+import { createWikilinks } from "./wikilinks.js";
 
 const WIDGET_KEY = "pi-inline-markup.preview";
 
@@ -17,8 +15,7 @@ interface Session {
   menu?: AbortController;
 }
 
-export default function inlineMarkupExtension(pi: ExtensionAPI): void {
-  const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+export function inlineMarkupExtension(pi: ExtensionAPI): void {
   let session: Session | undefined;
 
   pi.on("session_start", (_event, { mode, cwd, ui }) => {
@@ -26,7 +23,7 @@ export default function inlineMarkupExtension(pi: ExtensionAPI): void {
     ui.setWidget(
       WIDGET_KEY,
       (tui, theme) => {
-        const preview = createHoverPreview(tui, theme, cwd, checkout, (href) => current.wiki?.findPreview(href));
+        const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href));
         const current: Session = { cwd, theme, tui, dismissPreview: preview.dismiss };
         session = current;
         const widget = {
@@ -74,7 +71,7 @@ export default function inlineMarkupExtension(pi: ExtensionAPI): void {
 
         current.dismissPreview();
         if (choice === "On") {
-          current.wiki = createWikilinks(checkout, () => {
+          current.wiki = createWikilinks(current.cwd, () => {
             current.tui.invalidate();
             current.tui.requestRender();
           });

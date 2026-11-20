@@ -11,8 +11,8 @@ import {
   rgbColor,
   stripTerminalSequences,
 } from "@earendil-works/pi-tui";
-import { resolveLinkPath } from "./filelinks.ts";
-import type { createWikilinks } from "./wikilinks.ts";
+import { resolveLinkPath } from "./filelinks.js";
+import type { createWikilinks } from "./wikilinks.js";
 
 const START =
   /(?<![![])\[\[\[([^[\]\r\n]+)\]\]\]\(|(?<![![])\[\[([^[\]\r\n]+)\]\](?![\](])|\[(?:\\[^\r\n]|[^[\]\\\r\n])+\]\(/g;
