@@ -53,6 +53,7 @@ const enabledBySession = new WeakMap<ExtensionContext["sessionManager"], boolean
 const publishersBySession = new WeakMap<ExtensionContext["sessionManager"], StatusBinding>();
 const statusesBySession = new WeakMap<ExtensionContext["sessionManager"], StatusValue>();
 const connectionStatusBySession = new WeakMap<ExtensionContext["sessionManager"], StatusValue>();
+const recoveryStatusBySession = new WeakMap<ExtensionContext["sessionManager"], StatusValue>();
 
 interface StatusValue {
   value: string;
@@ -145,6 +146,7 @@ export function createSyncStatusPublisher(events: ExtensionAPI["events"] | undef
           publishersBySession.delete(sessionManager);
           statusesBySession.delete(sessionManager);
           connectionStatusBySession.delete(sessionManager);
+          recoveryStatusBySession.delete(sessionManager);
           current = undefined;
         }
         // Retire before optional callbacks; withdrawal observers cannot revive first-use binding.
@@ -223,6 +225,7 @@ export function configureSyncStatus(ctx: SyncStatusContext, enabled: boolean) {
   if (!enabled) {
     statusesBySession.delete(ctx.sessionManager);
     connectionStatusBySession.delete(ctx.sessionManager);
+    recoveryStatusBySession.delete(ctx.sessionManager);
     renderSyncStatus(ctx);
   }
 }
@@ -232,7 +235,11 @@ function renderSyncStatus(ctx: SyncStatusContext) {
   const { sessionManager } = ctx;
   const status = statusesBySession.get(sessionManager);
   const connection = connectionStatusBySession.get(sessionManager);
-  const current = status && status.presentation?.activity !== "idle" ? status : (connection ?? status);
+  const recovery = recoveryStatusBySession.get(sessionManager);
+  const activity = status?.presentation?.activity;
+  const normal = status && activity !== "idle" ? status : (connection ?? status);
+  // Recovery explains a transfer's wait, but must not obscure confirmed failures or review.
+  const current = activity === "blocked" || activity === "review" ? status : (recovery ?? normal);
   ctx.ui.setStatus(STATUS_KEY, current?.value);
   publishersBySession.get(sessionManager)?.update(current?.value, current?.presentation);
 }
@@ -255,17 +262,30 @@ export function setSyncStatus(
   renderSyncStatus(ctx);
 }
 
-/** Connection repair never clears or replaces a transfer or review status. */
-export function showSyncConnectionStatus(ctx: SyncStatusContext, value: string, presentation: SyncStatusPresentation) {
+function showOwnedStatus(
+  statuses: WeakMap<ExtensionContext["sessionManager"], StatusValue>,
+  ctx: SyncStatusContext,
+  value: string,
+  presentation: SyncStatusPresentation,
+) {
   if (!ctx.hasUI || enabledBySession.get(ctx.sessionManager) === false) return (_redraw?: boolean) => {};
   const { sessionManager } = ctx;
   const status: StatusValue = { value };
-  connectionStatusBySession.set(sessionManager, status);
+  statuses.set(sessionManager, status);
   status.presentation = statusPresentation(presentation);
-  if (connectionStatusBySession.get(sessionManager) === status) renderSyncStatus(ctx);
+  if (statuses.get(sessionManager) === status) renderSyncStatus(ctx);
   return (redraw = true) => {
-    if (connectionStatusBySession.get(sessionManager) !== status) return;
-    connectionStatusBySession.delete(sessionManager);
+    if (statuses.get(sessionManager) !== status) return;
+    statuses.delete(sessionManager);
     if (redraw) renderSyncStatus(ctx);
   };
+}
+
+/** Connection repair never clears or replaces a transfer or review status. */
+export function showSyncConnectionStatus(ctx: SyncStatusContext, value: string, presentation: SyncStatusPresentation) {
+  return showOwnedStatus(connectionStatusBySession, ctx, value, presentation);
+}
+
+export function showSyncQueueReleaseRecovery(ctx: SyncStatusContext) {
+  return showOwnedStatus(recoveryStatusBySession, ctx, "sync recovering", { activity: "retry", reason: "temp" });
 }

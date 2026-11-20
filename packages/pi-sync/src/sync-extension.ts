@@ -111,11 +111,11 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     },
   });
   pi.on("session_start", async (_event, ctx) => {
-    const releaseStatus = status.start(ctx);
     const previousClient = owner;
     shutdownAbort?.abort(new DOMException("Session replaced", "AbortError"));
     shutdownAbort = undefined;
     sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
+    const releaseStatus = status.start(ctx);
     sessionAbort = new AbortController();
     const signal = sessionAbort.signal;
     const client = bindPiDaemonClient(ctx, signal, publishTimings);
@@ -160,7 +160,10 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     });
     try {
       const ready = await initialization;
-      if (ready === false) releaseStatus();
+      if (ready === false) {
+        client.disableQueueReleaseUI();
+        releaseStatus();
+      }
       if (
         ready &&
         !signal.aborted &&
@@ -172,6 +175,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
           check.start(ctx, signal, ready);
         });
     } catch (error) {
+      client.disableQueueReleaseUI();
       releaseStatus();
       throw error;
     }

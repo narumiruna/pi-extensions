@@ -30,9 +30,15 @@ import type { CommandOptions } from "../commands/command-types.js";
 import type { StartupTimingPublisher } from "../sync/startup-timings.js";
 import { errorMessage, SyncDecisionRequiredError } from "../sync/sync-errors.js";
 import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
-import { type SyncStatusPresentation, setSyncStatus, showSyncConnectionStatus } from "../ui/sync-status.js";
+import {
+  type SyncStatusPresentation,
+  setSyncStatus,
+  showSyncConnectionStatus,
+  showSyncQueueReleaseRecovery,
+} from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
+import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 
 const scope = new AsyncLocalStorage<{ client: PiDaemonClient; reload?: AbortController }>();
@@ -228,7 +234,25 @@ export class PiDaemonClient {
   private contactRepair?: { controller: AbortController; done: Promise<void> };
   private contactAttempt?: { error?: unknown };
   private contactFactsUnpublished = false;
-  private clearContactStatus?: (redraw?: boolean) => void;
+  private contactStatus?: { clear(redraw?: boolean): void; unavailable: boolean };
+  private releaseUIEnabled = true;
+  private runSignal?: AbortSignal;
+  private readonly releaseUI = createQueueReleaseUI(
+    () => {
+      const ctx = this.releaseContext();
+      if (ctx) return showSyncQueueReleaseRecovery(ctx);
+    },
+    () =>
+      this.releaseContext()?.ui.notify(
+        "Pi Sync could not confirm the file write queue release. Sync may be paused; check /sync daemon status before retrying.",
+        "warning",
+      ),
+  );
+  private readonly stopReleaseUI = () => {
+    // Withdraw while the SDK owner is still active, but never redraw through a replaced context.
+    this.releaseUIEnabled = false;
+    this.releaseUI.clear(Boolean(this.releaseContext(true)));
+  };
   private disposed = false;
   private disposing?: Promise<void>;
   private uiContext: ExtensionContext;
@@ -260,6 +284,7 @@ export class PiDaemonClient {
     if (!root) throw new Error("Agent directory is unavailable.");
     this.root = root;
     this.gate = new PiApplyGate(() => this.validate());
+    this.signal.addEventListener("abort", this.stopReleaseUI, { once: true });
   }
   validate() {
     this.signal.throwIfAborted();
@@ -314,6 +339,7 @@ export class PiDaemonClient {
   async pauseForSessionChange() {
     this.validate();
     this.paused = true;
+    this.stopReleaseUI();
     this.stopContactRepair(true);
     this.gate.cancelPending();
     this.pausing ??= (async () => {
@@ -429,8 +455,10 @@ export class PiDaemonClient {
               );
           },
           contact: (state) => this.observeContact(connection, state),
+          queueRelease: (event) => this.observeQueueRelease(connection, event),
           error: () => {
-            if (this.ownsContactUI()) this.showContactStatus("sync service unavailable", "blocked");
+            if (this.ownsContactUI() && connection.facts.hasUI && !this.releaseUI.retrying)
+              this.showContactStatus("sync service unavailable", "blocked", true);
           },
         });
         this.partialConnection = connection;
@@ -475,18 +503,40 @@ export class PiDaemonClient {
       !this.signal.aborted && !this.disposed && !this.closing && !this.paused && clients.get(this.manager) === this
     );
   }
-  private showContactStatus(text: string, activity: "retry" | "blocked") {
-    const previous = this.clearContactStatus;
-    this.clearContactStatus = showSyncConnectionStatus(this.ctx, text, {
-      activity,
-      reason: activity === "retry" ? "temp" : "repair",
-    });
-    previous?.();
+  private releaseContext(cleanup = false) {
+    if (clients.get(this.manager) !== this) return;
+    if (!cleanup && (!this.releaseUIEnabled || !this.ownsContactUI() || this.busy.has("shutdown"))) return;
+    try {
+      this.ctx.isIdle(); // Also verifies the SDK context has not been retired.
+      if (this.ctx.hasUI && (this.ctx.mode === "tui" || this.ctx.mode === "rpc")) return this.ctx;
+    } catch {
+      // Detached cleanup can outlive its UI.
+    }
+  }
+  disableQueueReleaseUI() {
+    this.stopReleaseUI();
+  }
+  private observeQueueRelease(connection: DaemonConnection, event: QueueReleaseEvent) {
+    if (connection !== this.connection || !connection.facts.hasUI || !this.releaseContext()) return;
+    if (event.state === "retrying" && this.contactStatus?.unavailable) this.clearConnectionStatus();
+    this.releaseUI.observe(event, this.busy.has("command"), !this.runSignal || this.runSignal.aborted);
+  }
+  private showContactStatus(text: string, activity: "retry" | "blocked", unavailable = false) {
+    const previous = this.contactStatus;
+    this.contactStatus = {
+      clear: showSyncConnectionStatus(this.ctx, text, { activity, reason: activity === "retry" ? "temp" : "repair" }),
+      unavailable,
+    };
+    previous?.clear();
+  }
+  private clearConnectionStatus(redraw = true) {
+    const status = this.contactStatus;
+    this.contactStatus = undefined;
+    status?.clear(redraw);
   }
   private stopContactRepair(redraw: boolean) {
     this.contactRepair?.controller.abort(new DOMException("Pi session is changing", "AbortError"));
-    this.clearContactStatus?.(redraw);
-    this.clearContactStatus = undefined;
+    this.clearConnectionStatus(redraw);
   }
   private observeContact(connection: DaemonConnection, state: ContactState) {
     if (connection !== this.connection || !this.ownsContactUI()) return;
@@ -494,7 +544,7 @@ export class PiDaemonClient {
       if (this.contactRepair || this.contactFactsUnpublished || connection.contactResumeState === "uncertain") return;
       this.clearRestoredContact();
     } else if (state === "expired" && connection.facts.hasUI && !this.contactAttempt && !this.contactRepair) {
-      if (this.gate.size || connection.hasPendingWork) return;
+      if (this.gate.size || connection.hasPendingWork || this.releaseUI.retrying) return;
       void this.resumeContact(connection).catch(() => {
         // The owning repair updates the status; a later command reports the error.
       });
@@ -503,8 +553,7 @@ export class PiDaemonClient {
   private clearRestoredContact() {
     this.contactAttempt = undefined;
     this.contactFactsUnpublished = false;
-    this.clearContactStatus?.();
-    this.clearContactStatus = undefined;
+    this.clearConnectionStatus();
   }
   private async resumeContact(connection: DaemonConnection) {
     this.validate();
@@ -642,13 +691,12 @@ export class PiDaemonClient {
     // The daemon directs reload only to the submitting client, and run() serializes its jobs.
     const request = reload ? { received: false } : undefined;
     this.reloadRequest = request;
+    const runSignal = signal ? AbortSignal.any([signal, this.signal]) : this.signal;
+    this.runSignal = runSignal;
+    const clearForeground = () => this.releaseUI.finishForeground(Boolean(this.releaseContext()));
+    runSignal.addEventListener("abort", clearForeground, { once: true });
     try {
-      const result = await connection.run(
-        operation,
-        payload,
-        signal ? AbortSignal.any([signal, this.signal]) : this.signal,
-        onCommit,
-      );
+      const result = await connection.run(operation, payload, runSignal, onCommit);
       if (request?.received && reload && !this.paused && !reload.signal.aborted && !signal?.aborted) {
         this.validate();
         this.pendingReload = reload;
@@ -673,6 +721,9 @@ export class PiDaemonClient {
       }
       throw error;
     } finally {
+      runSignal.removeEventListener("abort", clearForeground);
+      clearForeground();
+      this.runSignal = undefined;
       this.uiContext = this.ctx;
       this.reloadRequest = undefined;
     }
@@ -695,7 +746,10 @@ export class PiDaemonClient {
   async setBusy(reason: string, busy: boolean, publish = true) {
     this.validate();
     if (busy) this.busy.add(reason);
-    else this.busy.delete(reason);
+    else if (this.busy.delete(reason) && reason === "command") {
+      // Local command completion does not depend on publishing idle facts.
+      this.releaseUI.flushWarnings();
+    }
     if (publish) await this.update();
     this.validate();
   }
@@ -807,6 +861,8 @@ export class PiDaemonClient {
   async dispose(handoff?: ClientHandoff) {
     if (this.disposing) return this.disposing;
     this.closing = true;
+    this.signal.removeEventListener("abort", this.stopReleaseUI);
+    this.stopReleaseUI();
     this.stopContactRepair(false);
     this.disposing = (async () => {
       const connection = this.connection ?? this.partialConnection ?? (await this.connecting?.catch(() => undefined));

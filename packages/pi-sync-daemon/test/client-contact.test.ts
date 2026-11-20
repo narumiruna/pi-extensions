@@ -88,6 +88,65 @@ async function fixture(
   }
 }
 
+test("a full callback ledger still drains releases once and retires their cleanup records", async () => {
+  const release = releaseCallback();
+  const later = releaseCallback();
+  let phase: "pending" | "retired" | "older" | "next" = "pending";
+  let observations = 0;
+  const handled: string[] = [];
+  const answers: string[] = [];
+  let unconfirmed = false;
+  await fixture(
+    ({ method, params }) => {
+      if (method === "poll") {
+        if (phase === "retired") return poll("active", { cursor: 2 });
+        if (phase === "next") return poll("active", { cursor: 3, callbacks: [later] });
+        return poll("active", { cursor: 1, callbacks: [release] });
+      }
+      if (method === "answer") {
+        assert.equal(params.value, true);
+        answers.push(String(params.id));
+        // Keep the first callback pending to exercise deduplication after the task ends.
+        return params.id === release.id ? failure("Cannot acknowledge") : { result: {} };
+      }
+      return poll("active");
+    },
+    async (client, calls) => {
+      // Seed completed history to reach the production limit without thousands of IPC calls.
+      const history = Reflect.get(client, "completedCallbacks") as Set<string>;
+      for (let index = 0; index < 4096; index++) history.add(String(index));
+      await client.attach();
+      await vi.waitFor(() => assert.ok(unconfirmed));
+      await assert.rejects(client.run("write", {}), /unavailable/u);
+      assert.ok(!calls.some(({ method }) => method === "submit"));
+      const observePoll = async () => {
+        const previous = observations;
+        await vi.waitFor(() => assert.ok(observations > previous));
+      };
+      await observePoll();
+      assert.deepEqual(answers, [release.id]);
+      phase = "retired";
+      await observePoll();
+      phase = "older";
+      await observePoll();
+      phase = "next";
+      await vi.waitFor(() => assert.deepEqual(answers, [release.id, later.id]));
+      assert.deepEqual(handled, [release.id, later.id]);
+      assert.equal((Reflect.get(client, "completedReleases") as Set<string>).has(release.id), false);
+    },
+    {
+      callback: async ({ id }) => {
+        handled.push(id);
+        return true;
+      },
+      queueRelease: ({ state }) => {
+        if (state === "unconfirmed") unconfirmed = true;
+      },
+      contact: () => observations++,
+    },
+  );
+});
+
 test("poll notifies repeated contact states only after admission but serves cleanup during attach", async () => {
   const queueRelease = releaseCallback();
   const admitted = Promise.withResolvers<void>();
@@ -127,6 +186,221 @@ test("poll notifies repeated contact states only after admission but serves clea
       await vi.waitFor(() => assert.equal(observations.at(-1), "inactive"));
     },
     { contact: (state) => observations.push(state) },
+  );
+});
+
+test.each(["request", "response", "response with stale retry"] as const)(
+  "a lost queue-release %s does not replay the job or callback",
+  async (drop) => {
+    let job: string | undefined;
+    let released = false;
+    let answers = 0;
+    let handled = 0;
+    let finished = false;
+    const callback = { ...releaseCallback(), payload: { reservation: randomUUID() } };
+    let signal: AbortSignal | undefined;
+    if (drop === "response") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    await fixture(
+      async ({ method, params }, response) => {
+        if (method === "submit") job = String(params.id);
+        if (method === "poll") {
+          // Force a stale retry in one case by delaying the removal snapshot.
+          const visible = released && (drop === "response" || finished);
+          return poll("active", {
+            cursor: visible ? 2 : 1,
+            callbacks: job && !visible ? [{ ...callback, job }] : [],
+            ...(params.job === job &&
+              job && {
+                job: visible ? { id: job, phase: "done", result: "original" } : { id: job, phase: "running" },
+              }),
+          });
+        }
+        if (method === "answer") {
+          answers++;
+          assert.deepEqual(params, { client: params.client, id: callback.id, value: true });
+          if (answers === 1) {
+            released = drop !== "request";
+            if (drop === "response") {
+              // Only the newer poll confirms removal. The answer gets no response.
+              await new Promise<void>((resolve) => response.once("close", resolve));
+            } else response.destroy();
+          } else if (released) {
+            return failure("Stale or foreign callback response.");
+          } else {
+            released = true;
+            return { result: {} };
+          }
+        }
+        if (method === "cancel") return { result: {} };
+        return poll("active");
+      },
+      async (client, calls) => {
+        await client.attach();
+        const result = client.run("fixture", {});
+        try {
+          // Drive polling without reaching the two-second answer attempt timeout.
+          // The other cases use real time to exercise the retry path.
+          await vi.waitFor(async () => {
+            assert.equal(await result, "original");
+            assert.ok(released && (drop === "response" || finished));
+          });
+        } catch (error) {
+          await client.dispose();
+          throw error;
+        }
+        assert.equal(handled, 1);
+        assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
+        if (drop === "response") assert.equal(signal?.aborted, true);
+        assert.equal(answers, drop === "response" ? 1 : 2);
+      },
+      {
+        callback: async (_, callbackSignal) => {
+          signal = callbackSignal;
+          handled++;
+          return true;
+        },
+        queueRelease: ({ state }) => {
+          if (state === "finished") finished = true;
+        },
+      },
+    ).finally(() => {
+      if (drop === "response") vi.useRealTimers();
+    });
+  },
+);
+
+test.each(["failed", "rejected", "exhausted", "detached"] as const)(
+  "queue release delivery handles %s without re-running the callback",
+  async (scenario) => {
+    const release = releaseCallback();
+    const clock = vi.spyOn(performance, "now");
+    const states: string[] = [];
+    let answers = 0;
+    let callbacks = 0;
+    const confirmed = Promise.withResolvers<void>();
+    try {
+      await fixture(
+        async ({ method, params }, response) => {
+          if (method === "detach" && scenario === "detached") await confirmed.promise;
+          if (method === "poll") return poll(undefined, { callbacks: [release] });
+          if (method === "answer") {
+            answers++;
+            assert.equal(params.id, release.id);
+            if (scenario === "failed") {
+              assert.equal(typeof params.error, "string");
+              return { result: {} };
+            }
+            assert.equal(params.value, true);
+            if (scenario === "rejected") return failure("Rejected");
+            if (scenario === "exhausted") clock.mockReturnValue(performance.now() + 26_000);
+            if (answers === 1) response.destroy();
+            else return { result: {} };
+          }
+          return poll();
+        },
+        async (client) => {
+          if (scenario === "detached") {
+            // A detached recovery has no attach or foreground context, but still polls to drain.
+            await client.dispose();
+            assert.deepEqual(states, ["retrying", "finished"]);
+          } else {
+            await client.attach();
+            await vi.waitFor(() => assert.equal(states.at(-1), "unconfirmed"));
+          }
+          assert.equal(callbacks, 1);
+          assert.equal(answers, scenario === "detached" ? 2 : 1);
+          assert.equal(states.includes("finished"), scenario === "detached");
+        },
+        {
+          callback: async () => {
+            callbacks++;
+            if (scenario === "failed") throw new Error("release failed");
+            return true;
+          },
+          queueRelease: ({ state }) => {
+            states.push(state);
+            if (state !== "retrying") confirmed.resolve();
+          },
+        },
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
+
+test("an old background poll cannot cancel a newer queue-release delivery", async () => {
+  const release = releaseCallback();
+  const oldPoll = Promise.withResolvers<void>();
+  const oldPollEntered = Promise.withResolvers<void>();
+  const admitPoll = Promise.withResolvers<void>();
+  const allowAnswer = Promise.withResolvers<void>();
+  let backgroundPolls = 0;
+  let consumed = false;
+  let answers = 0;
+  let handled = 0;
+  let signal: AbortSignal | undefined;
+  let job: string | undefined;
+  await fixture(
+    async ({ method, params }, response) => {
+      if (method === "submit") job = String(params.id);
+      if (method === "poll" && !params.job) {
+        backgroundPolls++;
+        if (backgroundPolls === 1) {
+          await admitPoll.promise;
+          return poll("active");
+        }
+        if (backgroundPolls === 2) {
+          oldPollEntered.resolve();
+          await oldPoll.promise;
+          return poll("expired", { cursor: 1 });
+        }
+      }
+      if (method === "answer") {
+        answers++;
+        if (answers === 1) response.destroy();
+        else return { result: {} };
+      }
+      if (method === "poll" && job) {
+        return poll("active", {
+          cursor: answers === 2 ? 3 : 2,
+          callbacks: answers === 2 ? [] : [{ ...release, job }],
+          job: answers === 2 ? { id: job, phase: "done", result: true } : { id: job, phase: "running" },
+        });
+      }
+      return poll("active", { cursor: 1 });
+    },
+    async (client) => {
+      try {
+        await client.attach();
+        admitPoll.resolve();
+        await oldPollEntered.promise;
+        const result = client.run("fixture", {});
+        void result.catch(() => {});
+        await vi.waitFor(() => assert.ok(consumed));
+        assert.equal(signal?.aborted, false);
+        allowAnswer.resolve();
+        await vi.waitFor(() => assert.equal(answers, 2));
+        assert.equal(await result, true);
+        assert.equal(handled, 1);
+      } finally {
+        admitPoll.resolve();
+        oldPoll.resolve();
+        allowAnswer.resolve();
+      }
+    },
+    {
+      callback: async (_, callbackSignal) => {
+        signal = callbackSignal;
+        handled++;
+        oldPoll.resolve();
+        await allowAnswer.promise;
+        return true;
+      },
+      contact: (state) => {
+        if (state === "expired") consumed = true;
+      },
+    },
   );
 });
 

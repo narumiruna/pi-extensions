@@ -169,6 +169,18 @@ Acquire target queues in deterministic client-ID and canonical-target order. Eac
 
 Batch reservations cover the transaction, not only each rename. `Execution.withParticipants()` fences attach publication from the peer snapshot through every grant, nested write, and acknowledged release. Nested reservations share that fence instead of reacquiring it. An attach queued behind an apply cannot finish startup until the reservation ends; the next batch includes that client. Cancelled waiters cannot publish later, and shutdown drains admission. Attach has no idle request timeout: a legitimate long apply must not let startup escape the fence. Transport disconnection cancels queued admission, and the Pi adapter pauses or disposes its partial connection without waiting for attach to finish. Other local requests retain their timeout. Monitoring hooks run outside the fence because they can await a queued background reservation.
 
+When Pi successfully releases a queue, `DaemonConnection` can resend the same
+`answer` after a transient local transport failure. It does not rerun the
+release callback, replay the job, or switch owners. The original daemon
+queue deadline and admission fence stay in force. A newer poll that no longer
+lists the callback, or a stale-answer rejection, ends delivery without
+proving that the job succeeded. Explicit release failures are not retried.
+If the connection reaches its callback history limit, it blocks new work but
+still drains pending queue releases. It keeps their completed IDs only until
+a newer daemon snapshot no longer lists them.
+The optional local `queueRelease` observer reports delivery activity only;
+there is no v1 wire change.
+
 Nested writes retain the transaction's queue ownership. Validate paths and canonical parents before reservation and recheck session protection and preimages after every await that can change them. The daemon's own Pi queue alone is insufficient.
 
 A queue grant coordinates access; it does not authorize a filesystem write. The engine owns destination selection, transfer review, path preflight, and session protection. A reviewed session destination can be outside the agent directory and every participant's current session root. Each client must reserve those bounded absolute canonical targets without imposing a second current-root policy. Otherwise a directional root transition or a peer with a different session root can block an otherwise valid transfer.
