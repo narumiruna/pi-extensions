@@ -187,6 +187,7 @@ test.for([true, false])(
       [`[[[rename plan](${relative})]]`, relative, "\uE0B6\u00a0rename\u00a0plan\u00a0\uE0B4"],
       [`[[[rename plan]]](${href})`, href, "\uE0B6\u00a0rename\u00a0plan\u00a0\uE0B4"],
       ["[Workspace](./README.md)", "./README.md", "📄\u00a0Workspace"],
+      ["[Photo](../plans/image.png)", "../plans/image.png", "🖼️\u00a0Photo"],
     ]) {
       const line = session.link(source);
       expect(stripTerminalSequences(line).trimEnd()).toBe(label);
