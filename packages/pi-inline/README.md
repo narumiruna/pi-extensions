@@ -15,33 +15,29 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 
 Pi extensions run with your user permissions. Load only code you trust.
 
-`@narumitw/pi-inline` is not yet published to npm. From the repository root,
-install dependencies and try it without a build:
-
-```bash
-npm install
-pi -e ./packages/pi-inline
-```
-
-To keep this checkout installed:
-
-```bash
-pi install ./packages/pi-inline
-```
-
-After the first npm release, install or try it with:
+Install from npm or try it for one Pi session:
 
 ```bash
 pi install npm:@narumitw/pi-inline
 pi -e npm:@narumitw/pi-inline
 ```
 
+For a local checkout, install dependencies from the repository root and try the
+extension without a build:
+
+```bash
+npm install
+pi -e ./packages/pi-inline
+```
+
+To keep this checkout installed, run `pi install ./packages/pi-inline`.
+
 ### Migrate from pi-inline-markup
 
-`pi update` does not switch to the new npm name. After the first release, run
+`pi update` does not switch to the new npm name. Run
 `pi remove npm:@narumitw/pi-inline-markup` in the original scope, then run
-`pi install npm:@narumitw/pi-inline` in that same scope. Add `-l` to both commands for a
-project install.
+`pi install npm:@narumitw/pi-inline` in the same scope. Add `-l` to both commands
+for a project install.
 
 If you load the old checkout path, replace it with `./packages/pi-inline`.
 Remove any explicit entry for the former `.pi/extensions/pi-inline-markup/`
@@ -116,15 +112,6 @@ session history.
   ratio. The extension has no fixed source size limit, but the image decoder
   and available memory still set practical limits. If a preview is unavailable,
   you can still open the link.
-
-## 📋 First publication
-
-Maintainers must review the regenerated Version PR for `@narumitw/pi-inline`
-before merging it and coordinate the merge with the approved first publication.
-Do not merge a Version PR that still targets `@narumitw/pi-inline-markup`. Leave
-the old npm package and its tags intact. After publication, verify the public
-version and npm-source loading, confirm npm Trusted Publishing for later releases,
-and update the install status in both READMEs.
 
 ## 🗂️ Package layout
 

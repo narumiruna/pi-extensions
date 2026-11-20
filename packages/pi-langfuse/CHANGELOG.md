@@ -1,5 +1,12 @@
 # @narumitw/pi-langfuse
 
+## 0.54.3
+
+### Patch Changes
+
+- ed7ea5a: Replace the Langfuse JavaScript SDK with OpenTelemetry's official tracing and OTLP HTTP packages. Keep the existing Pi settings and Langfuse trace schema.
+- 25eef0a: Update the runtime libraries for AgentFS shell execution, Langfuse trace export, Starship pattern matching, subagent ignore rules, and sync daemon XML parsing and glob matching.
+
 ## 0.54.2
 
 ### Patch Changes

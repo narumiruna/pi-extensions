@@ -1,5 +1,11 @@
 # @narumitw/pi-sync-daemon
 
+## 0.6.1
+
+### Patch Changes
+
+- 25eef0a: Update the runtime libraries for AgentFS shell execution, Langfuse trace export, Starship pattern matching, subagent ignore rules, and sync daemon XML parsing and glob matching.
+
 ## 0.6.0
 
 ### Minor Changes

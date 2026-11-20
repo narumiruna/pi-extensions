@@ -60,7 +60,7 @@ These extensions are part of my daily Pi setup:
 | [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
 | [`pi-files`](./packages/pi-files) | Browse and attach exact file snapshots, and independently restrict native edits to selected targets through `/files`. | [Build and install locally](./packages/pi-files#-install); not yet published |
 | [`pi-illustrate`](./packages/pi-illustrate) | Preview static SVG and Mermaid diagrams through Kitty graphics, with appearance-aware resizing and optional model images. | [Install locally](./packages/pi-illustrate#-install); not yet published |
-| [`pi-inline`](./packages/pi-inline) | Style badges and preview local file citations and optional wikilinks in the terminal. | [Install locally](./packages/pi-inline#-install); npm publication pending |
+| [`pi-inline`](./packages/pi-inline) | Style badges and preview local file citations and optional wikilinks in the terminal. | `pi install npm:@narumitw/pi-inline` |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
 | [`pi-plan-mode`](./packages/pi-plan-mode) | Codex-like, read-only `/plan` collaboration before implementation begins. | `pi install npm:@narumitw/pi-plan-mode` |
 | [`pi-subagents`](./packages/pi-subagents) | Start bounded background Pi jobs with authenticated main-agent messaging. | `pi install npm:@narumitw/pi-subagents` |
