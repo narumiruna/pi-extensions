@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { type BigIntStats, constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
@@ -21,14 +21,19 @@ export interface PreviewExcerpt {
   lineRange?: LineRange;
 }
 
-function workspacePath(root: string, path: string): string | undefined {
+export interface ExternalPreviewRoot {
+  path: string;
+  identity: Pick<BigIntStats, "dev" | "ino">;
+}
+
+export function relativePreviewPath(root: string, path: string): string | undefined {
   const local = relative(root, path);
   if (!local || isAbsolute(local) || local === ".." || local.startsWith(`..${sep}`)) return undefined;
   if (local.split(sep).includes("node_modules")) return undefined;
   return local;
 }
 
-export function resolveLinkPath(root: string, href: string): string | undefined {
+function localLinkPath(root: string, href: string): string | undefined {
   // Interpret Markdown destinations as filesystem paths, not as URLs to fetch.
   // Leave URI schemes (including file:) and protocol-relative links to Pi.
   const invalid = /[\\\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u;
@@ -38,11 +43,26 @@ export function resolveLinkPath(root: string, href: string): string | undefined 
     const path = decodeURIComponent(encoded);
     if (!path || path.startsWith("//") || invalid.test(path)) return undefined;
     if (/^[a-z][a-z\d+.-]*:/i.test(path) && !isAbsolute(path)) return undefined;
-    const target = resolve(root, path);
-    return workspacePath(root, target) ? target : undefined;
+    return resolve(root, path);
   } catch {
     return undefined; // Malformed percent escape.
   }
+}
+
+export function resolveLinkPath(root: string, href: string): string | undefined {
+  const path = localLinkPath(root, href);
+  return path && relativePreviewPath(root, path) ? path : undefined;
+}
+
+/** Classifies local links for display without checking whether a file exists. */
+export function classifyLinkPath(
+  root: string,
+  href: string,
+): { kind: "workspace" | "external"; path: string } | undefined {
+  const path = localLinkPath(root, href);
+  if (!path || path === resolve(root)) return undefined;
+  if (relativePreviewPath(root, path)) return { kind: "workspace", path };
+  return path.split(sep).includes("node_modules") ? undefined : { kind: "external", path };
 }
 
 export function parseLineRange(href: string): LineRange | undefined {
@@ -78,27 +98,48 @@ function selectLines(
   };
 }
 
-/** Opens a regular workspace file without following symlinks. The caller owns the handle. */
-export async function openPreviewFile(root: string, path: string, signal: AbortSignal) {
+function sameFile(a: ExternalPreviewRoot["identity"], b: ExternalPreviewRoot["identity"]): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+async function isCurrentRoot(root: ExternalPreviewRoot, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted || (await realpath(root.path)) !== root.path || signal.aborted) return false;
+  const stat = await lstat(root.path, { bigint: true });
+  return !signal.aborted && stat.isDirectory() && sameFile(stat, root.identity);
+}
+
+/** Opens a regular preview file without following symlinks. The caller owns the handle. */
+export async function openPreviewFile(root: string | ExternalPreviewRoot, path: string, signal: AbortSignal) {
   try {
-    const local = workspacePath(root, path);
+    const external = typeof root === "string" ? undefined : root;
+    const rootPath = typeof root === "string" ? root : root.path;
+    const local = relativePreviewPath(rootPath, path);
     if (!local || signal.aborted) return undefined;
-    const project = await realpath(root);
+    if (external && !(await isCurrentRoot(external, signal))) return undefined;
+    const directory = external ? rootPath : await realpath(rootPath);
     if (signal.aborted) return undefined;
-    const candidate = resolve(project, local);
+    const candidate = resolve(directory, local);
     if ((await realpath(candidate)) !== candidate || signal.aborted) return undefined;
-    if (!(await lstat(candidate)).isFile() || signal.aborted) return undefined;
+    const verified = await lstat(candidate, { bigint: true });
+    if (!verified.isFile() || signal.aborted) return undefined;
+    if (external && !(await isCurrentRoot(external, signal))) return undefined;
+    if (signal.aborted) return undefined;
 
     const file = await open(candidate, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     let keepOpen = false;
     try {
       if (signal.aborted) return undefined;
-      const stat = await file.stat();
+      const stat = await file.stat({ bigint: true });
       if (signal.aborted || !stat.isFile()) return undefined;
+      // Do not read a different file if the target changed between lstat and open.
+      if (external) {
+        if (!sameFile(verified, stat) || !(await isCurrentRoot(external, signal)) || signal.aborted) return undefined;
+        if ((await realpath(candidate)) !== candidate || signal.aborted) return undefined;
+      }
       keepOpen = true;
       return {
         file,
-        size: stat.size,
+        size: Number(stat.size),
         filename: basename(candidate).replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, " "),
       };
     } finally {
@@ -111,7 +152,7 @@ export async function openPreviewFile(root: string, path: string, signal: AbortS
 }
 
 export async function readExcerpt(
-  root: string,
+  root: string | ExternalPreviewRoot,
   path: string,
   signal: AbortSignal,
   lineRange?: LineRange,

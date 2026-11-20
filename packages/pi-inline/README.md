@@ -8,7 +8,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 ## ✨ Features
 
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
-- Hover over a file link in fullscreen mode to preview an image, a text file, or a range of source lines.
+- Hover over a file link in fullscreen mode to preview a workspace image or text file, or text in an approved external directory.
 - Turn on filename lookup for wikilinks in the current session.
 
 ## 📦 Install
@@ -64,6 +64,7 @@ stops file indexing and closes any open preview.
 [[[README](./README.md)]]
 [[[README]]](./README.md)
 [`runTests()`](./scripts/run-tests.mjs#L12-L20)
+[rename plan](/home/alex/.agents/plans/rename%20plan.md#L2-L5)
 ```
 
 - `[[label]]` is decorative unless you enable wikilinks. With wikilinks off, the
@@ -71,9 +72,9 @@ stops file indexing and closes any open preview.
 - The two linked badge forms are equivalent. Both use standard local Markdown
   destinations and support hover previews whether or not wikilinks are enabled.
 - Ordinary Markdown links use a file icon (📄). Use a plain-text or inline-code
-  label and a path relative to Pi's working directory or an absolute path within
-  it. Hidden paths work too, for example `[CI workflow](./.github/workflows/ci.yml#L1)`.
-  Encode spaces as `%20`.
+  label with an absolute path or a path relative to Pi's working directory.
+  Paths can point outside that directory, including with `../`. Encode spaces
+  as `%20`. The icon does not indicate that a file exists.
 - Use `#L12` for one source line or `#L12-L20` for an inclusive range. Hover also
   accepts `#L12-20`. These previews show literal source rather than rendered Markdown.
 
@@ -86,12 +87,36 @@ files match, the badge previews files but is not clickable. Unresolved names
 also stay non-clickable. The index skips hidden paths, starts on first lookup,
 and refreshes five seconds after each scan.
 
+## ⚙️ Settings
+
+To allow external text previews, edit the user file `pi-inline.json` in Pi's agent
+directory (by default `~/.pi/agent/`):
+
+```json
+{
+  "externalPreviewRoots": ["/home/alex/.agents/plans"]
+}
+```
+
+A conversation link can trigger a file read inside an approved directory when
+you hover over it. Approve only narrow directories you control, not shared
+directories. Use existing absolute directories without symbolic links. Do not
+use globs, a filesystem root, your home directory, or a directory that contains
+your home directory.
+
+The default is `[]` and project settings are ignored. Invalid or unreadable
+settings leave external previews off. Use a regular file, not a symbolic link.
+Changes take effect on session start or
+`/reload`. To revoke access, remove the field or set it to `[]`, then run
+`/reload`. Link icons do not depend on this setting.
+
 ## 🔒 Security and privacy
 
-Previews are local. They exclude files outside Pi's working directory,
-`node_modules`, and symbolic links. Hovering over an explicit Markdown link
-can display a hidden workspace file, including dotfiles that may contain secrets.
-The extension does not add file contents to the model context.
+Hover can show hidden files, including files that contain secrets. Previews
+exclude `node_modules` and symbolic links. External previews are text-only.
+External PNG, JPEG, GIF, and WebP links can be opened but never start an image
+preview. The extension does not add preview contents to model context or
+stored messages.
 
 In the terminal UI, the extension adds a fixed system prompt hint about badge
 labels and Markdown file citations. The hint uses a placeholder path and contains
