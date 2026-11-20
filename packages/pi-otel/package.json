@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-otel",
-  "version": "0.54.3",
+  "version": "0.55.0",
   "description": "Pi extension that exports agent, model, and tool traces to OpenTelemetry collectors or Langfuse.",
   "type": "module",
   "license": "MIT",

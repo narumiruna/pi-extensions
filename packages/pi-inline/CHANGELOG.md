@@ -1,5 +1,15 @@
 # @narumitw/pi-inline
 
+## 0.4.0
+
+### Minor Changes
+
+- 2722e8a: Style explicit Markdown file links outside the workspace. Allow bounded text previews in approved directories when users set `externalPreviewRoots` in their user settings. External previews remain off by default.
+
+### Patch Changes
+
+- 913bf63: Show a picture icon on ordinary Markdown file links to PNG, JPEG, GIF, and WebP paths. Other file icons, linked badges, and hover preview rules stay the same.
+
 ## 0.3.0
 
 ### Minor Changes
