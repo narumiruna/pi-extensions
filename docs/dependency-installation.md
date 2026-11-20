@@ -45,8 +45,10 @@ on a public `package.json` export or packages outside the repository install sco
 Update peer support and test dependencies together when changing compatibility. If the check fails,
 align the named manifest ranges, run `npm install`, and inspect the lockfile diff before retrying.
 A newer peer nested under a consumer does not satisfy a hoisted dependency that resolves an older
-copy from the root. This gate checks the current install scope; it does not replace independent
-package-install or runtime compatibility smokes.
+copy from the root. If a coordinated Pi update conflicts with another workspace's peer and no
+compatible release meets the release-age policy, defer the Pi update as a group. Do not use `--force`
+or `--legacy-peer-deps` to bypass the conflict. This gate checks the current install scope; it does
+not replace independent package-install or runtime compatibility smokes.
 
 ## Toolchain upgrades and verification
 

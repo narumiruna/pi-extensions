@@ -1,4 +1,5 @@
 import { type ChildProcess, execFile, fork } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,7 +22,9 @@ beforeAll(async () => {
   const installed = join(directory, "node_modules", "@narumitw", "pi-langfuse");
   await mkdir(installed, { recursive: true });
   await exec("tar", ["-xzf", join(directory, filename), "--strip-components=1", "-C", installed]);
-  // Use already-installed dependency packages; default tests never contact a registry.
+  // Preserve workspace-local dependencies before falling back to hoisted ones, without a registry install.
+  const workspaceModules = resolve("packages/pi-langfuse/node_modules");
+  if (existsSync(workspaceModules)) await symlink(workspaceModules, join(installed, "node_modules"), "dir");
   const rootModules = resolve("node_modules");
   for (const entry of await readdir(rootModules, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
