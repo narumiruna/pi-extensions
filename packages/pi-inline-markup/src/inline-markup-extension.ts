@@ -2,6 +2,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { createHoverPreview } from "./hover-preview.js";
 import { renderInlineMarkup } from "./inline-markup.js";
+import { INLINE_FORMATTING_PROMPT } from "./prompt.js";
 import { createWikilinks } from "./wikilinks.js";
 
 const WIDGET_KEY = "pi-inline-markup.preview";
@@ -89,8 +90,7 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", (event, ctx) => {
     if (ctx.mode !== "tui" || !session) return;
-    event.systemPromptOptions.sections.pi_inline_markup =
-      "Cite files with Markdown links (#L12-L20 for line ranges); [[label]] is decorative unless wikilinks are enabled, and [[[label](./path)]] styles a link as a badge.";
+    event.systemPromptOptions.sections.inline_formatting = INLINE_FORMATTING_PROMPT;
   });
 
   // Pi 1.5.0 does not accept messageTypes registration options.
