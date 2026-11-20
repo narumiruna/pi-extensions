@@ -1,4 +1,4 @@
-# @narumitw/pi-inline-markup
+# @narumitw/pi-inline
 
 ## 0.2.0
 
