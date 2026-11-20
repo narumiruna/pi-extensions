@@ -409,7 +409,8 @@ for (const trigger of [
           baseline.input,
         );
         assert.deepEqual(next.tools, baseline.tools);
-        assert.equal(next.instructions, baseline.instructions);
+        assert.ok(session.systemPrompt);
+        assert.deepEqual((baseline.input as JsonObject[])[0], { role: "developer", content: session.systemPrompt });
       }
       assert.equal(requests.filter((payload) => payload.context_management).length, trigger === "repeat" ? 2 : 1);
     } finally {

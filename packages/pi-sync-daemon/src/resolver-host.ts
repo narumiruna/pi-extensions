@@ -12,7 +12,7 @@ export interface ResolverHost {
   settle(): Promise<void>;
 }
 const DIFFERENT =
-  "The selected model is unavailable: its definition or auth source differs in the standalone daemon. No fallback model was selected.";
+  "The selected model is unavailable: its definition or auth source differs in the standalone daemon. No fallback model was selected. Align the host and daemon Pi model catalogs, or select a model with the same definition and auth source on both.";
 /** No resource discovery or extension loading; credential work starts only for a resolver request. */
 export async function prepareResolverHost(
   root: string,

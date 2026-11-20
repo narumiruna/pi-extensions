@@ -62,6 +62,8 @@ Sync content, session conversations, storage credentials, and conflict evidence 
 
 ## 🚧 Limitations
 
+Autonomous conflict resolution requires the host and daemon to agree on the full model definition and independent authentication source. If the daemon rejects a model, align the Pi host and daemon’s bundled catalogs or verify a model with the same definition and auth source on both. Matching IDs alone are not enough. This check does not affect ordinary sync without model resolution.
+
 A daemon does not lock every editor or shell command. Cooperating Pi clients reserve their actual public mutation queues; unregistered writers still require freshness checks and can cause safe refusal. Active sessions remain protected when contact is lost but their process is still alive. A heartbeat timeout is not proof of process exit.
 
 Pi core's missing-`settings.json` write branch cannot be made safe with the existing file lock alone. The daemon refuses to create that file while a participating Pi is alive; create it through Pi first. Existing-file writes use the actual Pi settings-file lock.
