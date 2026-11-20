@@ -1,7 +1,8 @@
-import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import {
   type BeforeAgentStartEvent,
   type ExtensionAPI,
@@ -18,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  getCellDimensions,
   getOsc8LinkAtColumn,
   Markdown,
   Marked,
@@ -25,12 +27,14 @@ import {
   ProcessTerminal,
   rgbColor,
   setCapabilityOverrides,
+  setCellDimensions,
   stripTerminalSequences,
   type TUI,
   TuiAltScreen,
   TuiMainScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "../src/filelinks.js";
 import { prepareImagePreview, previewImageMime } from "../src/image-preview.js";
@@ -620,6 +624,12 @@ test.for([
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAEklEQVR4nGP8z4AdMOEQp4sEAJiFAQtsMIKbAAAAAElFTkSuQmCC";
 
+function thumbnailPng(line: string): Buffer {
+  const chunks = line.split("\x1b_G").slice(1);
+  const data = chunks.map((chunk) => chunk.slice(chunk.indexOf(";") + 1).split("\x1b\\")[0]).join("");
+  return Buffer.from(data, "base64");
+}
+
 function useKittyImages(onTestFinished: (cleanup: () => void) => void) {
   setCapabilityOverrides({ hyperlinks: true, images: "kitty" });
   onTestFinished(() => setCapabilityOverrides({ hyperlinks: true }));
@@ -639,36 +649,93 @@ test.for([
   await writeFile(path, Buffer.from(data, "base64"));
   const mime = previewImageMime(path);
   if (!mime) throw new Error("Expected a supported extension");
-  const render = await prepareImagePreview(fixtureRoot, path, mime, new AbortController().signal);
+  const { signal } = new AbortController();
+  const render = await prepareImagePreview(fixtureRoot, path, mime, 16, 4, signal);
   if (!render) throw new Error("Expected an image preview");
-  const lines = render(16, 4, 0);
+  const lines = render(0);
   expect(lines).toHaveLength(4);
   expect(lines.every((line) => visibleWidth(line) <= 16)).toBe(true);
   expect(lines[0]).toContain("\x1b_Ga=T,f=100,q=2,C=1,");
-  expect(lines[0]).toContain(";iVBOR");
-  expect(render(0, 4, 0)).toEqual([]);
+  await expect(sharp(thumbnailPng(lines[0])).metadata()).resolves.toMatchObject({ format: "png", width: 8, height: 6 });
+  await expect(prepareImagePreview(fixtureRoot, path, mime, 0, 4, signal)).resolves.toBeUndefined();
 });
 
-test("skips invalid, oversized, and disallowed image files", async ({ onTestFinished }) => {
+test("scales an image above the old byte and pixel limits to the terminal cell size", async ({ onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  const currentCellSize = getCellDimensions();
+  setCellDimensions({ widthPx: 10, heightPx: 20 });
+  onTestFinished(() => setCellDimensions(currentCellSize));
+  const path = join(fixtureRoot, "large.png");
+  const input = await sharp({
+    create: {
+      width: 2400,
+      height: 1800,
+      channels: 3,
+      background: "black",
+      noise: { type: "gaussian", mean: 127, sigma: 30 },
+    },
+  })
+    .ensureAlpha(0.5)
+    .png({ compressionLevel: 0 })
+    .toBuffer();
+  expect(input.byteLength).toBeGreaterThan(4 * 1024 * 1024);
+  await writeFile(path, input);
+  const render = await prepareImagePreview(fixtureRoot, path, "image/png", 62, 12, new AbortController().signal);
+  if (!render) throw new Error("Expected an image preview");
+  const lines = render(0);
+  expect(lines).toHaveLength(12);
+  expect(lines.every((line) => visibleWidth(line) <= 62)).toBe(true);
+  expect(lines[0]).toContain("\x1b_Gm=0;");
+  await expect(sharp(thumbnailPng(lines[0])).metadata()).resolves.toMatchObject({
+    format: "png",
+    width: 320,
+    height: 240,
+    hasAlpha: true,
+  });
+});
+
+test("skips invalid and disallowed image files", async ({ onTestFinished }) => {
   useKittyImages(onTestFinished);
   const root = await mkdtemp(join(fixtureRoot, "images-"));
   const outside = join(fixtureRoot, "outside.png");
   const link = join(root, "symlink.png");
-  const large = join(root, "large.png");
-  const wide = join(root, "wide.png");
   const invalid = join(root, "invalid.png");
-  await writeFile(outside, Buffer.from(PNG, "base64"));
+  const truncated = join(root, "truncated.png");
+  const png = Buffer.from(PNG, "base64");
+  await writeFile(outside, png);
   await symlink(outside, link);
-  await writeFile(large, Buffer.from(PNG, "base64"));
-  await truncate(large, 4 * 1024 * 1024 + 1);
-  const pixels = Buffer.from(PNG, "base64");
-  pixels.writeUInt32BE(1_000_000, 16);
-  await writeFile(wide, pixels);
   await writeFile(invalid, "Not a PNG");
+  await writeFile(truncated, png.subarray(0, 33));
   const { signal } = new AbortController();
-  for (const path of [outside, link, large, wide, invalid]) {
-    await expect(prepareImagePreview(root, path, "image/png", signal), path).resolves.toBeUndefined();
+  for (const path of [outside, link, invalid, truncated]) {
+    await expect(prepareImagePreview(root, path, "image/png", 16, 4, signal), path).resolves.toBeUndefined();
   }
+});
+
+test("terminates the thumbnail worker when the preview is cancelled", async ({ onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  const path = join(fixtureRoot, "cancel.png");
+  await writeFile(path, Buffer.from(PNG, "base64"));
+  const controller = new AbortController();
+  const started = Promise.withResolvers<Worker>();
+  const once = Worker.prototype.once;
+  const listen = vi.spyOn(Worker.prototype, "once").mockImplementation(function (this: Worker, event, listener) {
+    const result = once.call(this, event, listener);
+    if (event === "message") started.resolve(this);
+    return result;
+  });
+  const stop = vi.spyOn(Worker.prototype, "terminate");
+  onTestFinished(() => {
+    controller.abort();
+    listen.mockRestore();
+    stop.mockRestore();
+  });
+
+  const preview = prepareImagePreview(fixtureRoot, path, "image/png", 16, 4, controller.signal);
+  const worker = await started.promise;
+  controller.abort();
+  await expect(preview).resolves.toBeUndefined();
+  expect(stop.mock.contexts).toContain(worker);
 });
 
 test("does not read an image without Kitty graphics", async ({ onTestFinished }) => {
@@ -677,7 +744,7 @@ test("does not read an image without Kitty graphics", async ({ onTestFinished })
   const resolvePath = vi.mocked(realpath).mockClear();
   const path = join(fixtureRoot, "cat.png");
   await expect(
-    prepareImagePreview(fixtureRoot, path, "image/png", new AbortController().signal),
+    prepareImagePreview(fixtureRoot, path, "image/png", 16, 4, new AbortController().signal),
   ).resolves.toBeUndefined();
   expect(resolvePath).not.toHaveBeenCalled();
 });
@@ -742,7 +809,12 @@ test.for(["leave", "escape", "resize", "shutdown"] as const)(
     else expect(imageRow + (handle.getBounds()?.height ?? 0)).toBe(row);
     expect(handle.getBounds()?.col).toBe(5);
     expect(writes.mock.lastCall?.[0]).toContain(`\x1b[7G\x1b_Ga=T`);
-    expect(writes.mock.lastCall?.[0]).toContain(`;${PNG}\x1b\\\x1b[39G`);
+    expect(writes.mock.lastCall?.[0]).toContain("\x1b\\\x1b[39G");
+    await expect(sharp(thumbnailPng(tui.getScreenLines()[imageRow])).metadata()).resolves.toMatchObject({
+      format: "png",
+      width: 8,
+      height: 6,
+    });
     expect(tui.getFocusedComponent()).toBe(root);
 
     if (action === "leave") process.stdin.emit("data", `\x1b[<35;80;${row + 1}M`);

@@ -101,8 +101,10 @@ session history.
 - Text previews show up to 16 KiB of a regular UTF-8 file. For a line-anchored
   preview, the first requested line must start within the first 256 KiB.
 - Image previews require Kitty graphics and display a static PNG, JPEG, GIF, or
-  WebP image. The file and any converted PNG must each be at most 4 MiB and
-  4 million pixels. The link remains usable when no image preview is available.
+  WebP image. The preview fits the available terminal space and keeps the image's
+  aspect ratio. The extension has no fixed source size limit, but the image decoder
+  and available memory still set practical limits. If a preview is unavailable,
+  you can still open the link.
 
 ## 🗂️ Package layout
 

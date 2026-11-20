@@ -1,17 +1,13 @@
 import { extname } from "node:path";
-import { convertToPng } from "@earendil-works/pi-coding-agent";
+import { Worker } from "node:worker_threads";
 import {
   allocateImageId,
   getCapabilities,
-  getImageDimensions,
+  getCellDimensions,
   type ImageDimensions,
   renderImage,
 } from "@earendil-works/pi-tui";
-import { readPreviewBytes } from "./filelinks.js";
-
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-const MAX_PIXELS = 4_000_000;
-const PNG_HEADER = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+import { openPreviewFile } from "./filelinks.js";
 
 type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
@@ -29,47 +25,76 @@ export function previewImageMime(path: string): ImageMime | undefined {
   }
 }
 
-function fitsPixelBudget(dimensions: ImageDimensions | null): dimensions is ImageDimensions {
-  return (
-    dimensions !== null &&
-    dimensions.widthPx > 0 &&
-    dimensions.heightPx > 0 &&
-    dimensions.widthPx * dimensions.heightPx <= MAX_PIXELS
-  );
+async function readImage(cwd: string, path: string, signal: AbortSignal): Promise<Buffer | undefined> {
+  const source = await openPreviewFile(cwd, path, signal);
+  if (!source) return undefined;
+  try {
+    if (signal.aborted) return undefined;
+    const bytes = await source.file.readFile({ signal });
+    if (!signal.aborted && bytes.length === source.size) return bytes;
+  } catch {
+    // An unreadable or cancelled preview is not shown.
+  } finally {
+    await source.file.close().catch(() => undefined);
+  }
 }
 
-/** Prepares a bounded Kitty overlay; Pi owns the terminal image placement and cleanup. */
+interface Thumbnail extends ImageDimensions {
+  data: string;
+}
+
+async function resizeForTerminal(
+  bytes: Buffer,
+  mime: ImageMime,
+  width: number,
+  height: number,
+  signal: AbortSignal,
+): Promise<Thumbnail | undefined> {
+  const cell = getCellDimensions();
+  const worker = new Worker(new URL("./image-thumbnail-worker.mjs", import.meta.url), {
+    workerData: {
+      bytes,
+      format: mime.slice("image/".length),
+      maxWidth: Math.max(1, Math.floor((width - 2) * cell.widthPx)),
+      maxHeight: Math.max(1, Math.floor(height * cell.heightPx)),
+    },
+    // Transfer a whole buffer. Do not detach a shared allocation for a slice.
+    transferList:
+      bytes.buffer instanceof ArrayBuffer && bytes.byteLength === bytes.buffer.byteLength ? [bytes.buffer] : [],
+  });
+  const result = Promise.withResolvers<Thumbnail | undefined>();
+  const abort = () => result.resolve(undefined);
+  signal.addEventListener("abort", abort, { once: true });
+  worker.once("message", result.resolve);
+  worker.on("error", abort);
+  worker.once("exit", abort);
+  try {
+    return await result.promise;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    void worker.terminate().catch(() => undefined);
+  }
+}
+
+/** Prepares a viewport-sized PNG; Pi owns the terminal image placement and cleanup. */
 export async function prepareImagePreview(
   cwd: string,
   path: string,
   mime: ImageMime,
+  width: number,
+  height: number,
   signal: AbortSignal,
-): Promise<((width: number, height: number, column: number) => string[]) | undefined> {
-  if (getCapabilities().images !== "kitty") return undefined;
-  const file = await readPreviewBytes(cwd, path, signal, MAX_IMAGE_BYTES);
-  if (!file || signal.aborted) return undefined;
-  if (
-    mime === "image/png" &&
-    (file.bytes.length < 33 || !file.bytes.subarray(0, PNG_HEADER.length).equals(PNG_HEADER))
-  ) {
-    return undefined;
-  }
-  let data = file.bytes.toString("base64");
-  let dimensions = getImageDimensions(data, mime);
-  if (!fitsPixelBudget(dimensions)) return undefined;
-  if (mime !== "image/png") {
-    const converted = await convertToPng(data, mime).catch(() => null);
-    if (signal.aborted || !converted || Buffer.byteLength(converted.data, "base64") > MAX_IMAGE_BYTES) return undefined;
-    data = converted.data;
-    dimensions = getImageDimensions(data, "image/png");
-    if (!fitsPixelBudget(dimensions)) return undefined;
-  }
+): Promise<((column: number) => string[]) | undefined> {
+  if (width < 3 || height < 1 || getCapabilities().images !== "kitty") return undefined;
+  const bytes = await readImage(cwd, path, signal);
+  if (!bytes?.length || signal.aborted) return undefined;
+  const thumbnail = await resizeForTerminal(bytes, mime, width, height, signal).catch(() => undefined);
+  if (!thumbnail || signal.aborted) return undefined;
 
-  const size = dimensions;
   const imageId = allocateImageId();
-  return (width, height, column) => {
-    if (width < 3 || height < 1 || getCapabilities().images !== "kitty") return [];
-    const image = renderImage(data, size, {
+  return (column) => {
+    if (getCapabilities().images !== "kitty") return [];
+    const image = renderImage(thumbnail.data, thumbnail, {
       maxWidthCells: width - 2,
       maxHeightCells: height,
       imageId,

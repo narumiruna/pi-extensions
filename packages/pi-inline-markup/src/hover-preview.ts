@@ -81,11 +81,11 @@ export function createHoverPreview(
     let draw: () => { width: number; lines: string[] } | undefined;
     const imageMime = !preview && path ? previewImageMime(path) : undefined;
     if (path && imageMime) {
-      const render = await prepareImagePreview(cwd, path, imageMime, controller.signal);
+      const render = await prepareImagePreview(cwd, path, imageMime, width, height, controller.signal);
       if (!render) return;
       const column = Math.min(target.col, columns - width);
       imageColumn = column;
-      draw = () => ({ width, lines: render(width, height, column) });
+      draw = () => ({ width, lines: render(column) });
     } else if (preview && "sources" in preview) {
       const candidates = preview.sources.slice(0, wikiGroupSourceLimit(preview.sources.length, height));
       const excerpts = await Promise.all(
