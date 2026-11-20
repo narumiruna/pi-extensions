@@ -46,17 +46,16 @@ interface Thumbnail extends ImageDimensions {
 async function resizeForTerminal(
   bytes: Buffer,
   mime: ImageMime,
-  width: number,
-  height: number,
+  maxWidth: number,
+  maxHeight: number,
   signal: AbortSignal,
 ): Promise<Thumbnail | undefined> {
-  const cell = getCellDimensions();
   const worker = new Worker(new URL("./image-thumbnail-worker.mjs", import.meta.url), {
     workerData: {
       bytes,
       format: mime.slice("image/".length),
-      maxWidth: Math.max(1, Math.floor((width - 2) * cell.widthPx)),
-      maxHeight: Math.max(1, Math.floor(height * cell.heightPx)),
+      maxWidth,
+      maxHeight,
     },
     // Transfer a whole buffer. Do not detach a shared allocation for a slice.
     transferList:
@@ -84,29 +83,42 @@ export async function prepareImagePreview(
   width: number,
   height: number,
   signal: AbortSignal,
-): Promise<((column: number) => string[]) | undefined> {
-  if (width < 3 || height < 1 || getCapabilities().images !== "kitty") return undefined;
+): Promise<{ width: number; render(column: number): string[] } | undefined> {
+  if (width < 2 || height < 1 || getCapabilities().images !== "kitty") return undefined;
+  // Pi drops ANSI sequences at the exclusive end of an overlay. Reserve one
+  // column after the image to keep the Kitty upload and cursor restore intact.
+  const maxWidth = width - 1;
   const bytes = await readImage(cwd, path, signal);
   if (!bytes?.length || signal.aborted) return undefined;
-  const thumbnail = await resizeForTerminal(bytes, mime, width, height, signal).catch(() => undefined);
-  if (!thumbnail || signal.aborted) return undefined;
+  const cell = getCellDimensions();
+  const thumbnail = await resizeForTerminal(bytes, mime, maxWidth * cell.widthPx, height * cell.heightPx, signal).catch(
+    () => undefined,
+  );
+  if (!thumbnail || signal.aborted || getCapabilities().images !== "kitty") return undefined;
 
-  const imageId = allocateImageId();
-  return (column) => {
-    if (getCapabilities().images !== "kitty") return [];
-    const image = renderImage(thumbnail.data, thumbnail, {
-      maxWidthCells: width - 2,
-      maxHeightCells: height,
-      imageId,
-      moveCursor: false,
-    });
-    if (!image) return [];
-    // Blank the image cells before placing it, then restore the cursor for the
-    // compositor's trailing text. Pi's slicing preserves absolute column
-    // moves (CSI G), not relative left and right moves (CSI D/C).
-    const { columns, rows, sequence } = image;
-    const start = column + 2; // 1-based terminal column plus one cell of inset.
-    const firstLine = ` ${" ".repeat(columns)}\x1b[${start}G${sequence}\x1b[${start + columns}G`;
-    return [firstLine, ...Array<string>(rows - 1).fill("")];
+  const currentCell = getCellDimensions();
+  const columns = Math.ceil(thumbnail.widthPx / currentCell.widthPx);
+  const rows = Math.ceil(thumbnail.heightPx / currentCell.heightPx);
+  if (columns > maxWidth || rows > height) return undefined;
+  // Register the occupied cells with Pi for redraw and cleanup. Remove the
+  // Kitty sizing controls so the terminal displays the PNG at its pixel size.
+  const image = renderImage(
+    thumbnail.data,
+    { widthPx: columns * currentCell.widthPx, heightPx: rows * currentCell.heightPx },
+    { maxWidthCells: columns, maxHeightCells: rows, imageId: allocateImageId(), moveCursor: false },
+  );
+  if (!image) return undefined;
+  const headerEnd = image.sequence.indexOf(";");
+  const sequence = image.sequence.slice(0, headerEnd).replace(/,[cr]=\d+/g, "") + image.sequence.slice(headerEnd);
+  return {
+    width: columns + 1,
+    render(column) {
+      if (getCapabilities().images !== "kitty") return [];
+      // Clear the covered cells, place the image, and restore the cursor for
+      // the compositor's padding and trailing text. Pi preserves CSI G.
+      const start = column + 1;
+      const firstLine = `${" ".repeat(columns)}\x1b[${start}G${sequence}\x1b[${start + columns}G`;
+      return [firstLine, ...Array<string>(rows - 1).fill("")];
+    },
   };
 }
