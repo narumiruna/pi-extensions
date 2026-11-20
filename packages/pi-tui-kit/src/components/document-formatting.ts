@@ -102,7 +102,8 @@ export function formatDocumentPresentation(
   const resolvedFormat = format ?? { kind: "text" as const };
   if (resolvedFormat.kind === "markdown") {
     const prepared = prepareMarkdownDocument(content, resolvedFormat, width, theme);
-    const lines = renderMarkdownDocument(prepared, resolvedFormat, width, theme);
+    // Keep the mutable presentation contract without exposing Pi's cached rows.
+    const lines = [...renderMarkdownDocument(prepared, resolvedFormat, width, theme)];
     const searchLines = markdownSearchLines(lines);
     if (!includeSearchMetadata) {
       return {
@@ -629,7 +630,7 @@ function renderMarkdownDocument(
   format: Extract<ReviewFormat, { kind: "markdown" }>,
   width: number,
   theme: DocumentTheme,
-): string[] {
+): readonly string[] {
   const component = new PiTui.Markdown(
     content,
     0,

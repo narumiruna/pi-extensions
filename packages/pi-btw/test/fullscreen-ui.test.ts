@@ -543,7 +543,7 @@ class ScrollableSideInput implements Component, Focusable {
     return this.scrollView;
   }
 
-  render(width: number): string[] {
+  render(width: number): ReturnType<Component["render"]> {
     return this.scrollView.render(width);
   }
 

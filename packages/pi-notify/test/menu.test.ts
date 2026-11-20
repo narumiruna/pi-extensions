@@ -57,7 +57,7 @@ function harness(remap = false) {
   );
   const tui = createTuiHarness({ width: 72, rows: 24, theme, keybindings });
   const notify = vi.fn();
-  const zeroFrames: string[][] = [];
+  const zeroFrames: (readonly string[])[] = [];
   const custom: ExtensionCommandContext["ui"]["custom"] = (factory, options) =>
     tui.custom(async (...args) => {
       const component = await factory(...args);

@@ -20,7 +20,7 @@ test.each([
   { width: 80, themeName: "light" },
 ])("Pi core name input renders themed guidance at $width columns ($themeName)", async ({ width, themeName }) => {
   initTheme(themeName, false);
-  let lines: string[] = [];
+  let lines: readonly string[] = [];
   let submitted = false;
   const roles: string[] = [];
   const colors = getSelectListTheme();

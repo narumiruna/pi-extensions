@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 
 /** Adapt only public rendering/input boundaries; Kit still owns search, saves and focus. */
 export function boundedSettingsUI(ctx: ExtensionCommandContext): ExtensionCommandContext["ui"] {
@@ -19,14 +20,7 @@ export function boundedSettingsUI(ctx: ExtensionCommandContext): ExtensionComman
             return typeof value === "function" ? value.bind(target) : value;
           },
         });
-        const guard = <
-          T extends {
-            render(width: number): string[];
-            handleMouse?: import("@earendil-works/pi-tui").Component["handleMouse"];
-          },
-        >(
-          component: T,
-        ): T => {
+        const guard = <T extends Component>(component: T): T => {
           const render = component.render.bind(component);
           const handleMouse = component.handleMouse?.bind(component);
           let sourceRow = 0;

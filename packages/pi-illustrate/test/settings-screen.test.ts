@@ -6,6 +6,7 @@ import {
   getKeybindings,
   type KeybindingsConfig,
   KeybindingsManager,
+  SettingsList,
   setKeybindings,
   setKittyProtocolActive,
   TUI_KEYBINDINGS,
@@ -213,7 +214,7 @@ describe("native Illustrate settings", () => {
 
   it("bounds zero and non-finite widths at the actual custom component boundary", async () => {
     const f = fixture();
-    const evidence: string[][] = [];
+    const evidence: (readonly string[])[] = [];
     const custom = f.ctx.ui.custom;
     f.ctx.ui.custom = (factory, options) =>
       custom(async (...args) => {
@@ -260,6 +261,68 @@ describe("native Illustrate settings", () => {
     f.tui.press("tui.select.cancel");
     expect(await running).toBe("back");
     expect(f.settings.mermaidAppearance).toBe("light");
+  });
+
+  it("keeps the pending-save indicator out of reused native rows, even across clipping", async ({ onTestFinished }) => {
+    const f = fixture({ config: { "tui.select.down": "ctrl+n", "tui.select.confirm": "ctrl+y" } });
+    const entered = gate();
+    const release = gate();
+    f.saveSettings.mockImplementationOnce(async (patch) => {
+      entered.release();
+      await release.promise;
+      Object.assign(f.settings, patch);
+    });
+
+    // Reuse the native result at one width even on Pi versions that redraw this list.
+    const nativeRender = SettingsList.prototype.render;
+    let sharedRows: ReturnType<SettingsList["render"]> | undefined;
+    let originalRows: readonly string[] | undefined;
+    const renderSpy = vi.spyOn(SettingsList.prototype, "render").mockImplementation(function (
+      this: SettingsList,
+      width,
+    ) {
+      if (width !== 80) return nativeRender.call(this, width);
+      if (!sharedRows) {
+        sharedRows = nativeRender.call(this, width);
+        originalRows = sharedRows.slice();
+      }
+      return sharedRows;
+    });
+
+    const running = showIllustrateSettings(f.ctx, f.owner);
+    onTestFinished(async () => {
+      renderSpy.mockRestore();
+      release.release();
+      f.tui.dispose();
+      await running;
+    });
+    await f.tui.waitForOpen();
+    expect(plain(f.tui.send("\x0e")).join("\n")).toContain("→ Mermaid appearance");
+    expect(plain(f.tui.send("\x19")).join("\n")).toContain("Saving…");
+    await entered.promise;
+    for (let frame = 0; frame < 3; frame += 1) {
+      const lines = plain(f.tui.render(80));
+      expect(lines.filter((line) => line.trim() === "Saving…")).toHaveLength(1);
+      expect(sharedRows).toEqual(originalRows);
+    }
+
+    const clipped = plain(f.tui.resize({ width: 80, rows: 4 }));
+    expect(clipped).toHaveLength(1);
+    expect(clipped[0]).toMatch(/^→ Mermaid appearance/);
+    f.tui.mouse({ type: "press", x: 2, y: 0 });
+    f.tui.mouse({ type: "click", x: 2, y: 0 });
+    expect(f.saveSettings).toHaveBeenCalledExactlyOnceWith({ mermaidAppearance: "dark" });
+
+    release.release();
+    await f.tui.waitForPending();
+    expect(f.saveSettings.mock.calls).toEqual([[{ mermaidAppearance: "dark" }], [{ mermaidAppearance: "light" }]]);
+    expect(f.settings.mermaidAppearance).toBe("light");
+    const settled = plain(f.tui.resize({ rows: 35 }));
+    expect(settled.join("\n")).not.toContain("Saving…");
+    expect(sharedRows).toEqual(originalRows);
+
+    f.tui.press("ctrl+c");
+    expect(await running).toBe("close");
   });
 
   it("restores the accepted displayed value after failure and keeps the save queue usable", async () => {

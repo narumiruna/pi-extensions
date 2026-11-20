@@ -129,7 +129,7 @@ test("Configuration scrolls all warnings, keeps action focus, sanitizes text, an
   }));
   const original = JSON.stringify(loaded);
   const themeRoles = new Set<string>();
-  let zeroWidth: string[] = [];
+  let zeroWidth: readonly string[] = [];
   const tui = createTuiHarness({
     theme: {
       fg(role, text) {

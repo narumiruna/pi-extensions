@@ -71,7 +71,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
           details: fixture.result.details,
           content: fixture.result.content.map((block) => ({ type: "text" as const, text: block.text })),
         };
-        const rendered: string[] = tool
+        const rendered: readonly string[] = tool
           .renderResult(result, { expanded, isPartial: false }, theme, renderContext)
           .render(80);
         const text = rendered.join("\n");

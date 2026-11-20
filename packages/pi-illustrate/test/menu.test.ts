@@ -186,7 +186,7 @@ describe("Illustrate manager", () => {
 
   it("keeps Status and Help width-safe and read-only at constrained heights and zero width", async () => {
     const f = fixture();
-    const zeroFrames: string[][] = [];
+    const zeroFrames: (readonly string[])[] = [];
     const custom = f.ctx.ui.custom;
     f.ctx.ui.custom = (factory, options) =>
       custom(async (...args) => {

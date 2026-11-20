@@ -606,7 +606,7 @@ test.each(METADATA_PRESET_NAMES)("%s keeps the selector and mounted display boun
   const before = fixture.snapshot();
   const writes = runtimeWrites(fixture);
   const themed: { role: string; text: string }[] = [];
-  let renderZero: (() => string[]) | undefined;
+  let renderZero: (() => readonly string[]) | undefined;
   const tui = createTuiHarness({
     width: 80,
     rows: 24,
@@ -634,7 +634,7 @@ test.each(METADATA_PRESET_NAMES)("%s keeps the selector and mounted display boun
     width: number;
     rows: number;
     lines: readonly string[];
-    zero: string[] | undefined;
+    zero: readonly string[] | undefined;
     mounted: ReturnType<Fixture["render"]>;
   }[] = [];
   for (const rows of [3, 4, 7, 8, 14, 24, 40]) {

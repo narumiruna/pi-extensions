@@ -325,7 +325,7 @@ function mount(session: AgentSession, result: ReturnType<typeof resultFor>, args
   component.updateResult(result);
   return { component, requestRender };
 }
-function previews(lines: string[]): number {
+function previews(lines: readonly string[]): number {
   // Count first transmission chunks, not continuation chunks or Kitty image IDs.
   return lines.join("\n").split("\x1b_Ga=T,").length - 1;
 }

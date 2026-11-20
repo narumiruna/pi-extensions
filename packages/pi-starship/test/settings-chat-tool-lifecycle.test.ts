@@ -24,7 +24,7 @@ import { response } from "./settings-chat-support.js";
 initTheme("dark", false);
 const width = 80;
 const textResult = (text: string) => ({ content: [{ type: "text" as const, text }], details: undefined });
-const plain = (lines: string[]) => lines.map(stripVTControlCharacters).join("\n");
+const plain = (lines: readonly string[]) => lines.map(stripVTControlCharacters).join("\n");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

@@ -29,7 +29,7 @@ export function setup(overrides: Partial<ScopePickerOptions> = {}, bindings: Key
   const keys = new KeybindingsManager(definitions, bindings);
   setKeybindings(keys);
   const roles = new Set<string>();
-  const zeroFrames: string[][] = [];
+  const zeroFrames: (readonly string[])[] = [];
   const tui = createTuiHarness({
     width: 100,
     rows: 32,

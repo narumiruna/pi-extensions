@@ -161,6 +161,7 @@ async function showSettings(ctx: ExtensionCommandContext) {
 The sample omits extension-specific validation, serialized persistence, rollback, and runtime
 application; production implementations must provide them.
 The sample also omits mouse routing. Production wrappers must map the visible frame rows back to the native list rows after clipping, rather than use a fixed header offset.
+Add wrapper-owned rows such as a save indicator without mutating the rows returned by `SettingsList`.
 
 ## Scope and precedence
 

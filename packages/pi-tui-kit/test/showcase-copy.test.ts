@@ -22,7 +22,7 @@ function copyKeys() {
   });
 }
 
-function renderCapture(widgets: Map<string, unknown>, width = 120): string[] {
+function renderCapture(widgets: Map<string, unknown>, width = 120): readonly string[] {
   const factory = widgets.get(KEY) as ((_tui: unknown, theme: typeof widgetTheme) => Component) | undefined;
   return factory?.(undefined, widgetTheme).render(width) ?? [];
 }

@@ -51,7 +51,7 @@ class MainThreadTreePickerComponent implements Component, Focusable {
     return this.selector.wantsKeyRelease;
   }
 
-  render(width: number): string[] {
+  render(width: number) {
     return this.selector.render(width);
   }
 
