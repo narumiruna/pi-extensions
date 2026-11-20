@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-inline",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Style inline badges and preview local file links in Pi's terminal UI.",
   "type": "module",
   "license": "MIT",
