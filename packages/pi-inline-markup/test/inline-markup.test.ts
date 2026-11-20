@@ -1,6 +1,6 @@
-import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type BeforeAgentStartEvent,
@@ -17,6 +17,7 @@ import {
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
+  type Component,
   getOsc8LinkAtColumn,
   Markdown,
   Marked,
@@ -32,6 +33,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "../src/filelinks.js";
+import { prepareImagePreview, previewImageMime } from "../src/image-preview.js";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("../src/filelinks.js", { spy: true });
@@ -83,10 +85,10 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
   )?.[1] as ExtensionHandler<BeforeAgentStartEvent>;
   const invalidate = vi.spyOn(tui, "invalidate");
   const requestRender = vi.spyOn(tui, "requestRender").mockImplementation(() => {});
-  let disposeWidget: (() => void) | undefined;
+  let widget: (Component & { dispose?(): void }) | undefined;
   const setWidget = vi.fn<ExtensionUIContext["setWidget"]>((_key, content) => {
-    disposeWidget?.();
-    disposeWidget = typeof content === "function" ? content(tui, previewTheme).dispose : undefined;
+    widget?.dispose?.();
+    widget = typeof content === "function" ? content(tui, previewTheme) : undefined;
   });
   const select = vi.fn<ExtensionUIContext["select"]>().mockResolvedValue(undefined);
   const ctx = { cwd: fixtureRoot, mode: "tui", ui: { select, setWidget } } as unknown as ExtensionCommandContext;
@@ -104,6 +106,7 @@ async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal()))
     select,
     setWidget,
     startWidget,
+    renderWidget: (width: number) => widget?.render(width) ?? [],
     runCommand: (args = "", mode: ExtensionContext["mode"] = "tui") => command.handler(args, { ...ctx, mode }),
     render(markdown: string, messageType: MarkdownTransformContext["messageType"] = "user") {
       return transform(markdown, { messageType, isStreaming: false, availableWidth: 80 });
@@ -416,14 +419,17 @@ test("plain badges do not index, link, or preview an existing file", async ({ on
 
 test("only resolves eligible workspace paths", () => {
   expect(resolveLinkPath(fixtureRoot, "./notes/a%20b.md#part")).toBe(join(fixtureRoot, "notes", "a b.md"));
+  expect(resolveLinkPath(fixtureRoot, "./notes/.hidden.md")).toBe(join(fixtureRoot, "notes", ".hidden.md"));
+  const workflow = join(fixtureRoot, ".github", "workflows", "ci.yml");
+  expect(resolveLinkPath(fixtureRoot, `${workflow}#L1`)).toBe(workflow);
   for (const href of [
     "https://example.test/a.md",
     `file://${join(fixtureRoot, "a.md")}`,
     "//example.test/a.md",
     "../outside.md",
-    "./%2e%2e/outside.md",
-    "./notes/.hidden.md",
-    "./node_modules/pkg/README.md",
+    "./%2e%2e/.outside.md",
+    join(dirname(fixtureRoot), ".outside.md"),
+    "./.hidden/node_modules/pkg/README.md",
   ]) {
     expect(resolveLinkPath(fixtureRoot, href), href).toBeUndefined();
   }
@@ -472,18 +478,24 @@ test("scans beyond the first excerpt while bounding the source search and output
   expect(await readExcerpt(fixtureRoot, path, signal, { start: 4, end: 4 })).toBeUndefined();
 });
 
-test("does not read directories or symlinks", async () => {
+test("still excludes files outside the workspace, node_modules, directories, and symlinks", async () => {
   const project = await mkdtemp(join(fixtureRoot, "project-"));
-  const outside = join(fixtureRoot, "outside.md");
-  const plain = join(project, "plain.md");
+  const outside = join(fixtureRoot, ".outside.md");
+  const hidden = join(project, ".hidden.md");
+  const dependency = join(project, "node_modules", "dependency.md");
   await writeFile(outside, "Outside the project");
-  await writeFile(plain, "Inside the project");
-  await symlink(outside, join(project, "outside-link.md"));
-  await symlink(plain, join(project, "inside-link.md"));
-  await mkdir(join(project, "folder"));
+  await writeFile(hidden, "Inside the project");
+  await mkdir(dirname(dependency));
+  await writeFile(dependency, "Inside node_modules");
+  const outsideLink = join(project, ".outside-link.md");
+  const insideLink = join(project, ".inside-link.md");
+  await symlink(outside, outsideLink);
+  await symlink(hidden, insideLink);
+  const folder = join(project, ".folder");
+  await mkdir(folder);
   const { signal } = new AbortController();
-  await expect(readExcerpt(project, plain, signal)).resolves.toMatchObject({ text: "Inside the project" });
-  for (const path of [outside, ...["outside-link.md", "inside-link.md", "folder"].map((name) => join(project, name))]) {
+  await expect(readExcerpt(project, hidden, signal)).resolves.toMatchObject({ text: "Inside the project" });
+  for (const path of [outside, dependency, folder, outsideLink, insideLink]) {
     await expect(readExcerpt(project, path, signal)).resolves.toBeUndefined();
   }
 });
@@ -562,11 +574,14 @@ test.for(["leave", "dispose", "resize", "show and leave"] as const)(
 );
 
 test.for([
-  ["[`readExcerpt()`](./example.ts#L2-L3)", "📄\u00a0readExcerpt()"],
-  ["[[[`readExcerpt()`](./example.ts#L2-L3)]]", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4"],
-  ["[[[readExcerpt()]]](./example.ts#L2-L3)", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4"],
-] as const)("hovers the line-range link %s", async ([link, label], { onTestFinished }) => {
-  await writeFile(join(fixtureRoot, "example.ts"), "first\nsecond\nthird\nfourth\n");
+  ["[`readExcerpt()`](./example.ts#L2-L3)", "📄\u00a0readExcerpt()", "example.ts"],
+  ["[[[`readExcerpt()`](./example.ts#L2-L3)]]", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4", "example.ts"],
+  ["[[[readExcerpt()]]](./example.ts#L2-L3)", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4", "example.ts"],
+  ["[CI workflow](./.github/workflows/ci.yml#L2-L3)", "📄\u00a0CI workflow", ".github/workflows/ci.yml"],
+] as const)("hovers the line-range link %s", async ([link, label, file], { onTestFinished }) => {
+  const path = join(fixtureRoot, file);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, "first\nsecond\nthird\nfourth\n");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   onTestFinished(stubRawInput());
   const terminal = new ProcessTerminal();
@@ -584,7 +599,7 @@ test.for([
   const screen = new Markdown(session.render(link), 0, 0, getMarkdownTheme()).render(80);
   expect(stripTerminalSequences(screen[0]).trimEnd()).toBe(label);
   for (const col of [0, visibleWidth(label) - 1]) {
-    expect(getOsc8LinkAtColumn(screen[0], col)).toBe("./example.ts#L2-L3");
+    expect(getOsc8LinkAtColumn(screen[0], col)).toBe(`./${file}#L2-L3`);
   }
   vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
 
@@ -597,8 +612,177 @@ test.for([
   overlay.invalidate();
   expect(overlay.render(60)).toEqual(lines);
   const card = lines.map(stripTerminalSequences).join("\n");
-  expect(card).toContain("example.ts#L2-L3");
+  expect(card).toContain(`${basename(file)}#L2-L3`);
   expect(card).toContain("second");
   expect(card).toContain("third");
   expect(card).not.toMatch(/first|fourth/);
+});
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAEklEQVR4nGP8z4AdMOEQp4sEAJiFAQtsMIKbAAAAAElFTkSuQmCC";
+
+function useKittyImages(onTestFinished: (cleanup: () => void) => void) {
+  setCapabilityOverrides({ hyperlinks: true, images: "kitty" });
+  onTestFinished(() => setCapabilityOverrides({ hyperlinks: true }));
+}
+
+test.for([
+  ["png", PNG],
+  [
+    "JPEG",
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAAGAAgBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAABP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AO//Z",
+  ],
+  ["gif", "R0lGODdhCAAGAIEAAP8AAAAAAAAAAAAAACwAAAAACAAGAAAIDgABCBxIsKDBgwgTDgwIADs="],
+  ["webp", "UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoIAAYAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA="],
+] as const)("prepares a bounded static Kitty image for %s", async ([extension, data], { onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  const path = join(fixtureRoot, `fixture.${extension}`);
+  await writeFile(path, Buffer.from(data, "base64"));
+  const mime = previewImageMime(path);
+  if (!mime) throw new Error("Expected a supported extension");
+  const render = await prepareImagePreview(fixtureRoot, path, mime, new AbortController().signal);
+  if (!render) throw new Error("Expected an image preview");
+  const lines = render(16, 4, 0);
+  expect(lines).toHaveLength(4);
+  expect(lines.every((line) => visibleWidth(line) <= 16)).toBe(true);
+  expect(lines[0]).toContain("\x1b_Ga=T,f=100,q=2,C=1,");
+  expect(lines[0]).toContain(";iVBOR");
+  expect(render(0, 4, 0)).toEqual([]);
+});
+
+test("skips invalid, oversized, and disallowed image files", async ({ onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  const root = await mkdtemp(join(fixtureRoot, "images-"));
+  const outside = join(fixtureRoot, "outside.png");
+  const link = join(root, "symlink.png");
+  const large = join(root, "large.png");
+  const wide = join(root, "wide.png");
+  const invalid = join(root, "invalid.png");
+  await writeFile(outside, Buffer.from(PNG, "base64"));
+  await symlink(outside, link);
+  await writeFile(large, Buffer.from(PNG, "base64"));
+  await truncate(large, 4 * 1024 * 1024 + 1);
+  const pixels = Buffer.from(PNG, "base64");
+  pixels.writeUInt32BE(1_000_000, 16);
+  await writeFile(wide, pixels);
+  await writeFile(invalid, "Not a PNG");
+  const { signal } = new AbortController();
+  for (const path of [outside, link, large, wide, invalid]) {
+    await expect(prepareImagePreview(root, path, "image/png", signal), path).resolves.toBeUndefined();
+  }
+});
+
+test("does not read an image without Kitty graphics", async ({ onTestFinished }) => {
+  setCapabilityOverrides({ hyperlinks: true, images: null });
+  onTestFinished(() => setCapabilityOverrides({ hyperlinks: true }));
+  const resolvePath = vi.mocked(realpath).mockClear();
+  const path = join(fixtureRoot, "cat.png");
+  await expect(
+    prepareImagePreview(fixtureRoot, path, "image/png", new AbortController().signal),
+  ).resolves.toBeUndefined();
+  expect(resolvePath).not.toHaveBeenCalled();
+});
+
+test.for(["leave", "escape", "resize", "shutdown"] as const)(
+  "composites and clears the image in a real fullscreen frame on %s",
+  async (action, { onTestFinished }) => {
+    useKittyImages(onTestFinished);
+    await writeFile(join(fixtureRoot, "cat.png"), Buffer.from(PNG, "base64"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(stubRawInput());
+    let columns = 80;
+    const writes = vi.fn<(data: string) => void>();
+    const terminal = new (class extends ProcessTerminal {
+      override get columns() {
+        return columns;
+      }
+      override get rows() {
+        return 24;
+      }
+      override start() {}
+      override stop() {}
+      override hideCursor() {}
+      override showCursor() {}
+      override write = writes;
+    })();
+    const tui = new TuiAltScreen(terminal);
+    const session = await startSession(tui);
+    onTestFinished(session.stop);
+    const row = action === "resize" ? 20 : 0;
+    const message = new Markdown(session.render("[Cat Photo](./cat.png)"), 0, 0, getMarkdownTheme());
+    const root = {
+      render: (width: number) => [
+        ...Array<string>(row).fill(""),
+        `    ${message.render(width - 4)[0]}`,
+        ...session.renderWidget(width),
+      ],
+      invalidate: () => message.invalidate(),
+    };
+    tui.setLayoutRoot(root);
+    tui.setFocus(root);
+    tui.start();
+    onTestFinished(() => tui.stop({ preserveScreen: true }));
+    tui.renderNow();
+    expect(getOsc8LinkAtColumn(tui.getScreenLines()[row], 5)).toBe("./cat.png");
+
+    const displayed = Promise.withResolvers<OverlayHandle>();
+    const mount = tui.showOverlay.bind(tui);
+    vi.spyOn(tui, "showOverlay").mockImplementation((component, options) => {
+      const handle = mount(component, options);
+      displayed.resolve(handle);
+      return handle;
+    });
+    process.stdin.emit("data", `\x1b[<35;6;${row + 1}M`);
+    await vi.advanceTimersByTimeAsync(250);
+    const handle = await displayed.promise;
+    const hide = vi.spyOn(handle, "hide");
+    tui.renderNow();
+    const imageRow = tui.getScreenLines().findIndex((line) => line.includes("\x1b_Ga=T"));
+    expect(imageRow).toBeGreaterThanOrEqual(0);
+    if (row === 0) expect(imageRow).toBe(1);
+    else expect(imageRow + (handle.getBounds()?.height ?? 0)).toBe(row);
+    expect(handle.getBounds()?.col).toBe(5);
+    expect(writes.mock.lastCall?.[0]).toContain(`\x1b[7G\x1b_Ga=T`);
+    expect(writes.mock.lastCall?.[0]).toContain(`;${PNG}\x1b\\\x1b[39G`);
+    expect(tui.getFocusedComponent()).toBe(root);
+
+    if (action === "leave") process.stdin.emit("data", `\x1b[<35;80;${row + 1}M`);
+    else if (action === "escape") {
+      process.stdin.emit("data", "\x1b");
+      await vi.runOnlyPendingTimersAsync();
+    } else if (action === "resize") columns = 70;
+    else await session.stop();
+    tui.renderNow();
+    await Promise.resolve();
+    expect(hide).toHaveBeenCalledOnce();
+    expect(tui.hasOverlay()).toBe(false);
+    expect(tui.getScreenLines().some((line) => line.includes("\x1b_G"))).toBe(false);
+    expect(writes.mock.lastCall?.[0]).toContain("\x1b_Ga=d,d=a");
+  },
+);
+
+test("cancels a pending image read when the session widget is replaced", async ({ onTestFinished }) => {
+  useKittyImages(onTestFinished);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(stubRawInput());
+  const terminal = new ProcessTerminal();
+  vi.spyOn(terminal, "columns", "get").mockReturnValue(80);
+  vi.spyOn(terminal, "rows", "get").mockReturnValue(24);
+  const tui = new TuiAltScreen(terminal);
+  const session = await startSession(tui);
+  onTestFinished(session.stop);
+  const screen = new Markdown(session.render("[Cat Photo](./cat.png)"), 0, 0, getMarkdownTheme()).render(80);
+  vi.spyOn(tui, "getScreenLines").mockReturnValue(screen);
+  const overlay = vi.spyOn(tui, "showOverlay");
+  const pending = Promise.withResolvers<string>();
+  onTestFinished(() => pending.resolve(fixtureRoot));
+  const resolvePath = vi.mocked(realpath).mockClear().mockReturnValueOnce(pending.promise);
+
+  process.stdin.emit("data", "\x1b[<35;6;1M");
+  await vi.advanceTimersByTimeAsync(250);
+  expect(resolvePath).toHaveBeenCalledExactlyOnceWith(fixtureRoot);
+  await session.startWidget();
+  pending.resolve(fixtureRoot);
+  await pending.promise;
+  expect(resolvePath).toHaveBeenCalledOnce();
+  expect(overlay).not.toHaveBeenCalled();
 });

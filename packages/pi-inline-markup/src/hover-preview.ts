@@ -9,6 +9,7 @@ import {
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "./filelinks.js";
+import { prepareImagePreview, previewImageMime } from "./image-preview.js";
 import {
   hoverLinkLine,
   renderWikiGroupPreview,
@@ -72,9 +73,20 @@ export function createHoverPreview(
     const width = Math.min(columns, preview ? 56 : 60);
     const height = Math.min(placeBelow ? below : above, MAX_HEIGHT);
     if (width < (preview ? 20 : 16) || height < MIN_HEIGHT) return;
+    viewport = { columns, rows };
 
+    // The image moves its terminal cursor to an absolute column, so use the
+    // same column for rendering and placement even if the pointer moves.
+    let imageColumn: number | undefined;
     let draw: () => { width: number; lines: string[] } | undefined;
-    if (preview && "sources" in preview) {
+    const imageMime = !preview && path ? previewImageMime(path) : undefined;
+    if (path && imageMime) {
+      const render = await prepareImagePreview(cwd, path, imageMime, controller.signal);
+      if (!render) return;
+      const column = Math.min(target.col, columns - width);
+      imageColumn = column;
+      draw = () => ({ width, lines: render(width, height, column) });
+    } else if (preview && "sources" in preview) {
       const candidates = preview.sources.slice(0, wikiGroupSourceLimit(preview.sources.length, height));
       const excerpts = await Promise.all(
         candidates.map((source) => readExcerpt(cwd, resolve(cwd, source), controller.signal)),
@@ -96,10 +108,9 @@ export function createHoverPreview(
       return;
     }
     const card = draw();
-    if (!card) return;
+    if (!card?.lines.length) return;
 
     let lines = card.lines;
-    viewport = { columns, rows };
     overlay = tui.showOverlay(
       {
         render: () => lines,
@@ -110,8 +121,8 @@ export function createHoverPreview(
       {
         nonCapturing: true,
         width: card.width,
-        row: placeBelow ? target.row + 1 : target.row - lines.length,
-        col: Math.min(target.col, columns - card.width),
+        ...(placeBelow ? { row: target.row + 1 } : { anchor: "bottom-left", margin: { bottom: rows - target.row } }),
+        col: imageColumn ?? Math.min(target.col, columns - card.width),
         visible: (w, h) => w === columns && h === rows,
       },
     );

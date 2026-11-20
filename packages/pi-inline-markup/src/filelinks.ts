@@ -23,8 +23,8 @@ export interface PreviewExcerpt {
 
 function workspacePath(root: string, path: string): string | undefined {
   const local = relative(root, path);
-  if (!local || isAbsolute(local)) return undefined;
-  if (local.split(sep).some((part) => part.startsWith(".") || part === "node_modules")) return undefined;
+  if (!local || isAbsolute(local) || local === ".." || local.startsWith(`..${sep}`)) return undefined;
+  if (local.split(sep).includes("node_modules")) return undefined;
   return local;
 }
 
@@ -78,12 +78,14 @@ function selectLines(
   };
 }
 
-export async function readExcerpt(
+/** Reads a regular workspace file without following symlinks or exceeding the byte budget. */
+export async function readPreviewBytes(
   root: string,
   path: string,
   signal: AbortSignal,
-  lineRange?: LineRange,
-): Promise<PreviewExcerpt | undefined> {
+  limit: number,
+  allowTruncated = false,
+): Promise<{ filename: string; bytes: Buffer; moreBytes: boolean } | undefined> {
   try {
     const local = workspacePath(root, path);
     if (!local || signal.aborted) return undefined;
@@ -97,33 +99,47 @@ export async function readExcerpt(
     try {
       if (signal.aborted) return undefined;
       const stat = await file.stat();
-      if (signal.aborted || !stat.isFile()) return undefined;
-      const buffer = Buffer.alloc(Math.min(stat.size, lineRange ? MAX_LINE_SCAN_BYTES : MAX_BYTES));
+      if (signal.aborted || !stat.isFile() || (!allowTruncated && stat.size > limit)) return undefined;
+      // For a full read, leave room for one byte to detect growth since stat().
+      const buffer = Buffer.alloc(allowTruncated ? Math.min(stat.size, limit) : stat.size + 1);
       const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-      if (signal.aborted) return undefined;
-      const bytes = buffer.subarray(0, bytesRead);
-      const moreBytes = stat.size > bytesRead;
-      const excerpt = lineRange ? selectLines(bytes, lineRange, moreBytes) : { bytes, clipped: moreBytes };
-      if (!excerpt) return undefined;
-      const { clipped } = excerpt;
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(excerpt.bytes, { stream: clipped });
-      if (text.includes("\0")) return undefined;
-      const clean = stripTerminalSequences(text)
-        .replace(/\r\n?/g, "\n")
-        .replace(/[\p{Zl}\p{Zp}]/gu, " ")
-        .replace(/(?![\n\t])[\p{Cc}\p{Bidi_Control}]/gu, "");
+      if (signal.aborted || (!allowTruncated && bytesRead !== stat.size)) return undefined;
       return {
         filename: basename(candidate).replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, " "),
-        text: clean,
-        clipped,
-        lineRange,
+        bytes: buffer.subarray(0, bytesRead),
+        moreBytes: stat.size > bytesRead,
       };
     } finally {
       await file.close();
     }
   } catch {
-    // A file can be missing, unreadable, or not UTF-8.
+    // A file can be missing or unreadable.
     return undefined;
+  }
+}
+
+export async function readExcerpt(
+  root: string,
+  path: string,
+  signal: AbortSignal,
+  lineRange?: LineRange,
+): Promise<PreviewExcerpt | undefined> {
+  const file = await readPreviewBytes(root, path, signal, lineRange ? MAX_LINE_SCAN_BYTES : MAX_BYTES, true);
+  if (!file || signal.aborted) return undefined;
+  const { filename, bytes, moreBytes } = file;
+  const excerpt = lineRange ? selectLines(bytes, lineRange, moreBytes) : { bytes, clipped: moreBytes };
+  if (!excerpt) return undefined;
+  const { clipped } = excerpt;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(excerpt.bytes, { stream: clipped });
+    if (text.includes("\0")) return undefined;
+    const clean = stripTerminalSequences(text)
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\p{Zl}\p{Zp}]/gu, " ")
+      .replace(/(?![\n\t])[\p{Cc}\p{Bidi_Control}]/gu, "");
+    return { filename, text: clean, clipped, lineRange };
+  } catch {
+    return undefined; // Not UTF-8.
   }
 }
 

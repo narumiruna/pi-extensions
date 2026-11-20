@@ -8,7 +8,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 ## ✨ Features
 
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
-- Hover over a file link in fullscreen mode to preview the file or a specific range of source lines.
+- Hover over a file link in fullscreen mode to preview an image, a text file, or a range of source lines.
 - Turn on filename lookup for wikilinks in the current session.
 
 ## 📦 Install
@@ -41,7 +41,8 @@ If you explicitly configured the old path, remove that entry before loading the 
 
 Start Pi in a directory with a `README.md` file. Send a message containing
 `[README](./README.md)` to see a file icon next to the label. In fullscreen mode,
-hover over the link to preview the file.
+hover over the link to preview the file. If Pi detects Kitty graphics support,
+hover over an image link such as `[Cat Photo](./cat.png)` to see the image.
 
 ## 💬 Commands
 
@@ -65,7 +66,8 @@ stops file indexing and closes any open preview.
   destinations and support hover previews whether or not wikilinks are enabled.
 - Ordinary Markdown links use a file icon (📄). Use a plain-text or inline-code
   label and a path relative to Pi's working directory or an absolute path within
-  it. Encode spaces as `%20`.
+  it. Hidden paths work too, for example `[CI workflow](./.github/workflows/ci.yml#L1)`.
+  Encode spaces as `%20`.
 - Use `#L12` for one source line or `#L12-L20` for an inclusive range. Hover also
   accepts `#L12-20`. These previews show literal source rather than rendered Markdown.
 
@@ -75,17 +77,20 @@ path. If a bare filename matches several Markdown files, the badge previews up
 to three. Clicking opens the file at the working directory root if present, or
 the only match if the filename is unique. If there is no root match and several
 files match, the badge previews files but is not clickable. Unresolved names
-also stay non-clickable. The index starts on first lookup and refreshes five
-seconds after each scan.
+also stay non-clickable. The index skips hidden paths, starts on first lookup,
+and refreshes five seconds after each scan.
 
 ## 🔒 Security and privacy
 
-Previews are local. They exclude files outside Pi's working directory, hidden
-paths, `node_modules`, and symbolic links. The extension does not add file
-contents to the model context. In the terminal UI it adds a fixed system prompt
-hint about badge labels and Markdown file citations. The hint uses a
-placeholder path and contains no extension name or workspace data. Updating the hint does not
-rewrite existing session history.
+Previews are local. They exclude files outside Pi's working directory,
+`node_modules`, and symbolic links. Hovering over an explicit Markdown link
+can display a hidden workspace file, including dotfiles that may contain secrets.
+The extension does not add file contents to the model context.
+
+In the terminal UI, the extension adds a fixed system prompt hint about badge
+labels and Markdown file citations. The hint uses a placeholder path and contains
+no extension name or workspace data. Updating the hint does not rewrite existing
+session history.
 
 ## 🚧 Limitations
 
@@ -93,8 +98,11 @@ rewrite existing session history.
 - Hover previews require fullscreen mode, OSC 8 hyperlinks, and mouse movement
   reports without a button press. Pi does not request these reports in tmux,
   Zellij, or GNU Screen.
-- Previews show up to 16 KiB of a regular UTF-8 file. For a line-anchored preview,
-  the first requested line must start within the first 256 KiB.
+- Text previews show up to 16 KiB of a regular UTF-8 file. For a line-anchored
+  preview, the first requested line must start within the first 256 KiB.
+- Image previews require Kitty graphics and display a static PNG, JPEG, GIF, or
+  WebP image. The file and any converted PNG must each be at most 4 MiB and
+  4 million pixels. The link remains usable when no image preview is available.
 
 ## 🗂️ Package layout
 
