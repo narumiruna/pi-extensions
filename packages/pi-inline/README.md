@@ -1,9 +1,9 @@
-# 🔖 pi-inline-markup — Inline Badges and File Previews for Pi
+# 🔖 pi-inline — Inline Badges and File Previews for Pi
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-inline-markup)](https://www.npmjs.com/package/@narumitw/pi-inline-markup) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-inline)](https://www.npmjs.com/package/@narumitw/pi-inline) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Style badges and preview local file citations in Pi's terminal transcript without changing stored messages.
-`pi-inline-markup` is inspired by [pi-emphasis](https://github.com/johnlindquist/pi-emphasis).
+`pi-inline` is inspired by [pi-emphasis](https://github.com/johnlindquist/pi-emphasis).
 
 ## ✨ Features
 
@@ -15,27 +15,37 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 
 Pi extensions run with your user permissions. Load only code you trust.
 
-This package is not yet published to npm. Try it from the repository root without building it:
+`@narumitw/pi-inline` is not yet published to npm. From the repository root,
+install dependencies and try it without a build:
 
 ```bash
-pi -e ./packages/pi-inline-markup
+npm install
+pi -e ./packages/pi-inline
 ```
 
 To keep this checkout installed:
 
 ```bash
-pi install ./packages/pi-inline-markup
+pi install ./packages/pi-inline
 ```
 
 After the first npm release, install or try it with:
 
 ```bash
-pi install npm:@narumitw/pi-inline-markup
-pi -e npm:@narumitw/pi-inline-markup
+pi install npm:@narumitw/pi-inline
+pi -e npm:@narumitw/pi-inline
 ```
 
-This package replaces the project-local `.pi/extensions/pi-inline-markup/` extension.
-If you explicitly configured the old path, remove that entry before loading the package.
+### Migrate from pi-inline-markup
+
+`pi update` does not switch to the new npm name. After the first release, run
+`pi remove npm:@narumitw/pi-inline-markup` in the original scope, then run
+`pi install npm:@narumitw/pi-inline` in that same scope. Add `-l` to both commands for a
+project install.
+
+If you load the old checkout path, replace it with `./packages/pi-inline`.
+Remove any explicit entry for the former `.pi/extensions/pi-inline-markup/`
+extension. Do not load both copies. The `/inline-markup` command is unchanged.
 
 ## 🚀 Quick start
 
@@ -106,6 +116,15 @@ session history.
   ratio. The extension has no fixed source size limit, but the image decoder
   and available memory still set practical limits. If a preview is unavailable,
   you can still open the link.
+
+## 📋 First publication
+
+Maintainers must review the regenerated Version PR for `@narumitw/pi-inline`
+before merging it and coordinate the merge with the approved first publication.
+Do not merge a Version PR that still targets `@narumitw/pi-inline-markup`. Leave
+the old npm package and its tags intact. After publication, verify the public
+version and npm-source loading, confirm npm Trusted Publishing for later releases,
+and update the install status in both READMEs.
 
 ## 🗂️ Package layout
 
