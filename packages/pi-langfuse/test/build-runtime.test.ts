@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { getLangfuseTracerProvider, setLangfuseTracerProvider } from "@langfuse/tracing";
 import { afterAll, beforeAll, test } from "vitest";
 import { listFiles } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
@@ -298,7 +297,7 @@ test("generated JavaScript root exposes the host API without eagerly loading pro
     const output = join(root, "dist");
     await cp(requireBuildFixture().output, output, { recursive: true });
     const entrySource = await readFile(join(output, "index.js"), "utf8");
-    assert.doesNotMatch(entrySource, /@langfuse\/otel/u);
+    assert.doesNotMatch(entrySource, /@opentelemetry\//u);
 
     const module = await import(`${pathToFileURL(join(output, "index.js")).href}?test=${crypto.randomUUID()}`);
     assert.equal(typeof module.default, "function");
@@ -364,7 +363,6 @@ test("generated package copies share runtime session capabilities", async () => 
     const key = Symbol.for(`@narumitw/pi-langfuse/runtime/${version}`);
     return { key, descriptor: Object.getOwnPropertyDescriptor(globalThis, key) };
   });
-  const previousProvider = getLangfuseTracerProvider();
   const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   try {
     // Own a fresh runtime without closing any runtime inherited from another test.
@@ -414,25 +412,27 @@ test("generated package copies share runtime session capabilities", async () => 
             else Reflect.deleteProperty(globalThis, key);
           }
         } finally {
-          try {
-            setLangfuseTracerProvider(previousProvider);
-          } finally {
-            await rm(root, { force: true, recursive: true });
-          }
+          await rm(root, { force: true, recursive: true });
         }
       }
     }
   }
 });
 
-test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
+test("Pi's Jiti loader can initialize and shut down the generated OTLP runtime", async () => {
   const root = await mkdtemp(join(packageRoot, ".pi-langfuse-build-test-"));
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const runtimeSlots = ["v1", "v2"].map((version) => Symbol.for(`@narumitw/pi-langfuse/runtime/${version}`));
   try {
     await cp(requireBuildFixture().output, output, { recursive: true });
     await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(agentDir, "pi-langfuse.json"),
+      JSON.stringify({ publicKey: "pk-jiti", secretKey: "sk-jiti", baseUrl: "http://127.0.0.1:1" }),
+      { mode: 0o600 },
+    );
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
       cwd: root,
@@ -456,7 +456,22 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     });
     await command?.handler("", ctx);
     assert.match(notifications.at(-1)?.message ?? "", /Langfuse setup and privacy/u);
+
+    const start = extension?.handlers.get("session_start")?.[0];
+    const shutdown = extension?.handlers.get("session_shutdown")?.[0];
+    assert.ok(start);
+    assert.ok(shutdown);
+    notifications.length = 0;
+    try {
+      await start({ type: "session_start", reason: "startup" }, ctx);
+      assert.ok(Reflect.get(globalThis, Symbol.for("@narumitw/pi-langfuse/runtime/v2")));
+      assert.deepEqual(notifications, []);
+    } finally {
+      await shutdown({ type: "session_shutdown", reason: "quit" }, ctx);
+    }
+    assert.deepEqual(notifications, []);
   } finally {
+    for (const key of runtimeSlots) Reflect.deleteProperty(globalThis, key);
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     await rm(root, { force: true, recursive: true });

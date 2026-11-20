@@ -36,9 +36,12 @@ pi -e ./packages/pi-langfuse
 ```
 
 The package declares `dist/index.ts`, so Pi cannot load an unbuilt local checkout.
-The Langfuse SDK requires Node.js >=22; the supported Pi runtimes require Node.js >=22.19.0.
-[Langfuse SDK 6](https://langfuse.com/docs/observability/sdk/upgrade-path/js-v5-to-v6) requires Langfuse Cloud or self-hosted Langfuse >=4.59.0.
-Proxies must accept gzip-compressed trace requests, or you must set `LANGFUSE_OTEL_COMPRESSION=none` before starting Pi.
+Supported Pi runtimes require Node.js >=22.19.0.
+The OpenTelemetry exporter sends traces directly to [Langfuse's OTLP endpoint](https://langfuse.com/integrations/native/opentelemetry) without the Langfuse SDK.
+Use Langfuse Cloud or self-hosted Langfuse >=4.59.0 for v4 ingestion.
+If your proxy does not accept gzip-compressed requests, set `LANGFUSE_OTEL_COMPRESSION=none` before starting Pi.
+Compression defaults to gzip after checking `LANGFUSE_OTEL_COMPRESSION`,
+`OTEL_EXPORTER_OTLP_TRACES_COMPRESSION`, and `OTEL_EXPORTER_OTLP_COMPRESSION` in order for a valid `gzip` or `none` value.
 The durable adapter targets experimental Pi durable APIs within the peer ranges in [`package.json`](./package.json); review its [compatibility and upgrade checks](./docs/durable.md#compatibility) before enabling or upgrading it.
 Pi extensions run with your user permissions.
 Review this extension and its data-export behavior before installing it.
@@ -301,7 +304,8 @@ Manual compaction outside an active agent trace is ignored; incomplete compactio
 Images and embedded base64 data URIs are represented without their payloads, including provider data URLs.
 Opaque `thinkingSignature`, `textSignature`, and `thoughtSignature` continuity values are always removed.
 Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers.
-Langfuse credentials are masked again in the span processor before network export.
+The OpenTelemetry backend masks Langfuse credentials before writing span attributes.
+Trace and observation fields, such as output and usage, take priority if there is too much metadata to export.
 
 The root agent begins before the first agent loop and remains open across retries, overflow-compaction recovery, and queued continuations.
 `agent_end` closes only the current attempt; `agent_settled` closes the root after no automatic work remains.

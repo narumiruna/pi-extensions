@@ -1,14 +1,9 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { isLangfuseSpan, LangfuseSpanProcessor } from "@langfuse/otel";
-import {
-  type LangfuseObservation,
-  type LangfuseObservationAttributes,
-  LangfuseOtelSpanAttributes,
-  setLangfuseTracerProvider,
-  startObservation,
-} from "@langfuse/tracing";
-import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { context, ROOT_CONTEXT, type Span, type Tracer, trace } from "@opentelemetry/api";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { CompressionAlgorithm } from "@opentelemetry/otlp-exporter-base";
+import { BatchSpanProcessor, type ReadableSpan, type SpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
 import type { LangfuseConfig } from "./config.js";
 import {
   type CreateLangfuseRuntimeOptions,
@@ -28,6 +23,10 @@ export type {
 
 const RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v2");
 const LEGACY_RUNTIME_KEY = Symbol.for("@narumitw/pi-langfuse/runtime/v1");
+const INSTRUMENTATION_SCOPE = "@narumitw/pi-langfuse";
+const TRACE = "langfuse.trace";
+const OBSERVATION = "langfuse.observation";
+const MAX_PENDING_METADATA_ATTRIBUTES = 128;
 
 interface ResolvedRuntimeConfig {
   publicKey: string;
@@ -48,99 +47,143 @@ type GlobalWithRuntime = typeof globalThis & {
   [LEGACY_RUNTIME_KEY]?: unknown;
 };
 
-export interface RuntimeFactories {
+interface RuntimeFactories {
   createProcessor(config: ResolvedRuntimeConfig): SpanProcessor;
-  createProvider(processor: SpanProcessor): NodeTracerProvider;
-  selectProvider(provider: NodeTracerProvider): void;
+  createProvider(processor: SpanProcessor): TracerProvider;
 }
 
 class ProductionObservation implements Observation {
   readonly traceId: string;
+  private readonly metadata = new Map<string, string>();
 
   constructor(
-    readonly native: LangfuseObservation,
+    readonly span: Span,
     private readonly secrets: readonly string[],
   ) {
-    this.traceId = native.traceId;
+    this.traceId = span.spanContext().traceId;
   }
 
   update(attributes: ObservationAttributes): Observation {
-    const { sessionId, userId, ...observationAttributes } = maskObservationAttributes(attributes, this.secrets);
-    this.native.updateOtelSpanAttributes(observationAttributes as LangfuseObservationAttributes);
-    applySessionId(this.native, sessionId);
-    applyUserId(this.native, userId);
+    const {
+      input,
+      output,
+      metadata,
+      level,
+      statusMessage,
+      model,
+      modelParameters,
+      usageDetails,
+      costDetails,
+      completionStartTime,
+      version,
+      sessionId,
+      userId,
+    } = attributes;
+    this.span.setAttributes({
+      [`${OBSERVATION}.input`]: serializeIO(input, this.secrets),
+      [`${OBSERVATION}.output`]: serializeIO(output, this.secrets),
+      [`${OBSERVATION}.level`]: level,
+      [`${OBSERVATION}.status_message`]: this.mask(statusMessage),
+      [`${OBSERVATION}.model.name`]: this.mask(model),
+      [`${OBSERVATION}.model.parameters`]: serializeIO(modelParameters, this.secrets),
+      [`${OBSERVATION}.usage_details`]: serializeIO(usageDetails, this.secrets),
+      [`${OBSERVATION}.cost_details`]: serializeIO(costDetails, this.secrets),
+      [`${OBSERVATION}.completion_start_time`]: serializeIO(completionStartTime, this.secrets),
+      "langfuse.version": this.mask(version),
+      "session.id": this.mask(sessionId),
+      "user.id": this.mask(userId),
+    });
+    this.setMetadata(OBSERVATION, metadata);
     return this;
   }
 
   updateTrace(attributes: ObservationAttributes): Observation {
-    const { input, output, metadata, name, sessionId, userId, tags, version } = maskObservationAttributes(
-      attributes,
-      this.secrets,
-    );
-    // Preserve setTraceIO's trace-only scope; Langfuse 6's update() changes observation IO instead.
-    for (const [key, value] of [
-      [LangfuseOtelSpanAttributes.TRACE_INPUT, input],
-      [LangfuseOtelSpanAttributes.TRACE_OUTPUT, output],
-    ] as const) {
-      const serialized = serializeTraceIO(value);
-      if (serialized !== undefined) this.native.otelSpan.setAttribute(key, serialized);
-    }
-    if (name !== undefined) {
-      this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_NAME, name);
-    }
-    applySessionId(this.native, sessionId);
-    applyUserId(this.native, userId);
-    if (tags !== undefined) {
-      this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_TAGS, tags);
-    }
-    if (version !== undefined) {
-      this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.VERSION, version);
-    }
-    for (const [key, value] of Object.entries(metadata ?? {})) {
-      const serialized = serializeMetadataValue(value);
-      if (serialized !== undefined) {
-        this.native.otelSpan.setAttribute(`${LangfuseOtelSpanAttributes.TRACE_METADATA}.${key}`, serialized);
-      }
-    }
+    const { input, output, metadata, name, sessionId, userId, tags, version } = attributes;
+    // Trace IO belongs to the receiving span without changing its observation IO.
+    this.span.setAttributes({
+      [`${TRACE}.input`]: serializeIO(input, this.secrets),
+      [`${TRACE}.output`]: serializeIO(output, this.secrets),
+      [`${TRACE}.name`]: this.mask(name),
+      [`${TRACE}.tags`]: tags?.map((tag) => maskSecretString(tag, this.secrets)),
+      "langfuse.version": this.mask(version),
+      "session.id": this.mask(sessionId),
+      "user.id": this.mask(userId),
+    });
+    this.setMetadata(TRACE, metadata);
     return this;
   }
 
   end(endTime?: number): Observation {
-    this.native.end(endTime);
+    // Write metadata last so it can only use slots left by trace and observation fields.
+    for (const [key, value] of this.metadata) this.span.setAttribute(key, value);
+    this.metadata.clear();
+    this.span.end(endTime);
     return this;
+  }
+
+  private mask(value: string | undefined): string | undefined {
+    return value === undefined ? undefined : maskSecretString(value, this.secrets);
+  }
+
+  private setMetadata(scope: string, metadata: Record<string, unknown> | undefined): void {
+    if (!metadata || !this.span.isRecording()) return;
+    for (const [key, value] of Object.entries(metadata)) {
+      if (scope === OBSERVATION && value == null) continue;
+      const attribute = `${scope}.metadata.${maskSecretString(key, this.secrets)}`;
+      if (this.metadata.size >= MAX_PENDING_METADATA_ATTRIBUTES && !this.metadata.has(attribute)) continue;
+      const serialized = serializeMetadataValue(value, this.secrets);
+      if (serialized !== undefined) this.metadata.set(attribute, serialized);
+    }
   }
 }
 
 class ProductionTraceBackend implements TraceBackend {
+  private readonly tracer: Tracer;
+  private readonly spans = new WeakSet<Span>();
+  private readonly secrets: readonly string[];
+
   constructor(
-    private readonly provider: NodeTracerProvider,
+    private readonly provider: TracerProvider,
     private readonly processor: SpanProcessor,
-    private readonly secrets: readonly string[],
-  ) {}
+    private readonly config: ResolvedRuntimeConfig,
+  ) {
+    this.tracer = provider.getTracer(INSTRUMENTATION_SCOPE);
+    this.secrets = [config.publicKey, config.secretKey].sort((a, b) => b.length - a.length);
+  }
 
   start(
     name: string,
     attributes: ObservationAttributes,
     options: { asType: ObservationType; parent?: Observation; startTime?: Date },
   ): Observation {
-    const maskedName = maskSecretString(name, this.secrets);
-    const { sessionId, userId, ...observationAttributes } = maskObservationAttributes(attributes, this.secrets);
-    const parent = options.parent;
-    const native =
-      parent instanceof ProductionObservation
-        ? startChild(parent.native, maskedName, observationAttributes, options.asType, options.startTime)
-        : startRoot(maskedName, observationAttributes, options.asType, options.startTime);
-    applySessionId(native, sessionId);
-    applyUserId(native, userId);
-    return new ProductionObservation(native, this.secrets);
+    const parent = options.parent instanceof ProductionObservation ? options.parent.span : undefined;
+    const parentContext = parent ? trace.setSpan(ROOT_CONTEXT, parent) : context.active();
+    const parentSpan = trace.getSpan(parentContext);
+    // Preserve the trace ID of an explicit parent even if it ended before this span started.
+    const isAppRoot = !parentSpan || !this.spans.has(parentSpan) || !parentSpan.isRecording();
+    const span = this.tracer.startSpan(
+      maskSecretString(name, this.secrets),
+      {
+        startTime: options.startTime,
+        attributes: {
+          [`${OBSERVATION}.type`]: options.asType,
+          "langfuse.internal.is_app_root": isAppRoot ? true : undefined,
+          "langfuse.environment": this.config.environment && maskSecretString(this.config.environment, this.secrets),
+          "langfuse.release": this.config.release && maskSecretString(this.config.release, this.secrets),
+        },
+      },
+      parentContext,
+    );
+    this.spans.add(span);
+    return new ProductionObservation(span, this.secrets).update(attributes);
   }
 
-  async forceFlush(): Promise<void> {
-    await this.processor.forceFlush();
+  forceFlush(): Promise<void> {
+    return this.processor.forceFlush();
   }
 
-  async shutdown(): Promise<void> {
-    await this.provider.shutdown();
+  shutdown(): Promise<void> {
+    return this.provider.shutdown();
   }
 }
 
@@ -200,42 +243,56 @@ async function initializeRuntime(
   factories: RuntimeFactories,
 ): Promise<SharedRuntime> {
   const processor = factories.createProcessor(config);
-  let provider: NodeTracerProvider | undefined;
+  let provider: TracerProvider;
   try {
     provider = factories.createProvider(processor);
-    factories.selectProvider(provider);
   } catch (error) {
-    await (provider?.shutdown() ?? processor.shutdown()).catch(() => undefined);
+    await processor.shutdown().catch(() => undefined);
     throw error;
   }
   const runtime = getLangfuseRuntimeInternal(
-    createLangfuseRuntimeFromBackend(
-      new ProductionTraceBackend(provider, processor, [config.publicKey, config.secretKey]),
-    ),
+    createLangfuseRuntimeFromBackend(new ProductionTraceBackend(provider, processor, config)),
   );
   return { fingerprint, runtime, shutdown: true };
 }
 
+class PiBatchSpanProcessor extends BatchSpanProcessor {
+  override onEnd(span: ReadableSpan): void {
+    if (span.instrumentationScope.name === INSTRUMENTATION_SCOPE) super.onEnd(span);
+  }
+}
+
 const defaultFactories: RuntimeFactories = {
-  createProcessor: (config) => {
-    const secrets = [config.secretKey, config.publicKey];
-    return new LangfuseSpanProcessor({
-      publicKey: config.publicKey,
-      secretKey: config.secretKey,
-      baseUrl: config.baseUrl,
-      environment: config.environment ?? "",
-      release: config.release ?? "",
-      flushAt: 512,
-      flushInterval: 5,
-      timeout: 5,
-      mask: ({ data }) => maskSecrets(data, secrets),
-      // Langfuse 6 also filters during onStart, before observation attributes exist.
-      shouldExportSpan: ({ otelSpan }) => isLangfuseSpan(otelSpan),
-    });
-  },
-  createProvider: (processor) => new NodeTracerProvider({ spanProcessors: [processor] }),
-  selectProvider: setLangfuseTracerProvider,
+  createProcessor: (config) =>
+    new PiBatchSpanProcessor({
+      exporter: new OTLPTraceExporter({
+        url: `${config.baseUrl}/api/public/otel/v1/traces`,
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${config.publicKey}:${config.secretKey}`).toString("base64")}`,
+          "x-langfuse-ingestion-version": "4",
+        },
+        timeoutMillis: 5_000,
+        compression: resolveCompression(),
+      }),
+      // Keep batches smaller than the SDK default because each span can carry large captured inputs and outputs.
+      maxExportBatchSize: 128,
+      scheduledDelayMillis: 5_000,
+    }),
+  // The provider is private: do not register it with OpenTelemetry or replace the host's provider.
+  createProvider: (processor) => new TracerProvider({ spanProcessors: [processor] }),
 };
+
+function resolveCompression(): CompressionAlgorithm {
+  for (const key of [
+    "LANGFUSE_OTEL_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_COMPRESSION",
+  ]) {
+    const value = process.env[key]?.trim().toLowerCase();
+    if (value === CompressionAlgorithm.NONE || value === CompressionAlgorithm.GZIP) return value;
+  }
+  return CompressionAlgorithm.GZIP;
+}
 
 export function resolveLangfuseRuntimeConfig(options: CreateLangfuseRuntimeOptions): ResolvedRuntimeConfig {
   const env = options.env === false ? undefined : (options.env ?? process.env);
@@ -298,130 +355,40 @@ function normalizeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-// Match Langfuse 5's createTraceAttributes serializer, including omitted and failed values.
-function serializeTraceIO(value: unknown): string | undefined {
+function serializeIO(value: unknown, secrets: readonly string[]): string | undefined {
+  if (typeof value === "string") return maskSecretString(value, secrets);
+  if (value == null) return undefined;
   try {
-    if (typeof value === "string") return value;
-    return value != null ? JSON.stringify(value) : undefined;
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) return undefined;
+    // Mask decoded keys and values so escaped credentials are redacted without breaking JSON.
+    return JSON.stringify(maskSecrets(JSON.parse(serialized), secrets));
   } catch {
     return "<failed to serialize>";
   }
 }
 
-function serializeMetadataValue(value: unknown): string | undefined {
-  return JSON.stringify(value);
-}
-
-function maskObservationAttributes(
-  attributes: ObservationAttributes,
-  secrets: readonly string[],
-): ObservationAttributes {
-  return {
-    ...attributes,
-    ...(attributes.metadata ? { metadata: maskSecrets(attributes.metadata, secrets) as Record<string, unknown> } : {}),
-    ...(attributes.name ? { name: maskSecretString(attributes.name, secrets) } : {}),
-    ...(attributes.sessionId ? { sessionId: maskSecretString(attributes.sessionId, secrets) } : {}),
-    ...(attributes.userId ? { userId: maskSecretString(attributes.userId, secrets) } : {}),
-    ...(attributes.tags ? { tags: attributes.tags.map((tag) => maskSecretString(tag, secrets)) } : {}),
-    ...(attributes.statusMessage ? { statusMessage: maskSecretString(attributes.statusMessage, secrets) } : {}),
-    ...(attributes.model ? { model: maskSecretString(attributes.model, secrets) } : {}),
-    ...(attributes.version ? { version: maskSecretString(attributes.version, secrets) } : {}),
-    ...(attributes.modelParameters
-      ? {
-          modelParameters: Object.fromEntries(
-            Object.entries(attributes.modelParameters).map(([key, value]) => [
-              maskSecretString(key, secrets),
-              typeof value === "string" ? maskSecretString(value, secrets) : value,
-            ]),
-          ),
-        }
-      : {}),
-  };
+function serializeMetadataValue(value: unknown, secrets: readonly string[]): string | undefined {
+  try {
+    return JSON.stringify(maskSecrets(value, secrets), (_, entry: unknown) => {
+      if (typeof entry === "number" && !Number.isFinite(entry)) return String(entry);
+      if (typeof entry !== "bigint") return entry;
+      return entry >= BigInt(Number.MIN_SAFE_INTEGER) && entry <= BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number(entry)
+        : entry.toString();
+    });
+  } catch {
+    return JSON.stringify("<failed to serialize>");
+  }
 }
 
 function maskSecretString(value: string, secrets: readonly string[]): string {
-  return maskSecrets(value, secrets) as string;
-}
-
-function applySessionId(observation: LangfuseObservation, sessionId: string | undefined): void {
-  if (sessionId !== undefined) {
-    observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, sessionId);
+  let masked = value.replace(/\b(?:sk|pk)-lf-[A-Za-z0-9_-]+\b/gu, "[LANGFUSE_KEY_REDACTED]");
+  // Replace longer configured keys first if one key is a prefix of the other.
+  for (const secret of secrets) {
+    if (secret) masked = masked.replaceAll(secret, "[LANGFUSE_KEY_REDACTED]");
   }
-}
-
-function applyUserId(observation: LangfuseObservation, userId: string | undefined): void {
-  if (userId !== undefined) {
-    observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_USER_ID, userId);
-  }
-}
-
-function startRoot(
-  name: string,
-  attributes: ObservationAttributes,
-  type: ObservationType,
-  startTime?: Date,
-): LangfuseObservation {
-  if (type === "agent") {
-    return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent", startTime });
-  }
-  if (type === "generation") {
-    return startObservation(name, attributes as LangfuseObservationAttributes, {
-      asType: "generation",
-      startTime,
-    });
-  }
-  if (type === "tool") {
-    return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool", startTime });
-  }
-  return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "span", startTime });
-}
-
-function startChild(
-  parent: LangfuseObservation,
-  name: string,
-  attributes: ObservationAttributes,
-  type: ObservationType,
-  startTime?: Date,
-): LangfuseObservation {
-  if (startTime) {
-    const parentSpanContext = parent.otelSpan.spanContext();
-    if (type === "agent") {
-      return startObservation(name, attributes as LangfuseObservationAttributes, {
-        asType: "agent",
-        parentSpanContext,
-        startTime,
-      });
-    }
-    if (type === "generation") {
-      return startObservation(name, attributes as LangfuseObservationAttributes, {
-        asType: "generation",
-        parentSpanContext,
-        startTime,
-      });
-    }
-    if (type === "tool") {
-      return startObservation(name, attributes as LangfuseObservationAttributes, {
-        asType: "tool",
-        parentSpanContext,
-        startTime,
-      });
-    }
-    return startObservation(name, attributes as LangfuseObservationAttributes, {
-      asType: "span",
-      parentSpanContext,
-      startTime,
-    });
-  }
-  if (type === "agent") {
-    return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent" });
-  }
-  if (type === "generation") {
-    return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "generation" });
-  }
-  if (type === "tool") {
-    return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool" });
-  }
-  return parent.startObservation(name, attributes as LangfuseObservationAttributes, { asType: "span" });
+  return masked;
 }
 
 function configFingerprint(config: ResolvedRuntimeConfig): string {
@@ -437,13 +404,7 @@ export function maskSecrets(data: unknown, secrets: readonly string[]): unknown 
 }
 
 function maskSecretValue(data: unknown, secrets: readonly string[], active: WeakSet<object>): unknown {
-  if (typeof data === "string") {
-    let masked = data.replace(/\b(?:sk|pk)-lf-[A-Za-z0-9_-]+\b/g, "[LANGFUSE_KEY_REDACTED]");
-    for (const secret of secrets) {
-      if (secret) masked = masked.replaceAll(secret, "[LANGFUSE_KEY_REDACTED]");
-    }
-    return masked;
-  }
+  if (typeof data === "string") return maskSecretString(data, secrets);
   if (!data || typeof data !== "object") return data;
   if (active.has(data)) return "[circular]";
 

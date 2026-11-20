@@ -1,13 +1,63 @@
 import assert from "node:assert/strict";
-import { setLangfuseTracerProvider } from "@langfuse/tracing";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { test } from "vitest";
+import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
+import { afterEach, test } from "vitest";
 import { createProductionBackend } from "../src/runtime.js";
 import { TraceRecorder } from "../src/tracing.js";
 
+afterEach(() => {
+  for (const version of ["v1", "v2"]) {
+    Reflect.deleteProperty(globalThis, Symbol.for(`@narumitw/pi-langfuse/runtime/${version}`));
+  }
+});
+
+test.each([128, 16])("metadata cannot displace late span fields (limit %i)", async (attributeCountLimit) => {
+  const exporter = new InMemorySpanExporter();
+  const backend = await createProductionBackend(
+    {
+      publicKey: "pk-attribute-limit",
+      secretKey: "sk-attribute-limit",
+      baseUrl: "https://example.test",
+      captureContent: true,
+    },
+    {
+      createProcessor: () => new SimpleSpanProcessor({ exporter }),
+      createProvider: (processor) =>
+        new TracerProvider({ spanProcessors: [processor], spanLimits: { attributeCountLimit } }),
+    },
+  );
+  try {
+    const metadata = Object.fromEntries(Array.from({ length: 160 }, (_, index) => [`key.${index}`, index]));
+    for (const scope of ["observation", "trace"]) {
+      const generation = backend.start(scope, { model: "test-model" }, { asType: "generation" });
+      const metadataUpdate =
+        scope === "trace" ? generation.updateTrace?.bind(generation) : generation.update.bind(generation);
+      assert.ok(metadataUpdate);
+      metadataUpdate({ metadata });
+      metadataUpdate({ metadata: { "key.0": "updated" } });
+      generation.update({ output: "answer", usageDetails: { output: 2 }, costDetails: { total: 0.01 } });
+      generation.updateTrace?.({ output: "trace answer" });
+      generation.end();
+    }
+
+    await backend.forceFlush();
+    const spans = exporter.getFinishedSpans();
+    assert.equal(spans.length, 2);
+    for (const { name: scope, attributes } of spans) {
+      assert.equal(attributes["langfuse.observation.output"], "answer", scope);
+      assert.equal(attributes["langfuse.observation.usage_details"], '{"output":2}', scope);
+      assert.equal(attributes["langfuse.observation.cost_details"], '{"total":0.01}', scope);
+      assert.equal(attributes["langfuse.trace.output"], "trace answer", scope);
+      assert.equal(attributes[`langfuse.${scope}.metadata.key.0`], '"updated"');
+      assert.equal(Object.keys(attributes).length, attributeCountLimit, scope);
+    }
+  } finally {
+    await backend.shutdown();
+  }
+});
+
 test("trace IO preserves legacy serialization, receiver scope, and sanitized recorder content", async () => {
   const exporter = new InMemorySpanExporter();
-  const processor = new SimpleSpanProcessor(exporter);
+  const processor = new SimpleSpanProcessor({ exporter });
   const backend = await createProductionBackend(
     {
       publicKey: "pk-trace-io",
@@ -121,6 +171,5 @@ test("trace IO preserves legacy serialization, receiver scope, and sanitized rec
     assert.equal(JSON.stringify(agent.attributes).includes("c2VjcmV0"), false);
   } finally {
     await backend.shutdown();
-    setLangfuseTracerProvider(null);
   }
 });
