@@ -7,7 +7,7 @@ import { test, vi } from "vitest";
 import { settingsFilePath as caffeinateSettingsPath } from "../packages/pi-caffeinate/src/settings.js";
 import { settingsFilePath as chromeDevtoolsSettingsPath } from "../packages/pi-chrome-devtools/src/settings.js";
 import { settingsFilePath as firecrawlSettingsPath } from "../packages/pi-firecrawl/src/settings.js";
-import { langfuseConfigPath } from "../packages/pi-langfuse/src/config.js";
+import { otelSettingsPath } from "../packages/pi-otel/src/config.js";
 import {
   createLocalConfigDocument,
   localConfigPath,
@@ -88,7 +88,7 @@ test("settings paths use Pi tilde expansion", () => {
     assert.equal(caffeinateSettingsPath(), join(agentDir, "pi-caffeinate.json"));
     assert.equal(chromeDevtoolsSettingsPath(), join(agentDir, "pi-chrome-devtools.json"));
     assert.equal(firecrawlSettingsPath(), join(agentDir, "pi-firecrawl.json"));
-    assert.equal(langfuseConfigPath(), join(agentDir, "pi-langfuse.json"));
+    assert.equal(otelSettingsPath(), join(agentDir, "pi-otel.json"));
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

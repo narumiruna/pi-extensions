@@ -72,8 +72,8 @@ test("the root dependency command exits nonzero for a mismatch and succeeds afte
 
 test("rejects the aa919c68 durable dev/peer mismatch from PR 1598", async () => {
   await fixture(async (root) => {
-    await json(root, "packages/pi-langfuse/package.json", {
-      name: "@narumitw/pi-langfuse",
+    await json(root, "packages/pi-otel/package.json", {
+      name: "@narumitw/pi-otel",
       version: "1.0.0",
       peerDependencies: { "@earendil-works/pi-durable": "1.0.4" },
       peerDependenciesMeta: { "@earendil-works/pi-durable": { optional: true } },
@@ -81,7 +81,7 @@ test("rejects the aa919c68 durable dev/peer mismatch from PR 1598", async () => 
     });
     assert.ok(
       dependencyProblems({ root }).some((problem) =>
-        /packages\/pi-langfuse\/package\.json:.*pi-durable.*1\.2\.0.*1\.0\.4.*align/u.test(problem),
+        /packages\/pi-otel\/package\.json:.*pi-durable.*1\.2\.0.*1\.0\.4.*align/u.test(problem),
       ),
     );
   });
@@ -102,17 +102,17 @@ test("rejects the 2e3c3ce1 hoisted OpenTelemetry peer mismatch from PR 1684", as
       peerDependencies: { "@opentelemetry/api": ">=1.10.0 <1.11.0" },
     });
     await json(root, "node_modules/@opentelemetry/api/package.json", { name: "@opentelemetry/api", version: "1.9.1" });
-    await json(root, "packages/pi-langfuse/package.json", {
-      name: "@narumitw/pi-langfuse",
+    await json(root, "packages/pi-otel/package.json", {
+      name: "@narumitw/pi-otel",
       version: "1.0.0",
       dependencies: { "@opentelemetry/api": "1.10.0" },
     });
-    await json(root, "packages/pi-langfuse/node_modules/@opentelemetry/api/package.json", {
+    await json(root, "packages/pi-otel/node_modules/@opentelemetry/api/package.json", {
       name: "@opentelemetry/api",
       version: "1.10.0",
     });
     await mkdir(join(root, "node_modules/@narumitw"), { recursive: true });
-    await symlink(join(root, "packages/pi-langfuse"), join(root, "node_modules/@narumitw/pi-langfuse"), "dir");
+    await symlink(join(root, "packages/pi-otel"), join(root, "node_modules/@narumitw/pi-otel"), "dir");
     // The consumer's newer nested copy cannot satisfy the hoisted SDK's peer.
     const problems = dependencyProblems({ root });
     assert.ok(

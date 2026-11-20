@@ -15,15 +15,15 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "pi-langfuse-durable-consumer-"));
   const packed = await exec(
     "npm",
-    ["pack", "--workspace", "@narumitw/pi-langfuse", "--ignore-scripts", "--json", "--pack-destination", directory],
+    ["pack", "--workspace", "@narumitw/pi-otel", "--ignore-scripts", "--json", "--pack-destination", directory],
     { cwd: process.cwd() },
   );
   const [{ filename }] = JSON.parse(packed.stdout) as Array<{ filename: string }>;
-  const installed = join(directory, "node_modules", "@narumitw", "pi-langfuse");
+  const installed = join(directory, "node_modules", "@narumitw", "pi-otel");
   await mkdir(installed, { recursive: true });
   await exec("tar", ["-xzf", join(directory, filename), "--strip-components=1", "-C", installed]);
   // Preserve workspace-local dependencies before falling back to hoisted ones, without a registry install.
-  const workspaceModules = resolve("packages/pi-langfuse/node_modules");
+  const workspaceModules = resolve("packages/pi-otel/node_modules");
   if (existsSync(workspaceModules)) await symlink(workspaceModules, join(installed, "node_modules"), "dir");
   const rootModules = resolve("node_modules");
   for (const entry of await readdir(rootModules, { withFileTypes: true })) {
@@ -31,7 +31,7 @@ beforeAll(async () => {
     if (entry.name.startsWith("@")) {
       await mkdir(join(directory, "node_modules", entry.name), { recursive: true });
       for (const name of await readdir(join(rootModules, entry.name))) {
-        if (entry.name === "@narumitw" && name === "pi-langfuse") continue;
+        if (entry.name === "@narumitw" && name === "pi-otel") continue;
         if (entry.name === "@earendil-works" && name === "pi-coding-agent") continue;
         const target = join(rootModules, entry.name, name);
         await symlink(target, join(directory, "node_modules", entry.name, name), "dir");
@@ -62,7 +62,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, fauxProvider, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, createRegistry, defineExtension, defineTool, hook, ToolTask } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { createLangfuseRuntime, createLangfuseRuntimeFromBackend, createPiLangfuseDurableConversation, type TraceBackend, type ObservationAttributes } from "@narumitw/pi-langfuse/durable";
+import { createLangfuseRuntime, createLangfuseRuntimeFromBackend, createPiLangfuseDurableConversation, type TraceBackend, type ObservationAttributes } from "@narumitw/pi-otel/durable";
 const context = BACKGROUND_CONTEXT;
 const records: Array<{ name: string; initial: ObservationAttributes; updates: ObservationAttributes[]; ended: boolean }> = [];
 const backend: TraceBackend = {

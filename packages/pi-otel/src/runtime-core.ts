@@ -100,7 +100,7 @@ export function getLangfuseRuntimeInternal(runtime: LangfuseRuntime): LangfuseRu
   const internal = (runtime as LangfuseRuntime & { [key: symbol]: LangfuseRuntimeInternal | undefined })[
     RUNTIME_INTERNAL_KEY
   ];
-  if (!internal) throw new Error("Langfuse runtime was not created by @narumitw/pi-langfuse.");
+  if (!internal) throw new Error("The tracing runtime was not created by this package.");
   return internal;
 }
 

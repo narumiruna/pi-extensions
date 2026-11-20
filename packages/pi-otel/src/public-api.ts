@@ -6,6 +6,8 @@ export {
 export {
   type CreateLangfuseRuntimeOptions,
   createLangfuseRuntime,
+  createOtelRuntime,
   type LangfuseRuntime,
   type LangfuseRuntimeConfig,
+  type OtlpRuntimeConfig,
 } from "./runtime-api.js";

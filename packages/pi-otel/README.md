@@ -1,11 +1,12 @@
-# 🪢 pi-langfuse — Trace Pi Runs in Langfuse
+# 🪢 pi-otel — Export Pi Traces with OpenTelemetry
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-langfuse)](https://www.npmjs.com/package/@narumitw/pi-langfuse) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-otel)](https://www.npmjs.com/package/@narumitw/pi-otel) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Export Pi coding-agent and durable conversation activity to [Langfuse](https://langfuse.com/) through OpenTelemetry.
+Export Pi coding-agent and durable conversation traces to an OpenTelemetry collector or [Langfuse](https://langfuse.com/).
 
 ## ✨ Features
 
+- Exports to a custom OTLP/HTTP endpoint or directly to Langfuse with its existing trace format.
 - Groups each settled agent run into one trace with indexed attempt spans for retries and queued continuations.
 - Records bounded provider requests, final assistant output, model identity, time to first content, usage, known costs, and safe response diagnostics.
 - Captures final tool inputs and outputs, progress timing, duration, failures, and structural compaction events.
@@ -18,38 +19,47 @@ Export Pi coding-agent and durable conversation activity to [Langfuse](https://l
 
 ## 📦 Install
 
+Until the first npm release, use the local checkout instructions below. Once published, install with:
+
 ```bash
-pi install npm:@narumitw/pi-langfuse
+pi install npm:@narumitw/pi-otel
 ```
 
 Try the published package without installing it:
 
 ```bash
-pi -e npm:@narumitw/pi-langfuse
+pi -e npm:@narumitw/pi-otel
 ```
 
 Build and load a local checkout from the repository root:
 
 ```bash
-npm --workspace @narumitw/pi-langfuse run build
-pi -e ./packages/pi-langfuse
+npm --workspace @narumitw/pi-otel run build
+pi -e ./packages/pi-otel
 ```
 
 The package declares `dist/index.ts`, so Pi cannot load an unbuilt local checkout.
 Supported Pi runtimes require Node.js >=22.19.0.
-The OpenTelemetry exporter sends traces directly to [Langfuse's OTLP endpoint](https://langfuse.com/integrations/native/opentelemetry) without the Langfuse SDK.
-Use Langfuse Cloud or self-hosted Langfuse >=4.59.0 for v4 ingestion.
-If your proxy does not accept gzip-compressed requests, set `LANGFUSE_OTEL_COMPRESSION=none` before starting Pi.
-Compression defaults to gzip after checking `LANGFUSE_OTEL_COMPRESSION`,
-`OTEL_EXPORTER_OTLP_TRACES_COMPRESSION`, and `OTEL_EXPORTER_OTLP_COMPRESSION` in order for a valid `gzip` or `none` value.
 The durable adapter targets experimental Pi durable APIs within the peer ranges in [`package.json`](./package.json); review its [compatibility and upgrade checks](./docs/durable.md#compatibility) before enabling or upgrading it.
-Pi extensions run with your user permissions.
-Review this extension and its data-export behavior before installing it.
+Pi extensions run with your user permissions. Review the [data-export behavior](#-security-and-privacy) before enabling tracing.
+
+If you already use `pi-langfuse`, uninstall it before loading `pi-otel` to avoid duplicate tracing and slash commands.
+Existing Langfuse settings still work; see [Settings](#settings). Host applications can change their import paths to `@narumitw/pi-otel` or `@narumitw/pi-otel/durable` without renaming their Langfuse factories.
 
 ## 🚀 Quick start
 
-Run `/langfuse`, choose **Set up Langfuse for this Pi agent directory**, enter your credentials, and restart Pi.
-New agent runs are then traced with the saved content-capture and metadata settings.
+Start an OpenTelemetry Collector with the OTLP HTTP receiver enabled. Save this as `~/.pi/agent/pi-otel.json`:
+
+```json
+{
+  "backend": "otlp",
+  "endpoint": "http://localhost:4318/v1/traces"
+}
+```
+
+Restart Pi, run a prompt, then use `/otel` → **Flush completed traces for this session** to send completed traces to the collector. Model and tool metadata are exported; prompts, replies, and tool contents stay local by default.
+
+For Langfuse instead, use `/otel` → **Set up Langfuse for this Pi agent directory** and restart Pi, or keep your existing `pi-langfuse.json`.
 
 ## 🧩 Host application embedding
 
@@ -60,7 +70,7 @@ import { DefaultResourceLoader, createAgentSession } from "@earendil-works/pi-co
 import {
   createLangfuseRuntime,
   createPiLangfuseSession,
-} from "@narumitw/pi-langfuse";
+} from "@narumitw/pi-otel";
 
 const runtime = await createLangfuseRuntime({
   config: { environment: "production" },
@@ -107,16 +117,18 @@ Controller disposal ends only that session's open observations; it never flushes
 Both operations are idempotent.
 
 Do not also auto-load this package's default extension into a session that uses `tracing.extension`, or that session will be traced twice.
-One process supports one active Langfuse credential/endpoint combination; creating a conflicting runtime fails and requires a process restart rather than replacing the active provider.
-Restart the process before switching from a package version that uses an older runtime protocol so two providers cannot initialize concurrently.
+Each process supports one active export connection. A conflicting connection requires a restart instead of replacing the active provider.
 
-Host runtime fields resolve independently in this order: `config`, the supplied `env` object (or `process.env`), then defaults.
-The supported names are `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT`, and `LANGFUSE_RELEASE`.
-Pass `env: false` to disable environment access.
-The default extension always uses its validated `pi-langfuse.json` with `env: false`, so its existing settings behavior does not change.
+For a generic OTLP receiver, import `createOtelRuntime` from the same package (or from `/durable` for a durable host) and call it with `{ endpoint, headers, serviceName }`.
+Pass that runtime to the same session or durable observer factory. Only `endpoint` is required; use explicit options, not environment variables, to configure the OTLP connection.
+Set `captureContent: false` on embedded observers for metadata-only tracing; the default extension's JSON settings do not configure those observers.
+
+`createLangfuseRuntime()` resolves fields in this order: `config`, the supplied `env` object (or `process.env`), then defaults.
+It supports `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT`, and `LANGFUSE_RELEASE`.
+Pass `env: false` to disable these lookups. The default extension resolves these fields only from its settings file.
 
 `setRequestId()` snapshots `pi.request.id` when the next root trace starts; changing or clearing it never rewrites an active trace.
-`traceName` changes only the Langfuse trace name; schema-v2 observation names and hierarchy stay unchanged.
+`traceName` changes the trace-name attribute without changing span names or hierarchy.
 `onTraceId` runs once after each root is created, including automatic-continuation roots, and callback errors are intentionally ignored so host code cannot corrupt tracing cleanup.
 Custom metadata is sanitized, bounded, and exported even when `captureContent` is `false`; package-owned `pi.*` fields cannot be overridden.
 Treat custom metadata, tags, session IDs, user IDs, request IDs, and trace names as exported data.
@@ -131,7 +143,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   createLangfuseRuntime,
   createPiLangfuseDurableConversation,
-} from "@narumitw/pi-langfuse/durable";
+} from "@narumitw/pi-otel/durable";
 
 const runtime = await createLangfuseRuntime(); // Standard Langfuse credentials/environment.
 const tracing = await createPiLangfuseDurableConversation(runtime, {
@@ -159,30 +171,31 @@ Tracing never resumes paused recovery or controls execution, and capture bounds 
 See the installed [durable API guide](./docs/durable.md) for the compatibility matrix, ownership, per-request correlation, privacy projections, recovery semantics and limitations.
 The host remains responsible for authorization, storage, execution cancellation/recovery, callback-owned work and shared-runtime shutdown.
 
+<a id="settings"></a>
+
 ## ⚙️ Settings
 
-Run the interactive manager and choose **Set up Langfuse for this Pi agent directory** or **Update Langfuse for this Pi agent directory**:
+Settings apply to the Pi agent directory, not a project or an individual conversation. Edit `<getAgentDir()>/pi-otel.json` (normally `~/.pi/agent/pi-otel.json`).
+If that file is absent, `pi-otel` reads a legacy `pi-langfuse.json` in the same directory without copying or deleting it.
+An existing `pi-otel.json` always wins, even if invalid; repair it to re-enable tracing.
+To edit a legacy setup with `/otel`, move the file to `pi-otel.json` first, without overwriting an existing file.
 
-```text
-/langfuse
-```
+Keep the file private (`chmod 600 ~/.pi/agent/pi-otel.json`). The extension enforces mode `0600` and refuses to load the file if it cannot do so.
+Restart each Pi process to change the backend, endpoint, credentials, or service name; `/reload` cannot replace the process-owned exporter.
+The extension reads `captureContent` and `userId` again at session start. If set, `userId` is exported and must be a non-empty string of at most 200 characters.
 
-The setup flow prompts for the secret key, public key, and base URL in the same order Langfuse presents them.
-Leave either key blank to preserve its existing value when updating a valid config.
-Leave the base URL blank to use `https://us.cloud.langfuse.com`.
-The first successful setup creates the file.
-Within one Pi process, updates run in invocation order, reread the latest valid private document, preserve unknown fields, and save atomically with mode `0600`.
-Malformed JSON or invalid recognized fields block writes until you repair the file.
-Errors redact entered and stored credentials.
-A failed save leaves the current session and previous file unchanged.
+### OTLP collector
 
-Configuration applies to the displayed Pi agent directory, not only the current conversation.
-Restart every running Pi process after saving so later sessions use the new connection.
-`/reload` is not sufficient because the isolated Langfuse runtime is initialized once per process.
-In print or JSON mode, edit the file manually because the interactive manager is unavailable.
+Use `"backend": "otlp"` with the full HTTP or HTTPS traces URL, including the receiver path (usually `/v1/traces`).
+The exporter sends OTLP/HTTP protobuf, not gRPC. The URL must not contain credentials, a query, or a fragment.
+Optional `serviceName` defaults to `pi`. Optional `headers` is an object of literal header names and values, for example `{"Authorization": "Bearer YOUR_TOKEN"}`.
+Header names are case-insensitive and cannot be duplicated or override transport headers such as `Content-Type`.
+Custom headers require HTTPS, except over HTTP to a loopback IP such as `127.0.0.1` or `[::1]`. Use a loopback IP instead of `localhost` if a local HTTP collector needs headers.
+The exporter does not inherit ambient `OTEL_EXPORTER_OTLP_*` connection settings. `captureContent` defaults to `false`.
 
-You can also create `<getAgentDir()>/pi-langfuse.json` (normally `~/.pi/agent/pi-langfuse.json`) manually.
-This minimal example keeps prompts, responses, and tool content local:
+### Langfuse
+
+Use `"backend": "langfuse"` or omit `backend` as in existing settings. Choose the Langfuse setup action in `/otel`, or save the literal keys manually:
 
 ```json
 {
@@ -193,33 +206,17 @@ This minimal example keeps prompts, responses, and tool content local:
 }
 ```
 
-`publicKey` and `secretKey` are required literal strings.
-Environment-variable and command interpolation are intentionally unsupported.
-`baseUrl` defaults to `https://us.cloud.langfuse.com`; regional and self-hosted HTTP or HTTPS endpoints are supported.
-Prefer HTTPS because HTTP sends Langfuse credentials and trace content without transport encryption.
+`publicKey` and `secretKey` are required. `baseUrl` defaults to `https://us.cloud.langfuse.com`; regional and self-hosted HTTP or HTTPS endpoints are supported.
+Optional `environment` is at most 40 lowercase letters, numbers, hyphens, or underscores and cannot start with `langfuse`; `release` is an optional string.
+Changes to `environment` or `release` also require a restart. For compatibility, `captureContent` defaults to `true` in Langfuse mode; set it to `false` to keep raw content local.
 
-`environment`, `release`, and `userId` are optional Langfuse trace attributes.
-An environment must match Langfuse's contract: at most 40 lowercase letters, numbers, hyphens, or underscores, and it cannot start with `langfuse`.
-`userId` populates the Langfuse user dimension, which is what the Sessions and Traces views group by; Langfuse accepts at most 200 characters, and leaving it unset reports no user.
-`captureContent` defaults to `true` when omitted.
-Set it to `false` to trace only timing, model, usage, cost, status, and bounded diagnostic metadata.
-In that mode, pi-langfuse does not export prompts, provider-request snapshots, responses, or tool content.
+The setup flow leaves saved keys unchanged if you submit an empty key field. A blank base URL selects the default. Saves run in order within one Pi process, preserve unknown fields, and publish atomically. Invalid settings block writes; a failed save leaves the previous file and current session unchanged.
 
-The extension automatically restricts an existing config file to mode `0600` and refuses to load credentials if that protection cannot be enforced.
-You can also set it explicitly:
-
-```bash
-chmod 600 ~/.pi/agent/pi-langfuse.json
-```
-
-Changes to credentials, endpoint, environment, release, or `captureContent` require a Pi process restart.
-Changes to `userId` apply to new sessions without restarting Pi.
-The isolated OpenTelemetry tracer provider is initialized once per Pi process and used only for Langfuse.
-It does not replace Pi's process-global provider or send Langfuse observations to another extension's exporter.
+Use Langfuse Cloud or self-hosted Langfuse >=4.59.0 for [v4 OTLP ingestion](https://langfuse.com/integrations/native/opentelemetry). Compression defaults to `gzip` after checking `LANGFUSE_OTEL_COMPRESSION`, `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION`, and `OTEL_EXPORTER_OTLP_COMPRESSION` in order for a valid `gzip` or `none` value.
 
 ## 🔭 What is traced
 
-Each trace has this observation hierarchy:
+Both backends preserve the same run, attempt, turn, generation, tool, and compaction hierarchy. Langfuse keeps its existing `langfuse.*` ingestion attributes. A generic receiver gets standard OTLP spans with `service.name`, OpenTelemetry error status, and Pi attributes under `pi.observation.*` and `pi.trace.*`.
 
 ```text
 pi.trace
@@ -304,7 +301,7 @@ Manual compaction outside an active agent trace is ignored; incomplete compactio
 Images and embedded base64 data URIs are represented without their payloads, including provider data URLs.
 Opaque `thinkingSignature`, `textSignature`, and `thoughtSignature` continuity values are always removed.
 Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers.
-The OpenTelemetry backend masks Langfuse credentials before writing span attributes.
+The OpenTelemetry backend masks configured export credentials before writing span attributes.
 Trace and observation fields, such as output and usage, take priority if there is too much metadata to export.
 
 The root agent begins before the first agent loop and remains open across retries, overflow-compaction recovery, and queued continuations.
@@ -318,23 +315,21 @@ Detached HEADs retain only commit/detached metadata and the `git:detached` tag.
 Missing Git, non-repositories, timeouts, and lookup failures silently omit Git context without affecting tracing.
 
 Completed observations are exported in batches while Pi remains live.
-Neither `agent_end` nor `agent_settled` waits for Langfuse network I/O.
-To wait for completed exports, run `/langfuse` and choose **Flush completed traces for this session**; quit shutdown also drains the provider.
+Neither `agent_end` nor `agent_settled` waits for exporter network I/O.
+Quit shutdown drains the provider.
 
 ## 💬 Commands
 
-Run `/langfuse` to configure tracing, inspect its state without exposing credentials, or flush completed traces for the current session in TUI or RPC mode.
-Arguments are ignored for compatibility and cannot bypass the menu.
-Print and JSON modes reject the command with an error containing tracing state and the manual configuration path.
+- `/otel` shows tracing status, the settings path, and privacy help. Use its setup action for Langfuse or edit the displayed settings file for a generic OTLP receiver. When tracing is active, choose **Flush completed traces for this session** to send completed spans to the configured endpoint. No arguments are accepted.
+- `/langfuse` is deprecated. It warns you to use `/otel`, then opens the same menu and ignores arguments. This does not deprecate the Langfuse backend or its settings.
 
-Connection changes apply to the current Pi agent directory and require each process to restart; see [Settings](#-settings).
-Flushing exports completed observations to the configured endpoint; review [Security and privacy](#-security-and-privacy) before enabling content capture.
+Both commands can open menus in TUI and RPC mode. Print and JSON modes reject them with the current status and settings path.
 
 ## 🔒 Security and privacy
 
 With content capture enabled, traces can contain user prompts, model responses, tool arguments, and tool results.
 These may include source code, file contents, shell output, or other sensitive project data.
-Review Langfuse retention and access controls before enabling the extension.
+Review the destination's retention and access controls before enabling the extension. Use HTTPS for remote receivers because HTTP does not encrypt credentials or trace data.
 
 Metadata includes Git branch names, commit ids, working directory, session and leaf ids, the configured `userId`, model identity, usage, cost, aggregate counts, and allowlisted response-header values.
 This metadata remains exported when `captureContent` is `false`.
@@ -342,21 +337,21 @@ Branch names and diagnostic header values can contain operational details.
 A `userId` can identify you if you set it to an email address or real name.
 Choose a pseudonymous value when that matters, or leave `userId` unset to export no user at all.
 
-The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner.
-Set `"captureContent": false` in `pi-langfuse.json` when prompts, provider-request snapshots, responses, and tool content must remain local.
+The built-in mask protects configured export credentials but is not a general secret scanner.
+Set `"captureContent": false` when prompts, provider-request snapshots, responses, tool content, and free-form provider error messages must stay local. Traces still record the error status and a generic message. Turn it on only for trusted receivers.
 Compaction summaries, tool partial results, opaque continuation signatures, authorization headers, cookies, and unapproved response headers are never exported in either mode.
 
 ## 🗂️ Package layout
 
 ```text
-packages/pi-langfuse/
+packages/pi-otel/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin default and public entrypoint
-│   ├── langfuse.ts                    # Default settings and command adapter
+│   ├── otel.ts                        # Default settings and command adapter
 │   ├── pi-session.ts                  # Per-session Pi lifecycle controller
 │   ├── durable.ts                     # Public durable observer entrypoint
 │   ├── runtime-core.ts                # Process-runtime ownership
-│   ├── runtime.ts                     # Lazy production Langfuse runtime
+│   ├── runtime.ts                     # Lazy OpenTelemetry exporters and span mapping
 │   └── tracing.ts                     # Schema-v2 observation recorder
 ├── docs/durable.md                    # Durable API, compatibility and privacy contract
 ├── dist/                              # Generated Node, declaration, and Jiti runtime

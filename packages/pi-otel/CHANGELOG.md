@@ -1,4 +1,6 @@
-# @narumitw/pi-langfuse
+# @narumitw/pi-otel
+
+Versions through 0.54.3 were released as `@narumitw/pi-langfuse`.
 
 ## 0.54.3
 

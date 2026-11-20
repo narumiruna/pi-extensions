@@ -1,6 +1,6 @@
 # Durable tracing
 
-Import `createPiLangfuseDurableConversation` from `@narumitw/pi-langfuse/durable` to observe one existing conversation. This entry uses public durable APIs, the existing Langfuse backend, sanitizer and shared-runtime ownership; it does not create an `AgentSession`, load coding-agent registration, or install a durable extension.
+Import `createPiLangfuseDurableConversation` from `@narumitw/pi-otel/durable` to observe one existing conversation. This entry uses public durable APIs, the existing Langfuse backend, sanitizer and shared-runtime ownership; it does not create an `AgentSession`, load coding-agent registration, or install a durable extension.
 
 > **Experimental compatibility:** this adapter targets the Pi durable and Chord peer ranges declared in [`package.json`](../package.json). Their upstream APIs can change without notice. Do not upgrade durable without the checks below.
 
@@ -14,18 +14,18 @@ Import `createPiLangfuseDurableConversation` from `@narumitw/pi-langfuse/durable
 The coding-agent, durable and Chord peers are optional because each entry only needs its own runtime. Install durable and Chord explicitly for `/durable`. They are host peers rather than adapter-owned execution dependencies so the host's experimental Harness and Context APIs stay aligned. The adapter uses the host Harness's public `observeConversation()` and `observeCommits()` methods. Keep host dependencies within the declared peer contract, and check `active`/`onError` when attaching. Run the durable and packed-consumer checks on the host's supported Node versions before deployment.
 The Langfuse SDK independently requires Node >=22, but that is not sufficient for these Pi runtimes; see the [installation requirements](../README.md#-install). The tested host dependencies are the versions resolved from the package's devDependencies and repository lockfile. Pi AI's nominal transcript types must resolve consistently with the host's durable dependency resolution; do not pass a Models collection from an incompatible Pi AI release.
 
-For an upstream upgrade, inspect the changelog, README, public root exports/types and installed implementation. Review synchronous observation ordering, deferred persistence, submission and task publications, request checkpoint identities, the read-only attachment barrier, source end reasons and `Harness.closed`, `Submission.status()`, committed message projections and cancellation semantics. Review the durable peer range and update the test dependency together. Run the focused durable and coding-agent suites, `npm run check`, `npm test`, `npm run package:pack -- langfuse`, packed consumer tests on supported Node versions, and the package-directory Pi loading smoke. Never replace removed public APIs with private imports or coding-agent event casts.
+For an upstream upgrade, inspect the changelog, README, public root exports/types and installed implementation. Review synchronous observation ordering, deferred persistence, submission and task publications, request checkpoint identities, the read-only attachment barrier, source end reasons and `Harness.closed`, `Submission.status()`, committed message projections and cancellation semantics. Review the durable peer range and update the test dependency together. Run the focused durable and coding-agent suites, `npm run check`, `npm test`, `npm run package:pack -- otel`, packed consumer tests on supported Node versions, and the package-directory Pi loading smoke. Never replace removed public APIs with private imports or coding-agent event casts.
 
 ## Minimal host example
 
-Install `@narumitw/pi-langfuse`, `@earendil-works/pi-durable` and `@earendil-works/chord` within the declared peer ranges, plus a compatible `@earendil-works/pi-ai`.
+Install `@narumitw/pi-otel`, `@earendil-works/pi-durable` and `@earendil-works/chord` within the declared peer ranges, plus a compatible `@earendil-works/pi-ai`.
 
 ```ts
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import {
   createLangfuseRuntime,
   createPiLangfuseDurableConversation,
-} from "@narumitw/pi-langfuse/durable";
+} from "@narumitw/pi-otel/durable";
 
 // The host already owns harness, conversation, provider credentials and authorization.
 const runtime = await createLangfuseRuntime({

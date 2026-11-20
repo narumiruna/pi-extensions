@@ -52,7 +52,7 @@ This historical audit includes `pi-typesafe-search`, now archived under `depreca
 | pi-sync | Seventeen first-use inputs must exist and remain lazy; Kit/parser subpath bans include dynamic external edges; parsed import validation; no public rename seam | Declarative boundaries and focused graph validator; migrate; share parsed validation and publication seam |
 | pi-ticker | Two menus lazy; forbid only exact Kit root, permit subpaths and dynamic external edges; validate all relative import extensions | Declarative; migrate with shared parsed import validation |
 | pi-tool | Catalog lazy; alternate banner | Declarative; migrate |
-| pi-langfuse | Separate TypeScript and JavaScript graphs, library-chunks, tsc declaration generation, cross-graph and declaration validation | Retain local builder and all tests: migration would require a second build pipeline/declaration hook used by no other package |
+| pi-otel | Separate TypeScript and JavaScript graphs, library-chunks, tsc declaration generation, cross-graph and declaration validation | Retain local builder and all tests: migration would require a second build pipeline/declaration hook used by no other package |
 
 Parsed, non-bundling esbuild validation replaces import-like string matching in migrated builders. Every actual relative static import, re-export and dynamic import must target an emitted `.ts` runtime exactly. Ordinary strings are not imports. Stray `.js` output is rejected consistently, including the old stamp/sync gaps. These checks do not alter emitted output.
 
