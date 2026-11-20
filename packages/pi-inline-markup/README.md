@@ -3,6 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-inline-markup)](https://www.npmjs.com/package/@narumitw/pi-inline-markup) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Style badges and preview local file citations in Pi's terminal transcript without changing stored messages.
+`pi-inline-markup` is inspired by [pi-emphasis](https://github.com/johnlindquist/pi-emphasis).
 
 ## ✨ Features
 
