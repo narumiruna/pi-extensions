@@ -98,7 +98,7 @@ test("invalid unmanaged field-policy save preserves settings and unknown fields"
     await assert.rejects(
       updateLocalConfig((current) => {
         const setup = current.syncSetups.home;
-        assert.ok(setup);
+        assert.ok(setup && !setup.sync.scope);
         return {
           ...current,
           syncSetups: { ...current.syncSetups, home: { ...setup, sync: { ...setup.sync, include: [] } } },
@@ -211,7 +211,7 @@ test("unsupported settings recovery names supported versions without recommendin
     () => validateSettingsDocument({ ...v3S3Settings(), version: 999 }),
     (error) => {
       assert.ok(error instanceof Error);
-      assert.match(error.message, /version 3, 4, 5 or 6/);
+      assert.match(error.message, /version 3, 4, 5, 6 or 7/);
       assert.match(error.message, /do not downgrade/);
       assert.doesNotMatch(error.message, /create a new version 3/);
       return true;

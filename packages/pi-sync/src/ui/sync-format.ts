@@ -57,7 +57,7 @@ export function formatPushSummary(
     ...excludedPolicyLines(config),
     head ? `Remote latest: ${safeTerminalText(head.snapshotId)}` : "Remote latest: empty",
     "Publication effect: the backend's active head will reference the new immutable snapshot. Removed paths leave the active snapshot; retained history is not erased.",
-    ...(remote && inspectRemoteSelection(config.include, remote, config.exclude).kind === "different"
+    ...(remote && inspectRemoteSelection(config.include, remote, config.exclude, config).kind === "different"
       ? ["Included-content policy effect: replace the differing remote selection with this setup's local selection."]
       : []),
     formatPublicationPreview(remote, upload),
@@ -70,6 +70,13 @@ export function formatPushSummary(
 }
 
 function excludedPolicyLines(config: CommonSyncConfig) {
+  if (config.scope)
+    return [
+      "Sync scope: all eligible files in the Pi agent directory.",
+      `Excluded paths: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}`,
+      `Re-included paths: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
+      "Credentials and project trust stay local. Excluded paths are omitted from new publications, not erased from history.",
+    ];
   return config.exclude === undefined
     ? []
     : [

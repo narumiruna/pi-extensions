@@ -13,7 +13,7 @@ import {
 } from "../backends/webdav/webdav-config.js";
 import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { normalizeLocalFields } from "../sync/local-field-policy.js";
-import { normalizeSyncInclude } from "../sync/sync-policy.js";
+import { normalizeDirectoryRules, normalizeSyncInclude } from "../sync/sync-policy.js";
 import { CONFIG_FILE_NAME } from "./config-file.js";
 import type {
   OnSwitchAction,
@@ -34,9 +34,10 @@ export function normalizeOnSwitch(value: unknown): OnSwitchAction {
 }
 
 export function validateSettingsDocument(value: Record<string, unknown>): PiSyncSettingsV3 {
-  if (value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6) {
+  const version = value.version;
+  if (version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7) {
     throw new Error(
-      `Unsupported pi-sync settings: version 3, 4, 5 or 6 is required. Keep the existing ${CONFIG_FILE_NAME} for recovery and use a compatible pi-sync client or review a separate supported setup; do not downgrade portable field policies. pi-sync will not migrate or overwrite unsupported settings.`,
+      `Unsupported pi-sync settings: version 3, 4, 5, 6 or 7 is required. Keep the existing ${CONFIG_FILE_NAME} for recovery and use a compatible pi-sync client or review a separate supported setup; do not downgrade portable policies. pi-sync will not migrate or overwrite unsupported settings.`,
     );
   }
   rejectLegacyFields(
@@ -88,6 +89,7 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
       name,
       requireOwnObject(syncSetups, name, "sync setup") as Record<string, unknown>,
       storageConnections,
+      version,
     );
   }
   const names = Object.keys(syncSetups);
@@ -98,18 +100,6 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
     }
   } else if (!activeSyncSetup || !Object.hasOwn(syncSetups, activeSyncSetup)) {
     throw new Error("Invalid pi-sync settings: activeSyncSetup must reference an existing own-property sync setup.");
-  }
-  for (const setup of Object.values(syncSetups)) {
-    const policy = (setup as SyncSetupSettings).sync;
-    if (policy.localFields !== undefined && value.version !== 4 && value.version !== 5 && value.version !== 6)
-      throw new Error("localFields requires explicit settings version 4; older binaries must refuse portable state.");
-  }
-  for (const setup of Object.values(syncSetups)) {
-    const policy = (setup as SyncSetupSettings).sync;
-    if (policy.exclude !== undefined && value.version !== 6)
-      throw new Error("sync.exclude requires explicit settings version 6; older clients must refuse excluded content.");
-    if ((policy.mergeContent || policy.partialSync) && value.version !== 5 && value.version !== 6)
-      throw new Error("Content/partial sync requires explicit settings version 5.");
   }
   validateUniqueRemoteSyncSetups(syncSetups, storageConnections);
   return value as PiSyncSettingsV3;
@@ -164,7 +154,12 @@ function validateStorageConnection(name: string, value: Record<string, unknown>)
   }
 }
 
-function validateSyncSetup(name: string, value: Record<string, unknown>, connections: Record<string, unknown>) {
+function validateSyncSetup(
+  name: string,
+  value: Record<string, unknown>,
+  connections: Record<string, unknown>,
+  version: PiSyncSettingsV3["version"],
+) {
   rejectLegacyFields(
     value,
     [
@@ -214,14 +209,32 @@ function validateSyncSetup(name: string, value: Record<string, unknown>, connect
       mixedSetupError("WebDAV", name);
     }
   }
-  if (!Object.hasOwn(sync, "include")) {
-    throw new Error(`Invalid pi-sync settings: sync setup “${name}” is missing sync.include.`);
-  }
-  const include = normalizeSyncInclude(sync.include);
-  normalizeSyncExclude(sync.exclude);
   const localFields = normalizeLocalFields(sync.localFields);
-  if (localFields.length > 0 && !include.includes("settings.json"))
-    throw new Error("Nonempty localFields requires settings.json in sync.include.");
+  if (Object.hasOwn(sync, "scope")) {
+    if (sync.scope !== "agent-directory") throw new Error("Invalid pi-sync settings: unsupported sync.scope.");
+    if (version < 7) throw new Error("sync.scope requires explicit settings version 7.");
+    if (Object.hasOwn(sync, "include"))
+      throw new Error("Invalid pi-sync settings: agent-directory scope cannot use sync.include.");
+    normalizeDirectoryRules(sync.exclude);
+    normalizeDirectoryRules(sync.reinclude);
+    if (sync.sessions !== undefined && typeof sync.sessions !== "boolean")
+      throw new Error("Invalid pi-sync settings: sync.sessions must be boolean.");
+  } else {
+    if (Object.hasOwn(sync, "sessions") || Object.hasOwn(sync, "reinclude"))
+      throw new Error("Invalid pi-sync settings: sync.sessions and sync.reinclude require agent-directory scope.");
+    if (!Object.hasOwn(sync, "include"))
+      throw new Error(`Invalid pi-sync settings: sync setup “${name}” is missing sync.include.`);
+    const include = normalizeSyncInclude(sync.include);
+    normalizeSyncExclude(sync.exclude);
+    if (localFields.length > 0 && !include.includes("settings.json"))
+      throw new Error("Nonempty localFields requires settings.json in sync.include.");
+  }
+  if (sync.localFields !== undefined && version < 4)
+    throw new Error("localFields requires explicit settings version 4; older binaries must refuse portable state.");
+  if (sync.exclude !== undefined && version < 6)
+    throw new Error("sync.exclude requires explicit settings version 6; older clients must refuse excluded content.");
+  if ((sync.mergeContent || sync.partialSync) && version < 5)
+    throw new Error("Content/partial sync requires explicit settings version 5.");
   for (const key of ["mergeContent", "partialSync", "agentMode", "continuous"])
     if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`${key} must be boolean.`);
   if (sync.mergeSettings !== undefined && typeof sync.mergeSettings !== "boolean")

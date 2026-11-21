@@ -1,9 +1,9 @@
 import type { EngineContext } from "../host.js";
-import { loadConfig } from "../settings/config.js";
+import { configFromSettings, loadConfig } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
-import { sessionDirFromContext } from "../snapshot/session-paths.js";
+import { effectiveSessionRoot, sessionDirFromContext, snapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { pendingTransactionEntries } from "../snapshot/snapshot-transaction-directory.js";
 import { stateDirectoryMigrationNotice, withStateDirectoryAccess } from "../state/state-directory.js";
 import { captureMutationOwner } from "./mutation-owner.js";
@@ -29,12 +29,17 @@ export async function initializeSync(ctx: EngineContext, signal: AbortSignal, pu
         validate();
         const settings = await readLocalConfigObject();
         validate();
-        const setup = settings?.activeSyncSetup;
+        const config = settings?.activeSyncSetup ? configFromSettings(settings) : undefined;
+        const sessionDir =
+          config?.scope === "agent-directory"
+            ? await effectiveSessionRoot(ctx, config, signal)
+            : sessionDirFromContext(ctx);
+        validate();
         const current = ctx.sessionManager.getSessionFile?.();
         await recoverSnapshotTransactionsOnStartup({
-          exclude: setup ? settings.syncSetups[setup]?.sync.exclude : undefined,
+          ...(config ? snapshotOptionsForContext(ctx, config) : {}),
           signal,
-          sessionDir: sessionDirFromContext(ctx),
+          sessionDir,
           protectedTargets: [...(ctx.protectedSessionFiles ?? []), ...(current ? [current] : [])],
           validateMutation: validate,
         });

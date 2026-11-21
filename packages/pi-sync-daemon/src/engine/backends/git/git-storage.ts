@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { Snapshot, SnapshotSelection } from "../../snapshot/snapshot-types.js";
 import { sameLocalFields, validatePortableSnapshot, validateSnapshotFieldPolicy } from "../../sync/local-fields.js";
 import {
+  assertAgentDirectoryPathLayout,
+  configuredSnapshotPathMatcher,
   portableSnapshotSelection,
   sameSnapshotSelection,
   snapshotSelectionInclude,
@@ -64,7 +66,8 @@ export function requireGitManifest(value: unknown): GitManifest {
     (manifest.snapshotVersion !== 1 &&
       manifest.snapshotVersion !== 2 &&
       manifest.snapshotVersion !== 3 &&
-      manifest.snapshotVersion !== 4) ||
+      manifest.snapshotVersion !== 4 &&
+      manifest.snapshotVersion !== 5) ||
     typeof manifest.snapshotId !== "string" ||
     manifest.snapshotId.length > 512 ||
     !/^[A-Za-z0-9._-]+$/u.test(manifest.snapshotId) ||
@@ -99,8 +102,9 @@ export function requireGitManifest(value: unknown): GitManifest {
     throw new Error("Git publication manifest is malformed.");
   }
   validateSnapshotFieldPolicy({ version: manifest.snapshotVersion, localFields: manifest.localFields });
-  if (manifest.selection !== undefined) portableSnapshotSelection(manifest.selection);
-  validateSnapshotSelection({ version: manifest.snapshotVersion, selection: manifest.selection });
+  const selection = manifest.selection === undefined ? undefined : portableSnapshotSelection(manifest.selection);
+  validateSnapshotSelection({ version: manifest.snapshotVersion, selection });
+  const selected = selection?.scope ? configuredSnapshotPathMatcher(selection) : undefined;
   let total = 0;
   const paths = new Set<string>();
   for (const rawFile of manifest.files) {
@@ -111,6 +115,7 @@ export function requireGitManifest(value: unknown): GitManifest {
     if (
       !hasExactKeys(file as Record<string, unknown>, ["path", "sha256", "size"]) ||
       !isSafeSnapshotPath(file.path) ||
+      (selected !== undefined && !selected(file.path)) ||
       typeof file.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/u.test(file.sha256) ||
       typeof file.size !== "number" ||
@@ -125,7 +130,8 @@ export function requireGitManifest(value: unknown): GitManifest {
     }
     paths.add(file.path);
   }
-  assertNoPathConflicts([...paths]);
+  if (selected) assertAgentDirectoryPathLayout(paths);
+  else assertNoPathConflicts([...paths]);
   return manifest as GitManifest;
 }
 

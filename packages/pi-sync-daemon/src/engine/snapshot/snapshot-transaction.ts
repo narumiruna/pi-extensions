@@ -2,58 +2,42 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assertWithinRoot, isDeniedPath, isPathInside } from "../paths.js";
+import { isPathInside } from "../paths.js";
 import { syncDirectory, writeJson } from "../state/json-file.js";
 import { withLock } from "../state/lock.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
 import { stateDir } from "../state/state-directory.js";
-import { normalizeSyncExclude, sameSyncExclude } from "../sync/exclude-policy.js";
+import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
+import { includeFromSelectionConfig, type SyncSelectionConfig, selectionForSnapshot } from "../sync/sync-policy.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
-import { caseReplacementSpelling, coalesceCaseReplacements, isCaseReplacement } from "./snapshot-case-replacement.js";
+import {
+  agentDirectoryConfiguredSessionDir,
+  agentDirectorySessionDirFromSettings,
+  readAgentDirectorySettings,
+} from "./snapshot.js";
+import { caseReplacementSpelling, coalesceCaseReplacements } from "./snapshot-case-replacement.js";
 import { assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { withMissingTargetQueues, withTargetQueues } from "./snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
-import {
-  prepareSessionRootTransition,
-  resolveTransitionSessionRoot,
-  type SessionRootTransition,
-  validateSessionRootTransition,
-} from "./snapshot-root-transition.js";
+import { prepareSessionRootTransition, resolveTransitionSessionRoot } from "./snapshot-root-transition.js";
 import { pendingTransactionEntries, transactionRoot } from "./snapshot-transaction-directory.js";
 import { fileImage, indexTransactionPlan } from "./snapshot-transaction-plan.js";
+import {
+  AGENT_DIRECTORY_JOURNAL_VERSION,
+  assertAllowedTarget,
+  assertRecoveryPolicy,
+  isStrictlyInside,
+  type TransactionEntry,
+  type TransactionJournal,
+  transactionHasSessionTargets,
+  validateJournal,
+  validateJournalPolicy,
+} from "./snapshot-transaction-policy.js";
 import type { SnapshotApplyPlan } from "./snapshot-types.js";
 
 const JOURNAL_VERSION = 4;
-interface TransactionEntry {
-  target: string;
-  /** Version 5: one physical file, original target spelling and intended installed spelling. */
-  afterTarget?: string;
-  backupName: string;
-  kind: "missing" | "file" | "directory" | "symlink";
-  linkTarget?: string;
-  beforeImage?: string;
-  afterImage?: string;
-  postFiles?: { relative: string; image: string }[];
-  /** Durable intent permits only a missing intermediate image, never unknown bytes. */
-  removalPending?: boolean;
-  /** Published before materialization: absence/partial trees can no longer prove an unstarted replacement. */
-  replacementStarted?: boolean;
-  /** Published before copying to a transaction-derived sibling staging path. */
-  recoveryStaged?: boolean;
-}
-interface TransactionJournal {
-  version: number;
-  exclude?: string[];
-  /** Version 6: durable files are accepted; surviving evidence permits cleanup only. */
-  completed?: boolean;
-  root: string;
-  sessionRoot?: string;
-  /** Version 7: reviewed settings images authorize recovery from either transition root. */
-  sessionRootTransition?: SessionRootTransition;
-  entries: TransactionEntry[];
-}
-interface TransactionOptions {
+interface TransactionOptions extends SyncSelectionConfig {
   sessionDir?: string;
   exclude?: readonly string[];
   signal?: AbortSignal;
@@ -66,15 +50,20 @@ interface TransactionOptions {
 
 export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options: TransactionOptions = {}) {
   options.validateMutation?.();
+  const root = path.resolve(agentDir());
+  if (options.scope === "agent-directory") {
+    const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(options.signal, root));
+    options = { ...options, sessionDir: sessionStorageRoot(root, sessionDir) };
+  }
   await recoverPendingSnapshotTransactions(options);
-  const coalesced = await coalesceCaseReplacements(path.resolve(agentDir()), plan);
+  const coalesced = await coalesceCaseReplacements(root, plan);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
   const targets = [...new Set([...coalesced.plan.deletes, ...coalesced.plan.writes.map((item) => item.target)])].sort();
   if (targets.length > 16_384)
     throw new Error("Snapshot transaction exceeds its target bound; review a smaller transfer.");
   return withTargetQueues(targets, options, async (heldKeys) => {
-    await assertUnexcludedTargets(agentDir(), targets, options);
+    await assertUnexcludedTargets(root, [...targets, ...coalesced.replacements.values()], options);
     options.signal?.throwIfAborted();
     if (
       targets.some((target) =>
@@ -120,7 +109,18 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
       expectedPreimages.set(original, expected);
       expectedPreimages.set(target, destination);
     }
+    if (options.scope === "agent-directory") {
+      const evidence = await stableAgentDirectorySettingsImage(root, plan, options);
+      if (evidence) {
+        const target = originalTargets.get(evidence.target) ?? evidence.target;
+        const reviewed = expectedPreimages.get(target);
+        if (reviewed !== undefined && reviewed !== evidence.image)
+          throw new Error("Reviewed Pi settings changed before apply; snapshot installation refused.");
+        expectedPreimages.set(target, evidence.image);
+      }
+    }
     for (const [target, expected] of expectedPreimages) {
+      if (options.scope === "agent-directory") await assertUnexcludedTargets(agentDir(), [target], options);
       const current = await image(target);
       options.validateMutation?.();
       options.signal?.throwIfAborted();
@@ -173,6 +173,8 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
             const entry = entriesByTarget.get(item.target);
             if (!entry) throw new Error("Unowned transaction target.");
             const deletedByThisCall = uninstalledWrites.delete(entry.target);
+            if (options.scope === "agent-directory")
+              await assertUnexcludedTargets(transaction.journal.root, [item.target], options);
             await verifyTarget(transaction.directory, entry, transaction.journal, deletedByThisCall);
             options.validateMutation?.();
             options.signal?.throwIfAborted();
@@ -269,14 +271,13 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw new Error("Cannot recover malformed pi-sync transaction; preserve private evidence for review.");
     }
+    validateJournalPolicy(journal);
+    if (!journal.completed) assertRecoveryPolicy(journal, options);
     let sessionDir = options.sessionDir;
-    if (
-      sessionDir === undefined &&
-      options.resolveConfiguredSessionDir &&
-      !journal.completed &&
-      transactionHasSessionTargets(journal)
-    ) {
-      sessionDir = await configuredSessionDir();
+    if (sessionDir === undefined && !journal.completed) {
+      if (options.scope === "agent-directory") sessionDir = await agentDirectoryConfiguredSessionDir(options.signal);
+      else if (options.resolveConfiguredSessionDir && transactionHasSessionTargets(journal))
+        sessionDir = await configuredSessionDir();
     }
     options.validateMutation?.();
     options.signal?.throwIfAborted();
@@ -296,8 +297,6 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
       options.signal?.throwIfAborted();
     }
     validateJournal(directory, journal, sessionDir);
-    if (!journal.completed && !sameSyncExclude(journal.exclude, options.exclude))
-      throw new Error("Pending transaction has a different exclude policy; preserve its backup for reviewed recovery.");
     if (journal.completed) {
       await removeTransaction(directory);
       continue;
@@ -308,6 +307,21 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
   }
 }
 
+async function stableAgentDirectorySettingsImage(root: string, plan: SnapshotApplyPlan, options: TransactionOptions) {
+  const settingsTarget = mergePathIdentity(path.join(root, "settings.json"));
+  const write = plan.writes.find(({ target }) => mergePathIdentity(target) === settingsTarget);
+  const target = write?.target ?? plan.deletes.find((target) => mergePathIdentity(target) === settingsTarget);
+  if (!target) return;
+  const beforeBytes = await readAgentDirectorySettings(options.signal, root);
+  const before = beforeBytes === undefined ? undefined : agentDirectorySessionDirFromSettings(beforeBytes);
+  options.validateMutation?.();
+  options.signal?.throwIfAborted();
+  const after = write ? agentDirectorySessionDirFromSettings(write.content) : undefined;
+  if (sessionStorageRoot(root, before) !== sessionStorageRoot(root, after))
+    throw new Error("Agent-directory transfers cannot change Pi session storage; keep the local sessionDir setting.");
+  return { target, image: beforeBytes === undefined ? "missing" : fileImage(beforeBytes) };
+}
+
 async function prepareTransaction(
   plan: SnapshotApplyPlan,
   targets: string[],
@@ -316,7 +330,8 @@ async function prepareTransaction(
 ) {
   const { sessionDir } = options;
   const root = path.resolve(agentDir());
-  const sessionRoot = sessionDir ? path.resolve(sessionStorageRoot(root, sessionDir)) : undefined;
+  const wholeDirectory = options.scope === "agent-directory";
+  const sessionRoot = sessionDir || wholeDirectory ? path.resolve(sessionStorageRoot(root, sessionDir)) : undefined;
   const indexed = indexTransactionPlan(plan, targets);
   const directory = path.join(transactionRoot(), randomUUID());
   const backupDirectory = path.join(directory, "before");
@@ -327,6 +342,7 @@ async function prepareTransaction(
     options.validateMutation?.();
     assertAllowedTarget(root, sessionRoot, target);
     await assertSafeParents(root, sessionRoot, target);
+    if (wholeDirectory) await assertUnexcludedTargets(root, [target], options);
     const entry: TransactionEntry = { target, backupName: `${index}`, kind: "missing" };
     if (replacements.has(target)) entry.afterTarget = replacements.get(target);
     const backup = path.join(backupDirectory, entry.backupName);
@@ -342,9 +358,10 @@ async function prepareTransaction(
           dereference: false,
           verbatimSymlinks: true,
           preserveTimestamps: true,
-          filter: () => {
+          filter: async (source) => {
             options.signal?.throwIfAborted();
             options.validateMutation?.();
+            if (wholeDirectory) await assertUnexcludedTargets(root, [source], options, { recursive: false });
             return true;
           },
         });
@@ -381,18 +398,23 @@ async function prepareTransaction(
   // File fsync does not persist the name linking each backup into this directory.
   await syncDirectory(backupDirectory);
   const effectiveRoot = sessionRoot ?? path.join(root, "sessions");
-  const sessionRootTransition = await prepareSessionRootTransition(
-    directory,
-    root,
-    effectiveRoot,
-    entries,
-    plan,
-    options,
-  );
+  const sessionRootTransition = wholeDirectory
+    ? undefined
+    : await prepareSessionRootTransition(directory, root, effectiveRoot, entries, plan, options);
   const journal: TransactionJournal = {
-    version: sessionRootTransition ? 7 : replacements.size ? 5 : JOURNAL_VERSION,
+    version: wholeDirectory
+      ? AGENT_DIRECTORY_JOURNAL_VERSION
+      : sessionRootTransition
+        ? 7
+        : replacements.size
+          ? 5
+          : JOURNAL_VERSION,
     root,
-    ...(options.exclude === undefined ? {} : { exclude: normalizeSyncExclude(options.exclude) }),
+    ...(wholeDirectory
+      ? { selection: selectionForSnapshot(includeFromSelectionConfig(options), options.exclude, options) }
+      : options.exclude === undefined
+        ? {}
+        : { exclude: normalizeSyncExclude(options.exclude) }),
     sessionRoot: sessionRootTransition ? effectiveRoot : sessionRoot,
     sessionRootTransition,
     entries,
@@ -439,6 +461,11 @@ async function restoreQueuedTransaction(
   validateJournal(directory, journal, options.sessionDir);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
+  await assertUnexcludedTargets(
+    journal.root,
+    journal.entries.flatMap((entry) => [entry.target, ...(entry.afterTarget ? [entry.afterTarget] : [])]),
+    options,
+  );
   for (const entry of journal.entries) {
     if (
       options.protectedTargets?.some(
@@ -619,7 +646,11 @@ async function removeOwnedTarget(
   options: TransactionOptions,
   restoringBefore?: string,
 ) {
-  await assertUnexcludedTargets(journal.root, [entry.target], options);
+  await assertUnexcludedTargets(
+    journal.root,
+    [entry.target, ...(entry.afterTarget ? [entry.afterTarget] : [])],
+    options,
+  );
   const current = await verifyTarget(directory, entry, journal);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
@@ -638,6 +669,7 @@ async function removeOwnedTarget(
   options.validateMutation?.();
   options.signal?.throwIfAborted();
   if (restoringBefore !== undefined && verified === restoringBefore) return false;
+  if (options.scope === "agent-directory") await assertUnexcludedTargets(journal.root, [entry.target], options);
   await fs.rm(entry.target, { recursive: true, force: true });
   await syncDirectory(path.dirname(entry.target));
   return true;
@@ -792,120 +824,6 @@ async function ownedPostTree(target: string, files: { relative: string; image: s
   return (await visit(target)) && (!requireComplete || [...expected.keys()].every((key) => seen.has(key)));
 }
 
-function validateJournal(directory: string, journal: TransactionJournal, sessionDir?: string) {
-  if (
-    ![1, 2, 3, 4, 5, 6, 7].includes(journal.version) ||
-    !Array.isArray(journal.entries) ||
-    journal.entries.length > 16_384
-  )
-    throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
-  if (journal.exclude !== undefined && !Array.isArray(journal.exclude))
-    throw new Error("Invalid transaction exclude policy; preserve evidence.");
-  normalizeSyncExclude(journal.exclude);
-  if (journal.completed !== undefined && (![6, 7].includes(journal.version) || journal.completed !== true))
-    throw new Error("Invalid transaction completion evidence.");
-  const root = path.resolve(agentDir());
-  if (typeof journal.root !== "string" || path.resolve(journal.root) !== root)
-    throw new Error("Transaction root no longer matches the Pi agent directory.");
-  if (journal.sessionRootTransition !== undefined) {
-    if (journal.version !== 7 || typeof journal.sessionRoot !== "string")
-      throw new Error("Invalid session root-transition version.");
-    validateSessionRootTransition(journal.sessionRootTransition);
-  } else if (journal.version === 7) throw new Error("Missing session root-transition evidence.");
-  const trustedSessionRoot = sessionDir
-    ? path.resolve(sessionStorageRoot(root, sessionDir))
-    : path.join(root, "sessions");
-  if (
-    journal.sessionRoot !== undefined &&
-    (typeof journal.sessionRoot !== "string" ||
-      !path.isAbsolute(journal.sessionRoot) ||
-      path.resolve(journal.sessionRoot) !== journal.sessionRoot ||
-      (!journal.completed && transactionHasSessionTargets(journal) && journal.sessionRoot !== trustedSessionRoot))
-  )
-    throw new Error("Transaction session root is not owned by this context; preserve evidence for review.");
-  for (const entry of journal.entries) {
-    if (
-      !entry ||
-      typeof entry.target !== "string" ||
-      !path.isAbsolute(entry.target) ||
-      path.resolve(entry.target) !== entry.target ||
-      typeof entry.backupName !== "string" ||
-      !/^\d+$/u.test(entry.backupName) ||
-      !["missing", "file", "directory", "symlink"].includes(entry.kind)
-    )
-      throw new Error("Invalid pi-sync transaction entry.");
-    assertWithinRoot(directory, path.join(directory, "before", entry.backupName));
-    assertAllowedTarget(root, journal.sessionRoot, entry.target);
-    if (
-      entry.afterTarget !== undefined &&
-      (![5, 6, 7].includes(journal.version) ||
-        typeof entry.afterTarget !== "string" ||
-        !isCaseReplacement(root, entry.target, entry.afterTarget) ||
-        path.resolve(entry.afterTarget) !== entry.afterTarget ||
-        entry.kind !== "file")
-    )
-      throw new Error("Invalid transaction case replacement evidence.");
-    if (entry.afterTarget) assertAllowedTarget(root, journal.sessionRoot, entry.afterTarget);
-    if (
-      journal.version >= 2 &&
-      ((entry.beforeImage === undefined ? !journal.completed : typeof entry.beforeImage !== "string") ||
-        (entry.afterImage === undefined ? !journal.completed : typeof entry.afterImage !== "string") ||
-        (entry.postFiles === undefined ? !journal.completed : !Array.isArray(entry.postFiles)))
-    )
-      throw new Error("Invalid transaction postimage evidence.");
-    if (entry.recoveryStaged !== undefined && typeof entry.recoveryStaged !== "boolean")
-      throw new Error("Invalid recovery staging evidence.");
-    if (entry.removalPending !== undefined && (journal.version < 3 || typeof entry.removalPending !== "boolean"))
-      throw new Error("Invalid transaction removal evidence.");
-    if (
-      entry.replacementStarted !== undefined &&
-      (journal.version < 4 || typeof entry.replacementStarted !== "boolean")
-    )
-      throw new Error("Invalid transaction replacement evidence.");
-    if (entry.removalPending && entry.replacementStarted)
-      throw new Error("Conflicting transaction replacement evidence.");
-    for (const file of entry.postFiles ?? []) {
-      if (
-        typeof file.relative !== "string" ||
-        typeof file.image !== "string" ||
-        !isStrictlyInside(entry.target, path.resolve(entry.target, file.relative))
-      )
-        throw new Error("Invalid transaction subtree evidence.");
-    }
-  }
-}
-function transactionHasSessionTargets(journal: TransactionJournal) {
-  const root = path.resolve(agentDir());
-  return (
-    Array.isArray(journal.entries) &&
-    journal.entries.some(
-      (entry) =>
-        typeof entry?.target === "string" &&
-        (!isPathInside(root, entry.target) ||
-          isPathInside(path.join(root, "sessions"), entry.target) ||
-          (typeof journal.sessionRoot === "string" && isPathInside(journal.sessionRoot, entry.target))),
-    )
-  );
-}
-function isStrictlyInside(root: string, target: string) {
-  return path.relative(path.resolve(root), path.resolve(target)) !== "" && isPathInside(root, target);
-}
-
-function assertAllowedTarget(root: string, sessionRoot: string | undefined, target: string) {
-  const resolved = path.resolve(target);
-  if (isStrictlyInside(root, resolved)) {
-    if (isDeniedPath(path.relative(root, resolved))) throw new Error("Transaction targets denied private storage.");
-    assertWithinRoot(root, resolved);
-    return;
-  }
-  if (sessionRoot && isStrictlyInside(sessionRoot, resolved)) {
-    if (isDeniedPath(`sessions/${path.relative(sessionRoot, resolved)}`))
-      throw new Error("Transaction targets denied session storage.");
-    assertWithinRoot(sessionRoot, resolved);
-    return;
-  }
-  throw new Error("Transaction target is outside configured roots.");
-}
 async function assertSafeParents(root: string, sessionRoot: string | undefined, target: string) {
   assertAllowedTarget(root, sessionRoot, target);
   const boundary = isPathInside(root, target) ? root : sessionRoot;
@@ -930,7 +848,12 @@ async function completeTransaction(directory: string, journal: TransactionJourna
   // may only retry cleanup, never roll back already accepted files.
   await writeJson(
     path.join(directory, "journal.json"),
-    { ...journal, version: journal.sessionRootTransition ? 7 : 6, completed: true },
+    {
+      ...journal,
+      version:
+        journal.version === AGENT_DIRECTORY_JOURNAL_VERSION ? journal.version : journal.sessionRootTransition ? 7 : 6,
+      completed: true,
+    },
     {
       maxBytes: 32 * 1024 * 1024,
     },

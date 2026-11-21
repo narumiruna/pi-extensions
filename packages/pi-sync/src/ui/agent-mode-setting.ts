@@ -43,7 +43,13 @@ export async function saveAgentMode(
       `Storage path: ${safeTerminalText(setup.storage.path)}`,
       ...(setup.storage.bucket ? [`Bucket: ${safeTerminalText(String(setup.storage.bucket))}`] : []),
       ...(setup.storage.branch ? [`Branch: ${safeTerminalText(String(setup.storage.branch))}`] : []),
-      `Included paths: ${setup.sync.include.map(safeTerminalText).join(", ")}`,
+      ...(setup.sync.scope
+        ? [
+            "Sync scope: all eligible files in the Pi agent directory.",
+            `Excluded paths: ${setup.sync.exclude?.map(safeTerminalText).join(", ") || "none"}`,
+            `Re-included paths: ${setup.sync.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
+          ]
+        : [`Included paths: ${setup.sync.include.map(safeTerminalText).join(", ")}`]),
       continuous ? CONTINUOUS_DESCRIPTION : AGENT_MODE_DESCRIPTION,
       ...(continuous
         ? [

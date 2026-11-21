@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withEngineMutationQueue as withFileMutationQueue } from "../host.js";
@@ -12,6 +13,7 @@ import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
 import { mergePathIdentity } from "./file-merge-planner.js";
+import { configuredSnapshotPathMatcher } from "./sync-policy.js";
 import { fileHashMap } from "./sync-state.js";
 
 /** Read-only filesystem applicability check before publishing a combined result. */
@@ -26,11 +28,10 @@ export async function preflightMergedTargets(
   const afterHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(after));
   const paths = [...new Set([...Object.keys(beforeHashes), ...Object.keys(afterHashes)])].sort();
   const changed = new Set(paths.filter((item) => beforeHashes[item] !== afterHashes[item]));
-  await assertUnexcludedTargets(
-    root,
-    [...changed].map((item) => snapshotTarget(root, item, options.sessionDir)),
-    options,
-  );
+  requireManagedChanges(changed, options);
+  const targets = [...changed].map((item) => snapshotTarget(root, item, options.sessionDir));
+  if (options.scope === "agent-directory") await assertCanonicalMutationTargets(targets, options);
+  await assertUnexcludedTargets(root, targets, options);
   await assertCanonicalMergedTargets(root, changed, options);
   await assertDistinctMergedTargets(root, paths, changed, options, protectedTarget, new Set(Object.keys(afterHashes)));
   const removed = replacementPaths(
@@ -41,10 +42,14 @@ export async function preflightMergedTargets(
   for (const relative of paths) {
     if (changed.has(relative)) await assertFilesystemTarget(root, relative, options, removedTargets, beforeHashes);
   }
-  await assertCanonicalMutationTargets(
-    [...changed].map((relative) => snapshotTarget(root, relative, options.sessionDir)),
-    options,
-  );
+  await assertCanonicalMutationTargets(targets, options);
+}
+
+function requireManagedChanges(paths: Iterable<string>, options: SnapshotOptions) {
+  if (options.scope !== "agent-directory") return;
+  const configured = configuredSnapshotPathMatcher(options);
+  for (const relative of paths)
+    if (!configured(relative)) throw new Error("A merged transfer targets a path outside the configured policy.");
 }
 
 function replacementPaths(removed: Set<string>, afterHashes: Readonly<Record<string, string>>) {
@@ -129,22 +134,55 @@ async function assertDistinctMergedTargets(
   }
 }
 
-async function assertReviewedTree(directory: string, relative: string, beforeHashes: Readonly<Record<string, string>>) {
+async function hashReviewedFile(target: string, stat: Stats, options: SnapshotOptions) {
+  if (options.scope !== "agent-directory")
+    return createHash("sha256")
+      .update(await fs.readFile(target))
+      .digest("hex");
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat();
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== stat.dev || opened.ino !== stat.ino)
+      throw new Error("Reviewed file changed at the merge boundary.");
+    const hash = createHash("sha256");
+    let total = 0;
+    for await (const bytes of handle.createReadStream({ autoClose: false, signal: options.signal })) {
+      options.signal?.throwIfAborted();
+      options.validateMutation?.();
+      total += bytes.length;
+      if (total > 64 * 1024 * 1024) throw new Error("Reviewed file exceeds the merge byte limit.");
+      hash.update(bytes);
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertReviewedTree(
+  directory: string,
+  relative: string,
+  beforeHashes: Readonly<Record<string, string>>,
+  options: SnapshotOptions,
+) {
   for (const name of await fs.readdir(directory)) {
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
     const child = path.join(directory, name);
     const childRelative = `${relative}/${name}`;
     const stat = await fs.lstat(child);
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
     if (stat.isDirectory()) {
-      await assertReviewedTree(child, childRelative, beforeHashes);
+      await assertReviewedTree(child, childRelative, beforeHashes, options);
     } else if (
-      stat.isFile() &&
-      stat.nlink === 1 &&
-      beforeHashes[childRelative] ===
-        createHash("sha256")
-          .update(await fs.readFile(child))
-          .digest("hex")
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      beforeHashes[childRelative] === undefined ||
+      beforeHashes[childRelative] !== (await hashReviewedFile(child, stat, options))
     ) {
-    } else {
       throw new Error("Reviewed directory contains unknown or changed files; publication refused.");
     }
   }
@@ -210,7 +248,7 @@ async function assertFilesystemTarget(
     const stat = await fs.lstat(target);
     if ((!stat.isFile() && !removedTargets.has(target)) || (stat.isFile() && stat.nlink > 1))
       throw new Error("Merge target is non-regular or hard-linked; review a directional operation before transfer.");
-    if (stat.isDirectory() && beforeHashes) await assertReviewedTree(target, relative, beforeHashes);
+    if (stat.isDirectory() && beforeHashes) await assertReviewedTree(target, relative, beforeHashes, options);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && !(code === "ENOTDIR" && removedTargets.size > 0)) throw error;
@@ -235,9 +273,9 @@ export async function applyMergedSnapshot(
     afterHashes,
   );
   const intermediateDirectories = [...replacements].filter((item) => !beforeHashes[item] && !afterHashes[item]);
-  const changed = [
-    ...new Set([...paths.filter((item) => beforeHashes[item] !== afterHashes[item]), ...intermediateDirectories]),
-  ].sort();
+  const changedFiles = paths.filter((item) => beforeHashes[item] !== afterHashes[item]);
+  requireManagedChanges(changedFiles, options);
+  const changed = [...new Set([...changedFiles, ...intermediateDirectories])].sort();
   const protectedKeys = new Set([...protectedPaths].map(mergePathIdentity));
   if (changed.some((item) => protectedKeys.has(mergePathIdentity(item)))) {
     throw new Error("A merged transfer targets the current session; review is required.");
@@ -255,6 +293,7 @@ export async function applyMergedSnapshot(
     new Set(Object.keys(afterHashes)),
   );
   await assertCanonicalMutationTargets(targets, options);
+  if (options.scope === "agent-directory") await assertUnexcludedTargets(root, targets, options);
   // Existing case aliases share Pi's non-reentrant realpath queue. Reserve the
   // missing destination separately only after deleting its reviewed preimage.
   const targetsByQueue = new Map<string, string[]>();
@@ -339,6 +378,10 @@ export async function applyMergedSnapshot(
       await validate();
       const relative = relativeByTarget.get(target);
       if (!relative) throw new Error("Unowned merge target.");
+      if (options.scope === "agent-directory") {
+        await assertCanonicalMutationTargets([target], options);
+        await assertUnexcludedTargets(root, [target], options);
+      }
       await assertFilesystemTarget(root, relative, options, removedTargets, currentHashes);
       await validate();
       let hash: string | undefined;
@@ -350,9 +393,7 @@ export async function applyMergedSnapshot(
         } else {
           if (!stat.isFile() || stat.nlink > 1)
             throw new Error("Merged transfer target is no longer an independent regular file.");
-          hash = createHash("sha256")
-            .update(await fs.readFile(target))
-            .digest("hex");
+          hash = await hashReviewedFile(target, stat, options);
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

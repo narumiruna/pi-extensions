@@ -57,6 +57,10 @@ export function sameSyncExclude(left: unknown, right: unknown) {
 
 /** Compile at the operation boundary and reuse for every file/directory. */
 export function compileSyncExclude(value: unknown) {
+  return compilePathRules(value).matches;
+}
+
+export function compilePathRules(value: unknown) {
   const matchers = normalizeSyncExclude(value).map(
     (rule) =>
       // A trailing globstar also matches zero segments; ancestor matching owns its subtree.
@@ -71,7 +75,7 @@ export function compileSyncExclude(value: unknown) {
         optimizationLevel: 0,
       }),
   );
-  return (relativePath: string): boolean => {
+  const matches = (relativePath: string): boolean => {
     if (matchers.length === 0) return false;
     for (let candidate = relativePath; candidate; ) {
       if (matchers.some((matcher) => matcher.match(candidate))) return true;
@@ -80,5 +84,9 @@ export function compileSyncExclude(value: unknown) {
       candidate = candidate.slice(0, slash);
     }
     return false;
+  };
+  return {
+    matches,
+    mayMatchBelow: (directory: string) => matchers.some((matcher) => matcher.match(directory, true)),
   };
 }

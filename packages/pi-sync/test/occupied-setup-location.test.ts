@@ -178,7 +178,7 @@ for (const kind of kinds) {
         assert.ok(warning, JSON.stringify(notifications));
         assert.match(warning.message, /home/u);
         const correction = titles.findIndex((t) => /already used by “/u.test(t));
-        const content = titles.findIndex((t) => /Choose (included content|an initial sync preset)/u.test(t));
+        const content = titles.findIndex((t) => /Choose synced content/u.test(t));
         assert.ok(correction >= 0 && correction < content, titles.join("\n"));
       });
     },

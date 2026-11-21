@@ -14,7 +14,7 @@ import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-st
 import { sameSyncExclude } from "../sync/exclude-policy.js";
 import { errorMessage } from "../sync/sync-errors.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
-import { compareSyncInclude, syncSessionsSelected } from "../sync/sync-policy.js";
+import { compareSyncInclude, syncSelectionHasContent, syncSessionsSelected } from "../sync/sync-policy.js";
 import {
   observationMatchesConfig,
   observationSummary,
@@ -77,7 +77,7 @@ export async function describeManagerState(
   }
   const configuredTargets = ownRecord(raw.syncSetups);
   if (
-    (raw.version === 3 || raw.version === 4 || raw.version === 5 || raw.version === 6) &&
+    (raw.version === 3 || raw.version === 4 || raw.version === 5 || raw.version === 6 || raw.version === 7) &&
     configuredTargets &&
     Object.keys(configuredTargets).length === 0
   ) {
@@ -114,7 +114,9 @@ export async function describeManagerState(
     const attentionExclusionsDiffer = currentAttention
       ? !sameSyncExclude(currentAttention.decision.localExclude, currentAttention.decision.remoteExclude)
       : false;
-    const noSyncedContent = config.include.length === 0;
+    const attentionDirectoryPolicy =
+      currentAttention?.decision.localDirectory || currentAttention?.decision.remoteDirectory;
+    const noSyncedContent = !syncSelectionHasContent(config);
     const syncState = changesBlocked ? undefined : await readStateForConfig(config).catch(() => undefined);
     const currentObservation =
       observation &&
@@ -141,6 +143,7 @@ export async function describeManagerState(
       "Manage sync",
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
       `Storage: ${backendStorageDescription(config)}`,
+      ...(config.scope ? ["Sync scope: Pi agent directory, with exclusions"] : []),
       ...(syncState?.unresolved?.length
         ? [`Unresolved: ${syncState.unresolved.length} dependency groups · review needed`]
         : []),
@@ -149,11 +152,13 @@ export async function describeManagerState(
             currentAttention.decision.setupName === config.setupName
               ? "Sync status: Review needed"
               : `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
-            attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
-              ? attentionExclusionsDiffer
-                ? "Synced-content exclusion rules differ."
-                : "Only the synced-content order differs."
-              : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
+            attentionDirectoryPolicy
+              ? "Sync scopes or directory rules differ."
+              : attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
+                ? attentionExclusionsDiffer
+                  ? "Synced-content exclusion rules differ."
+                  : "Only the synced-content order differs."
+                : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
           ]
         : currentObservation
           ? [`Observed ${safeTerminalText(currentObservation.checkedAt)}: ${observationSummary(currentObservation)}`]

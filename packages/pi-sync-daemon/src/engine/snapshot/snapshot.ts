@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Dirent } from "node:fs";
+import { constants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeniedPath, posixJoin, safeJoin, toPosix } from "../paths.js";
-import { agentDir, configuredSessionDir } from "./session-paths.js";
+import { agentDir, configuredSessionDir, expandSessionDir } from "./session-paths.js";
+import {
+  agentDirectoryAnchor,
+  agentDirectoryPhysicalSessionPath,
+  agentDirectorySessionRoot,
+} from "./snapshot-exclude-safety.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 
 export { isDeniedPath } from "../paths.js";
@@ -12,12 +17,17 @@ export { sessionStorageRoot } from "./snapshot-paths.js";
 
 import { compileSyncExclude } from "../sync/exclude-policy.js";
 import {
+  assertAgentDirectoryPathLayout,
   canonicalSnapshotPathForConfig,
+  compileSyncPolicyExclude,
+  compileSyncPolicyTraversal,
   configuredSnapshotPathMatcher,
   customIncludePathsByLower,
   DEFAULT_SYNC_INCLUDE,
   includeFromSelectionConfig,
   isPreservableUnmanagedSnapshotPath,
+  MAX_AGENT_DIRECTORY_ENTRIES,
+  MAX_AGENT_DIRECTORY_FILES,
   normalizeExtraFiles,
   normalizeSyncFiles,
   type SyncSelectionConfig,
@@ -26,12 +36,15 @@ import {
   snapshotSelectionExclude,
   snapshotSelectionInclude,
   syncIncludeSelection,
+  syncSessionsSelected,
 } from "../sync/sync-policy.js";
 import type { Snapshot, SnapshotFile, SnapshotOptions } from "./snapshot-types.js";
 
 export { canonicalSnapshotPathForConfig, isConfiguredSnapshotPath } from "../sync/sync-policy.js";
 
 const VERSION = 1;
+const MAX_AGENT_DIRECTORY_BYTES = 64 * 1024 * 1024;
+const MAX_PI_SETTINGS_BYTES = 1024 * 1024;
 const TOP_LEVEL_FILES: readonly string[] = DEFAULT_SYNC_INCLUDE.filter((name) => name.includes("."));
 const TOP_LEVEL_DIRS = new Set<string>(DEFAULT_SYNC_INCLUDE.filter((name) => !name.includes(".")));
 const SECRET_PATTERNS = [
@@ -96,36 +109,39 @@ export function regenerateSnapshotIdentity(snapshot: Snapshot): Snapshot {
 export async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
   options.signal?.throwIfAborted();
   const include = effectiveInclude(options);
-  const excluded = compileSyncExclude(options.exclude);
-  const syncSessions = include.includes("sessions") && !excluded("sessions");
+  const policy = { ...options, include };
+  const excluded = compileSyncPolicyExclude(policy);
+  const syncSessions = syncSessionsSelected(policy);
   const needsSessionConfig = syncSessions || !excluded("settings.json");
-  const sessionDir = options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir() : undefined);
+  const sessionDir =
+    options.scope === "agent-directory"
+      ? options.sessionDir
+      : (options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir() : undefined));
   options.signal?.throwIfAborted();
   const files = await collectFiles(
     agentDir(),
     {
-      include,
-      exclude: options.exclude,
+      ...policy,
       sessionDir,
-      signal: options.signal,
     },
     excluded,
   );
   options.signal?.throwIfAborted();
   return {
-    version: options.exclude === undefined ? VERSION : 4,
+    version: options.scope === "agent-directory" ? 5 : options.exclude === undefined ? VERSION : 4,
     id: snapshotId(),
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
     profile,
     syncSessions,
-    selection: selectionForSnapshot(include, options.exclude),
+    selection: selectionForSnapshot(include, options.exclude, options),
     files,
   };
 }
 
 function effectiveInclude(options: SnapshotOptions) {
   if (options.include) return options.include;
+  if (options.scope === "agent-directory") return [];
   return [
     ...normalizeSyncFiles(options.syncFiles),
     ...normalizeExtraFiles(options.extraFiles),
@@ -138,6 +154,7 @@ export async function collectFiles(
   options: SnapshotOptions = {},
   excluded = compileSyncExclude(options.exclude),
 ): Promise<SnapshotFile[]> {
+  if (options.scope === "agent-directory") return collectAgentDirectory(root, options);
   const signal = options.signal;
   signal?.throwIfAborted();
   const results: SnapshotFile[] = [];
@@ -175,6 +192,189 @@ export async function collectFiles(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+  signal?.throwIfAborted();
+  return results.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+interface ScannedPath {
+  absolute: string;
+  canonical: string;
+  stat: Stats;
+}
+
+function sameScannedPath(left: Stats, right: Stats) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function changedScan(): never {
+  throw new Error("Agent directory changed or has an unsafe filesystem layout; no snapshot was collected.");
+}
+
+async function identify(absolute: string, canonical: string, signal?: AbortSignal): Promise<ScannedPath> {
+  signal?.throwIfAborted();
+  const stat = await fs.lstat(absolute);
+  if (stat.isSymbolicLink() || (await fs.realpath(absolute)) !== canonical) changedScan();
+  signal?.throwIfAborted();
+  return { absolute, canonical, stat };
+}
+
+async function recheck({ absolute, canonical, stat }: ScannedPath, signal?: AbortSignal) {
+  if (!sameScannedPath((await identify(absolute, canonical, signal)).stat, stat)) changedScan();
+}
+
+async function readScannedFile(candidate: ScannedPath, signal?: AbortSignal) {
+  await recheck(candidate, signal);
+  const handle = await fs.open(candidate.absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    // Read only through the verified descriptor, and never read more than the approved size.
+    if (!sameScannedPath(await handle.stat(), candidate.stat)) changedScan();
+    await recheck(candidate, signal);
+    const content = Buffer.alloc(candidate.stat.size);
+    for (let offset = 0; offset < content.length; ) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await handle.read(content, offset, content.length - offset, offset);
+      if (bytesRead === 0) changedScan();
+      offset += bytesRead;
+    }
+    if (!sameScannedPath(await handle.stat(), candidate.stat)) changedScan();
+    return content;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Read Pi's bounded session routing metadata independently of snapshot payload selection. */
+export async function agentDirectoryConfiguredSessionDir(signal?: AbortSignal, root = agentDir()) {
+  const content = await readAgentDirectorySettings(signal, root);
+  return content === undefined ? undefined : agentDirectorySessionDirFromSettings(content);
+}
+
+export async function readAgentDirectorySettings(signal?: AbortSignal, root = agentDir()) {
+  const absolute = path.resolve(root);
+  const canonical = path.join(await fs.realpath(path.dirname(absolute)), path.basename(absolute));
+  await identify(absolute, canonical, signal);
+  let settings: ScannedPath;
+  try {
+    settings = await identify(path.join(absolute, "settings.json"), path.join(canonical, "settings.json"), signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!settings.stat.isFile() || settings.stat.nlink !== 1) changedScan();
+  if (settings.stat.size > MAX_PI_SETTINGS_BYTES)
+    throw new Error("Pi settings.json exceeds the session metadata byte bound.");
+  const content = await readScannedFile(settings, signal);
+  signal?.throwIfAborted();
+  return content;
+}
+
+export function agentDirectorySessionDirFromSettings(content: Buffer) {
+  let value: unknown;
+  try {
+    value = (JSON.parse(content.toString("utf8").replace(/^\\uFEFF/u, "")) as { sessionDir?: unknown } | null)
+      ?.sessionDir;
+  } catch {
+    throw new Error("Pi settings.json cannot be parsed; repair the file before syncing.");
+  }
+  if (value !== undefined && typeof value !== "string") throw new Error("Pi sessionDir must be a string.");
+  return value ? expandSessionDir(value) : undefined;
+}
+
+async function collectAgentDirectory(root: string, options: SnapshotOptions) {
+  const signal = options.signal;
+  const excluded = compileSyncPolicyExclude(options);
+  const canTraverse = compileSyncPolicyTraversal(options);
+  const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(signal, root));
+  const isPhysicalSessionPath = agentDirectoryPhysicalSessionPath(root, sessionDir);
+  const sessionRoot = agentDirectorySessionRoot(root, sessionDir);
+  const directories: ScannedPath[] = [];
+  const candidates: Array<ScannedPath & { snapshotPath: string }> = [];
+  let entries = 0;
+  let bytes = 0;
+
+  async function walk(directory: ScannedPath, prefix: string, sessions: boolean) {
+    if (!directory.stat.isDirectory()) changedScan();
+    directories.push(directory);
+    const handle = await fs.opendir(directory.absolute);
+    for await (const entry of handle) {
+      signal?.throwIfAborted();
+      if (++entries > MAX_AGENT_DIRECTORY_ENTRIES) throw new Error("Agent directory exceeds the scan entry bound.");
+      const snapshotPath = posixJoin(prefix, entry.name);
+      if (!sessions && (/^sessions(?:\/|$)/iu.test(snapshotPath) || isPhysicalSessionPath(snapshotPath))) continue;
+      if (entry.isDirectory() ? !canTraverse(snapshotPath) : !entry.isFile() || excluded(snapshotPath)) continue;
+      if (!entry.isDirectory() && sessions && !isSessionFilePath(snapshotPath)) continue;
+      const candidate = await identify(
+        path.join(directory.absolute, entry.name),
+        path.join(directory.canonical, entry.name),
+        signal,
+      );
+      if (entry.isDirectory()) await walk(candidate, snapshotPath, sessions);
+      else {
+        if (!candidate.stat.isFile() || candidate.stat.nlink !== 1) changedScan();
+        bytes += candidate.stat.size;
+        if (bytes > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Agent directory exceeds the 64 MiB scan byte bound.");
+        if (candidates.length >= MAX_AGENT_DIRECTORY_FILES)
+          throw new Error("Agent directory exceeds the scan file bound.");
+        candidates.push({ ...candidate, snapshotPath });
+      }
+    }
+    await recheck(directory, signal);
+  }
+
+  const absoluteRoot = path.resolve(root);
+  const canonicalRoot = path.join(await fs.realpath(path.dirname(absoluteRoot)), path.basename(absoluteRoot));
+  const selectedSessions = syncSessionsSelected(options);
+  async function identifySessionRoot() {
+    // Validate the custom root even when opted out: an external alias could otherwise hide an in-tree store.
+    if (!sessionDir && !selectedSessions) return undefined;
+    let absolute = agentDirectoryAnchor(absoluteRoot, sessionRoot);
+    const parts = path.relative(absolute, sessionRoot).split(path.sep);
+    let canonical = await fs.realpath(absolute);
+    let directory: ScannedPath | undefined;
+    try {
+      for (const part of parts) {
+        absolute = path.join(absolute, part);
+        canonical = path.join(canonical, part);
+        directory = await identify(absolute, canonical, signal);
+        if (!directory.stat.isDirectory()) changedScan();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    return directory;
+  }
+  const sessionDirectory = await identifySessionRoot();
+  await walk(await identify(absoluteRoot, canonicalRoot, signal), "", false);
+  if (selectedSessions && sessionDirectory) await walk(sessionDirectory, "sessions", true);
+
+  assertAgentDirectoryPathLayout(candidates.map((candidate) => candidate.snapshotPath));
+  const results: SnapshotFile[] = [];
+  for (const candidate of candidates) {
+    const content = await readScannedFile(candidate, signal);
+    results.push({ path: candidate.snapshotPath, contentBase64: content.toString("base64"), sha256: sha256(content) });
+  }
+  // No caller can mistake a changed/disappeared directory or routing policy for an empty snapshot subtree.
+  for (const directory of directories) await recheck(directory, signal);
+  if (options.sessionDir === undefined && (await agentDirectoryConfiguredSessionDir(signal, root)) !== sessionDir)
+    changedScan();
+  const currentSessionDirectory = await identifySessionRoot();
+  if (
+    Boolean(sessionDirectory) !== Boolean(currentSessionDirectory) ||
+    (sessionDirectory &&
+      currentSessionDirectory &&
+      (sessionDirectory.stat.dev !== currentSessionDirectory.stat.dev ||
+        sessionDirectory.stat.ino !== currentSessionDirectory.stat.ino))
+  )
+    changedScan();
   signal?.throwIfAborted();
   return results.sort((left, right) => left.path.localeCompare(right.path));
 }
@@ -275,6 +475,7 @@ export function snapshotTarget(root: string, relativePath: string, configuredSes
 }
 
 export function snapshotIncludesSessions(snapshot: Snapshot) {
+  if (snapshot.selection?.version === 3) return syncSessionsSelected(snapshot.selection);
   return (
     snapshot.syncSessions === true ||
     (snapshotSelectionInclude(snapshot)?.includes("sessions") === true &&
@@ -286,18 +487,20 @@ export function snapshotIncludesSessions(snapshot: Snapshot) {
 export function filterSnapshotForConfigPolicy(
   snapshot: Snapshot,
   config: SyncSelectionConfig,
-  options: { regenerateId?: boolean } = {},
+  options: { regenerateId?: boolean; sessionDir?: string } = {},
 ) {
   const include = includeFromSelectionConfig(config);
-  const includePaths = customIncludePathsByLower(include);
-  const exclude = config.exclude ?? (snapshot.version === 4 ? [] : undefined);
+  const wholeDirectory = config.scope === "agent-directory";
+  const exclude = config.exclude ?? (snapshot.version >= 4 ? [] : undefined);
+  const files = wholeDirectory
+    ? filterAgentDirectoryFiles(snapshot.files, config, options.sessionDir)
+    : canonicalizeSnapshotFilesForConfig(snapshot.files, config, customIncludePathsByLower(include));
   const filtered = {
     ...snapshot,
-    version: exclude === undefined ? snapshot.version : 4,
-    syncSessions:
-      include.includes("sessions") && !compileSyncExclude(exclude)("sessions") ? snapshot.syncSessions : false,
-    selection: selectionForSnapshot(include, exclude),
-    files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, includePaths),
+    version: wholeDirectory ? 5 : exclude === undefined ? snapshot.version : 4,
+    syncSessions: syncSessionsSelected(config) ? snapshot.syncSessions : false,
+    selection: selectionForSnapshot(include, exclude, config),
+    files,
   };
   if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
   return {
@@ -306,6 +509,18 @@ export function filterSnapshotForConfigPolicy(
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
   };
+}
+
+function filterAgentDirectoryFiles(files: SnapshotFile[], config: SyncSelectionConfig, sessionDir?: string) {
+  const configured = configuredSnapshotPathMatcher(config);
+  const isPhysicalSessionPath = sessionDir ? agentDirectoryPhysicalSessionPath(agentDir(), sessionDir) : undefined;
+  return files
+    .filter((file) => {
+      if (!isSafeSnapshotPath(file.path) || !configured(file.path)) return false;
+      if (/^sessions(?:\/|$)/iu.test(file.path)) return isSessionFilePath(file.path);
+      return !isPhysicalSessionPath?.(file.path);
+    })
+    .sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function canonicalizeSnapshotFilesForConfig(
@@ -365,7 +580,15 @@ export function snapshotWithoutSessions(snapshot: Snapshot) {
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
     syncSessions: false,
-    ...(include ? { selection: selectionForSnapshot(include, snapshotSelectionExclude(snapshot)) } : {}),
+    ...(include
+      ? {
+          selection: selectionForSnapshot(
+            include,
+            snapshotSelectionExclude(snapshot),
+            snapshot.selection?.version === 3 ? snapshot.selection : undefined,
+          ),
+        }
+      : {}),
     files,
   };
 }
@@ -386,11 +609,19 @@ export function scanSnapshot(snapshot: Snapshot) {
   return findings;
 }
 
-export function mergeRemotePreservedFiles(local: Snapshot, remote: Snapshot, config: SyncSelectionConfig) {
+export function mergeRemotePreservedFiles(
+  local: Snapshot,
+  remote: Snapshot,
+  config: SyncSelectionConfig,
+  options: { sessionDir?: string } = {},
+) {
+  // Directory scope has no unmanaged ordinary files to carry forward.
+  if (config.scope === "agent-directory")
+    return filterSnapshotForConfigPolicy(local, config, { ...options, regenerateId: true });
   const localPathNames = new Set(local.files.map((file) => file.path.toLowerCase()));
   const preservedPathNames = new Set<string>();
   const configured = configuredSnapshotPathMatcher(config);
-  const excluded = compileSyncExclude(config.exclude);
+  const excluded = compileSyncPolicyExclude(config);
   const preserved = remote.files.filter((file) => {
     const normalized = toPosix(file.path);
     const lower = normalized.toLowerCase();
@@ -419,8 +650,11 @@ export function mergeRemotePreservedFiles(local: Snapshot, remote: Snapshot, con
 }
 
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
-  const excluded = compileSyncExclude(snapshotSelectionExclude(local));
-  if (excluded("sessions")) return local;
+  const directory = local.selection?.version === 3 ? local.selection : undefined;
+  const excluded = directory
+    ? compileSyncPolicyExclude(directory)
+    : compileSyncExclude(snapshotSelectionExclude(local));
+  if (directory ? !syncSessionsSelected(directory) : excluded("sessions")) return local;
   const remoteSessions = remote.files.filter((file) => {
     const normalized = toPosix(file.path);
     return isSessionFilePath(normalized) && isSafeSnapshotPath(file.path) && !excluded(normalized);
@@ -438,6 +672,7 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
           selection: selectionForSnapshot(
             localInclude.includes("sessions") ? localInclude : [...localInclude, "sessions"],
             snapshotSelectionExclude(local),
+            directory,
           ),
         }
       : {}),

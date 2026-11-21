@@ -371,16 +371,14 @@ test("a later direct command clears attention invalidated by local setup changes
     const { ctx, statuses, widgets } = createMockContext({ hasUI: true, mode: "tui" });
     await mock.commands.get("sync")?.handler("pull --yes --setup home", ctx);
     assert.match(statuses.get("sync") ?? "", /sync ⇕/u);
-    await updateLocalConfig((settings) => ({
-      ...settings,
-      syncSetups: {
-        ...settings.syncSetups,
-        home: {
-          ...settings.syncSetups.home,
-          sync: { ...settings.syncSetups.home.sync, include: ["models.json"] },
-        },
-      },
-    }));
+    await updateLocalConfig((settings) => {
+      const home = settings.syncSetups.home;
+      assert.ok(!home.sync.scope);
+      return {
+        ...settings,
+        syncSetups: { ...settings.syncSetups, home: { ...home, sync: { ...home.sync, include: ["models.json"] } } },
+      };
+    });
 
     await mock.commands.get("sync")?.handler("help", ctx);
 
@@ -918,16 +916,14 @@ test("included-content save preserves a concurrent include change", async () => 
           editorVisits += 1;
           return editorVisits === 1 ? "settings.json" : undefined;
         }
-        await updateLocalConfig((current) => ({
-          ...current,
-          syncSetups: {
-            ...current.syncSetups,
-            home: {
-              ...current.syncSetups.home,
-              sync: { ...current.syncSetups.home.sync, include: ["models.json"] },
-            },
-          },
-        }));
+        await updateLocalConfig((current) => {
+          const home = current.syncSetups.home;
+          assert.ok(!home.sync.scope);
+          return {
+            ...current,
+            syncSetups: { ...current.syncSetups, home: { ...home, sync: { ...home.sync, include: ["models.json"] } } },
+          };
+        });
         return "Save changes";
       },
     });
@@ -1025,7 +1021,7 @@ test("unsupported settings pause startup automatic sync and remain unchanged", a
     await notified.promise;
     await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
     const output = notifications.map((item) => item.message).join("\n");
-    assert.match(output, /recovery required.*Unsupported pi-sync settings.*version 3, 4, 5 or 6/su);
+    assert.match(output, /recovery required.*Unsupported pi-sync settings.*version 3, 4, 5, 6 or 7/su);
     assert.doesNotMatch(output, /hidden/u);
     assert.deepEqual(readFileSync(localConfigPath()), bytes);
   });

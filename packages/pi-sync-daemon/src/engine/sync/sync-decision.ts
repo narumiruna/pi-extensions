@@ -30,6 +30,10 @@ export interface SyncDecision {
   currentInclude: readonly string[];
   previousExclude?: readonly string[];
   currentExclude?: readonly string[];
+  previousScope?: "agent-directory";
+  currentScope?: "agent-directory";
+  previousReinclude?: readonly string[];
+  currentReinclude?: readonly string[];
   review: string;
   directions: readonly SyncResolutionDirection[];
   directMessage: string;
@@ -84,10 +88,16 @@ export function createSyncDecision(options: CreateSyncDecisionOptions) {
     ...(policyChanged
       ? [
           "",
-          `Previously included: ${safeList(previousInclude)}`,
-          `Currently included: ${safeList(currentInclude)}`,
+          `Previously included: ${selectionLabel(state.scope, previousInclude)}`,
+          `Currently included: ${selectionLabel(config.scope, currentInclude)}`,
           `Previously excluded: ${safeList(state.exclude ?? [])}`,
           `Currently excluded: ${safeList(config.exclude ?? [])}`,
+          ...(state.scope || config.scope
+            ? [
+                `Previously re-included: ${safeList(state.reinclude ?? [])}`,
+                `Currently re-included: ${safeList(config.reinclude ?? [])}`,
+              ]
+            : []),
         ]
       : []),
     "",
@@ -103,10 +113,20 @@ export function createSyncDecision(options: CreateSyncDecisionOptions) {
     currentInclude,
     ...(policyChanged && state.exclude !== undefined ? { previousExclude: [...state.exclude] } : {}),
     ...(config.exclude === undefined ? {} : { currentExclude: [...config.exclude] }),
+    ...(policyChanged && state.scope !== undefined ? { previousScope: state.scope } : {}),
+    ...(config.scope === undefined ? {} : { currentScope: config.scope }),
+    ...(policyChanged && state.reinclude !== undefined ? { previousReinclude: [...state.reinclude] } : {}),
+    ...(config.reinclude === undefined ? {} : { currentReinclude: [...config.reinclude] }),
     review,
     directions: kind === "remote-empty" ? ["push"] : ["push", "pull"],
     directMessage: options.directMessage,
   });
+}
+
+function selectionLabel(scope: SyncState["scope"], include: readonly string[]) {
+  return scope === "agent-directory"
+    ? `eligible files in the Pi agent directory (sessions ${include.includes("sessions") ? "opted in" : "off"})`
+    : safeList(include);
 }
 
 function safeList(values: readonly string[]) {

@@ -3,7 +3,8 @@ import type { SyncBackend } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext } from "../host.js";
 import { loadConfig, syncSessionsWarnings } from "../settings/config.js";
-import { snapshotOptionsForContext } from "../snapshot/session-paths.js";
+import type { AnySyncConfig } from "../settings/settings-types.js";
+import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot, scanSnapshot } from "../snapshot/snapshot.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, withLock } from "../state/lock.js";
@@ -19,7 +20,20 @@ import { inspectSync } from "./sync-inspection.js";
 import { rollback } from "./sync-mutations.js";
 import { syncSessionsSelected } from "./sync-policy.js";
 
-const DEFAULT_PROFILE = "default";
+function contentLines(config: AnySyncConfig) {
+  return [
+    config.scope === "agent-directory"
+      ? "included content: eligible files in the Pi agent directory"
+      : `included content: ${config.include.map(safeTerminalText).join(", ") || "none"}`,
+    ...(config.exclude === undefined
+      ? []
+      : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
+    ...(config.reinclude === undefined
+      ? []
+      : [`re-included paths: ${config.reinclude.map(safeTerminalText).join(", ") || "none"}`]),
+    `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
+  ];
+}
 
 export async function status(
   ctx: ExtensionCommandContext,
@@ -31,7 +45,7 @@ export async function status(
   setSyncStatus(ctx, `checking ${config.setupName}`, { activity: "checking" });
   const { head, selectionState, localChanged, remoteChanged, localFiles, destination, capability } = await inspectSync(
     config,
-    snapshotOptionsForContext(ctx, config),
+    await resolvedSnapshotOptionsForContext(ctx, config, options.signal),
     options.signal,
     factory,
   );
@@ -50,11 +64,7 @@ export async function status(
       `storage connection: ${config.connectionName}`,
       `storage location: ${safeTerminalText(destination)}`,
       `publication safety: ${publicationCapabilityDescription(capability)}`,
-      `included content: ${config.include.join(", ") || "none"}`,
-      ...(config.exclude === undefined
-        ? []
-        : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
-      `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
+      ...contentLines(config),
       ...continuous,
       remoteText,
       formatRemoteSelectionStatus(selectionState),
@@ -76,13 +86,12 @@ export async function diff(
   throwIfAborted(options.signal);
   setSyncStatus(ctx, `checking ${config.setupName}`, { activity: "checking" });
   const backend = await factory(config);
-  const local = portableSnapshot(
-    await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config)),
-    config.localFields,
-  );
+  const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
+  const local = portableSnapshot(await createSnapshot(config.snapshotIdentity, snapshotOptions), config.localFields);
   throwIfAborted(options.signal);
   const { snapshot: remote, selectionState } = await readRemoteSnapshot(backend, config, options.signal, {
     allowSelectionDifference: true,
+    sessionDir: snapshotOptions.sessionDir,
   });
   throwIfAborted(options.signal);
   setSyncStatus(ctx, undefined);
@@ -92,11 +101,7 @@ export async function diff(
     `sync setup: ${config.setupName}`,
     `storage connection: ${config.connectionName}`,
     `storage location: ${safeTerminalText(backend.destination)}`,
-    `included content: ${config.include.join(", ") || "none"}`,
-    ...(config.exclude === undefined
-      ? []
-      : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
-    `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
+    ...contentLines(config),
     formatRemoteSelectionStatus(selectionState),
     ...warnings,
   ].join("\n");
@@ -116,25 +121,19 @@ export async function doctor(
 ) {
   const messages: string[] = [];
   let level: "info" | "warning" = "info";
-  let snapshotOptions: SnapshotOptions = {};
-  let profile = DEFAULT_PROFILE;
+  let localConfig: { profile: string; snapshotOptions: SnapshotOptions } | undefined;
   let backend: SyncBackend | undefined;
   let backendSummary: string[] = [];
 
   try {
     const config = await loadConfig(options.setup);
     throwIfAborted(options.signal);
+    localConfig = {
+      profile: config.snapshotIdentity,
+      snapshotOptions: await resolvedSnapshotOptionsForContext(ctx, config, options.signal),
+    };
     backend = await factory(config);
-    profile = config.snapshotIdentity;
-    snapshotOptions = snapshotOptionsForContext(ctx, config);
-    messages.push(
-      `config: ok (sync setup ${config.setupName})`,
-      `included content: ${config.include.join(", ") || "none"}`,
-      ...(config.exclude === undefined
-        ? []
-        : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
-      `sessions: ${syncSessionsSelected(config) ? "included" : "excluded"}`,
-    );
+    messages.push(`config: ok (sync setup ${config.setupName})`, ...contentLines(config));
     backendSummary = [
       `storage location: ${safeTerminalText(backend.destination)}`,
       `publication safety: ${publicationCapabilityDescription(backend.capability)}`,
@@ -150,16 +149,18 @@ export async function doctor(
     messages.push(`config: ${errorMessage(error)}`);
   }
 
-  const local = await createSnapshot(profile, snapshotOptions);
-  throwIfAborted(options.signal);
-  const secrets = scanSnapshot(local);
-  if (secrets.length > 0) {
-    level = "warning";
-    messages.push("secret scan: possible secrets found:");
-    messages.push(...secrets.map((secret) => `- ${secret}`));
-  } else {
-    messages.push(`secret scan: ok (${local.files.length} files checked)`);
-  }
+  if (localConfig) {
+    const local = await createSnapshot(localConfig.profile, localConfig.snapshotOptions);
+    throwIfAborted(options.signal);
+    const secrets = scanSnapshot(local);
+    if (secrets.length > 0) {
+      level = "warning";
+      messages.push("secret scan: possible secrets found:");
+      messages.push(...secrets.map((secret) => `- ${safeTerminalText(secret)}`));
+    } else {
+      messages.push(`secret scan: ok (${local.files.length} files checked)`);
+    }
+  } else messages.push("secret scan: skipped without a valid content policy");
 
   const lock = await inspectLock();
   throwIfAborted(options.signal);

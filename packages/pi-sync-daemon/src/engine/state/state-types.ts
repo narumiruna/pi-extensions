@@ -7,6 +7,8 @@ export interface SyncState {
   lastFileHashes: Record<string, string>;
   include?: string[];
   exclude?: string[];
+  scope?: "agent-directory";
+  reinclude?: string[];
   localFields?: string[];
   lastObservedSnapshot?: string;
   lastObservedRevision?: string;

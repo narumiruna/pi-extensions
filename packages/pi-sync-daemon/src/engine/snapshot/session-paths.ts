@@ -7,6 +7,8 @@ import {
   getEngineRoot as getAgentDir,
 } from "../host.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
+import { configuredSnapshotPathMatcher, type SyncSelectionConfig } from "../sync/sync-policy.js";
+import { agentDirectorySessionRoot } from "./snapshot-exclude-safety.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import type { Snapshot, SnapshotOptions } from "./snapshot-types.js";
 
@@ -40,12 +42,39 @@ export async function configuredSessionDir() {
   return settings?.sessionDir ? expandSessionDir(settings.sessionDir) : undefined;
 }
 
-export async function effectiveSessionRoot(ctx: ExtensionCommandContext | ExtensionContext) {
-  return path.resolve(sessionStorageRoot(agentDir(), sessionDirFromContext(ctx) ?? (await configuredSessionDir())));
+export async function effectiveSessionRoot(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  policy?: SyncSelectionConfig,
+  signal?: AbortSignal,
+) {
+  const sessionDir = sessionDirFromContext(ctx);
+  if (policy?.scope === "agent-directory") {
+    const root = agentDir();
+    if (sessionDir !== undefined || ctx.sessionManager.usesDefaultSessionDir?.())
+      return agentDirectorySessionRoot(root, sessionDir);
+    if (!configuredSnapshotPathMatcher(policy)("settings.json"))
+      throw new Error("Pi session storage is unknown and settings.json is excluded. Use an active Pi context to sync.");
+    const { agentDirectoryConfiguredSessionDir } = await import("./snapshot.js");
+    signal?.throwIfAborted();
+    return agentDirectorySessionRoot(root, await agentDirectoryConfiguredSessionDir(signal));
+  }
+  return path.resolve(sessionStorageRoot(agentDir(), sessionDir ?? (await configuredSessionDir())));
 }
 
-export async function sessionDirForApply(ctx: ExtensionCommandContext | ExtensionContext, snapshot: Snapshot) {
+export async function sessionDirForApply(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  snapshot: Snapshot,
+  options: SnapshotOptions = {},
+) {
   const contextSessionDir = sessionDirFromContext(ctx);
+  if (options.scope === "agent-directory") {
+    // A scoped operation uses the physical root reported by Pi, even when sessions are off.
+    // Reading excluded settings to infer the root would violate the collection policy.
+    const root = await effectiveSessionRoot(ctx, options, options.signal);
+    if (root !== agentDirectorySessionRoot(agentDir(), options.sessionDir))
+      throw new Error("Pi session storage changed during transfer; retry from a fresh review.");
+    return root;
+  }
   const localSessionDir = await configuredSessionDir();
   if (contextSessionDir && path.resolve(contextSessionDir) !== path.resolve(localSessionDir ?? "")) {
     return contextSessionDir;
@@ -54,20 +83,34 @@ export async function sessionDirForApply(ctx: ExtensionCommandContext | Extensio
 }
 
 /** Hash-only merge plans cannot describe installation into a different session root. */
-export function requireStableMergeSessionRoot(before: Snapshot, after: Snapshot) {
+export function requireStableMergeSessionRoot(before: Snapshot, after: Snapshot, scope?: SnapshotOptions["scope"]) {
+  const scoped = scope === "agent-directory";
+  const settings = (snapshot: Snapshot) => {
+    const files = snapshot.files.filter((file) => (scoped ? file.path.toLowerCase() : file.path) === "settings.json");
+    if (files.length > 1) throw new Error("Multiple Pi settings paths cannot establish a stable session root.");
+    return files[0];
+  };
+  const previous = settings(before);
+  const next = settings(after);
+  if (scoped && previous?.sha256 === next?.sha256) return;
   const root = agentDir();
   if (
-    path.resolve(sessionStorageRoot(root, sessionDirFromSnapshot(before))) !==
-    path.resolve(sessionStorageRoot(root, sessionDirFromSnapshot(after)))
+    path.resolve(sessionStorageRoot(root, sessionDirFromSettingsFile(previous))) !==
+    path.resolve(sessionStorageRoot(root, sessionDirFromSettingsFile(next)))
   ) {
     throw new Error(
-      "Merged transfer changes the session root; no local apply or baseline acceptance is allowed. Review /sync diff and choose an explicit push or pull direction.",
+      scoped
+        ? "Agent-directory transfer would change Pi session storage. Configure session storage on this machine before syncing."
+        : "Merged transfer changes the session root; no local apply or baseline acceptance is allowed. Review /sync diff and choose an explicit push or pull direction.",
     );
   }
 }
 
 function sessionDirFromSnapshot(snapshot: Snapshot) {
-  const settingsFile = snapshot.files.find((file) => file.path === "settings.json");
+  return sessionDirFromSettingsFile(snapshot.files.find((file) => file.path === "settings.json"));
+}
+
+function sessionDirFromSettingsFile(settingsFile: Snapshot["files"][number] | undefined) {
   if (!settingsFile) return undefined;
   let settings: unknown;
   try {
@@ -107,9 +150,27 @@ export function snapshotOptionsForContext(
   ctx: ExtensionCommandContext | ExtensionContext,
   config: AnySyncConfig,
 ): SnapshotOptions {
+  const defaultScopedSessionDir =
+    config.scope === "agent-directory" && ctx.sessionManager.usesDefaultSessionDir?.()
+      ? sessionStorageRoot(agentDir())
+      : undefined;
   return {
     include: config.include,
+    ...(config.scope === undefined ? {} : { scope: config.scope }),
     ...(config.exclude === undefined ? {} : { exclude: config.exclude }),
-    sessionDir: sessionDirFromContext(ctx),
+    ...(config.reinclude === undefined ? {} : { reinclude: config.reinclude }),
+    sessionDir: sessionDirFromContext(ctx) ?? defaultScopedSessionDir,
+  };
+}
+
+export async function resolvedSnapshotOptionsForContext(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  config: AnySyncConfig,
+  signal?: AbortSignal,
+): Promise<SnapshotOptions> {
+  return {
+    ...snapshotOptionsForContext(ctx, config),
+    ...(config.scope === "agent-directory" ? { sessionDir: await effectiveSessionRoot(ctx, config, signal) } : {}),
+    signal,
   };
 }

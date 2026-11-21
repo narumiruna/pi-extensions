@@ -134,7 +134,7 @@ for (const change of ["agent-mode", "connection", "included-paths", "secret-scan
           await updateLocalConfig((settings) => {
             const setup = settings.syncSetups.home;
             const connection = settings.storageConnections.r2;
-            assert.ok(setup && connection?.type === "s3");
+            assert.ok(setup && !setup.sync.scope && connection?.type === "s3");
             if (change === "secret-scan") return { ...settings, skipSecretScan: true };
             if (change === "connection")
               return {

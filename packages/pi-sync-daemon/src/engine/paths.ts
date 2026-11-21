@@ -27,7 +27,7 @@ export function isDeniedPath(relativePath: string) {
 
 export function isPathInside(parent: string, child: string) {
   const relative = path.relative(path.resolve(parent), path.resolve(child));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 export function safeJoin(root: string, relativePath: string) {

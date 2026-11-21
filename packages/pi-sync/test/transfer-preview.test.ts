@@ -109,7 +109,7 @@ test("case-cleanup inspection closes its file handle after cancellation", async 
       return handle;
     });
     try {
-      await assert.rejects(inspectCaseCleanup(f.base, owner.signal), { name: "AbortError" });
+      await assert.rejects(inspectCaseCleanup(f.base, { signal: owner.signal }), { name: "AbortError" });
       assert.ok(handle);
       await assert.rejects(handle.stat(), /closed|bad file descriptor|EBADF/iu);
     } finally {

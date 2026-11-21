@@ -9,10 +9,11 @@ import { showWebDavSetup } from "./webdav-ui.js";
 
 export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: AbortSignal) {
   if (ctx.mode !== "tui") {
-    ctx.ui.notify(
-      `Guided sync setup requires TUI mode for masked credential input. Create version 3 settings in ${safeTerminalText(localConfigPath())}.`,
-      "warning",
-    );
+    if (ctx.hasUI)
+      ctx.ui.notify(
+        `Guided sync setup requires TUI mode for masked credential input. Create settings in ${safeTerminalText(localConfigPath())} (version 7 for agent-directory scope).`,
+        "warning",
+      );
     return false;
   }
   const preset = await ctx.ui.select(

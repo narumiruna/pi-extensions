@@ -8,6 +8,7 @@ import { compileSyncExclude, normalizeSyncExclude } from "../sync/exclude-policy
 import { collidingPaths, planFileMerge } from "../sync/file-merge-planner.js";
 import { parseSettingsDocument } from "../sync/json-document.js";
 import { validateSession } from "../sync/session-merge.js";
+import { configuredSnapshotPathMatcher, syncDirectoryPolicyKey } from "../sync/sync-policy.js";
 import { isMergeTextPath, text } from "../sync/text-merge.js";
 import { syncDirectory, writeJson } from "./json-file.js";
 import type { SyncState } from "./state-types.js";
@@ -39,11 +40,19 @@ function identity(config: AnySyncConfig) {
     backendIdentityCoordinates(config),
     config.include,
     config.localFields ?? [],
-    ...(config.exclude === undefined
-      ? []
-      : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
+    ...(config.scope === "agent-directory"
+      ? [syncDirectoryPolicyKey(config)]
+      : config.exclude === undefined
+        ? []
+        : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
   ]);
 }
+function baselinePathMatcher(config: AnySyncConfig) {
+  if (config.scope === "agent-directory") return configuredSnapshotPathMatcher(config);
+  const excluded = compileSyncExclude(config.exclude);
+  return (filePath: string) => !excluded(filePath);
+}
+
 function directory(config: AnySyncConfig) {
   return `${statePathForConfig(config)}.ancestors`;
 }
@@ -66,10 +75,10 @@ export async function stageMergeBaseline(
   previous?: SyncState,
 ) {
   const collisions = collidingPaths(snapshot.files.map((file) => file.path));
-  const excluded = compileSyncExclude(config.exclude);
+  const configured = baselinePathMatcher(config);
   const files = snapshot.files.filter((file) => {
     return (
-      !excluded(file.path) &&
+      configured(file.path) &&
       !collisions.has(file.path) &&
       accepted.lastFileHashes[file.path] === file.sha256 &&
       (file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) &&
@@ -86,7 +95,7 @@ export async function stageMergeBaseline(
     }
     for (const ancestor of ancestors)
       if (
-        !excluded(ancestor.path) &&
+        configured(ancestor.path) &&
         !collisions.has(ancestor.path) &&
         accepted.lastFileHashes[ancestor.path] === ancestor.sha256 &&
         !stagedPaths.has(ancestor.path)
@@ -150,8 +159,8 @@ export async function readMergeAncestors(config: AnySyncConfig, state: SyncState
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new Error("Merge ancestor is invalid; preserve its private cache and review the conflict.");
   }
-  const excluded = compileSyncExclude(config.exclude);
-  return record.files.filter((file) => !excluded(file.path));
+  const configured = baselinePathMatcher(config);
+  return record.files.filter((file) => configured(file.path));
 }
 /** A no-op must not skip seeding or repairing ancestors required by later merges. */
 export async function hasCurrentMergeBaseline(config: AnySyncConfig, snapshot: Snapshot, state: SyncState) {
@@ -159,8 +168,10 @@ export async function hasCurrentMergeBaseline(config: AnySyncConfig, snapshot: S
     const ancestors = await readMergeAncestors(config, state);
     if (!ancestors) return false;
     const hashes = new Map(ancestors.map((file) => [file.path, file.sha256]));
+    const configured = configuredSnapshotPathMatcher(config);
     return snapshot.files.every(
       (file) =>
+        (config.scope === "agent-directory" && !configured(file.path)) ||
         !(file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) ||
         !eligible(file) ||
         hashes.get(file.path) === file.sha256,

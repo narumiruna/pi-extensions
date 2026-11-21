@@ -5,7 +5,7 @@ import { syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../sett
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { sameSyncExclude } from "../sync/exclude-policy.js";
 import type { StartupObservation } from "../sync/sync-inspection.js";
-import { type RemoteSelectionDecision, sameSyncInclude } from "../sync/sync-policy.js";
+import { type RemoteSelectionDecision, sameSyncInclude, syncDirectoryPolicyKey } from "../sync/sync-policy.js";
 import { setSyncStatus } from "./sync-status.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -24,7 +24,13 @@ export function syncAttentionMatchesConfig(attention: SyncAttentionState, config
     attention.decision.setupName === config.setupName &&
     attention.decision.configIdentity === syncConfigReviewFingerprint(config) &&
     sameSyncInclude(attention.decision.localInclude, config.include) &&
-    sameSyncExclude(attention.decision.localExclude, config.exclude)
+    sameSyncExclude(attention.decision.localExclude, config.exclude) &&
+    syncDirectoryPolicyKey(config) ===
+      syncDirectoryPolicyKey({
+        include: attention.decision.localInclude,
+        exclude: attention.decision.localExclude,
+        ...attention.decision.localDirectory,
+      })
   );
 }
 
@@ -165,7 +171,7 @@ export function classifyObservation(observation: StartupObservation): Observatio
   const result = observation.inspection;
   // Sync now exits before reading remote content when nothing is selected.
   if (result.emptyInclude) return "guidance";
-  // Ordering is part of the existing transfer policy, not merely display order.
+  // Selected-path ordering remains part of the legacy policy; directory rules are sets.
   if (result.selectionState?.kind === "different") return "review";
   if (result.firstSync) return result.head ? "review" : "guidance";
   if (!result.head || (result.localChanged && result.remoteChanged)) return "review";

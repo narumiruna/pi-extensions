@@ -80,6 +80,34 @@ test("captured setup text is sanitized at the review display boundary", async ()
   }
 });
 
+test.each([
+  { localScope: undefined, localInclude: ["skills"], text: "Scope differs." },
+  { localScope: "agent-directory" as const, localInclude: [], text: "Enable session sync explicitly" },
+])(
+  "directory policy review does not silently switch scopes or enable sessions",
+  async ({ localScope, localInclude, text }) => {
+    const tui = createTuiHarness({ width: 100, rows: 24 });
+    const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+    const running = showRemoteSelectionReview(ctx, undefined, undefined, undefined, {
+      decision: {
+        setupName: "home",
+        configIdentity: "captured",
+        localInclude,
+        remoteInclude: ["sessions"],
+        ...(localScope ? { localDirectory: { scope: localScope, reinclude: ["notes/local.md"] } } : {}),
+        remoteDirectory: { scope: "agent-directory", reinclude: ["notes/shared.md"] },
+      },
+    });
+    await waitForSelectionScreen(tui);
+    const rendered = tui.render().join("\n");
+    tui.press("tui.select.cancel");
+    await running;
+    assert.ok(rendered.includes(text));
+    assert.match(rendered, /Remote re-included paths: notes\/shared\.md/u);
+    assert.doesNotMatch(rendered, /Use remote content list|Only the ordering differs/u);
+  },
+);
+
 test("order-only selection difference is explicit in summary and exact review", async () => {
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
@@ -418,16 +446,14 @@ test("remote selection adoption refreshes a concurrent local include change", as
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
     const backend = new MutatingReadBackend(async () => {
-      await updateLocalConfig((settings) => ({
-        ...settings,
-        syncSetups: {
-          ...settings.syncSetups,
-          home: {
-            ...settings.syncSetups.home,
-            sync: { ...settings.syncSetups.home.sync, include: ["models.json"] },
-          },
-        },
-      }));
+      await updateLocalConfig((settings) => {
+        const home = settings.syncSetups.home;
+        assert.ok(!home.sync.scope);
+        return {
+          ...settings,
+          syncSetups: { ...settings.syncSetups, home: { ...home, sync: { ...home.sync, include: ["models.json"] } } },
+        };
+      });
     });
     await publishSelection(backend, ["settings.json", "pi-starship.toml"]);
     const tui = createTuiHarness({ width: 80, rows: 20 });

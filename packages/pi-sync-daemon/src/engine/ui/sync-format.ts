@@ -57,7 +57,7 @@ export function formatPushSummary(
     ...excludedPolicyLines(config),
     head ? `Remote latest: ${safeTerminalText(head.snapshotId)}` : "Remote latest: empty",
     "Publication effect: the backend's active head will reference the new immutable snapshot. Removed paths leave the active snapshot; retained history is not erased.",
-    ...(remote && inspectRemoteSelection(config.include, remote, config.exclude).kind === "different"
+    ...(remote && inspectRemoteSelection(config.include, remote, config.exclude, config).kind === "different"
       ? ["Included-content policy effect: replace the differing remote selection with this setup's local selection."]
       : []),
     formatPublicationPreview(remote, upload),
@@ -66,16 +66,31 @@ export function formatPushSummary(
       : preservedRemoteFileCount > 0
         ? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
         : "Possible secrets were scanned before this prompt.",
+    ...(config.scope === "agent-directory"
+      ? ["Warning: synced files may contain secrets or other sensitive data that the scanner cannot identify."]
+      : []),
   ].join("\n");
 }
 
 function excludedPolicyLines(config: CommonSyncConfig) {
-  return config.exclude === undefined
-    ? []
-    : [
-        `Excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`,
-        "Excluded local files remain untouched; matching paths are omitted from new publications, not erased from history.",
-      ];
+  const scoped = config.scope === "agent-directory";
+  return [
+    ...(scoped
+      ? [
+          "Scope: eligible files in the Pi agent directory.",
+          "Always local: Pi credentials (auth.json), project trust (trust.json), their lock files, and Pi Sync settings and service state.",
+        ]
+      : []),
+    ...(config.exclude === undefined && !scoped
+      ? []
+      : [`Excluded paths: ${(config.exclude ?? []).map(safeTerminalText).join(", ") || "none"}`]),
+    ...(scoped ? [`Re-included paths: ${(config.reinclude ?? []).map(safeTerminalText).join(", ") || "none"}`] : []),
+    ...(scoped || config.exclude !== undefined
+      ? [
+          "Excluded local files remain untouched; matching paths are omitted from new publications, not erased from history.",
+        ]
+      : []),
+  ];
 }
 
 export function formatApplyPreview(

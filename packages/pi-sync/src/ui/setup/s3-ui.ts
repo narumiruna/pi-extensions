@@ -11,13 +11,7 @@ import {
   chooseInitialRemoteLocation,
   promptAvailableSetupStorage,
 } from "./setup-location-ui.js";
-import {
-  chooseAutomaticSync,
-  chooseSessions,
-  chooseSetupContent,
-  includedContentLines,
-  readSetupConnection,
-} from "./setup-prompts.js";
+import { chooseSetupPolicy, finishSetup, readSetupConnection } from "./setup-prompts.js";
 import { saveReviewedDraft } from "./setup-review.js";
 import { requiredInput, requiredValueInput } from "./text-input.js";
 
@@ -51,12 +45,8 @@ export async function showS3Setup(
   if (!location) return false;
   const credentials = await chooseS3Credentials(ctx, signal);
   if (!credentials) return false;
-  const include = await chooseSetupContent(ctx, signal);
-  if (!include) return false;
-  const automatic = await chooseAutomaticSync(ctx, signal);
-  if (automatic === undefined) return false;
-  const sessions = await chooseSessions(ctx, signal);
-  if (sessions === undefined) return false;
+  const policy = await chooseSetupPolicy(ctx, signal, { legacySessions: true });
+  if (signal?.aborted || !policy) return false;
   const saved = await saveReviewedDraft(
     ctx,
     "Review sync setup",
@@ -67,8 +57,8 @@ export async function showS3Setup(
       `Region: ${safeTerminalText(region)}`,
       `Bucket: ${safeTerminalText(location.bucket)}`,
       `Storage location: ${safeTerminalText(location.path)}`,
-      ...includedContentLines(include, sessions),
-      `Automatic sync: ${automaticSyncSummary(automatic)}`,
+      ...policy.lines,
+      `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
       `Credentials: ${credentials.summary}`,
       "The bucket must already exist. Saving does not contact remote storage or start syncing.",
     ],
@@ -93,7 +83,7 @@ export async function showS3Setup(
               bucket: location.bucket,
               path: location.path,
             },
-            sync: { include: [...include, ...(sessions ? ["sessions"] : [])], automatic },
+            sync: policy.sync,
           },
         },
         saveSignal,
@@ -102,8 +92,7 @@ export async function showS3Setup(
   );
   if (!saved || signal?.aborted) return false;
   await refreshTargetCompletions();
-  if (!signal?.aborted)
-    ctx.ui.notify(`Sync setup “${safeTerminalText(targetName)}” saved. Choose Sync now to start.`, "info");
+  await finishSetup(ctx, targetName, `Sync setup “${safeTerminalText(targetName)}” saved.`, policy.join, signal);
   return true;
 }
 
@@ -118,10 +107,8 @@ export async function showAddS3Target(
   if (!location) return;
   const storage = await promptAvailableSetupStorage(ctx, { connection: profile, ...location }, signal);
   if (!storage) return;
-  const include = await chooseSetupContent(ctx, signal);
-  if (!include) return;
-  const automatic = await chooseAutomaticSync(ctx, signal);
-  if (automatic === undefined) return;
+  const policy = await chooseSetupPolicy(ctx, signal);
+  if (signal?.aborted || !policy) return;
   const connection = await readSetupConnection(profile, signal);
   if (connection.type !== "s3") throw new Error("Storage connection changed; reopen setup.");
   const saved = await saveReviewedDraft(
@@ -133,18 +120,18 @@ export async function showAddS3Target(
       `Endpoint: ${safeTerminalText(connection.endpoint)}`,
       `Bucket: ${safeTerminalText(storage.bucket)}`,
       `Storage location: ${safeTerminalText(storage.path)}`,
-      ...includedContentLines(include),
-      `Automatic sync: ${automaticSyncSummary(automatic)}`,
+      ...policy.lines,
+      `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
       "Only the current setup is checked at startup. Shutdown can push selected content when sessions are included.",
       "The bucket must already exist. Adding this setup does not sync or modify remote data.",
     ],
     "Add sync setup",
-    (saveSignal) => addSyncSetup(name, { storage, sync: { include, automatic } }, saveSignal, connection),
+    (saveSignal) => addSyncSetup(name, { storage, sync: policy.sync }, saveSignal, connection),
     signal,
   );
   if (!saved || signal?.aborted) return;
   await refreshTargetCompletions();
-  if (!signal?.aborted) ctx.ui.notify(`Added sync setup “${safeTerminalText(name)}”.`, "info");
+  await finishSetup(ctx, name, `Added sync setup “${safeTerminalText(name)}”.`, policy.join, signal);
 }
 
 export async function showEditS3Target(ctx: ExtensionCommandContext, partial: PartialConfig, signal?: AbortSignal) {

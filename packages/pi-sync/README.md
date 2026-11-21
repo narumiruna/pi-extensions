@@ -61,8 +61,8 @@ All new setups default to storage path `./`: the Git repository root, the WebDAV
 Git also suggests branch `main`.
 Use different folders or prefixes for independent setups sharing a WebDAV collection or bucket; existing settings and paths are unchanged.
 If another configured setup already uses the chosen location, setup asks for a different path before the content selection and review; Git requires a different branch, even when the directory differs.
-Every new setup asks for included content and automatic sync; automatic sync is off unless you enable it. Recommended includes nine Pi roots; Minimal includes `settings.json` and `AGENTS.md`. Sessions stay off unless explicitly included with a privacy acknowledgement.
-Before saving, scroll through the exact destination, every included path, automatic-sync choice, and hidden-credential summary. R2/S3 always asks for an existing bucket; an example bucket name is not a default.
+New setups default to the Pi agent directory. All eligible files are selected except `sessions/`, `bin/`, and `npm/`; you can review and change these rules before starting a transfer. Sessions require explicit opt-in. Automatic sync is off unless you enable it. Choose **Join an existing remote** to save with both options off and then review its policy, without transferring files. Selected-path setups remain available for compatibility.
+Before saving, review the exact destination, scope and rules, automatic-sync choice, and hidden-credential summary. R2/S3 always asks for an existing bucket; an example bucket name is not a default.
 
 Invalid fields ask for a correction without restarting setup. A temporary local save failure keeps the review for another Save; changed settings require reopening and reviewing the current values. Saving only changes local settings, not remote data. A connection saved through **Add a new storage connection…** remains saved if you later cancel the setup.
 
@@ -174,6 +174,8 @@ Run `/sync` → **Set up sync** to create the canonical private user file at `<g
 Use **Settings** to manage an existing setup.
 Missing settings stay unconfigured without creating files or locks.
 
+Directory scope selects all eligible files, applies `exclude`, then restores matches from `reinclude`. Pi login credentials, project trust, and Pi Sync's own state stay local regardless of those rules. Folder-wide sync may include private files that the secret scan cannot identify. Review the content before transferring to a trusted destination. Existing setups keep their selected paths and are not migrated automatically. See [Agent-directory scope](./skills/configure-pi-sync/references/configuration.md#agent-directory-scope) for formats, precedence, and recovery.
+
 ### Debug startup timings
 
 Set the top-level `"debug": true` in `pi-sync.json`, or enable **Settings → Debug startup timings**, then restart Pi or use `/reload`.
@@ -282,7 +284,7 @@ Version 1, version 2, and non-empty unversioned settings require manual recovery
 Adding `sessions` can upload prompts, tool output, paths, images, and secrets; interactive flows require a privacy acknowledgement.
 Startup checks report included-content differences without changing anything. Transfers retain their existing included-content policy checks instead of silently expanding local scope.
 
-**Settings → Excluded paths** edits optional per-setup `sync.exclude` rules, for example `["skills/private", "extensions/**/*.test.ts"]`. Rules win over includes and apply to future transfers; excluded local files remain untouched, including on rollback. Saving opts into settings version 6 / snapshot version 4, which older clients must refuse. New publications omit matching remote paths, but old history is **not erased**. Removing rules can expose or replace content. See [Excluded paths](./skills/configure-pi-sync/references/configuration.md#excluded-paths) for syntax, review, and recovery.
+For selected-path setups, **Settings → Excluded paths** edits `sync.exclude` rules that win over `include`; saving opts into at least settings version 6 and snapshot version 4. For directory scope, **Settings → Agent directory scope** also edits `reinclude` and session opt-in. Excluded local files remain untouched, including on rollback. New publications omit matching remote paths, but old history is **not erased**. Removing rules can expose or replace content. See [Excluded paths](./skills/configure-pi-sync/references/configuration.md#excluded-paths) for syntax, review, and recovery.
 
 Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, content policy, legacy paths, and recovery steps.
 

@@ -76,8 +76,7 @@ export type SyncSetupStorageSettings =
   | GitSyncSetupStorageSettings
   | WebDavSyncSetupStorageSettings;
 
-export interface SyncPolicySettings {
-  include: string[];
+interface CommonSyncPolicySettings {
   exclude?: string[];
   automatic: boolean;
   /** Explicit opt-in, separate from the legacy observe/shutdown policy. */
@@ -94,6 +93,12 @@ export interface SyncPolicySettings {
   [key: string]: unknown;
 }
 
+export type SyncPolicySettings = CommonSyncPolicySettings &
+  (
+    | { scope?: never; include: string[]; reinclude?: never; sessions?: never }
+    | { scope: "agent-directory"; include?: never; reinclude?: string[]; sessions?: boolean }
+  );
+
 export interface SyncSetupSettings {
   storage: SyncSetupStorageSettings;
   sync: SyncPolicySettings;
@@ -101,7 +106,7 @@ export interface SyncSetupSettings {
 }
 
 export interface PiSyncSettingsV3 {
-  version: 3 | 4 | 5 | 6;
+  version: 3 | 4 | 5 | 6 | 7;
   activeSyncSetup?: string;
   onSwitch: OnSwitchAction;
   skipSecretScan?: boolean;
@@ -119,7 +124,9 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   /** Snapshot/wire identity retained behind the settings normalization boundary. */
   snapshotIdentity: string;
   include: string[];
+  scope?: "agent-directory";
   exclude?: string[];
+  reinclude?: string[];
   automatic: boolean;
   automaticTransfer?: boolean;
   agentMode?: boolean;
@@ -138,14 +145,16 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
 export type AnySyncConfig = SyncConfig<ResolvedSyncBackend>;
 export type CommonSyncConfig = Omit<AnySyncConfig, "backend">;
 
-/** UI projection over a fully validated v3 setup; it is never persisted directly. */
+/** UI projection over a validated setup; it is never persisted directly. */
 export interface PartialConfig {
   setupName: string;
   connectionName: string;
   storageKind: StorageConnectionType;
   storagePath: string;
   include: string[];
+  scope?: "agent-directory";
   exclude?: string[];
+  reinclude?: string[];
   automatic: boolean;
   automaticTransfer?: boolean;
   agentMode?: boolean;

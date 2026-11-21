@@ -3,7 +3,7 @@ import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { Snapshot, SnapshotFile } from "../snapshot/snapshot-types.js";
 import type { SyncState } from "../state/state-types.js";
 import type { FileMergeDecision } from "./file-merge-planner.js";
-import { fileHashMap } from "./sync-state.js";
+import { acceptedSelection, fileHashMap } from "./sync-state.js";
 /** Withholding preserves the complete local version, including explicit absence. */
 export function acceptedMergeFiles(
   decisions: readonly FileMergeDecision[],
@@ -45,8 +45,10 @@ export function progressState(
     version: 3,
     profile: config.snapshotIdentity,
     lastFileHashes: hashes,
-    include: [...config.include],
-    exclude: config.exclude === undefined ? undefined : [...config.exclude],
+    ...acceptedSelection(config),
+    ...(config.exclude === undefined ? { exclude: undefined } : {}),
+    ...(config.scope === undefined ? { scope: undefined } : {}),
+    ...(config.reinclude === undefined ? { reinclude: undefined } : {}),
     localFields: config.localFields,
     lastObservedSnapshot: head.snapshotId,
     lastObservedRevision: head.revision,

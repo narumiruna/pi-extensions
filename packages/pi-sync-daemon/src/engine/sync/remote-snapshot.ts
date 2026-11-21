@@ -33,9 +33,9 @@ export function requireCompatibleRemoteSelection(config: AnySyncConfig, snapshot
     throw new Error(
       "Remote local-field policy differs; confirm a reviewed directional migration. Old history is not erased.",
     );
-  const state = inspectRemoteSelection(config.include, snapshot, config.exclude);
+  const state = inspectRemoteSelection(config.include, snapshot, config.exclude, config);
   if (state.kind === "different") {
-    throw remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config), state.exclude);
+    throw remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config), state.exclude, state);
   }
 }
 
@@ -50,6 +50,9 @@ export function formatRemoteSelectionStatus(state: RemoteSelectionState | undefi
     `remote-only selection: ${safeList(state.remoteOnly)}`,
     `local-only selection: ${safeList(state.localOnly)}`,
     `remote excluded paths: ${safeList(state.exclude ?? [])}`,
+    ...(state.scope
+      ? [`remote scope: ${state.scope}`, `remote re-included paths: ${safeList(state.reinclude ?? [])}`]
+      : []),
   ].join("\n");
 }
 
@@ -61,19 +64,25 @@ export async function readRemoteSnapshot(
   backend: SyncBackend,
   config: AnySyncConfig,
   signal?: AbortSignal,
-  options: { allowSelectionDifference?: boolean } = {},
+  options: { allowSelectionDifference?: boolean; sessionDir?: string } = {},
 ) {
   const head = await backend.readHead(signal);
   if (!head) return { head: undefined, snapshot: undefined, selectionState: undefined };
   const snapshot = await readSnapshotForHead(backend, head, signal);
-  const selectionState = inspectRemoteSelection(config.include, snapshot, config.exclude);
+  const selectionState = inspectRemoteSelection(config.include, snapshot, config.exclude, config);
   if (!options.allowSelectionDifference && selectionState.kind === "different") {
     const configIdentity = syncConfigReviewFingerprint(config);
-    throw remoteSelectionMismatch(config, selectionState.include, configIdentity, selectionState.exclude);
+    throw remoteSelectionMismatch(
+      config,
+      selectionState.include,
+      configIdentity,
+      selectionState.exclude,
+      selectionState,
+    );
   }
   return {
     head,
-    snapshot: filterSnapshotForConfigPolicy(snapshot, config),
+    snapshot: filterSnapshotForConfigPolicy(snapshot, config, { sessionDir: options.sessionDir }),
     selectionState,
   };
 }
