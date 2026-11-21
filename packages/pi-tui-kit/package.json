@@ -121,7 +121,7 @@
     "directory": "packages/pi-tui-kit"
   },
   "dependencies": {
-    "diff": "9.0.0",
+    "diff": "^9.0.0",
     "grok-mermaid": "0.2.3",
     "highlight.js": "11.12.0"
   }
