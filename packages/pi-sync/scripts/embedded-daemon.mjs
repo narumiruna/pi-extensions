@@ -33,13 +33,13 @@ function embeddedImports(exports) {
 }
 
 export async function stageDaemon(outputDirectory) {
-  const daemon = await readJson(join(daemonRoot, "package.json"));
+  const { manifest, files } = await readDaemonBuild(daemonRoot);
+  const daemon = JSON.parse(manifest);
   const client = await readJson(clientManifest);
   const range = client.devDependencies?.[daemonName];
   if (daemon.name !== daemonName || !range || !semver.satisfies(daemon.version, range, { includePrerelease: true })) {
     throw new Error(`Workspace daemon ${daemon.version} does not match selected build range ${range}.`);
   }
-  const files = await readDaemonBuild(daemonRoot);
   const workspaceEntry = await realpath(join(daemonRoot, "dist", "index.js"));
   if ((await realpath(workspaceRequire.resolve(daemonName))) !== workspaceEntry) {
     throw new Error("Pi Sync must use the local workspace daemon build, not a registry copy.");

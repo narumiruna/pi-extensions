@@ -4,9 +4,13 @@ import { join } from "node:path";
 
 export const buildRecordName = ".daemon-build.json";
 
-export async function recordDaemonBuild(root) {
+export async function recordDaemonBuild(root, before) {
   const files = await runtimeFiles(root);
-  await writeFile(join(root, buildRecordName), JSON.stringify(await buildRecord(root, files)));
+  const { hashes } = await captureDaemonInputs(root);
+  if (JSON.stringify(before.hashes) !== JSON.stringify(hashes)) {
+    throw new Error("Daemon build inputs changed during compilation; rebuild @narumitw/pi-sync-daemon.");
+  }
+  await writeFile(join(root, buildRecordName), JSON.stringify(buildRecord(before.hashes, files)));
 }
 
 export async function readDaemonBuild(root) {
@@ -15,17 +19,23 @@ export async function readDaemonBuild(root) {
     throw new Error("Missing workspace daemon build record; build @narumitw/pi-sync-daemon first.");
   });
   const files = await runtimeFiles(root);
-  if (recorded !== JSON.stringify(await buildRecord(root, files))) {
+  const { hashes, manifest } = await captureDaemonInputs(root);
+  if (recorded !== JSON.stringify(buildRecord(hashes, files))) {
     throw new Error("Stale or mismatched workspace daemon build; rebuild @narumitw/pi-sync-daemon first.");
   }
-  return files;
+  return { manifest: manifest.toString("utf8"), files };
 }
 
-async function buildRecord(root, runtime) {
-  const inputs = ["../../tsconfig.json", "package.json", "tsconfig.json", "tsconfig.build.json"];
+export async function captureDaemonInputs(root) {
+  const manifest = await readFile(join(root, "package.json"));
+  const inputs = ["../../tsconfig.json", "tsconfig.json", "tsconfig.build.json"];
   for (const file of await listFiles(join(root, "src"))) inputs.push(`src/${file}`);
-  const inputHashes = await Promise.all(inputs.map(async (file) => [file, hash(await readFile(join(root, file)))]));
-  return { inputs: inputHashes, runtime: [...runtime].map(([file, bytes]) => [file, hash(bytes)]) };
+  const hashes = await Promise.all(inputs.map(async (file) => [file, hash(await readFile(join(root, file)))]));
+  return { manifest, hashes: [["package.json", hash(manifest)], ...hashes] };
+}
+
+function buildRecord(inputs, runtime) {
+  return { inputs, runtime: [...runtime].map(([file, bytes]) => [file, hash(bytes)]) };
 }
 
 async function runtimeFiles(root) {
