@@ -31,7 +31,7 @@ jobs:
 
       - name: Persist refreshed credentials
         if: always() && steps.triage.outcome != 'skipped'
-        uses: narumiruna/pi-actions/persist-auth@10517c9297a5135606b2869f8d3781bfa7ea674d
+        uses: narumiruna/pi-actions/persist-auth@9323da4e610f3702196471dbdefbdbb3aebe1152
         with:
           auth-file: ${{ runner.temp }}/pi-triage-auth/auth.json
           auth-json: ${{ secrets.PI_AUTH_JSON }}
