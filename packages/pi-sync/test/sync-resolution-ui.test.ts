@@ -294,16 +294,14 @@ test("resolution rejects a sync setup changed after review", async () => {
     });
 
     await tui.waitForOpen();
-    await updateLocalConfig((current) => ({
-      ...current,
-      syncSetups: {
-        ...current.syncSetups,
-        home: {
-          ...current.syncSetups.home,
-          sync: { ...current.syncSetups.home.sync, include: [] },
-        },
-      },
-    }));
+    await updateLocalConfig((current) => {
+      const home = current.syncSetups.home;
+      assert.ok(!home.sync.scope);
+      return {
+        ...current,
+        syncSetups: { ...current.syncSetups, home: { ...home, sync: { ...home.sync, include: [] } } },
+      };
+    });
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();

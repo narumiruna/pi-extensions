@@ -298,10 +298,16 @@ for (const [version, policy] of [
   });
 }
 
-test("the exclusion policy fragment validates inside a version-6 setup", () => {
-  const fragments = [...reference.matchAll(/```json\n([\s\S]*?)\n```/gu)]
-    .map((match) => JSON.parse(match[1] ?? "") as Record<string, unknown>)
-    .filter((value) => Object.hasOwn(value, "exclude"));
+function documentedPolicyFragments() {
+  return [...reference.matchAll(/```json\n([\s\S]*?)\n```/gu)].map(
+    (match) => JSON.parse(match[1] ?? "") as Record<string, unknown>,
+  );
+}
+
+test("the exclusion policy fragment validates inside a version-6 allowlist setup", () => {
+  const fragments = documentedPolicyFragments().filter(
+    (value) => value.scope === undefined && Object.hasOwn(value, "exclude"),
+  );
   assert.equal(fragments.length, 1);
   const settings = validateSettingsDocument(configurationExample());
   settings.version = 6;
@@ -311,7 +317,18 @@ test("the exclusion policy fragment validates inside a version-6 setup", () => {
   validateSettingsDocument(settings);
 });
 
-for (const version of [undefined, 1, 2, 7]) {
+test("the directory policy fragment validates inside a version-7 setup without include", () => {
+  const fragments = documentedPolicyFragments().filter((value) => value.scope === "agent-directory");
+  assert.equal(fragments.length, 1);
+  const settings = validateSettingsDocument(configurationExample());
+  settings.version = 7;
+  const setup = settings.syncSetups.home;
+  assert.ok(setup);
+  Object.assign(setup, { sync: fragments[0] });
+  validateSettingsDocument(settings);
+});
+
+for (const version of [undefined, 1, 2, 8]) {
   test(`unsupported settings version ${String(version)} is not interpreted as a supported example`, () => {
     const settings = configurationExample();
     settings.version = version;

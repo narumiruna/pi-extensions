@@ -16,6 +16,7 @@ import {
   type RemoteSelectionDecision,
   type RemoteSelectionState,
   sameSyncInclude,
+  syncDirectoryPolicyKey,
 } from "../sync/sync-policy.js";
 import {
   type RunRoute,
@@ -190,18 +191,26 @@ async function showSelectionDifference(
             description: "Compare exact remote-only, device-only, and ordered lists.",
             to: "review",
           },
-          {
-            id: "adopt",
-            label: "Use remote content list",
-            description: "Save the reviewed list on this device without pulling files.",
-            action: "adopt",
-          },
-          {
-            id: "keep",
-            label: "Keep this device's content list and update remote…",
-            description: "Open the existing exact force-push preview without skipping confirmation.",
-            action: "keep",
-          },
+          ...(adoptionUnavailable(state.decision)
+            ? []
+            : [
+                {
+                  id: "adopt",
+                  label: "Use remote content list",
+                  description: "Save the reviewed rules on this device without pulling files.",
+                  action: "adopt" as const,
+                },
+              ]),
+          ...(scopesDiffer(state.decision)
+            ? []
+            : [
+                {
+                  id: "keep",
+                  label: "Keep this device's content list and update remote…",
+                  description: "Open the existing exact force-push preview without skipping confirmation.",
+                  action: "keep" as const,
+                },
+              ]),
           { id: "cancel", label: options.cancelLabel ?? "Cancel", action: "cancel" },
         ],
         hint: "back",
@@ -251,6 +260,8 @@ async function showSelectionDifference(
               ownedSignal.throwIfAborted();
               validateOwner();
               assertLocalSelectionCurrent(currentConfig, state.decision);
+              const refusal = adoptionUnavailable(state.decision);
+              if (refusal) throw new Error(refusal);
               if (!currentConfig.include.includes("sessions") && state.decision.remoteInclude.includes("sessions")) {
                 onDialog?.(true);
                 let acknowledged: boolean;
@@ -267,7 +278,11 @@ async function showSelectionDifference(
                 validateOwner();
                 if (!acknowledged) return undefined;
               }
-              if (state.decision.remoteExclude !== undefined && currentConfig.exclude === undefined) {
+              if (
+                !currentConfig.scope &&
+                state.decision.remoteExclude !== undefined &&
+                currentConfig.exclude === undefined
+              ) {
                 onDialog?.(true);
                 let confirmed: boolean;
                 try {
@@ -306,6 +321,9 @@ async function showSelectionDifference(
             ...adoption.value.config,
             include: [...state.decision.remoteInclude],
             exclude: adoptedExclude(state.decision),
+            ...(adoption.value.config.scope
+              ? { reinclude: [...(state.decision.remoteDirectory?.reinclude ?? [])] }
+              : {}),
           });
           flowState = { decision: state.decision, saved: true };
           return { kind: "to" as const, screen: "saved" as const };
@@ -453,11 +471,12 @@ async function loadAdoptionReview(
   const snapshot = await readSnapshotForHead(backend, reviewedHead, signal);
   throwIfAborted(signal);
   validateOwner();
-  const state = inspectRemoteSelection(config.include, snapshot, config.exclude);
+  const state = inspectRemoteSelection(config.include, snapshot, config.exclude, config);
   if (
     state.kind !== "different" ||
     !sameSyncInclude(state.include, decision.remoteInclude) ||
-    !sameSyncExclude(state.exclude, decision.remoteExclude)
+    !sameSyncExclude(state.exclude, decision.remoteExclude) ||
+    !matchesRemoteDirectory(state, decision)
   ) {
     throw new StaleRemoteSelectionReviewError("Remote synced content changed while the comparison was open.");
   }
@@ -479,11 +498,17 @@ async function revalidateAndAdopt(
   const currentSnapshot = await readSnapshotForHead(review.backend, currentHead, signal);
   throwIfAborted(signal);
   validateOwner();
-  const currentState = inspectRemoteSelection(review.config.include, currentSnapshot, review.config.exclude);
+  const currentState = inspectRemoteSelection(
+    review.config.include,
+    currentSnapshot,
+    review.config.exclude,
+    review.config,
+  );
   if (
     currentState.kind !== "different" ||
     !sameSyncInclude(currentState.include, decision.remoteInclude) ||
-    !sameSyncExclude(currentState.exclude, decision.remoteExclude)
+    !sameSyncExclude(currentState.exclude, decision.remoteExclude) ||
+    !matchesRemoteDirectory(currentState, decision)
   ) {
     throw new StaleRemoteSelectionReviewError("Remote synced content changed while the comparison was open.");
   }
@@ -491,13 +516,23 @@ async function revalidateAndAdopt(
     decision.setupName,
     (setup) => {
       validateOwner();
+      const refusal = adoptionUnavailable(decision);
+      if (refusal) throw new Error(refusal);
+      const exclude = adoptedExclude(decision);
+      if (setup.sync.scope === "agent-directory") {
+        return {
+          ...setup,
+          sync: {
+            ...setup.sync,
+            exclude,
+            reinclude: [...(decision.remoteDirectory?.reinclude ?? [])],
+            sessions: decision.remoteInclude.includes("sessions"),
+          },
+        };
+      }
       return {
         ...setup,
-        sync: {
-          ...setup.sync,
-          include: [...decision.remoteInclude],
-          ...(adoptedExclude(decision) === undefined ? {} : { exclude: adoptedExclude(decision) }),
-        },
+        sync: { ...setup.sync, include: [...decision.remoteInclude], ...(exclude === undefined ? {} : { exclude }) },
       };
     },
     {
@@ -537,7 +572,7 @@ async function inspectConfiguredRemoteSelection(
   return {
     kind: "selection",
     config,
-    state: inspectRemoteSelection(config.include, snapshot, config.exclude),
+    state: inspectRemoteSelection(config.include, snapshot, config.exclude, config),
   };
 }
 
@@ -597,13 +632,57 @@ function adoptedExclude(decision: RemoteSelectionDecision) {
     : [...decision.remoteExclude];
 }
 
+function scopesDiffer(decision: RemoteSelectionDecision) {
+  return decision.localDirectory?.scope !== decision.remoteDirectory?.scope;
+}
+
+function adoptionUnavailable(decision: RemoteSelectionDecision) {
+  if (scopesDiffer(decision))
+    return "Scope differs. Configure a setup with the remote scope to join it; this location is not migrated in place.";
+  if (
+    decision.remoteDirectory?.scope &&
+    decision.remoteInclude.includes("sessions") &&
+    !decision.localInclude.includes("sessions")
+  )
+    return "Enable session sync explicitly in Settings before adopting these rules.";
+}
+
+function matchesRemoteDirectory(
+  state: Extract<RemoteSelectionState, { kind: "different" }>,
+  decision: RemoteSelectionDecision,
+) {
+  return (
+    syncDirectoryPolicyKey(state) ===
+    syncDirectoryPolicyKey({
+      include: decision.remoteInclude,
+      exclude: decision.remoteExclude,
+      ...decision.remoteDirectory,
+    })
+  );
+}
+
+function directoryReviewLines(decision: RemoteSelectionDecision) {
+  if (!decision.localDirectory?.scope && !decision.remoteDirectory?.scope) return [];
+  const unavailable = adoptionUnavailable(decision);
+  return [
+    `Remote scope: ${decision.remoteDirectory?.scope ? "Pi agent directory" : "selected paths or legacy"}`,
+    `This device scope: ${decision.localDirectory?.scope ? "Pi agent directory" : "selected paths"}`,
+    `Remote re-included paths: ${safeList(decision.remoteDirectory?.reinclude ?? [])}`,
+    `This device re-included paths: ${safeList(decision.localDirectory?.reinclude ?? [])}`,
+    ...(unavailable ? [unavailable] : []),
+  ];
+}
+
 function selectionSummaryLines(decision: RemoteSelectionDecision) {
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     `Sync setup: ${safeTerminalText(decision.setupName)}`,
     "Nothing changed. Review both lists before choosing what happens next.",
+    ...directoryReviewLines(decision),
     ...excludeReviewLines(decision),
-    ...(comparison.remoteOnly.length === 0 &&
+    ...(!decision.localDirectory?.scope &&
+    !decision.remoteDirectory?.scope &&
+    comparison.remoteOnly.length === 0 &&
     comparison.localOnly.length === 0 &&
     sameSyncExclude(decision.localExclude, decision.remoteExclude)
       ? ["Only the ordering differs; membership is the same."]
@@ -614,7 +693,10 @@ function selectionSummaryLines(decision: RemoteSelectionDecision) {
 function formatSelectionDifference(decision: RemoteSelectionDecision) {
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
-    ...(comparison.remoteOnly.length === 0 &&
+    ...directoryReviewLines(decision),
+    ...(!decision.localDirectory?.scope &&
+    !decision.remoteDirectory?.scope &&
+    comparison.remoteOnly.length === 0 &&
     comparison.localOnly.length === 0 &&
     sameSyncExclude(decision.localExclude, decision.remoteExclude)
       ? ["Only ordering differs; both lists contain the same paths.", ""]
@@ -650,7 +732,10 @@ function formatRemoteSelectionSummary(decision: RemoteSelectionDecision) {
     `Synced content for “${safeTerminalText(decision.setupName)}” differs from this device.`,
     `Remote-only: ${safeList(comparison.remoteOnly)}`,
     `Device-only: ${safeList(comparison.localOnly)}`,
-    ...(comparison.remoteOnly.length === 0 &&
+    ...directoryReviewLines(decision),
+    ...(!decision.localDirectory?.scope &&
+    !decision.remoteDirectory?.scope &&
+    comparison.remoteOnly.length === 0 &&
     comparison.localOnly.length === 0 &&
     sameSyncExclude(decision.localExclude, decision.remoteExclude)
       ? [
@@ -688,6 +773,8 @@ function decisionFromState(
     remoteInclude: [...state.include],
     ...(config.exclude === undefined ? {} : { localExclude: [...config.exclude] }),
     ...(state.exclude === undefined ? {} : { remoteExclude: [...state.exclude] }),
+    ...(config.scope ? { localDirectory: { scope: config.scope, reinclude: config.reinclude } } : {}),
+    ...(state.scope ? { remoteDirectory: { scope: state.scope, reinclude: state.reinclude } } : {}),
   };
 }
 
@@ -695,7 +782,13 @@ function assertLocalSelectionCurrent(config: AnySyncConfig, decision: RemoteSele
   if (
     syncConfigReviewFingerprint(config) === decision.configIdentity &&
     sameSyncInclude(config.include, decision.localInclude) &&
-    sameSyncExclude(config.exclude, decision.localExclude)
+    sameSyncExclude(config.exclude, decision.localExclude) &&
+    syncDirectoryPolicyKey(config) ===
+      syncDirectoryPolicyKey({
+        include: decision.localInclude,
+        exclude: decision.localExclude,
+        ...decision.localDirectory,
+      })
   ) {
     return;
   }

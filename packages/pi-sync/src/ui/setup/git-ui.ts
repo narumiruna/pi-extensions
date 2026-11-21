@@ -11,13 +11,7 @@ import type { PartialConfig } from "../../settings/settings-types.js";
 import { automaticSyncSummary } from "../automatic-sync-summary.js";
 import { safeTerminalText } from "../terminal-text.js";
 import { promptAvailableSetupStorage } from "./setup-location-ui.js";
-import {
-  chooseAutomaticSync,
-  chooseSetupContent,
-  includedContentLines,
-  promptResourceName,
-  readSetupConnection,
-} from "./setup-prompts.js";
+import { chooseSetupPolicy, finishSetup, promptResourceName, readSetupConnection } from "./setup-prompts.js";
 import { saveReviewedDraft } from "./setup-review.js";
 import { requiredInput, requiredValueInput } from "./text-input.js";
 
@@ -26,10 +20,8 @@ export async function showGitSetup(ctx: ExtensionCommandContext, targetName: str
   if (!remote) return false;
   const destination = await promptGitDestination(ctx, signal);
   if (!destination) return false;
-  const include = await chooseSetupContent(ctx, signal);
-  if (!include) return false;
-  const automatic = await chooseAutomaticSync(ctx, signal);
-  if (automatic === undefined) return false;
+  const policy = await chooseSetupPolicy(ctx, signal);
+  if (signal?.aborted || !policy) return false;
   const saved = await saveReviewedDraft(
     ctx,
     "Review Git sync setup",
@@ -39,8 +31,8 @@ export async function showGitSetup(ctx: ExtensionCommandContext, targetName: str
       `Remote: ${safeTerminalText(remote)}`,
       `Sync branch: ${safeTerminalText(destination.branch)}`,
       `Storage location: ${safeTerminalText(destination.directory)}`,
-      ...includedContentLines(include),
-      `Automatic sync: ${automaticSyncSummary(automatic)}`,
+      ...policy.lines,
+      `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
       "Authentication: existing Git credential helper or SSH configuration (not stored by pi-sync).",
       "pi-sync manages the entire branch. The repository must already exist; a new branch is created on first push.",
       "Saving does not contact remote storage or start syncing.",
@@ -58,15 +50,15 @@ export async function showGitSetup(ctx: ExtensionCommandContext, targetName: str
               branch: destination.branch,
               path: destination.directory,
             },
-            sync: { include, automatic },
+            sync: policy.sync,
           },
         },
         saveSignal,
       ),
     signal,
   );
-  if (saved && !signal?.aborted)
-    ctx.ui.notify(`Saved Git sync setup “${safeTerminalText(targetName)}”. Choose Sync now to start.`, "info");
+  if (saved)
+    await finishSetup(ctx, targetName, `Saved Git sync setup “${safeTerminalText(targetName)}”.`, policy.join, signal);
   return saved;
 }
 
@@ -143,10 +135,8 @@ export async function showAddGitTarget(
     signal,
   );
   if (!storage) return false;
-  const include = await chooseSetupContent(ctx, signal);
-  if (!include) return false;
-  const automatic = await chooseAutomaticSync(ctx, signal);
-  if (automatic === undefined) return false;
+  const policy = await chooseSetupPolicy(ctx, signal);
+  if (signal?.aborted || !policy) return false;
   const connection = await readSetupConnection(profile, signal);
   if (connection?.type !== "git") throw new Error("Storage connection changed; reopen setup.");
   const saved = await saveReviewedDraft(
@@ -158,15 +148,15 @@ export async function showAddGitTarget(
       `Remote: ${safeTerminalText(connection.remote)}`,
       `Sync branch: ${safeTerminalText(storage.branch)}`,
       `Storage location: ${safeTerminalText(storage.path)}`,
-      ...includedContentLines(include),
-      `Automatic sync: ${automaticSyncSummary(automatic)}`,
+      ...policy.lines,
+      `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
       "pi-sync manages the entire branch. Adding this setup does not sync or modify remote data.",
     ],
     "Add sync setup",
-    (saveSignal) => addSyncSetup(name, { storage, sync: { include, automatic } }, saveSignal, connection),
+    (saveSignal) => addSyncSetup(name, { storage, sync: policy.sync }, saveSignal, connection),
     signal,
   );
-  if (saved && !signal?.aborted) ctx.ui.notify(`Added sync setup “${safeTerminalText(name)}”.`, "info");
+  if (saved) await finishSetup(ctx, name, `Added sync setup “${safeTerminalText(name)}”.`, policy.join, signal);
   return saved;
 }
 

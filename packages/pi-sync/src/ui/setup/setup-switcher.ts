@@ -79,7 +79,7 @@ export async function showSetupSwitcher(
 ) {
   const raw = await readLocalConfigObject();
   if (signal?.aborted) return false;
-  if (raw?.version !== 3 && raw?.version !== 4 && raw?.version !== 5 && raw?.version !== 6) {
+  if (!raw) {
     ctx.ui.notify("Add a second sync setup before switching setups.", "info");
     return false;
   }
@@ -127,7 +127,9 @@ export async function showSetupSwitcher(
       `From: ${safeTerminalText(active ?? "none")}`,
       `To: ${safeTerminalText(name)}`,
       `Storage: ${backendStorageDescription(config)}`,
-      `Included content: ${config.include.length} paths`,
+      config.scope === "agent-directory"
+        ? `Scope: Pi agent directory · ${config.exclude?.length ?? 0} excluded and ${config.reinclude?.length ?? 0} re-included rules`
+        : `Included content: ${config.include.length} paths`,
       `Automatic sync: ${automaticSyncSummary(config.automatic)} · Sessions: ${syncSessionsSelected(config) ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,

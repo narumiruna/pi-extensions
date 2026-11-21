@@ -4,9 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertWithinRoot, isDeniedPath, isPathInside, parentPaths, safeJoin, toPosix } from "../paths.js";
 import { syncDirectory } from "../state/json-file.js";
-import { compileSyncExclude } from "../sync/exclude-policy.js";
+import { stateDir } from "../state/state-directory.js";
+import { compileSyncPolicyExclude } from "../sync/sync-policy.js";
 import { agentDir } from "./session-paths.js";
 import {
+  agentDirectoryConfiguredSessionDir,
+  agentDirectoryInventory,
   createSnapshot,
   isSessionFilePath,
   isSessionPath,
@@ -14,7 +17,11 @@ import {
   snapshotIncludesSessions,
   snapshotTarget,
 } from "./snapshot.js";
-import { assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
+import { assertAgentDirectorySnapshotBound } from "./snapshot-bounds.js";
+import { assertProjectedAgentDirectoryEntries } from "./snapshot-entry-projection.js";
+import { agentDirectoryPhysicalSessionPath, assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
+import { decodeBase64Strict } from "./snapshot-payload.js";
+import { reviewedSnapshotPreimages } from "./snapshot-reviewed-preimages.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
 
@@ -33,6 +40,8 @@ export async function applySnapshot(
     SnapshotOptions,
     | "include"
     | "exclude"
+    | "scope"
+    | "reinclude"
     | "sessionDir"
     | "syncFiles"
     | "syncSessions"
@@ -40,17 +49,21 @@ export async function applySnapshot(
     | "signal"
     | "validateMutation"
     | "expectedFileHashes"
-  > = {},
+  > & { reviewedLocal?: Pick<Snapshot, "files"> } = {},
 ) {
   const root = agentDir();
-  const { sessionDir } = options;
-  const excluded = compileSyncExclude(options.exclude);
+  if (snapshot.version === 5 && options.scope !== "agent-directory")
+    throw new Error("Agent-directory snapshot apply requires the local agent-directory policy.");
+  const sessionDir =
+    options.scope === "agent-directory"
+      ? sessionStorageRoot(root, options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(options.signal, root)))
+      : options.sessionDir;
+  options.validateMutation?.();
+  options = { ...options, sessionDir };
+  const excluded = excludedApplyPath(root, options);
   snapshot = { ...snapshot, files: snapshot.files.filter((file) => !excluded(file.path)) };
   const transactionOptions = {
-    sessionDir,
-    exclude: options.exclude,
-    signal: options.signal,
-    validateMutation: options.validateMutation,
+    ...options,
     protectedTargets: [...protectedRelativePaths].map((relative) => snapshotTarget(root, relative, sessionDir)),
     expectedPreimages: new Map(
       Object.entries(options.expectedFileHashes ?? {})
@@ -65,38 +78,88 @@ export async function applySnapshot(
   await recoverPendingSnapshotTransactions(transactionOptions);
   const current = await createSnapshot(snapshot.profile, {
     ...options,
-    ...(options.include === undefined ? { syncSessions: snapshotIncludesSessions(snapshot) } : {}),
+    ...(options.scope === undefined && options.include === undefined
+      ? { syncSessions: snapshotIncludesSessions(snapshot) }
+      : {}),
     sessionDir,
   });
+  const inventory = agentDirectoryInventory(current);
+  if (options.reviewedLocal && !sameReviewedFiles(current, options.reviewedLocal))
+    throw new Error("Reviewed local files changed before apply; reopen the transfer preview.");
+  if (options.scope === "agent-directory") {
+    assertAgentDirectorySnapshotBound([
+      ...snapshot.files.filter(({ path }) => !protectedRelativePaths.has(path)),
+      ...current.files.filter(({ path }) => protectedRelativePaths.has(path)),
+    ]);
+  }
   const plan = await addTopLevelCaseVariantDeletes(
     root,
     protectSnapshotApplyPlan(
       root,
-      preflightSnapshotApply(root, snapshot, current, { sessionDir, exclude: options.exclude }),
+      preflightSnapshotApply(root, snapshot, current, options),
       protectedRelativePaths,
       sessionDir,
     ),
     snapshot,
+    options,
   );
-  await preflightSnapshotMutations(root, plan, sessionDir, options);
+  if (inventory) {
+    // The transaction can create the private state directory. Its own entry counts, not its children.
+    assertProjectedAgentDirectoryEntries(
+      inventory,
+      { ...plan, writes: [...plan.writes, { target: stateDir(root) }] },
+      options,
+    );
+    await preflightSnapshotMutations(root, plan, sessionDir, options);
+  }
+  if (options.reviewedLocal || inventory) {
+    const images = reviewedSnapshotPreimages(root, sessionDir, current.files, plan, inventory);
+    const reviewed = options.reviewedLocal;
+    if (reviewed && inventory) {
+      const approved = reviewedSnapshotPreimages(
+        root,
+        sessionDir,
+        reviewed.files,
+        plan,
+        agentDirectoryInventory(reviewed),
+      );
+      if ([...images].some(([target, image]) => image !== approved.get(target)))
+        throw new Error("Reviewed directory preimage changed before apply; reopen the transfer preview.");
+    }
+    for (const [target, image] of images) {
+      const existing = transactionOptions.expectedPreimages.get(target);
+      if (existing !== undefined && existing !== image) throw new Error("Reviewed preimage evidence is inconsistent.");
+      transactionOptions.expectedPreimages.set(target, image);
+    }
+  }
+  if (!inventory) await preflightSnapshotMutations(root, plan, sessionDir, options);
   await applySnapshotTransaction(plan, transactionOptions);
   return appliedFileHashMap(snapshot, current, protectedRelativePaths);
+}
+
+function sameReviewedFiles(scanned: Pick<Snapshot, "files">, reviewed: Pick<Snapshot, "files">) {
+  const hashes = new Map(scanned.files.map((file) => [file.path, file.sha256]));
+  return (
+    scanned.files.length === reviewed.files.length &&
+    reviewed.files.every((file) => hashes.get(file.path) === file.sha256)
+  );
 }
 
 export function preflightSnapshotApply(
   root: string,
   snapshot: Snapshot,
   current: Snapshot,
-  options: { sessionDir?: string; exclude?: string[] } = {},
+  options: SnapshotOptions = {},
 ): SnapshotApplyPlan {
   const seenPaths = new Set<string>();
   const remotePaths = new Set<string>();
   const writes: Array<{ target: string; content: Buffer }> = [];
   const deletes: string[] = [];
-  const excluded = compileSyncExclude(options.exclude);
+  const excluded = excludedApplyPath(root, options);
 
   for (const file of snapshot.files) {
     const normalized = toPosix(file.path);
+    if (options.scope === "agent-directory" && excluded(normalized)) continue;
     if (!isSafeSnapshotPath(file.path)) {
       throw new Error(`Unsafe path in snapshot: ${file.path}`);
     }
@@ -115,6 +178,10 @@ export function preflightSnapshotApply(
   }
 
   const deletePaths = new Set<string>();
+  const inventory = options.scope === "agent-directory" ? agentDirectoryInventory(current) : undefined;
+  for (const { target } of writes) {
+    if (inventory?.entries.get(target) === "directory") deletePaths.add(target);
+  }
   for (const file of current.files) {
     const normalized = toPosix(file.path);
     if (excluded(normalized)) continue;
@@ -151,12 +218,15 @@ export function protectSnapshotApplyPlan(
 export async function addTopLevelCaseVariantDeletes(
   root: string,
   plan: SnapshotApplyPlan,
-  snapshot: Pick<Snapshot, "files">,
+  snapshot: Pick<Snapshot, "files" | "selection">,
+  options: SnapshotOptions = {},
 ): Promise<SnapshotApplyPlan> {
+  if (options.scope === "agent-directory" || snapshot.selection?.version === 3) return plan;
+  const excluded = compileSyncPolicyExclude(options);
   const topLevelPaths = new Map<string, string>();
   for (const file of snapshot.files) {
     const normalized = toPosix(file.path);
-    if (!normalized.includes("/") && isSafeSnapshotPath(file.path)) {
+    if (!normalized.includes("/") && isSafeSnapshotPath(file.path) && !excluded(normalized)) {
       topLevelPaths.set(normalized.toLowerCase(), normalized);
     }
   }
@@ -173,7 +243,12 @@ export async function addTopLevelCaseVariantDeletes(
   const deletes = new Set(plan.deletes);
   for (const entry of entries) {
     const canonicalPath = topLevelPaths.get(entry.name.toLowerCase());
-    if (canonicalPath && entry.name !== canonicalPath && (entry.isFile() || entry.isSymbolicLink())) {
+    if (
+      canonicalPath &&
+      entry.name !== canonicalPath &&
+      !excluded(entry.name) &&
+      (entry.isFile() || entry.isSymbolicLink())
+    ) {
       deletes.add(safeJoin(root, entry.name));
     }
   }
@@ -209,14 +284,19 @@ function isSafeSnapshotPath(relativePath: string) {
   );
 }
 
-function decodeBase64Strict(value: string, filePath: string) {
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
-    throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
-  }
-  return Buffer.from(value, "base64");
+function excludedApplyPath(root: string, options: SnapshotOptions) {
+  const excluded = compileSyncPolicyExclude(options);
+  if (options.scope !== "agent-directory") return excluded;
+  const physicalSessionPath = agentDirectoryPhysicalSessionPath(root, options.sessionDir);
+  return (relative: string) =>
+    excluded(relative) ||
+    (/^sessions(?:\/|$)/iu.test(relative) ? !isSessionFilePath(relative) : physicalSessionPath(relative));
 }
 
-type MutationGuards = Pick<SnapshotOptions, "signal" | "validateMutation" | "exclude">;
+type MutationGuards = Pick<
+  SnapshotOptions,
+  "signal" | "validateMutation" | "exclude" | "scope" | "include" | "reinclude"
+>;
 
 export async function preflightSnapshotMutations(
   root: string,
@@ -295,6 +375,7 @@ async function ensureSafeDirectory(root: string, directory: string, deletePaths:
         throw new Error(`Snapshot path parent is not a directory: ${current}`);
       }
     } else {
+      if (options.scope === "agent-directory") return true;
       await fs.mkdir(current);
       assertMutationCurrent(options);
       await syncDirectory(path.dirname(current));

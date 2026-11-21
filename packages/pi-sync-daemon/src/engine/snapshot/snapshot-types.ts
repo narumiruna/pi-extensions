@@ -4,9 +4,15 @@ export interface SnapshotFile {
   sha256: string;
 }
 
+export interface DirectoryScope {
+  scope?: "agent-directory";
+  reinclude?: readonly string[];
+}
+
 export type SnapshotSelection =
-  | { version: 1; include: string[]; exclude?: never }
-  | { version: 2; include: string[]; exclude: string[] };
+  | { version: 1; include: string[]; exclude?: never; scope?: never; reinclude?: never }
+  | { version: 2; include: string[]; exclude: string[]; scope?: never; reinclude?: never }
+  | { version: 3; scope: "agent-directory"; include: string[]; exclude: string[]; reinclude: string[] };
 
 export interface Snapshot {
   version: number;
@@ -22,7 +28,19 @@ export interface Snapshot {
   files: SnapshotFile[];
 }
 
-export interface SnapshotOptions {
+/** Local scan evidence keyed by exact absolute paths; never part of a portable snapshot. */
+export interface AgentDirectoryInventory {
+  root: string;
+  sessionRoot: string;
+  scanSessions: boolean;
+  entries: ReadonlyMap<string, "file" | "directory" | "unreviewed">;
+  /** Existing directories whose immediate children count toward the scan limit. */
+  walkedDirectories: ReadonlySet<string>;
+  /** Existing session routing ancestors, even outside the ordinary walk. */
+  routingDirectories: ReadonlySet<string>;
+}
+
+export interface SnapshotOptions extends DirectoryScope {
   signal?: AbortSignal;
   /** Caller-owned session/generation guard, rechecked at file-mutation boundaries. */
   validateMutation?: () => void;

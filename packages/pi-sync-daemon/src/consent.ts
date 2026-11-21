@@ -15,6 +15,7 @@ import path from "node:path";
 import { syncCheckConfigFingerprint } from "./engine/settings/config.js";
 import type { AnySyncConfig } from "./engine/settings/settings-types.js";
 import { stateDir } from "./engine/state/state-directory.js";
+import { safeTerminalText } from "./engine/ui/terminal-text.js";
 import { type ClientFacts, type Execution, record } from "./protocol.js";
 
 interface Consent {
@@ -226,9 +227,19 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   if (fingerprint !== payload.fingerprint) throw new Error("Setup changed; reopen the daemon authorization review.");
   if (payload.afterExit && (!config.continuous || !config.agentMode))
     throw new Error("Enable the reviewed Autonomous and Continuous policies first.");
+  const paths = (rules?: readonly string[]) => rules?.map(safeTerminalText).join(", ") || "none";
+  const selection =
+    config.scope === "agent-directory"
+      ? [
+          "Selected content: all eligible files in the Pi agent directory",
+          `Excluded paths: ${paths(config.exclude)}`,
+          `Re-included paths: ${paths(config.reinclude)}`,
+          `Session opt-in: ${config.include.includes("sessions") ? "On — path rules still apply" : "Off"}`,
+        ].join("\n")
+      : `Selected content: ${paths(config.include)}`;
   const accepted = await execution.request("confirm", {
     title: payload.afterExit ? "Allow continuous sync after all Pi clients exit?" : "Revoke unattended sync?",
-    message: `Setup: ${config.setupName}\nSelected content: ${config.include.join(", ")}\nModel: ${facts?.model?.provider ?? "unavailable"}/${facts?.model?.id ?? "unavailable"}\n\n${payload.afterExit ? "The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission." : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
+    message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\nModel: ${safeTerminalText(facts?.model?.provider ?? "unavailable")}/${safeTerminalText(facts?.model?.id ?? "unavailable")}\n\n${payload.afterExit ? "The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission." : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
   });
   execution.validate();
   if (accepted !== true) return false;

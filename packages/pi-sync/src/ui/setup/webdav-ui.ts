@@ -16,14 +16,7 @@ import { automaticSyncSummary } from "../automatic-sync-summary.js";
 import { promptSecret } from "../secret-input.js";
 import { safeTerminalText as safe } from "../terminal-text.js";
 import { promptAvailableSetupStorage } from "./setup-location-ui.js";
-import {
-  chooseAutomaticSync,
-  chooseSessions,
-  chooseSetupContent,
-  includedContentLines,
-  promptResourceName,
-  readSetupConnection,
-} from "./setup-prompts.js";
+import { chooseSetupPolicy, finishSetup, promptResourceName, readSetupConnection } from "./setup-prompts.js";
 import { saveReviewedDraft } from "./setup-review.js";
 import { promptTextInput } from "./text-input.js";
 
@@ -37,12 +30,8 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
   if (password === undefined) return false;
   const remotePath = await chooseDestination(ctx, signal);
   if (!remotePath) return false;
-  const include = await chooseSetupContent(ctx, signal);
-  if (!include) return false;
-  const automatic = await chooseAutomaticSync(ctx, signal);
-  if (automatic === undefined) return false;
-  const sessions = await chooseSessions(ctx, signal);
-  if (sessions === undefined) return false;
+  const policy = await chooseSetupPolicy(ctx, signal, { legacySessions: true });
+  if (signal?.aborted || !policy) return false;
   const saved = await saveReviewedDraft(
     ctx,
     "Review WebDAV setup",
@@ -52,8 +41,8 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
       `URL: ${safe(url)}`,
       `Storage location: ${safe(remotePath)}`,
       "Username and password: stored privately (values hidden)",
-      ...includedContentLines(include, sessions),
-      `Automatic sync: ${automaticSyncSummary(automatic)}`,
+      ...policy.lines,
+      `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
       "Check setup tests whether this server can safely save sync updates using a temporary probe.",
       "Saving does not contact remote storage or start syncing.",
     ],
@@ -66,15 +55,14 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
           connection: { type: "webdav", url, credentials: { username, password } },
           setup: {
             storage: { connection: targetName, path: remotePath },
-            sync: { include: [...include, ...(sessions ? ["sessions"] : [])], automatic },
+            sync: policy.sync,
           },
         },
         saveSignal,
       ),
     signal,
   );
-  if (saved && !signal?.aborted)
-    ctx.ui.notify(`Sync setup “${safe(targetName)}” saved. Choose Sync now to start.`, "info");
+  if (saved) await finishSetup(ctx, targetName, `Sync setup “${safe(targetName)}” saved.`, policy.join, signal);
   return saved;
 }
 
@@ -88,10 +76,8 @@ export async function showAddWebDavTarget(
   if (!remotePath) return false;
   const storage = await promptAvailableSetupStorage(ctx, { connection: profile, path: remotePath }, signal);
   if (!storage) return false;
-  const include = await chooseSetupContent(ctx, signal);
-  if (!include) return false;
-  const automatic = await chooseAutomaticSync(ctx, signal);
-  if (automatic === undefined) return false;
+  const policy = await chooseSetupPolicy(ctx, signal);
+  if (signal?.aborted || !policy) return false;
   const connection = await readSetupConnection(profile, signal);
   if (connection.type !== "webdav") throw new Error("Storage connection changed; reopen setup.");
   const saved = await saveReviewedDraft(
@@ -102,15 +88,15 @@ export async function showAddWebDavTarget(
       `Storage connection: ${safe(profile)}`,
       `URL: ${safe(connection.url)}`,
       `Storage location: ${safe(storage.path)}`,
-      ...includedContentLines(include),
-      `Automatic sync: ${automaticSyncSummary(automatic)}`,
+      ...policy.lines,
+      `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
       "Adding this setup does not sync or modify remote data.",
     ],
     "Add sync setup",
-    (saveSignal) => addSyncSetup(name, { storage, sync: { include, automatic } }, saveSignal, connection),
+    (saveSignal) => addSyncSetup(name, { storage, sync: policy.sync }, saveSignal, connection),
     signal,
   );
-  if (saved && !signal?.aborted) ctx.ui.notify(`Added sync setup “${safe(name)}”.`, "info");
+  if (saved) await finishSetup(ctx, name, `Added sync setup “${safe(name)}”.`, policy.join, signal);
   return saved;
 }
 

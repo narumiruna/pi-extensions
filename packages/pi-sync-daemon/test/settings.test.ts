@@ -114,6 +114,25 @@ test("formatting-only source changes invalidate an exact settings approval", () 
     assert.equal(await fs.readFile(path.join(root, "pi-sync.json"), "utf8"), replacement);
   }));
 
+test("an exact source fingerprint does not authorize relabeling an unsupported or invalid document", () =>
+  fixture(async (root, connect) => {
+    const file = path.join(root, "pi-sync.json");
+    const client = await connect();
+    for (const [source, error] of [
+      [{ ...template, version: 8 }, /Unsupported pi-sync settings/u],
+      [{ ...template, debug: "invalid" }, /debug must be boolean/u],
+    ] as const) {
+      const original = `${JSON.stringify(source)}\n`;
+      await fs.writeFile(file, original, { mode: 0o600 });
+      const document = (await client.run("settings.repair-read", {})) as DocumentView;
+      await assert.rejects(
+        client.run("settings.cas", { expected: documentFingerprint(document), next: { ...template, version: 7 } }),
+        error,
+      );
+      assert.equal(await fs.readFile(file, "utf8"), original);
+    }
+  }));
+
 test("invalid existing settings are never replaced by a default or stale save", () =>
   fixture(async (root, connect) => {
     const file = path.join(root, "pi-sync.json");

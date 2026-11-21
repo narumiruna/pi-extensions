@@ -5,12 +5,14 @@ import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { localConfigPath } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { agentDir } from "../snapshot/session-paths.js";
+import { captureMutationOwner } from "../sync/sync-local.js";
 import {
   BUILT_IN_SYNC_ROOTS,
   isSafeCustomIncludePath,
   normalizeSyncInclude,
   syncIncludeSelection,
 } from "../sync/sync-policy.js";
+import { showDirectoryScope } from "./excluded-paths-ui.js";
 
 const BUILT_IN_PREFIX = "builtin:";
 const CUSTOM_PREFIX = "custom:";
@@ -24,18 +26,19 @@ interface SelectionDraft {
 }
 
 export async function showFileSelection(ctx: ExtensionCommandContext, setupName?: string, signal?: AbortSignal) {
+  const validate = captureMutationOwner(ctx, signal);
   const config = await loadConfig(setupName);
   if (signal?.aborted) return;
+  validate();
+  if (config.scope === "agent-directory") return showDirectoryScope(ctx, config, signal);
   const selection = syncIncludeSelection(config.include);
   const original: SelectionDraft = {
     builtIns: new Set(selection.builtIns),
     custom: new Set(selection.custom),
     sessions: selection.sessions,
   };
-  const draft = cloneDraft(original);
-  const customCandidates = await listCustomCandidates(draft.custom);
-
   if (ctx.mode !== "tui") {
+    if (!ctx.hasUI) return;
     ctx.ui.notify(
       [
         `pi-sync included content for sync setup ${safeTerminalText(config.setupName)}:`,
@@ -49,6 +52,8 @@ export async function showFileSelection(ctx: ExtensionCommandContext, setupName?
     );
     return;
   }
+  const draft = cloneDraft(original);
+  const customCandidates = await listCustomCandidates(draft.custom);
 
   while (!signal?.aborted) {
     await showDraftEditor(ctx, config.setupName, draft, customCandidates, signal);
@@ -81,10 +86,10 @@ export async function showFileSelection(ctx: ExtensionCommandContext, setupName?
       if (signal?.aborted) return;
       await updateSyncSetup(
         config.setupName,
-        (setup) => ({
-          ...setup,
-          sync: { ...setup.sync, include },
-        }),
+        (setup) => {
+          if (setup.sync.scope === "agent-directory") throw new Error("Sync scope changed during review.");
+          return { ...setup, sync: { ...setup.sync, include } };
+        },
         { expectedConfigFingerprint: syncCheckConfigFingerprint(config), expectedInclude: config.include, signal },
       );
       if (signal?.aborted) return;

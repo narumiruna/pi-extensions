@@ -5,7 +5,7 @@ import { readLocalConfigObject } from "../settings/settings-store.js";
 import { ownRecord } from "../settings/settings-validation.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
-import { syncIncludeSelection } from "../sync/sync-policy.js";
+import { syncIncludeSelection, syncSessionsSelected } from "../sync/sync-policy.js";
 import { safeTerminalText } from "./terminal-text.js";
 
 export async function countValidSyncSetups(setups: Record<string, unknown> | undefined, signal?: AbortSignal) {
@@ -189,8 +189,10 @@ async function loadSetupMenuState(selectedName: string | undefined, signal?: Abo
       `Storage connection: ${safeTerminalText(config.connectionName)}`,
       `Endpoint: ${storageEndpoint(config)}`,
       `Storage location: ${storageLocation(config)}`,
-      `Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`,
-      `Sessions: ${selection.sessions ? "On — privacy-sensitive" : "Off"}`,
+      config.scope
+        ? `Sync scope: Pi agent directory · ${config.exclude?.length ?? 0} exclusions · ${config.reinclude?.length ?? 0} exceptions`
+        : `Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`,
+      `Sessions: ${syncSessionsSelected(config) ? "On — privacy-sensitive" : "Off"}`,
       `Automatic sync: ${config.automatic ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,

@@ -15,6 +15,7 @@ import {
   validateSnapshotFieldPolicy,
 } from "./local-fields.js";
 import type { PartialProgress } from "./partial-progress.js";
+import { configuredSnapshotPathMatcher, syncDirectoryPolicyKey, validateSnapshotSelection } from "./sync-policy.js";
 import { fileHashMap, sameHashes } from "./sync-state.js";
 
 export interface MergeJournal {
@@ -42,9 +43,11 @@ export function mergeJournalIdentity(config: AnySyncConfig, backendIdentity: str
     backendIdentity,
     [...config.include].sort(),
     config.localFields ?? null,
-    ...(config.exclude === undefined
-      ? []
-      : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
+    ...(config.scope === "agent-directory"
+      ? [syncDirectoryPolicyKey(config)]
+      : config.exclude === undefined
+        ? []
+        : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
   ]);
 }
 
@@ -103,8 +106,9 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
       ...(journal.accepted ? [journal.accepted] : []),
     ]) {
       validateSnapshotFieldPolicy(snapshot);
+      validateSnapshotSelection(snapshot);
       if (
-        (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3 && snapshot.version !== 4) ||
+        ![1, 2, 3, 4, 5].includes(snapshot.version) ||
         typeof snapshot.id !== "string" ||
         typeof snapshot.profile !== "string" ||
         snapshot.files.length > 16_384 ||
@@ -116,6 +120,11 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
           64 * 1024 * 1024
       )
         throw new Error("Invalid journal input.");
+      if (snapshot.selection?.scope) {
+        const configured = configuredSnapshotPathMatcher(snapshot.selection);
+        if (snapshot.files.some((file) => typeof file?.path !== "string" || !configured(file.path)))
+          throw new Error("Journal retains paths outside its recorded directory policy.");
+      }
       const plan = planFileMerge({ baseline: {}, local: snapshot.files, remote: [], selectionCompatible: true });
       if (
         plan.kind !== "planned" ||

@@ -19,7 +19,7 @@ import {
   saveContinuousMode,
 } from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
-import { showExcludedPaths } from "./excluded-paths-ui.js";
+import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
@@ -42,9 +42,17 @@ export async function showSyncSettings(
     return { kind: "close" as const };
   };
   if (ctx.mode !== "tui") {
-    ctx.ui.notify(`Edit pi-sync settings manually: ${safeTerminalText(localConfigPath())}`, "info");
     if (ctx.mode === "rpc" && ctx.hasUI) {
       // Preserve RPC catalog management; preference/credential editing stays TUI-only.
+      const config = await loadConfig(reviewedSetup).catch(() => undefined);
+      if (signal?.aborted) return disposition;
+      ctx.ui.notify(
+        [
+          `Edit pi-sync settings manually: ${safeTerminalText(localConfigPath())}`,
+          ...(config?.scope === "agent-directory" ? directoryScopeSummary(config) : []),
+        ].join("\n"),
+        "info",
+      );
       const management = defineMenu<undefined, "management", "setups" | "connections", ExtensionCommandContext>({
         start: "management",
         screens: {
@@ -108,27 +116,40 @@ export async function showSyncSettings(
           saveStatus,
         ],
         items: [
-          {
-            id: "include",
-            label: "Included paths",
-            description:
-              "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
-            currentValue: `${state.include.length} paths · Edit`,
-            action: "include",
-          },
-          {
-            id: "exclude",
-            label: "Excluded paths",
-            description:
-              "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
-            currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
-            action: "exclude",
-          },
+          ...(state.scope === "agent-directory"
+            ? [
+                {
+                  id: "include",
+                  label: "Agent directory scope",
+                  description:
+                    "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
+                  currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
+                  action: "include" as const,
+                },
+              ]
+            : [
+                {
+                  id: "include",
+                  label: "Included paths",
+                  description:
+                    "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
+                  currentValue: `${state.include.length} paths · Edit`,
+                  action: "include" as const,
+                },
+                {
+                  id: "exclude",
+                  label: "Excluded paths",
+                  description:
+                    "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
+                  currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
+                  action: "exclude" as const,
+                },
+              ]),
           {
             id: "remoteInclude",
-            label: "Compare included paths",
+            label: state.scope === "agent-directory" ? "Compare sync policies" : "Compare included paths",
             description:
-              "This setup: compare include and exclude policies, not file contents. Review before saving both lists; no files transfer unless you explicitly Continue.",
+              "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
             currentValue: "Review",
             action: "remote-include",
           },
@@ -221,8 +242,7 @@ export async function showSyncSettings(
           {
             id: "contentPolicy",
             label: "Content merge / partial progress",
-            description:
-              "This setup, opt-in: review the version-5 upgrade before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.",
+            description: `This setup, opt-in: ${state.scope === "agent-directory" ? "review format compatibility" : "review the version-5 upgrade"} before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.`,
             currentValue: state.mergeContent
               ? state.partialSync
                 ? "Merge + partial"
@@ -290,7 +310,7 @@ export async function showSyncSettings(
           if (
             !(await ctx.ui.confirm(
               "Save content policy?",
-              "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them. Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.",
+              `${previous.scope === "agent-directory" ? "Agent directory scope keeps settings version 7 and snapshot version 5; older clients must refuse them." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
               { signal: mutationSignal },
             ))
           )
@@ -302,13 +322,14 @@ export async function showSyncSettings(
             const setup = current.syncSetups[setupName];
             if (
               !setup ||
+              setup.sync.scope !== previous.scope ||
               Boolean(setup.sync.mergeContent) !== Boolean(previous.mergeContent) ||
               Boolean(setup.sync.partialSync) !== Boolean(previous.partialSync)
             )
               throw new Error("Content policy changed during review.");
             return {
               ...current,
-              version: current.version === 6 ? 6 : 5,
+              version: current.version >= 6 ? current.version : 5,
               syncSetups: {
                 ...current.syncSetups,
                 [setupName]: { ...setup, sync: { ...setup.sync, mergeContent, partialSync } },
@@ -364,7 +385,7 @@ export async function showSyncSettings(
           if (sameLocalFields(previous.localFields, fields)) return { kind: "stay" };
           const confirmed = await ctx.ui.confirm(
             "Save portable field policy?",
-            "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain 6/4. Older clients must refuse them. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.",
+            `${previous.scope === "agent-directory" ? "Agent directory scope keeps settings version 7 and snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
             { signal: mutationSignal },
           );
           validate();
@@ -373,7 +394,11 @@ export async function showSyncSettings(
           await updateLocalConfig((current) => {
             validate();
             const setup = current.syncSetups[setupName];
-            if (!setup || !sameLocalFields(setup.sync.localFields, previous.localFields))
+            if (
+              !setup ||
+              setup.sync.scope !== previous.scope ||
+              !sameLocalFields(setup.sync.localFields, previous.localFields)
+            )
               throw new Error("Field policy changed while under review; reopen settings.");
             return {
               ...current,

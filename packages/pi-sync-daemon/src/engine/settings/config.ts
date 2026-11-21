@@ -4,7 +4,13 @@ import { normalizeGitBranch, normalizeGitDirectory, normalizeGitRemote } from ".
 import { normalizeWebDavPath, normalizeWebDavUrl } from "../backends/webdav/webdav-config.js";
 import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { normalizeLocalFields } from "../sync/local-field-policy.js";
-import { normalizeSyncInclude, syncSessionsSelected } from "../sync/sync-policy.js";
+import {
+  normalizeDirectoryRules,
+  normalizeSyncInclude,
+  type SyncSelectionConfig,
+  syncDirectoryPolicyKey,
+  syncSessionsSelected,
+} from "../sync/sync-policy.js";
 import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "./config-file.js";
 import { requireSettings } from "./settings-store.js";
 import type {
@@ -79,7 +85,9 @@ export async function loadPartialConfig(setupName?: string): Promise<PartialConf
     setupName: config.setupName,
     ...storageReviewFromConfig(config),
     include: [...config.include],
+    ...(config.scope === undefined ? {} : { scope: config.scope }),
     ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
+    ...(config.reinclude === undefined ? {} : { reinclude: [...config.reinclude] }),
     automatic: config.automatic,
     automaticTransfer: config.automaticTransfer ?? false,
     agentMode: config.agentMode ?? false,
@@ -112,6 +120,7 @@ export function syncSetupReviewIdentity(
 }
 
 export function syncConfigReviewIdentity(config: AnySyncConfig) {
+  const directoryPolicy = syncDirectoryPolicyKey(config);
   return JSON.stringify([
     config.setupName,
     config.connectionName,
@@ -126,9 +135,11 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
     config.partialSync ?? false,
     // Preserve existing Off identities and cached candidates across the upgrade.
     ...(config.continuous ? ["continuous"] : []),
-    ...(config.exclude === undefined
-      ? []
-      : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
+    ...(directoryPolicy !== undefined
+      ? [directoryPolicy]
+      : config.exclude === undefined
+        ? []
+        : ["exclude", normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase())]),
   ]);
 }
 
@@ -167,14 +178,25 @@ function resolveSyncConfig(
 ): AnySyncConfig {
   const storagePath = normalizeStoragePath(setup.storage.path);
   const namespace = storagePath === "./" ? "root" : storagePath.slice(storagePath.lastIndexOf("/") + 1);
-  const include = normalizeSyncInclude(setup.sync.include);
+  const policy = setup.sync;
+  const selection =
+    policy.scope === "agent-directory"
+      ? {
+          scope: policy.scope,
+          include: policy.sessions ? ["sessions"] : [],
+          ...(policy.exclude === undefined ? {} : { exclude: normalizeDirectoryRules(policy.exclude) }),
+          ...(policy.reinclude === undefined ? {} : { reinclude: normalizeDirectoryRules(policy.reinclude) }),
+        }
+      : {
+          include: normalizeSyncInclude(policy.include),
+          ...(policy.exclude === undefined ? {} : { exclude: normalizeSyncExclude(policy.exclude) }),
+        };
   const common = {
     setupName,
     connectionName,
     storagePath,
     snapshotIdentity: namespace,
-    include,
-    ...(setup.sync.exclude === undefined ? {} : { exclude: normalizeSyncExclude(setup.sync.exclude) }),
+    ...selection,
     automatic: setup.sync.automatic,
     automaticTransfer: setup.sync.automaticTransfer ?? false,
     agentMode: setup.sync.agentMode ?? false,
@@ -244,7 +266,7 @@ export function sessionTokenWarnings(config: { endpoint?: string; sessionToken?:
   ];
 }
 
-export function syncSessionsWarnings(config: { include: readonly string[]; exclude?: readonly string[] }) {
+export function syncSessionsWarnings(config: SyncSelectionConfig) {
   if (!syncSessionsSelected(config)) return [];
   return [
     "sessions: included; Pi session JSONL can contain prompts, tool output, file paths, images, and secrets. Sync sessions only to storage you trust.",

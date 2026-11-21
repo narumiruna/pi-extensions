@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isDeniedPath, toPosix } from "../paths.js";
-import type { Snapshot, SnapshotSelection } from "../snapshot/snapshot-types.js";
-import { compileSyncExclude, normalizeSyncExclude, sameSyncExclude } from "./exclude-policy.js";
+import type { DirectoryScope, Snapshot, SnapshotSelection } from "../snapshot/snapshot-types.js";
+import { compilePathRules, compileSyncExclude, normalizeSyncExclude, sameSyncExclude } from "./exclude-policy.js";
 
 export const BUILT_IN_SYNC_ROOTS = [
   "settings.json",
@@ -125,8 +125,26 @@ function validateAgentRelativeInclude(value: string) {
   }
 }
 
+export function normalizeDirectoryRules(value: unknown): string[] {
+  return normalizeSyncExclude(
+    Array.isArray(value)
+      ? value.map((rule: unknown) => (typeof rule === "string" ? rule.replace(/(?<!\/)\/(?= *$)/u, "") : rule))
+      : value,
+  );
+}
+
 export function portableSnapshotSelection(value: unknown): SnapshotSelection {
   const selection = value as Partial<SnapshotSelection> | null;
+  if (selection && typeof selection === "object" && !Array.isArray(selection) && selection.version === 3) {
+    if (
+      selection.scope !== "agent-directory" ||
+      !Array.isArray(selection.exclude) ||
+      !Array.isArray(selection.reinclude) ||
+      Object.keys(selection).some((key) => !["version", "scope", "include", "exclude", "reinclude"].includes(key))
+    )
+      throw new Error("Invalid agent-directory snapshot policy.");
+    return directorySelection(selection.include, selection.exclude, selection.reinclude);
+  }
   if (
     !selection ||
     typeof selection !== "object" ||
@@ -153,7 +171,25 @@ export function snapshotSelectionExclude(snapshot: Pick<Snapshot, "selection">) 
   return snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection).exclude;
 }
 
-export function selectionForSnapshot(include: unknown, exclude?: unknown): SnapshotSelection {
+function directorySelection(include: unknown, exclude: unknown, reinclude: unknown): SnapshotSelection {
+  const normalized = normalizeSyncInclude(include);
+  if (normalized.some((root) => root !== "sessions"))
+    throw new Error("Agent-directory snapshots only use include metadata for explicit session selection.");
+  return {
+    version: 3,
+    scope: "agent-directory",
+    include: normalized,
+    exclude: normalizeDirectoryRules(exclude),
+    reinclude: normalizeDirectoryRules(reinclude),
+  };
+}
+
+export function selectionForSnapshot(
+  include: unknown,
+  exclude?: unknown,
+  directory?: DirectoryScope,
+): SnapshotSelection {
+  if (directory?.scope === "agent-directory") return directorySelection(include, exclude, directory.reinclude);
   const normalized = normalizeSyncInclude(include);
   return exclude === undefined
     ? { version: 1, include: normalized }
@@ -172,6 +208,8 @@ export function validateSnapshotSelection(snapshot: Pick<Snapshot, "version" | "
   const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
   if ((snapshot.version === 4) !== (selection?.version === 2))
     throw new Error("Exclude policy requires snapshot version 4 and selection version 2.");
+  if ((snapshot.version === 5) !== (selection?.version === 3))
+    throw new Error("Agent-directory policy requires snapshot version 5 and selection version 3.");
 }
 
 export function sameSyncInclude(left: unknown, right: unknown) {
@@ -197,34 +235,55 @@ export function compareSyncInclude(local: unknown, remote: unknown) {
 
 export type RemoteSelectionState =
   | { kind: "legacy"; discovered: string[] }
-  | { kind: "same"; include: string[]; exclude?: string[] }
-  | {
+  | ({ kind: "same"; include: string[]; exclude?: string[] } & DirectoryScope)
+  | ({
       kind: "different";
       include: string[];
       exclude?: string[];
       remoteOnly: string[];
       localOnly: string[];
       excludeChanged?: boolean;
-    };
+    } & DirectoryScope);
+
+export function syncDirectoryPolicyKey(config: SyncSelectionConfig) {
+  if (config.scope !== "agent-directory") return undefined;
+  return JSON.stringify([
+    config.scope,
+    includeFromSelectionConfig(config).includes("sessions"),
+    normalizeDirectoryRules(config.exclude).map((rule) => rule.toLowerCase()),
+    normalizeDirectoryRules(config.reinclude).map((rule) => rule.toLowerCase()),
+  ]);
+}
 
 export function inspectRemoteSelection(
   localInclude: unknown,
   snapshot: Pick<Snapshot, "selection" | "files">,
   localExclude?: unknown,
+  directory?: DirectoryScope,
 ): RemoteSelectionState {
-  const remoteInclude = snapshotSelectionInclude(snapshot);
-  if (!remoteInclude) return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
-  const exclude = snapshotSelectionExclude(snapshot);
+  const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
+  if (!selection && !directory?.scope) return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
+  const remoteInclude = selection?.include ?? discoverLegacySnapshotInclude(snapshot);
+  const exclude = selection?.exclude;
   const comparison = compareSyncInclude(localInclude, remoteInclude);
-  const rules = exclude === undefined ? {} : { exclude };
-  return comparison.same && sameSyncExclude(localExclude, exclude)
+  const rules = {
+    ...(exclude === undefined ? {} : { exclude }),
+    ...(selection?.scope ? { scope: selection.scope, reinclude: selection.reinclude } : {}),
+  };
+  const directoryKey = syncDirectoryPolicyKey({ include: localInclude, exclude: localExclude, ...directory });
+  const sameDirectoryPolicy = directoryKey === syncDirectoryPolicyKey({ include: remoteInclude, ...rules });
+  const sameExclusions =
+    directoryKey !== undefined
+      ? sameSyncExclude(normalizeDirectoryRules(localExclude), exclude)
+      : sameSyncExclude(localExclude, exclude);
+  return comparison.same && sameExclusions && sameDirectoryPolicy
     ? { kind: "same", include: remoteInclude, ...rules }
     : {
         kind: "different",
         include: remoteInclude,
         ...comparison,
         ...rules,
-        ...(!sameSyncExclude(localExclude, exclude) ? { excludeChanged: true } : {}),
+        ...(!sameExclusions ? { excludeChanged: true } : {}),
       };
 }
 
@@ -235,6 +294,8 @@ export interface RemoteSelectionDecision {
   remoteInclude: readonly string[];
   localExclude?: readonly string[];
   remoteExclude?: readonly string[];
+  localDirectory?: DirectoryScope;
+  remoteDirectory?: DirectoryScope;
 }
 
 export class RemoteSelectionMismatchError extends Error {
@@ -250,10 +311,22 @@ export class RemoteSelectionMismatchError extends Error {
     configIdentity = JSON.stringify([setupName, normalizeSyncInclude(localInclude)]),
     localExclude?: string[],
     remoteExclude?: string[],
+    localDirectory?: DirectoryScope,
+    remoteDirectory?: DirectoryScope,
   ) {
     const local = normalizeSyncInclude(localInclude);
     const remote = normalizeSyncInclude(remoteInclude);
-    super(formatRemoteSelectionMismatch(setupName, local, remote, localExclude, remoteExclude));
+    super(
+      formatRemoteSelectionMismatch(
+        setupName,
+        local,
+        remote,
+        localExclude,
+        remoteExclude,
+        localDirectory,
+        remoteDirectory,
+      ),
+    );
     this.name = "RemoteSelectionMismatchError";
     this.setupName = setupName;
     this.localInclude = local;
@@ -265,15 +338,22 @@ export class RemoteSelectionMismatchError extends Error {
       remoteInclude: [...remote],
       ...(localExclude === undefined ? {} : { localExclude: normalizeSyncExclude(localExclude) }),
       ...(remoteExclude === undefined ? {} : { remoteExclude: normalizeSyncExclude(remoteExclude) }),
+      ...(localDirectory?.scope ? { localDirectory: directoryRules(localDirectory) } : {}),
+      ...(remoteDirectory?.scope ? { remoteDirectory: directoryRules(remoteDirectory) } : {}),
     };
   }
 }
 
+function directoryRules(directory: DirectoryScope): DirectoryScope {
+  return { scope: directory.scope, reinclude: normalizeDirectoryRules(directory.reinclude) };
+}
+
 export function remoteSelectionMismatch(
-  config: { setupName: string; include: unknown; exclude?: string[] },
+  config: { setupName: string; include: unknown; exclude?: string[] } & DirectoryScope,
   remoteInclude: unknown,
   configIdentity?: string,
   remoteExclude?: string[],
+  remoteDirectory?: DirectoryScope,
 ) {
   return new RemoteSelectionMismatchError(
     config.setupName,
@@ -282,6 +362,8 @@ export function remoteSelectionMismatch(
     configIdentity,
     config.exclude,
     remoteExclude,
+    config,
+    remoteDirectory,
   );
 }
 
@@ -291,6 +373,8 @@ export function formatRemoteSelectionMismatch(
   remoteInclude: readonly string[],
   localExclude?: readonly string[],
   remoteExclude?: readonly string[],
+  localDirectory?: DirectoryScope,
+  remoteDirectory?: DirectoryScope,
 ) {
   const comparison = compareSyncInclude(localInclude, remoteInclude);
   const lines = [
@@ -298,7 +382,16 @@ export function formatRemoteSelectionMismatch(
     `Remote-only: ${comparison.remoteOnly.join(", ") || "none"}`,
     `This-device-only: ${comparison.localOnly.join(", ") || "none"}`,
   ];
-  if (!sameSyncExclude(localExclude, remoteExclude)) {
+  if (localDirectory?.scope || remoteDirectory?.scope) {
+    lines.push(
+      `Remote scope: ${remoteDirectory?.scope ?? "selected paths or legacy"}`,
+      `This device scope: ${localDirectory?.scope ?? "selected paths"}`,
+      `Remote excluded paths: ${normalizeSyncExclude(remoteExclude).join(", ") || "none"}`,
+      `This device excluded paths: ${normalizeSyncExclude(localExclude).join(", ") || "none"}`,
+      `Remote re-included paths: ${normalizeDirectoryRules(remoteDirectory?.reinclude).join(", ") || "none"}`,
+      `This device re-included paths: ${normalizeDirectoryRules(localDirectory?.reinclude).join(", ") || "none"}`,
+    );
+  } else if (!sameSyncExclude(localExclude, remoteExclude)) {
     lines.push(
       `Remote excluded paths: ${normalizeSyncExclude(remoteExclude).join(", ") || "none"}`,
       `This device excluded paths: ${normalizeSyncExclude(localExclude).join(", ") || "none"}`,
@@ -372,7 +465,7 @@ export function customIncludePathsByLower(value: unknown) {
   return new Map(syncIncludeSelection(value).custom.map((relativePath) => [relativePath.toLowerCase(), relativePath]));
 }
 
-export interface SyncSelectionConfig {
+export interface SyncSelectionConfig extends DirectoryScope {
   include?: unknown;
   exclude?: unknown;
   syncFiles?: unknown;
@@ -382,6 +475,7 @@ export interface SyncSelectionConfig {
 
 export function includeFromSelectionConfig(config: SyncSelectionConfig) {
   if (config.include !== undefined) return normalizeSyncInclude(config.include);
+  if (config.scope === "agent-directory") return [];
   return [
     ...normalizeSyncFiles(config.syncFiles),
     ...normalizeExtraFiles(config.extraFiles),
@@ -389,8 +483,101 @@ export function includeFromSelectionConfig(config: SyncSelectionConfig) {
   ];
 }
 
+export function syncSelectionHasContent(config: SyncSelectionConfig) {
+  return config.scope === "agent-directory" || includeFromSelectionConfig(config).length > 0;
+}
+
+const DIRECTORY_SCOPE_LOCAL_ROOTS = new Set([
+  "auth.json",
+  "auth.json.lock",
+  "trust.json",
+  "trust.json.lock",
+  "settings.json.lock",
+  "models-store.json",
+  "models-store.json.lock",
+  "crashes.json",
+  "pi-debug.log",
+]);
+
+function isProtectedDirectoryPath(relativePath: string) {
+  if (Buffer.byteLength(relativePath, "utf8") > 4_096) return true;
+  const segments = relativePath.split("/");
+  const root = segments[0]?.toLowerCase();
+  if (
+    segments.some(
+      (segment) =>
+        !segment || /[. ]$/u.test(segment) || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(segment),
+    ) ||
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Reject unsafe and nonportable path spellings.
+    /[\\<>:"|?*\u0000-\u001f\u007f-\u009f]/u.test(relativePath) ||
+    (root === "sessions" && segments[0] !== "sessions") ||
+    (root === "settings.json" && relativePath !== "settings.json") ||
+    (root !== undefined && DIRECTORY_SCOPE_LOCAL_ROOTS.has(root))
+  )
+    return true;
+  for (let ancestor = relativePath; ancestor; ) {
+    if (isDeniedPath(ancestor)) return true;
+    const slash = ancestor.lastIndexOf("/");
+    if (slash < 0) break;
+    ancestor = ancestor.slice(0, slash);
+  }
+  return false;
+}
+
+function compileDirectoryPolicy(config: SyncSelectionConfig) {
+  const excluded = compilePathRules(normalizeDirectoryRules(config.exclude));
+  const restored = compilePathRules(normalizeDirectoryRules(config.reinclude));
+  const sessions = includeFromSelectionConfig(config).includes("sessions");
+  const blocked = (relativePath: string) =>
+    isProtectedDirectoryPath(relativePath) || (!sessions && /^sessions(?:\/|$)/iu.test(relativePath));
+  return {
+    excludes: (relativePath: string) =>
+      blocked(relativePath) || (excluded.matches(relativePath) && !restored.matches(relativePath)),
+    descends: (relativePath: string) =>
+      !blocked(relativePath) &&
+      (!excluded.matches(relativePath) || restored.matches(relativePath) || restored.mayMatchBelow(relativePath)),
+  };
+}
+
+/** Reject names that alias each other when this snapshot is installed on a case-insensitive host. */
+export const MAX_AGENT_DIRECTORY_ENTRIES = 65_536;
+export const MAX_AGENT_DIRECTORY_FILES = 16_384;
+
+export function assertAgentDirectoryPathLayout(files: Iterable<string>) {
+  const prefixes = new Map<string, { spelling: string; file: boolean }>();
+  let count = 0;
+  for (const file of files) {
+    if (++count > MAX_AGENT_DIRECTORY_FILES) throw new Error("Agent-directory snapshot exceeds the file bound.");
+    for (let end = file.indexOf("/"); ; end = file.indexOf("/", end + 1)) {
+      const spelling = end === -1 ? file : file.slice(0, end);
+      const portable = spelling.normalize("NFC").toLowerCase();
+      const known = prefixes.get(portable);
+      if (known && (known.spelling !== spelling || known.file || end === -1))
+        throw new Error("Agent-directory snapshot has conflicting portable paths.");
+      if (!known) {
+        if (prefixes.size >= MAX_AGENT_DIRECTORY_ENTRIES)
+          throw new Error("Agent-directory snapshot exceeds the path bound.");
+        prefixes.set(portable, { spelling, file: end === -1 });
+      }
+      if (end === -1) break;
+    }
+  }
+}
+
+export function compileSyncPolicyExclude(config: SyncSelectionConfig) {
+  return config.scope === "agent-directory"
+    ? compileDirectoryPolicy(config).excludes
+    : compileSyncExclude(config.exclude);
+}
+
+export function compileSyncPolicyTraversal(config: SyncSelectionConfig) {
+  if (config.scope === "agent-directory") return compileDirectoryPolicy(config).descends;
+  const excludes = compileSyncExclude(config.exclude);
+  return (relativePath: string) => !excludes(relativePath);
+}
+
 export function syncSessionsSelected(config: SyncSelectionConfig) {
-  return includeFromSelectionConfig(config).includes("sessions") && !compileSyncExclude(config.exclude)("sessions");
+  return includeFromSelectionConfig(config).includes("sessions") && compileSyncPolicyTraversal(config)("sessions");
 }
 
 export function isConfiguredSnapshotPath(
@@ -402,6 +589,13 @@ export function isConfiguredSnapshotPath(
 }
 
 export function configuredSnapshotPathMatcher(config: SyncSelectionConfig) {
+  if (config.scope === "agent-directory") {
+    const excluded = compileSyncPolicyExclude(config);
+    return (relativePath: string) =>
+      !excluded(relativePath) &&
+      relativePath !== "sessions" &&
+      (!relativePath.startsWith("sessions/") || relativePath.endsWith(".jsonl"));
+  }
   const selection = syncIncludeSelection(includeFromSelectionConfig(config));
   const excluded = compileSyncExclude(config.exclude);
   return (relativePath: string) => {

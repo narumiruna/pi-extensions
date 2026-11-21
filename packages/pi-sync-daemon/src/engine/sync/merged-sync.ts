@@ -71,7 +71,14 @@ import { createStartupTimings, type StartupTimings } from "./startup-timings.js"
 import { createSyncDecision } from "./sync-decision.js";
 import { backupLocal, captureMutationOwner, protectedSessionPaths } from "./sync-local.js";
 import { configuredSnapshotPathMatcher, inspectRemoteSelection, syncSessionsSelected } from "./sync-policy.js";
-import { fileHashMap, hasLocalChanges, hasRemoteChanges, sameHashes, syncPolicyChanged } from "./sync-state.js";
+import {
+  acceptedSelection,
+  fileHashMap,
+  hasLocalChanges,
+  hasRemoteChanges,
+  sameHashes,
+  syncPolicyChanged,
+} from "./sync-state.js";
 import { TEXT_MERGE_WORK_LIMIT } from "./text-merge.js";
 
 const MAX_ATTEMPTS = 3;
@@ -109,7 +116,10 @@ export async function mergeSync(
   validateRetryAuthorization(config);
   const configToken = syncCheckConfigFingerprint(config);
   const modelToken = JSON.stringify(ctx.model);
-  const sessionRoot = syncSessionsSelected(config) ? await effectiveSessionRoot(ctx) : undefined;
+  const sessionRoot =
+    config.scope === "agent-directory" || syncSessionsSelected(config)
+      ? await effectiveSessionRoot(ctx, config, options.signal)
+      : undefined;
   validateOwner();
   const snapshotOptions = {
     ...snapshotOptionsForContext(ctx, config),
@@ -125,7 +135,7 @@ export async function mergeSync(
       if (configToken !== syncCheckConfigFingerprint(latest))
         throw new Error("Sync setup or settings changed during transfer; reopen sync.");
       if (sessionRoot !== undefined) {
-        const currentRoot = await effectiveSessionRoot(ctx);
+        const currentRoot = await effectiveSessionRoot(ctx, latest, options.signal);
         validateOwner();
         if (currentRoot !== sessionRoot)
           throw new Error("Session storage root changed during transfer; evidence retained for review.");
@@ -205,8 +215,8 @@ export async function mergeSync(
         !state.unresolved?.length &&
         head.snapshotId === state.lastAppliedSnapshot &&
         backend.sameRevision(head.revision, state.lastRemoteRevision) &&
-        inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude).kind ===
-          "same" &&
+        inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config)
+          .kind === "same" &&
         matchesAcceptedState(state, config, head, local)
       ) {
         const unchanged = await timings.measure("transfer unchanged verification", async () => {
@@ -245,7 +255,10 @@ export async function mergeSync(
         }
       }
       const remote = rawRemote
-        ? portableSnapshot(filterSnapshotForConfigPolicy(rawRemote, config), rawRemote.localFields)
+        ? portableSnapshot(
+            filterSnapshotForConfigPolicy(rawRemote, config, { sessionDir: sessionRoot }),
+            rawRemote.localFields,
+          )
         : undefined;
       if (rawRemote) {
         requireCompatibleRemoteSelection(config, rawRemote);
@@ -289,7 +302,7 @@ export async function mergeSync(
         throw review("Included content changed; review the selection before merging.", "remote-or-policy-changed");
       if (!head || !remote || !rawRemote)
         throw review("The established remote is missing; choose an explicit recovery direction.", "remote-empty");
-      const selectionState = inspectRemoteSelection(config.include, rawRemote, config.exclude);
+      const selectionState = inspectRemoteSelection(config.include, rawRemote, config.exclude, config);
       const selectionCompatible = selectionState.kind === "same";
       let plan = await timings.measure("transfer merge planning", () =>
         planFileMerge({
@@ -455,19 +468,19 @@ export async function mergeSync(
         files: acceptedMergeFiles(plan.decisions, local.files, withheld),
       });
       const after = overlayLocalFields(accepted, localRaw, config.localFields);
-      if (syncSessionsSelected(config)) requireStableMergeSessionRoot(localRaw, after);
+      if (sessionRoot !== undefined) requireStableMergeSessionRoot(localRaw, after, config.scope);
       const publication = regenerateSnapshotIdentity({
         ...accepted,
-        version: accepted.version === 4 ? 4 : config.partialSync ? 3 : accepted.version,
+        version: config.partialSync && accepted.version < 3 ? 3 : accepted.version,
         files: [
           ...accepted.files.filter((file) => !withheld.has(file.path)),
           ...remote.files.filter((file) => withheld.has(file.path)),
         ],
       });
-      const upload = mergeRemotePreservedFiles(publication, rawRemote, config);
+      const upload = mergeRemotePreservedFiles(publication, rawRemote, config, { sessionDir: sessionRoot });
       const publish =
         !sameHashes(fileHashMap(publication), fileHashMap(remote)) ||
-        Boolean(config.partialSync && rawRemote.version !== 3 && rawRemote.version !== 4);
+        Boolean(config.partialSync && rawRemote.version < 3);
       const apply = !sameHashes(fileHashMap(localRaw), fileHashMap(after));
       if (!publish && !apply) {
         const beforeEvidence = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
@@ -728,7 +741,10 @@ async function completeJournal(
       "Merge journal belongs to a different setup, selection or local-field policy; preserve it for reviewed recovery.",
     );
   await validate();
-  const sessionRoot = syncSessionsSelected(config) ? await effectiveSessionRoot(ctx) : undefined;
+  const sessionRoot =
+    config.scope === "agent-directory" || syncSessionsSelected(config)
+      ? await effectiveSessionRoot(ctx, config, signal)
+      : undefined;
   await validate();
   if (sessionRoot !== undefined && journal.sessionRoot !== sessionRoot) {
     throw new Error(
@@ -820,11 +836,11 @@ async function completeJournal(
   if (syncStateFingerprint(state) !== journal.stateIdentity) {
     throw new Error("Sync baseline changed after the interrupted merge; preserve its journal and review recovery.");
   }
-  if (inspectRemoteSelection(config.include, observed, config.exclude).kind !== "same")
+  if (inspectRemoteSelection(config.include, observed, config.exclude, config).kind !== "same")
     throw new Error(
       "Pending merge has unavailable remote selection metadata; preserve its journal and choose a reviewed explicit direction.",
     );
-  if (syncSessionsSelected(config)) requireStableMergeSessionRoot(journal.before, journal.after);
+  if (sessionRoot !== undefined) requireStableMergeSessionRoot(journal.before, journal.after, config.scope);
   await validate();
   const validateOwner = captureMutationOwner(ctx, signal);
   const validateMutation = () => {
@@ -903,8 +919,7 @@ function acceptedState(
     lastAppliedSnapshot: head.snapshotId,
     lastRemoteRevision: head.revision,
     lastFileHashes: fileHashMap(canonical ? portableSnapshot(snapshot, config.localFields) : snapshot),
-    include: [...config.include],
-    ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
+    ...acceptedSelection(config),
     ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
   };
 }

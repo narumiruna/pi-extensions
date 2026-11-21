@@ -11,6 +11,7 @@ import {
   includeFromSelectionConfig,
   normalizeSyncInclude,
   type SyncSelectionConfig,
+  syncDirectoryPolicyKey,
   syncSessionsSelected,
 } from "./sync-policy.js";
 
@@ -19,7 +20,9 @@ type SyncPolicyConfig = SyncSelectionConfig & { localFields?: string[] };
 export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncPolicyConfig) {
   return (
     (Boolean(state.lastAppliedSnapshot) &&
-      (!sameLocalFields(state.localFields, config.localFields) || !sameSyncExclude(state.exclude, config.exclude))) ||
+      (state.scope !== config.scope ||
+        !sameLocalFields(state.localFields, config.localFields) ||
+        !sameSelectionRules(state, config))) ||
     !sameHashes(fileHashMap(portableSnapshot(local, config.localFields)), stateHashMapForConfig(state, config))
   );
 }
@@ -72,7 +75,10 @@ function stateHashMapForConfig(state: SyncState, config: SyncPolicyConfig) {
   return Object.fromEntries(
     Object.entries(state.lastFileHashes)
       .filter(([filePath]) => configured(filePath))
-      .map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, includePaths), hash]),
+      .map(([filePath, hash]) => [
+        config.scope === "agent-directory" ? filePath : canonicalSnapshotPathForConfig(filePath, includePaths),
+        hash,
+      ]),
   );
 }
 
@@ -99,8 +105,9 @@ function withoutHashPaths(hashes: Record<string, string>, ignoredPaths: Set<stri
 
 export function syncPolicyChanged(state: SyncState, config: SyncPolicyConfig) {
   return (
+    state.scope !== config.scope ||
     syncIncludeChanged(state, config) ||
-    !sameSyncExclude(state.exclude, config.exclude) ||
+    !sameSelectionRules(state, config) ||
     !sameLocalFields(state.localFields, config.localFields)
   );
 }
@@ -117,6 +124,27 @@ export function shouldRefreshSyncedState(
     Boolean(head && (!state.lastRemoteRevision || !sameRevision(head.revision, state.lastRemoteRevision))) ||
     syncPolicyChanged(state, config)
   );
+}
+
+/** Capture the accepted projection, not the current file inventory. */
+export function acceptedSelection(config: {
+  include: string[];
+  exclude?: string[];
+  scope?: "agent-directory";
+  reinclude?: string[];
+}) {
+  return {
+    include: [...config.include],
+    ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
+    ...(config.scope === undefined ? {} : { scope: config.scope }),
+    ...(config.reinclude === undefined ? {} : { reinclude: [...config.reinclude] }),
+  };
+}
+
+function sameSelectionRules(state: SyncState, config: SyncPolicyConfig) {
+  return config.scope === "agent-directory" && state.scope === config.scope
+    ? syncDirectoryPolicyKey(state) === syncDirectoryPolicyKey(config)
+    : sameSyncExclude(state.exclude, config.exclude);
 }
 
 function syncIncludeChanged(state: SyncState, config: SyncPolicyConfig) {

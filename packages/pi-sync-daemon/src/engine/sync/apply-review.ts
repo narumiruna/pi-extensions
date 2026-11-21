@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { agentDir } from "../snapshot/session-paths.js";
 import { addTopLevelCaseVariantDeletes } from "../snapshot/snapshot-apply.js";
-import type { Snapshot } from "../snapshot/snapshot-types.js";
+import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { throwIfAborted } from "./signals.js";
 
 export interface CaseCleanupReview {
@@ -13,10 +13,11 @@ export interface CaseCleanupReview {
 }
 
 /** Inspect the apply engine's additional alias removals, which logical snapshots omit. */
-export async function inspectCaseCleanup(snapshot: Snapshot, signal?: AbortSignal): Promise<CaseCleanupReview[]> {
+export async function inspectCaseCleanup(snapshot: Snapshot, options: SnapshotOptions): Promise<CaseCleanupReview[]> {
+  const { signal } = options;
   throwIfAborted(signal);
   const root = agentDir();
-  const plan = await addTopLevelCaseVariantDeletes(root, { writes: [], deletes: [] }, snapshot);
+  const plan = await addTopLevelCaseVariantDeletes(root, { writes: [], deletes: [] }, snapshot, options);
   throwIfAborted(signal);
   const review: CaseCleanupReview[] = [];
   for (const target of plan.deletes.sort()) {
@@ -55,9 +56,9 @@ export async function inspectCaseCleanup(snapshot: Snapshot, signal?: AbortSigna
 export async function revalidateCaseCleanup(
   expected: readonly CaseCleanupReview[],
   snapshot: Snapshot,
-  signal?: AbortSignal,
+  options: SnapshotOptions,
 ) {
-  const current = await inspectCaseCleanup(snapshot, signal);
+  const current = await inspectCaseCleanup(snapshot, options);
   if (JSON.stringify(current) !== JSON.stringify(expected))
     throw new Error("Case-variant paths changed during transfer review; reopen the preview.");
 }

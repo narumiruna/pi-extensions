@@ -1,7 +1,7 @@
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext } from "../host.js";
 import { loadConfig } from "../settings/config.js";
-import { snapshotOptionsForContext } from "../snapshot/session-paths.js";
+import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
 import { withLock } from "../state/lock.js";
 import { withStateDirectoryAccess } from "../state/state-directory.js";
@@ -9,7 +9,7 @@ import { readStateForConfig } from "../state/sync-state-store.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 import { captureMutationOwner } from "./sync-local.js";
 import { syncSessionsSelected } from "./sync-policy.js";
-import { hasLocalChanges } from "./sync-state.js";
+import { hasLocalChanges, syncPolicyChanged } from "./sync-state.js";
 
 /** Existing legacy policy; service ownership/consent is established by its caller. */
 export async function pushSessionsOnShutdown(
@@ -25,10 +25,10 @@ export async function pushSessionsOnShutdown(
     withLock("auto-session-push", async () => {
       const state = await readStateForConfig(config);
       validate();
-      const local = await createSnapshot(config.snapshotIdentity, {
-        ...snapshotOptionsForContext(ctx, config),
-        signal: options.signal,
-      });
+      if ((config.scope || state.scope) && (!state.lastAppliedSnapshot || syncPolicyChanged(state, config))) return;
+      const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
+      validate();
+      const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
       validate();
       if (!hasLocalChanges(local, state, config)) return;
       const operations = await loaders.operations();

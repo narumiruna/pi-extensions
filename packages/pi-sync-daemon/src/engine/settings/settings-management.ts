@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { normalizeSyncInclude } from "../sync/sync-policy.js";
 import {
   configFromSettings,
   type SyncSetupStorageReview,
@@ -8,7 +7,7 @@ import {
 } from "./config.js";
 import { localConfigPath } from "./config-file.js";
 import { updateLocalConfig } from "./settings-store.js";
-import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
+import type { StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
 import { effectiveSyncSetupRemoteIdentity, validateConfigName } from "./settings-validation.js";
 
 export class SyncSetupReviewChangedError extends Error {
@@ -27,32 +26,29 @@ export async function saveNewV3Settings(
   },
   signal?: AbortSignal,
 ) {
-  validateConfigName(input.setupName, "sync setup");
-  validateConfigName(input.connectionName, "storage connection");
-  const settings: PiSyncSettingsV3 = {
-    version: 3,
-    activeSyncSetup: input.setupName,
-    onSwitch: "ask-before-pull",
-    skipSecretScan: false,
-    storageConnections: { [input.connectionName]: structuredClone(input.connection) },
-    syncSetups: {
-      [input.setupName]: {
-        ...structuredClone(input.setup),
-        storage: { ...input.setup.storage, connection: input.connectionName },
-      },
-    },
-  };
+  const { setupName, connectionName } = input;
+  validateConfigName(setupName, "sync setup");
+  validateConfigName(connectionName, "storage connection");
+  const connection = structuredClone(input.connection);
+  const setup = structuredClone(input.setup);
+  setup.storage.connection = connectionName;
   return updateLocalConfig((current) => {
     if (Object.keys(current.storageConnections).length || Object.keys(current.syncSetups).length) {
       throw new Error(`Settings already exist: ${localConfigPath()}`);
     }
-    return { ...current, ...settings };
+    return {
+      ...current,
+      version: setup.sync.scope === "agent-directory" ? 7 : current.version,
+      activeSyncSetup: setupName,
+      storageConnections: { [connectionName]: connection },
+      syncSetups: { [setupName]: setup },
+    };
   }, signal);
 }
 
 export async function addStorageConnection(name: string, connection: StorageConnectionSettings, signal?: AbortSignal) {
   validateConfigName(name, "storage connection");
-  await updateSettings((settings) => {
+  await updateLocalConfig((settings) => {
     if (Object.hasOwn(settings.storageConnections, name)) {
       throw new Error(`Storage connection already exists: ${name}`);
     }
@@ -73,7 +69,7 @@ export async function updateStorageConnection(
   signal?: AbortSignal,
 ) {
   validateConfigName(name, "storage connection");
-  await updateSettings((settings) => {
+  await updateLocalConfig((settings) => {
     const connection = settings.storageConnections[name];
     if (!connection) throw new Error(`Storage connection not found: ${name}`);
     const currentSetups = referencingSetupNames(settings.syncSetups, name);
@@ -96,7 +92,7 @@ export async function addSyncSetup(
   expectedConnection?: StorageConnectionSettings,
 ) {
   validateConfigName(name, "sync setup");
-  await updateSettings((settings) => {
+  await updateLocalConfig((settings) => {
     if (Object.hasOwn(settings.syncSetups, name)) throw new Error(`Sync setup already exists: ${name}`);
     if (!Object.hasOwn(settings.storageConnections, setup.storage.connection)) {
       throw new Error(`Storage connection not found: ${setup.storage.connection}`);
@@ -111,6 +107,7 @@ export async function addSyncSetup(
     assertUniqueLocations(nextSetups, settings.storageConnections);
     return {
       ...settings,
+      version: setup.sync.scope === "agent-directory" ? 7 : settings.version,
       syncSetups: nextSetups,
       ...(settings.activeSyncSetup ? {} : { activeSyncSetup: name }),
     };
@@ -130,7 +127,7 @@ export async function updateSyncSetup(
   } = {},
 ) {
   validateConfigName(name, "sync setup");
-  await updateSettings((settings) => {
+  await updateLocalConfig((settings) => {
     const setup = settings.syncSetups[name];
     if (!setup) throw new Error(`Sync setup not found: ${name}`);
     if (
@@ -141,7 +138,7 @@ export async function updateSyncSetup(
         `Sync setup “${name}” changed while it was open; reopen it and review the current configuration.`,
       );
     }
-    if (options.expectedInclude && !sameNames(normalizeSyncInclude(setup.sync.include), options.expectedInclude)) {
+    if (options.expectedInclude && !sameNames(configFromSettings(settings, name).include, options.expectedInclude)) {
       throw new SyncSetupReviewChangedError(
         `Sync setup “${name}” included content changed while it was open; reopen it and review the current selection.`,
       );
@@ -170,13 +167,19 @@ export async function updateSyncSetup(
     }
     const nextSetups = { ...settings.syncSetups, [name]: nextSetup };
     assertUniqueLocations(nextSetups, settings.storageConnections);
-    return { ...settings, ...(options.upgradeExclude ? { version: 6 as const } : {}), syncSetups: nextSetups };
+    const version =
+      nextSetup.sync.scope === "agent-directory"
+        ? 7
+        : options.upgradeExclude && settings.version < 6
+          ? 6
+          : settings.version;
+    return { ...settings, version, syncSetups: nextSetups };
   }, options.signal);
 }
 
 export async function removeSyncSetup(name: string, signal?: AbortSignal) {
   validateConfigName(name, "sync setup");
-  await updateSettings((settings) => {
+  await updateLocalConfig((settings) => {
     if (!Object.hasOwn(settings.syncSetups, name)) throw new Error(`Sync setup not found: ${name}`);
     const isCurrent = settings.activeSyncSetup === name;
     if (isCurrent && Object.keys(settings.syncSetups).length > 1) {
@@ -192,7 +195,7 @@ export async function removeSyncSetup(name: string, signal?: AbortSignal) {
 
 export async function removeStorageConnection(name: string, signal?: AbortSignal) {
   validateConfigName(name, "storage connection");
-  await updateSettings((settings) => {
+  await updateLocalConfig((settings) => {
     const referenced = referencingSetupNames(settings.syncSetups, name)[0];
     if (referenced) {
       throw new Error(`Storage connection “${name}” is used by sync setup “${referenced}”.`);
@@ -203,15 +206,6 @@ export async function removeStorageConnection(name: string, signal?: AbortSignal
     const storageConnections = { ...settings.storageConnections };
     delete storageConnections[name];
     return { ...settings, storageConnections };
-  }, signal);
-}
-
-async function updateSettings(update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3, signal?: AbortSignal) {
-  return updateLocalConfig((settings) => {
-    if (settings.version !== 3 && settings.version !== 4 && settings.version !== 5 && settings.version !== 6) {
-      throw new Error("Storage connections and sync setups require version 3, 4, 5 or 6 pi-sync settings.");
-    }
-    return update(settings);
   }, signal);
 }
 

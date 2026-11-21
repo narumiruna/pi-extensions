@@ -6,7 +6,7 @@ import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
-import { inspectRemoteSelection } from "./sync-policy.js";
+import { inspectRemoteSelection, syncSelectionHasContent } from "./sync-policy.js";
 import { fileHashMap, hasLocalChanges, remoteChangedSinceState } from "./sync-state.js";
 
 /** Advisory baseline-relative observation, never an authorization to transfer files. */
@@ -37,13 +37,13 @@ export async function inspectSync(
     ...freshness,
     head,
     selectionState: head
-      ? inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude)
+      ? inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config)
       : undefined,
     localFiles: local.files.length,
     localChanged: hasLocalChanges(local, state, config),
     remoteChanged: remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)),
     firstSync: !state.lastAppliedSnapshot,
-    emptyInclude: config.include.length === 0,
+    emptyInclude: !syncSelectionHasContent(config),
     stateIdentity: syncStateFingerprint(state),
     destination: backend.destination,
     capability: backend.capability,

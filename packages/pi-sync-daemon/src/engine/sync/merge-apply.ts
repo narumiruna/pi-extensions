@@ -1,10 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withEngineMutationQueue as withFileMutationQueue } from "../host.js";
 import { agentDir } from "../snapshot/session-paths.js";
-import { createSnapshot, snapshotTarget } from "../snapshot/snapshot.js";
+import {
+  agentDirectoryConfiguredSessionDir,
+  agentDirectoryInventory,
+  createSnapshot,
+  scanAgentDirectoryInventory,
+  snapshotTarget,
+} from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
+import { assertAgentDirectorySnapshotBound, MAX_AGENT_DIRECTORY_BYTES } from "../snapshot/snapshot-bounds.js";
+import { assertProjectedAgentDirectoryEntries } from "../snapshot/snapshot-entry-projection.js";
 import { assertUnexcludedTargets } from "../snapshot/snapshot-exclude-safety.js";
 import { assertCanonicalMutationTargets } from "../snapshot/snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "../snapshot/snapshot-paths.js";
@@ -12,6 +21,7 @@ import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
 import { mergePathIdentity } from "./file-merge-planner.js";
+import { configuredSnapshotPathMatcher } from "./sync-policy.js";
 import { fileHashMap } from "./sync-state.js";
 
 /** Read-only filesystem applicability check before publishing a combined result. */
@@ -21,16 +31,21 @@ export async function preflightMergedTargets(
   options: SnapshotOptions,
   protectedTarget?: string | readonly string[],
 ) {
+  if (options.scope === "agent-directory") assertAgentDirectorySnapshotBound(after.files);
   const root = agentDir();
+  const scan =
+    options.scope === "agent-directory"
+      ? (agentDirectoryInventory(before) ?? agentDirectoryInventory(await createSnapshot(before.profile, options)))
+      : undefined;
+  if (scan) options = { ...options, sessionDir: scan.sessionRoot };
   const beforeHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(before));
   const afterHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(after));
   const paths = [...new Set([...Object.keys(beforeHashes), ...Object.keys(afterHashes)])].sort();
   const changed = new Set(paths.filter((item) => beforeHashes[item] !== afterHashes[item]));
-  await assertUnexcludedTargets(
-    root,
-    [...changed].map((item) => snapshotTarget(root, item, options.sessionDir)),
-    options,
-  );
+  requireManagedChanges(changed, options);
+  const targets = [...changed].map((item) => snapshotTarget(root, item, options.sessionDir));
+  if (options.scope === "agent-directory") await assertCanonicalMutationTargets(targets, options);
+  await assertUnexcludedTargets(root, targets, options);
   await assertCanonicalMergedTargets(root, changed, options);
   await assertDistinctMergedTargets(root, paths, changed, options, protectedTarget, new Set(Object.keys(afterHashes)));
   const removed = replacementPaths(
@@ -41,10 +56,28 @@ export async function preflightMergedTargets(
   for (const relative of paths) {
     if (changed.has(relative)) await assertFilesystemTarget(root, relative, options, removedTargets, beforeHashes);
   }
-  await assertCanonicalMutationTargets(
-    [...changed].map((relative) => snapshotTarget(root, relative, options.sessionDir)),
-    options,
-  );
+  await assertCanonicalMutationTargets(targets, options);
+  if (scan) {
+    assertProjectedAgentDirectoryEntries(
+      scan,
+      {
+        deletes: [...removedTargets],
+        writes: [...changed]
+          .filter((relative) => afterHashes[relative] !== undefined)
+          .map((relative) => ({
+            target: snapshotTarget(root, relative, options.sessionDir),
+          })),
+      },
+      options,
+    );
+  }
+}
+
+function requireManagedChanges(paths: Iterable<string>, options: SnapshotOptions) {
+  if (options.scope !== "agent-directory") return;
+  const configured = configuredSnapshotPathMatcher(options);
+  for (const relative of paths)
+    if (!configured(relative)) throw new Error("A merged transfer targets a path outside the configured policy.");
 }
 
 function replacementPaths(removed: Set<string>, afterHashes: Readonly<Record<string, string>>) {
@@ -129,22 +162,59 @@ async function assertDistinctMergedTargets(
   }
 }
 
-async function assertReviewedTree(directory: string, relative: string, beforeHashes: Readonly<Record<string, string>>) {
+async function hashReviewedFile(target: string, stat: Stats, options: SnapshotOptions) {
+  if (options.scope !== "agent-directory")
+    return createHash("sha256")
+      .update(await fs.readFile(target))
+      .digest("hex");
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat();
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== stat.dev || opened.ino !== stat.ino)
+      throw new Error("Reviewed file changed at the merge boundary.");
+    const hash = createHash("sha256");
+    let total = 0;
+    for await (const bytes of handle.createReadStream({ autoClose: false, signal: options.signal })) {
+      options.signal?.throwIfAborted();
+      options.validateMutation?.();
+      total += bytes.length;
+      if (total > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Reviewed file exceeds the merge byte limit.");
+      hash.update(bytes);
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertReviewedTree(
+  directory: string,
+  relative: string,
+  beforeHashes: Readonly<Record<string, string>>,
+  options: SnapshotOptions,
+  removedTargets: ReadonlySet<string>,
+) {
   for (const name of await fs.readdir(directory)) {
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
     const child = path.join(directory, name);
     const childRelative = `${relative}/${name}`;
     const stat = await fs.lstat(child);
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
     if (stat.isDirectory()) {
-      await assertReviewedTree(child, childRelative, beforeHashes);
+      // A persisted merge only authorizes directory paths inferred from its reviewed file deletions.
+      if (options.scope === "agent-directory" && (!removedTargets.has(child) || beforeHashes[childRelative]))
+        throw new Error("Reviewed directory contains an unreviewed directory; use a reviewed directional transfer.");
+      await assertReviewedTree(child, childRelative, beforeHashes, options, removedTargets);
     } else if (
-      stat.isFile() &&
-      stat.nlink === 1 &&
-      beforeHashes[childRelative] ===
-        createHash("sha256")
-          .update(await fs.readFile(child))
-          .digest("hex")
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      beforeHashes[childRelative] === undefined ||
+      beforeHashes[childRelative] !== (await hashReviewedFile(child, stat, options))
     ) {
-    } else {
       throw new Error("Reviewed directory contains unknown or changed files; publication refused.");
     }
   }
@@ -186,35 +256,42 @@ async function assertFilesystemTarget(
     relative.startsWith("sessions/") && options.sessionDir
       ? path.resolve(sessionStorageRoot(root, options.sessionDir))
       : path.resolve(root);
+  const parents: string[] = [];
   for (
     let parent = path.dirname(target);
     mergePathIdentity(parent) !== mergePathIdentity(boundary);
     parent = path.dirname(parent)
   ) {
-    options.signal?.throwIfAborted();
     if (path.dirname(parent) === parent) throw new Error("Unowned merged target.");
+    parents.push(parent);
+  }
+  const statTarget = async (file: string) => {
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
     try {
-      const stat = await fs.lstat(parent);
-      if (
-        (!stat.isDirectory() || stat.isSymbolicLink()) &&
-        !(stat.isFile() && stat.nlink === 1 && removedTargets.has(parent))
-      )
-        throw new Error("Unsafe merge filesystem layout; review the selected paths before transfer.");
+      return await fs.lstat(file);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return undefined;
+    } finally {
+      options.signal?.throwIfAborted();
+      options.validateMutation?.();
     }
+  };
+  for (const parent of parents.reverse()) {
+    const stat = await statTarget(parent);
+    if (!stat || stat.isDirectory()) continue;
+    // Descendants cannot exist beneath this reviewed file until its removal.
+    // Writes recheck the actual parents without this exception after deletion.
+    if (stat.isFile() && stat.nlink === 1 && removedTargets.has(parent)) return;
+    throw new Error("Unsafe merge filesystem layout; review the selected paths before transfer.");
   }
-  options.signal?.throwIfAborted();
-  try {
-    const stat = await fs.lstat(target);
-    if ((!stat.isFile() && !removedTargets.has(target)) || (stat.isFile() && stat.nlink > 1))
-      throw new Error("Merge target is non-regular or hard-linked; review a directional operation before transfer.");
-    if (stat.isDirectory() && beforeHashes) await assertReviewedTree(target, relative, beforeHashes);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && !(code === "ENOTDIR" && removedTargets.size > 0)) throw error;
-  }
+  const stat = await statTarget(target);
+  if (!stat) return;
+  if ((!stat.isFile() && !removedTargets.has(target)) || (stat.isFile() && stat.nlink > 1))
+    throw new Error("Merge target is non-regular or hard-linked; review a directional operation before transfer.");
+  if (stat.isDirectory() && beforeHashes)
+    await assertReviewedTree(target, relative, beforeHashes, options, removedTargets);
 }
 
 /** Roll forward only while each target is still its reviewed preimage or committed postimage. */
@@ -227,6 +304,14 @@ export async function applyMergedSnapshot(
   protectedTarget?: string,
 ) {
   const root = agentDir();
+  if (options.scope === "agent-directory" && options.sessionDir === undefined) {
+    options = {
+      ...options,
+      sessionDir: sessionStorageRoot(root, await agentDirectoryConfiguredSessionDir(options.signal, root)),
+    };
+    options.validateMutation?.();
+    options.signal?.throwIfAborted();
+  }
   const beforeHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(before));
   const afterHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(after));
   const paths = [...new Set([...Object.keys(beforeHashes), ...Object.keys(afterHashes)])].sort();
@@ -234,10 +319,13 @@ export async function applyMergedSnapshot(
     new Set(paths.filter((item) => beforeHashes[item] && !afterHashes[item])),
     afterHashes,
   );
+  const replacementTargets = new Set(
+    [...replacements].map((relative) => snapshotTarget(root, relative, options.sessionDir)),
+  );
   const intermediateDirectories = [...replacements].filter((item) => !beforeHashes[item] && !afterHashes[item]);
-  const changed = [
-    ...new Set([...paths.filter((item) => beforeHashes[item] !== afterHashes[item]), ...intermediateDirectories]),
-  ].sort();
+  const changedFiles = paths.filter((item) => beforeHashes[item] !== afterHashes[item]);
+  requireManagedChanges(changedFiles, options);
+  const changed = [...new Set([...changedFiles, ...intermediateDirectories])].sort();
   const protectedKeys = new Set([...protectedPaths].map(mergePathIdentity));
   if (changed.some((item) => protectedKeys.has(mergePathIdentity(item)))) {
     throw new Error("A merged transfer targets the current session; review is required.");
@@ -255,6 +343,7 @@ export async function applyMergedSnapshot(
     new Set(Object.keys(afterHashes)),
   );
   await assertCanonicalMutationTargets(targets, options);
+  if (options.scope === "agent-directory") await assertUnexcludedTargets(root, targets, options);
   // Existing case aliases share Pi's non-reentrant realpath queue. Reserve the
   // missing destination separately only after deleting its reviewed preimage.
   const targetsByQueue = new Map<string, string[]>();
@@ -314,6 +403,17 @@ export async function applyMergedSnapshot(
     const plan = preflightSnapshotApply(root, after, current, options);
     plan.writes = plan.writes.filter((item) => targetSet.has(item.target));
     plan.deletes = plan.deletes.filter((target) => targetSet.has(target));
+    if (options.scope === "agent-directory") {
+      // Recovery preserves files outside the plan, including protected sessions
+      // that may have appeared or grown since the reviewed after-image.
+      const written = new Set(plan.writes.map((item) => item.target));
+      const replaced = new Set([...plan.deletes, ...written]);
+      const targetFor = (relative: string) => snapshotTarget(root, relative, options.sessionDir);
+      assertAgentDirectorySnapshotBound([
+        ...current.files.filter((file) => !replaced.has(targetFor(file.path))),
+        ...after.files.filter((file) => written.has(targetFor(file.path))),
+      ]);
+    }
     await preflightSnapshotMutations(root, plan, options.sessionDir, options);
     const deletedTargets = new Set(plan.deletes);
     for (const relative of intermediateDirectories) {
@@ -324,14 +424,26 @@ export async function applyMergedSnapshot(
         }
       }
     }
+    const scan = agentDirectoryInventory(current);
+    if (scan) {
+      for (const { target } of plan.writes) {
+        if (!deletedTargets.has(target)) continue;
+        const relative = relativeByTarget.get(target);
+        if (!relative) throw new Error("Unowned merge write target.");
+        await assertFilesystemTarget(root, relative, options, replacementTargets, beforeHashes);
+      }
+      assertProjectedAgentDirectoryEntries(scan, plan, options);
+    }
     // A parent must remain until every reviewed leaf and intermediate directory is gone.
     plan.deletes.sort(
       (left, right) => right.split(path.sep).length - left.split(path.sep).length || left.localeCompare(right),
     );
-    const removed = replacementPaths(
-      new Set(paths.filter((relative) => deletedTargets.has(snapshotTarget(root, relative, options.sessionDir)))),
-      afterHashes,
-    );
+    const removed = scan
+      ? replacements
+      : replacementPaths(
+          new Set(paths.filter((relative) => deletedTargets.has(snapshotTarget(root, relative, options.sessionDir)))),
+          afterHashes,
+        );
     const removedTargets = new Set([...removed].map((item) => snapshotTarget(root, item, options.sessionDir)));
     await assertCanonicalMergedTargets(root, changed, options);
     await validate();
@@ -339,6 +451,10 @@ export async function applyMergedSnapshot(
       await validate();
       const relative = relativeByTarget.get(target);
       if (!relative) throw new Error("Unowned merge target.");
+      if (options.scope === "agent-directory") {
+        await assertCanonicalMutationTargets([target], options);
+        await assertUnexcludedTargets(root, [target], options);
+      }
       await assertFilesystemTarget(root, relative, options, removedTargets, currentHashes);
       await validate();
       let hash: string | undefined;
@@ -350,9 +466,7 @@ export async function applyMergedSnapshot(
         } else {
           if (!stat.isFile() || stat.nlink > 1)
             throw new Error("Merged transfer target is no longer an independent regular file.");
-          hash = createHash("sha256")
-            .update(await fs.readFile(target))
-            .digest("hex");
+          hash = await hashReviewedFile(target, stat, options);
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -362,6 +476,14 @@ export async function applyMergedSnapshot(
       if (hash !== beforeHashes[relative] && hash !== afterHashes[relative])
         throw new Error("Local content changed at the apply boundary; journal retained, newer bytes untouched.");
     };
+    async function recheckEntryBudget(deletes: string[]) {
+      if (options.scope !== "agent-directory") return;
+      const inventory = await scanAgentDirectoryInventory(root, options);
+      options.signal?.throwIfAborted();
+      options.validateMutation?.();
+      assertProjectedAgentDirectoryEntries(inventory, { writes: plan.writes, deletes }, options);
+    }
+    if (plan.deletes.length) await recheckEntryBudget(plan.deletes);
     for (const target of plan.deletes) {
       await revalidateTarget(target);
       try {
@@ -399,6 +521,10 @@ export async function applyMergedSnapshot(
     await requireAbsentDestinations();
     await acquireDestinations(0);
     async function writeTargets() {
+      if (plan.writes.length && options.scope === "agent-directory") {
+        await validate();
+        await recheckEntryBudget([]);
+      }
       for (const item of plan.writes) {
         await validate();
         const relative = relativeByTarget.get(item.target);
