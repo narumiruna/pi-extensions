@@ -55,6 +55,7 @@ export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDepen
       signal,
       isCurrent,
       get: () => ({ ...settings }),
+      widget: widget.controls(ctx),
       save: (key, value, actionSignal) => {
         actionSignal.throwIfAborted();
         if (!isCurrent()) throw new Error("The subagents session changed.");

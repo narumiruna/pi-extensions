@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, KeybindingsManager, TUI_KEYBINDINGS, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  getKeybindings,
+  KeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -125,6 +132,63 @@ test("main-menu and direct settings routes share one screen and apply durable ch
   assert.deepEqual(JSON.parse(await fs.readFile(store.userPath, "utf8")), { showJobId: true });
 });
 
+test("Settings previews display changes with sample jobs even when no jobs are active", async () => {
+  const tui = createTuiHarness({ width: 80, rows: 24 });
+  const { mock, context, store, children } = await setup({ mode: "tui", custom: tui.custom });
+  const failedSave = deferred();
+  vi.spyOn(store, "save").mockImplementationOnce(async () => {
+    await failedSave.promise;
+    throw new Error("settings unavailable");
+  });
+  const command = invoke(mock, context, "settings");
+  const frame = () => tui.render().map(stripVTControlCharacters).join("\n");
+  try {
+    await tui.waitForOpen();
+    assert.match(frame(), /Preview · sample jobs\n.*Subagents · 1 running · 1 queued/u);
+    assert.match(frame(), /▶ Review release notes · 12s \/ 1m/u);
+    assert.doesNotMatch(frame(), /job_example_1|tools: read/u);
+    await choose(tui, "Show job ID");
+    assert.match(frame(), /▶ job_example_1 · Review release notes/u);
+    failedSave.resolve();
+    await tui.waitForPending();
+    assert.doesNotMatch(frame(), /job_example_1/u);
+    assert.match(context.notifications.at(-1)?.message ?? "", /settings unavailable/u);
+    await choose(tui, "Show job ID");
+    await tui.waitForPending();
+    assert.match(frame(), /▶ job_example_1 · Review release notes/u);
+    await choose(tui, "Show tools");
+    await tui.waitForPending();
+    assert.match(frame(), /tools: read, grep/u);
+    await choose(tui, "Show timing");
+    await tui.waitForPending();
+    assert.doesNotMatch(frame(), /12s/u);
+    await choose(tui, "Status view");
+    await choose(tui, "Counts only");
+    assert.match(frame(), /Status view\s+Counts only/u);
+    assert.match(frame(), /Preview · sample jobs\n.*Subagents · 1 running · 1 queued/u);
+    assert.doesNotMatch(frame(), /Review release notes/u);
+    await choose(tui, "Status view");
+    await choose(tui, "Hidden");
+    assert.match(frame(), /Preview · sample jobs\nStatus hidden for this session/u);
+    await choose(tui, "Show widget");
+    await tui.waitForPending();
+    assert.match(frame(), /Preview · sample jobs\nHidden by Show widget/u);
+    assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
+    assert.deepEqual(children, []);
+    assert.deepEqual(JSON.parse(await fs.readFile(store.userPath, "utf8")), {
+      showWidget: false,
+      showJobId: true,
+      showTools: true,
+      showTiming: false,
+    });
+  } finally {
+    failedSave.resolve();
+    tui.press("ctrl+c");
+    await command;
+    tui.dispose();
+  }
+});
+
 test("reloads manual user preferences and leaves model-visible tools unchanged", async () => {
   const { mock, context, store } = await setup({ mode: "tui" });
   const definitions = JSON.stringify(mock.tools);
@@ -231,7 +295,7 @@ test("public hooks compact on consumed user messages, not input attempts or othe
   const { mock, context } = await setup({ mode: "tui", custom: tui.custom });
   await spawnJob(mock, context);
   const definitions = JSON.stringify(mock.tools);
-  await armTrigger(mock, context, tui, "Next consumed user message");
+  await armTrigger(mock, context, tui, "On next message");
   for (const role of ["assistant", "custom", "toolResult"]) {
     await emit(mock, "message_start", context.ctx, { message: { role } });
   }
@@ -255,7 +319,7 @@ test("public settled hooks group retries and queued continuations and require an
   const { mock, context } = await setup({ mode: "tui", custom: tui.custom });
   await spawnJob(mock, context);
   await emit(mock, "agent_start", context.ctx);
-  await armTrigger(mock, context, tui, "Next eligible settled cycle");
+  await armTrigger(mock, context, tui, "After next reply");
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
@@ -287,7 +351,7 @@ test("menu arming excludes run preparation before the public agent_start hook", 
   await spawnJob(mock, context);
   idle = false; // A later preparation handler is still waiting; no agent_start exists yet.
   await emit(mock, "before_agent_start", context.ctx);
-  await armTrigger(mock, context, tui, "Next eligible settled cycle");
+  await armTrigger(mock, context, tui, "After next reply");
   await emit(mock, "agent_start", context.ctx);
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
@@ -320,7 +384,7 @@ test("async settings initialization excludes an already-busy cycle even when its
   release.resolve();
   await loading;
   await spawnJob(mock, context);
-  await armTrigger(mock, context, tui, "Next eligible settled cycle");
+  await armTrigger(mock, context, tui, "After next reply");
   await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
   await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
   await emit(mock, "agent_settled", context.ctx, { aborted: false });
@@ -347,7 +411,7 @@ test.each([false, true])(
     });
     await emit(mock, "session_tree", context.ctx);
     idle = true; // Navigation clears its controller without agent_settled.
-    await armTrigger(mock, context, tui, "Next eligible settled cycle");
+    await armTrigger(mock, context, tui, "After next reply");
     await emit(mock, "agent_start", context.ctx);
     await emit(mock, "message_start", context.ctx, { message: { role: "user" } });
     await emit(mock, "turn_end", context.ctx, { message: { role: "assistant", stopReason: "stop" } });
@@ -366,7 +430,7 @@ for (const reason of ["threshold", "overflow"] as const) {
       await spawnJob(mock, context);
       idle = false;
       await emit(mock, "session_before_compact", context.ctx, { reason, willRetry });
-      await armTrigger(mock, context, tui, "Next eligible settled cycle");
+      await armTrigger(mock, context, tui, "After next reply");
       await emit(mock, "session_compact", context.ctx, { reason, willRetry });
       await emit(mock, "before_agent_start", context.ctx);
       await emit(mock, "agent_start", context.ctx);
@@ -395,7 +459,7 @@ for (const operation of ["session_before_tree", "session_before_compact"] as con
     await spawnJob(mock, context);
     idle = false;
     await emit(mock, operation, context.ctx, { reason: "manual", signal: new AbortController().signal });
-    await armTrigger(mock, context, tui, "Next eligible settled cycle");
+    await armTrigger(mock, context, tui, "After next reply");
     // Native user prompts expose idle through input before starting a run.
     // This resets tracking without counting the input as accepted user activity.
     idle = true;
@@ -423,11 +487,16 @@ test("existing keyboard view controls restore disclosure without changing settin
   const settings = { ...store.settings };
   collapseWidget(context);
   assert.match(widgetText(context), /^─ ▸ Subagents · 1 running · 0 queued ─+$/u);
+  const original = getKeybindings();
+  setKeybindings(keybindings);
   const menu = invoke(mock, context, "");
   try {
     await tui.waitForOpen();
-    await choose(tui, "Widget view", ["\u000e", "\u0019"]);
-    await choose(tui, "Show details", ["\u000e", "\u0019"]);
+    const keys = ["\u000e", "\u0019"] as const;
+    assert.doesNotMatch(tui.render().join("\n"), /Widget view/u);
+    await choose(tui, "Settings", keys);
+    await choose(tui, "Status view", keys);
+    await choose(tui, "Job rows", keys);
     assert.match(widgetText(context), /Run test task/u);
     assert.match(widgetText(context), /^─ ▾ Subagents /u);
     assert.deepEqual(store.settings, settings);
@@ -437,6 +506,7 @@ test("existing keyboard view controls restore disclosure without changing settin
   } finally {
     tui.press("ctrl+c");
     await menu;
+    setKeybindings(original);
     tui.dispose();
   }
 });
@@ -445,7 +515,7 @@ test("tree navigation closes the old menu and resets presentation without cancel
   const tui = createTuiHarness();
   const { mock, context, children } = await setup({ mode: "tui", custom: tui.custom });
   await spawnJob(mock, context);
-  await armTrigger(mock, context, tui, "Next consumed user message");
+  await armTrigger(mock, context, tui, "On next message");
   const old = collapseWidget(context);
   assert.match(widgetText(context), /^─ ▸ Subagents · 1 running · 0 queued ─+$/u);
   const menu = invoke(mock, context, "");
@@ -462,10 +532,9 @@ test("tree navigation closes the old menu and resets presentation without cancel
 });
 
 async function armTrigger(mock: Mock, context: Context, tui: ReturnType<typeof createTuiHarness>, label: string) {
-  const command = invoke(mock, context, "");
+  const command = invoke(mock, context, "settings");
   await tui.waitForOpen();
-  await choose(tui, "Widget view");
-  await choose(tui, "Automatic compaction");
+  await choose(tui, "Switch to counts");
   await choose(tui, label);
   tui.press("ctrl+c");
   await command;

@@ -3,12 +3,19 @@ import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  getKeybindings,
+  KeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, test, vi } from "vitest";
 import { showSubagentsMenu } from "../src/menu.js";
 import type { ActiveJobDisplay, SubagentRuntime } from "../src/runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../src/settings.js";
+import { showSubagentSettings } from "../src/settings-ui.js";
 import { JOB_STATES, type JobSummary } from "../src/types.js";
 import { createSubagentWidgetController, SUBAGENT_WIDGET_KEY } from "../src/widget.js";
 
@@ -298,6 +305,9 @@ function presentationFixture() {
     "tui.select.confirm": "ctrl+y",
     "tui.select.cancel": "ctrl+x",
   });
+  const original = getKeybindings();
+  setKeybindings(bindings);
+  widgetCleanups.push(() => setKeybindings(original));
   const tui = createTuiHarness({ keybindings: bindings, width: 160 });
   current.ctx.ui.custom = tui.custom;
   const rawId = "job_\u001b[31mone\u001b[0m";
@@ -351,7 +361,22 @@ function presentationFixture() {
     controller,
     controls,
     rawId,
-    options: { ...current.options, widget: controls },
+    options: {
+      ...current.options,
+      widget: controls,
+      showSettings: (signal: AbortSignal) =>
+        showSubagentSettings(current.ctx, {
+          signal,
+          isCurrent: current.options.isCurrent,
+          get: () => current.state.settings,
+          widget: controls,
+          save: async (key, value) => ({ ...current.state.settings, [key]: value }),
+          apply: (settings) => {
+            current.state.settings = settings;
+            controller.update(current.ctx, settings);
+          },
+        }),
+    },
     render: () => text(component?.render(200) ?? []),
     changeTask() {
       jobs = jobs.map((job) => ({ ...job, task: "New assignment" }));
@@ -376,18 +401,40 @@ test("remapped widget menu controls actual presentation and disabled settings be
   const f = presentationFixture();
   const command = showSubagentsMenu(f.ctx, f.options);
   await f.tui.waitForOpen();
-  await choosePresentation(f.tui, "Widget view");
-  await choosePresentation(f.tui, "Show summary");
+  await choosePresentation(f.tui, "Settings");
+  const originalWidget = f.render();
+  await choosePresentation(f.tui, "Status view");
+  assert.match(text(f.tui.render()), /Review release notes/u);
+  f.tui.send("\u000e");
+  const summaryPreview = text(f.tui.render());
+  assert.match(summaryPreview, /Preview · sample jobs\n.*1 running · 1 queued/u);
+  assert.doesNotMatch(summaryPreview, /Review release notes/u);
+  f.tui.send("\u000e");
+  assert.match(text(f.tui.render()), /Preview · sample jobs\nStatus hidden for this session/u);
+  assert.equal(f.render(), originalWidget);
+  f.tui.send("\u0018");
+  assert.match(text(f.tui.render()), /Review release notes/u);
+  assert.equal(f.render(), originalWidget);
+  await choosePresentation(f.tui, "Status view");
+  const clipped = f.tui.resize({ rows: 8, width: 80 });
+  assert.equal(clipped.length, 5);
+  assert.match(text(clipped), /→ Job rows/u);
+  assert.doesNotMatch(text(clipped), /Preview/u);
+  const countRow = clipped.findIndex((line) => line.includes("Counts only"));
+  assert.ok(countRow >= 0);
+  f.tui.mouse({ type: "click", x: 4, y: countRow });
   const compact = f.render();
-  await choosePresentation(f.tui, "Pin view");
+  f.tui.resize({ rows: 24, width: 160 });
+  await choosePresentation(f.tui, "Pin status view");
   const pinned = text(f.tui.render());
-  await choosePresentation(f.tui, "Hide widget");
+  await choosePresentation(f.tui, "Status view");
+  await choosePresentation(f.tui, "Hidden");
   const hidden = f.render();
-  await choosePresentation(f.tui, "Show widget");
+  await choosePresentation(f.tui, "Status view");
+  await choosePresentation(f.tui, "Job rows");
   const shown = f.render();
-  f.state.settings.showWidget = false;
-  f.controller.update(f.ctx, f.state.settings);
-  await choosePresentation(f.tui, "Show details");
+  await choosePresentation(f.tui, "Show widget");
+  await f.tui.waitForPending();
   const disabled = f.render();
   const disabledMenu = text(f.tui.render());
   f.tui.send("\u0018"); // Remapped back returns to the root.
@@ -397,13 +444,13 @@ test("remapped widget menu controls actual presentation and disabled settings be
   await command;
   assert.match(compact, /1 running · 1 queued/u);
   assert.doesNotMatch(compact, /thinking:/u);
-  assert.match(pinned, /pinned: true/u);
-  assert.match(pinned, /Unpin view/u);
+  assert.match(pinned, /Pin status view\s+Yes/u);
   assert.equal(hidden, "");
   assert.match(shown, /thinking: high/u);
   assert.equal(disabled, "");
-  assert.match(disabledMenu, /Disabled by Settings/u);
-  assert.match(root, /Widget view/u);
+  assert.match(disabledMenu, /Hidden by Show widget/u);
+  assert.match(root, /Settings/u);
+  assert.doesNotMatch(root, /Widget view/u);
   assert.equal(f.options.cancelJob.mock.calls.length, 0);
   assert.deepEqual(f.notifications, []);
 });
@@ -426,8 +473,8 @@ test("item menu uses raw IDs, rejects a stale selected revision, and resets remo
   await f.tui.waitForOpen();
   f.tui.send("\u0018");
   await f.tui.waitForOpen();
-  await choosePresentation(f.tui, "Widget view");
-  await choosePresentation(f.tui, "Reset item views");
+  await choosePresentation(f.tui, "Settings");
+  await choosePresentation(f.tui, "Restore job rows");
   const reset = f.render();
   f.tui.press("ctrl+c");
   await command;

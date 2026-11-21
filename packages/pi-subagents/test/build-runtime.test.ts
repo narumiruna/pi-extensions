@@ -407,7 +407,7 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
             const running = command.handler(route, context.ctx);
             try {
               await tui.waitForOpen();
-              assert.match(tui.render().join("\n"), route === "" ? /Jobs/u : /Show widget/u);
+              assert.match(tui.render().join("\n"), route === "" ? /Jobs/u : /Preview · sample jobs/u);
             } finally {
               tui.press("ctrl+c");
               await running;
