@@ -157,49 +157,105 @@ posixCreation("confirmed calls share one complete default file and never touch a
   }),
 );
 
-posixCreation("overlapping initializers cannot clobber one another's creation record", () =>
+posixCreation.each(["active", "late"] as const)("an %s contender leaves the winner's file usable", (ordering) =>
   fixture(async (root, target, markerPath) => {
     const open = fs.open;
-    const both = Promise.withResolvers<void>();
-    let contenders = 0;
+    const contenderAtMarker = Promise.withResolvers<void>();
+    const releaseContender = Promise.withResolvers<void>();
+    const winnerAtTarget = Promise.withResolvers<void>();
+    const releaseWinner = Promise.withResolvers<void>();
+    let pauseContender = true;
+    let pauseWinner = ordering === "active";
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      if (path.basename(String(args[0])) === marker && exclusive(args[1])) {
-        if (++contenders === 2) both.resolve();
-        await both.promise;
+      const name = path.basename(String(args[0]));
+      if (name === marker && exclusive(args[1]) && pauseContender) {
+        pauseContender = false;
+        contenderAtMarker.resolve();
+        await releaseContender.promise;
+      }
+      if (name === filename && exclusive(args[1]) && pauseWinner) {
+        pauseWinner = false;
+        winnerAtTarget.resolve();
+        await releaseWinner.promise;
       }
       return open(...args);
     });
-    const attempts = await Promise.allSettled([
-      initializeDefaultIgnoreSource(root),
-      initializeDefaultIgnoreSource(root),
-    ]);
-    const successes = attempts.filter((result) => result.status === "fulfilled");
-    const failures = attempts.filter((result) => result.status === "rejected");
-    assert.equal(successes.length, 1);
-    assert.equal(failures.length, 1);
-    assert.match(String(failures[0]?.reason), /appeared concurrently/u);
-    assert.equal(await fs.readFile(target, "utf8"), starter);
-    await assertMissing(markerPath);
+    const contender = initializeDefaultIgnoreSource(root);
+    const attempts = [contender];
+    try {
+      await Promise.race([contenderAtMarker.promise, contender]);
+      const winner = initializeDefaultIgnoreSource(root);
+      attempts.push(winner);
+      if (ordering === "active") await Promise.race([winnerAtTarget.promise, winner]);
+      else await winner;
+      releaseContender.resolve();
+      await assert.rejects(contender, /appeared concurrently/u);
+      if (ordering === "active") {
+        assert.equal(await fs.readFile(markerPath, "utf8"), record);
+        await assertMissing(target);
+        await assert.rejects(readIgnoreSource(root), unfinished);
+      }
+      releaseWinner.resolve();
+      const completed = await winner;
+      assert.deepEqual(await readIgnoreSource(root), completed);
+      assert.equal(await fs.readFile(target, "utf8"), starter);
+      await assertMissing(markerPath);
+    } finally {
+      releaseWinner.resolve();
+      releaseContender.resolve();
+      await Promise.allSettled(attempts);
+    }
   }),
 );
 
-posixCreation("losing exclusive creation preserves the concurrent file and record for reviewed recovery", () =>
+posixCreation.each([
+  { scenario: "with custom rules", contents: "external\n", cancelled: false },
+  { scenario: "with no rules", contents: "", cancelled: false },
+  { scenario: "during cancellation", contents: "external\n", cancelled: true },
+])("a fresh target collision $scenario preserves the competitor for reviewed retry", ({ contents, cancelled }) =>
   fixture(async (root, target, markerPath) => {
+    const controller = new AbortController();
+    const reason = new Error("confirmed request was cancelled");
     const open = fs.open;
     const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       if (path.basename(String(args[0])) === filename && exclusive(args[1])) {
-        await fs.writeFile(target, "external\n", { flag: "wx" });
+        assert.equal(await fs.readFile(markerPath, "utf8"), record);
+        await fs.writeFile(target, contents, { flag: "wx" });
+        if (cancelled) controller.abort(reason);
       }
       return open(...args);
     });
-    await assert.rejects(initializeDefaultIgnoreSource(root), /appeared concurrently/u);
+    const attempt = initializeDefaultIgnoreSource(root, controller.signal);
+    await assert.rejects(attempt, cancelled ? (error) => error === reason : /appeared concurrently/u);
     spy.mockRestore();
+    await assertMissing(markerPath);
+    const competitor = await readIgnoreSource(root);
+    assert.equal(competitor.present, true);
+    assert.equal(competitor.text, contents);
+    assert.deepEqual(await initializeDefaultIgnoreSource(root), competitor);
+    assert.equal(await fs.readFile(target, "utf8"), contents);
+  }),
+);
+
+posixCreation.each(["resumed", "replaced"] as const)("a %s creation record is preserved after target EEXIST", (kind) =>
+  fixture(async (root, target, markerPath) => {
+    if (kind === "resumed") await fs.writeFile(markerPath, record, { mode: 0o600 });
+    const open = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (path.basename(String(args[0])) === filename && exclusive(args[1])) {
+        await fs.writeFile(target, "external\n", { flag: "wx" });
+        if (kind === "replaced") {
+          const replacement = path.join(root, "replacement");
+          await fs.writeFile(replacement, record, { mode: 0o600 });
+          await fs.rename(replacement, markerPath);
+        }
+      }
+      return open(...args);
+    });
+    await assert.rejects(initializeDefaultIgnoreSource(root), /appeared concurrently|changed during initialization/u);
     assert.equal(await fs.readFile(markerPath, "utf8"), record);
     assert.equal(await fs.readFile(target, "utf8"), "external\n");
     await assert.rejects(readIgnoreSource(root), unfinished);
-    await assert.rejects(initializeDefaultIgnoreSource(root), /unfinished creation.*outside the Pi agent directory/u);
-    assert.equal(await fs.readFile(target, "utf8"), "external\n");
-    assert.equal(await fs.readFile(markerPath, "utf8"), record);
   }),
 );
 
@@ -306,34 +362,41 @@ posixCreation.each(["malformed", "symlink", "hardlink", "public"])("refuses a %s
   }),
 );
 
-posixCreation("cancellation after record publication closes owned handles and leaves a resumable absent target", () =>
-  fixture(async (root, target, markerPath) => {
-    const controller = new AbortController();
-    const reason = new Error("confirmed request was cancelled");
-    const open = fs.open;
-    const handles: FileHandle[] = [];
-    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      handles.push(handle);
-      if (args[0] === root) {
-        const sync = handle.sync;
-        let directorySyncs = 0;
-        handle.sync = async () => {
-          await sync.call(handle);
-          if (++directorySyncs === 2) controller.abort(reason);
-        };
-      }
-      return handle;
-    });
-    await assert.rejects(initializeDefaultIgnoreSource(root, controller.signal), (error) => error === reason);
-    spy.mockRestore();
-    assert.ok(handles.length > 0);
-    assert.ok(handles.every((handle) => handle.fd === -1));
-    assert.equal(await fs.readFile(markerPath, "utf8"), record);
-    await assertMissing(target);
-    await assert.rejects(readIgnoreSource(root), unfinished);
-    assert.equal((await initializeDefaultIgnoreSource(root)).text, starter);
-  }),
+posixCreation.each(["exclusive open", "publication"] as const)(
+  "cancellation after record %s leaves a durable record and a resumable absent target",
+  (phase) =>
+    fixture(async (root, target, markerPath) => {
+      const controller = new AbortController();
+      const reason = new Error("confirmed request was cancelled");
+      const open = fs.open;
+      const handles: FileHandle[] = [];
+      let directorySyncs = 0;
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        handles.push(handle);
+        if (path.basename(String(args[0])) === marker && exclusive(args[1]) && phase === "exclusive open") {
+          controller.abort(reason);
+        }
+        if (args[0] === root) {
+          const sync = handle.sync;
+          handle.sync = async () => {
+            await sync.call(handle);
+            if (++directorySyncs === 2 && phase === "publication") controller.abort(reason);
+          };
+        }
+        return handle;
+      });
+      await assert.rejects(initializeDefaultIgnoreSource(root, controller.signal), (error) => error === reason);
+      spy.mockRestore();
+      assert.equal(directorySyncs, 2);
+      assert.ok(handles.length > 0);
+      assert.ok(handles.every((handle) => handle.fd === -1));
+      assert.equal(await fs.readFile(markerPath, "utf8"), record);
+      await assertMissing(target);
+      await assert.rejects(readIgnoreSource(root), unfinished);
+      assert.equal((await initializeDefaultIgnoreSource(root)).text, starter);
+      await assertMissing(markerPath);
+    }),
 );
 
 posixCreation("fails without writing if directory-relative lookup or directory fsync is unavailable", () =>
@@ -403,6 +466,11 @@ const childScript = `
   fs.open = async (...args) => {
     const creatingTarget = path.basename(String(args[0])) === filename && (args[1] & constants.O_EXCL) !== 0;
     if (creatingTarget && phase === 'before-open') await checkpoint();
+    if (creatingTarget && phase === 'target-eexist') {
+      await fs.writeFile(path.join(root, filename), '', { flag: 'wx', mode: 0o600 });
+      await assert.rejects(open(...args), { code: 'EEXIST' });
+      await checkpoint();
+    }
     const handle = await open(...args);
     if (creatingTarget && phase === 'after-open') await checkpoint();
     if (creatingTarget && phase === 'partial-write') {
@@ -457,16 +525,16 @@ async function crashChild(root: string, phase: string) {
   assert.deepEqual(await exit, [null, "SIGKILL"]);
 }
 
-posixCreation.each(["before-open", "after-open", "partial-write", "before-clear"])(
-  "a process crash at %s leaves evidence that only confirmed initialization can resolve",
+posixCreation.each(["before-open", "target-eexist", "after-open", "partial-write", "before-clear"])(
+  "a process crash at %s blocks ordinary reads and preserves ambiguous targets",
   (phase) =>
     fixture(async (root, target, markerPath) => {
       await crashChild(root, phase);
       assert.equal(await fs.readFile(markerPath, "utf8"), record);
       assert.equal((await fs.stat(markerPath)).mode & 0o777, 0o600);
       await assert.rejects(readIgnoreSource(root), unfinished);
-      if (phase === "after-open" || phase === "partial-write") {
-        const partial = phase === "after-open" ? "" : starter.slice(0, 5);
+      if (phase === "target-eexist" || phase === "after-open" || phase === "partial-write") {
+        const partial = phase === "partial-write" ? starter.slice(0, 5) : "";
         assert.equal(await fs.readFile(target, "utf8"), partial);
         await assert.rejects(initializeDefaultIgnoreSource(root), /unfinished creation/u);
         assert.equal(await fs.readFile(target, "utf8"), partial);

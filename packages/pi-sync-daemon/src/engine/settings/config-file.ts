@@ -42,11 +42,17 @@ const LOCKFILE_FS_ADAPTER = {
   utimesSync,
 };
 
+type PublicationReview = {
+  document: LocalConfigDocument | undefined;
+  check: () => Promise<void>;
+};
+
 type PublishFile = (
   source: string,
   destination: string,
   expected?: LocalConfigDocument,
   signal?: AbortSignal,
+  review?: PublicationReview,
 ) => Promise<void>;
 let configUpdateQueue: Promise<void> = Promise.resolve();
 let publishConfigFile: PublishFile = publishFileWithGuard;
@@ -169,6 +175,10 @@ export async function peekLocalConfigDocument(): Promise<LocalConfigDocument | u
 async function peekUnlocked(maxBytes?: number, securePermissions = true): Promise<LocalConfigDocument | undefined> {
   const canonicalPath = localConfigPath();
   const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyLocalConfigPath();
+  return readConfigDocumentIfExists(filePath, maxBytes, securePermissions);
+}
+
+async function readConfigDocumentIfExists(filePath: string, maxBytes?: number, securePermissions = true) {
   const snapshot = await readConfigSnapshotIfExists(filePath, maxBytes, securePermissions);
   return snapshot ? { path: filePath, ...snapshot } : undefined;
 }
@@ -210,9 +220,7 @@ export async function readMigratingLocalConfigDocument(
   }
   return queueConfigOperation(() =>
     withLocalConfigReadLockIfNeeded(async () => {
-      const configPath = await prepareLocalConfigPath(validateForMigration);
-      const snapshot = await readConfigSnapshotIfExists(configPath);
-      return snapshot ? { path: configPath, ...snapshot } : undefined;
+      return readConfigDocumentIfExists(await prepareLocalConfigPath(validateForMigration));
     }),
   );
 }
@@ -255,11 +263,11 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
     signal?.throwIfAborted();
     return withLocalConfigFileLock(async () => {
       signal?.throwIfAborted();
-      const configPath = await prepareLocalConfigPath(validate);
+      const reviewed = validateSource !== undefined || beforePublish !== undefined;
+      const configPath = reviewed ? undefined : await prepareLocalConfigPath(validate);
       signal?.throwIfAborted();
-      const snapshot = await readConfigSnapshotIfExists(configPath);
+      const document = configPath ? await readConfigDocumentIfExists(configPath) : await peekUnlocked();
       signal?.throwIfAborted();
-      const document = snapshot ? { path: configPath, ...snapshot } : undefined;
       validateSource?.(document);
       if (document) validate(document.parsed);
       const current = document ? (structuredClone(document.parsed) as T) : structuredClone(defaultValue);
@@ -267,10 +275,20 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
       validate(next);
       signal?.throwIfAborted();
       if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
-      if (beforePublish) await beforePublish(document, next);
-      signal?.throwIfAborted();
-      if (document) await replaceLocalConfigDocumentUnlocked(document, next, signal);
-      else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), signal);
+      const review = reviewed
+        ? {
+            document,
+            check: async () => {
+              if (beforePublish) {
+                assertCurrentDocument(document);
+                await beforePublish(document, next);
+              }
+              validateSource?.(document);
+            },
+          }
+        : undefined;
+      if (document) await replaceLocalConfigDocumentUnlocked(document, next, signal, review);
+      else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), signal, review);
       return next;
     });
   });
@@ -306,6 +324,7 @@ async function replaceLocalConfigDocumentUnlocked(
   document: LocalConfigDocument,
   value: Record<string, unknown>,
   signal?: AbortSignal,
+  review?: PublicationReview,
 ) {
   const nextBytes = serializedConfig(value);
   const canonicalPath = localConfigPath();
@@ -313,7 +332,7 @@ async function replaceLocalConfigDocumentUnlocked(
     if (!(await configDocumentStillMatches(document))) throw settingsChangedError();
     let installed: FileIdentity;
     try {
-      installed = await installPrivateConfigExclusively(canonicalPath, nextBytes, signal);
+      installed = await installPrivateConfigExclusively(canonicalPath, nextBytes, signal, review);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new Error("Canonical settings were created concurrently; no settings were replaced.");
@@ -352,7 +371,7 @@ async function replaceLocalConfigDocumentUnlocked(
       let published = false;
       try {
         signal?.throwIfAborted();
-        await publishConfigFile(temporaryPath, canonicalPath, document, signal);
+        await publishConfigFile(temporaryPath, canonicalPath, document, signal, review);
         published = true;
         await syncParentDirectory(canonicalPath);
         await afterReplacementInstalledHook();
@@ -588,10 +607,15 @@ function parseConfigObject(bytes: Buffer, filePath: string) {
   return parsed as Record<string, unknown>;
 }
 
-async function installPrivateConfigExclusively(filePath: string, bytes: Buffer, signal?: AbortSignal) {
+async function installPrivateConfigExclusively(
+  filePath: string,
+  bytes: Buffer,
+  signal?: AbortSignal,
+  review?: PublicationReview,
+) {
   return withPrivateConfigTemporary(filePath, bytes, async (temporaryPath, installed) => {
     signal?.throwIfAborted();
-    await publishConfigFile(temporaryPath, filePath, undefined, signal);
+    await publishConfigFile(temporaryPath, filePath, undefined, signal, review);
     try {
       if (!(await fileIdentityAndContentsMatch(filePath, installed, bytes))) {
         throw new Error(`Published pi-sync settings changed concurrently: ${filePath}`);
@@ -764,12 +788,18 @@ async function publishFileWithGuard(
   destination: string,
   expected?: LocalConfigDocument,
   signal?: AbortSignal,
+  review?: PublicationReview,
 ) {
   await beforeConfigPublicationHook();
   signal?.throwIfAborted();
+  if (review) {
+    await review.check();
+    signal?.throwIfAborted();
+    assertCurrentDocument(review.document);
+  }
   if (expected) {
     // The shared lock orders Pi Sync writers; rename has no CAS for noncooperating writers.
-    if (!(await configDocumentStillMatches(expected))) throw settingsChangedError();
+    if (!review && !(await configDocumentStillMatches(expected))) throw settingsChangedError();
     signal?.throwIfAborted();
     await fs.rename(source, destination);
   } else {

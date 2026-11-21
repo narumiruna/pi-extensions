@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { type ActionMenuItem, defineMenu, type MenuDefinition, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
+import { loadConfig, loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
@@ -181,8 +181,10 @@ export async function showSyncManager(
         const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
         return result === "pull-attempted" || result === "closed" ? { kind: "close" } : { kind: "stay" };
       },
-      settings: async ({ state }) => {
-        const result = await showSyncSettings(ctx, runRoute, sessionSignal, state.manager.configReview?.setupName);
+      settings: async ({ state, signal: actionSignal }) => {
+        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+        const review = state.manager.settingsReview ?? state.manager.configReview;
+        const result = await showSyncSettings(ctx, runRoute, signal, review?.setupName);
         return { kind: result === "exit" ? "close" : "stay" };
       },
       pull: async ({ state }) => {
@@ -328,10 +330,11 @@ export async function showSyncManager(
     const activate = menu.actions[action];
     menu.actions[action] = async (invocation) => {
       validateOwner();
-      const review = invocation.state.manager.configReview;
+      const { configReview, settingsReview } = invocation.state.manager;
+      const review = action === "settings" ? (settingsReview ?? configReview) : configReview;
       let current = false;
       try {
-        const config = await loadConfig();
+        const config = await (action === "settings" ? loadSettingsConfig() : loadConfig());
         validateOwner();
         invocation.signal.throwIfAborted();
         current = review?.fingerprint === syncCheckConfigFingerprint(config);

@@ -33,6 +33,14 @@ flowchart LR
 
 Read-only display state is not a second settings writer. A client proposes a validated new document with the exact source fingerprint; the authoritative writer checks the fingerprint under its settings lock. A stale editor must reopen rather than merge a stale approval automatically. Invalid existing JSON remains intact. Unknown fields remain in the proposed source clone.
 
+When a reviewed save uses `pi-sync.local.json`, the writer checks that source under the lock before any canonical publication. A changed document is written directly to `pi-sync.json`; a stale or unchanged proposal does not promote the filename. The private legacy file remains as a recovery copy. The writer rechecks the active path, file identity, and exact bytes before publication, and refuses a canonical file it observes before rename. These checks order cooperating writers but do not make filesystem rename atomic with a check against external editors.
+
+### Reviewed ignore policy changes (not enabled)
+
+The internal switch and migration flows use the same settings writer. Migration keeps the resolved session opt-in; the rules can still exclude sessions. After preparing the files and checking the remote head, migration compares the local paths under both policies again. It omits only the starter file created by that operation from the prior policy's paths. It then rechecks the rule source and settings before publication. A late refusal does not save the new policy or start a transfer; a verified starter file or private settings backup already prepared can remain. The remote head, filesystem inventory, and settings publication are not one atomic transaction.
+
+Opening Settings can show an existing rule file path without reading or writing the rules. The daemon rejects `ignore.save`: Node does not provide an atomic rename conditional on the destination still matching the reviewed file. The daemon's locks do not extend to external editors. `ignore.read` checks reported live session files by device and inode so aliases cannot expose session text as rules.
+
 ### Local ignore migration deferral
 
 `ignore.migration-offer` and `ignore.migration-defer` require a current attached TUI client. The read returns an opaque token only for the requested active legacy setup without a deferral. Opening or dismissing a prompt does not persist a choice. An explicit decline must present the same setup and token, which binds the active document's path, file identity, and bytes to the migration version. `ignore.capabilities` reports `{ available: false }`; it does not enable migration. None of these operations pause the monitor, take the sync lock, contact a backend, or change settings or rules.
@@ -200,6 +208,8 @@ These guarantees cover cooperating registered clients. Unregistered old Pi versi
 Version 10 journals use unique workspace slots. Scratch files get separate unique slots in private directories on the destination filesystem. Recovery reads only the names that the durable journal or scratch record identifies. A failed publication can leave unrecorded objects, but it cannot block a new slot or authorize deleting the old one. The synced path policy excludes these private objects. Older journals keep their exact paths and identity checks; an upgrade does not adopt unrecorded data.
 
 The ignore-file apply engine uses version 11 with the same workspace layout. It records local source evidence separately from the portable policy digest. Pending recovery requires the same reviewed rule source and a fresh source check under mutation ownership. Completed cleanup still uses the recorded workspace identity and does not replay file changes. The ignore-file policy is not yet enabled through setup or transfer routing; see [ADR 0008](../../../docs/adr/0008-pi-sync-ignore-file.md) for the proposed activation contract.
+
+A merge journal can be retired when its recorded commit is already the accepted baseline, even if the remote policy has changed. This does not apply files from the newer head. The prepared ignore-policy merge engine also supports an archive-only review for a pending journal whose original remote head and accepted baseline still match. Directional force cannot skip that recovery. The review can keep newer local edits and archive the journal without changing the backup, the baseline, or the remote. If the evidence is uncertain, it leaves the journal in place.
 
 On macOS, setting a modification time earlier than a file's creation time can also move its creation time back. Before recording an empty scratch file's identity, recovery sets and flushes the backup's timestamps on that file. It reapplies the same timestamps after copying the bytes, then verifies the recorded identity and content before installation.
 

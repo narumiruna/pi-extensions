@@ -23,6 +23,7 @@ import {
   type MergeJournal,
   mergeJournalIdentity,
   mergeJournalPath,
+  mergeJournalPolicy,
   readMergeJournal,
   requireNoMergeJournal,
   retireMergeJournal,
@@ -30,6 +31,7 @@ import {
 } from "../src/engine/sync/merge-journal.js";
 import { mergeSync } from "../src/engine/sync/merged-sync.js";
 import { createEngineLoaders } from "../src/engine/sync/sync-loaders.js";
+import { pull, push, syncBoth } from "../src/engine/sync/sync-mutations.js";
 import { selectionForSnapshot } from "../src/engine/sync/sync-policy.js";
 import { acceptedSelection, fileHashMap } from "../src/engine/sync/sync-state.js";
 import type { Execution } from "../src/protocol.js";
@@ -94,7 +96,7 @@ function backendFixture(initial: Snapshot) {
   });
   const committed = vi.fn<(snapshot: Snapshot) => void>();
   const publishHook = vi.fn<() => Promise<void>>(async () => {});
-  const readHead = vi.fn(async () => head());
+  const readHead = vi.fn<SyncBackend["readHead"]>(async () => head());
   const readSnapshot = vi.fn(async (id: string) => {
     assert.equal(id, current.id);
     return current;
@@ -119,11 +121,26 @@ function backendFixture(initial: Snapshot) {
     diagnose: async () => [],
     listHistory: async () => [],
   };
-  return { factory: vi.fn(async () => backend), readHead, readSnapshot, publishSnapshot, committed, publishHook };
+  return {
+    factory: vi.fn(async () => backend),
+    head,
+    readHead,
+    readSnapshot,
+    publishSnapshot,
+    committed,
+    publishHook,
+    replaceHead(snapshot: Snapshot) {
+      current = snapshot;
+    },
+  };
 }
 
-function host(root: string, mutate: EngineHost["mutate"] = async (_target, action) => action()) {
-  configureEngineHost({ root: () => root, mutate, review: async () => true });
+function host(
+  root: string,
+  mutate: EngineHost["mutate"] = async (_target, action) => action(),
+  review: EngineHost["review"] = async () => true,
+) {
+  configureEngineHost({ root: () => root, mutate, review });
 }
 
 async function fixture(
@@ -269,6 +286,232 @@ test("recovering an uncertain v6 commit applies its verified snapshot without re
     assert.equal(remote.publishSnapshot.mock.calls.length, 1);
   }));
 
+test.each([
+  ["legacy", "published", true],
+  ["legacy", "apply-only", true],
+  ["ignore", "published", true],
+  ["ignore", "apply-only", true],
+  ["legacy", "published", false],
+  ["legacy", "apply-only", false],
+  ["ignore", "published", false],
+  ["ignore", "apply-only", false],
+] as const)("%s %s journal, accepted=%s, with newer incompatible remote policy", (policy, operation, accepted) =>
+  fixture(async ({ root, config, ctx, load }) => {
+    const localPolicy = policy === "legacy" ? legacy : config;
+    if (policy === "legacy") load.mockResolvedValue(legacy);
+    const state = await baseline(localPolicy);
+    const before = snapshot(localPolicy, "baseline", [file("notes.md", "baseline")]);
+    const after = snapshot(localPolicy, "committed", [file("notes.md", "accepted")]);
+    const remote = backendFixture(before);
+    const expectedHead = remote.head();
+    remote.replaceHead(after);
+    const committedHead = remote.head();
+    const applyOnly = operation === "apply-only";
+    await writeMergeJournal(localPolicy, {
+      ...mergeJournalPolicy(localPolicy),
+      identity: mergeJournalIdentity(localPolicy, "memory"),
+      before,
+      after,
+      upload: after,
+      accepted: after,
+      expectedHead: applyOnly ? committedHead : expectedHead,
+      committedHead,
+      ...(applyOnly ? { applyOnly: true } : {}),
+      backup: "fixture-backup",
+      stateIdentity: syncStateFingerprint(state),
+      sessionRoot: path.join(root, "sessions"),
+    });
+    const journalPath = mergeJournalPath(localPolicy);
+    const recorded = await fs.readFile(journalPath);
+    const expectedState = accepted
+      ? {
+          ...state,
+          lastAppliedSnapshot: after.id,
+          lastRemoteRevision: committedHead.revision,
+          lastFileHashes: fileHashMap(after),
+        }
+      : state;
+    if (accepted) await writeStateForConfig(localPolicy, expectedState);
+    const next = snapshot(policy === "legacy" ? config : legacy, "new-policy", [file("notes.md", "incoming")]);
+    remote.replaceHead(next);
+    await fs.writeFile(path.join(root, "notes.md"), "newer local edit");
+    const run = () => syncBoth(ctx, foreground, remote.factory);
+    if (accepted) {
+      assert.equal(await run(), "applied");
+      await requireNoMergeJournal(localPolicy);
+    } else {
+      await assert.rejects(run(), /Remote ignore-file policy differs or is unavailable/);
+      assert.deepEqual(await fs.readFile(journalPath), recorded);
+    }
+    assert.deepEqual(await readStateForConfig(localPolicy), expectedState);
+    assert.equal(await fs.readFile(path.join(root, "notes.md"), "utf8"), "newer local edit");
+    assert.equal((await remote.readHead())?.snapshotId, next.id);
+    assert.equal(remote.readSnapshot.mock.calls.length, 0);
+    assert.equal(remote.publishSnapshot.mock.calls.length, 0);
+  }),
+);
+
+const foreground = { ...options, auto: false, yes: false, silent: false };
+
+async function interruptBeforeCommit(root: string, config: AnySyncConfig, ctx: EngineContext) {
+  const state = await baseline(config);
+  const target = path.join(root, "notes.md");
+  await fs.writeFile(target, "local edit");
+  const remote = backendFixture(
+    snapshot(config, "remote", [file("notes.md", "baseline"), file("new.md", "remote edit")]),
+  );
+  remote.publishHook.mockRejectedValueOnce(new Error("Connection lost before commit"));
+  await assert.rejects(mergeSync(ctx, options, remote.factory), /journal and backup retained/i);
+  const pending = await readMergeJournal(config);
+  assert.ok(pending?.version === 2 && !pending.committedHead);
+  const journalPath = mergeJournalPath(config);
+  const journalBytes = await fs.readFile(journalPath);
+  const backupBytes = await fs.readFile(pending.backup);
+  await fs.writeFile(target, "newer local edit");
+  return { state, target, remote, pending, journalPath, journalBytes, backupBytes };
+}
+
+for (const [mode, approve] of [
+  ["tui", true],
+  ["rpc", true],
+  ["rpc", false],
+] as const) {
+  test(`only the journal is archived after ${mode} review, approve=${approve}`, () =>
+    fixture(async ({ root, config, ctx }) => {
+      const { state, target, remote, pending, journalPath, journalBytes, backupBytes } = await interruptBeforeCommit(
+        root,
+        config,
+        ctx,
+      );
+      ctx.mode = mode;
+      const review = vi.fn<EngineHost["review"]>(async () => {
+        if (approve) await fs.writeFile(target, "edit made during review");
+        return approve;
+      });
+      host(root, undefined, review);
+      for (const run of [
+        () => push(ctx, { ...foreground, force: true }, undefined, remote.factory),
+        () => pull(ctx, { ...foreground, force: true }, remote.factory),
+        () => mergeSync(ctx, options, remote.factory),
+        () => syncBoth(ctx, { ...foreground, yes: true }, remote.factory),
+        () => syncBoth({ ...ctx, mode: "print", hasUI: false }, foreground, remote.factory),
+      ]) {
+        await assert.rejects(run(), /directional --force cannot bypass it.*requires foreground review/);
+      }
+      assert.equal(review.mock.calls.length, 0);
+      const notify = vi.spyOn(ctx.ui, "notify");
+      assert.equal(await syncBoth(ctx, foreground, remote.factory), approve ? "archived" : "cancelled");
+      if (approve) assert.match(notify.mock.calls[0]?.[0] ?? "", /Archived the inactive merge journal/);
+      else assert.equal(notify.mock.calls.length, 0);
+      const request = review.mock.calls[0]?.[1];
+      assert.equal(request?.confirmationLabel, "archive journal only");
+      assert.match(request.content, /Keep its backup and all current local and remote files/);
+      const directory = path.dirname(journalPath);
+      const archives = (await fs.readdir(directory)).filter((entry) => entry.endsWith(".resolved"));
+      assert.equal(archives.length, approve ? 1 : 0);
+      if (approve) await requireNoMergeJournal(config);
+      assert.deepEqual(await fs.readFile(approve ? path.join(directory, archives[0]) : journalPath), journalBytes);
+      assert.deepEqual(await fs.readFile(pending.backup), backupBytes);
+      assert.deepEqual(await readStateForConfig(config), state);
+      assert.deepEqual(await remote.readHead(), pending.expectedHead);
+      assert.equal(remote.committed.mock.calls.length, 0);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 1);
+      assert.equal(await fs.readFile(target, "utf8"), approve ? "edit made during review" : "newer local edit");
+      await assert.rejects(fs.stat(path.join(root, "new.md")), { code: "ENOENT" });
+    }));
+}
+
+for (const change of ["head", "head policy", "baseline", "ignore source", "session", "abort"] as const) {
+  test(`archive approval does not survive a changed ${change}`, () =>
+    fixture(async ({ root, config, ignoreFile, ctx }) => {
+      const { state, target, remote, pending, journalPath, journalBytes, backupBytes } = await interruptBeforeCommit(
+        root,
+        config,
+        ctx,
+      );
+      const abort = new AbortController();
+      let session = "original";
+      ctx.sessionManager.getSessionId = () => session;
+      const review = vi.fn<EngineHost["review"]>(async () => {
+        if (change === "head") remote.replaceHead(snapshot(config, "advanced", []));
+        if (change === "head policy")
+          remote.readHead.mockResolvedValueOnce({ ...pending.expectedHead, selection: undefined });
+        if (change === "baseline") await writeStateForConfig(config, { ...state, lastRemoteRevision: "different" });
+        if (change === "ignore source") await fs.writeFile(ignoreFile, `${rules}# changed during review\n`);
+        if (change === "session") session = "replacement";
+        if (change === "abort") abort.abort();
+        return true;
+      });
+      host(root, undefined, review);
+      const run = () => syncBoth(ctx, { ...foreground, signal: abort.signal }, remote.factory);
+      if (change === "session" || change === "abort") assert.equal(await run(), "cancelled");
+      else await assert.rejects(run(), /changed during (recovery review|transfer)/);
+      assert.equal(review.mock.calls.length, 1);
+      assert.deepEqual(await fs.readFile(journalPath), journalBytes);
+      assert.deepEqual(await fs.readFile(pending.backup), backupBytes);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 1);
+      assert.equal(await fs.readFile(target, "utf8"), "newer local edit");
+    }));
+}
+
+for (const remoteDisposition of [
+  "missing",
+  "different",
+  "candidate active",
+  "same revision but different snapshot",
+  "candidate equals expected snapshot",
+  "unavailable head policy",
+  "changed baseline",
+  "superseded apply-only",
+] as const) {
+  test(`a pending ignore-policy merge with ${remoteDisposition} does not offer archive`, () =>
+    fixture(async ({ root, config, ctx }) => {
+      const { state, target, remote, pending, journalPath, backupBytes } = await interruptBeforeCommit(
+        root,
+        config,
+        ctx,
+      );
+      const review = vi.fn<EngineHost["review"]>(async () => true);
+      host(root, undefined, review);
+      if (remoteDisposition === "missing") remote.readHead.mockResolvedValueOnce(undefined);
+      if (remoteDisposition === "different") remote.replaceHead(snapshot(config, "unrelated", []));
+      if (remoteDisposition === "candidate active") {
+        remote.replaceHead(pending.upload);
+        await fs.writeFile(path.join(root, "new.md"), "newer byte at a planned target");
+      }
+      if (remoteDisposition === "same revision but different snapshot") {
+        remote.readHead.mockResolvedValueOnce({ ...pending.expectedHead, snapshotId: "unrelated" });
+      }
+      if (remoteDisposition === "candidate equals expected snapshot") {
+        await writeMergeJournal(config, {
+          ...pending,
+          upload: { ...pending.upload, id: pending.expectedHead.snapshotId },
+        });
+      }
+      if (remoteDisposition === "unavailable head policy") {
+        remote.readHead.mockResolvedValueOnce({ ...pending.expectedHead, selection: undefined });
+      }
+      if (remoteDisposition === "changed baseline")
+        await writeStateForConfig(config, { ...state, lastRemoteRevision: "different" });
+      if (remoteDisposition === "superseded apply-only") {
+        remote.replaceHead(pending.upload);
+        const committedHead = remote.head();
+        await writeMergeJournal(config, { ...pending, applyOnly: true, expectedHead: committedHead, committedHead });
+        remote.replaceHead(snapshot(config, "advanced", []));
+      }
+      const journalBytes = await fs.readFile(journalPath);
+      await assert.rejects(syncBoth(ctx, foreground, remote.factory));
+      if (remoteDisposition === "candidate active") {
+        assert.equal(await fs.readFile(path.join(root, "new.md"), "utf8"), "newer byte at a planned target");
+      }
+      assert.equal(review.mock.calls.length, 0);
+      assert.deepEqual(await fs.readFile(journalPath), journalBytes);
+      assert.deepEqual(await fs.readFile(pending.backup), backupBytes);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 1);
+      assert.equal(await fs.readFile(target, "utf8"), "newer local edit");
+    }));
+}
+
 test("a pending v1 journal still resolves to its original path but cannot authorize v8 recovery", () =>
   fixture(async ({ root, config, ctx }) => {
     const state = await baseline(legacy);
@@ -281,7 +524,7 @@ test("a pending v1 journal still resolves to its original path but cannot author
       after: image,
       accepted: image,
       upload: image,
-      expectedHead: await remote.readHead(),
+      expectedHead: remote.head(),
       backup: "fixture-backup",
       stateIdentity: syncStateFingerprint(state),
       sessionRoot: path.join(root, "sessions"),

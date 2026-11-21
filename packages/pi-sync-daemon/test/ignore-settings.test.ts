@@ -2,18 +2,26 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "vitest";
-import { configureEngineHost } from "../src/engine/host.js";
+import { test, vi } from "vitest";
+import { documentFingerprint } from "../src/document.js";
+import { configureEngineHost, engineHost } from "../src/engine/host.js";
 import { DEFAULT_IGNORE_CREATION_RECORD, DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
 import {
   configFromSettings,
   loadConfig,
   loadConfigForCheck,
   loadPartialConfig,
+  loadSettingsConfig,
   resolveIgnoreConfig,
   syncCheckConfigFingerprint,
   syncConfigReviewFingerprint,
 } from "../src/engine/settings/config.js";
+import {
+  type LocalConfigDocument,
+  peekLocalConfigDocument,
+  updateLocalConfigDocument,
+  withConfigPublicationReadyHookForTest,
+} from "../src/engine/settings/config-file.js";
 import { addSyncSetup, saveNewV3Settings, updateSyncSetup } from "../src/engine/settings/settings-management.js";
 import { updateLocalConfig } from "../src/engine/settings/settings-store.js";
 import type { PiSyncSettingsV3, SyncPolicySettings, SyncSetupSettings } from "../src/engine/settings/settings-types.js";
@@ -153,6 +161,23 @@ test("configuration reads do not create rules, and legacy operation loaders refu
     await assert.rejects(initialized.validateIgnorePolicy(), /reopen the review/u);
   }));
 
+test("settings display does not migrate the document or open the configured rule file", () =>
+  fixture(async (root, save) => {
+    await assert.rejects(loadSettingsConfig(), /Missing pi-sync settings/u);
+    assert.deepEqual(await fs.readdir(root), []);
+    const document = settings({ ...ignoreSync, ignoreFile: "Current.rules" });
+    await save(document);
+    const legacy = path.join(root, "pi-sync.local.json");
+    await fs.rename(path.join(root, "pi-sync.json"), legacy);
+    const before = await fs.readFile(legacy, "utf8");
+    const config = await loadSettingsConfig();
+    assert.equal(config.ignoreFile, "Current.rules");
+    assert.equal(config.ignorePolicy, undefined);
+    assert.equal(config.validateIgnorePolicy, undefined);
+    assert.equal(await fs.readFile(legacy, "utf8"), before);
+    assert.deepEqual(await fs.readdir(root), ["pi-sync.local.json"]);
+  }));
+
 test("source and settings changes invalidate operation fingerprints without serializing rule bytes", () =>
   fixture(async (root, save) => {
     const document = settings({ ...ignoreSync, sessions: true, ignoreFile: "Current.rules" });
@@ -211,6 +236,80 @@ test("source and settings changes invalidate operation fingerprints without seri
     await assert.rejects(resolveIgnoreConfig(document, "home", controller.signal), /review cancelled/u);
   }));
 
+test.each([false, true])("a sessions change from %s during the ignore source read invalidates review", (sessions) =>
+  fixture(async (root, save) => {
+    const filename = "Current.rules";
+    const document = settings({ ...ignoreSync, ignoreFile: filename, sessions });
+    const sourcePath = path.join(root, filename);
+    const rules = "# unchanged rules\n";
+    await fs.writeFile(sourcePath, rules);
+    await save(document);
+    const resolved = await resolveIgnoreConfig(document);
+    assert.ok(resolved.validateIgnorePolicy);
+    await withPausedOpen(sourcePath, 1, resolved.validateIgnorePolicy, async () => {
+      await save(settings({ ...ignoreSync, ignoreFile: filename, sessions: !sessions }));
+      return /settings changed/u;
+    });
+    assert.equal(await fs.readFile(sourcePath, "utf8"), rules);
+  }),
+);
+
+test.each(["abort", "root"] as const)("a change in %s during the second settings read invalidates review", (change) =>
+  fixture(async (root, save) => {
+    const document = settings();
+    await save(document);
+    await fs.writeFile(path.join(root, ".syncignore"), DEFAULT_IGNORE_RULES);
+    const controller = new AbortController();
+    const resolved = await resolveIgnoreConfig(document, undefined, controller.signal);
+    assert.ok(resolved.validateIgnorePolicy);
+    const host = engineHost();
+    try {
+      await withPausedOpen(path.join(root, "pi-sync.json"), 2, resolved.validateIgnorePolicy, async () => {
+        if (change === "abort") {
+          controller.abort(new Error("review cancelled"));
+          return /review cancelled/u;
+        }
+        configureEngineHost({ ...host, root: () => path.join(root, "replacement") });
+        return /agent directory changed/u;
+      });
+    } finally {
+      configureEngineHost(host);
+    }
+  }),
+);
+
+async function withPausedOpen(
+  file: string,
+  occurrence: number,
+  validate: () => Promise<void>,
+  change: () => Promise<RegExp>,
+) {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const open = fs.open;
+  const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    if (args[0] === file && --occurrence === 0) {
+      entered.resolve();
+      await release.promise;
+    }
+    return open(...args);
+  });
+  const validation = validate();
+  try {
+    await Promise.race([
+      entered.promise,
+      validation.then(() => assert.fail("Review finished before reaching the paused read")),
+    ]);
+    const rejected = assert.rejects(validation, await change());
+    release.resolve();
+    await rejected;
+  } finally {
+    release.resolve();
+    await validation.catch(() => undefined);
+    spy.mockRestore();
+  }
+}
+
 test("legacy-only configurations keep their previous fingerprint when the document version is 8", () => {
   const cases: [SyncPolicySettings, string, string][] = [
     [
@@ -232,6 +331,104 @@ test("legacy-only configurations keep their previous fingerprint when the docume
     }
   }
 });
+
+test.each([
+  "current",
+  "no-op",
+  "edited before lock",
+  "edited at publication",
+  "canonical appeared at publication",
+] as const)("shared reviewed save from the legacy settings filename: %s", (change) =>
+  fixture(async (root) => {
+    const canonical = path.join(root, "pi-sync.json");
+    const legacy = path.join(root, "pi-sync.local.json");
+    const original = { ...settings(legacySync), future: { preserved: true } };
+    const bytes = `${JSON.stringify(original)}\n\n`;
+    await fs.writeFile(legacy, bytes, { mode: 0o600 });
+    const fingerprint = (document: LocalConfigDocument | undefined) =>
+      documentFingerprint(document && { bytes: document.bytes.toString("base64"), identity: document.identity });
+    const reviewed = fingerprint(await peekLocalConfigDocument());
+    const update = () =>
+      updateLocalConfigDocument(
+        original,
+        (current) => (change === "no-op" ? current : { ...current, debug: true }),
+        validateSettingsDocument,
+        undefined,
+        (document) => {
+          if (fingerprint(document) !== reviewed) throw new Error("Reviewed settings changed.");
+        },
+      );
+    if (change === "current" || change === "no-op") {
+      assert.deepEqual(await update(), change === "current" ? { ...original, debug: true } : original);
+      if (change === "current") {
+        assert.deepEqual(JSON.parse(await fs.readFile(canonical, "utf8")), { ...original, debug: true });
+        if (process.platform !== "win32") assert.equal((await fs.stat(canonical)).mode & 0o777, 0o600);
+      } else await assert.rejects(fs.lstat(canonical), { code: "ENOENT" });
+    } else {
+      if (change === "edited before lock") await fs.appendFile(legacy, "\n");
+      await assert.rejects(
+        withConfigPublicationReadyHookForTest(async () => {
+          if (change === "edited before lock") assert.fail("Stale approval reached publication");
+          if (change === "edited at publication") await fs.appendFile(legacy, "\n");
+          else await fs.writeFile(canonical, bytes, { mode: 0o600 });
+        }, update),
+        /settings changed/iu,
+      );
+      if (change === "canonical appeared at publication") assert.equal(await fs.readFile(canonical, "utf8"), bytes);
+      else await assert.rejects(fs.lstat(canonical), { code: "ENOENT" });
+    }
+    assert.equal(await fs.readFile(legacy, "utf8"), change.startsWith("edited") ? `${bytes}\n` : bytes);
+    assert.ok(!(await fs.readdir(root)).some((name) => name.startsWith(".pi-sync.json.")));
+  }),
+);
+
+test.each(["missing", "legacy"] as const)(
+  "a reviewed %s source does not clobber canonical settings created at the final destination probe",
+  (source) =>
+    fixture(async (root) => {
+      const canonical = path.join(root, "pi-sync.json");
+      const legacy = path.join(root, "pi-sync.local.json");
+      const original = settings(legacySync);
+      if (source === "legacy") await fs.writeFile(legacy, JSON.stringify(original), { mode: 0o600 });
+      const concurrent = `${JSON.stringify({ ...original, showStatus: false })}\n\n`;
+      let staged = false;
+      let checkedAfterStaging = false;
+      const lstat = fs.lstat.bind(fs);
+      const probe = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        if (checkedAfterStaging && args[0] === canonical) {
+          checkedAfterStaging = false;
+          await fs.writeFile(canonical, concurrent, { flag: "wx", mode: 0o600 });
+        }
+        return lstat(...args);
+      });
+      try {
+        await assert.rejects(
+          withConfigPublicationReadyHookForTest(
+            async () => {
+              staged = true;
+            },
+            () =>
+              updateLocalConfigDocument(
+                original,
+                (current) => ({ ...current, debug: true }),
+                validateSettingsDocument,
+                undefined,
+                (document) => {
+                  assert.equal(document?.path, source === "legacy" ? legacy : undefined);
+                  checkedAfterStaging = staged;
+                },
+              ),
+          ),
+          /already exist|created concurrently/u,
+        );
+      } finally {
+        probe.mockRestore();
+      }
+      assert.equal(await fs.readFile(canonical, "utf8"), concurrent);
+      if (source === "legacy") assert.deepEqual(JSON.parse(await fs.readFile(legacy, "utf8")), original);
+      assert.ok(!(await fs.readdir(root)).some((name) => name.endsWith(".migrate")));
+    }),
+);
 
 test("settings writers advance to 8 for ignore-file policies and preserve 8 on unrelated legacy updates", () =>
   fixture(async (root) => {

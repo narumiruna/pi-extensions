@@ -6,7 +6,8 @@ import { test, vi } from "vitest";
 import { configureEngineHost, type ReviewRequest } from "../src/engine/host.js";
 import { readIgnoreMigrationOffer } from "../src/engine/ignore/ignore-migration-prompt.js";
 import { migrateIgnoreSetup, newIgnoreFilename, switchIgnoreFile } from "../src/engine/ignore/ignore-settings.js";
-import { DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
+import { DEFAULT_IGNORE_CREATION_RECORD, DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
+import { withConfigPublicationReadyHookForTest } from "../src/engine/settings/config-file.js";
 import type { PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import type { ClientFacts, Execution } from "../src/protocol.js";
 
@@ -132,6 +133,45 @@ test.skipIf(process.platform !== "linux")(
     }),
 );
 
+test.each([
+  { include: ["settings.json", " Sessions "], automatic: false },
+  { scope: "agent-directory", sessions: true, automatic: false },
+] satisfies PiSyncSettingsV3["syncSetups"][string]["sync"][])("migration keeps resolved session opt-in: %j", (sync) =>
+  fixture(async (root, execution, proposal) => {
+    const original = structuredClone(fixtureSettings);
+    original.syncSetups.home.sync = sync;
+    await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(original));
+    await fs.writeFile(path.join(root, file), "");
+    await fs.mkdir(path.join(root, "sessions"));
+    await fs.writeFile(path.join(root, "sessions", "history.jsonl"), "{}\n");
+    proposal(async ({ content }) => {
+      assert.doesNotMatch(content, /sessions\/history\.jsonl/u);
+      return true;
+    });
+    assert.equal(await migrateIgnoreSetup(execution, "home"), "saved");
+    assert.equal((await readSettings(root)).syncSetups.home.sync.sessions, true);
+  }),
+);
+
+test("reviewed migration publishes directly from the legacy settings filename", () =>
+  fixture(async (root, execution, proposal) => {
+    const canonical = path.join(root, "pi-sync.json");
+    const legacy = path.join(root, "pi-sync.local.json");
+    const original = `${JSON.stringify(fixtureSettings)}\n\n`;
+    await fs.writeFile(canonical, original);
+    await fs.rename(canonical, legacy);
+    await fs.writeFile(path.join(root, file), "");
+    proposal(async () => true);
+    assert.equal(await migrateIgnoreSetup(execution, "home"), "saved");
+    assert.equal((await readSettings(root)).syncSetups.home.sync.pathPolicy, "ignore-file");
+    assert.equal(await fs.readFile(legacy, "utf8"), original);
+    const backup = (await fs.readdir(path.join(root, "pi-sync"))).find((name) =>
+      name.startsWith("settings-before-ignore-"),
+    );
+    assert.ok(backup);
+    assert.equal(await fs.readFile(path.join(root, "pi-sync", backup), "utf8"), original);
+  }));
+
 test("cancelled migration does not create the default or change settings", () =>
   fixture(async (root, execution, proposal) => {
     proposal(async () => false);
@@ -191,6 +231,106 @@ test("migration refuses scope or remote changes while the review is open", () =>
     assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
 
+test("migration rechecks local scope after final head lookup and settings preparation", () =>
+  fixture(async (root, execution, proposal) => {
+    await fs.writeFile(path.join(root, file), "");
+    let stagingFinished = false;
+    headRead
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(async () => {
+        await fs.writeFile(path.join(root, "late.md"), "not reviewed\n");
+        return undefined;
+      });
+    proposal(async ({ content }) => {
+      assert.doesNotMatch(content, /late\.md/u);
+      return true;
+    });
+    await assert.rejects(
+      withConfigPublicationReadyHookForTest(
+        async () => {
+          stagingFinished = (await fs.readdir(root)).some((name) => name.endsWith(".migrate"));
+        },
+        () => migrateIgnoreSetup(execution, "home"),
+      ),
+      /Reopen/u,
+    );
+    assert.equal(stagingFinished, true);
+    assert.equal(headRead.mock.calls.length, 3);
+    assert.deepEqual(await readSettings(root), fixtureSettings);
+  }));
+
+test.each(["head revision", "rule identity", "settings bytes", "abort"] as const)(
+  "migration refuses a late %s change before publishing",
+  (change) =>
+    fixture(async (root, execution, proposal) => {
+      const rules = path.join(root, file);
+      const config = path.join(root, "pi-sync.json");
+      const original = JSON.stringify(fixtureSettings);
+      const controller = new AbortController();
+      let committed = false;
+      const running = {
+        ...execution,
+        signal: controller.signal,
+        committed: () => {
+          committed = true;
+        },
+      };
+      await fs.writeFile(rules, "");
+      const head = { snapshotId: "same", snapshotRef: "same", revision: "before" };
+      remote.mockResolvedValue({ id: head.snapshotId, files: [] });
+      headRead
+        .mockResolvedValueOnce(head)
+        .mockResolvedValueOnce(head)
+        .mockImplementationOnce(async () => {
+          if (change === "rule identity") {
+            await fs.writeFile(path.join(root, "incoming"), "");
+            await fs.rename(path.join(root, "incoming"), rules);
+          }
+          if (change === "settings bytes") await fs.appendFile(config, "\n");
+          if (change === "abort") controller.abort(new Error("client cancelled"));
+          return change === "head revision" ? { ...head, revision: "after" } : head;
+        });
+      proposal(async () => true);
+      const error = change === "abort" ? /client cancelled/u : /Reopen|settings changed/u;
+      await assert.rejects(migrateIgnoreSetup(running, "home"), error);
+      assert.equal(committed, false);
+      assert.equal(headRead.mock.calls.length, 3);
+      assert.equal(await fs.readFile(config, "utf8"), change === "settings bytes" ? `${original}\n` : original);
+      assert.equal(await fs.readFile(rules, "utf8"), "");
+    }),
+);
+
+test.skipIf(process.platform !== "linux")("migration neutralizes only a starter created by this operation", () =>
+  fixture(async (root, execution, proposal) => {
+    proposal(async ({ content }) => {
+      assert.doesNotMatch(content, /Local — leaves scope:\n {2}\.syncignore/u);
+      return true;
+    });
+    assert.equal(await migrateIgnoreSetup(execution, "other"), "saved");
+    assert.equal(await fs.readFile(path.join(root, file), "utf8"), DEFAULT_IGNORE_RULES);
+    assert.equal((await readSettings(root)).syncSetups.other.sync.pathPolicy, "ignore-file");
+  }),
+);
+
+test.skipIf(process.platform !== "linux")("a recovered starter that already existed remains in the prior scope", () =>
+  fixture(async (root, execution, proposal) => {
+    await fs.writeFile(
+      path.join(root, DEFAULT_IGNORE_CREATION_RECORD),
+      `pi-sync-ignore-creation-v1\n${DEFAULT_IGNORE_RULES}`,
+      { mode: 0o600 },
+    );
+    await fs.writeFile(path.join(root, file), DEFAULT_IGNORE_RULES, { mode: 0o600 });
+    proposal(async ({ content }) => {
+      assert.match(content, /Local — leaves scope:\n {2}\.syncignore/u);
+      return true;
+    });
+    assert.equal(await migrateIgnoreSetup(execution, "other"), "saved");
+    assert.equal((await readSettings(root)).syncSetups.other.sync.pathPolicy, "ignore-file");
+    await assert.rejects(fs.lstat(path.join(root, DEFAULT_IGNORE_CREATION_RECORD)), { code: "ENOENT" });
+  }),
+);
+
 test("ordinary settings proposals cannot migrate or silently switch an existing rule file", () => {
   const next = structuredClone(fixtureSettings);
   next.version = 8;
@@ -201,6 +341,37 @@ test("ordinary settings proposals cannot migrate or silently switch an existing 
   assert.throws(() => newIgnoreFilename(next, switched), /reviewed/u);
   assert.equal(newIgnoreFilename(undefined, next), file);
 });
+
+test.each(["current", "legacy edited", "canonical appeared"] as const)(
+  "rule-file switch from the legacy settings filename: %s",
+  (change) =>
+    fixture(async (root, execution, proposal) => {
+      const canonical = path.join(root, "pi-sync.json");
+      const legacy = path.join(root, "pi-sync.local.json");
+      const original = structuredClone(fixtureSettings);
+      original.version = 8;
+      original.syncSetups.home.sync = { scope: "agent-directory", pathPolicy: "ignore-file", automatic: false };
+      const bytes = `${JSON.stringify(original)}\n`;
+      await fs.rm(canonical);
+      await fs.writeFile(legacy, bytes, { mode: 0o600 });
+      await fs.writeFile(path.join(root, "other.ignore"), "");
+      proposal(async () => {
+        if (change === "legacy edited") await fs.appendFile(legacy, "\n");
+        if (change === "canonical appeared") await fs.writeFile(canonical, bytes, { mode: 0o600 });
+        return true;
+      });
+      const result = switchIgnoreFile(execution, "home", "other.ignore", file);
+      if (change === "current") {
+        assert.equal(await result, "saved");
+        assert.equal((await readSettings(root)).syncSetups.home.sync.ignoreFile, "other.ignore");
+      } else {
+        await assert.rejects(result, /Reopen/u);
+        if (change === "legacy edited") await assert.rejects(fs.lstat(canonical), { code: "ENOENT" });
+        else assert.equal(await fs.readFile(canonical, "utf8"), bytes);
+      }
+      assert.equal(await fs.readFile(legacy, "utf8"), change === "legacy edited" ? `${bytes}\n` : bytes);
+    }),
+);
 
 test("the pointer editor does not recreate an absent default", () =>
   fixture(async (root, execution) => {

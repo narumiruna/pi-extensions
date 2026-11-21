@@ -19,23 +19,33 @@ const openRead = constants.O_RDONLY | noFollow;
 const openExclusive = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | noFollow;
 
 export async function initializeDefaultIgnoreSource(root: string, signal?: AbortSignal): Promise<IgnoreSource> {
+  return (await prepareDefaultIgnoreSource(root, signal)).source;
+}
+
+export async function prepareDefaultIgnoreSource(
+  root: string,
+  signal?: AbortSignal,
+): Promise<{ source: IgnoreSource; created: boolean }> {
   signal?.throwIfAborted();
   root = path.resolve(root);
   try {
     const initialRoot = await fs.lstat(root, { bigint: true });
-    const checkRoot = () => {
-      signal?.throwIfAborted();
+    const assertRoot = () => {
       const current = lstatSync(root, { bigint: true });
       if (!current.isDirectory() || !sameIdentity(initialRoot, current) || realpathSync(root) !== root) {
         throw new Error("the Pi agent directory is not canonical or changed during initialization");
       }
+    };
+    const checkRoot = () => {
+      signal?.throwIfAborted();
+      assertRoot();
     };
     checkRoot();
     const priorRecord = statAt(path.join(root, DEFAULT_IGNORE_CREATION_RECORD));
     if (!priorRecord) {
       const source = await readIgnoreSource(root, DEFAULT_IGNORE_FILENAME, signal);
       checkRoot();
-      if (source.present) return source;
+      if (source.present) return { source, created: false };
     }
     if (!constants.O_DIRECTORY || !constants.O_NOFOLLOW || !constants.O_NONBLOCK || process.platform === "win32") {
       throw new Error(
@@ -60,7 +70,7 @@ export async function initializeDefaultIgnoreSource(root: string, signal?: Abort
           markerPath,
           path.join(root, DEFAULT_IGNORE_CREATION_RECORD),
           record,
-          checkRoot,
+          priorRecord ? checkRoot : assertRoot,
           priorRecord,
           true,
         );
@@ -72,7 +82,15 @@ export async function initializeDefaultIgnoreSource(root: string, signal?: Abort
         checkCreation();
         const priorFile = priorRecord ? statAt(target) : undefined;
         if (priorFile) assertOwned(priorFile, DEFAULT_IGNORE_FILENAME, false);
-        const file = await fs.open(target, priorFile ? openRead : openExclusive, 0o600);
+        const file = await fs.open(target, priorFile ? openRead : openExclusive, 0o600).catch(async (cause) => {
+          if (!priorRecord && (cause as NodeJS.ErrnoException).code === "EEXIST") {
+            assertRoot();
+            assertCurrent(markerPath, markerStat);
+            unlinkSync(markerPath);
+            await directory.sync();
+          }
+          throw cause;
+        });
         try {
           const fileStat = await flushAndVerify(
             file,
@@ -94,7 +112,7 @@ export async function initializeDefaultIgnoreSource(root: string, signal?: Abort
           if (source.identity !== ignoreFileIdentity(fileStat) || source.text !== DEFAULT_IGNORE_RULES) {
             changed(DEFAULT_IGNORE_FILENAME);
           }
-          return source;
+          return { source, created: priorFile === undefined };
         } finally {
           await file.close();
         }

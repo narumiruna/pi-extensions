@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RemoteHead } from "../backends/sync-backend.js";
+import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
+import type { CommandOptions } from "../commands/command-types.js";
+import type { EngineContext } from "../host.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import {
   assertRecoveryPolicy,
@@ -13,7 +15,9 @@ import {
 } from "../snapshot/snapshot-transaction-policy.js";
 import { IGNORE_SNAPSHOT_VERSION, type Snapshot } from "../snapshot/snapshot-types.js";
 import { readJsonIfExists, syncDirectory, writeJson } from "../state/json-file.js";
-import { statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { readStateForConfig, statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { confirmMergeReview } from "../ui/merge-review.js";
+import { safeTerminalText } from "../ui/terminal-text.js";
 import { normalizeSyncExclude } from "./exclude-policy.js";
 import { planFileMerge } from "./file-merge-planner.js";
 import {
@@ -295,10 +299,81 @@ export async function retireMergeJournal(config: AnySyncConfig) {
   assertMergeJournalPolicy(journal, config);
   const validateIgnore = ignorePolicyValidator(config);
   if (validateIgnore) await validateIgnore();
+  if (journal.version === 2) throw new Error(ignoreMergeRecoveryGuidance);
+  await archiveMergeJournal(config);
+}
+
+async function archiveMergeJournal(config: AnySyncConfig) {
   const file = mergeJournalPath(config);
   await fs.rename(file, `${file}.${randomUUID()}.resolved`);
   await syncDirectory(path.dirname(file));
 }
+
+export async function reviewInactiveIgnoreMerge(
+  ctx: EngineContext,
+  config: AnySyncConfig,
+  backend: SyncBackend,
+  journal: MergeJournal,
+  head: RemoteHead,
+  options: CommandOptions,
+  validateFresh: () => Promise<void>,
+  isCurrent?: () => boolean,
+) {
+  if (
+    !isCurrent ||
+    options.auto ||
+    options.background ||
+    options.agentAcceptance ||
+    options.yes ||
+    !ctx.hasUI ||
+    (ctx.mode !== "tui" && ctx.mode !== "rpc")
+  ) {
+    throw new Error(ignoreMergeRecoveryGuidance);
+  }
+  await validateFresh();
+  if (
+    !(await confirmMergeReview(
+      ctx,
+      "Archive the inactive merge journal?",
+      [
+        `Setup: ${safeTerminalText(config.setupName)}`,
+        "The original remote head and accepted baseline still match the journal, but local files changed.",
+        "Archive only the journal. Keep its backup and all current local and remote files. Do not change the baseline.",
+        "Run Sync now again to review a fresh plan.",
+      ].join("\n"),
+      options.signal,
+      isCurrent,
+      "archive journal only",
+    ))
+  )
+    return "cancelled" as const;
+
+  await validateFresh();
+  const latest = await backend.readHead(options.signal);
+  if (!isCurrent()) return "cancelled" as const;
+  const state = await readStateForConfig(config);
+  await validateFresh();
+  if (
+    !latest ||
+    !backend.sameRevision(latest.revision, head.revision) ||
+    latest.snapshotId !== head.snapshotId ||
+    latest.snapshotRef !== head.snapshotRef ||
+    !sameSnapshotSelection(latest.selection, head.selection) ||
+    syncStateFingerprint(state) !== journal.stateIdentity
+  ) {
+    throw new Error("Remote head or sync baseline changed during recovery review; journal and backup retained.");
+  }
+  await archiveMergeJournal(config);
+  if (!options.silent && isCurrent())
+    ctx.ui.notify(
+      "Archived the inactive merge journal. Local files, remote files, baseline and backup were kept. Run Sync now again for a fresh plan.",
+      "info",
+    );
+  return "archived" as const;
+}
+
+const ignoreMergeRecoveryGuidance =
+  "An ignore-file merged transfer needs recovery; directional --force cannot bypass it. Inactive journal archiving requires foreground review where supported; --yes does not approve it. Preserve the journal, backup and current files if recovery is unavailable. Do not downgrade or restore old bytes blindly.";
 
 export async function requireNoMergeJournal(config: AnySyncConfig, options: { force?: boolean } = {}) {
   const journal = await readMergeJournal(config);
@@ -306,6 +381,7 @@ export async function requireNoMergeJournal(config: AnySyncConfig, options: { fo
   assertMergeJournalPolicy(journal, config);
   const validateIgnore = ignorePolicyValidator(config);
   if (validateIgnore) await validateIgnore();
+  if (journal.version === 2) throw new Error(ignoreMergeRecoveryGuidance);
   if (!options.force) {
     throw new Error(
       "A merged transfer needs recovery. Run /sync sync to reconcile it. If newer local edits or remote revisions prevent recovery, review /sync diff and explicitly choose push --force or pull --force; the selected directional result will archive the old journal, not restore old bytes. Keep its backup; do not downgrade while recovery is pending.",

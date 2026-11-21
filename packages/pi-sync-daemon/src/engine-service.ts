@@ -52,6 +52,10 @@ export function createEngineService(root: string) {
           ? readIgnoreMigrationOffer(payload, execution)
           : deferIgnoreMigrationOffer(payload, execution);
       }
+      if (operation === "ignore.save") {
+        execution.validate();
+        throw new Error("Daemon ignore-file saves are unavailable. Edit the existing rule file manually.");
+      }
       await monitor.pause();
       execution.validate();
       if (operation === "daemon.authorize") return authorizeAfterExit(execution, payload);
@@ -78,20 +82,10 @@ export function createEngineService(root: string) {
         };
       }
       if (operation === "monitor.pause") return;
-      if (operation === "ignore.read" || operation === "ignore.save") {
-        const { readIgnoreFileEdit, saveIgnoreFileEdit } = await import("./engine/ignore/ignore-edit.js");
+      if (operation === "ignore.read") {
+        const { readIgnoreFileEdit } = await import("./engine/ignore/ignore-edit.js");
         execution.validate();
-        if (operation === "ignore.read") return readIgnoreFileEdit(payload, execution);
-        const result = await saveIgnoreFileEdit(
-          payload,
-          execution,
-          () => requireHandover(execution),
-          () => {
-            if (!readConsent(root)) throw new Error("Saving ignore files requires reviewed daemon handover.");
-          },
-        );
-        execution.validate();
-        return result;
+        return readIgnoreFileEdit(payload, execution);
       }
       if (operation === "settings.read" || operation === "settings.repair-read") {
         const { readLocalConfigDocument } = await import("./engine/settings/settings-store.js");

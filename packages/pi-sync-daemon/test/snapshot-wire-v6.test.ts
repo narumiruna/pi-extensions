@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +6,7 @@ import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { test } from "vitest";
 import { GitSyncBackend } from "../src/engine/backends/git/git-backend.js";
+import { runGit } from "../src/engine/backends/git/git-runner.js";
 import {
   GIT_MANIFEST_VERSION,
   type GitManifest,
@@ -246,7 +246,7 @@ test("local bare Git round-trips v6 while legacy read and apply refuse the same 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-wire-v6-"));
   try {
     const remote = path.join(root, "remote.git");
-    execFileSync("git", ["init", "--bare", remote], { stdio: "ignore" });
+    await runGit(["-c", "init.templateDir=", "init", "--bare", "--object-format=sha1", remote]);
     const branch = "pi-sync/test";
     const backend = new GitSyncBackend(
       {
@@ -258,8 +258,8 @@ test("local bare Git round-trips v6 while legacy read and apply refuse the same 
     );
     const image = snapshot([file("notes.md")]);
     const { head } = await backend.publishSnapshot(image, { kind: "missing" });
-    const raw = execFileSync("git", ["--git-dir", remote, "show", `refs/heads/${branch}:pi-sync/manifest.json`]);
-    assert.deepEqual(JSON.parse(raw.toString("utf8")), manifest(image));
+    const { stdout } = await runGit(["show", `refs/heads/${branch}:pi-sync/manifest.json`], { gitDir: remote });
+    assert.deepEqual(JSON.parse(stdout.toString("utf8")), manifest(image));
     assert.deepEqual(head.selection, image.selection);
     assert.deepEqual(await backend.readSnapshot(head.snapshotRef), image);
     await assert.rejects(readSnapshotForHead(backend, head), /cannot transfer an ignore-file snapshot/i);

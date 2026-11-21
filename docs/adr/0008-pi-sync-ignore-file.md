@@ -33,7 +33,7 @@ When the user confirms a new setup or explicitly migrates an existing setup to t
 /truth.json
 ```
 
-The leading `/` anchors each rule to the agent directory. Never overwrite a pre-existing file during initialization. An existing file, even an empty one, replaces the starter rules unless there is an unfinished creation record. Record creation durably before opening the absent path exclusively, then verify the resulting file before clearing the record. If interrupted, stop work that depends on the file until it is verified or repaired. Do not activate the new setup or policy while creation is incomplete. If an explicitly selected alternative is missing, or the selected file is unreadable, unsafe, invalid UTF-8, or over the supported size limit, stop the operation and show which file to fix. Do not fall back to a broader scope.
+The leading `/` anchors each rule to the agent directory. Never overwrite a pre-existing file during initialization. An existing file, even an empty one, replaces the starter rules unless there is an unfinished creation record. Record creation durably before opening the absent path exclusively, then verify the resulting file before clearing the record. If the exclusive open reports a competing file, preserve that file and clear only the verified record from this attempt. After a crash, the record may not establish who opened the target. Keep that evidence and stop work that depends on the file until it is verified or repaired. Do not activate the new setup or policy while creation is incomplete. If an explicitly selected alternative is missing, or the selected file is unreadable, unsafe, invalid UTF-8, or over the supported size limit, stop the operation and show which file to fix. Do not fall back to a broader scope.
 
 `auth.json` and Pi's actual `trust.json` remain protected independently of these rules. `truth.json` is the requested default exclusion, not an alternative name for Pi's trust file. Keep the engine's other hard protections, including Pi Sync settings and state. Keep `.syncignore` and configured alternative ignore files local and out of snapshot payloads. Rules cannot bypass any hard protection. Sessions still require separate opt-in; opting in while `/sessions/` remains in the file does not sync sessions.
 
@@ -46,6 +46,8 @@ Use Git ignore pattern semantics for one root file: comments, blank lines, `*`, 
 !/skills/private/shared.md
 ```
 
+Pi Sync rejects an escaped `/` separator. Use `private/note.txt` instead of Git's `private\/note.txt`.
+
 Users who sync sessions match their logical `sessions/` paths even if Pi stores those files elsewhere. Ignore rules apply to collection, previews, push, pull, merge, rollback, and automatic work. An ignored local path is not overwritten or deleted; replacing an ancestor is refused if that would remove an ignored descendant. New publications omit ignored paths, but retained snapshots and backups are not erased. Review the selected files before transferring: an ignore file is not a secret scanner.
 
 ### Menu and skill
@@ -55,7 +57,7 @@ Users who sync sessions match their logical `sessions/` paths even if Pi stores 
 - Remove **Included paths**, **Excluded paths**, and the legacy rule editor from normal settings. Keep **Compare sync policies** as a read-only comparison and a way into the existing reviewed resolution flow; do not add a new slash-command route.
 - Update the bundled `configure-pi-sync` skill to direct path changes to the active ignore file, not JSON arrays. Allow a scoped edit of that text file only when the user explicitly asks for it and the active filename is known; otherwise ask for the filename or direct the user to the editor. Do not read private `pi-sync.json` to discover the filename, change JSON settings, or start a transfer. Explain any scope expansion and the retained-history limitation.
 
-The Pi client owns presentation; the daemon owns validation and persistence for menu saves. Serialize daemon saves and atomically replace the file only if it still matches the reviewed source. External editors, including skill-driven file edits, do not share that lock. Re-read rules for subsequent operations and invalidate pending reviews when either the selected filename or the source bytes change. Saving rules or changing the filename never initiates a transfer by itself.
+The Pi client owns presentation; the daemon owns validation and persistence for menu saves. Keep menu saves disabled until the daemon can atomically replace the file only if it still matches the reviewed source. A file check followed by rename cannot protect against external editors, including skill-driven file edits, because they do not share the daemon lock. Until then, show the existing rule file path for manual editing. Re-read rules for subsequent operations and invalidate pending reviews when either the selected filename or the source bytes change. Saving rules or changing the filename never initiates a transfer by itself.
 
 ### Compatibility and migration
 

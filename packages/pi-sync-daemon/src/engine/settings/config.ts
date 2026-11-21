@@ -46,6 +46,10 @@ export async function loadConfigForCheck(): Promise<AnySyncConfig> {
   return requireLegacyOperationConfig(configFromSettings(await readSettingsForCheck()));
 }
 
+export async function loadSettingsConfig(setupName?: string): Promise<AnySyncConfig> {
+  return configFromSettings(await readSettingsForCheck(), setupName);
+}
+
 async function readSettingsForCheck() {
   const document = await readActiveLocalConfigDocumentForRepair();
   if (!document) throw new Error(`Missing pi-sync settings: ${localConfigPath()}`);
@@ -73,6 +77,15 @@ export async function resolveIgnoreConfig(
       throw new Error("The Pi agent directory changed; reopen the review before continuing.");
   };
   const settingsFingerprint = syncCheckConfigFingerprint(config);
+  const validateSettings = (document: PiSyncSettingsV3) => {
+    signal?.throwIfAborted();
+    validateRoot();
+    const current = configFromSettings(document, setupName);
+    if (settingsFingerprint !== syncCheckConfigFingerprint(current)) {
+      throw new Error("Pi Sync settings changed; reopen the review before continuing.");
+    }
+    return current;
+  };
   const ignorePolicy = await loadEffectiveIgnorePolicy(root, ignorePolicyInput(config), signal);
   signal?.throwIfAborted();
   validateRoot();
@@ -81,15 +94,11 @@ export async function resolveIgnoreConfig(
     ignorePolicy,
     validateIgnorePolicy: async () => {
       signal?.throwIfAborted();
-      const current = configFromSettings(await readSettingsForCheck(), setupName);
-      signal?.throwIfAborted();
-      validateRoot();
-      if (settingsFingerprint !== syncCheckConfigFingerprint(current)) {
-        throw new Error("Pi Sync settings changed; reopen the review before continuing.");
-      }
+      const current = validateSettings(await readSettingsForCheck());
       const source = await readIgnoreSource(root, current.ignoreFile, signal);
       signal?.throwIfAborted();
       validateRoot();
+      validateSettings(await readSettingsForCheck());
       if (source.sourceDigest !== ignorePolicy.sourceDigest) {
         throw new Error("Pi Sync ignore policy changed; reopen the review before continuing.");
       }

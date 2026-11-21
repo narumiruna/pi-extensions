@@ -152,7 +152,7 @@ export async function push(
   const validateCommittedOwner = captureMutationOwner(ctx);
   const config = input?.config ?? (await loadConfig(options.setup));
   throwIfAborted(options.signal);
-  await requireNoMergeJournal(config, config.ignorePolicy ? {} : options);
+  await requireNoMergeJournal(config, options);
   const state = input?.state ?? (await readStateForConfig(config));
   validateMutation();
   requireResolvedDirectionalProgress(state, options);
@@ -352,7 +352,7 @@ export async function pull(
   const configIdentity = syncCheckConfigFingerprint(config);
   if (initial && initial.configIdentity !== configIdentity)
     throw new Error("Settings changed before initial pull; run sync again.");
-  await requireNoMergeJournal(config, config.ignorePolicy ? {} : options);
+  await requireNoMergeJournal(config, options);
   setSyncStatus(ctx, `pulling ${config.setupName}`, { activity: "pulling" });
   const backend = await factory(config);
   const state = await readStateForConfig(config);

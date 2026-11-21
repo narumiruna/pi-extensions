@@ -14,7 +14,7 @@ import {
   peekLocalConfigDocument,
   updateLocalConfigDocument,
 } from "../settings/config-file.js";
-import type { PiSyncSettingsV3, SyncSetupSettings } from "../settings/settings-types.js";
+import type { AnySyncConfig, PiSyncSettingsV3, SyncSetupSettings } from "../settings/settings-types.js";
 import { validateSettingsDocument } from "../settings/settings-validation.js";
 import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
@@ -26,7 +26,7 @@ import { requireNoMergeJournal } from "../sync/merge-journal.js";
 import { configuredSnapshotPathMatcher } from "../sync/sync-policy.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { compileEffectiveIgnorePolicy } from "./effective-ignore-policy.js";
-import { initializeDefaultIgnoreSource } from "./ignore-initialization.js";
+import { prepareDefaultIgnoreSource } from "./ignore-initialization.js";
 import { assertCurrentIgnoreMigrationOffer } from "./ignore-migration-prompt.js";
 import {
   compileIgnoreRules,
@@ -44,6 +44,14 @@ function sourceToken(document: LocalConfigDocument | undefined) {
   return documentFingerprint(
     document ? { bytes: document.bytes.toString("base64"), identity: document.identity } : undefined,
   );
+}
+
+function settingsReviewGuard(document: LocalConfigDocument, execution: Execution) {
+  const token = sourceToken(document);
+  return (candidate: LocalConfigDocument | undefined) => {
+    execution.validate();
+    if (document.path !== candidate?.path || token !== sourceToken(candidate)) stale();
+  };
 }
 
 function ignoreFilename(setup: SyncSetupSettings | undefined) {
@@ -135,11 +143,16 @@ export async function prepareReviewedIgnoreSource(root: string, reviewed: Review
     current.pendingCreation !== reviewed.pendingCreation
   )
     stale();
-  if (current.present) return current;
-  const created = await initializeDefaultIgnoreSource(root, execution.signal);
+  if (current.present) return { source: current, created: false };
+  const prepared = await prepareDefaultIgnoreSource(root, execution.signal);
   execution.validate();
-  if (!created.present || created.text !== reviewed.text) stale();
-  return created;
+  if (
+    !prepared.source.present ||
+    prepared.source.text !== reviewed.text ||
+    (!current.pendingCreation && !prepared.created)
+  )
+    stale();
+  return prepared;
 }
 
 export async function switchIgnoreFile(
@@ -191,10 +204,7 @@ export async function switchIgnoreFile(
         },
         validateSettingsDocument,
         execution.signal,
-        (candidate) => {
-          execution.validate();
-          if (sourceToken(document) !== sourceToken(candidate)) stale();
-        },
+        settingsReviewGuard(document, execution),
         async () => {
           await prepareReviewedIgnoreSource(execution.root, source, execution);
         },
@@ -226,56 +236,62 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
       execution.validate();
       const next = structuredClone(before);
       const policy = next.syncSetups[setupName].sync;
-      const { include, exclude: _exclude, reinclude: _reinclude, ...common } = policy;
+      const { include: _include, exclude: _exclude, reinclude: _reinclude, ...common } = policy;
       const sessions =
-        policy.scope === "agent-directory" ? policy.sessions === true : include?.includes("sessions") === true;
+        policy.scope === "agent-directory" ? policy.sessions === true : previous.include.includes("sessions");
       next.syncSetups[setupName].sync = { ...common, scope: "agent-directory", sessions, pathPolicy: "ignore-file" };
       next.version = 8;
       validateSettingsDocument(next);
       const source = await readSetupSource(execution.root, DEFAULT_IGNORE_FILENAME, execution.signal);
-      const current = configFromSettings(next, setupName);
-      const ignorePolicy = compileEffectiveIgnorePolicy(source, {
-        sessions,
-        configuredFilenames: configuredFilenames(next),
-      });
+      execution.validate();
+      const current = {
+        ...configFromSettings(next, setupName),
+        ignorePolicy: compileEffectiveIgnorePolicy(source, {
+          sessions,
+          configuredFilenames: configuredFilenames(next),
+        }),
+      };
       const backend = await createSyncBackend(previous);
+      execution.validate();
       const head = await backend.readHead(execution.signal);
+      execution.validate();
       const remote = head ? await backend.readSnapshot(head.snapshotRef, execution.signal) : undefined;
+      execution.validate();
       if (head && remote?.id !== head.snapshotId) throw new Error("The remote snapshot changed during inspection.");
-      const collect = async () => {
-        const oldImage = await createSnapshot(
-          previous.snapshotIdentity,
-          await resolvedSnapshotOptionsForContext(ctx, previous, execution.signal),
-        );
-        const newImage = await createSnapshot(
-          current.snapshotIdentity,
-          await resolvedSnapshotOptionsForContext(ctx, { ...current, ignorePolicy }, execution.signal),
-        );
-        const oldSelect = configuredSnapshotPathMatcher(previous);
-        const newSelect = configuredSnapshotPathMatcher({ ...current, ignorePolicy });
-        const remotePaths = remote?.files.map(({ path }) => path) ?? [];
-        const oldPaths = oldImage.files.map(({ path }) => path).sort();
-        const newPaths = newImage.files.map(({ path }) => path).sort();
+      const collectPaths = async (config: AnySyncConfig) => {
+        const options = await resolvedSnapshotOptionsForContext(ctx, config, execution.signal);
+        execution.validate();
+        const image = await createSnapshot(config.snapshotIdentity, options);
+        execution.validate();
+        return image.files.map(({ path }) => path).sort();
+      };
+      const collect = async (createdStarter?: string) => {
+        const oldPaths = (await collectPaths(previous)).filter((name) => name !== createdStarter);
+        const newPaths = await collectPaths(current);
         const fingerprint = createHash("sha256")
           .update(JSON.stringify([oldPaths, newPaths]))
           .digest("hex");
-        const content = [
-          `Destination: ${safeTerminalText(backend.destination)}`,
-          `Ignore file: ${safeTerminalText(path.join(execution.root, source.filename))}`,
-          describeSource(source),
-          "Directory-wide selection also applies to future files. Legacy rules are not translated automatically.",
-          "Migration changes this setup only. No transfer starts and retained history is not erased.",
-          ...describeChanges("Local", oldPaths, newPaths),
-          ...(remote
-            ? describeChanges("Remote", remotePaths.filter(oldSelect), remotePaths.filter(newSelect))
-            : ["Remote: no published snapshot."]),
-        ].join("\n");
-        return { content, fingerprint };
+        return { oldPaths, newPaths, fingerprint };
       };
       const review = await collect();
       execution.validate();
-      if (!(await confirm(ctx, execution, "Review migration to ignore-file policy", review.content)))
-        return "cancelled";
+      const remotePaths = remote?.files.map(({ path }) => path) ?? [];
+      const content = [
+        `Destination: ${safeTerminalText(backend.destination)}`,
+        `Ignore file: ${safeTerminalText(path.join(execution.root, source.filename))}`,
+        describeSource(source),
+        "Directory-wide selection also applies to future files. Legacy rules are not translated automatically.",
+        "Migration changes this setup only. No transfer starts and retained history is not erased.",
+        ...describeChanges("Local", review.oldPaths, review.newPaths),
+        ...(remote
+          ? describeChanges(
+              "Remote",
+              remotePaths.filter(configuredSnapshotPathMatcher(previous)),
+              remotePaths.filter(configuredSnapshotPathMatcher(current)),
+            )
+          : ["Remote: no published snapshot."]),
+      ].join("\n");
+      if (!(await confirm(ctx, execution, "Review migration to ignore-file policy", content))) return "cancelled";
       const verifyHead = (fresh: RemoteHead | undefined) => {
         if (
           head
@@ -289,18 +305,19 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
         () => next,
         validateSettingsDocument,
         execution.signal,
-        (candidate) => {
-          execution.validate();
-          if (sourceToken(document) !== sourceToken(candidate)) stale();
-        },
+        settingsReviewGuard(document, execution),
         async () => {
           verifyHead(await backend.readHead(execution.signal));
           execution.validate();
-          if ((await collect()).fingerprint !== review.fingerprint) stale();
-          const prepared = await prepareReviewedIgnoreSource(execution.root, source, execution);
-          verifyHead(await backend.readHead(execution.signal));
+          if (!source.present && (await collect()).fingerprint !== review.fingerprint) stale();
+          execution.validate();
+          const { source: prepared, created } = await prepareReviewedIgnoreSource(execution.root, source, execution);
           execution.validate();
           await preserveLegacySettings(document);
+          execution.validate();
+          verifyHead(await backend.readHead(execution.signal));
+          execution.validate();
+          if ((await collect(created ? prepared.filename : undefined)).fingerprint !== review.fingerprint) stale();
           execution.validate();
           const finalSource = await readIgnoreSource(execution.root, source.filename, execution.signal);
           execution.validate();
