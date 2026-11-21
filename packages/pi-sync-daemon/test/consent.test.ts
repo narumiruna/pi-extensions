@@ -29,12 +29,12 @@ async function fixture(
   run: (state: {
     root: string;
     client: DaemonConnection;
-    approve: (fn: () => Promise<boolean>) => void;
+    approve: (fn: (payload: { title?: string; message?: string }) => Promise<boolean>) => void;
   }) => Promise<void>,
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-consent-"));
   await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(config), { mode: 0o600 });
-  let approval = async () => true;
+  let approval: (payload: { title?: string; message?: string }) => Promise<boolean> = async () => true;
   const daemon = await ensureDaemon(root);
   const client = await new DaemonConnection(
     daemon.paths,
@@ -58,9 +58,9 @@ async function fixture(
     {
       callback: async (callback) => {
         assert.equal(callback.kind, "confirm");
-        if ((callback.payload as { title?: string }).title === "Adopt pi-sync-daemon as the synchronization owner?")
-          return true;
-        return approval();
+        const payload = callback.payload as { title?: string; message?: string };
+        if (payload.title === "Adopt pi-sync-daemon as the synchronization owner?") return true;
+        return approval(payload);
       },
     },
   ).attach();
@@ -142,6 +142,46 @@ test("unattended permission defaults off and reviewed enable/revoke preserves un
     const saved = JSON.parse(await fs.readFile(target, "utf8"));
     assert.deepEqual(saved.future, { retain: true });
     assert.equal(saved.setups.home.future, "retained");
+  }));
+
+test("unattended authorization review shows the directory scope and separate session opt-in", () =>
+  fixture(async ({ root, client, approve }) => {
+    const home = config.syncSetups.home;
+    await fs.writeFile(
+      path.join(root, "pi-sync.json"),
+      JSON.stringify({
+        ...config,
+        version: 7,
+        syncSetups: {
+          home: {
+            ...home,
+            sync: {
+              scope: "agent-directory",
+              automatic: true,
+              agentMode: true,
+              continuous: true,
+              sessions: true,
+              exclude: ["sessions"],
+              reinclude: ["sessions/work.jsonl"],
+            },
+          },
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const policy = await readPolicy(client);
+    let message: string | undefined;
+    approve(async (payload) => {
+      message = payload.message;
+      return false;
+    });
+    assert.equal(await client.run("daemon.authorize", { ...policy, afterExit: true }), false);
+    assert.match(message ?? "", /all eligible files in the Pi agent directory/);
+    assert.match(
+      message ?? "",
+      /Excluded paths: sessions\nRe-included paths: sessions\/work\.jsonl\nSession opt-in: On — path rules still apply/,
+    );
+    assert.equal((await readPolicy(client)).afterExit, false);
   }));
 
 for (const change of ["config", "model", "consent"] as const)

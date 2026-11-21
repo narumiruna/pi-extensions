@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { regenerateSnapshotIdentity } from "../snapshot/snapshot.js";
+import { assertAgentDirectorySnapshotBound } from "../snapshot/snapshot-bounds.js";
 import type { Snapshot, SnapshotFile } from "../snapshot/snapshot-types.js";
 import {
   type JsonDocument,
@@ -9,12 +10,7 @@ import {
   renderSettingsMembers,
 } from "./json-document.js";
 import { normalizeLocalFields } from "./local-field-policy.js";
-import {
-  assertAgentDirectoryPathLayout,
-  compileSyncPolicyExclude,
-  configuredSnapshotPathMatcher,
-  validateSnapshotSelection,
-} from "./sync-policy.js";
+import { compileSyncPolicyExclude, configuredSnapshotPathMatcher, validateSnapshotSelection } from "./sync-policy.js";
 
 export { normalizeLocalFields } from "./local-field-policy.js";
 
@@ -38,7 +34,7 @@ export function validatePortableSnapshot(snapshot: Snapshot) {
     const selected = configuredSnapshotPathMatcher(selection);
     if (snapshot.files.some((file) => typeof file?.path !== "string" || !selected(file.path)))
       throw new Error("Portable snapshot retains excluded or unsafe agent-directory paths.");
-    assertAgentDirectoryPathLayout(snapshot.files.map((file) => file.path));
+    assertAgentDirectorySnapshotBound(snapshot.files);
   } else {
     const excludedPath = compileSyncPolicyExclude(selection ?? {});
     if (snapshot.files.some((file) => excludedPath(file.path)))

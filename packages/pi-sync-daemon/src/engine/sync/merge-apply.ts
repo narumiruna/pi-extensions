@@ -6,6 +6,7 @@ import { withEngineMutationQueue as withFileMutationQueue } from "../host.js";
 import { agentDir } from "../snapshot/session-paths.js";
 import { createSnapshot, snapshotTarget } from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
+import { assertAgentDirectorySnapshotBound, MAX_AGENT_DIRECTORY_BYTES } from "../snapshot/snapshot-bounds.js";
 import { assertUnexcludedTargets } from "../snapshot/snapshot-exclude-safety.js";
 import { assertCanonicalMutationTargets } from "../snapshot/snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "../snapshot/snapshot-paths.js";
@@ -23,6 +24,7 @@ export async function preflightMergedTargets(
   options: SnapshotOptions,
   protectedTarget?: string | readonly string[],
 ) {
+  if (options.scope === "agent-directory") assertAgentDirectorySnapshotBound(after.files);
   const root = agentDir();
   const beforeHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(before));
   const afterHashes: Record<string, string> = Object.assign(Object.create(null), fileHashMap(after));
@@ -152,7 +154,7 @@ async function hashReviewedFile(target: string, stat: Stats, options: SnapshotOp
       options.signal?.throwIfAborted();
       options.validateMutation?.();
       total += bytes.length;
-      if (total > 64 * 1024 * 1024) throw new Error("Reviewed file exceeds the merge byte limit.");
+      if (total > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Reviewed file exceeds the merge byte limit.");
       hash.update(bytes);
     }
     return hash.digest("hex");
@@ -224,35 +226,41 @@ async function assertFilesystemTarget(
     relative.startsWith("sessions/") && options.sessionDir
       ? path.resolve(sessionStorageRoot(root, options.sessionDir))
       : path.resolve(root);
+  const parents: string[] = [];
   for (
     let parent = path.dirname(target);
     mergePathIdentity(parent) !== mergePathIdentity(boundary);
     parent = path.dirname(parent)
   ) {
-    options.signal?.throwIfAborted();
     if (path.dirname(parent) === parent) throw new Error("Unowned merged target.");
+    parents.push(parent);
+  }
+  const statTarget = async (file: string) => {
+    options.signal?.throwIfAborted();
+    options.validateMutation?.();
     try {
-      const stat = await fs.lstat(parent);
-      if (
-        (!stat.isDirectory() || stat.isSymbolicLink()) &&
-        !(stat.isFile() && stat.nlink === 1 && removedTargets.has(parent))
-      )
-        throw new Error("Unsafe merge filesystem layout; review the selected paths before transfer.");
+      return await fs.lstat(file);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return undefined;
+    } finally {
+      options.signal?.throwIfAborted();
+      options.validateMutation?.();
     }
+  };
+  for (const parent of parents.reverse()) {
+    const stat = await statTarget(parent);
+    if (!stat || stat.isDirectory()) continue;
+    // Descendants cannot exist beneath this reviewed file until its removal.
+    // Writes recheck the actual parents without this exception after deletion.
+    if (stat.isFile() && stat.nlink === 1 && removedTargets.has(parent)) return;
+    throw new Error("Unsafe merge filesystem layout; review the selected paths before transfer.");
   }
-  options.signal?.throwIfAborted();
-  try {
-    const stat = await fs.lstat(target);
-    if ((!stat.isFile() && !removedTargets.has(target)) || (stat.isFile() && stat.nlink > 1))
-      throw new Error("Merge target is non-regular or hard-linked; review a directional operation before transfer.");
-    if (stat.isDirectory() && beforeHashes) await assertReviewedTree(target, relative, beforeHashes, options);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && !(code === "ENOTDIR" && removedTargets.size > 0)) throw error;
-  }
+  const stat = await statTarget(target);
+  if (!stat) return;
+  if ((!stat.isFile() && !removedTargets.has(target)) || (stat.isFile() && stat.nlink > 1))
+    throw new Error("Merge target is non-regular or hard-linked; review a directional operation before transfer.");
+  if (stat.isDirectory() && beforeHashes) await assertReviewedTree(target, relative, beforeHashes, options);
 }
 
 /** Roll forward only while each target is still its reviewed preimage or committed postimage. */
@@ -353,6 +361,17 @@ export async function applyMergedSnapshot(
     const plan = preflightSnapshotApply(root, after, current, options);
     plan.writes = plan.writes.filter((item) => targetSet.has(item.target));
     plan.deletes = plan.deletes.filter((target) => targetSet.has(target));
+    if (options.scope === "agent-directory") {
+      // Recovery preserves files outside the plan, including protected sessions
+      // that may have appeared or grown since the reviewed after-image.
+      const written = new Set(plan.writes.map((item) => item.target));
+      const replaced = new Set([...plan.deletes, ...written]);
+      const targetFor = (relative: string) => snapshotTarget(root, relative, options.sessionDir);
+      assertAgentDirectorySnapshotBound([
+        ...current.files.filter((file) => !replaced.has(targetFor(file.path))),
+        ...after.files.filter((file) => written.has(targetFor(file.path))),
+      ]);
+    }
     await preflightSnapshotMutations(root, plan, options.sessionDir, options);
     const deletedTargets = new Set(plan.deletes);
     for (const relative of intermediateDirectories) {

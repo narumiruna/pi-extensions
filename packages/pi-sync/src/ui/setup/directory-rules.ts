@@ -18,9 +18,8 @@ export function starterDirectoryRules(): DirectoryRulesDraft {
   return { exclude: ["sessions", "bin", "npm"], reinclude: [], sessions: false };
 }
 
-export function setSessionOptIn(draft: DirectoryRulesDraft, sessions: boolean) {
-  draft.sessions = sessions;
-  if (sessions) draft.exclude = draft.exclude.filter((rule) => rule.toLowerCase() !== "sessions");
+export function directorySessionOptInLine(sessions: boolean | undefined) {
+  return `Sessions: ${sessions ? "On — explicit opt-in; path rules still apply" : "Off — rules cannot enable sessions"}`;
 }
 
 export async function acknowledgeSessions(ctx: ExtensionCommandContext, signal?: AbortSignal) {
@@ -75,7 +74,7 @@ export function directoryScopeLines(draft: DirectoryRulesDraft) {
     "Scope: Pi agent directory · all eligible files, including custom paths",
     ...formatDirectoryRules("Excluded paths", draft.exclude),
     ...formatDirectoryRules("Re-included paths (override exclusions)", draft.reinclude),
-    `Sessions: ${draft.sessions ? "On — explicit opt-in; path rules still apply" : "Off — rules cannot enable sessions"}`,
+    directorySessionOptInLine(draft.sessions),
     DIRECTORY_SCOPE_ALWAYS_LOCAL,
     "Synced files can contain sensitive data the secret scanner cannot identify. Review the preview before transferring.",
   ];

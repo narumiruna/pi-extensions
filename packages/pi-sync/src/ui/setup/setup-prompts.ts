@@ -9,7 +9,6 @@ import {
   acknowledgeSessions,
   directoryScopeLines,
   promptDirectoryRules,
-  setSessionOptIn,
   starterDirectoryRules,
 } from "./directory-rules.js";
 import { promptTextInput } from "./text-input.js";
@@ -62,7 +61,8 @@ export async function chooseSetupPolicy(
   const legacy =
     choice === "Recommended Pi settings" || choice === "Minimal settings" || joinScope === "Selected paths (legacy)";
   const draft = starterDirectoryRules();
-  if (choice === "Agent directory · edit starter rules") {
+  const editRules = choice === "Agent directory · edit starter rules";
+  if (editRules) {
     const exclude = await promptDirectoryRules(ctx, "exclude", draft.exclude, signal);
     if (signal?.aborted || !exclude) return undefined;
     draft.exclude = exclude;
@@ -86,7 +86,9 @@ export async function chooseSetupPolicy(
       join,
     };
   }
-  setSessionOptIn(draft, sessions);
+  draft.sessions = sessions;
+  // Only the unedited starter policy drops its blanket sessions exclusion on opt-in.
+  if (sessions && !editRules) draft.exclude = draft.exclude.filter((rule) => rule !== "sessions");
   return {
     sync: {
       scope: "agent-directory",

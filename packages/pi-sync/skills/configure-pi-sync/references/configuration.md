@@ -29,10 +29,10 @@ An explicit setup creates the file atomically.
 On POSIX, pi-sync creates and replaces it with mode `0600`.
 Pi-sync processes coordinate settings access through `pi-sync.json.mutation-lock`; lock-unaware editors are outside that serialization boundary and should not save the file while a pi-sync settings operation is running.
 Within one process, settings reads wait for earlier writes, including writes that have not acquired the lock yet.
-Replacement writes and flushes a private temporary file before renaming it over the canonical file; the active file is not moved away first.
+Under that lock, a save validates the existing document before editing it. A malformed, invalid, or unsupported source cannot be replaced by relabeling it as a supported version. The writer validates the proposed document before flushing a private temporary file and renaming it over the canonical file; the active file is not moved away first.
 Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
 
-A private `pi-sync.local.json` containing a valid version 3 document is copied byte-for-byte to `pi-sync.json`.
+A private `pi-sync.local.json` containing a valid supported document is copied byte-for-byte to `pi-sync.json`.
 The old file remains as a recovery copy.
 If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
 If an older interrupted replacement left `pi-sync.json` missing and a hidden `.pi-sync.json.*.schema-migration-source` or `.pi-sync.json.*.migration-retired` file remains, settings access stops instead of loading the legacy copy.
@@ -308,7 +308,11 @@ The agent directory is Pi's active agent root, normally `~/.pi/agent/`. Every el
 
 Pi's `auth.json`, `trust.json`, their locks, and Pi Sync's settings and service state cannot be re-included. Pi's settings lock, dynamic model catalog cache and its lock, `crashes.json`, and `pi-debug.log` also stay local. Session paths remain local until explicitly enabled with `sync.sessions: true` (and not still excluded by a rule). The interactive flow requires a privacy acknowledgement. Symlinks are not followed. Agent-directory transfers do not move Pi's session storage root. Before moving a custom session store yourself, remove its old copy from the agent directory or exclude its old path explicitly. Pi Sync protects the current and default session locations, not unidentified old copies. Review what will transfer; the secret scan cannot identify every sensitive file.
 
-Open **Settings → Agent directory scope** to edit the rules or change session opt-in. **Compare sync policies** reviews the remote scope and rules without comparing file contents.
+The agent-directory scan and projected transfer result are limited to 64 MiB of file content, including retained protected sessions in the result. `settings.json` has a separate 1 MiB limit for session routing. If local files change after review, reopen the transfer preview. A directory replacement is refused if it would remove an unreviewed or excluded descendant.
+
+Enabling sessions in the unedited recommended setup removes its starter `sessions` exclusion. If you choose to edit the starter rules or change session opt-in later in **Settings → Agent directory scope**, the toggle leaves both rule lists unchanged. For example, keep `exclude: ["sessions"]` and set `reinclude: ["sessions/work.jsonl"]` with `sessions: true` to select only that session.
+
+**Compare sync policies** reviews the remote scope and rules without comparing file contents.
 
 Settings version 7 and snapshot version 5 carry the new policy; older clients must refuse it. A local and remote scope mismatch stops transfer, even when forcing it. Use a matching setup or choose a new location. Adopting same-scope rules does not enable sessions on a device that has not opted in. Existing selected-path setups keep their behavior and stored settings. Changing rules does not transfer data, and excluding a path does not erase its old snapshots.
 
@@ -445,7 +449,7 @@ Unknown fields remain preserved and malformed/invalid files block saves, just as
 ### Autonomous sync
 
 Autonomous sync uses the unchanged `sync.agentMode` key, an optional per-setup boolean, default `false`, in settings versions 3 through 7.
-Open **Settings → Autonomous sync** and review the setup, destination, selected paths, transfer authorization, model disclosure, costs, and autonomous writes before enabling.
+Open **Settings → Autonomous sync** and review the setup, destination, content policy, transfer authorization, model disclosure, costs, and autonomous writes before enabling. For directory scope, the review shows session opt-in separately from path rules.
 RPC users can explicitly set the same field in the private settings file.
 Setting it to `true` is authorization, not just a display preference.
 
@@ -564,7 +568,7 @@ A failed consent write blocks automatic work in that service instance. Uncertain
 ### Continuous sync
 
 `sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3 through 7.
-Open **Settings → Continuous sync** after enabling Autonomous sync.
+Open **Settings → Continuous sync** after enabling Autonomous sync. For directory scope, the review shows session opt-in separately from path rules.
 RPC users can set the field explicitly in the private settings file.
 Existing Autonomous sync consent does not enable recurring requests.
 
@@ -696,9 +700,8 @@ Field merging and nonempty portable projections also refuse unsafe integers, non
 `sync.localFields` is an explicit sorted string array of whole global `settings.json` root field names, not a heuristic or project override.
 Example: `"localFields": ["shellPath"]`.
 Coupled fields must be excluded together.
-Nonempty rules require `settings.json` in `sync.include`; absent or explicitly empty rules remain valid for other selections.
-Saving nonempty rules in Settings confirms an upgrade to at least settings version 4; manual edits must declare version 4 or newer.
-Existing version-5/6 settings are never downgraded by a field-policy edit.
+Selected-path setups with nonempty rules must include `settings.json` in `sync.include`. Directory-scope setups must omit `sync.include` and can configure local fields without it. Path rules still govern whether `settings.json` syncs, and nonempty field rules require that exact file spelling if it is synced. Absent or explicitly empty rules remain valid for either scope.
+Settings asks for confirmation before saving changes to these rules. An explicit array requires settings version 4 or later, and editing the rules does not downgrade an existing settings version.
 Absent rules keep a setup nonportable, including unrelated setups in a version-4 document.
 An explicit array opts that setup into at least snapshot version 2; exclusion-enabled selected-path setups retain version 4, and directory scope retains version 5.
 `[]` after rule removal retains this reviewed opt-in and differs from absence.
@@ -739,7 +742,7 @@ Never reinterpret portable snapshots with an old binary.
 
 `sync.mergeContent` and `sync.partialSync` are independent opt-in booleans, both default `false`.
 The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit upgrade to at least settings version 5.
-Manual configuration must also declare version 5 or 6.
+Manual configuration must use a supported settings version of at least 5 (version 7 for directory scope).
 Partial publications retain snapshot version 4 for exclusion-enabled selected paths and version 5 for directory scope.
 Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration.
 Disabling options retains the schema and recovery evidence.

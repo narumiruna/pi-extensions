@@ -14,7 +14,7 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import { addSyncSetup, updateSyncSetup } from "../src/settings/settings-management.js";
 import { readLocalConfigObject } from "../src/settings/settings-store.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
-import { syncSessionsSelected } from "../src/sync/sync-policy.js";
+import { configuredSnapshotPathMatcher, syncSessionsSelected } from "../src/sync/sync-policy.js";
 import { showFileSelection } from "../src/ui/file-selection.js";
 import { type SyncSettingsRoute, showSyncSettings } from "../src/ui/settings-ui.js";
 import { showSetupWizard } from "../src/ui/setup/setup-wizard.js";
@@ -56,6 +56,10 @@ for (const [policy, error] of [
 
 test("settings project only explicit sessions and bind normalized directory rules to reviewed identities", () => {
   assert.throws(() => validateSettingsDocument({ ...directorySettings(), version: 6 }), /version 7/u);
+  assert.deepEqual(
+    configFromSettings(validateSettingsDocument(directorySettings({ localFields: ["shellPath"] }))).localFields,
+    ["shellPath"],
+  );
   const legacy = validateSettingsDocument({ ...v3S3Settings({ include: ["skills", "settings.json"] }), version: 7 });
   assert.deepEqual(configFromSettings(legacy).include, ["skills", "settings.json"]);
   Object.assign(legacy.syncSetups.home.sync, { sessions: false });
@@ -81,7 +85,15 @@ test("settings project only explicit sessions and bind normalized directory rule
   assert.notEqual(syncConfigReviewIdentity(config()), syncConfigReviewIdentity(on));
 });
 
-for (const mode of ["default", "custom", "decline sessions", "discard", "join directory", "join legacy"] as const) {
+for (const mode of [
+  "default",
+  "default sessions",
+  "custom",
+  "decline sessions",
+  "discard",
+  "join directory",
+  "join legacy",
+] as const) {
   test(`first Git setup: ${mode}`, async () =>
     withTempHome(async () => {
       reviewRemote.mockReset();
@@ -89,7 +101,8 @@ for (const mode of ["default", "custom", "decline sessions", "discard", "join di
       const joining = mode.startsWith("join");
       const custom = mode === "custom";
       const inputs = ["home", "git@github.com:owner/private-pi-sync.git", "", ""];
-      if (custom) inputs.push('[\n"sessions/", "private/", "bin"\n]', '["private/share", "sessions/**"]');
+      if (custom) inputs.push('[\n"sessions/", "private/", "bin"\n]', '["private/share", "sessions/work.jsonl"]');
+      const optIn = custom || mode === "default sessions" || mode === "decline sessions";
       const selections = [
         "Git",
         joining
@@ -99,12 +112,7 @@ for (const mode of ["default", "custom", "decline sessions", "discard", "join di
             : "Agent directory (recommended)",
         ...(joining
           ? [mode === "join legacy" ? "Selected paths (legacy)" : "Pi agent directory"]
-          : [
-              "Keep automatic sync off",
-              custom || mode === "decline sessions"
-                ? "Include session conversations"
-                : "Keep sessions off (recommended)",
-            ]),
+          : ["Keep automatic sync off", optIn ? "Include session conversations" : "Keep sessions off (recommended)"]),
         mode === "discard" ? "Cancel" : "Save setup",
       ];
       let firstOption: string | undefined;
@@ -130,7 +138,7 @@ for (const mode of ["default", "custom", "decline sessions", "discard", "join di
       const saved = mode !== "discard" && mode !== "decline sessions";
       assert.equal(await showSetupWizard(ctx), saved);
       assert.equal(firstOption, "Agent directory (recommended)");
-      assert.equal(acknowledgements, custom || mode === "decline sessions" ? 1 : 0);
+      assert.equal(acknowledgements, optIn ? 1 : 0);
       assert.equal(reviewRemote.mock.calls.length, joining ? 1 : 0);
       if (!saved) {
         await assert.rejects(fs.stat(localConfigPath()), { code: "ENOENT" });
@@ -155,9 +163,12 @@ for (const mode of ["default", "custom", "decline sessions", "discard", "join di
       assert.equal(document?.version, 7);
       assert.equal(policy?.scope, "agent-directory");
       assert.equal(Object.hasOwn(policy ?? {}, "include"), false);
-      assert.deepEqual(policy?.exclude, custom ? ["bin", "private"] : starters);
-      assert.equal(policy?.sessions, custom);
-      assert.deepEqual(policy?.reinclude, custom ? ["private/share", "sessions/**"] : undefined);
+      assert.deepEqual(policy?.exclude, custom ? ["bin", "private", "sessions"] : optIn ? ["bin", "npm"] : starters);
+      assert.equal(policy?.sessions, optIn);
+      assert.deepEqual(policy?.reinclude, custom ? ["private/share", "sessions/work.jsonl"] : undefined);
+      const selects = configuredSnapshotPathMatcher(await loadConfig());
+      assert.equal(selects("sessions/work.jsonl"), optIn);
+      assert.equal(selects("sessions/other.jsonl"), optIn && !custom);
       const rendered = seen.join("\n");
       assert.match(rendered, /Always local: Pi credentials \(auth.json\), project trust \(trust.json\)/u);
       assert.match(rendered, /secret scanner cannot identify/u);
@@ -176,13 +187,24 @@ const keys = {
   },
 };
 
-for (const mode of ["save", "cancel", "hard-cancel", "stale"] as const) {
+for (const mode of ["save", "cancel", "hard-cancel", "stale", "opt in only", "opt out only"] as const) {
   test(`agent directory review ${mode} binds rules and session consent atomically`, async () =>
     withTempHome(async (root) => {
       await fs.mkdir(root, { recursive: true });
-      const original = JSON.stringify(directorySettings({ exclude: starters, ownedByFutureVersion: true }));
+      const toggleOnly = mode === "opt in only" || mode === "opt out only";
+      const original = JSON.stringify(
+        directorySettings({
+          exclude: starters,
+          ...(toggleOnly ? { reinclude: ["sessions/work.jsonl"], sessions: mode === "opt out only" } : {}),
+          ownedByFutureVersion: true,
+        }),
+      );
       await fs.writeFile(localConfigPath(), original, { mode: 0o600 });
-      const choices = ["Edit excluded paths", "Edit re-included paths", "Session opt-in", "Review changes"];
+      const choices = [
+        ...(toggleOnly ? [] : ["Edit excluded paths", "Edit re-included paths"]),
+        "Session opt-in",
+        "Review changes",
+      ];
       const frames: string[] = [];
       const placeholders: string[] = [];
       let privacyWarnings = 0;
@@ -192,7 +214,7 @@ for (const mode of ["save", "cancel", "hard-cancel", "stale"] as const) {
         input: async (title: string, placeholder?: string) => {
           placeholders.push(placeholder ?? "");
           if (title.startsWith("Excluded paths")) return '[\n"sessions/", "private/", "bin"\n]';
-          return '["private/share", "sessions/**"]';
+          return '["private/share", "sessions/work.jsonl"]';
         },
         confirm: async () => {
           privacyWarnings++;
@@ -230,15 +252,15 @@ for (const mode of ["save", "cancel", "hard-cancel", "stale"] as const) {
       });
       await showFileSelection(ctx, "home");
       assert.deepEqual(choices, []);
-      assert.equal(privacyWarnings, 1);
+      assert.equal(privacyWarnings, mode === "opt out only" ? 0 : 1);
       assert.deepEqual(
         placeholders.map((value) => JSON.parse(value)),
-        [["bin", "npm", "sessions"], []],
+        toggleOnly ? [] : [["bin", "npm", "sessions"], []],
       );
       assert.equal(bounded, true);
       const review = frames.find((frame) => frame.includes("Review agent directory scope")) ?? "";
-      assert.match(review, /private\/share/u);
-      assert.match(review, /Sessions: On — explicit opt-in/u);
+      assert.match(review, /sessions\/work\.jsonl/u);
+      assert.match(review, mode === "opt out only" ? /Sessions: Off/u : /Sessions: On — explicit opt-in/u);
       assert.match(review, /ctrl\+y/u);
       if (mode === "cancel" || mode === "hard-cancel") {
         assert.equal(await fs.readFile(localConfigPath(), "utf8"), original);
@@ -255,9 +277,15 @@ for (const mode of ["save", "cancel", "hard-cancel", "stale"] as const) {
         assert.equal(policy?.sessions, undefined);
         assert.match(notifications.at(-1)?.message ?? "", /not saved.*changed while it was open/u);
       } else {
-        assert.deepEqual(policy?.exclude, ["bin", "private"]);
-        assert.deepEqual(policy?.reinclude, ["private/share", "sessions/**"]);
-        assert.equal(policy?.sessions, true);
+        assert.deepEqual(policy?.exclude, toggleOnly ? starters : ["bin", "private", "sessions"]);
+        assert.deepEqual(
+          policy?.reinclude,
+          toggleOnly ? ["sessions/work.jsonl"] : ["private/share", "sessions/work.jsonl"],
+        );
+        assert.equal(policy?.sessions, mode !== "opt out only");
+        const selects = configuredSnapshotPathMatcher(await loadConfig());
+        assert.equal(selects("sessions/work.jsonl"), mode !== "opt out only");
+        assert.equal(selects("sessions/other.jsonl"), false);
         assert.match(notifications.at(-1)?.message ?? "", /no transfer started/u);
       }
     }));

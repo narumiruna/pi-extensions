@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeniedPath, posixJoin, safeJoin, toPosix } from "../paths.js";
 import { agentDir, configuredSessionDir, expandSessionDir } from "./session-paths.js";
+import { assertAgentDirectorySettingsSize, MAX_AGENT_DIRECTORY_BYTES } from "./snapshot-bounds.js";
 import {
   agentDirectoryAnchor,
   agentDirectoryPhysicalSessionPath,
@@ -43,8 +44,6 @@ import type { Snapshot, SnapshotFile, SnapshotOptions } from "./snapshot-types.j
 export { canonicalSnapshotPathForConfig, isConfiguredSnapshotPath } from "../sync/sync-policy.js";
 
 const VERSION = 1;
-const MAX_AGENT_DIRECTORY_BYTES = 64 * 1024 * 1024;
-const MAX_PI_SETTINGS_BYTES = 1024 * 1024;
 const TOP_LEVEL_FILES: readonly string[] = DEFAULT_SYNC_INCLUDE.filter((name) => name.includes("."));
 const TOP_LEVEL_DIRS = new Set<string>(DEFAULT_SYNC_INCLUDE.filter((name) => !name.includes(".")));
 const SECRET_PATTERNS = [
@@ -269,17 +268,17 @@ export async function readAgentDirectorySettings(signal?: AbortSignal, root = ag
     throw error;
   }
   if (!settings.stat.isFile() || settings.stat.nlink !== 1) changedScan();
-  if (settings.stat.size > MAX_PI_SETTINGS_BYTES)
-    throw new Error("Pi settings.json exceeds the session metadata byte bound.");
+  assertAgentDirectorySettingsSize(settings.stat.size);
   const content = await readScannedFile(settings, signal);
-  signal?.throwIfAborted();
+  await recheck(settings, signal);
   return content;
 }
 
 export function agentDirectorySessionDirFromSettings(content: Buffer) {
+  assertAgentDirectorySettingsSize(content.length);
   let value: unknown;
   try {
-    value = (JSON.parse(content.toString("utf8").replace(/^\\uFEFF/u, "")) as { sessionDir?: unknown } | null)
+    value = (JSON.parse(content.toString("utf8").replace(/^\uFEFF/u, "")) as { sessionDir?: unknown } | null)
       ?.sessionDir;
   } catch {
     throw new Error("Pi settings.json cannot be parsed; repair the file before syncing.");
@@ -303,10 +302,15 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
   async function walk(directory: ScannedPath, prefix: string, sessions: boolean) {
     if (!directory.stat.isDirectory()) changedScan();
     directories.push(directory);
-    const handle = await fs.opendir(directory.absolute);
-    for await (const entry of handle) {
+    const children: Dirent[] = [];
+    for await (const entry of await fs.opendir(directory.absolute)) {
       signal?.throwIfAborted();
       if (++entries > MAX_AGENT_DIRECTORY_ENTRIES) throw new Error("Agent directory exceeds the scan entry bound.");
+      children.push(entry);
+    }
+    await recheck(directory, signal);
+    for (const entry of children) {
+      signal?.throwIfAborted();
       const snapshotPath = posixJoin(prefix, entry.name);
       if (!sessions && (/^sessions(?:\/|$)/iu.test(snapshotPath) || isPhysicalSessionPath(snapshotPath))) continue;
       if (entry.isDirectory() ? !canTraverse(snapshotPath) : !entry.isFile() || excluded(snapshotPath)) continue;
@@ -319,6 +323,7 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
       if (entry.isDirectory()) await walk(candidate, snapshotPath, sessions);
       else {
         if (!candidate.stat.isFile() || candidate.stat.nlink !== 1) changedScan();
+        if (snapshotPath.toLowerCase() === "settings.json") assertAgentDirectorySettingsSize(candidate.stat.size);
         bytes += candidate.stat.size;
         if (bytes > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Agent directory exceeds the 64 MiB scan byte bound.");
         if (candidates.length >= MAX_AGENT_DIRECTORY_FILES)
@@ -375,6 +380,7 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
         sessionDirectory.stat.ino !== currentSessionDirectory.stat.ino))
   )
     changedScan();
+  for (const candidate of candidates) await recheck(candidate, signal);
   signal?.throwIfAborted();
   return results.sort((left, right) => left.path.localeCompare(right.path));
 }
@@ -514,13 +520,13 @@ export function filterSnapshotForConfigPolicy(
 function filterAgentDirectoryFiles(files: SnapshotFile[], config: SyncSelectionConfig, sessionDir?: string) {
   const configured = configuredSnapshotPathMatcher(config);
   const isPhysicalSessionPath = sessionDir ? agentDirectoryPhysicalSessionPath(agentDir(), sessionDir) : undefined;
-  return files
-    .filter((file) => {
-      if (!isSafeSnapshotPath(file.path) || !configured(file.path)) return false;
-      if (/^sessions(?:\/|$)/iu.test(file.path)) return isSessionFilePath(file.path);
-      return !isPhysicalSessionPath?.(file.path);
-    })
-    .sort((left, right) => left.path.localeCompare(right.path));
+  const projected = files.filter((file) => {
+    if (!isSafeSnapshotPath(file.path) || !configured(file.path)) return false;
+    if (/^sessions(?:\/|$)/iu.test(file.path)) return isSessionFilePath(file.path);
+    return !isPhysicalSessionPath?.(file.path);
+  });
+  assertAgentDirectoryPathLayout(projected.map((file) => file.path));
+  return projected.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function canonicalizeSnapshotFilesForConfig(

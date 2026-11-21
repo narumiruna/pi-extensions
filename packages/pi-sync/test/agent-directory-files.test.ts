@@ -12,6 +12,7 @@ import {
   snapshotWithoutSessions,
 } from "../src/snapshot/snapshot.js";
 import { applySnapshot } from "../src/snapshot/snapshot-apply.js";
+import { assertUnexcludedTargets } from "../src/snapshot/snapshot-exclude-safety.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "../src/snapshot/snapshot-transaction.js";
 import { transactionRoot } from "../src/snapshot/snapshot-transaction-directory.js";
 import { snapshot, withTempHome } from "./helpers.js";
@@ -61,7 +62,10 @@ test("directory scope scans custom paths and re-included descendants without ope
       assert.equal(result.selection?.version, 3);
       assert.deepEqual(names(result), kept);
       assert.equal(snapshotIncludesSessions(result), false);
-      assert.deepEqual(open.mock.calls.map(([file]) => path.relative(root, String(file))).sort(), kept);
+      assert.deepEqual(
+        open.mock.calls.map(([file]) => path.relative(root, String(file)).split(path.sep).join("/")).sort(),
+        kept,
+      );
       assert.deepEqual(readFile.mock.calls, []);
       for (const forbidden of ["nested/hidden", "pi-sync", "sessions", "node_modules"]) {
         assert.ok(!opendir.mock.calls.some(([file]) => file === path.join(root, forbidden)), forbidden);
@@ -95,6 +99,41 @@ test("a custom session directory is only scanned through the explicitly enabled 
     assert.deepEqual(mergeRemoteSessionFiles(off, on), off);
   }));
 
+test("a case variant of the custom session store is ordinary only when it is physically distinct", async () =>
+  withTempHome(async (root) => {
+    await put(root, ["Store/chat.jsonl"]);
+    const sessionDir = path.join(root, "Store");
+    const ordinaryDir = path.join(root, "store");
+    let distinct = true;
+    try {
+      await fs.mkdir(ordinaryDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      distinct = false;
+    }
+    const ordinaryFile = "store/notes.md";
+    await put(root, [ordinaryFile]);
+    const options = { ...directory, include: ["sessions"], sessionDir };
+    assert.deepEqual(names(await createSnapshot("home", options)), [
+      "sessions/chat.jsonl",
+      ...(distinct ? [ordinaryFile] : []),
+    ]);
+    const incoming = image(ordinaryFile);
+    assert.deepEqual(
+      names(filterSnapshotForConfigPolicy(incoming, options, { sessionDir })),
+      distinct ? [ordinaryFile] : [],
+    );
+    await applySnapshot(incoming, new Set(), { ...options, include: [] });
+    assert.equal(await fs.readFile(path.join(root, ordinaryFile), "utf8"), distinct ? "remote" : "local");
+    assert.equal(await fs.readFile(path.join(sessionDir, "chat.jsonl"), "utf8"), "local");
+
+    const missingChild = "store/missing/other.md";
+    const nested = filterSnapshotForConfigPolicy(image(missingChild), options, {
+      sessionDir: path.join(sessionDir, "missing"),
+    });
+    assert.deepEqual(names(nested), distinct ? [missingChild] : []);
+  }));
+
 test("excluded Pi settings still bind the physical session root as metadata without entering the payload", async () =>
   withTempHome(async (root) => {
     const sessionDir = path.join(root, "custom/conversations");
@@ -109,6 +148,55 @@ test("excluded Pi settings still bind the physical session root as metadata with
     await applySnapshot(image("custom/conversations/project/keep.jsonl"), new Set(), options);
     assert.equal(await fs.readFile(path.join(sessionDir, "project/keep.jsonl"), "utf8"), "local");
     assert.equal(await fs.readFile(path.join(root, "settings.json"), "utf8"), JSON.stringify({ sessionDir }));
+  }));
+
+test("Pi settings with a UTF-8 BOM route sessions and retain original bytes through collection and apply", async () =>
+  withTempHome(async (root) => {
+    const sessionDir = path.join(root, "Store");
+    const before = Buffer.from(`\uFEFF${JSON.stringify({ sessionDir })}`);
+    const after = Buffer.from(`\uFEFF${JSON.stringify({ sessionDir, theme: "dark" })}`);
+    const settings = path.join(root, "settings.json");
+    await put(root, ["Store/chat.jsonl"]);
+    await fs.writeFile(settings, before);
+    const collected = await createSnapshot("home", { ...directory, include: ["sessions"] });
+    assert.deepEqual(names(collected), ["sessions/chat.jsonl", "settings.json"]);
+    assert.equal(
+      collected.files.find((file) => file.path === "settings.json")?.contentBase64,
+      before.toString("base64"),
+    );
+    await applySnapshotTransaction({ writes: [{ target: settings, content: after }], deletes: [] }, directory);
+    assert.deepEqual(await fs.readFile(settings), after);
+  }));
+
+test("settings size is bounded in bytes for collection, fallback metadata, and transaction images", async () =>
+  withTempHome(async (root) => {
+    const bound = 1024 * 1024;
+    const sessionDir = path.join(root, "sessions");
+    const settings = path.join(root, "settings.json");
+    const exact = Buffer.from(`{"text":"${"é".repeat((bound - 12) / 2)}"} `);
+    assert.equal(exact.length, bound);
+    const oversized = Buffer.concat([exact, Buffer.from(" ")]);
+    const plan = (content: Buffer) => ({ writes: [{ target: settings, content }], deletes: [] });
+    await put(root, ["settings.json"], "{}");
+    await applySnapshotTransaction(plan(exact), directory);
+    const backup = vi.spyOn(fs, "copyFile");
+    try {
+      await assert.rejects(applySnapshotTransaction(plan(oversized), directory), /1 MiB/);
+      assert.deepEqual(await fs.readFile(settings), exact);
+      assert.deepEqual(backup.mock.calls, []);
+      await fs.writeFile(settings, oversized);
+      await assert.rejects(applySnapshotTransaction(plan(exact), { ...directory, sessionDir }), /1 MiB/);
+      await assert.rejects(createSnapshot("home", directory), /1 MiB/);
+      await assert.rejects(createSnapshot("home", { ...directory, sessionDir }), /1 MiB/);
+      assert.deepEqual(
+        names(await createSnapshot("home", { ...directory, sessionDir, exclude: ["settings.json"] })),
+        [],
+      );
+      assert.deepEqual(await fs.readFile(settings), oversized);
+      assert.deepEqual(backup.mock.calls, []);
+    } finally {
+      backup.mockRestore();
+    }
   }));
 
 test("directory inventory is bounded before any payload bytes are opened", async () =>
@@ -190,6 +278,59 @@ test("an unreadable eligible subtree rejects the whole scan before any payload r
     }
   }));
 
+test("snapshot collection and replacement preflight close each iterator before opening a child", async () =>
+  withTempHome(async (root) => {
+    const leaf = "nested/a/b/c/item.txt";
+    await put(root, [leaf]);
+    let openIterators = 0;
+    const actualOpendir = fs.opendir.bind(fs);
+    const list = vi.spyOn(fs, "opendir").mockImplementation(async (target, options) => {
+      assert.equal(openIterators, 0, `parent iterator still open while opening ${target}`);
+      const handle = await actualOpendir(target, options);
+      openIterators++;
+      return {
+        async *[Symbol.asyncIterator]() {
+          try {
+            yield* handle;
+          } finally {
+            openIterators--;
+          }
+        },
+      } as unknown as Dir;
+    });
+    try {
+      assert.deepEqual(names(await createSnapshot("home", directory)), [leaf]);
+      await assertUnexcludedTargets(root, [path.join(root, "nested")], directory);
+      assert.equal(openIterators, 0);
+    } finally {
+      list.mockRestore();
+    }
+  }));
+
+test("snapshot collection rejects a file edited after its descriptor check", async () =>
+  withTempHome(async (root) => {
+    await put(root, ["race.txt"]);
+    const target = path.join(root, "race.txt");
+    const actualOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await actualOpen(...args);
+      if (args[0] === target) {
+        const actualClose = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+          await actualClose();
+          await fs.appendFile(target, " newer");
+        });
+      }
+      return handle;
+    });
+    try {
+      await assert.rejects(createSnapshot("home", directory), /changed or has an unsafe filesystem layout/);
+      assert.equal(await fs.readFile(target, "utf8"), "local newer");
+    } finally {
+      open.mockRestore();
+    }
+  }));
+
 test.skipIf(process.platform === "win32")(
   "static symlinks are never traversed and candidate swaps are rejected",
   async () =>
@@ -241,6 +382,27 @@ test("remote projection and publication do not carry protected, excluded, or phy
     assert.deepEqual(names(published), ["custom/show"]);
   }));
 
+test("historical projection rejects retained portable layout conflicts after filtering", () => {
+  for (const conflicts of [
+    ["skills/Foo/a.md", "skills/foo/b.md"],
+    ["skills/a.md", "skills/A.MD"],
+    ["skills/café/a.md", "skills/cafe\u0301/b.md"],
+    ["skills/foo", "skills/foo/a.md"],
+    ["skills/foo", "skills/foo"],
+  ]) {
+    assert.throws(() => filterSnapshotForConfigPolicy(image(...conflicts), directory), /conflicting portable paths/);
+  }
+  assert.deepEqual(
+    names(
+      filterSnapshotForConfigPolicy(image("skills/Foo/a.md", "skills/foo/b.md"), {
+        ...directory,
+        exclude: ["skills/Foo/a.md"],
+      }),
+    ),
+    ["skills/foo/b.md"],
+  );
+});
+
 test("apply leaves excluded siblings, denied paths and sessions unchanged", async () =>
   withTempHome(async (root) => {
     const blocked = [...alwaysLocal, "nested/private.txt", "physical/saved.jsonl", "sessions/default.jsonl"];
@@ -272,6 +434,38 @@ test("apply refuses a directory replacement that would remove an excluded descen
       cp.mockRestore();
     }
   }));
+
+test.each([undefined, "custom-store"])(
+  "replacement keeps non-payload session descendants out of backup, for store %s",
+  (customStore) =>
+    withTempHome(async (root) => {
+      const sessionDir = path.join(root, customStore ?? "sessions");
+      const jsonl = path.join(sessionDir, "chat.jsonl", "nested", "part.jsonl");
+      const sidecar = path.join(sessionDir, "chat.jsonl", "nested", "index.txt");
+      const wrongCase = path.join(sessionDir, "chat.jsonl", "nested", "old.JSONL");
+      await put(
+        root,
+        [jsonl, sidecar, wrongCase].map((file) => path.relative(root, file)),
+      );
+      const options = { ...directory, sessionDir, include: ["sessions"] };
+      const incoming = image("sessions/chat.jsonl");
+      const backup = vi.spyOn(fs, "cp");
+      try {
+        await assert.rejects(applySnapshot(incoming, new Set(), options), /excluded path or directory descendant/);
+        assert.equal(await fs.readFile(sidecar, "utf8"), "local");
+        await fs.unlink(sidecar);
+        await assert.rejects(applySnapshot(incoming, new Set(), options), /excluded path or directory descendant/);
+        assert.equal(await fs.readFile(wrongCase, "utf8"), "local");
+        assert.equal(await fs.readFile(jsonl, "utf8"), "local");
+        assert.deepEqual(backup.mock.calls, []);
+        await fs.unlink(wrongCase);
+        await applySnapshot(incoming, new Set(), options);
+        assert.equal(await fs.readFile(path.join(sessionDir, "chat.jsonl"), "utf8"), "remote");
+      } finally {
+        backup.mockRestore();
+      }
+    }),
+);
 
 test("direct transaction apply refuses a Pi session root transition even with sessions disabled", async () =>
   withTempHome(async (root) => {

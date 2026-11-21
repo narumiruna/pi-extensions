@@ -82,15 +82,15 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
       options.signal?.throwIfAborted();
     }
     const originalTargets = new Map([...coalesced.replacements].map(([before, after]) => [after, before]));
+    const scoped = options.scope === "agent-directory";
     const expectedPreimages = new Map(
-      [...(options.expectedPreimages ?? [])].map(([target, expected]) => [
-        originalTargets.get(target) ?? target,
-        expected,
-      ]),
+      [...(options.expectedPreimages ?? [])]
+        .filter(([target]) => !scoped || !originalTargets.has(target))
+        .map(([target, expected]) => [originalTargets.get(target) ?? target, expected]),
     );
     // A case-sensitive spelling replacement has two targets, unlike a coalesced physical alias.
     // Bind both the source bytes and destination absence/bytes before capturing their backups.
-    for (const [target, expected] of options.expectedPreimages ?? []) {
+    for (const [target, expected] of scoped ? [] : (options.expectedPreimages ?? [])) {
       if (originalTargets.has(target)) continue;
       const variants = coalesced.plan.deletes.filter(
         (candidate) =>

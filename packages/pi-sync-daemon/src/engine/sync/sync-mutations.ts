@@ -294,30 +294,47 @@ export async function push(
   return "applied" as const;
 }
 
+interface InitialPullEvidence {
+  configIdentity: string;
+  stateIdentity: string;
+  sessionDir: string | undefined;
+  localHashes: Record<string, string>;
+  head: RemoteHead | undefined;
+}
+
 export async function pull(
   ctx: ExtensionCommandContext | ExtensionContext,
   options: CommandOptions,
   factory: SyncBackendFactory = createSyncBackend,
-  expectedConfigIdentity?: string,
+  initial?: InitialPullEvidence,
 ) {
   const validateMutation = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);
   const config = await loadConfig(options.setup);
-  throwIfAborted(options.signal);
-  if (expectedConfigIdentity !== undefined && expectedConfigIdentity !== syncCheckConfigFingerprint(config))
+  validateMutation();
+  const configIdentity = syncCheckConfigFingerprint(config);
+  if (initial && initial.configIdentity !== configIdentity)
     throw new Error("Settings changed before initial pull; run sync again.");
   await requireNoMergeJournal(config, options);
   setSyncStatus(ctx, `pulling ${config.setupName}`, { activity: "pulling" });
   const backend = await factory(config);
   const state = await readStateForConfig(config);
   validateMutation();
+  if (initial && initial.stateIdentity !== syncStateFingerprint(state))
+    throw new Error("Baseline changed before initial pull; run sync again.");
   requireResolvedDirectionalProgress(state, options);
   const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
   validateMutation();
+  if (initial && initial.sessionDir !== snapshotOptions.sessionDir)
+    throw new Error("Pi session storage changed before initial pull; run sync again.");
   const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
-  throwIfAborted(options.signal);
+  validateMutation();
+  if (initial && !sameHashes(initial.localHashes, fileHashMap(local)))
+    throw new Error("Local bytes changed before initial pull; run sync again.");
   const { head, snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal, snapshotOptions);
-  throwIfAborted(options.signal);
+  validateMutation();
+  if (initial && !matchesInitialHead(initial, backend, head))
+    throw new Error("Remote changed before initial pull; run sync again.");
   const localChanged = hasLocalChanges(local, state, config);
   if (!remote) {
     throw createSyncDecision({
@@ -341,7 +358,6 @@ export async function pull(
     setSyncStatus(ctx, undefined);
     return "cancelled" as const;
   }
-  const configIdentity = syncCheckConfigFingerprint(config);
   const logical = portableSnapshot(remote, config.localFields);
   const physical = overlayLocalFields(logical, local, config.localFields);
   if (config.scope === "agent-directory") requireStableMergeSessionRoot(local, physical, config.scope);
@@ -410,10 +426,14 @@ export async function pull(
   const applySessionDir = await sessionDirForApply(ctx, physical, snapshotOptions);
   if (recoveringMerge) await requireFreshRecovery();
   const currentState = await readStateForConfig(config);
-  if (!options.yes && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
+  validateMutation();
+  if ((initial || !options.yes) && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
     throw new Error("Baseline changed during pull review.");
   requireResolvedDirectionalProgress(currentState, options);
   if (!options.yes) await revalidateCaseCleanup(caseCleanup, physical, snapshotOptions);
+  if (initial && !matchesInitialHead(initial, backend, await backend.readHead(options.signal)))
+    throw new Error("Remote changed during initial pull; run sync again.");
+  validateMutation();
   if (config.scope && applySessionDir !== (await effectiveSessionRoot(ctx, config, options.signal)))
     throw new Error("Pi session storage changed during pull review.");
   validateMutation();
@@ -425,10 +445,10 @@ export async function pull(
     ...snapshotOptions,
     sessionDir: applySessionDir,
     validateMutation,
-    expectedFileHashes:
-      config.scope === "agent-directory" || config.localFields?.length
-        ? { "settings.json": fileHashMap(local)["settings.json"] ?? null }
-        : undefined,
+    ...(config.scope === "agent-directory" ? { reviewedLocal: local } : {}),
+    expectedFileHashes: config.localFields?.length
+      ? { "settings.json": fileHashMap(local)["settings.json"] ?? null }
+      : undefined,
   });
   // Local installation is complete; user cancellation must not leave the baseline stale.
   validateCommittedOwner();
@@ -518,6 +538,16 @@ export async function syncBoth(
   // Established baselines return through mergeSync above; only initial-source selection remains.
   const portableLocal = portableSnapshot(local, config.localFields);
   const configIdentity = syncCheckConfigFingerprint(config);
+  const pullInitialSource = () => {
+    validateMutation();
+    return pull(ctx, options, factory, {
+      configIdentity,
+      stateIdentity: syncStateFingerprint(state),
+      sessionDir: snapshotOptions.sessionDir,
+      localHashes: fileHashMap(local),
+      head,
+    });
+  };
   const acceptMatchingState = async (snapshot: Snapshot) => {
     requireCompatibleRemoteSelection(config, snapshot);
     if (config.scope === "agent-directory") {
@@ -585,7 +615,7 @@ export async function syncBoth(
             "Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.",
         });
       }
-      await pull(ctx, options, factory, configIdentity);
+      await pullInitialSource();
       return;
     }
     await acceptMatchingState(remote);
@@ -604,7 +634,7 @@ export async function syncBoth(
     return;
   }
   if (remoteChanged) {
-    await pull(ctx, options, factory, configIdentity);
+    await pullInitialSource();
     return;
   }
   if (localChanged || !remote) {
@@ -665,6 +695,7 @@ export async function rollback(
   const physical = overlayLocalFields(remote, local, config.localFields);
   if (config.scope === "agent-directory") requireStableMergeSessionRoot(local, physical, config.scope);
   const upload = await snapshotForUpload(backend, config, remote, expectedHead, currentRemote, snapshotOptions);
+  if (config.scope === "agent-directory") validatePortableSnapshot(upload);
   const caseCleanup = options.yes ? [] : await inspectCaseCleanup(physical, snapshotOptions);
   validateMutation();
 
@@ -717,10 +748,10 @@ export async function rollback(
     ...snapshotOptions,
     sessionDir: applySessionDir,
     validateMutation,
-    expectedFileHashes:
-      config.scope === "agent-directory" || config.localFields?.length
-        ? { "settings.json": fileHashMap(local)["settings.json"] ?? null }
-        : undefined,
+    ...(config.scope === "agent-directory" ? { reviewedLocal: local } : {}),
+    expectedFileHashes: config.localFields?.length
+      ? { "settings.json": fileHashMap(local)["settings.json"] ?? null }
+      : undefined,
   });
   // The local transaction is retired; finish publication despite caller cancellation.
   validateCommittedOwner();
@@ -855,6 +886,10 @@ async function confirmPush(
 function sameRemoteHead(backend: SyncBackend, left: RemoteHead | undefined, right: RemoteHead | undefined) {
   if (!left || !right) return left === right;
   return backend.sameRevision(left.revision, right.revision);
+}
+
+function matchesInitialHead(initial: InitialPullEvidence, backend: SyncBackend, current: RemoteHead | undefined) {
+  return initial.head?.snapshotId === current?.snapshotId && sameRemoteHead(backend, initial.head, current);
 }
 
 export { backupLocal } from "./sync-local.js";

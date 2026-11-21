@@ -110,6 +110,7 @@ const authority: ConfigAuthority = {
       const document = await client.readSettings(true);
       client.validate();
       signal?.throwIfAborted();
+      if (document) validate(document.parsed);
       const next = update(structuredClone(document?.parsed ?? fallback) as T);
       validate(next);
       await client.run("settings.cas", { expected: fingerprint(document), next }, signal);

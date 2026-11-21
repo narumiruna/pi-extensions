@@ -15,7 +15,9 @@ import {
   snapshotIncludesSessions,
   snapshotTarget,
 } from "./snapshot.js";
+import { assertAgentDirectorySnapshotBound } from "./snapshot-bounds.js";
 import { agentDirectoryPhysicalSessionPath, assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
+import { reviewedSnapshotPreimages } from "./snapshot-reviewed-preimages.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
 
@@ -43,7 +45,7 @@ export async function applySnapshot(
     | "signal"
     | "validateMutation"
     | "expectedFileHashes"
-  > = {},
+  > & { reviewedLocal?: Pick<Snapshot, "files"> } = {},
 ) {
   const root = agentDir();
   if (snapshot.version === 5 && options.scope !== "agent-directory")
@@ -70,13 +72,22 @@ export async function applySnapshot(
   };
   options.validateMutation?.();
   await recoverPendingSnapshotTransactions(transactionOptions);
-  const current = await createSnapshot(snapshot.profile, {
+  const scanned = await createSnapshot(snapshot.profile, {
     ...options,
     ...(options.scope === undefined && options.include === undefined
       ? { syncSessions: snapshotIncludesSessions(snapshot) }
       : {}),
     sessionDir,
   });
+  const current = options.reviewedLocal ? { ...scanned, files: options.reviewedLocal.files } : scanned;
+  if (options.reviewedLocal && !sameReviewedFiles(scanned, current))
+    throw new Error("Reviewed local files changed before apply; reopen the transfer preview.");
+  if (options.scope === "agent-directory") {
+    assertAgentDirectorySnapshotBound([
+      ...snapshot.files.filter(({ path }) => !protectedRelativePaths.has(path)),
+      ...current.files.filter(({ path }) => protectedRelativePaths.has(path)),
+    ]);
+  }
   const plan = await addTopLevelCaseVariantDeletes(
     root,
     protectSnapshotApplyPlan(
@@ -88,9 +99,24 @@ export async function applySnapshot(
     snapshot,
     options,
   );
+  if (options.reviewedLocal) {
+    for (const [target, image] of reviewedSnapshotPreimages(root, sessionDir, current.files, plan)) {
+      const existing = transactionOptions.expectedPreimages.get(target);
+      if (existing !== undefined && existing !== image) throw new Error("Reviewed preimage evidence is inconsistent.");
+      transactionOptions.expectedPreimages.set(target, image);
+    }
+  }
   await preflightSnapshotMutations(root, plan, sessionDir, options);
   await applySnapshotTransaction(plan, transactionOptions);
   return appliedFileHashMap(snapshot, current, protectedRelativePaths);
+}
+
+function sameReviewedFiles(scanned: Pick<Snapshot, "files">, reviewed: Pick<Snapshot, "files">) {
+  const hashes = new Map(scanned.files.map((file) => [file.path, file.sha256]));
+  return (
+    scanned.files.length === reviewed.files.length &&
+    reviewed.files.every((file) => hashes.get(file.path) === file.sha256)
+  );
 }
 
 export function preflightSnapshotApply(

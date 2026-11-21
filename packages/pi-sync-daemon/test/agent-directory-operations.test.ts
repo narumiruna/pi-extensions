@@ -9,8 +9,10 @@ import type { CommandOptions } from "../src/engine/commands/command-types.js";
 import { configureEngineHost, type EngineContext } from "../src/engine/host.js";
 import { loadConfig } from "../src/engine/settings/config.js";
 import { snapshotOptionsForContext } from "../src/engine/snapshot/session-paths.js";
+import { createSnapshot } from "../src/engine/snapshot/snapshot.js";
 import type { Snapshot, SnapshotFile } from "../src/engine/snapshot/snapshot-types.js";
 import { readStateForConfig } from "../src/engine/state/sync-state-store.js";
+import { applyMergedSnapshot, preflightMergedTargets } from "../src/engine/sync/merge-apply.js";
 import { inspectSync } from "../src/engine/sync/sync-inspection.js";
 import { push, rollback, syncBoth } from "../src/engine/sync/sync-mutations.js";
 
@@ -24,8 +26,8 @@ const options: CommandOptions = {
   yes: true,
 };
 
-function file(path: string, text: string): SnapshotFile {
-  const bytes = Buffer.from(text);
+function file(path: string, content: string | Buffer): SnapshotFile {
+  const bytes = typeof content === "string" ? Buffer.from(content) : content;
   return { path, contentBase64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
@@ -168,6 +170,135 @@ test("an empty explicit include still inspects, publishes and merges a scoped se
       merged.files.map((entry) => entry.path),
       ["cache/keep.txt", "custom.txt", "notes.txt"],
     );
+  }));
+
+for (const branch of ["remote only", "matching local subset"]) {
+  for (const change of ["none", "local", "remote", "remote after review check", "settings", "session storage"]) {
+    test(`first sync with ${branch} ${change === "none" ? "pulls unchanged sources" : `rejects changed ${change}`}`, () =>
+      fixture(async (root, ctx, remote) => {
+        const target = path.join(root, "notes.txt");
+        const subset = branch === "matching local subset";
+        if (subset) await fs.writeFile(target, "reviewed");
+        const config = await loadConfig();
+        const snapshot: Snapshot = {
+          ...historical([file("notes.txt", "reviewed"), file("shared.txt", "new remote content")]),
+          version: 5,
+          profile: config.snapshotIdentity,
+          selection: {
+            version: 3,
+            scope: "agent-directory",
+            include: [],
+            exclude: ["cache"],
+            reinclude: ["cache/keep.txt"],
+          },
+        };
+        const head = remote.seed(snapshot);
+        const advanceRemote = () =>
+          remote.seed({ ...snapshot, id: "advanced-remote", files: [file("notes.txt", "new remote content")] });
+        let opens = 0;
+        if (change === "remote after review check") {
+          const readHead = remote.backend.readHead;
+          let pullReads = 0;
+          remote.backend.readHead = async (signal) => {
+            const observed = await readHead(signal);
+            // The first pull read opens its snapshot; the second checks freshness before backup.
+            if (opens === 2 && ++pullReads === 2) advanceRemote();
+            return observed;
+          };
+        }
+        let commits = 0;
+        const sync = syncBoth(ctx, { ...options, onCommit: () => commits++ }, async () => {
+          // The second open happens after syncBoth has chosen the initial source.
+          if (++opens === 2) {
+            if (change === "local") await fs.writeFile(target, "new local content");
+            if (change === "remote") advanceRemote();
+            if (change === "settings") {
+              const settingsPath = path.join(root, "pi-sync.json");
+              const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+              settings.syncSetups.work.sync.reinclude = [];
+              await fs.writeFile(settingsPath, JSON.stringify(settings));
+            }
+            if (change === "session storage")
+              ctx.sessionManager.getSessionDir = () => path.join(root, "other-sessions");
+          }
+          return remote.backend;
+        });
+        if (change === "none") {
+          await sync;
+          assert.equal(commits, 1);
+          assert.equal(await fs.readFile(target, "utf8"), "reviewed");
+          assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, head.snapshotId);
+        } else {
+          await assert.rejects(sync, /(?:initial pull|during pull review)/u);
+          assert.equal(commits, 0);
+          assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
+          assert.equal(
+            await fs.readFile(target, "utf8").catch(() => undefined),
+            change === "local" ? "new local content" : subset ? "reviewed" : undefined,
+          );
+          await assert.rejects(fs.stat(path.join(root, "shared.txt")), { code: "ENOENT" });
+        }
+        assert.equal(remote.publications.length, 0);
+      }));
+  }
+}
+
+for (const reviewed of [true, false]) {
+  test(`scoped merge ${reviewed ? "defers" : "refuses"} a nested target blocked by a ${reviewed ? "reviewed" : "different"} file`, () =>
+    fixture(async (root, ctx) => {
+      const ancestor = path.join(root, "work");
+      await fs.writeFile(ancestor, "blocking file");
+      await fs.writeFile(path.join(root, "notes.txt"), "unrelated reviewed removal");
+      const config = await loadConfig();
+      const snapshotOptions = snapshotOptionsForContext(ctx, config);
+      const before = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+      if (!reviewed) before.files = before.files.filter((entry) => entry.path !== "work");
+      const after = { ...before, files: [file("work/sub/item.txt", "nested")] };
+      if (!reviewed) {
+        await assert.rejects(preflightMergedTargets(before, after, snapshotOptions), /Unsafe merge filesystem layout/u);
+        assert.equal(await fs.readFile(ancestor, "utf8"), "blocking file");
+        assert.equal(await fs.readFile(path.join(root, "notes.txt"), "utf8"), "unrelated reviewed removal");
+        return;
+      }
+      await preflightMergedTargets(before, after, snapshotOptions);
+      assert.equal(await fs.readFile(ancestor, "utf8"), "blocking file");
+      await applyMergedSnapshot(before, after, new Set(), snapshotOptions, async () => {});
+      assert.equal(await fs.readFile(path.join(ancestor, "sub/item.txt"), "utf8"), "nested");
+      // The same committed plan can recover after the replacement already landed.
+      await applyMergedSnapshot(before, after, new Set(), snapshotOptions, async () => {});
+    }));
+}
+
+test("scoped merge counts protected session bytes at review and at recovery", () =>
+  fixture(async (root, ctx) => {
+    const config = await loadConfig();
+    const snapshotOptions = { ...snapshotOptionsForContext(ctx, config), include: ["sessions"] };
+    const sessionDir = path.join(root, "conversations");
+    const session = path.join(sessionDir, "protected.jsonl");
+    const sessionPath = "sessions/protected.jsonl";
+    await fs.mkdir(sessionDir);
+    await fs.writeFile(session, Buffer.alloc(1024 * 1024));
+    const before = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+    assert.deepEqual(
+      before.files.map((entry) => entry.path),
+      [sessionPath],
+    );
+    const incoming = file("incoming.txt", Buffer.alloc(63 * 1024 * 1024));
+    const after = { ...before, files: [...before.files, incoming] };
+    // The reviewed directory is exactly 64 MiB and the protected session is unchanged in the plan.
+    await preflightMergedTargets(before, after, snapshotOptions, session);
+    await fs.appendFile(session, Buffer.alloc(1024 * 1024));
+    const larger = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+    await assert.rejects(
+      preflightMergedTargets(larger, { ...after, files: [...larger.files, incoming] }, snapshotOptions, session),
+      /exceeds the 64 MiB scan byte bound/u,
+    );
+    await assert.rejects(
+      applyMergedSnapshot(before, after, new Set([sessionPath]), snapshotOptions, async () => {}, session),
+      /exceeds the 64 MiB scan byte bound/u,
+    );
+    assert.equal((await fs.stat(session)).size, 2 * 1024 * 1024);
+    await assert.rejects(fs.stat(path.join(root, "incoming.txt")), { code: "ENOENT" });
   }));
 
 test("a force push cannot convert an existing allowlist remote to directory scope", () =>

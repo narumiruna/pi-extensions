@@ -12,7 +12,6 @@ import {
   directoryScopeLines,
   formatDirectoryRules,
   promptDirectoryRules,
-  setSessionOptIn,
   summarizeDirectoryRules,
 } from "./setup/directory-rules.js";
 import { saveReviewedDraft } from "./setup/setup-review.js";
@@ -168,7 +167,10 @@ export async function showDirectoryScope(ctx: ExtensionCommandContext, config: A
         draft: () => ({
           kind: "actions",
           title: `Agent directory scope · ${safeTerminalText(config.setupName)}`,
-          lines: ["Changes stay in this draft until you review and save. Back discards the draft."],
+          lines: [
+            "Changes stay in this draft until you review and save. Back discards the draft.",
+            "Session opt-in does not change path rules. Edit the rules separately to select which sessions can sync.",
+          ],
           items: [
             { id: "exclude", label: `Edit excluded paths… (${draft.exclude.length})`, action: "exclude" },
             { id: "reinclude", label: `Edit re-included paths… (${draft.reinclude.length})`, action: "reinclude" },
@@ -188,7 +190,7 @@ export async function showDirectoryScope(ctx: ExtensionCommandContext, config: A
         sessions: async ({ signal: actionSignal }) => {
           if (!draft.sessions && !(await acknowledgeSessions(ctx, actionSignal))) return { kind: "stay" };
           if (actionSignal.aborted || !isCurrent()) return { kind: "close" };
-          setSessionOptIn(draft, !draft.sessions);
+          draft.sessions = !draft.sessions;
           return { kind: "stay" };
         },
         review: async ({ signal: actionSignal }) => {

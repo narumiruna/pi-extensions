@@ -12,6 +12,51 @@ import { v3S3Settings, withTempHome } from "./helpers.js";
 
 initTheme("dark", false);
 
+for (const preference of ["agentMode", "continuous"] as const)
+  for (const sessions of [undefined, false, true])
+    test(`${preference} review distinguishes directory session opt-in: ${sessions}`, async () =>
+      withTempHome(async (agentDir) => {
+        await fs.mkdir(agentDir, { recursive: true });
+        const base = v3S3Settings();
+        const original = JSON.stringify({
+          ...base,
+          version: 7,
+          syncSetups: {
+            home: {
+              ...base.syncSetups.home,
+              sync: {
+                scope: "agent-directory",
+                automatic: false,
+                agentMode: preference === "continuous",
+                exclude: ["sessions", "private"],
+                reinclude: ["sessions/work.jsonl"],
+                ...(sessions === undefined ? {} : { sessions }),
+              },
+            },
+          },
+        });
+        await fs.writeFile(localConfigPath(), original);
+        let review = "";
+        const { ctx } = createMockContext({
+          mode: "rpc",
+          select: async (title: string) => {
+            review = title;
+            return "No, cancel";
+          },
+        });
+        assert.equal(await saveAgentMode(ctx, "home", true, undefined, preference), false);
+        assert.match(review, preference === "agentMode" ? /Enable Autonomous sync/u : /Enable Continuous sync/u);
+        assert.match(review, /Excluded paths: sessions, private/u);
+        assert.match(review, /Re-included paths: sessions\/work\.jsonl/u);
+        assert.match(
+          review,
+          sessions
+            ? /Sessions: On — explicit opt-in; path rules still apply/u
+            : /Sessions: Off — rules cannot enable sessions/u,
+        );
+        assert.equal(await fs.readFile(localConfigPath(), "utf8"), original);
+      }));
+
 for (const enabled of [false, true])
   for (const interruption of ["cancel", "replace"] as const)
     test(`Agent mode ${enabled} save stays committed after publication-time ${interruption}`, async () =>

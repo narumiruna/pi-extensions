@@ -3,6 +3,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { requireSettings, updateLocalConfig } from "../settings/settings-store.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { confirmMergeReview } from "./merge-review.js";
+import { directorySessionOptInLine } from "./setup/directory-rules.js";
 import { safeTerminalText } from "./terminal-text.js";
 
 export const AGENT_MODE_DESCRIPTION =
@@ -46,6 +47,7 @@ export async function saveAgentMode(
       ...(setup.sync.scope
         ? [
             "Sync scope: all eligible files in the Pi agent directory.",
+            directorySessionOptInLine(setup.sync.sessions),
             `Excluded paths: ${setup.sync.exclude?.map(safeTerminalText).join(", ") || "none"}`,
             `Re-included paths: ${setup.sync.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
           ]
