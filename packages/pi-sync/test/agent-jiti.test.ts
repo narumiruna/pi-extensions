@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, type ExtensionCommandContext, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { DaemonConnection, ensureDaemon, modelSignature } from "@narumitw/pi-sync-daemon";
-import { afterAll, test } from "vitest";
+import { afterAll, aroundEach, describe, test } from "vitest";
 import { createSyncBackend } from "../src/backends/backend-factory.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -49,7 +49,7 @@ afterAll(async () => {
   if (fixtureRoot) await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
-for (const trigger of [
+const triggers = [
   "command",
   "startup",
   "continuous",
@@ -60,138 +60,145 @@ for (const trigger of [
   "parent-only",
   "different-auth",
   "non-agent",
-] as const)
-  test(`generated Jiti runtime: ${trigger} with an isolated WebDAV backend`, async ({ signal }) => {
-    const refusal =
-      trigger === "parent-only"
-        ? /No independently available daemon resolver model is authorized/u
-        : trigger === "missing-model" || trigger === "changed-model"
-          ? /No fallback model was selected\. Align the host and daemon Pi model catalogs/u
-          : trigger === "different-auth"
-            ? /Check model access and retry later/u
-            : undefined;
-    const foreground = trigger === "command" || trigger === "retry" || trigger === "non-agent" || refusal !== undefined;
-    // A timeout can leave an uncancellable build or reload pending; do not overlap HOME scopes.
-    await scenarioReady.catch(() => {});
-    signal.throwIfAborted();
-    scenarioReady = withTempHome(async (agentDir) => {
-      let server: MockWebDavServer | undefined;
-      let resolver: MockResolverServer | undefined;
-      let buildDir: string | undefined;
-      let loader: DefaultResourceLoader | undefined;
-      let extension: LoadedExtensions["extensions"][number] | undefined;
-      let shutdown: Promise<void> | undefined;
-      let done: (() => void) | undefined;
-      let replies = 0;
-      let watcher: FSWatcher | undefined;
-      const mock = agentContext(selectRemote);
-      mock.ctx.isIdle = () => !foreground && trigger !== "after-exit";
-      resolver = new MockResolverServer(({ units }) =>
-        trigger === "retry" && ++replies === 1
-          ? JSON.stringify({ version: 1, results: units.map((unit) => ({ id: unit.id, refuse: true })) })
-          : selectRemote(units),
+] as const;
+
+async function withJitiFixture(
+  trigger: (typeof triggers)[number],
+  signal: AbortSignal,
+  use: (exercise: () => Promise<void>) => Promise<void>,
+) {
+  const refusal =
+    trigger === "parent-only"
+      ? /No independently available daemon resolver model is authorized/u
+      : trigger === "missing-model" || trigger === "changed-model"
+        ? /No fallback model was selected\. Align the host and daemon Pi model catalogs/u
+        : trigger === "different-auth"
+          ? /Check model access and retry later/u
+          : undefined;
+  const foreground = trigger === "command" || trigger === "retry" || trigger === "non-agent" || refusal !== undefined;
+  // A timeout can leave an uncancellable build or reload pending; do not overlap HOME scopes.
+  await scenarioReady.catch(() => {});
+  signal.throwIfAborted();
+  scenarioReady = withTempHome(async (agentDir) => {
+    let server: MockWebDavServer | undefined;
+    let resolver: MockResolverServer | undefined;
+    let buildDir: string | undefined;
+    let loader: DefaultResourceLoader | undefined;
+    let extension: LoadedExtensions["extensions"][number] | undefined;
+    let shutdown: Promise<void> | undefined;
+    let done: (() => void) | undefined;
+    let replies = 0;
+    let watcher: FSWatcher | undefined;
+    const mock = agentContext(selectRemote);
+    mock.ctx.isIdle = () => !foreground && trigger !== "after-exit";
+    resolver = new MockResolverServer(({ units }) =>
+      trigger === "retry" && ++replies === 1
+        ? JSON.stringify({ version: 1, results: units.map((unit) => ({ id: unit.id, refuse: true })) })
+        : selectRemote(units),
+    );
+    const stop = (): Promise<void> => {
+      if (!extension) return Promise.resolve();
+      const current = extension;
+      shutdown ??= (async () => {
+        for (const handler of current.handlers.get("session_shutdown") ?? [])
+          await handler({ type: "session_shutdown", reason: trigger === "after-exit" ? "quit" : "reload" }, mock.ctx);
+      })();
+      return shutdown;
+    };
+    const cancel = () => {
+      done?.();
+      // Shutdown aborts and drains an in-flight command, startup check, or scheduler.
+      // The finally block observes any shutdown failure before releasing its resources.
+      void stop().catch(() => {});
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      signal.throwIfAborted();
+      const fixture = await runtimeFixture();
+      signal.throwIfAborted();
+      buildDir = await fs.mkdtemp(path.resolve("packages/pi-sync/.pi-sync-build-test-"));
+      signal.throwIfAborted();
+      await fs.cp(fixture, path.join(buildDir, "dist"), { recursive: true });
+      signal.throwIfAborted();
+      server = new MockWebDavServer();
+      await server.start();
+      signal.throwIfAborted();
+      await fs.mkdir(agentDir, { recursive: true });
+      await resolver.start();
+      await resolver.configure(agentDir, mock.ctx);
+      const model = mock.ctx.model;
+      assert.ok(model);
+      if (trigger === "missing-model") mock.ctx.model = { ...model, id: "resolver-next" };
+      if (trigger === "changed-model") {
+        mock.ctx.model = { ...model, compat: { ...model.compat, supportsMidConvoEffort: true } };
+      }
+      if (trigger === "parent-only" || trigger === "non-agent") {
+        mock.ctx.modelRegistry.getRegisteredProviderIds = () => [model.provider];
+      }
+      if (trigger === "different-auth") {
+        mock.ctx.modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      }
+      signal.throwIfAborted();
+      const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
+      settings.storageConnections.dav.url = server.url;
+      Object.assign(settings.syncSetups.home.sync, {
+        agentMode: trigger !== "non-agent",
+        ...(["continuous", "after-exit"].includes(trigger) ? { continuous: true } : {}),
+      });
+      await fs.writeFile(localConfigPath(), JSON.stringify(settings));
+      signal.throwIfAborted();
+      await fs.writeFile(path.join(agentDir, "AGENTS.md"), "base\n");
+      signal.throwIfAborted();
+      await push(mock.ctx, { ...mergeOptions, signal });
+      signal.throwIfAborted();
+      const config = await loadConfig();
+      const acceptedState = refusal ? await readStateForConfig(config) : undefined;
+      signal.throwIfAborted();
+      const backend = await createSyncBackend(config);
+      signal.throwIfAborted();
+      const head = await backend.readHead(signal);
+      signal.throwIfAborted();
+      assert.ok(head);
+      const remote = await backend.readSnapshot(head.snapshotRef, signal);
+      signal.throwIfAborted();
+      await backend.publishSnapshot(
+        regenerateSnapshotIdentity({
+          ...remote,
+          files: snapshot([{ path: "AGENTS.md", content: Buffer.from("remote\n") }]).files,
+        }),
+        { kind: "revision", revision: head.revision },
+        { signal },
       );
-      const stop = (): Promise<void> => {
-        if (!extension) return Promise.resolve();
-        const current = extension;
-        shutdown ??= (async () => {
-          for (const handler of current.handlers.get("session_shutdown") ?? [])
-            await handler({ type: "session_shutdown", reason: trigger === "after-exit" ? "quit" : "reload" }, mock.ctx);
-        })();
-        return shutdown;
-      };
-      const cancel = () => {
-        done?.();
-        // Shutdown aborts and drains an in-flight command, startup check, or scheduler.
-        // The finally block observes any shutdown failure before releasing its resources.
-        void stop().catch(() => {});
-      };
-      signal.addEventListener("abort", cancel, { once: true });
-      try {
-        signal.throwIfAborted();
-        const fixture = await runtimeFixture();
-        signal.throwIfAborted();
-        buildDir = await fs.mkdtemp(path.resolve("packages/pi-sync/.pi-sync-build-test-"));
-        signal.throwIfAborted();
-        await fs.cp(fixture, path.join(buildDir, "dist"), { recursive: true });
-        signal.throwIfAborted();
-        server = new MockWebDavServer();
-        await server.start();
-        signal.throwIfAborted();
-        await fs.mkdir(agentDir, { recursive: true });
-        await resolver.start();
-        await resolver.configure(agentDir, mock.ctx);
-        const model = mock.ctx.model;
-        assert.ok(model);
-        if (trigger === "missing-model") mock.ctx.model = { ...model, id: "resolver-next" };
-        if (trigger === "changed-model") {
-          mock.ctx.model = { ...model, compat: { ...model.compat, supportsMidConvoEffort: true } };
-        }
-        if (trigger === "parent-only" || trigger === "non-agent") {
-          mock.ctx.modelRegistry.getRegisteredProviderIds = () => [model.provider];
-        }
-        if (trigger === "different-auth") {
-          mock.ctx.modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
-        }
-        signal.throwIfAborted();
-        const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
-        settings.storageConnections.dav.url = server.url;
-        Object.assign(settings.syncSetups.home.sync, {
-          agentMode: trigger !== "non-agent",
-          ...(["continuous", "after-exit"].includes(trigger) ? { continuous: true } : {}),
-        });
-        await fs.writeFile(localConfigPath(), JSON.stringify(settings));
-        signal.throwIfAborted();
-        await fs.writeFile(path.join(agentDir, "AGENTS.md"), "base\n");
-        signal.throwIfAborted();
-        await push(mock.ctx, { ...mergeOptions, signal });
-        signal.throwIfAborted();
-        const config = await loadConfig();
-        const acceptedState = refusal ? await readStateForConfig(config) : undefined;
-        signal.throwIfAborted();
-        const backend = await createSyncBackend(config);
-        signal.throwIfAborted();
-        const head = await backend.readHead(signal);
-        signal.throwIfAborted();
-        assert.ok(head);
-        const remote = await backend.readSnapshot(head.snapshotRef, signal);
-        signal.throwIfAborted();
-        await backend.publishSnapshot(
-          regenerateSnapshotIdentity({
-            ...remote,
-            files: snapshot([{ path: "AGENTS.md", content: Buffer.from("remote\n") }]).files,
-          }),
-          { kind: "revision", revision: head.revision },
-          { signal },
-        );
-        signal.throwIfAborted();
-        const conflictHead = await backend.readHead(signal);
-        assert.ok(conflictHead);
-        if (trigger !== "non-agent") await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
-        signal.throwIfAborted();
-        await adoptFixtureRoot(agentDir);
-        signal.throwIfAborted();
-        const entry = path.join(buildDir, "dist/index.ts");
-        loader = new DefaultResourceLoader({
-          cwd: buildDir,
-          agentDir,
-          settingsManager: SettingsManager.inMemory({}),
-          additionalExtensionPaths: [entry],
-        });
-        // Retain the loader before reload so cleanup also sees partial initialization.
-        await loader.reload();
-        const loaded = loader.getExtensions();
-        extension = loaded.extensions[0];
-        signal.throwIfAborted();
-        assert.deepEqual(loaded.errors, []);
-        assert.equal(loaded.extensions.length, 1);
-        assert.ok(extension);
-        assert.equal(extension.resolvedPath, entry);
+      signal.throwIfAborted();
+      const conflictHead = await backend.readHead(signal);
+      assert.ok(conflictHead);
+      if (trigger !== "non-agent") await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
+      signal.throwIfAborted();
+      await adoptFixtureRoot(agentDir);
+      signal.throwIfAborted();
+      const entry = path.join(buildDir, "dist/index.ts");
+      loader = new DefaultResourceLoader({
+        cwd: buildDir,
+        agentDir,
+        settingsManager: SettingsManager.inMemory({}),
+        additionalExtensionPaths: [entry],
+      });
+      // Retain the loader before reload so cleanup also sees partial initialization.
+      await loader.reload();
+      const loaded = loader.getExtensions();
+      const loadedExtension = loaded.extensions[0];
+      extension = loadedExtension;
+      signal.throwIfAborted();
+      assert.deepEqual(loaded.errors, []);
+      assert.equal(loaded.extensions.length, 1);
+      assert.ok(loadedExtension);
+      assert.equal(loadedExtension.resolvedPath, entry);
+      await use(async () => {
         if (foreground) {
-          for (const start of extension.handlers.get("session_start") ?? [])
+          for (const start of loadedExtension.handlers.get("session_start") ?? [])
             await start({ type: "session_start", reason: "startup" }, mock.ctx);
           signal.throwIfAborted();
-          const command = extension.commands.get("sync");
+          const command = loadedExtension.commands.get("sync");
           assert.ok(command);
           await command.handler(trigger === "non-agent" ? "sync --yes" : "sync", mock.ctx as ExtensionCommandContext);
           signal.throwIfAborted();
@@ -207,7 +214,7 @@ for (const trigger of [
             assert.ok(candidates.some((name) => name.includes(".refusal-")));
           }
         } else if (trigger === "after-exit") {
-          for (const start of extension.handlers.get("session_start") ?? [])
+          for (const start of loadedExtension.handlers.get("session_start") ?? [])
             await start({ type: "session_start", reason: "startup" }, mock.ctx);
           const owner = await ensureDaemon(agentDir);
           assert.ok(mock.ctx.model);
@@ -272,7 +279,7 @@ for (const trigger of [
             notify(message, level);
             if (message.includes("No automatic reload.") || message.includes("stopped:")) done?.();
           };
-          for (const start of extension.handlers.get("session_start") ?? []) {
+          for (const start of loadedExtension.handlers.get("session_start") ?? []) {
             await start({ type: "session_start", reason: "startup" }, mock.ctx);
             signal.throwIfAborted();
           }
@@ -300,24 +307,51 @@ for (const trigger of [
         }
         signal.throwIfAborted();
         assert.equal(mock.statuses.get("sync"), undefined);
+      });
+    } finally {
+      signal.removeEventListener("abort", cancel);
+      watcher?.close();
+      try {
+        await stop();
       } finally {
-        signal.removeEventListener("abort", cancel);
-        watcher?.close();
         try {
-          await stop();
+          loader?.getExtensions().runtime.invalidate("agent Jiti test complete");
         } finally {
           try {
-            loader?.getExtensions().runtime.invalidate("agent Jiti test complete");
+            await resolver?.close();
+            await server?.close();
           } finally {
-            try {
-              await resolver?.close();
-              await server?.close();
-            } finally {
-              if (buildDir) await fs.rm(buildDir, { recursive: true, force: true });
-            }
+            if (buildDir) await fs.rm(buildDir, { recursive: true, force: true });
           }
         }
       }
-    });
-    await scenarioReady;
+    }
   });
+  await scenarioReady;
+}
+
+for (const trigger of triggers) {
+  describe(`generated Jiti runtime: ${trigger}`, () => {
+    let exercise: (() => Promise<void>) | undefined;
+    let running: Promise<void> | undefined;
+    // Prepare the daemon, backend, and Jiti loader before timing the sync operation.
+    aroundEach(async (runTest, { signal }) => {
+      await withJitiFixture(trigger, signal, async (operation) => {
+        exercise = operation;
+        try {
+          await runTest();
+        } finally {
+          // Vitest can release runTest on timeout while its aborted work is still draining.
+          await running?.catch(() => {});
+          running = undefined;
+          exercise = undefined;
+        }
+      });
+    });
+    test("with an isolated WebDAV backend", () => {
+      assert.ok(exercise);
+      running = exercise();
+      return running;
+    });
+  });
+}
