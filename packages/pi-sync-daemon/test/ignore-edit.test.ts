@@ -195,8 +195,14 @@ test("RPC refuses saves without touching unchanged, replaced or missing rules", 
     assert.deepEqual(await fs.readdir(root), ["pi-sync.json"]);
     assert.deepEqual(callbacks, []);
   } finally {
-    await connection.dispose();
-    await server.close();
-    await fs.rm(server.paths.directory, { recursive: true, force: true });
+    try {
+      await connection.dispose();
+    } finally {
+      try {
+        await server.close();
+      } finally {
+        await fs.rm(server.paths.directory, { recursive: true, force: true });
+      }
+    }
   }
 });

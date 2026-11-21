@@ -227,6 +227,34 @@ test("replacement during the byte read cannot authorize a detached source or byp
     }
   }));
 
+test.each([DEFAULT_IGNORE_FILENAME, ".work.syncignore"])(
+  "a replacement of %s while its read handle closes invalidates the source",
+  (filename) =>
+    fixture(async (root) => {
+      const target = path.join(root, filename);
+      const replacement = path.join(root, "replacement");
+      const rules = "/work/\n";
+      await fs.writeFile(target, rules);
+      await fs.writeFile(replacement, rules);
+      const open = fs.open;
+      const spy = vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
+        const handle = await open(...args);
+        const close = handle.close;
+        handle.close = async () => {
+          await close.call(handle);
+          await fs.rename(replacement, target);
+        };
+        return handle;
+      });
+      try {
+        await assert.rejects(readIgnoreSource(root, filename), /changed during the read/u);
+      } finally {
+        spy.mockRestore();
+      }
+      assert.equal((await readIgnoreSource(root, filename)).text, rules);
+    }),
+);
+
 test("cancellation rejects before lookup and closes a handle already opened", () =>
   fixture(async (root) => {
     const cancellation = new Error("cancel ignore read");

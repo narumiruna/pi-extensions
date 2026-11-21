@@ -14,7 +14,12 @@ import {
   syncDirectoryPolicyKey,
   syncSessionsSelected,
 } from "../sync/sync-policy.js";
-import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "./config-file.js";
+import {
+  type LocalConfigDocument,
+  localConfigPath,
+  readActiveLocalConfigDocumentForRepair,
+  withLockedLocalConfigDocument,
+} from "./config-file.js";
 import { requireSettings } from "./settings-store.js";
 import type {
   AnySyncConfig,
@@ -51,7 +56,10 @@ export async function loadSettingsConfig(setupName?: string): Promise<AnySyncCon
 }
 
 async function readSettingsForCheck() {
-  const document = await readActiveLocalConfigDocumentForRepair();
+  return settingsFromCheckDocument(await readActiveLocalConfigDocumentForRepair());
+}
+
+function settingsFromCheckDocument(document: LocalConfigDocument | undefined) {
   if (!document) throw new Error(`Missing pi-sync settings: ${localConfigPath()}`);
   return validateSettingsDocument(document.parsed);
 }
@@ -94,17 +102,27 @@ export async function resolveIgnoreConfig(
     ignorePolicy,
     validateIgnorePolicy: async () => {
       signal?.throwIfAborted();
-      const current = validateSettings(await readSettingsForCheck());
-      const source = await readIgnoreSource(root, current.ignoreFile, signal);
+      validateRoot();
+      await withLockedLocalConfigDocument(
+        async (document, recheck) => {
+          const current = validateSettings(settingsFromCheckDocument(document));
+          const source = await readIgnoreSource(root, current.ignoreFile, signal);
+          validateRoot();
+          recheck();
+          if (source.sourceDigest !== ignorePolicy.sourceDigest) {
+            throw new Error("Pi Sync ignore policy changed; reopen the review before continuing.");
+          }
+          if (!source.present) {
+            throw new Error(
+              `Ignore file "${source.filename}" is missing; starter rules can only be used for a preview.`,
+            );
+          }
+        },
+        signal,
+        true,
+      );
       signal?.throwIfAborted();
       validateRoot();
-      validateSettings(await readSettingsForCheck());
-      if (source.sourceDigest !== ignorePolicy.sourceDigest) {
-        throw new Error("Pi Sync ignore policy changed; reopen the review before continuing.");
-      }
-      if (!source.present) {
-        throw new Error(`Ignore file "${source.filename}" is missing; starter rules can only be used for a preview.`);
-      }
     },
   };
 }

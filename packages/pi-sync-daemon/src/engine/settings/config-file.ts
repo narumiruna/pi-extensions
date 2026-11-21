@@ -275,6 +275,11 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
       validate(next);
       signal?.throwIfAborted();
       if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
+      if (beforePublish && document?.path !== localConfigPath()) {
+        throw new Error(
+          "This reviewed settings change requires pi-sync.json. No settings were saved; use the canonical filename and reopen the review.",
+        );
+      }
       const review = reviewed
         ? {
             document,

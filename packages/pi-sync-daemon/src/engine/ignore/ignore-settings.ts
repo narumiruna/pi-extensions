@@ -319,6 +319,8 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
           execution.validate();
           if ((await collect(created ? prepared.filename : undefined)).fingerprint !== review.fingerprint) stale();
           execution.validate();
+          verifyHead(await backend.readHead(execution.signal));
+          execution.validate();
           const finalSource = await readIgnoreSource(execution.root, source.filename, execution.signal);
           execution.validate();
           if (

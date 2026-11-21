@@ -2,7 +2,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { configFromSettings, loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { activeLocalConfigPath, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import type { AnySyncConfig, PiSyncSettingsV3 } from "../settings/settings-types.js";
-import { isCloudflareR2Endpoint, ownRecord, validateSettingsDocument } from "../settings/settings-validation.js";
+import { isCloudflareR2Endpoint, validateSettingsDocument } from "../settings/settings-validation.js";
 import {
   inspectOperationAvailability,
   type OperationAvailability,
@@ -78,12 +78,8 @@ export async function describeManagerState(
       actions: ["Set up sync", "Help"],
     };
   }
-  const configuredTargets = ownRecord(raw.syncSetups);
-  if (
-    (raw.version === 3 || raw.version === 4 || raw.version === 5 || raw.version === 6 || raw.version === 7) &&
-    configuredTargets &&
-    Object.keys(configuredTargets).length === 0
-  ) {
+  const configuredTargets = raw.syncSetups;
+  if (Object.keys(configuredTargets).length === 0) {
     return {
       title: [
         "Manage sync",

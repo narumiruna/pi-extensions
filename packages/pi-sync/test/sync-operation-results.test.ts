@@ -14,11 +14,14 @@ test("only interactive foreground Sync now accepts an archived journal result", 
   assert.equal(await syncBoth(ctx, options), "archived");
   assert.deepEqual(remote.mock.calls, [[ctx, "sync", options]]);
 
+  const automatic = { ...options, auto: true };
+  await assert.rejects(syncBoth(ctx, automatic), /Invalid transfer result/);
+  assert.deepEqual(remote.mock.lastCall, [ctx, "startup-transfer", automatic]);
+
   const headless = createMockContext({ mode: "json", hasUI: false }).ctx;
   for (const run of [
     () => push(ctx, options),
     () => pull(ctx, options),
-    () => syncBoth(ctx, { ...options, auto: true }),
     () => syncBoth(ctx, { ...options, yes: true }),
     () => syncBoth(ctx, { ...options, agentRetryRefusal: true }),
     () => syncBoth(headless, options),

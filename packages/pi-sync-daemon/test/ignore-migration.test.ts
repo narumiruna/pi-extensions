@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -153,18 +154,22 @@ test.each([
   }),
 );
 
-test("reviewed migration publishes directly from the legacy settings filename", () =>
+test("reviewed migration requires canonical settings and does not promote the legacy filename", () =>
   fixture(async (root, execution, proposal) => {
     const canonical = path.join(root, "pi-sync.json");
     const legacy = path.join(root, "pi-sync.local.json");
     const original = `${JSON.stringify(fixtureSettings)}\n\n`;
     await fs.writeFile(canonical, original);
     await fs.rename(canonical, legacy);
-    await fs.writeFile(path.join(root, file), "");
     proposal(async () => true);
+    await assert.rejects(migrateIgnoreSetup(execution, "home"), /requires pi-sync\.json/u);
+    await assert.rejects(fs.lstat(canonical), { code: "ENOENT" });
+    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.equal(await fs.readFile(legacy, "utf8"), original);
+    await fs.rename(legacy, canonical);
+    await fs.writeFile(path.join(root, file), "");
     assert.equal(await migrateIgnoreSetup(execution, "home"), "saved");
     assert.equal((await readSettings(root)).syncSetups.home.sync.pathPolicy, "ignore-file");
-    assert.equal(await fs.readFile(legacy, "utf8"), original);
     const backup = (await fs.readdir(path.join(root, "pi-sync"))).find((name) =>
       name.startsWith("settings-before-ignore-"),
     );
@@ -179,6 +184,41 @@ test("cancelled migration does not create the default or change settings", () =>
     await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
     assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
+
+test.skipIf(process.platform !== "linux")(
+  "cancelling confirmed migration after starter creation begins does not save settings",
+  () =>
+    fixture(async (root, execution, proposal) => {
+      const controller = new AbortController();
+      const reason = new Error("client cancelled");
+      const open = fs.open;
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (
+          path.basename(String(args[0])) === file &&
+          typeof args[1] === "number" &&
+          (args[1] & constants.O_EXCL) !== 0
+        )
+          controller.abort(reason);
+        return handle;
+      });
+      proposal(async () => true);
+      const running = {
+        ...execution,
+        signal: controller.signal,
+        committed: () => assert.fail("Cancelled migration committed"),
+      };
+      try {
+        await assert.rejects(migrateIgnoreSetup(running, "home"), (error) => error === reason);
+      } finally {
+        spy.mockRestore();
+      }
+      assert.deepEqual(await readSettings(root), fixtureSettings);
+      assert.equal(await fs.readFile(path.join(root, file), "utf8"), DEFAULT_IGNORE_RULES);
+      await assert.rejects(fs.lstat(path.join(root, DEFAULT_IGNORE_CREATION_RECORD)), { code: "ENOENT" });
+      assert.equal(await migrateIgnoreSetup(execution, "home"), "saved");
+    }),
+);
 
 test("accepting a valid offer opens the review without saving when that review is cancelled", () =>
   fixture(async (root, execution, proposal) => {
@@ -231,7 +271,7 @@ test("migration refuses scope or remote changes while the review is open", () =>
     assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
 
-test("migration rechecks local scope after final head lookup and settings preparation", () =>
+test("migration rechecks local scope after the pre-scan head lookup and settings preparation", () =>
   fixture(async (root, execution, proposal) => {
     await fs.writeFile(path.join(root, file), "");
     let stagingFinished = false;
@@ -260,6 +300,37 @@ test("migration rechecks local scope after final head lookup and settings prepar
     assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
 
+test.each(["new head", "changed revision", "removed head"] as const)(
+  "migration refuses a %s published during the final local scope scan",
+  (change) =>
+    fixture(async (root, execution, proposal) => {
+      await fs.writeFile(path.join(root, file), "");
+      const head = { snapshotId: "same", snapshotRef: "same", revision: "before" };
+      const before = change === "new head" ? undefined : head;
+      const after = change === "removed head" ? undefined : { ...head, revision: "after" };
+      remote.mockResolvedValue({ id: head.snapshotId, files: [] });
+      let scanned = false;
+      headRead.mockImplementation(async () => (scanned ? after : before));
+      const open = fs.open;
+      const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (args[0] === path.join(root, "new-file.md") && headRead.mock.calls.length === 3) scanned = true;
+        return open(...args);
+      });
+      proposal(async () => true);
+      try {
+        await assert.rejects(
+          migrateIgnoreSetup({ ...execution, committed: () => assert.fail("Stale migration committed") }, "home"),
+          /Reopen/u,
+        );
+      } finally {
+        opened.mockRestore();
+      }
+      assert.ok(scanned);
+      assert.equal(headRead.mock.calls.length, 4);
+      assert.deepEqual(await readSettings(root), fixtureSettings);
+    }),
+);
+
 test.each(["head revision", "rule identity", "settings bytes", "abort"] as const)(
   "migration refuses a late %s change before publishing",
   (change) =>
@@ -282,6 +353,7 @@ test.each(["head revision", "rule identity", "settings bytes", "abort"] as const
       headRead
         .mockResolvedValueOnce(head)
         .mockResolvedValueOnce(head)
+        .mockResolvedValueOnce(head)
         .mockImplementationOnce(async () => {
           if (change === "rule identity") {
             await fs.writeFile(path.join(root, "incoming"), "");
@@ -295,7 +367,7 @@ test.each(["head revision", "rule identity", "settings bytes", "abort"] as const
       const error = change === "abort" ? /client cancelled/u : /Reopen|settings changed/u;
       await assert.rejects(migrateIgnoreSetup(running, "home"), error);
       assert.equal(committed, false);
-      assert.equal(headRead.mock.calls.length, 3);
+      assert.equal(headRead.mock.calls.length, 4);
       assert.equal(await fs.readFile(config, "utf8"), change === "settings bytes" ? `${original}\n` : original);
       assert.equal(await fs.readFile(rules, "utf8"), "");
     }),
@@ -360,15 +432,12 @@ test.each(["current", "legacy edited", "canonical appeared"] as const)(
         if (change === "canonical appeared") await fs.writeFile(canonical, bytes, { mode: 0o600 });
         return true;
       });
-      const result = switchIgnoreFile(execution, "home", "other.ignore", file);
-      if (change === "current") {
-        assert.equal(await result, "saved");
-        assert.equal((await readSettings(root)).syncSetups.home.sync.ignoreFile, "other.ignore");
-      } else {
-        await assert.rejects(result, /Reopen/u);
-        if (change === "legacy edited") await assert.rejects(fs.lstat(canonical), { code: "ENOENT" });
-        else assert.equal(await fs.readFile(canonical, "utf8"), bytes);
-      }
+      await assert.rejects(
+        switchIgnoreFile(execution, "home", "other.ignore", file),
+        change === "current" ? /requires pi-sync\.json/u : /Reopen/u,
+      );
+      if (change === "canonical appeared") assert.equal(await fs.readFile(canonical, "utf8"), bytes);
+      else await assert.rejects(fs.lstat(canonical), { code: "ENOENT" });
       assert.equal(await fs.readFile(legacy, "utf8"), change === "legacy edited" ? `${bytes}\n` : bytes);
     }),
 );

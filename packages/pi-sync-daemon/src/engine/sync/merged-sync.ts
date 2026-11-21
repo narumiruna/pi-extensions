@@ -61,6 +61,7 @@ import {
   mergeJournalPolicy,
   readMergeJournal,
   reviewInactiveIgnoreMerge,
+  sameMergeRecoveryHead,
   writeMergeJournal,
 } from "./merge-journal.js";
 import { mergeTransferError } from "./merge-transfer-error.js";
@@ -181,7 +182,7 @@ export async function mergeSync(
         config,
         backend,
         pending,
-        { validate, validateFresh },
+        { validate, validateFresh, validateOwner },
         timings,
         options,
         resolution ? undefined : isCurrent,
@@ -708,7 +709,7 @@ export async function mergeSync(
         throw mergeTransferError(error, config.backend);
       }
       const completed = await timings.measure("transfer journal recovery", () =>
-        completeJournal(ctx, config, backend, journal, { validate, validateFresh }, timings, options),
+        completeJournal(ctx, config, backend, journal, { validate, validateFresh, validateOwner }, timings, options),
       );
       if (!completed) {
         if (!options.signal?.aborted && (options.auto || !options.silent))
@@ -743,12 +744,20 @@ async function completeJournal(
   config: AnySyncConfig,
   backend: SyncBackend,
   journal: MergeJournal,
-  { validate, validateFresh }: { validate: () => Promise<void>; validateFresh: () => Promise<void> },
+  {
+    validate,
+    validateFresh,
+    validateOwner,
+  }: { validate: () => Promise<void>; validateFresh: () => Promise<void>; validateOwner: () => void },
   timings: StartupTimings,
   options: CommandOptions,
   isCurrent?: () => boolean,
 ) {
   const { auto, signal } = options;
+  const validateMutation = () => {
+    validateOwner();
+    if (auto && !ctx.isIdle()) throw new Error("Automatic file apply is no longer idle; evidence retained.");
+  };
   if (
     journal.identity !== mergeJournalIdentity(config, backend.identity) ||
     !sameLocalFields(journal.upload.localFields, config.localFields)
@@ -770,6 +779,22 @@ async function completeJournal(
   const snapshotOptions = { ...snapshotOptionsForContext(ctx, config), sessionDir: sessionRoot, signal };
   const head = await timings.measure("transfer remote head", () => backend.readHead(signal));
   await validate();
+  const readRetirementEvidence = async () => {
+    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
+    await validateFresh();
+    const local = await timings.measure("transfer local snapshot", () =>
+      createSnapshot(config.snapshotIdentity, snapshotOptions),
+    );
+    validateMutation();
+    const latest = await timings.measure("transfer remote head", () => backend.readHead(signal));
+    validateMutation();
+    if (!sameMergeRecoveryHead(backend, head, latest))
+      throw new Error("Remote head changed during merge recovery; journal and backup retained.");
+    return {
+      sameBaseline: syncStateFingerprint(state) === journal.stateIdentity,
+      sameLocal: sameHashes(fileHashMap(local), fileHashMap(journal.before)),
+    };
+  };
   // Baseline publication is the durable completion boundary. A later remote revision
   // cannot undo that acceptance; retire only the journal for the recorded commit.
   if (
@@ -811,12 +836,8 @@ async function completeJournal(
         head.snapshotId === journal.upload.id)
     )
       throw new Error("Cannot verify that the ignore-file candidate is inactive; preserve the journal and backup.");
-    const local = await timings.measure("transfer local snapshot", () =>
-      createSnapshot(config.snapshotIdentity, snapshotOptions),
-    );
-    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
-    const sameBaseline = syncStateFingerprint(state) === journal.stateIdentity;
-    const sameLocal = sameHashes(fileHashMap(local), fileHashMap(journal.before));
+    const { sameBaseline, sameLocal } = await readRetirementEvidence();
+    validateMutation();
     if (!sameBaseline || !sameLocal) {
       if (journal.version === 2) {
         if (!sameBaseline)
@@ -829,21 +850,13 @@ async function completeJournal(
         "Uncertain publication is not active, but local content or baseline changed; keep the journal for reviewed recovery.",
       );
     }
-    await validateFresh();
     await clearMergeJournal(config);
     return false;
   }
   if (journal.applyOnly && (!head || !backend.sameRevision(head.revision, journal.expectedHead.revision))) {
-    const local = await timings.measure("transfer local snapshot", () =>
-      createSnapshot(config.snapshotIdentity, snapshotOptions),
-    );
-    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
-    await validate();
-    if (
-      sameHashes(fileHashMap(local), fileHashMap(journal.before)) &&
-      syncStateFingerprint(state) === journal.stateIdentity
-    ) {
-      if (config.ignorePolicy) await validateFresh();
+    const { sameBaseline, sameLocal } = await readRetirementEvidence();
+    validateMutation();
+    if (sameBaseline && sameLocal) {
       await clearMergeJournal(config);
       return false;
     }
@@ -885,12 +898,6 @@ async function completeJournal(
     );
   if (sessionRoot !== undefined) requireStableMergeSessionRoot(journal.before, journal.after, config.scope);
   await validate();
-  const validateOwner = captureMutationOwner(ctx, signal);
-  const validateMutation = () => {
-    validateOwner();
-    options.background?.validate();
-    if (auto && !ctx.isIdle()) throw new Error("Automatic file apply is no longer idle; evidence retained.");
-  };
   await timings.measure("transfer local apply", () =>
     applyMergedSnapshot(
       journal.before,

@@ -246,7 +246,7 @@ test.each([false, true])("a sessions change from %s during the ignore source rea
     await save(document);
     const resolved = await resolveIgnoreConfig(document);
     assert.ok(resolved.validateIgnorePolicy);
-    await withPausedOpen(sourcePath, 1, resolved.validateIgnorePolicy, async () => {
+    await withPausedOpen(sourcePath, resolved.validateIgnorePolicy, async () => {
       await save(settings({ ...ignoreSync, ignoreFile: filename, sessions: !sessions }));
       return /settings changed/u;
     });
@@ -254,41 +254,77 @@ test.each([false, true])("a sessions change from %s during the ignore source rea
   }),
 );
 
-test.each(["abort", "root"] as const)("a change in %s during the second settings read invalidates review", (change) =>
-  fixture(async (root, save) => {
-    const document = settings();
-    await save(document);
-    await fs.writeFile(path.join(root, ".syncignore"), DEFAULT_IGNORE_RULES);
-    const controller = new AbortController();
-    const resolved = await resolveIgnoreConfig(document, undefined, controller.signal);
-    assert.ok(resolved.validateIgnorePolicy);
-    const host = engineHost();
-    try {
-      await withPausedOpen(path.join(root, "pi-sync.json"), 2, resolved.validateIgnorePolicy, async () => {
-        if (change === "abort") {
-          controller.abort(new Error("review cancelled"));
-          return /review cancelled/u;
-        }
-        configureEngineHost({ ...host, root: () => path.join(root, "replacement") });
-        return /agent directory changed/u;
-      });
-    } finally {
-      configureEngineHost(host);
-    }
-  }),
+test.each(["abort", "root", "rules"] as const)(
+  "a change in %s during the final settings read invalidates review",
+  (change) =>
+    fixture(async (root, save) => {
+      const document = settings();
+      const rules = path.join(root, ".syncignore");
+      await save(document);
+      await fs.writeFile(rules, DEFAULT_IGNORE_RULES);
+      const controller = new AbortController();
+      const resolved = await resolveIgnoreConfig(document, undefined, controller.signal);
+      assert.ok(resolved.validateIgnorePolicy);
+      const host = engineHost();
+      try {
+        await withPausedOpen(path.join(root, "pi-sync.json"), resolved.validateIgnorePolicy, async () => {
+          if (change === "abort") {
+            controller.abort(new Error("review cancelled"));
+            return /review cancelled/u;
+          }
+          if (change === "rules") {
+            await fs.writeFile(rules, "/other/\n");
+            return /ignore policy changed/u;
+          }
+          configureEngineHost({ ...host, root: () => path.join(root, "replacement") });
+          return /agent directory changed/u;
+        });
+      } finally {
+        configureEngineHost(host);
+      }
+    }),
 );
 
-async function withPausedOpen(
-  file: string,
-  occurrence: number,
-  validate: () => Promise<void>,
-  change: () => Promise<RegExp>,
-) {
+test.each(["pi-sync.json", "pi-sync.local.json"])(
+  "the daemon holds its settings lock from the only async %s read through the rule check",
+  (filename) =>
+    fixture(async (root) => {
+      const document = settings();
+      const settingsPath = path.join(root, filename);
+      const rulesPath = path.join(root, ".syncignore");
+      const lock = path.join(root, "pi-sync.json.mutation-lock");
+      await fs.writeFile(settingsPath, JSON.stringify(document), { mode: 0o600 });
+      await fs.writeFile(rulesPath, DEFAULT_IGNORE_RULES);
+      const resolved = await resolveIgnoreConfig(document);
+      assert.ok(resolved.validateIgnorePolicy);
+      const reads: { file: string; locked: boolean }[] = [];
+      const open = fs.open;
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (args[0] === settingsPath || args[0] === rulesPath) {
+          const stat = await fs.lstat(lock).catch(() => undefined);
+          reads.push({ file: args[0], locked: stat?.isDirectory() ?? false });
+        }
+        return open(...args);
+      });
+      try {
+        await resolved.validateIgnorePolicy();
+      } finally {
+        spy.mockRestore();
+      }
+      assert.deepEqual(reads, [
+        { file: settingsPath, locked: true },
+        { file: rulesPath, locked: true },
+      ]);
+      assert.deepEqual((await fs.readdir(root)).sort(), [".syncignore", filename]);
+    }),
+);
+
+async function withPausedOpen(file: string, validate: () => Promise<void>, change: () => Promise<RegExp>) {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const open = fs.open;
   const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    if (args[0] === file && --occurrence === 0) {
+    if (args[0] === file) {
       entered.resolve();
       await release.promise;
     }

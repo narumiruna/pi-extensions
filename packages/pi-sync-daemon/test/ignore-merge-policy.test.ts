@@ -15,7 +15,12 @@ import {
 import * as settings from "../src/engine/settings/config.js";
 import type { AnySyncConfig } from "../src/engine/settings/settings-types.js";
 import type { Snapshot } from "../src/engine/snapshot/snapshot-types.js";
-import { readStateForConfig, syncStateFingerprint, writeStateForConfig } from "../src/engine/state/sync-state-store.js";
+import {
+  readStateForConfig,
+  statePathForConfig,
+  syncStateFingerprint,
+  writeStateForConfig,
+} from "../src/engine/state/sync-state-store.js";
 import { createContinuousSync } from "../src/engine/sync/continuous-sync.js";
 import { watchContinuous } from "../src/engine/sync/continuous-watch.js";
 import { applyMergedSnapshot } from "../src/engine/sync/merge-apply.js";
@@ -421,7 +426,16 @@ for (const [mode, approve] of [
     }));
 }
 
-for (const change of ["head", "head policy", "baseline", "ignore source", "session", "abort"] as const) {
+for (const change of [
+  "head",
+  "head policy",
+  "head during baseline read",
+  "baseline",
+  "ignore source",
+  "session",
+  "session during final head read",
+  "abort",
+] as const) {
   test(`archive approval does not survive a changed ${change}`, () =>
     fixture(async ({ root, config, ignoreFile, ctx }) => {
       const { state, target, remote, pending, journalPath, journalBytes, backupBytes } = await interruptBeforeCommit(
@@ -432,6 +446,17 @@ for (const change of ["head", "head policy", "baseline", "ignore source", "sessi
       const abort = new AbortController();
       let session = "original";
       ctx.sessionManager.getSessionId = () => session;
+      let approved = false;
+      let changedDuringAwait = false;
+      const read = fs.readFile.bind(fs);
+      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        const bytes = await read(...args);
+        if (change === "head during baseline read" && approved && args[0] === statePathForConfig(config)) {
+          remote.replaceHead(snapshot(config, "advanced", []));
+          changedDuringAwait = true;
+        }
+        return bytes;
+      });
       const review = vi.fn<EngineHost["review"]>(async () => {
         if (change === "head") remote.replaceHead(snapshot(config, "advanced", []));
         if (change === "head policy")
@@ -439,13 +464,24 @@ for (const change of ["head", "head policy", "baseline", "ignore source", "sessi
         if (change === "baseline") await writeStateForConfig(config, { ...state, lastRemoteRevision: "different" });
         if (change === "ignore source") await fs.writeFile(ignoreFile, `${rules}# changed during review\n`);
         if (change === "session") session = "replacement";
+        if (change === "session during final head read") {
+          remote.readHead.mockImplementationOnce(async () => {
+            session = "replacement";
+            changedDuringAwait = true;
+            return pending.expectedHead;
+          });
+        }
         if (change === "abort") abort.abort();
+        approved = true;
         return true;
       });
       host(root, undefined, review);
       const run = () => syncBoth(ctx, { ...foreground, signal: abort.signal }, remote.factory);
-      if (change === "session" || change === "abort") assert.equal(await run(), "cancelled");
+      if (change === "session" || change === "abort" || change === "session during final head read")
+        assert.equal(await run(), "cancelled");
       else await assert.rejects(run(), /changed during (recovery review|transfer)/);
+      if (change === "head during baseline read" || change === "session during final head read")
+        assert.equal(changedDuringAwait, true);
       assert.equal(review.mock.calls.length, 1);
       assert.deepEqual(await fs.readFile(journalPath), journalBytes);
       assert.deepEqual(await fs.readFile(pending.backup), backupBytes);
@@ -453,6 +489,63 @@ for (const change of ["head", "head policy", "baseline", "ignore source", "sessi
       assert.equal(await fs.readFile(target, "utf8"), "newer local edit");
     }));
 }
+
+test.each([
+  ["uncommitted", "unchanged", "cancelled"],
+  ["uncommitted", "local edit", "archived"],
+  ["uncommitted", "remote advance", /Remote head changed during merge recovery/],
+  ["apply-only", "local edit", /Apply-only remote head advanced after local changes/],
+] as const)("%s v2 recovery checks fresh evidence before retiring the journal (%s)", (operation, change, result) =>
+  fixture(async ({ root, config, ctx }) => {
+    const { state, target, remote, pending, journalPath, backupBytes } = await interruptBeforeCommit(root, config, ctx);
+    if (operation === "apply-only") {
+      remote.replaceHead(pending.upload);
+      const committedHead = remote.head();
+      await writeMergeJournal(config, { ...pending, applyOnly: true, expectedHead: committedHead, committedHead });
+      remote.replaceHead(snapshot(config, "advanced", []));
+    }
+    const journalBytes = await fs.readFile(journalPath);
+    await fs.writeFile(target, "local edit");
+    const review = vi.fn<EngineHost["review"]>(async () => true);
+    host(root, undefined, review);
+    let baselineReads = 0;
+    let checkedBaseline = false;
+    const retirementRead = operation === "apply-only" ? 2 : 1;
+    const read = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const bytes = await read(...args);
+      if (args[0] === statePathForConfig(config) && ++baselineReads === retirementRead) {
+        checkedBaseline = true;
+        if (change === "local edit") await fs.writeFile(target, "edit during baseline read");
+        if (change === "remote advance") remote.replaceHead(pending.upload);
+      }
+      return bytes;
+    });
+    remote.readSnapshot.mockClear();
+    const run = () => syncBoth(ctx, foreground, remote.factory);
+    if (result instanceof RegExp) {
+      await assert.rejects(run(), result);
+      assert.deepEqual(await fs.readFile(journalPath), journalBytes);
+    } else {
+      assert.equal(await run(), result);
+      await requireNoMergeJournal(config);
+    }
+    assert.equal(checkedBaseline, true);
+    assert.equal(review.mock.calls.length, result === "archived" ? 1 : 0);
+    const directory = path.dirname(journalPath);
+    const archives = (await fs.readdir(directory)).filter((entry) => entry.endsWith(".resolved"));
+    assert.equal(archives.length, result === "archived" ? 1 : 0);
+    if (archives.length) assert.deepEqual(await fs.readFile(path.join(directory, archives[0])), journalBytes);
+    assert.equal(
+      await fs.readFile(target, "utf8"),
+      change === "local edit" ? "edit during baseline read" : "local edit",
+    );
+    assert.deepEqual(await fs.readFile(pending.backup), backupBytes);
+    assert.deepEqual(await readStateForConfig(config), state);
+    assert.equal(remote.readSnapshot.mock.calls.length, 0);
+    assert.equal(remote.publishSnapshot.mock.calls.length, 1);
+  }),
+);
 
 for (const remoteDisposition of [
   "missing",
@@ -500,10 +593,18 @@ for (const remoteDisposition of [
         remote.replaceHead(snapshot(config, "advanced", []));
       }
       const journalBytes = await fs.readFile(journalPath);
-      await assert.rejects(syncBoth(ctx, foreground, remote.factory));
+      remote.readSnapshot.mockClear();
       if (remoteDisposition === "candidate active") {
+        await assert.rejects(syncBoth(ctx, foreground, remote.factory), {
+          message:
+            "Local content changed during merged transfer; journal retained for review. No newer bytes were replaced.",
+        });
+        assert.deepEqual(
+          remote.readSnapshot.mock.calls.map(([reference]) => reference),
+          [pending.upload.id],
+        );
         assert.equal(await fs.readFile(path.join(root, "new.md"), "utf8"), "newer byte at a planned target");
-      }
+      } else await assert.rejects(syncBoth(ctx, foreground, remote.factory));
       assert.equal(review.mock.calls.length, 0);
       assert.deepEqual(await fs.readFile(journalPath), journalBytes);
       assert.deepEqual(await fs.readFile(pending.backup), backupBytes);

@@ -399,6 +399,55 @@ posixCreation.each(["exclusive open", "publication"] as const)(
     }),
 );
 
+posixCreation.each(["exclusive open", "file flush", "directory flush", "handle close"] as const)(
+  "cancellation at target %s leaves a complete starter and reports cancellation",
+  (phase) =>
+    fixture(async (root, target, markerPath) => {
+      const controller = new AbortController();
+      const reason = new Error("confirmed request was cancelled");
+      const open = fs.open;
+      const handles: FileHandle[] = [];
+      let directorySyncs = 0;
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        handles.push(handle);
+        if (path.basename(String(args[0])) === filename && exclusive(args[1])) {
+          if (phase === "exclusive open") controller.abort(reason);
+          const sync = handle.sync;
+          handle.sync = async () => {
+            await sync.call(handle);
+            if (phase === "file flush") controller.abort(reason);
+          };
+          const close = handle.close;
+          handle.close = async () => {
+            await close.call(handle);
+            if (phase === "handle close") controller.abort(reason);
+          };
+        }
+        if (args[0] === root) {
+          const sync = handle.sync;
+          handle.sync = async () => {
+            await sync.call(handle);
+            if (++directorySyncs === 3 && phase === "directory flush") controller.abort(reason);
+          };
+        }
+        return handle;
+      });
+      try {
+        await assert.rejects(initializeDefaultIgnoreSource(root, controller.signal), (error) => error === reason);
+      } finally {
+        spy.mockRestore();
+      }
+      assert.equal(directorySyncs, 4);
+      assert.ok(handles.every((handle) => handle.fd === -1));
+      assert.equal(await fs.readFile(target, "utf8"), starter);
+      await assertMissing(markerPath);
+      const completed = await readIgnoreSource(root);
+      assert.equal(completed.present, true);
+      assert.deepEqual(await initializeDefaultIgnoreSource(root), completed);
+    }),
+);
+
 posixCreation("fails without writing if directory-relative lookup or directory fsync is unavailable", () =>
   fixture(async (root) => {
     const stat = vi.spyOn(fs, "stat").mockRejectedValue(Object.assign(new Error("no anchor"), { code: "ENOTDIR" }));
@@ -420,20 +469,30 @@ posixCreation("fails without writing if directory-relative lookup or directory f
   }),
 );
 
-posixCreation("a file flush failure leaves the starter blocked until a confirmed retry verifies and flushes it", () =>
+posixCreation.each([false, true])("a file flush failure leaves the starter blocked (cancelled: %s)", (cancelled) =>
   fixture(async (root, target, markerPath) => {
+    const controller = new AbortController();
+    const reason = new Error("confirmed request was cancelled");
     const open = fs.open;
+    let attemptedFlush = false;
     const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await open(...args);
       if (path.basename(String(args[0])) === filename && exclusive(args[1])) {
+        if (cancelled) controller.abort(reason);
         handle.sync = async () => {
+          attemptedFlush = true;
           throw Object.assign(new Error("cannot flush starter"), { code: "EIO" });
         };
       }
       return handle;
     });
-    await assert.rejects(initializeDefaultIgnoreSource(root), /could not safely create or flush/u);
-    spy.mockRestore();
+    try {
+      const attempt = initializeDefaultIgnoreSource(root, controller.signal);
+      await assert.rejects(attempt, cancelled ? (error) => error === reason : /could not safely create or flush/u);
+    } finally {
+      spy.mockRestore();
+    }
+    assert.ok(attemptedFlush);
     assert.equal(await fs.readFile(markerPath, "utf8"), record);
     assert.equal(await fs.readFile(target, "utf8"), starter);
     await assert.rejects(readIgnoreSource(root), unfinished);

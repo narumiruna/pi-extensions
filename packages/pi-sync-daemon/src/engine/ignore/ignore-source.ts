@@ -112,12 +112,10 @@ export async function readIgnoreSource(
     assertIgnoreSize(before.size);
     if ((await fs.realpath(target)) !== target) throw new Error("use the exact on-disk filename, not a path alias");
     const bytes = await readIgnoreBytes(target, before, checkRoot, signal);
-    if (filename === DEFAULT_IGNORE_FILENAME) {
-      await checkRoot();
-      checkCreationRecord();
-      const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
-      if (!current || !sameFile(before, current)) changed();
-    }
+    await checkRoot();
+    checkCreationRecord();
+    const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
+    if (!current || !sameFile(before, current)) changed();
     signal?.throwIfAborted();
     let text: string;
     try {

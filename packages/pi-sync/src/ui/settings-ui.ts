@@ -1,9 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type MenuSettingItem, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig, loadSettingsConfig } from "../settings/config.js";
-import { localConfigPath } from "../settings/config-file.js";
+import { configFromSettings, loadConfig, loadSettingsConfig } from "../settings/config.js";
+import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { updateLocalConfig } from "../settings/settings-store.js";
+import { validateSettingsDocument } from "../settings/settings-validation.js";
 import { normalizeLocalFields, sameLocalFields } from "../sync/local-fields.js";
 import {
   SETUP_SWITCH_ACTION_OPTIONS,
@@ -23,6 +24,7 @@ import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js
 import { ignoreFileSettingsAvailable, manualIgnoreFileGuidance, showIgnoreFileAction } from "./ignore-file-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
+import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery } from "./settings-review.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
 import { showStorageConnections } from "./storage-connections-ui.js";
 import { AUTOMATIC_SYNC_DESCRIPTION, STARTUP_TRANSFER_DESCRIPTION, startupTransferSummary } from "./sync-behavior.js";
@@ -54,11 +56,23 @@ export async function showSyncSettings(
   };
   if (ctx.mode === "rpc") {
     // Preserve RPC catalog management; preference/credential editing stays TUI-only.
-    const config = await loadSettingsConfig(reviewedSetup).catch(() => undefined);
+    const document = await readActiveLocalConfigDocumentForRepair().catch(() => null);
     if (!isCurrent()) return disposition;
+    const settingsPath = document?.path ?? localConfigPath();
+    let config: Awaited<ReturnType<typeof loadSettingsConfig>> | undefined;
+    try {
+      if (document) config = configFromSettings(validateSettingsDocument(document.parsed), reviewedSetup);
+    } catch {
+      config = undefined;
+    }
     ctx.ui.notify(
       [
-        `Edit pi-sync settings manually: ${safeTerminalText(localConfigPath())}`,
+        document === null
+          ? "Could not read the active pi-sync settings file. Check file access or repair the JSON before reopening /sync."
+          : `Edit pi-sync settings manually: ${safeTerminalText(settingsPath)}`,
+        ...(config?.reservedIgnoreNames !== undefined
+          ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(settingsPath)]
+          : []),
         ...(config?.pathPolicy === "ignore-file"
           ? [manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
           : config?.scope === "agent-directory"
@@ -99,7 +113,7 @@ export async function showSyncSettings(
   const ignoreAvailable = await ignoreFileSettingsAvailable(ctx, signal);
   if (!isCurrent()) return disposition;
   const setupName = initial.setupName;
-  type SettingsState = Awaited<ReturnType<typeof loadConfig>>;
+  type SettingsState = Awaited<ReturnType<typeof loadSettingsConfig>>;
   type Action =
     | "automatic"
     | "automatic-transfer"
@@ -132,11 +146,13 @@ export async function showSyncSettings(
         title: "Pi Sync Settings",
         lines: [
           `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
-          ...(state.pathPolicy === "ignore-file" && !ignoreAvailable
-            ? [manualIgnoreFileGuidance(state.ignoreFile ?? ".syncignore")]
-            : []),
-          ...(readOnly(state)
-            ? ["Setup preferences are read-only because the connected daemon does not support ignore-file settings."]
+          ...(state.reservedIgnoreNames !== undefined
+            ? [
+                "Setup preferences are read-only; adding, editing, and switching setups are unavailable.",
+                state.pathPolicy === "ignore-file" && !ignoreAvailable
+                  ? manualIgnoreFileGuidance(state.ignoreFile ?? ".syncignore")
+                  : "Open Manage sync setups for manual recovery.",
+              ]
             : [saveStatus]),
         ],
         items: (
@@ -171,36 +187,38 @@ export async function showSyncSettings(
                       action: "ignore-migrate" as const,
                     },
                   ]
-                : state.scope === "agent-directory"
-                  ? [
-                      {
-                        id: "include",
-                        label: "Agent directory scope",
-                        description:
-                          "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
-                        currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
-                        action: "include" as const,
-                      },
-                    ]
-                  : [
-                      {
-                        id: "include",
-                        label: "Included paths",
-                        description:
-                          "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
-                        currentValue: `${state.include.length} paths · Edit`,
-                        action: "include" as const,
-                      },
-                      {
-                        id: "exclude",
-                        label: "Excluded paths",
-                        description:
-                          "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
-                        currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
-                        action: "exclude" as const,
-                      },
-                    ]),
-            ...(state.pathPolicy === "ignore-file" && !ignoreAvailable
+                : state.reservedIgnoreNames !== undefined
+                  ? []
+                  : state.scope === "agent-directory"
+                    ? [
+                        {
+                          id: "include",
+                          label: "Agent directory scope",
+                          description:
+                            "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
+                          currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
+                          action: "include" as const,
+                        },
+                      ]
+                    : [
+                        {
+                          id: "include",
+                          label: "Included paths",
+                          description:
+                            "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
+                          currentValue: `${state.include.length} paths · Edit`,
+                          action: "include" as const,
+                        },
+                        {
+                          id: "exclude",
+                          label: "Excluded paths",
+                          description:
+                            "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
+                          currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
+                          action: "exclude" as const,
+                        },
+                      ]),
+            ...(state.reservedIgnoreNames !== undefined
               ? []
               : [
                   {
@@ -239,7 +257,9 @@ export async function showSyncSettings(
               id: "setups",
               label: "Manage sync setups",
               description:
-                "This device: add, switch, edit, or remove sync setups. Each edit identifies its owner before saving.",
+                state.reservedIgnoreNames !== undefined
+                  ? "Review configured setups and recovery options. Adding, editing, and switching are unavailable."
+                  : "This device: add, switch, edit, or remove sync setups. Each edit identifies its owner before saving.",
               currentValue: "Open",
               action: "setups",
             },
@@ -247,7 +267,9 @@ export async function showSyncSettings(
               id: "connections",
               label: "Manage storage connections",
               description:
-                "Shared connections on this device: review affected setups before saving server or credential changes.",
+                state.reservedIgnoreNames !== undefined
+                  ? "Review shared connections. Connection changes are unavailable while ignore-file setups are configured."
+                  : "Shared connections on this device: review affected setups before saving server or credential changes.",
               currentValue: "Open",
               action: "connections",
             },
@@ -344,7 +366,10 @@ export async function showSyncSettings(
             },
           ] satisfies MenuSettingItem<Action>[]
         ).map((item) =>
-          readOnly(state) && item.id !== "setups" && item.id !== "connections" ? { ...item, disabled: true } : item,
+          state.reservedIgnoreNames !== undefined &&
+          !["setups", "connections", "ignoreFile", "ignoreRules", "migrateIgnoreFile"].includes(item.id)
+            ? { ...item, disabled: true }
+            : item,
         ),
       }),
     },
@@ -653,7 +678,8 @@ export async function showSyncSettings(
       "ignore-switch": ignoreAction("switch"),
       "ignore-edit": ignoreAction("edit"),
       "ignore-migrate": ignoreAction("migrate"),
-      "remote-include": async ({ signal: actionSignal }) => {
+      "remote-include": async ({ state, signal: actionSignal }) => {
+        if (state.reservedIgnoreNames !== undefined) return { kind: "rejected" };
         const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
         if (reviewSignal.aborted) return { kind: "rejected" };
@@ -696,9 +722,6 @@ export async function showSyncSettings(
       ctx.ui.notify(saveStatus, result?.kind === "rejected" ? "warning" : "info");
       return result;
     };
-  }
-  function readOnly(state: SettingsState) {
-    return state.reservedIgnoreNames !== undefined && !ignoreAvailable;
   }
   function ignoreAction(action: Parameters<typeof showIgnoreFileAction>[2]) {
     return async ({ state, signal: actionSignal }: { state: SettingsState; signal: AbortSignal }) => {

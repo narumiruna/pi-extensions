@@ -348,19 +348,11 @@ export async function reviewInactiveIgnoreMerge(
   )
     return "cancelled" as const;
 
+  const state = await readStateForConfig(config);
   await validateFresh();
   const latest = await backend.readHead(options.signal);
   if (!isCurrent()) return "cancelled" as const;
-  const state = await readStateForConfig(config);
-  await validateFresh();
-  if (
-    !latest ||
-    !backend.sameRevision(latest.revision, head.revision) ||
-    latest.snapshotId !== head.snapshotId ||
-    latest.snapshotRef !== head.snapshotRef ||
-    !sameSnapshotSelection(latest.selection, head.selection) ||
-    syncStateFingerprint(state) !== journal.stateIdentity
-  ) {
+  if (!sameMergeRecoveryHead(backend, head, latest) || syncStateFingerprint(state) !== journal.stateIdentity) {
     throw new Error("Remote head or sync baseline changed during recovery review; journal and backup retained.");
   }
   await archiveMergeJournal(config);
@@ -370,6 +362,20 @@ export async function reviewInactiveIgnoreMerge(
       "info",
     );
   return "archived" as const;
+}
+
+export function sameMergeRecoveryHead(
+  backend: SyncBackend,
+  left: RemoteHead | undefined,
+  right: RemoteHead | undefined,
+) {
+  if (!left || !right) return left === right;
+  return (
+    backend.sameRevision(left.revision, right.revision) &&
+    left.snapshotId === right.snapshotId &&
+    left.snapshotRef === right.snapshotRef &&
+    sameSnapshotSelection(left.selection, right.selection)
+  );
 }
 
 const ignoreMergeRecoveryGuidance =

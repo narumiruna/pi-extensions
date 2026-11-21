@@ -75,11 +75,8 @@ export async function prepareDefaultIgnoreSource(
           true,
         );
         await directory.sync();
-        const checkCreation = () => {
-          checkRoot();
-          assertCurrent(markerPath, markerStat);
-        };
-        checkCreation();
+        checkRoot();
+        assertCurrent(markerPath, markerStat);
         const priorFile = priorRecord ? statAt(target) : undefined;
         if (priorFile) assertOwned(priorFile, DEFAULT_IGNORE_FILENAME, false);
         const file = await fs.open(target, priorFile ? openRead : openExclusive, 0o600).catch(async (cause) => {
@@ -92,16 +89,20 @@ export async function prepareDefaultIgnoreSource(
           throw cause;
         });
         try {
+          const checkTargetRoot = priorFile ? checkRoot : assertRoot;
           const fileStat = await flushAndVerify(
             file,
             target,
             path.join(root, DEFAULT_IGNORE_FILENAME),
             starter,
-            checkCreation,
+            () => {
+              checkTargetRoot();
+              assertCurrent(markerPath, markerStat);
+            },
             priorFile,
           );
           await directory.sync();
-          checkRoot();
+          checkTargetRoot();
           assertCurrent(target, fileStat);
           assertCurrent(markerPath, markerStat);
           unlinkSync(markerPath);
@@ -121,6 +122,7 @@ export async function prepareDefaultIgnoreSource(
       }
     } finally {
       await directory.close();
+      signal?.throwIfAborted();
     }
   } catch (cause) {
     signal?.throwIfAborted();
