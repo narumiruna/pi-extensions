@@ -17,7 +17,7 @@ import {
 
 export interface DurableLive {
   run?: { taskId: TaskId; inputs: readonly SubmissionId[]; afterRun: boolean };
-  tools: readonly { taskId?: TaskId; callId: string; name: string; status: "pending" | "running" | "done" }[];
+  tools: readonly { taskId?: TaskId; callId: string; name: string }[];
 }
 export interface DurableSnapshot {
   entries: readonly EntryRecord[];
@@ -49,11 +49,10 @@ function liveProjection(live: LiveState = {}): DurableLive {
     ...(live.run
       ? { run: { taskId: live.run.taskId, inputs: live.run.inputs, afterRun: live.run.afterRun !== undefined } }
       : {}),
-    tools: [...(live.tools ?? []), ...(live.nestedTools ?? [])].map(({ taskId, callId, name, status }) => ({
+    tools: [...(live.tools ?? []), ...(live.nestedTools ?? [])].map(({ taskId, callId, name }) => ({
       taskId,
       callId,
       name,
-      status,
     })),
   };
 }

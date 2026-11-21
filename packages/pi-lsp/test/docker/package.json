@@ -7,6 +7,6 @@
     "typebox": "1.4.3"
   },
   "overrides": {
-    "undici@8": "8.12.3"
+    "undici@8": "8.12.4"
   }
 }

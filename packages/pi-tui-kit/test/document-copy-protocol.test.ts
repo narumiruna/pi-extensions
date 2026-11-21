@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
@@ -17,6 +17,20 @@ interface RecordValue {
 
 test("real Pi RPC and Jiti keep all three document-copy callbacks out of protocol flows", async (t) => {
   const agentDir = await mkdtemp(path.join(os.tmpdir(), "kit-copy-rpc-"));
+  // Keep the CLI offline without hiding startup warnings or enabling a real provider.
+  await writeFile(
+    path.join(agentDir, "models.json"),
+    JSON.stringify({
+      providers: {
+        "kit-copy-fixture": {
+          baseUrl: "http://127.0.0.1:1/v1",
+          api: "openai-completions",
+          apiKey: "fixture",
+          models: [{ id: "unused" }],
+        },
+      },
+    }),
+  );
   const child = spawn(
     process.execPath,
     [

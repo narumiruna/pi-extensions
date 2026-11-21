@@ -1,5 +1,4 @@
-import type { Context } from "@earendil-works/chord";
-import { awaitWithContext, withCancel } from "@earendil-works/chord/context";
+import { awaitWithContext, type Context, withCancel } from "@earendil-works/chord/context";
 import type {
   CommitObservation,
   ConversationId,

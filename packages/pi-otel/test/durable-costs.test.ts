@@ -133,7 +133,7 @@ async function recordCosts(backend: TraceBackend, cost: unknown, captureContent:
       entries: [],
       live: {
         run: { taskId: runTaskId, inputs: [1 as SubmissionId], afterRun: false },
-        tools: [{ taskId: toolTaskId, callId: "nested-call", name: "nested", status: "running" }],
+        tools: [{ taskId: toolTaskId, callId: "nested-call", name: "nested" }],
       },
       tasks: [
         { id: generationTaskId, kind: "pi.generation", phase: "request", terminal: false, failed: false },

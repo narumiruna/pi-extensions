@@ -7,9 +7,9 @@ import {
   defineTool,
   GenerationTask,
   hook,
+  hookTask,
   LiveDoc,
   MemoryStorage,
-  runEndTask,
   type Submission,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
@@ -89,7 +89,7 @@ it("keeps one run open when afterRun settles its inputs to an empty list", async
       tasks: [after],
       hooks: [
         hook(GenerationTask, {
-          afterRun: () => ({ tasks: [runEndTask(after, null)] }),
+          afterRun: () => ({ tasks: [hookTask(after, null)] }),
         }),
       ],
     }),

@@ -50,8 +50,8 @@
     "@narumitw/pi-tui-kit": "^0.70.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.5.0",
-    "@earendil-works/pi-tui": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-tui": "1.6.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/semver": "^7.8.0",
     "esbuild": "0.28.2",

@@ -339,7 +339,7 @@ async function switchQuestionToDiscussion(f: Fixture, scenario: Scenario, queued
   // Installed Pi stops a uniformly terminating batch without another stream.
   // Mixed/nested batches enter the SDK stream once with an ALREADY aborted
   // signal. ModelRuntime rejects auth preparation before invoking faux; Pi's
-  // lazyStream currently classifies that setup AbortError as an error response.
+  // lazyStream classifies that setup AbortError as an aborted response.
   assert.deepEqual(
     f.requests.map((request) => request.aborted),
     [false],
@@ -348,7 +348,7 @@ async function switchQuestionToDiscussion(f: Fixture, scenario: Scenario, queued
   const assistants = f.session.messages.filter((message) => message.role === "assistant");
   assert.equal(assistants.length, scenario === "standalone" ? 1 : 2);
   if (scenario !== "standalone") {
-    assert.equal(assistants.at(-1)?.stopReason, "error");
+    assert.equal(assistants.at(-1)?.stopReason, "aborted");
     assert.match(assistants.at(-1)?.errorMessage ?? "", /abort/i);
     assert.deepEqual(assistants.at(-1)?.content, []);
   }
