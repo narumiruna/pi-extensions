@@ -41,11 +41,11 @@ Keep the existing journal schema and retain unsafe or unmatched transaction evid
 
 ## Verification Results
 
-Native Windows check, test compilation, and the final npm-driven focused run passed: 313 tests passed, none failed, and 30 were skipped. Native NTFS recovery completed after the creation-time transition and removed its journal. Both canonical package packs, the real RPC Settings smoke, and seven file-safety probe groups passed.
+Native Windows check, test compilation, and the final npm-driven focused run passed: 315 tests passed, none failed, and 30 were skipped, including the updated build-race fixture on Windows. Native NTFS recovery completed after the creation-time transition and removed its journal. Both canonical package packs, the real RPC Settings smoke, and seven file-safety probe groups passed.
 
-The complete canonical Windows run at `4073de5` recorded 23,349 passed, 983 failed, four expected failures, 199 skipped, and ten unhandled errors. Twelve failures came from inherited Windows environment-key aliases in the launcher test fixture; that fixture was corrected and all focused tests were rerun through npm successfully. The complete suite was not rerun after this test-only correction. Its gate remains open; do not describe the complete Windows suite as passing.
+The complete canonical Windows run at `4073de5` recorded 23,349 passed, 983 failed, four expected failures, 199 skipped, and ten unhandled errors. Twelve failures came from inherited Windows environment-key aliases in the launcher test fixture; that fixture was corrected and all focused tests were rerun through npm successfully. The complete suite was not rerun after the test-only corrections. Its gate remains open; do not describe the complete Windows suite as passing.
 
-A separate Linux CI run was started for the source commit because automatic PR CI targets only `main`: https://github.com/narumiruna/pi-extensions/actions/runs/44923193873. Its final result is not required to reinterpret the failed native Windows gate.
+The Linux CI run for `4073de5` passed checks and recorded 24,552 passed, one failed, and 25 skipped: https://github.com/narumiruna/pi-extensions/actions/runs/44923193873. Its only failure was the build-race fixture's old npm-launcher simulation. The fixture now declares a compiler entry, runs through Node on both platforms, and passes the Windows focused run. A final-head CI rerun remains required; it cannot reinterpret the failed native Windows gate.
 
 ## External Handoff
 
