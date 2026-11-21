@@ -39,8 +39,8 @@ baseline.
 
 | Package | Removed | Disposition |
 | --- | ---: | --- |
-| Cache Hit Monitor | 4 | Removed redundant rendering wording and preserved lifecycle and display rationale in [its ADR](./adr/pi-cache-hit-monitor-confirmed-usage.md). |
-| Ticker | 4 | Dropped the stale parity claim, moved the UI choice to [its ADR](./adr/pi-ticker-mode-specific-reorder.md), and filed [#1983](https://github.com/narumiruna/pi-extensions/issues/1983) for the shortcut workaround. |
-| Tool | 3 | Moved exposure, keyboard access, and width rationale to [its ADR](./adr/pi-tool-available-tools-widget.md). |
+| Cache Hit Monitor | 4 | Removed redundant rendering wording and preserved lifecycle and display rationale in [its ADR](./adr/0005-pi-cache-hit-monitor-confirmed-usage.md). |
+| Ticker | 4 | Dropped the stale parity claim, moved the UI choice to [its ADR](./adr/0006-pi-ticker-mode-specific-reorder.md), and filed [#1983](https://github.com/narumiruna/pi-extensions/issues/1983) for the shortcut workaround. |
+| Tool | 3 | Moved exposure, keyboard access, and width rationale to [its ADR](./adr/0007-pi-tool-available-tools-widget.md). |
 
 The other baseline entries are inventoried, not semantically classified.
