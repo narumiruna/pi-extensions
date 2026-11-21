@@ -1,5 +1,17 @@
 # @narumitw/pi-sync
 
+## 0.62.0
+
+### Minor Changes
+
+- d27317a: Prepare Pi Sync's local ignore-file policy, including recoverable default-file creation, settings review, and versioned snapshot compatibility checks. Existing setups are not migrated automatically. The new setup flow and first-open migration prompt remain disabled. Settings can show an existing rule file for manual editing; the daemon does not replace it. Settings shows the active settings path in RPC and explains which setup actions are unavailable while ignore-file transfers are disabled.
+- 5b9146b: Let the `configure-pi-sync` skill apply and verify requested local settings edits, such as adding exclusions, through the running Pi Sync daemon without starting a transfer.
+
+### Patch Changes
+
+- 5262897: Ship the daemon with Pi Sync so npm installs no longer require the standalone daemon package. The daemon still runs in a separate Node.js process with the same ownership and upgrade rules. If you only install Pi Sync, run `node <pi-sync-package>/dist/daemon/dist/cli.js` to use the daemon CLI. Standalone daemon releases do not update the bundled copy; update Pi Sync to get a newer bundled build.
+- 4073de5: Fix Windows recovery when NTFS changes a restored file's creation time during rename. Keep exact content, file ID, spelling, and pre-rename ownership checks, and preserve existing recovery journal formats. Make the daemon build use the Node compiler entrypoint instead of spawning a Windows command script.
+
 ## 0.61.0
 
 ### Minor Changes
