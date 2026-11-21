@@ -298,7 +298,7 @@ async function createRuntime(consumer: Consumer, observerFirst = false) {
       assert.ok(rpc.dialogs.some((dialog) => dialog.options?.includes("Next eligible future user cycle settled")));
     } else {
       await tui.waitForOpen();
-      for (const label of ["Widget view", "Automatic compaction", "Next eligible settled cycle"]) {
+      for (const label of ["Settings", "Switch to counts", "After next reply"]) {
         let found = false;
         for (let index = 0; index < 20; index++) {
           if (tui.render().some((line) => stripVTControlCharacters(line).includes(`→ ${label}`))) {
@@ -313,7 +313,7 @@ async function createRuntime(consumer: Consumer, observerFirst = false) {
       }
       tui.press("ctrl+c");
       await command;
-      assert.ok(menuFrames.some((frame) => frame.includes("Automatic compaction")));
+      assert.ok(menuFrames.some((frame) => frame.includes("Preview · sample jobs")));
     }
     assertExpanded();
     assert.deepEqual(notifications, []);

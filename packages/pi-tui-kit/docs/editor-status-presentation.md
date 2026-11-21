@@ -63,7 +63,7 @@ Existing owner controls restore the body without changing domain data:
 | Widget | Keyboard restore path |
 | --- | --- |
 | Progress | `/progress` → Widget view → default, details, or summary. |
-| Subagents | `/subagents` → Widget view → details or summary. |
+| Subagents | `/subagents settings` → Status view → Job rows or Counts only. |
 | Herdr | Open `/herdr`. |
 | Files | Open `/files`. |
 | Plan mode | Open `/plan` without arguments. |
