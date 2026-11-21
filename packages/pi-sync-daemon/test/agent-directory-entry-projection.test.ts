@@ -217,6 +217,37 @@ test("merge subtracts reviewed directory removals, even when recovery has alread
     );
   }));
 
+for (const lateDirectory of [false, true]) {
+  test(`merge ${lateDirectory ? "refuses a retained entry added after projection" : "installs exactly at the entry bound"}`, () =>
+    fixture(async (root) => {
+      await createEmptyDirectories(root, entryLimit - 1);
+      const before = await createSnapshot("test", scope);
+      const after = incoming(before, "new.md");
+      const release = vi.spyOn(fs, "opendir");
+      const latePath = path.join(root, "late-empty");
+      let inserted = false;
+      try {
+        const run = applyMergedSnapshot(JSON.parse(JSON.stringify(before)), after, new Set(), scope, async () => {
+          if (!lateDirectory || inserted || !release.mock.calls.some(([target]) => target === root)) return;
+          inserted = true;
+          await fs.mkdir(latePath);
+        });
+        if (lateDirectory) {
+          await assert.rejects(run, /Projected agent directory exceeds the scan entry bound/);
+          assert.equal(inserted, true);
+          assert.ok((await fs.stat(latePath)).isDirectory());
+          await assert.rejects(fs.stat(path.join(root, "new.md")), { code: "ENOENT" });
+        } else {
+          await run;
+          assert.equal(await fs.readFile(path.join(root, "new.md"), "utf8"), "incoming");
+          assert.equal(agentDirectoryInventory(await createSnapshot("test", scope))?.entries.size, entryLimit);
+        }
+      } finally {
+        release.mockRestore();
+      }
+    }));
+}
+
 test("merge refuses directories not authorized by the durable file preimage before deleting reviewed files", () =>
   fixture(async (root) => {
     const target = path.join(root, "tree");

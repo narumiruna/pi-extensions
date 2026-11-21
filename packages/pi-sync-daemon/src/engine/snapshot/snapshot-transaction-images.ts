@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
-import { constants, type Stats } from "node:fs";
-import fs from "node:fs/promises";
+import { type BigIntStats, constants, type Stats } from "node:fs";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { syncDirectory } from "../state/json-file.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import { MAX_AGENT_DIRECTORY_ENTRIES, MAX_AGENT_DIRECTORY_FILES } from "../sync/sync-policy.js";
 import { MAX_AGENT_DIRECTORY_BYTES } from "./snapshot-bounds.js";
 import { fileImage } from "./snapshot-transaction-plan.js";
-import type { TransactionEntry } from "./snapshot-transaction-policy.js";
+import { isScopedIdentity, type TransactionEntry } from "./snapshot-transaction-policy.js";
 
 export const MAX_TRANSACTION_JOURNAL_BYTES = 32 * 1024 * 1024;
 const CHUNK_BYTES = 64 * 1024;
@@ -20,12 +20,26 @@ interface Guards {
 interface ScopedDirectoryImage {
   kind: "directory";
   value: string;
-  stat: Stats;
+  stat: BigIntStats;
   children: [string, ScopedNode][];
 }
 
-type ScopedNode = { kind: "file"; value: string; stat: Stats } | ScopedDirectoryImage;
+type ScopedNode = { kind: "file"; value: string; stat: BigIntStats } | ScopedDirectoryImage;
 export type ScopedImage = { kind: "missing"; value: "missing" } | ScopedNode;
+
+export async function scopedPathIdentity(target: string, guards: Guards) {
+  validate(guards);
+  const stat = await fs.lstat(target, { bigint: true });
+  validate(guards);
+  return scopedIdentity(stat);
+}
+
+export function scopedIdentity(stat: BigIntStats) {
+  // Birth time, where available, distinguishes a recycled inode from the original object.
+  const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+  if (!isScopedIdentity(identity)) changedImage();
+  return identity;
+}
 
 function validate(guards: Guards) {
   guards.signal?.throwIfAborted();
@@ -36,21 +50,21 @@ function changedImage(): never {
   throw new Error("Transaction image changed or is unsafe; preserve evidence for review.");
 }
 
-function sameIdentity(a: Stats, b: Stats) {
+function sameIdentity(a: BigIntStats, b: BigIntStats) {
   return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode;
 }
 
-function sameObservation(a: Stats, b: Stats) {
+function sameObservation(a: BigIntStats, b: BigIntStats) {
   return (
-    sameIdentity(a, b) && a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
+    sameIdentity(a, b) && a.nlink === b.nlink && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
   );
 }
 
-async function lstat(target: string, guards: Guards): Promise<Stats | undefined> {
+async function lstat(target: string, guards: Guards): Promise<BigIntStats | undefined> {
   validate(guards);
-  let stat: Stats;
+  let stat: BigIntStats;
   try {
-    stat = await fs.lstat(target);
+    stat = await fs.lstat(target, { bigint: true });
   } catch (error) {
     validate(guards);
     const code = (error as NodeJS.ErrnoException).code;
@@ -61,37 +75,38 @@ async function lstat(target: string, guards: Guards): Promise<Stats | undefined>
   return stat;
 }
 
-async function recheck(target: string, original: Stats, guards: Guards, identityOnly = false) {
+async function recheck(target: string, original: BigIntStats, guards: Guards, identityOnly = false) {
   const current = await lstat(target, guards);
   if (!current || !(identityOnly ? sameIdentity : sameObservation)(original, current)) changedImage();
 }
 
 async function readStableFile(
   target: string,
-  original: Stats,
+  original: BigIntStats,
   guards: Guards,
   consume: (chunk: Buffer, offset: number) => void | Promise<void>,
 ) {
   validate(guards);
   const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     validate(guards);
     if (!opened.isFile() || !sameObservation(original, opened)) changedImage();
     // On filesystems/platforms without O_NOFOLLOW, no bytes are read until the descriptor
     // matches the observed regular path and the pathname is checked again.
     await recheck(target, original, guards);
-    const buffer = Buffer.alloc(Math.min(CHUNK_BYTES, original.size));
-    for (let offset = 0; offset < original.size; ) {
+    const size = Number(original.size);
+    const buffer = Buffer.alloc(Math.min(CHUNK_BYTES, size));
+    for (let offset = 0; offset < size; ) {
       validate(guards);
-      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, original.size - offset), offset);
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, size - offset), offset);
       validate(guards);
       if (bytesRead === 0) changedImage();
       await consume(buffer.subarray(0, bytesRead), offset);
       offset += bytesRead;
     }
     // A file that grows never increases the read budget, and is not accepted as its original prefix.
-    if (!sameObservation(original, await handle.stat())) changedImage();
+    if (!sameObservation(original, await handle.stat({ bigint: true }))) changedImage();
   } finally {
     await handle.close();
   }
@@ -99,11 +114,11 @@ async function readStableFile(
 }
 
 /** Journal policy is not known until parsing; apply the serialized bound before and during the read. */
-export async function readTransactionJournal(file: string, guards: Guards) {
+export async function readTransactionJournal(file: string, guards: Guards, maxBytes = MAX_TRANSACTION_JOURNAL_BYTES) {
   const stat = await lstat(file, guards);
   if (!stat) return undefined;
-  if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_TRANSACTION_JOURNAL_BYTES) changedImage();
-  const content = Buffer.alloc(stat.size);
+  if (!stat.isFile() || stat.nlink !== 1n || stat.size > maxBytes) changedImage();
+  const content = Buffer.alloc(Number(stat.size));
   await readStableFile(file, stat, guards, (chunk, offset) => {
     chunk.copy(content, offset);
   });
@@ -116,13 +131,14 @@ export async function scopedTransactionImage(
   guards: Guards,
   copyTo?: string,
   checkPath?: (source: string) => Promise<void>,
+  beforeCopyFile?: (handle: FileHandle) => Promise<void>,
 ): Promise<ScopedImage> {
   const stat = await lstat(target, guards);
   if (!stat) return { kind: "missing", value: "missing" };
   let entries = 1;
   let files = 0;
   let bytes = 0;
-  async function visit(source: string, observed: Stats, destination: string | undefined): Promise<ScopedNode> {
+  async function visit(source: string, observed: BigIntStats, destination: string | undefined): Promise<ScopedNode> {
     if (checkPath) await checkPath(source);
     validate(guards);
     if (observed.isDirectory()) {
@@ -144,7 +160,7 @@ export async function scopedTransactionImage(
       }
       if (destination) {
         validate(guards);
-        await fs.chmod(destination, observed.mode & 0o777);
+        await fs.chmod(destination, Number(observed.mode & 0o777n));
         validate(guards);
         await fs.utimes(destination, observed.atime, observed.mtime);
         validate(guards);
@@ -155,21 +171,22 @@ export async function scopedTransactionImage(
       const value = `directory:${createHash("sha256").update(JSON.stringify(rows)).digest("hex")}`;
       return { kind: "directory", value, stat: observed, children };
     }
-    if (!observed.isFile() || observed.nlink !== 1) changedImage();
+    if (!observed.isFile() || observed.nlink !== 1n) changedImage();
     if (++files > MAX_AGENT_DIRECTORY_FILES)
       throw new Error("Transaction image exceeds the agent-directory file bound.");
-    bytes += observed.size;
+    bytes += Number(observed.size);
     if (bytes > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Transaction image exceeds the 64 MiB byte bound.");
     const hash = createHash("sha256");
     const copy = destination ? await fs.open(destination, "wx", 0o600) : undefined;
     try {
+      if (copy) await beforeCopyFile?.(copy);
       await readStableFile(source, observed, guards, async (chunk) => {
         hash.update(chunk);
         if (copy) await copy.writeFile(chunk);
       });
       if (copy) {
         validate(guards);
-        await copy.chmod(observed.mode & 0o777);
+        await copy.chmod(Number(observed.mode & 0o777n));
         validate(guards);
         await copy.utimes(observed.atime, observed.mtime);
         validate(guards);
@@ -182,6 +199,42 @@ export async function scopedTransactionImage(
     return { kind: "file", value: `file:${hash.digest("hex")}`, stat: observed };
   }
   return visit(target, stat, copyTo);
+}
+
+/** Every surviving path must have its original spelling, kind and (for files) hash. */
+export function ownedScopedSubset(image: ScopedImage, expected: ScopedImage): boolean {
+  if (image.kind !== expected.kind) return false;
+  if (image.kind !== "directory" || expected.kind !== "directory") return image.value === expected.value;
+  const children = new Map(expected.children);
+  return image.children.every(([name, child]) => {
+    const original = children.get(name);
+    return original !== undefined && ownedScopedSubset(child, original);
+  });
+}
+
+export async function matchesScopedFilePrefix(
+  source: string,
+  original: ScopedImage,
+  partial: ScopedImage,
+  guards: Guards,
+) {
+  if (original.kind !== "file" || partial.kind !== "file" || partial.stat.size > original.stat.size) return false;
+  const hash = createHash("sha256");
+  const size = Number(partial.stat.size);
+  await readStableFile(source, original.stat, guards, (chunk, offset) => {
+    if (offset < size) hash.update(chunk.subarray(0, size - offset));
+  });
+  return partial.value === `file:${hash.digest("hex")}`;
+}
+
+export function scopedDescendant(image: ScopedImage, relative: string) {
+  let node: ScopedImage | undefined = image;
+  for (const name of relative ? relative.split(path.sep) : []) {
+    if (node?.kind !== "directory") return;
+    const directory: ScopedDirectoryImage = node;
+    node = directory.children.find(([child]) => child === name)?.[1];
+  }
+  return node;
 }
 
 /** Remove only leaves in an authorized image; the kernel must find each directory empty. */

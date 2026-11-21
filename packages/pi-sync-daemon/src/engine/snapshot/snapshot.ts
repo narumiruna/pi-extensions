@@ -290,7 +290,11 @@ export function agentDirectorySessionDirFromSettings(content: Buffer) {
   return value ? expandSessionDir(value) : undefined;
 }
 
-async function collectAgentDirectory(root: string, options: SnapshotOptions) {
+export async function scanAgentDirectoryInventory(root: string, options: SnapshotOptions) {
+  return (await collectAgentDirectory(root, options, false)).inventory;
+}
+
+async function collectAgentDirectory(root: string, options: SnapshotOptions, readContents = true) {
   const signal = options.signal;
   const excluded = compileSyncPolicyExclude(options);
   const canTraverse = compileSyncPolicyTraversal(options);
@@ -373,9 +377,15 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
 
   assertAgentDirectoryPathLayout(candidates.map((candidate) => candidate.snapshotPath));
   const results: SnapshotFile[] = [];
-  for (const candidate of candidates) {
-    const content = await readScannedFile(candidate, signal);
-    results.push({ path: candidate.snapshotPath, contentBase64: content.toString("base64"), sha256: sha256(content) });
+  if (readContents) {
+    for (const candidate of candidates) {
+      const content = await readScannedFile(candidate, signal);
+      results.push({
+        path: candidate.snapshotPath,
+        contentBase64: content.toString("base64"),
+        sha256: sha256(content),
+      });
+    }
   }
   // No caller can mistake a changed/disappeared directory or routing policy for an empty snapshot subtree.
   for (const directory of directories) await recheck(directory, signal);

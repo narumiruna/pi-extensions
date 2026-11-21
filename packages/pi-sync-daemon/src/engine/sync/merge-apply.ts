@@ -8,6 +8,7 @@ import {
   agentDirectoryConfiguredSessionDir,
   agentDirectoryInventory,
   createSnapshot,
+  scanAgentDirectoryInventory,
   snapshotTarget,
 } from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
@@ -475,6 +476,14 @@ export async function applyMergedSnapshot(
       if (hash !== beforeHashes[relative] && hash !== afterHashes[relative])
         throw new Error("Local content changed at the apply boundary; journal retained, newer bytes untouched.");
     };
+    async function recheckEntryBudget(deletes: string[]) {
+      if (options.scope !== "agent-directory") return;
+      const inventory = await scanAgentDirectoryInventory(root, options);
+      options.signal?.throwIfAborted();
+      options.validateMutation?.();
+      assertProjectedAgentDirectoryEntries(inventory, { writes: plan.writes, deletes }, options);
+    }
+    if (plan.deletes.length) await recheckEntryBudget(plan.deletes);
     for (const target of plan.deletes) {
       await revalidateTarget(target);
       try {
@@ -512,6 +521,10 @@ export async function applyMergedSnapshot(
     await requireAbsentDestinations();
     await acquireDestinations(0);
     async function writeTargets() {
+      if (plan.writes.length && options.scope === "agent-directory") {
+        await validate();
+        await recheckEntryBudget([]);
+      }
       for (const item of plan.writes) {
         await validate();
         const relative = relativeByTarget.get(item.target);

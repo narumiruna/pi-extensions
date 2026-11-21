@@ -8,19 +8,30 @@ import { sessionStorageRoot } from "./snapshot-paths.js";
 import { type SessionRootTransition, validateSessionRootTransition } from "./snapshot-root-transition.js";
 import type { SnapshotSelection } from "./snapshot-types.js";
 
-export const AGENT_DIRECTORY_JOURNAL_VERSION = 8;
+export const LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION = 8;
+export const AGENT_DIRECTORY_JOURNAL_VERSION = 9;
+
+export function isScopedJournal(journal: TransactionJournalPolicy) {
+  return (
+    journal.version === LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION || journal.version === AGENT_DIRECTORY_JOURNAL_VERSION
+  );
+}
+
+export function isScopedIdentity(value: unknown): value is string {
+  return typeof value === "string" && /^\d{1,20}:[1-9]\d{0,19}:\d{1,20}$/u.test(value);
+}
 
 export interface TransactionJournalPolicy {
   version: number;
   exclude?: string[];
-  /** Version 8 binds recovery to the complete directory policy, including session opt-in. */
+  /** Version 8 and later bind recovery to the complete directory policy, including session opt-in. */
   selection?: SnapshotSelection;
 }
 
 export function validateJournalPolicy(journal: TransactionJournalPolicy) {
-  if (!journal || ![1, 2, 3, 4, 5, 6, 7, AGENT_DIRECTORY_JOURNAL_VERSION].includes(journal.version))
+  if (!journal || (![1, 2, 3, 4, 5, 6, 7].includes(journal.version) && !isScopedJournal(journal)))
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
-  if (journal.version === AGENT_DIRECTORY_JOURNAL_VERSION) {
+  if (isScopedJournal(journal)) {
     if (journal.exclude !== undefined || portableSnapshotSelection(journal.selection).version !== 3)
       throw new Error("Invalid agent-directory transaction policy; preserve evidence.");
   } else if (journal.selection !== undefined) {
@@ -59,8 +70,14 @@ export interface TransactionEntry {
   removalPending?: boolean;
   /** Published before materialization: absence/partial trees can no longer prove an unstarted replacement. */
   replacementStarted?: boolean;
-  /** Published before copying to a transaction-derived sibling staging path. */
+  /** Published before copying to a legacy sibling staging path. */
   recoveryStaged?: boolean;
+  /** Version 9: identity of the private workspace on the destination filesystem. */
+  recoveryWorkspace?: string;
+  /** Version 9: identity and source image of an interrupted removal. */
+  scopedRemoval?: { image: "before" | "after"; identity: string };
+  /** Version 9: identity of the complete payload reserved to fill a recovery-owned vacancy. */
+  vacantInstall?: string;
 }
 export interface TransactionJournal extends TransactionJournalPolicy {
   /** Version 6: durable files are accepted; surviving evidence permits cleanup only. */
@@ -74,12 +91,12 @@ export interface TransactionJournal extends TransactionJournalPolicy {
 
 export function validateJournal(directory: string, journal: TransactionJournal, sessionDir?: string) {
   validateJournalPolicy(journal);
-  const wholeDirectory = journal.version === AGENT_DIRECTORY_JOURNAL_VERSION;
+  const wholeDirectory = isScopedJournal(journal);
   if (!Array.isArray(journal.entries) || journal.entries.length > 16_384)
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
   if (
     journal.completed !== undefined &&
-    (![6, 7, AGENT_DIRECTORY_JOURNAL_VERSION].includes(journal.version) || journal.completed !== true)
+    ((!wholeDirectory && ![6, 7].includes(journal.version)) || journal.completed !== true)
   )
     throw new Error("Invalid transaction completion evidence.");
   const root = path.resolve(agentDir());
@@ -120,7 +137,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
     assertAllowedTarget(root, journal.sessionRoot, entry.target);
     if (
       entry.afterTarget !== undefined &&
-      (![5, 6, 7, AGENT_DIRECTORY_JOURNAL_VERSION].includes(journal.version) ||
+      ((!wholeDirectory && ![5, 6, 7].includes(journal.version)) ||
         typeof entry.afterTarget !== "string" ||
         !isCaseReplacement(root, entry.target, entry.afterTarget) ||
         path.resolve(entry.afterTarget) !== entry.afterTarget ||
@@ -135,7 +152,10 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
         (entry.postFiles === undefined ? !journal.completed : !Array.isArray(entry.postFiles)))
     )
       throw new Error("Invalid transaction postimage evidence.");
-    if (entry.recoveryStaged !== undefined && typeof entry.recoveryStaged !== "boolean")
+    if (
+      entry.recoveryStaged !== undefined &&
+      (typeof entry.recoveryStaged !== "boolean" || journal.version === AGENT_DIRECTORY_JOURNAL_VERSION)
+    )
       throw new Error("Invalid recovery staging evidence.");
     if (entry.removalPending !== undefined && (journal.version < 3 || typeof entry.removalPending !== "boolean"))
       throw new Error("Invalid transaction removal evidence.");
@@ -146,6 +166,28 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
       throw new Error("Invalid transaction replacement evidence.");
     if (entry.removalPending && entry.replacementStarted)
       throw new Error("Conflicting transaction replacement evidence.");
+    if (
+      (entry.recoveryWorkspace !== undefined &&
+        (journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION ||
+          !isScopedIdentity(entry.recoveryWorkspace) ||
+          entry.recoveryStaged ||
+          !["file", "directory"].includes(entry.kind))) ||
+      (entry.scopedRemoval !== undefined &&
+        (journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION ||
+          !entry.removalPending ||
+          !["before", "after"].includes(entry.scopedRemoval?.image) ||
+          !isScopedIdentity(entry.scopedRemoval?.identity) ||
+          (entry.scopedRemoval.image === "before"
+            ? !["file", "directory"].includes(entry.kind)
+            : entry.afterImage === "missing" && !entry.postFiles?.length))) ||
+      (entry.vacantInstall !== undefined &&
+        (journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION ||
+          !entry.recoveryWorkspace ||
+          !isScopedIdentity(entry.vacantInstall) ||
+          entry.removalPending ||
+          entry.replacementStarted))
+    )
+      throw new Error("Invalid scoped transaction progress evidence.");
     for (const file of entry.postFiles ?? []) {
       if (
         typeof file.relative !== "string" ||

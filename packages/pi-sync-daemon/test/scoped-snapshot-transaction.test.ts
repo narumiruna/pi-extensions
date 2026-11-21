@@ -16,6 +16,7 @@ import { scopedTransactionImage } from "../src/engine/snapshot/snapshot-transact
 import { fileImage } from "../src/engine/snapshot/snapshot-transaction-plan.js";
 import {
   AGENT_DIRECTORY_JOURNAL_VERSION,
+  LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION,
   type TransactionEntry,
   type TransactionJournal,
 } from "../src/engine/snapshot/snapshot-transaction-policy.js";
@@ -166,12 +167,12 @@ for (const change of ["none", "late child"] as const) {
     }));
 }
 
-async function recoveryFixture(root: string, entry: TransactionEntry) {
+async function recoveryFixture(root: string, entry: TransactionEntry, version = AGENT_DIRECTORY_JOURNAL_VERSION) {
   const directory = path.join(transactionRoot(), "interrupted");
   const before = path.join(directory, "before", entry.backupName);
   await fs.mkdir(path.dirname(before), { recursive: true });
   const journal: TransactionJournal = {
-    version: AGENT_DIRECTORY_JOURNAL_VERSION,
+    version,
     selection: selectionForSnapshot([], undefined, selection(root)),
     root,
     sessionRoot: selection(root).sessionDir,
@@ -180,8 +181,9 @@ async function recoveryFixture(root: string, entry: TransactionEntry) {
   const evidence = path.join(directory, "journal.json");
   await fs.writeFile(evidence, JSON.stringify(journal));
   const token = createHash("sha256").update(directory).update("\\0").update(entry.backupName).digest("hex");
-  const stage = path.join(path.dirname(entry.target), `.pi-sync.json.${token}.restore-tree`);
-  return { before, evidence, stage };
+  const suffix = entry.kind === "file" ? "restore" : "restore-tree";
+  const stage = path.join(path.dirname(entry.target), `.pi-sync.json.${token}.${suffix}`);
+  return { before, evidence, stage, workspace: `${stage}.workspace` };
 }
 
 for (const change of ["none", "late child", "different spelling"] as const) {
@@ -222,7 +224,8 @@ for (const change of ["none", "late child", "different spelling"] as const) {
         assert.deepEqual(await fs.readFile(before), oldBytes);
         const journal = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
         assert.equal(journal.entries[0]?.removalPending, true);
-        assert.equal(journal.entries[0]?.recoveryStaged, true);
+        assert.ok(journal.entries[0]?.recoveryWorkspace);
+        assert.equal(journal.entries[0]?.scopedRemoval?.image, "after");
         assert.equal(journal.completed, undefined);
       }
       assert.equal(
@@ -237,15 +240,19 @@ for (const change of ["none", "partial", "extra child", "late child"] as const) 
     fixture(async (root) => {
       const target = path.join(root, "tree");
       await fs.writeFile(target, newBytes);
-      const { before, evidence, stage } = await recoveryFixture(root, {
-        target,
-        backupName: "0",
-        kind: "directory",
-        beforeImage: directoryImage([["known.txt", fileImage(oldBytes)]]),
-        afterImage: fileImage(newBytes),
-        postFiles: [],
-        recoveryStaged: true,
-      });
+      const { before, evidence, stage } = await recoveryFixture(
+        root,
+        {
+          target,
+          backupName: "0",
+          kind: "directory",
+          beforeImage: directoryImage([["known.txt", fileImage(oldBytes)]]),
+          afterImage: fileImage(newBytes),
+          postFiles: [],
+          recoveryStaged: true,
+        },
+        LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION,
+      );
       await fs.mkdir(before);
       await fs.writeFile(path.join(before, "known.txt"), oldBytes);
       await fs.mkdir(stage);
@@ -279,5 +286,214 @@ for (const change of ["none", "partial", "extra child", "late child"] as const) 
         rm.mock.calls.some(([file, options]) => file === stage && options?.recursive),
         false,
       );
+    }));
+}
+
+for (const change of ["none", "changed scratch", "foreign scratch", "oversized scratch", "foreign payload"] as const) {
+  test(`scoped restarted copy requires ownership of partial bytes (${change})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "tree");
+      const big = Buffer.alloc(80 * 1024, 53);
+      await fs.writeFile(target, newBytes);
+      const { before, evidence, workspace } = await recoveryFixture(root, {
+        target,
+        backupName: "0",
+        kind: "directory",
+        beforeImage: directoryImage([
+          ["a", fileImage(oldBytes)],
+          ["b", fileImage(big)],
+        ]),
+        afterImage: fileImage(newBytes),
+        postFiles: [],
+      });
+      const scratch = path.join(workspace, "scratch");
+      const stagedFirst = path.join(workspace, "image", "a");
+      const stagedSecond = path.join(workspace, "image", "b");
+      await fs.mkdir(before);
+      await fs.writeFile(path.join(before, "a"), oldBytes);
+      await fs.writeFile(path.join(before, "b"), big);
+      const open = fs.open.bind(fs);
+      let started = 0;
+      const fault = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        const handle = await open(file, flags, mode);
+        if (file === scratch && flags === "wx" && ++started === 2) {
+          const write = handle.writeFile.bind(handle);
+          handle.writeFile = async (chunk) => {
+            await write(chunk);
+            throw new Error("copy interrupted after its first chunk");
+          };
+        }
+        return handle;
+      });
+      await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /copy interrupted/);
+      fault.mockRestore();
+      assert.deepEqual(await fs.readFile(target), newBytes);
+      assert.deepEqual(await fs.readFile(stagedFirst), oldBytes);
+      await assert.rejects(fs.lstat(stagedSecond), { code: "ENOENT" });
+      const partial = await fs.readFile(scratch);
+      assert.ok(partial.length > 0 && partial.length < big.length);
+      const originalEvidence = await fs.readFile(evidence);
+      if (change === "changed scratch") await fs.writeFile(scratch, "ordinary changed bytes");
+      if (change === "foreign scratch") {
+        await fs.rename(scratch, path.join(root, "saved-scratch"));
+        await fs.writeFile(scratch, partial);
+      }
+      if (change === "oversized scratch") await fs.truncate(scratch, MAX_AGENT_DIRECTORY_BYTES + 1);
+      if (change === "foreign payload") await fs.writeFile(stagedSecond, partial);
+      const retriedOpen = vi.spyOn(fs, "open");
+      const retry = recoverPendingSnapshotTransactions(selection(root));
+      if (change === "none") {
+        await retry;
+        assert.deepEqual(await fs.readFile(path.join(target, "a")), oldBytes);
+        assert.deepEqual(await fs.readFile(path.join(target, "b")), big);
+        await assert.rejects(fs.lstat(workspace), { code: "ENOENT" });
+        await assert.rejects(fs.lstat(evidence), { code: "ENOENT" });
+      } else {
+        await assert.rejects(
+          retry,
+          change === "oversized scratch" ? /64 MiB byte bound/ : /unrecognized recovery staging image/i,
+        );
+        assert.deepEqual(await fs.readFile(target), newBytes);
+        assert.deepEqual(await fs.readFile(evidence), originalEvidence);
+        if (change === "oversized scratch") {
+          assert.equal(
+            retriedOpen.mock.calls.some(([file]) => file === scratch),
+            false,
+          );
+          assert.equal((await fs.lstat(scratch)).size, MAX_AGENT_DIRECTORY_BYTES + 1);
+        } else if (change === "changed scratch") {
+          assert.equal(await fs.readFile(scratch, "utf8"), "ordinary changed bytes");
+        } else {
+          assert.deepEqual(await fs.readFile(change === "foreign payload" ? stagedSecond : scratch), partial);
+        }
+      }
+    }));
+}
+
+for (const change of ["none", "install completed", "foreign preimage", "foreign postimage", "foreign stage"] as const) {
+  test(`scoped recovery can restart at a reserved vacancy (${change})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "tree");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "incoming"), newBytes);
+      const { before, evidence, workspace } = await recoveryFixture(root, {
+        target,
+        backupName: "0",
+        kind: "file",
+        beforeImage: fileImage(oldBytes),
+        afterImage: "missing",
+        postFiles: [{ relative: "incoming", image: fileImage(newBytes) }],
+      });
+      await fs.writeFile(before, oldBytes);
+      const payload = path.join(workspace, "image");
+      const rename = fs.rename.bind(fs);
+      const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (from !== payload || to !== target) return rename(from, to);
+        if (change === "install completed") await rename(from, to);
+        throw new Error("recovery interrupted at installation");
+      });
+      await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /interrupted at installation/);
+      fault.mockRestore();
+      const originalEvidence = await fs.readFile(evidence);
+      const journal = JSON.parse(originalEvidence.toString()) as TransactionJournal;
+      assert.ok(journal.entries[0]?.vacantInstall);
+      if (change !== "install completed") await assert.rejects(fs.lstat(target), { code: "ENOENT" });
+      if (change === "foreign preimage") await fs.writeFile(target, oldBytes);
+      if (change === "foreign postimage") {
+        await fs.mkdir(target);
+        await fs.writeFile(path.join(target, "incoming"), newBytes);
+      }
+      if (change === "foreign stage") {
+        await fs.rename(payload, path.join(root, "saved-payload"));
+        await fs.writeFile(payload, oldBytes);
+      }
+      const retry = recoverPendingSnapshotTransactions(selection(root));
+      if (change === "none" || change === "install completed") {
+        await retry;
+        assert.deepEqual(await fs.readFile(target), oldBytes);
+        await assert.rejects(fs.lstat(workspace), { code: "ENOENT" });
+        await assert.rejects(fs.lstat(evidence), { code: "ENOENT" });
+      } else {
+        await assert.rejects(retry, /unrecognized or newer bytes|no verified staging image/);
+        assert.deepEqual(await fs.readFile(evidence), originalEvidence);
+        assert.deepEqual(await fs.readFile(payload), oldBytes);
+        if (change === "foreign preimage") assert.deepEqual(await fs.readFile(target), oldBytes);
+        if (change === "foreign postimage")
+          assert.deepEqual(await fs.readFile(path.join(target, "incoming")), newBytes);
+        if (change === "foreign stage") await assert.rejects(fs.lstat(target), { code: "ENOENT" });
+      }
+    }));
+}
+
+for (const change of ["none", "added child", "changed child", "foreign tree", "version 8"] as const) {
+  test(`scoped apply can roll back an interrupted reviewed preimage removal (${change})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "tree");
+      const nested = path.join(target, "nested");
+      const first = path.join(nested, "a");
+      const second = path.join(nested, "b");
+      await fs.mkdir(nested, { recursive: true });
+      await fs.writeFile(first, oldBytes);
+      await fs.writeFile(second, newBytes);
+      const nestedImage = directoryImage([
+        ["a", fileImage(oldBytes)],
+        ["b", fileImage(newBytes)],
+      ]);
+      const before = directoryImage([["nested", nestedImage]]);
+      const controller = new AbortController();
+      const unlink = fs.unlink.bind(fs);
+      const fault = vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+        await unlink(file);
+        if (file === first) controller.abort();
+      });
+      await assert.rejects(
+        applySnapshotTransaction(
+          { deletes: [target, nested, first], writes: [{ target, content: newBytes }] },
+          {
+            ...selection(root),
+            signal: controller.signal,
+            expectedPreimages: new Map([
+              [target, before],
+              [nested, nestedImage],
+              [first, fileImage(oldBytes)],
+            ]),
+          },
+        ),
+        /apply cancelled/i,
+      );
+      fault.mockRestore();
+      const [id] = await fs.readdir(transactionRoot());
+      assert.ok(id);
+      const evidence = path.join(transactionRoot(), id, "journal.json");
+      const journal = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
+      assert.equal(journal.entries.find((entry) => entry.target === target)?.scopedRemoval?.image, "before");
+      assert.equal(journal.entries.find((entry) => entry.target === nested)?.scopedRemoval?.image, "before");
+      await assert.rejects(fs.lstat(first), { code: "ENOENT" });
+      if (change === "added child") await fs.writeFile(path.join(nested, "extra"), oldBytes);
+      if (change === "changed child") await fs.writeFile(second, oldBytes);
+      if (change === "foreign tree") {
+        await fs.rename(target, path.join(root, "saved-tree"));
+        await fs.mkdir(nested, { recursive: true });
+        await fs.writeFile(second, newBytes);
+      }
+      if (change === "version 8") {
+        journal.version = LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION;
+        for (const entry of journal.entries) delete entry.scopedRemoval;
+        await fs.writeFile(evidence, JSON.stringify(journal));
+      }
+      const originalEvidence = await fs.readFile(evidence);
+      const retry = recoverPendingSnapshotTransactions(selection(root));
+      if (change === "none") {
+        await retry;
+        assert.deepEqual(await fs.readFile(first), oldBytes);
+        assert.deepEqual(await fs.readFile(second), newBytes);
+        await assert.rejects(fs.lstat(evidence), { code: "ENOENT" });
+      } else {
+        await assert.rejects(retry, /unrecognized or newer bytes/);
+        await assert.rejects(fs.lstat(first), { code: "ENOENT" });
+        assert.deepEqual(await fs.readFile(second), change === "changed child" ? oldBytes : newBytes);
+        if (change === "added child") assert.deepEqual(await fs.readFile(path.join(nested, "extra")), oldBytes);
+        assert.deepEqual(await fs.readFile(evidence), originalEvidence);
+      }
     }));
 }
