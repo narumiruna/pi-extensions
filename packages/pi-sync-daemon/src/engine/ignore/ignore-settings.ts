@@ -27,6 +27,7 @@ import { configuredSnapshotPathMatcher } from "../sync/sync-policy.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { compileEffectiveIgnorePolicy } from "./effective-ignore-policy.js";
 import { initializeDefaultIgnoreSource } from "./ignore-initialization.js";
+import { assertCurrentIgnoreMigrationOffer } from "./ignore-migration-prompt.js";
 import {
   compileIgnoreRules,
   DEFAULT_IGNORE_CREATION_RECORD,
@@ -204,7 +205,7 @@ export async function switchIgnoreFile(
   );
 }
 
-export async function migrateIgnoreSetup(execution: Execution, setupName: string) {
+export async function migrateIgnoreSetup(execution: Execution, setupName: string, offerToken?: string) {
   const ctx = requireInteractive(execution);
   await requireHandover(execution);
   execution.validate();
@@ -213,6 +214,7 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
       const document = await peekLocalConfigDocument();
       execution.validate();
       if (!document) throw new Error("No Pi Sync settings to migrate.");
+      if (offerToken !== undefined) assertCurrentIgnoreMigrationOffer(document, execution.root, setupName, offerToken);
       const before = validateSettingsDocument(document.parsed);
       const setup = Object.hasOwn(before.syncSetups, setupName) ? before.syncSetups[setupName] : undefined;
       if (!setup || ignoreFilename(setup)) throw new Error("Choose a legacy Pi Sync setup to migrate.");

@@ -43,6 +43,7 @@ export async function showIgnoreFileAction(
   action: IgnoreOperation,
   filename: string,
   signal: AbortSignal,
+  offerToken?: string,
 ) {
   if (signal.aborted || !ctx.hasUI) return;
   if (ctx.mode !== "tui") {
@@ -81,7 +82,7 @@ export async function showIgnoreFileAction(
   };
   try {
     if (action === "migrate") {
-      const result = await work("migrate", "Preparing ignore-file migration review…");
+      const result = await work("migrate", "Preparing ignore-file migration review…", offerToken ? { offerToken } : {});
       if (isCurrent() && result?.value === "saved")
         ctx.ui.notify("Ignore-file policy saved locally. No transfer started.", "info");
       return;

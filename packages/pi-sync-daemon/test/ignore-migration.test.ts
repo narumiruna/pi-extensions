@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, vi } from "vitest";
 import { configureEngineHost, type ReviewRequest } from "../src/engine/host.js";
+import { readIgnoreMigrationOffer } from "../src/engine/ignore/ignore-migration-prompt.js";
 import { migrateIgnoreSetup, newIgnoreFilename, switchIgnoreFile } from "../src/engine/ignore/ignore-settings.js";
 import { DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
 import type { PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
@@ -137,6 +138,41 @@ test("cancelled migration does not create the default or change settings", () =>
     assert.equal(await migrateIgnoreSetup(execution, "home"), "cancelled");
     await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
     assert.deepEqual(await readSettings(root), fixtureSettings);
+  }));
+
+test("accepting a valid offer opens the review without saving when that review is cancelled", () =>
+  fixture(async (root, execution, proposal) => {
+    const facts = execution.facts();
+    assert.ok(facts);
+    const tui = { ...execution, facts: () => ({ ...facts, mode: "tui" as const }) };
+    const offer = await readIgnoreMigrationOffer({ setup: "home" }, tui);
+    assert.ok(offer);
+    let reviewed = false;
+    proposal(async ({ title }) => {
+      assert.match(title, /Review migration/u);
+      reviewed = true;
+      return false;
+    });
+    assert.equal(await migrateIgnoreSetup(tui, "home", offer.token), "cancelled");
+    assert.equal(reviewed, true);
+    assert.deepEqual(await readIgnoreMigrationOffer({ setup: "home" }, tui), offer);
+    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.deepEqual(await readSettings(root), fixtureSettings);
+  }));
+
+test("changing the active setup after an offer refuses migration before opening a review", () =>
+  fixture(async (root, execution) => {
+    const facts = execution.facts();
+    assert.ok(facts);
+    const tui = { ...execution, facts: () => ({ ...facts, mode: "tui" as const }) };
+    const offer = await readIgnoreMigrationOffer({ setup: "home" }, tui);
+    assert.ok(offer);
+    const next = { ...fixtureSettings, activeSyncSetup: "other" };
+    await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(next), { mode: 0o600 });
+    await assert.rejects(migrateIgnoreSetup(tui, "home", offer.token), /offer is stale/u);
+    assert.equal(headRead.mock.calls.length, 0);
+    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.deepEqual(await readSettings(root), next);
   }));
 
 test("migration refuses scope or remote changes while the review is open", () =>
