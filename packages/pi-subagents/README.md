@@ -173,7 +173,7 @@ See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/
 
 ## ⚙️ Settings
 
-Use `/subagents settings` or the manager's **Settings** action to change display preferences and the current session's status view. **Preview · sample jobs** shows what the status looks like without starting any jobs. Highlight a **Status view** choice to preview it, then confirm to apply it or back out to keep the current view. On short terminals, the focused setting takes priority over the preview.
+Use `/subagents settings` or the manager's **Settings** action to change display preferences and the current session's status view. **Preview · sample jobs** shows what the status looks like without starting any jobs. Below the divider, **Saved preferences** apply across sessions and **This session** controls the current view only. Highlight a **Status view** choice to preview it, then confirm to apply it or back out to keep the current view. On short terminals, the focused setting takes priority over the preview and group headings.
 The four saved preferences accept JSON booleans:
 
 | Field | Default | Effect |
