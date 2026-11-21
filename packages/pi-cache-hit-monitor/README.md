@@ -76,7 +76,7 @@ While visible, the widget updates from `message_update` as soon as the provider 
 Cache comparisons reset across compaction and branch-summary boundaries because those events create a new cache prefix epoch, while session totals continue to include usage records visible on the active branch.
 The extension rebuilds state after session start, compaction, tree navigation, and `agent_settled`, and also reconciles the branch whenever the widget is shown.
 An idle warm that completes while the widget is already visible appears at the next deterministic lifecycle event or after hiding and showing the widget; Pi's extension API does not expose a warm-completion event.
-See the [cache accounting decision](https://github.com/narumiruna/pi-extensions/blob/main/docs/adr/pi-cache-hit-monitor-confirmed-usage.md) for the rationale.
+See the [cache accounting decision](https://github.com/narumiruna/pi-extensions/blob/main/docs/adr/0005-pi-cache-hit-monitor-confirmed-usage.md) for the rationale.
 The extension clears its widget during session replacement and shutdown and ignores events from stale sessions.
 
 ## 🔒 Security and privacy

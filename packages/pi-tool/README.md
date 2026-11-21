@@ -103,7 +103,7 @@ MCP resource tools belong to MCP; SDK-provided tools and active names without so
 It refreshes on relevant lifecycle events and polls for active-tool, source, and exposure changes made by other extensions.
 It clears immediately when disabled or when the session is replaced, reloaded, or shut down.
 Tool names, namespace labels, and extension labels are sanitized and bounded before terminal rendering.
-See the [widget design decision](https://github.com/narumiruna/pi-extensions/blob/main/docs/adr/pi-tool-available-tools-widget.md) for the rationale.
+See the [widget design decision](https://github.com/narumiruna/pi-extensions/blob/main/docs/adr/0007-pi-tool-available-tools-widget.md) for the rationale.
 
 ## 🔒 Security and privacy
 

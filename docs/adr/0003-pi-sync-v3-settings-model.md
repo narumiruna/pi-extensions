@@ -94,7 +94,7 @@ Normalized backend location tuples must be unique and do not include the setup n
 WebDAV this prevents two local state records from managing one active pointer. Git's tuple includes
 remote, branch, and path: exact duplicates are rejected, but direct JSON can still name one branch
 with different paths. Git operationally requires a distinct branch per setup, as recorded in
-`docs/adr/pi-sync-git-backend.md`.
+`docs/adr/0001-pi-sync-git-backend.md`.
 
 `activeSyncSetup` must reference an own-property setup whenever the catalog is non-empty and must be
 absent when it is empty. A current setup cannot be removed while alternatives exist; switch first.

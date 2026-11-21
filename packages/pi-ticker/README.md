@@ -64,7 +64,7 @@ When a valid search has no match, the add row changes to **Add SYMBOL** for dire
 `Shift+Up` and `Shift+Down` reorder the focused ticker when the search field is empty and those keys do not conflict with configured standard bindings.
 
 RPC mode exposes portable dialogs for choosing and moving a ticker.
-See the [menu design decision](https://github.com/narumiruna/pi-extensions/blob/main/docs/adr/pi-ticker-mode-specific-reorder.md) for why the two modes use separate controls.
+See the [menu design decision](https://github.com/narumiruna/pi-extensions/blob/main/docs/adr/0006-pi-ticker-mode-specific-reorder.md) for why the two modes use separate controls.
 Each accepted change saves immediately.
 If a save fails, the manager restores the previous displayed and effective value.
 Removing the final symbol hides the widget and stops polling.

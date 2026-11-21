@@ -169,7 +169,7 @@ ambiguous interval, so status review and unknown-outcome handling remain require
 
 Git maps the immutable reference and revision to commit/ref identity and protects the active branch
 with an exact lease. Its strict complete-tree representation and process/cache boundary are recorded
-in `docs/adr/pi-sync-git-backend.md`.
+in `docs/adr/0001-pi-sync-git-backend.md`.
 
 ## Consequences
 

@@ -4,6 +4,7 @@
 
 Accepted.
 The policy is implemented by Pi Sync snapshots, orchestration, and review and recovery flows.
+The [Pi Sync ignore file proposal](0008-pi-sync-ignore-file.md) describes a possible successor for new and migrated setups.
 
 ## Context
 
