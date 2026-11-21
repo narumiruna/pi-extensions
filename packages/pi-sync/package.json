@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-sync",
-  "version": "0.60.5",
+  "version": "0.61.0",
   "description": "Pi extension that syncs Pi configuration through Git, WebDAV, Cloudflare R2, or S3-compatible storage.",
   "type": "module",
   "license": "MIT",
@@ -46,7 +46,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-sync-daemon": "^0.6.0",
+    "@narumitw/pi-sync-daemon": "^0.7.0",
     "@narumitw/pi-tui-kit": "^0.70.1"
   },
   "devDependencies": {
