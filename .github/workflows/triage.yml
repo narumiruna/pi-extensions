@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Classify issue
         id: triage
-        uses: narumiruna/pi-actions/triage@10517c9297a5135606b2869f8d3781bfa7ea674d
+        uses: narumiruna/pi-actions/triage@9323da4e610f3702196471dbdefbdbb3aebe1152
         with:
           auth-json: ${{ secrets.PI_AUTH_JSON }}
           auth-output: ${{ runner.temp }}/pi-triage-auth/auth.json
