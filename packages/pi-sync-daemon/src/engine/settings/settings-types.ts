@@ -145,7 +145,6 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
 export type AnySyncConfig = SyncConfig<ResolvedSyncBackend>;
 export type CommonSyncConfig = Omit<AnySyncConfig, "backend">;
 
-/** UI projection over a validated setup; it is never persisted directly. */
 export interface PartialConfig {
   setupName: string;
   connectionName: string;

@@ -7,20 +7,30 @@ import { test, vi } from "vitest";
 import { configureEngineHost, engineHost } from "../src/engine/host.js";
 import { agentDirectoryInventory, createSnapshot } from "../src/engine/snapshot/snapshot.js";
 import { applySnapshot } from "../src/engine/snapshot/snapshot-apply.js";
+import { MAX_AGENT_DIRECTORY_BYTES as byteLimit } from "../src/engine/snapshot/snapshot-bounds.js";
 import type { Snapshot, SnapshotFile } from "../src/engine/snapshot/snapshot-types.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "../src/engine/sync/merge-apply.js";
-import { MAX_AGENT_DIRECTORY_ENTRIES as entryLimit } from "../src/engine/sync/sync-policy.js";
+import {
+  configuredSnapshotPathMatcher,
+  MAX_AGENT_DIRECTORY_ENTRIES as entryLimit,
+  MAX_AGENT_DIRECTORY_FILES as fileLimit,
+} from "../src/engine/sync/sync-policy.js";
 
 // Exercise the actual scanner and both apply paths without creating 65,536 filesystem entries.
 vi.mock("../src/engine/sync/sync-policy.js", async (original) => ({
   ...(await original<typeof import("../src/engine/sync/sync-policy.js")>()),
   MAX_AGENT_DIRECTORY_ENTRIES: 8,
+  MAX_AGENT_DIRECTORY_FILES: 3,
+}));
+
+vi.mock("../src/engine/snapshot/snapshot-bounds.js", async (original) => ({
+  ...(await original<typeof import("../src/engine/snapshot/snapshot-bounds.js")>()),
+  MAX_AGENT_DIRECTORY_BYTES: 64,
 }));
 
 const scope = { scope: "agent-directory" as const };
 
-function file(relative: string): SnapshotFile {
-  const bytes = Buffer.from("incoming");
+function file(relative: string, bytes = Buffer.from("incoming")): SnapshotFile {
   return {
     path: relative,
     contentBase64: bytes.toString("base64"),
@@ -29,7 +39,7 @@ function file(relative: string): SnapshotFile {
 }
 
 function incoming(before: Snapshot, ...paths: string[]): Snapshot {
-  return { ...before, files: paths.map(file) };
+  return { ...before, files: paths.map((relative) => file(relative)) };
 }
 
 async function fixture(run: (root: string) => Promise<void>) {
@@ -45,6 +55,18 @@ async function fixture(run: (root: string) => Promise<void>) {
 async function createEmptyDirectories(root: string, count: number) {
   await Promise.all(Array.from({ length: count }, (_, index) => fs.mkdir(path.join(root, `empty-${index}`))));
 }
+
+test("directory policy rejects C0 and C1 controls without excluding neighboring characters", () => {
+  const selected = configuredSnapshotPathMatcher(scope);
+  for (let code = 0; code <= 160; code++) {
+    if (code > 32 && code < 126) continue;
+    assert.equal(
+      selected(`name${String.fromCharCode(code)}.md`),
+      code === 32 || code === 126 || code === 160,
+      `code ${code}`,
+    );
+  }
+});
 
 test("directional projection counts retained entries absent from the payload", () =>
   fixture(async (root) => {
@@ -79,6 +101,117 @@ test("directional projection subtracts deleted entries before checking the final
       ["new"],
     );
     assert.equal(agentDirectoryInventory(after)?.entries.size, entryLimit - 1);
+  }));
+
+for (const boundary of ["write only", "before deletion", "after deletion"] as const) {
+  test(`directional apply refuses late entries at the ${boundary} boundary`, () =>
+    fixture(async (root) => {
+      const pathToDelete = path.join(root, "old.md");
+      const latePath = path.join(root, "late-empty");
+      await createEmptyDirectories(root, entryLimit - (boundary === "write only" ? 2 : 3));
+      if (boundary !== "write only") await fs.writeFile(pathToDelete, "old");
+      const before = await createSnapshot("test", scope);
+      const after = incoming(before, ...(boundary === "write only" ? ["new.md"] : ["new.md", "second.md"]));
+      const rename = fs.rename.bind(fs);
+      const unlink = fs.unlink.bind(fs);
+      const beforeDeletion = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (boundary !== "after deletion" && path.basename(String(to)) === "journal.json")
+          await fs.mkdir(latePath, { recursive: true });
+      });
+      const afterDeletion = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+        await unlink(target);
+        if (boundary === "after deletion" && target === pathToDelete) await fs.mkdir(latePath);
+      });
+      try {
+        await assert.rejects(
+          applySnapshot(after, new Set(), { ...scope, reviewedLocal: before }),
+          /Projected agent directory exceeds the scan entry bound/,
+        );
+        assert.ok((await fs.stat(latePath)).isDirectory());
+        if (boundary !== "write only") {
+          assert.equal(await fs.readFile(pathToDelete, "utf8"), "old");
+          if (boundary === "before deletion") assert.ok(!afterDeletion.mock.calls.some(([p]) => p === pathToDelete));
+        }
+        await assert.rejects(fs.stat(path.join(root, "new.md")), { code: "ENOENT" });
+      } finally {
+        beforeDeletion.mockRestore();
+        afterDeletion.mockRestore();
+      }
+    }));
+}
+
+for (const mode of ["directional", "merge"] as const) {
+  for (const grows of [false, true]) {
+    test(`${mode} ${grows ? "refuses late retained byte growth" : "installs exactly at the byte bound"}`, () =>
+      fixture(async (root) => {
+        const relative = "sessions/held.jsonl";
+        const retained = path.join(root, relative);
+        await fs.mkdir(path.dirname(retained));
+        await fs.writeFile(retained, "a");
+        const options = { ...scope, include: ["sessions"] };
+        const before = await createSnapshot("test", options);
+        const after = { ...before, files: [...before.files, file("new.md", Buffer.alloc(byteLimit - 1))] };
+        const protectedPaths = new Set([relative]);
+        const destination = path.join(root, "new.md");
+        let grew = false;
+        const grow = async () => {
+          if (!grows || grew) return;
+          await fs.appendFile(retained, "b");
+          grew = true;
+        };
+        const opendir = vi.spyOn(fs, "opendir");
+        const rename = fs.rename.bind(fs);
+        const journal = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          await rename(from, to);
+          if (mode === "directional" && path.basename(String(to)) === "journal.json") await grow();
+        });
+        try {
+          const run =
+            mode === "directional"
+              ? applySnapshot(after, protectedPaths, { ...options, reviewedLocal: before })
+              : applyMergedSnapshot(before, after, protectedPaths, options, async () => {
+                  if (opendir.mock.calls.some(([target]) => target === root)) await grow();
+                });
+          if (grows) {
+            await assert.rejects(run, /Projected agent directory exceeds the 64 MiB scan byte bound/);
+            assert.equal(await fs.readFile(retained, "utf8"), "ab");
+            await assert.rejects(fs.stat(destination), { code: "ENOENT" });
+          } else {
+            await run;
+            assert.equal(await fs.readFile(retained, "utf8"), "a");
+            assert.equal((await fs.stat(destination)).size, byteLimit - 1);
+          }
+        } finally {
+          opendir.mockRestore();
+          journal.mockRestore();
+        }
+      }));
+  }
+}
+
+test("a merge refuses a late retained file that would exceed the projected file count", () =>
+  fixture(async (root) => {
+    for (let index = 0; index < fileLimit - 1; index++) await fs.writeFile(path.join(root, `kept-${index}`), "keep");
+    const before = await createSnapshot("test", scope);
+    const after = { ...before, files: [...before.files, file("new.md")] };
+    const opened = vi.spyOn(fs, "opendir");
+    const latePath = path.join(root, "late.md");
+    let inserted = false;
+    try {
+      await assert.rejects(
+        applyMergedSnapshot(before, after, new Set(), scope, async () => {
+          if (inserted || !opened.mock.calls.some(([target]) => target === root)) return;
+          await fs.writeFile(latePath, "late");
+          inserted = true;
+        }),
+        /Projected agent directory exceeds the scan file bound/,
+      );
+      assert.equal(await fs.readFile(latePath, "utf8"), "late");
+      await assert.rejects(fs.stat(path.join(root, "new.md")), { code: "ENOENT" });
+    } finally {
+      opened.mockRestore();
+    }
   }));
 
 for (const fits of [true, false]) {

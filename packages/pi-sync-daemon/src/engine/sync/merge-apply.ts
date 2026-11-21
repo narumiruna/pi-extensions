@@ -8,15 +8,18 @@ import {
   agentDirectoryConfiguredSessionDir,
   agentDirectoryInventory,
   createSnapshot,
-  scanAgentDirectoryInventory,
   snapshotTarget,
 } from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
 import { assertAgentDirectorySnapshotBound, MAX_AGENT_DIRECTORY_BYTES } from "../snapshot/snapshot-bounds.js";
-import { assertProjectedAgentDirectoryEntries } from "../snapshot/snapshot-entry-projection.js";
+import {
+  assertProjectedAgentDirectoryBudget,
+  recheckAgentDirectoryBudget,
+} from "../snapshot/snapshot-entry-projection.js";
 import { assertUnexcludedTargets } from "../snapshot/snapshot-exclude-safety.js";
 import { assertCanonicalMutationTargets } from "../snapshot/snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "../snapshot/snapshot-paths.js";
+import { snapshotBase64Size } from "../snapshot/snapshot-payload.js";
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
@@ -58,14 +61,15 @@ export async function preflightMergedTargets(
   }
   await assertCanonicalMutationTargets(targets, options);
   if (scan) {
-    assertProjectedAgentDirectoryEntries(
+    assertProjectedAgentDirectoryBudget(
       scan,
       {
         deletes: [...removedTargets],
-        writes: [...changed]
-          .filter((relative) => afterHashes[relative] !== undefined)
-          .map((relative) => ({
-            target: snapshotTarget(root, relative, options.sessionDir),
+        writes: after.files
+          .filter((file) => changed.has(file.path))
+          .map((file) => ({
+            target: snapshotTarget(root, file.path, options.sessionDir),
+            size: snapshotBase64Size(file.contentBase64, file.path),
           })),
       },
       options,
@@ -205,7 +209,6 @@ async function assertReviewedTree(
     options.signal?.throwIfAborted();
     options.validateMutation?.();
     if (stat.isDirectory()) {
-      // A persisted merge only authorizes directory paths inferred from its reviewed file deletions.
       if (options.scope === "agent-directory" && (!removedTargets.has(child) || beforeHashes[childRelative]))
         throw new Error("Reviewed directory contains an unreviewed directory; use a reviewed directional transfer.");
       await assertReviewedTree(child, childRelative, beforeHashes, options, removedTargets);
@@ -281,8 +284,6 @@ async function assertFilesystemTarget(
   for (const parent of parents.reverse()) {
     const stat = await statTarget(parent);
     if (!stat || stat.isDirectory()) continue;
-    // Descendants cannot exist beneath this reviewed file until its removal.
-    // Writes recheck the actual parents without this exception after deletion.
     if (stat.isFile() && stat.nlink === 1 && removedTargets.has(parent)) return;
     throw new Error("Unsafe merge filesystem layout; review the selected paths before transfer.");
   }
@@ -404,8 +405,6 @@ export async function applyMergedSnapshot(
     plan.writes = plan.writes.filter((item) => targetSet.has(item.target));
     plan.deletes = plan.deletes.filter((target) => targetSet.has(target));
     if (options.scope === "agent-directory") {
-      // Recovery preserves files outside the plan, including protected sessions
-      // that may have appeared or grown since the reviewed after-image.
       const written = new Set(plan.writes.map((item) => item.target));
       const replaced = new Set([...plan.deletes, ...written]);
       const targetFor = (relative: string) => snapshotTarget(root, relative, options.sessionDir);
@@ -432,7 +431,11 @@ export async function applyMergedSnapshot(
         if (!relative) throw new Error("Unowned merge write target.");
         await assertFilesystemTarget(root, relative, options, replacementTargets, beforeHashes);
       }
-      assertProjectedAgentDirectoryEntries(scan, plan, options);
+      assertProjectedAgentDirectoryBudget(
+        scan,
+        { deletes: plan.deletes, writes: plan.writes.map(({ target, content }) => ({ target, size: content.length })) },
+        options,
+      );
     }
     // A parent must remain until every reviewed leaf and intermediate directory is gone.
     plan.deletes.sort(
@@ -476,14 +479,8 @@ export async function applyMergedSnapshot(
       if (hash !== beforeHashes[relative] && hash !== afterHashes[relative])
         throw new Error("Local content changed at the apply boundary; journal retained, newer bytes untouched.");
     };
-    async function recheckEntryBudget(deletes: string[]) {
-      if (options.scope !== "agent-directory") return;
-      const inventory = await scanAgentDirectoryInventory(root, options);
-      options.signal?.throwIfAborted();
-      options.validateMutation?.();
-      assertProjectedAgentDirectoryEntries(inventory, { writes: plan.writes, deletes }, options);
-    }
-    if (plan.deletes.length) await recheckEntryBudget(plan.deletes);
+    if (options.scope === "agent-directory" && plan.deletes.length)
+      await recheckAgentDirectoryBudget(root, plan, options);
     for (const target of plan.deletes) {
       await revalidateTarget(target);
       try {
@@ -523,7 +520,7 @@ export async function applyMergedSnapshot(
     async function writeTargets() {
       if (plan.writes.length && options.scope === "agent-directory") {
         await validate();
-        await recheckEntryBudget([]);
+        await recheckAgentDirectoryBudget(root, { deletes: [], writes: plan.writes }, options);
       }
       for (const item of plan.writes) {
         await validate();

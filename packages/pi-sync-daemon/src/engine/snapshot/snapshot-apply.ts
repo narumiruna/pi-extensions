@@ -18,7 +18,7 @@ import {
   snapshotTarget,
 } from "./snapshot.js";
 import { assertAgentDirectorySnapshotBound } from "./snapshot-bounds.js";
-import { assertProjectedAgentDirectoryEntries } from "./snapshot-entry-projection.js";
+import { assertProjectedAgentDirectoryBudget } from "./snapshot-entry-projection.js";
 import { agentDirectoryPhysicalSessionPath, assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { decodeBase64Strict } from "./snapshot-payload.js";
 import { reviewedSnapshotPreimages } from "./snapshot-reviewed-preimages.js";
@@ -104,10 +104,15 @@ export async function applySnapshot(
     options,
   );
   if (inventory) {
-    // The transaction can create the private state directory. Its own entry counts, not its children.
-    assertProjectedAgentDirectoryEntries(
+    assertProjectedAgentDirectoryBudget(
       inventory,
-      { ...plan, writes: [...plan.writes, { target: stateDir(root) }] },
+      {
+        deletes: plan.deletes,
+        writes: [
+          ...plan.writes.map(({ target, content }) => ({ target, size: content.length })),
+          { target: stateDir(root) },
+        ],
+      },
       options,
     );
     await preflightSnapshotMutations(root, plan, sessionDir, options);

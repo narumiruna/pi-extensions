@@ -236,7 +236,6 @@ async function readScannedFile(candidate: ScannedPath, signal?: AbortSignal) {
   await recheck(candidate, signal);
   const handle = await fs.open(candidate.absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    // Read only through the verified descriptor, and never read more than the approved size.
     if (!sameScannedPath(await handle.stat(), candidate.stat)) changedScan();
     await recheck(candidate, signal);
     const content = Buffer.alloc(candidate.stat.size);
@@ -253,7 +252,6 @@ async function readScannedFile(candidate: ScannedPath, signal?: AbortSignal) {
   }
 }
 
-/** Read Pi's bounded session routing metadata independently of snapshot payload selection. */
 export async function agentDirectoryConfiguredSessionDir(signal?: AbortSignal, root = agentDir()) {
   const content = await readAgentDirectorySettings(signal, root);
   return content === undefined ? undefined : agentDirectorySessionDirFromSettings(content);
@@ -290,11 +288,23 @@ export function agentDirectorySessionDirFromSettings(content: Buffer) {
   return value ? expandSessionDir(value) : undefined;
 }
 
-export async function scanAgentDirectoryInventory(root: string, options: SnapshotOptions) {
-  return (await collectAgentDirectory(root, options, false)).inventory;
+export type AgentDirectoryScanOptions = SyncSelectionConfig &
+  Pick<SnapshotOptions, "sessionDir" | "signal" | "validateMutation">;
+
+export async function scanAgentDirectoryInventory(
+  root: string,
+  options: AgentDirectoryScanOptions,
+  pendingStateEntry?: string,
+) {
+  return (await collectAgentDirectory(root, options, false, pendingStateEntry)).inventory;
 }
 
-async function collectAgentDirectory(root: string, options: SnapshotOptions, readContents = true) {
+async function collectAgentDirectory(
+  root: string,
+  options: AgentDirectoryScanOptions,
+  readContents = true,
+  pendingStateEntry?: string,
+) {
   const signal = options.signal;
   const excluded = compileSyncPolicyExclude(options);
   const canTraverse = compileSyncPolicyTraversal(options);
@@ -314,8 +324,10 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions, rea
     for await (const entry of await fs.opendir(directory.absolute)) {
       signal?.throwIfAborted();
       const absolute = path.join(directory.absolute, entry.name);
-      if (entries.size >= MAX_AGENT_DIRECTORY_ENTRIES) throw new Error("Agent directory exceeds the scan entry bound.");
       entries.set(absolute, "unreviewed");
+      const allowance = pendingStateEntry !== undefined && entries.has(pendingStateEntry) ? 1 : 0;
+      if (entries.size > MAX_AGENT_DIRECTORY_ENTRIES + allowance)
+        throw new Error("Agent directory exceeds the scan entry bound.");
       children.push(entry);
     }
     await recheck(directory, signal);
@@ -351,7 +363,6 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions, rea
   const canonicalRoot = path.join(await fs.realpath(path.dirname(absoluteRoot)), path.basename(absoluteRoot));
   const selectedSessions = syncSessionsSelected(options);
   async function identifySessionRoot(routing?: Set<string>) {
-    // Validate the custom root even when opted out: an external alias could otherwise hide an in-tree store.
     if (!sessionDir && !selectedSessions) return undefined;
     let absolute = agentDirectoryAnchor(absoluteRoot, sessionRoot);
     const parts = path.relative(absolute, sessionRoot).split(path.sep);
@@ -387,7 +398,6 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions, rea
       });
     }
   }
-  // No caller can mistake a changed/disappeared directory or routing policy for an empty snapshot subtree.
   for (const directory of directories) await recheck(directory, signal);
   if (options.sessionDir === undefined && (await agentDirectoryConfiguredSessionDir(signal, root)) !== sessionDir)
     changedScan();
@@ -409,6 +419,7 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions, rea
       sessionRoot,
       scanSessions: selectedSessions,
       entries,
+      fileSizes: new Map(candidates.map(({ absolute, stat }) => [absolute, stat.size])),
       walkedDirectories: new Set(directories.map(({ absolute }) => absolute)),
       routingDirectories,
     },
@@ -651,7 +662,6 @@ export function mergeRemotePreservedFiles(
   config: SyncSelectionConfig,
   options: { sessionDir?: string } = {},
 ) {
-  // Directory scope has no unmanaged ordinary files to carry forward.
   if (config.scope === "agent-directory")
     return filterSnapshotForConfigPolicy(local, config, { ...options, regenerateId: true });
   const localPathNames = new Set(local.files.map((file) => file.path.toLowerCase()));

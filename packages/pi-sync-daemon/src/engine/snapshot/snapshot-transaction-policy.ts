@@ -9,11 +9,20 @@ import { type SessionRootTransition, validateSessionRootTransition } from "./sna
 import type { SnapshotSelection } from "./snapshot-types.js";
 
 export const LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION = 8;
-export const AGENT_DIRECTORY_JOURNAL_VERSION = 9;
+export const FIXED_WORKSPACE_JOURNAL_VERSION = 9;
+export const AGENT_DIRECTORY_JOURNAL_VERSION = 10;
 
 export function isScopedJournal(journal: TransactionJournalPolicy) {
+  return [
+    LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION,
+    FIXED_WORKSPACE_JOURNAL_VERSION,
+    AGENT_DIRECTORY_JOURNAL_VERSION,
+  ].includes(journal.version);
+}
+
+export function isRecoveryStageId(value: unknown): value is string {
   return (
-    journal.version === LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION || journal.version === AGENT_DIRECTORY_JOURNAL_VERSION
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
   );
 }
 
@@ -24,7 +33,6 @@ export function isScopedIdentity(value: unknown): value is string {
 export interface TransactionJournalPolicy {
   version: number;
   exclude?: string[];
-  /** Version 8 and later bind recovery to the complete directory policy, including session opt-in. */
   selection?: SnapshotSelection;
 }
 
@@ -58,7 +66,6 @@ export function assertRecoveryPolicy(journal: TransactionJournalPolicy, options:
 
 export interface TransactionEntry {
   target: string;
-  /** Version 5: one physical file, original target spelling and intended installed spelling. */
   afterTarget?: string;
   backupName: string;
   kind: "missing" | "file" | "directory" | "symlink";
@@ -66,25 +73,18 @@ export interface TransactionEntry {
   beforeImage?: string;
   afterImage?: string;
   postFiles?: { relative: string; image: string }[];
-  /** Durable intent permits only a missing intermediate image, never unknown bytes. */
   removalPending?: boolean;
-  /** Published before materialization: absence/partial trees can no longer prove an unstarted replacement. */
   replacementStarted?: boolean;
-  /** Published before copying to a legacy sibling staging path. */
   recoveryStaged?: boolean;
-  /** Version 9: identity of the private workspace on the destination filesystem. */
   recoveryWorkspace?: string;
-  /** Version 9: identity and source image of an interrupted removal. */
+  recoveryWorkspaceId?: string;
   scopedRemoval?: { image: "before" | "after"; identity: string };
-  /** Version 9: identity of the complete payload reserved to fill a recovery-owned vacancy. */
   vacantInstall?: string;
 }
 export interface TransactionJournal extends TransactionJournalPolicy {
-  /** Version 6: durable files are accepted; surviving evidence permits cleanup only. */
   completed?: boolean;
   root: string;
   sessionRoot?: string;
-  /** Version 7: reviewed settings images authorize recovery from either transition root. */
   sessionRootTransition?: SessionRootTransition;
   entries: TransactionEntry[];
 }
@@ -154,7 +154,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
       throw new Error("Invalid transaction postimage evidence.");
     if (
       entry.recoveryStaged !== undefined &&
-      (typeof entry.recoveryStaged !== "boolean" || journal.version === AGENT_DIRECTORY_JOURNAL_VERSION)
+      (typeof entry.recoveryStaged !== "boolean" || journal.version >= FIXED_WORKSPACE_JOURNAL_VERSION)
     )
       throw new Error("Invalid recovery staging evidence.");
     if (entry.removalPending !== undefined && (journal.version < 3 || typeof entry.removalPending !== "boolean"))
@@ -168,12 +168,16 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
       throw new Error("Conflicting transaction replacement evidence.");
     if (
       (entry.recoveryWorkspace !== undefined &&
-        (journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION ||
+        (journal.version < FIXED_WORKSPACE_JOURNAL_VERSION ||
           !isScopedIdentity(entry.recoveryWorkspace) ||
           entry.recoveryStaged ||
           !["file", "directory"].includes(entry.kind))) ||
-      (entry.scopedRemoval !== undefined &&
+      (entry.recoveryWorkspaceId !== undefined &&
         (journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION ||
+          !entry.recoveryWorkspace ||
+          !isRecoveryStageId(entry.recoveryWorkspaceId))) ||
+      (entry.scopedRemoval !== undefined &&
+        (journal.version < FIXED_WORKSPACE_JOURNAL_VERSION ||
           !entry.removalPending ||
           !["before", "after"].includes(entry.scopedRemoval?.image) ||
           !isScopedIdentity(entry.scopedRemoval?.identity) ||
@@ -181,7 +185,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
             ? !["file", "directory"].includes(entry.kind)
             : entry.afterImage === "missing" && !entry.postFiles?.length))) ||
       (entry.vacantInstall !== undefined &&
-        (journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION ||
+        (journal.version < FIXED_WORKSPACE_JOURNAL_VERSION ||
           !entry.recoveryWorkspace ||
           !isScopedIdentity(entry.vacantInstall) ||
           entry.removalPending ||

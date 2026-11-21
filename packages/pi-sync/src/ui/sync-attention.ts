@@ -171,7 +171,6 @@ export function classifyObservation(observation: StartupObservation): Observatio
   const result = observation.inspection;
   // Sync now exits before reading remote content when nothing is selected.
   if (result.emptyInclude) return "guidance";
-  // Selected-path ordering remains part of the legacy policy; directory rules are sets.
   if (result.selectionState?.kind === "different") return "review";
   if (result.firstSync) return result.head ? "review" : "guidance";
   if (!result.head || (result.localChanged && result.remoteChanged)) return "review";

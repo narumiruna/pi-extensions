@@ -72,7 +72,6 @@ export async function chooseSetupPolicy(
   }
   const automatic = join ? false : await chooseAutomaticSync(ctx, signal);
   if (signal?.aborted || automatic === undefined) return undefined;
-  // Review the remote's policy before considering automatic work or explicitly opting into sessions.
   const sessions = join || (legacy && !legacySessions) ? false : await chooseSessions(ctx, signal);
   if (signal?.aborted || sessions === undefined) return undefined;
   const remoteWarning = join
@@ -87,7 +86,6 @@ export async function chooseSetupPolicy(
     };
   }
   draft.sessions = sessions;
-  // Only the unedited starter policy drops its blanket sessions exclusion on opt-in.
   if (sessions && !editRules) draft.exclude = draft.exclude.filter((rule) => rule !== "sessions");
   return {
     sync: {
@@ -114,7 +112,6 @@ export async function finishSetup(
   if (!join) return;
   const { showRemoteSelectionReview } = await import("../remote-selection-ui.js");
   if (signal?.aborted) return;
-  // No runRoute: this review may change settings only, never start a transfer.
   await showRemoteSelectionReview(ctx, name, signal, undefined, { origin: "settings" });
 }
 

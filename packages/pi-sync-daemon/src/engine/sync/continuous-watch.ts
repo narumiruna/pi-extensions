@@ -78,7 +78,6 @@ export async function watchContinuous(
       const pending = [root];
       if (syncSessionsSelected(config) && traverse("sessions")) pending.push(sessionRoot);
       const scheduled = new Set(pending);
-      // Watchers are only hints; bound subscriptions and let periodic scans cover the rest.
       for (let index = 0; index < pending.length && index < 512; index++) {
         const directory = pending[index];
         if (!directory) continue;
@@ -102,7 +101,6 @@ export async function watchContinuous(
           }
         } catch {
           options.signal?.throwIfAborted();
-          // Missing/inaccessible paths are covered by parent hints and periodic scans.
         }
       }
       return close;

@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../paths.js";
 import { syncDirectory } from "../state/json-file.js";
+import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import { expandSessionDir } from "./session-paths.js";
+import { agentDirectorySessionDirFromSettings, readAgentDirectorySettings } from "./snapshot.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import { fileImage } from "./snapshot-transaction-plan.js";
 import type { SnapshotApplyPlan } from "./snapshot-types.js";
@@ -57,6 +59,24 @@ async function beforeRoot(directory: string, root: string, entry: SettingsEntry,
   validateOwner(guards);
   if (fileImage(bytes) !== entry.beforeImage) throw new Error("Changed settings root-transition backup.");
   return rootFromSettings(root, bytes);
+}
+
+export async function stableAgentDirectorySettingsImage(
+  root: string,
+  plan: SnapshotApplyPlan,
+  guards: TransitionGuards,
+) {
+  const settingsTarget = mergePathIdentity(path.join(root, "settings.json"));
+  const write = plan.writes.find(({ target }) => mergePathIdentity(target) === settingsTarget);
+  const target = write?.target ?? plan.deletes.find((target) => mergePathIdentity(target) === settingsTarget);
+  if (!target) return;
+  const beforeBytes = await readAgentDirectorySettings(guards.signal, root);
+  validateOwner(guards);
+  const before = beforeBytes === undefined ? undefined : agentDirectorySessionDirFromSettings(beforeBytes);
+  const after = write ? agentDirectorySessionDirFromSettings(write.content) : undefined;
+  if (sessionStorageRoot(root, before) !== sessionStorageRoot(root, after))
+    throw new Error("Agent-directory transfers cannot change Pi session storage; keep the local sessionDir setting.");
+  return { target, image: beforeBytes === undefined ? "missing" : fileImage(beforeBytes) };
 }
 
 export async function prepareSessionRootTransition(

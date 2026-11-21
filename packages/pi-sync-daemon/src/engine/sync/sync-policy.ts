@@ -499,6 +499,14 @@ const DIRECTORY_SCOPE_LOCAL_ROOTS = new Set([
   "pi-debug.log",
 ]);
 
+function hasControlCharacter(value: string) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || (code >= 127 && code <= 159)) return true;
+  }
+  return false;
+}
+
 function isProtectedDirectoryPath(relativePath: string) {
   if (Buffer.byteLength(relativePath, "utf8") > 4_096) return true;
   const segments = relativePath.split("/");
@@ -508,8 +516,8 @@ function isProtectedDirectoryPath(relativePath: string) {
       (segment) =>
         !segment || /[. ]$/u.test(segment) || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(segment),
     ) ||
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: Reject unsafe and nonportable path spellings.
-    /[\\<>:"|?*\u0000-\u001f\u007f-\u009f]/u.test(relativePath) ||
+    /[\\<>:"|?*]/u.test(relativePath) ||
+    hasControlCharacter(relativePath) ||
     (root === "sessions" && segments[0] !== "sessions") ||
     (root === "settings.json" && relativePath !== "settings.json") ||
     (root !== undefined && DIRECTORY_SCOPE_LOCAL_ROOTS.has(root))
@@ -539,7 +547,6 @@ function compileDirectoryPolicy(config: SyncSelectionConfig) {
   };
 }
 
-/** Reject names that alias each other when this snapshot is installed on a case-insensitive host. */
 export const MAX_AGENT_DIRECTORY_ENTRIES = 65_536;
 export const MAX_AGENT_DIRECTORY_FILES = 16_384;
 

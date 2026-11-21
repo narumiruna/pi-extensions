@@ -232,7 +232,6 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
       signal?.throwIfAborted();
       const document = snapshot ? { path: configPath, ...snapshot } : undefined;
       validateSource?.(document);
-      // Validate under the same lock as publication, before a mutation can relabel the source.
       if (document) validate(document.parsed);
       const current = document ? (structuredClone(document.parsed) as T) : structuredClone(defaultValue);
       const next = update(current);

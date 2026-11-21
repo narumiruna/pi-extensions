@@ -519,7 +519,7 @@ test("new recovery journals require the recorded scope, rules, session opt-in, a
     const [pending] = await fs.readdir(transactionRoot());
     assert.ok(pending);
     const journal = JSON.parse(await fs.readFile(path.join(transactionRoot(), pending, "journal.json"), "utf8"));
-    assert.equal(journal.version, 9);
+    assert.equal(journal.version, 10);
     assert.deepEqual(journal.selection, {
       version: 3,
       scope: "agent-directory",

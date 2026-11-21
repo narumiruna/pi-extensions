@@ -28,15 +28,13 @@ export interface Snapshot {
   files: SnapshotFile[];
 }
 
-/** Local scan evidence keyed by exact absolute paths; never part of a portable snapshot. */
 export interface AgentDirectoryInventory {
   root: string;
   sessionRoot: string;
   scanSessions: boolean;
   entries: ReadonlyMap<string, "file" | "directory" | "unreviewed">;
-  /** Existing directories whose immediate children count toward the scan limit. */
+  fileSizes: ReadonlyMap<string, number>;
   walkedDirectories: ReadonlySet<string>;
-  /** Existing session routing ancestors, even outside the ordinary walk. */
   routingDirectories: ReadonlySet<string>;
 }
 

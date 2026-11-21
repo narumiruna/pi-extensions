@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { type BigIntStats, constants, type Stats } from "node:fs";
+import nodeFs, { type BigIntStats, constants, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { syncDirectory } from "../state/json-file.js";
@@ -35,10 +35,28 @@ export async function scopedPathIdentity(target: string, guards: Guards) {
 }
 
 export function scopedIdentity(stat: BigIntStats) {
-  // Birth time, where available, distinguishes a recycled inode from the original object.
   const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
   if (!isScopedIdentity(identity)) changedImage();
   return identity;
+}
+
+export function stableScopedIdentity(target: string, stat: BigIntStats) {
+  const identity = scopedIdentity(stat);
+  if (stat.birthtimeNs > 0n) {
+    if (stat.birthtimeNs !== stat.ctimeNs) return identity;
+    if (["darwin", "freebsd", "netbsd", "win32"].includes(process.platform)) return identity;
+    if (process.platform === "linux" || process.platform === "android") {
+      const current = nodeFs.lstatSync(target, { bigint: true });
+      if (!sameObservation(stat, current)) changedImage();
+      for (let ancestor = target; ancestor !== path.dirname(ancestor); ) {
+        ancestor = path.dirname(ancestor);
+        const witness = nodeFs.lstatSync(ancestor, { bigint: true });
+        if (!witness.isDirectory() || witness.dev !== stat.dev) break;
+        if (witness.birthtimeNs > 0n && witness.birthtimeNs !== witness.ctimeNs) return identity;
+      }
+    }
+  }
+  throw new Error("Stable filesystem birth time is unavailable; preserve transaction evidence for reviewed recovery.");
 }
 
 function validate(guards: Guards) {
@@ -51,12 +69,22 @@ function changedImage(): never {
 }
 
 function sameIdentity(a: BigIntStats, b: BigIntStats) {
-  return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode;
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.mode === b.mode &&
+    (a.birthtimeNs <= 0n || a.birthtimeNs === a.ctimeNs || a.birthtimeNs === b.birthtimeNs)
+  );
 }
 
 function sameObservation(a: BigIntStats, b: BigIntStats) {
   return (
-    sameIdentity(a, b) && a.nlink === b.nlink && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
+    sameIdentity(a, b) &&
+    a.nlink === b.nlink &&
+    a.size === b.size &&
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs &&
+    a.birthtimeNs === b.birthtimeNs
   );
 }
 
@@ -92,8 +120,6 @@ async function readStableFile(
     const opened = await handle.stat({ bigint: true });
     validate(guards);
     if (!opened.isFile() || !sameObservation(original, opened)) changedImage();
-    // On filesystems/platforms without O_NOFOLLOW, no bytes are read until the descriptor
-    // matches the observed regular path and the pathname is checked again.
     await recheck(target, original, guards);
     const size = Number(original.size);
     const buffer = Buffer.alloc(Math.min(CHUNK_BYTES, size));
@@ -105,7 +131,6 @@ async function readStableFile(
       await consume(buffer.subarray(0, bytesRead), offset);
       offset += bytesRead;
     }
-    // A file that grows never increases the read budget, and is not accepted as its original prefix.
     if (!sameObservation(original, await handle.stat({ bigint: true }))) changedImage();
   } finally {
     await handle.close();
@@ -113,7 +138,6 @@ async function readStableFile(
   await recheck(target, original, guards);
 }
 
-/** Journal policy is not known until parsing; apply the serialized bound before and during the read. */
 export async function readTransactionJournal(file: string, guards: Guards, maxBytes = MAX_TRANSACTION_JOURNAL_BYTES) {
   const stat = await lstat(file, guards);
   if (!stat) return undefined;
@@ -125,7 +149,6 @@ export async function readTransactionJournal(file: string, guards: Guards, maxBy
   return content.toString("utf8");
 }
 
-/** Hash only stable, bounded regular files. An optional exclusive copy uses these same verified bytes. */
 export async function scopedTransactionImage(
   target: string,
   guards: Guards,
@@ -201,7 +224,6 @@ export async function scopedTransactionImage(
   return visit(target, stat, copyTo);
 }
 
-/** Every surviving path must have its original spelling, kind and (for files) hash. */
 export function ownedScopedSubset(image: ScopedImage, expected: ScopedImage): boolean {
   if (image.kind !== expected.kind) return false;
   if (image.kind !== "directory" || expected.kind !== "directory") return image.value === expected.value;
@@ -237,7 +259,6 @@ export function scopedDescendant(image: ScopedImage, relative: string) {
   return node;
 }
 
-/** Remove only leaves in an authorized image; the kernel must find each directory empty. */
 export async function removeScopedImage(target: string, image: ScopedImage, guards: Guards) {
   if (image.kind === "missing") return;
   async function remove(target: string, node: ScopedNode): Promise<void> {
@@ -251,7 +272,6 @@ export async function removeScopedImage(target: string, image: ScopedImage, guar
       return;
     }
     for (const [name, child] of node.children) await remove(path.join(target, name), child);
-    // Our own removals changed directory metadata. Do not re-enumerate and adopt new children.
     await recheck(target, node.stat, guards, true);
     validate(guards);
     await fs.rmdir(target);
@@ -259,7 +279,6 @@ export async function removeScopedImage(target: string, image: ScopedImage, guar
   await remove(target, image);
 }
 
-/** Preserve the image format and symlink handling of older, non-scoped journals. */
 export async function legacyImage(target: string, durable = false): Promise<string> {
   const stat = await lstat(target, {});
   if (!stat) return "missing";
@@ -267,7 +286,6 @@ export async function legacyImage(target: string, durable = false): Promise<stri
   if (stat.isFile()) {
     const content = await fs.readFile(target);
     if (durable) {
-      // Keep POSIX read-only backup permissions; Windows flushing requires write access.
       const handle = await fs.open(target, process.platform === "win32" ? "r+" : "r");
       try {
         await handle.sync();
