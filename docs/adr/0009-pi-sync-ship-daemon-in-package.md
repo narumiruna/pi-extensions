@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. The current published design still installs `@narumitw/pi-sync-daemon` as a runtime dependency of `@narumitw/pi-sync`.
+Accepted and implemented in the workspace. This record does not establish publication or production readiness.
 
 ## Context
 
@@ -14,10 +14,10 @@ The daemon client launches a sibling `cli.js` and reads its installed daemon ver
 
 Ship the exact daemon build selected by Pi Sync inside the `@narumitw/pi-sync` tarball under `dist/daemon/`, without an npm runtime dependency on `@narumitw/pi-sync-daemon`. Keep the daemon a separate Node.js process with the same authenticated IPC, ownership checks, consent, and upgrade rules. Keep `@narumitw/pi-sync-daemon` independently versioned, publishable, and installable with its existing CLI.
 
-- **Build from one source.** Keep the daemon as a workspace build dependency of Pi Sync. Repository and Git source installs continue to use documented workspace exports. The packaged Pi Sync runtime maps those same exports to a staged native ESM copy. Reuse the daemon build and preserve its relative module layout, CLI, license, and original version metadata. Validate all generated static and lazy imports before replacing `dist`.
-- **Keep the two runtimes separate.** Pi still loads the extension through its Jiti entrypoint and supplies its host peers. The Node child must resolve its own required SDK and runtime dependencies even when Pi installs the extension with `--omit=peer`. Before committing to a dependency mapping, prove a packaged prototype can load both runtimes and exercise a late daemon SDK import without importing a second Pi host runtime. Do not narrow host compatibility or add a user install step to make the prototype pass.
+- **Build from one source.** Pi Sync lists the daemon in `devDependencies`. The package build requires a complete local daemon build and verifies its [build record](../runtime-builder.md#pi-syncs-embedded-daemon) before staging; Git preparation alone is not enough. Repository and Git source installs still use the daemon's documented workspace exports. The generated Jiti runtime uses private `#pi-sync-daemon` imports mapped by `dist/package.json` to the staged native files. The staged tree preserves the daemon's relative layout, license, and build version. Both import graphs are validated before replacing `dist`.
+- **Keep the two runtimes separate.** Pi supplies host peers through Jiti. The staged `dist/daemon/package.json` has daemon version metadata but no `type` field: Jiti applies Pi's host peer aliases, while Node detects ESM from syntax when it runs `dist/daemon/dist/cli.js`. A direct Node run from a checkout can warn that the module type is missing; adding `type: module` would bypass Jiti's host aliases. The embedded CLI alone loads a child-side `registerHooks` bootstrap. It resolves `@earendil-works/pi-coding-agent` through the exact `@narumitw/sync-node-sdk` npm alias and resolves Pi AI and Pi TUI from that SDK's dependency root. The child therefore does not depend on Pi's peers being installed, including with `--omit=peer`. The Pi peer floor and the daemon's Node.js minimum (22.19.0) are unchanged.
 - **Remove only the daemon registry dependency.** Keep `@narumitw/pi-tui-kit` a normal runtime dependency with the existing compatibility floor and artifact check. Keep the release guard unchanged. Do not add a second global CLI command or use a globally installed daemon as a fallback. Reuse an already running daemon only after the existing authenticated identity and compatibility checks.
-- **Keep packaging separate from behavior.** This change does not change settings, UI, protocol, state layout, consent, or daemon lifetime. Document how to invoke the bundled CLI with Node for users who install only Pi Sync; the standalone CLI remains available.
+- **Keep packaging separate from behavior.** Settings, UI, protocol, state layout, consent, and daemon lifetime are unchanged. The standalone runtime and packed file layout remain unchanged. Users who install only Pi Sync can [run the bundled CLI with Node](../../packages/pi-sync/docs/daemon-migration.md#daemon-cli).
 
 ## Alternatives
 
@@ -26,7 +26,7 @@ Ship the exact daemon build selected by Pi Sync inside the `@narumitw/pi-sync` t
 
 ## Consequences
 
-A clean install of the Pi Sync npm tarball no longer queries npm for the daemon package or requires a separately installed copy. Pi Sync still depends on registry availability for Kit and other declared dependencies. The package must carry and verify the embedded build. A standalone daemon release does not update the build shipped inside an existing Pi Sync tarball; fixes intended for that artifact require a new Pi Sync release that embeds them.
+A clean install of the Pi Sync npm tarball does not query npm for the standalone daemon package or require a separately installed copy. Pi Sync still depends on registry availability for Kit and other declared dependencies. A standalone daemon release does not update an existing Pi Sync tarball. Add an explicit Pi Sync Changeset to adopt a daemon build, including security or correctness fixes intended for the embedded copy.
 
 If the dependency or compatibility contract cannot be met, do not ship the packaging change. After release, use a corrective Pi Sync version rather than overwriting a published version. Preserve sync state and recovery evidence and use the existing safe daemon handover flow.
 

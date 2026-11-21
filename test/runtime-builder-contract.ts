@@ -39,6 +39,7 @@ interface RuntimeBuilderContractOptions {
   matchExternalSubpaths?: boolean;
   includeDynamicExternals?: boolean;
   entries?: Record<string, string>;
+  additionalRuntimeDirectory?: string;
 }
 
 export function registerRuntimeBuilderContract(options: RuntimeBuilderContractOptions) {
@@ -161,7 +162,9 @@ export function registerRuntimeBuilderContract(options: RuntimeBuilderContractOp
         assert.ok(files.includes(`${name}.ts.map`));
       }
       assert.equal(
-        files.some((path) => path.endsWith(".js")),
+        files.some(
+          (path) => !path.startsWith(`${options.additionalRuntimeDirectory ?? "\0"}/`) && path.endsWith(".js"),
+        ),
         false,
       );
       if (forbiddenEagerInputs.length > 0)

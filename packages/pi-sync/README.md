@@ -5,7 +5,7 @@
 Pi Sync synchronizes selected Pi settings and content across machines through Git, WebDAV, Cloudflare R2, or another S3-compatible store.
 Reusable storage connections hold credentials, while named sync setups define exactly what to sync, where to store it, and whether to sync automatically. Pi owns the interface; the separate [@narumitw/pi-sync-daemon service](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-sync-daemon) owns execution.
 
-> **Experimental daemon migration:** this checkout requires the new, independently published dependency. Close or upgrade older Pi processes and review ownership before real-data use. See [migration and release restrictions](./docs/daemon-migration.md).
+> **Experimental daemon migration:** close or upgrade older Pi processes and review ownership before real-data use. See [migration and release restrictions](./docs/daemon-migration.md).
 
 ## ✨ Features
 
@@ -21,6 +21,8 @@ Reusable storage connections hold credentials, while named sync setups define ex
 
 ## 📦 Install
 
+Use Node.js 22.19.0 or later for the daemon, the same minimum as the standalone package. The Pi Sync npm package includes the daemon code; no separate daemon installation is needed. The daemon still runs as a separate process.
+
 ```bash
 pi install npm:@narumitw/pi-sync
 ```
@@ -31,7 +33,7 @@ Try without installing permanently:
 pi -e npm:@narumitw/pi-sync
 ```
 
-Build the generated runtime and try a local checkout:
+Build and try a local checkout from the repository root:
 
 ```bash
 npm install
@@ -41,13 +43,11 @@ npm --workspace @narumitw/pi-sync run build
 pi -e ./packages/pi-sync
 ```
 
-The package declares `dist/index.ts`, so an unbuilt checkout must run the build before Pi loads the package directory.
+Pi loads `dist/index.ts` from the package directory, so build Kit and complete the local daemon build before building Pi Sync. The runtime-only daemon output from Git installation preparation is not enough for this build.
 
 Extensions run with Pi's permissions, so install only packages from sources you trust.
 
-Revoke retained unattended permission before updating. After updating, use `/reload` in open Pi
-sessions. If the upgrade is blocked or the old owner's exit is uncertain, follow the
-[daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
+Update Pi Sync to get a newer bundled daemon. Updating the standalone package does not change the copy in Pi Sync. Revoke retained unattended permission before updating, then use `/reload` in open Pi sessions. If the upgrade is blocked or the old owner's exit is uncertain, follow the [daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
 
 Use a Pi runtime that satisfies this package’s declared peer floor. Installing an extension dependency does not upgrade a separately installed Pi runtime. The declared Kit floor supplies exact scrolling/paginated review and configured-keybinding support.
 
@@ -324,7 +324,13 @@ show `sync recovering`. If cleanup remains uncertain, review
 [daemon recovery](./docs/daemon-migration.md#write-coordination-and-disconnection)
 before retrying.
 
-Use the installed CLI, `pi-sync-daemon stop --root <agent-directory>` or `pi-sync-daemon restart --root <agent-directory>`, for explicit service lifecycle control; these are not `/sync daemon` actions. Stop drains the service; reload Pi to reattach its session afterward. Explicit CLI start without clients also follows the 30-second grace policy. The next eligible interactive client or explicit command can restart only after the old owner's exit is proven; print/JSON never launch a service. Uncertain consent, failed revocation, or cleanup failure remains paused for the existing repair/revocation path, not silently cleared by automatic restart. No new setting, environment variable, or keep-alive flag is added. See [lifetime and recovery](./docs/daemon-migration.md).
+Use the [daemon CLI](./docs/daemon-migration.md#daemon-cli) for explicit `stop` or `restart`; these are not `/sync daemon` actions. For example, with only Pi Sync installed:
+
+```bash
+node "/path/to/installed/pi-sync/dist/daemon/dist/cli.js" status --root "/path/to/agent-directory"
+```
+
+Use the directory containing the installed Pi Sync `package.json` and the agent directory of the owner you want to inspect. `status` does not start a service. `stop` drains the service; reload Pi to reattach afterward. CLI `start` without clients follows the same 30-second grace policy. If ownership, consent, or cleanup is uncertain, follow the [recovery guide](./docs/daemon-migration.md#diagnostics-and-rollback) instead of forcing a restart. Print/JSON never launch a service.
 
 All routes support TUI and RPC; RPC settings and included-content screens are read-only.
 Print and JSON modes reject `/sync`.
@@ -410,7 +416,7 @@ packages/pi-sync/
 │   ├── backends/                      # Public backend contract forwarders
 │   ├── state/                         # Public state contract forwarders
 │   └── ui/                            # Manager, settings, reviews, and setup flows
-├── dist/                              # Generated Jiti runtime
+├── dist/                              # Published Jiti runtime and separate daemon files
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Operational audits and settings link compatibility
 ├── skills/configure-pi-sync/           # Agent settings edits and authoritative settings reference
@@ -421,7 +427,7 @@ The [exclude policy safety audit](./docs/exclude-policy-audit.md) maps implement
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
 Internal modules use direct imports from their owners; `src/sync.ts` and `src/types.ts` retain compatibility exports.
-Engine implementation lives in the non-extension `@narumitw/pi-sync-daemon` dependency; Pi uses its documented exports, without an in-process transfer fallback. First-use UI and setup implementations remain lazy.
+Repository and Git source installs use the daemon workspace's documented exports; the npm runtime maps the same exports to `dist/daemon/`. Transfers still run in the daemon, with no in-process fallback. First-use UI and setup implementations remain lazy.
 
 ## 🔎 Keywords
 

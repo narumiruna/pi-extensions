@@ -553,7 +553,7 @@ No Pi core changes or other extension are required.
 
 ### Daemon lifetime and unattended permission
 
-Pi starts or connects to the `pi-sync-daemon` service from `@narumitw/pi-sync-daemon` only for configured interactive work or an explicit setup/command. The service is a normal dependency, not another Pi extension. Unconfigured reads create no service or settings. The daemon owns the shared lifetime decision; no OS service is installed.
+For configured interactive work or an explicit setup or command, Pi starts the daemon bundled with the Pi Sync npm package or connects to an existing compatible owner. The daemon runs in a separate Node.js process, not as another Pi extension or an OS service. Unconfigured reads create no service or settings. The daemon owns the shared lifetime decision. For standalone and bundled CLI commands, see the [daemon CLI guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#daemon-cli).
 
 When no registered live client PID remains for that canonical agent directory and no valid explicit after-exit grant covers the active setup, a fixed 30-second grace period starts. Explicit CLI start without clients follows the same rule. Live passive, disconnected, publishing, and orderly retired PIDs keep the service alive. Detach, heartbeat loss, and an empty active-participant list are not proof of exit. `/reload`, `/new`, fork, and resume preserve shared ownership while their Pi process remains alive. A client arriving before shutdown becomes final cancels automatic exit. There is no new setting, environment variable, or keep-alive flag.
 
