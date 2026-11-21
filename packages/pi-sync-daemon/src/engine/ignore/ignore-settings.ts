@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { requireHandover } from "../../consent.js";
 import { documentFingerprint } from "../../document.js";
-import { type Execution, MAX_REVIEW_BYTES } from "../../protocol.js";
+import { type Execution, MAX_REVIEW_BYTES, record } from "../../protocol.js";
 import { createServiceContext } from "../../service-host.js";
 import { createSyncBackend } from "../backends/backend-factory.js";
 import type { RemoteHead } from "../backends/sync-backend.js";
@@ -15,7 +15,7 @@ import {
   updateLocalConfigDocument,
 } from "../settings/config-file.js";
 import type { AnySyncConfig, PiSyncSettingsV3, SyncSetupSettings } from "../settings/settings-types.js";
-import { validateSettingsDocument } from "../settings/settings-validation.js";
+import { validateConfigName, validateSettingsDocument } from "../settings/settings-validation.js";
 import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
 import { pendingTransactionEntries } from "../snapshot/snapshot-transaction-directory.js";
@@ -39,6 +39,35 @@ import {
   readIgnoreSource,
   validateIgnoreFilename,
 } from "./ignore-source.js";
+
+export function runIgnorePolicyChange(
+  operation: "ignore.migrate" | "ignore.switch",
+  payload: unknown,
+  execution: Execution,
+) {
+  if (!record(payload) || typeof payload.setup !== "string") throw new Error("Invalid ignore-file policy request.");
+  const { setup } = payload;
+  validateConfigName(setup, "sync setup");
+  if (operation === "ignore.migrate") {
+    const { offerToken } = payload;
+    if (
+      Object.keys(payload).some((key) => key !== "setup" && key !== "offerToken") ||
+      (offerToken !== undefined && (typeof offerToken !== "string" || !/^[a-f0-9]{64}$/u.test(offerToken)))
+    )
+      throw new Error("Invalid ignore-file migration request.");
+    if (offerToken !== undefined && execution.facts()?.mode !== "tui")
+      throw new Error("Ignore migration offers require an attached TUI client.");
+    return migrateIgnoreSetup(execution, setup, offerToken);
+  }
+  const { filename, expectedFilename } = payload;
+  if (
+    typeof filename !== "string" ||
+    typeof expectedFilename !== "string" ||
+    Object.keys(payload).some((key) => key !== "setup" && key !== "filename" && key !== "expectedFilename")
+  )
+    throw new Error("Invalid ignore-file switch request.");
+  return switchIgnoreFile(execution, setup, filename, expectedFilename);
+}
 
 function sourceToken(document: LocalConfigDocument | undefined) {
   return documentFingerprint(
@@ -224,7 +253,13 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
       const document = await peekLocalConfigDocument();
       execution.validate();
       if (!document) throw new Error("No Pi Sync settings to migrate.");
-      if (offerToken !== undefined) assertCurrentIgnoreMigrationOffer(document, execution.root, setupName, offerToken);
+      const guardSettings = settingsReviewGuard(document, execution);
+      const validateReview = (candidate: LocalConfigDocument | undefined) => {
+        guardSettings(candidate);
+        if (offerToken !== undefined)
+          assertCurrentIgnoreMigrationOffer(candidate, execution.root, setupName, offerToken);
+      };
+      validateReview(document);
       const before = validateSettingsDocument(document.parsed);
       const setup = Object.hasOwn(before.syncSetups, setupName) ? before.syncSetups[setupName] : undefined;
       if (!setup || ignoreFilename(setup)) throw new Error("Choose a legacy Pi Sync setup to migrate.");
@@ -305,7 +340,7 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
         () => next,
         validateSettingsDocument,
         execution.signal,
-        settingsReviewGuard(document, execution),
+        validateReview,
         async () => {
           verifyHead(await backend.readHead(execution.signal));
           execution.validate();
