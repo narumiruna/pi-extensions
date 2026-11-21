@@ -1,10 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { type ActionMenuItem, defineMenu, type MenuDefinition, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
+import { loadConfig, loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
+import { showIgnoreMigrationPrompt } from "./ignore-migration-prompt.js";
 import {
   attentionMainMenuItems,
   blockedSyncMenuItem,
@@ -180,8 +181,10 @@ export async function showSyncManager(
         const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
         return result === "pull-attempted" || result === "closed" ? { kind: "close" } : { kind: "stay" };
       },
-      settings: async ({ state }) => {
-        const result = await showSyncSettings(ctx, runRoute, sessionSignal, state.manager.configReview?.setupName);
+      settings: async ({ state, signal: actionSignal }) => {
+        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+        const review = state.manager.settingsReview ?? state.manager.configReview;
+        const result = await showSyncSettings(ctx, runRoute, signal, review?.setupName);
         return { kind: result === "exit" ? "close" : "stay" };
       },
       pull: async ({ state }) => {
@@ -327,10 +330,11 @@ export async function showSyncManager(
     const activate = menu.actions[action];
     menu.actions[action] = async (invocation) => {
       validateOwner();
-      const review = invocation.state.manager.configReview;
+      const { configReview, settingsReview } = invocation.state.manager;
+      const review = action === "settings" ? (settingsReview ?? configReview) : configReview;
       let current = false;
       try {
-        const config = await loadConfig();
+        const config = await (action === "settings" ? loadSettingsConfig() : loadConfig());
         validateOwner();
         invocation.signal.throwIfAborted();
         current = review?.fingerprint === syncCheckConfigFingerprint(config);
@@ -365,23 +369,38 @@ export async function showSyncManager(
         }, customOptions),
     },
   };
+  let firstOpen = true;
+  const describe = async (signal: AbortSignal) => {
+    const pendingAttention = options.getAttention?.();
+    const observation = options.getObservation?.();
+    const manager = await describeManagerState(signal, pendingAttention, undefined, observation);
+    if (signal.aborted || !isCurrent()) return manager;
+    // A busy operation suppresses baseline reads, not the stored check-time hint.
+    if (
+      observation &&
+      options.getObservation?.() === observation &&
+      !manager.observation &&
+      !(manager.operation && operationBlocksChanges(manager.operation))
+    ) {
+      options.onObservationInvalidated?.();
+    }
+    if (pendingAttention && options.getAttention?.() === pendingAttention && !manager.attention) {
+      options.onSelectionResolved?.(pendingAttention);
+    }
+    return manager;
+  };
   await runMenu(menuContext, menu, {
-    getState: async () => {
-      const pendingAttention = options.getAttention?.();
-      const observation = options.getObservation?.();
-      const manager = await describeManagerState(sessionSignal, pendingAttention, undefined, observation);
-      if (sessionSignal?.aborted) return { manager };
-      // A busy operation suppresses baseline reads, not the stored check-time hint.
+    getState: async ({ signal }) => {
+      const offerOnOpen = firstOpen;
+      firstOpen = false;
+      let manager = await describe(signal);
       if (
-        observation &&
-        options.getObservation?.() === observation &&
-        !manager.observation &&
-        !(manager.operation && operationBlocksChanges(manager.operation))
+        offerOnOpen &&
+        manager.operation?.kind === "free" &&
+        manager.configReview &&
+        (await showIgnoreMigrationPrompt(ctx, manager.configReview.setupName, signal, isCurrent))
       ) {
-        options.onObservationInvalidated?.();
-      }
-      if (pendingAttention && options.getAttention?.() === pendingAttention && !manager.attention) {
-        options.onSelectionResolved?.(pendingAttention);
+        if (!signal.aborted && isCurrent()) manager = await describe(signal);
       }
       return { manager };
     },

@@ -1,6 +1,18 @@
 import { createHash } from "node:crypto";
-import type { Snapshot, SnapshotSelection } from "../../snapshot/snapshot-types.js";
-import { sameLocalFields, validatePortableSnapshot, validateSnapshotFieldPolicy } from "../../sync/local-fields.js";
+import { assertAgentDirectorySettingsSize, MAX_AGENT_DIRECTORY_BYTES } from "../../snapshot/snapshot-bounds.js";
+import {
+  IGNORE_SNAPSHOT_VERSION,
+  isSupportedSnapshotVersion,
+  type Snapshot,
+  type SnapshotSelection,
+} from "../../snapshot/snapshot-types.js";
+import {
+  sameLocalFields,
+  validateIgnoreSnapshotIdentity,
+  validateIgnoreSnapshotSessionFlag,
+  validatePortableSnapshot,
+  validateSnapshotFieldPolicy,
+} from "../../sync/local-fields.js";
 import {
   assertAgentDirectoryPathLayout,
   configuredSnapshotPathMatcher,
@@ -63,11 +75,7 @@ export function requireGitManifest(value: unknown): GitManifest {
   }
   if (
     manifest.version !== GIT_MANIFEST_VERSION ||
-    (manifest.snapshotVersion !== 1 &&
-      manifest.snapshotVersion !== 2 &&
-      manifest.snapshotVersion !== 3 &&
-      manifest.snapshotVersion !== 4 &&
-      manifest.snapshotVersion !== 5) ||
+    !isSupportedSnapshotVersion(manifest.snapshotVersion) ||
     typeof manifest.snapshotId !== "string" ||
     manifest.snapshotId.length > 512 ||
     !/^[A-Za-z0-9._-]+$/u.test(manifest.snapshotId) ||
@@ -104,8 +112,20 @@ export function requireGitManifest(value: unknown): GitManifest {
   validateSnapshotFieldPolicy({ version: manifest.snapshotVersion, localFields: manifest.localFields });
   const selection = manifest.selection === undefined ? undefined : portableSnapshotSelection(manifest.selection);
   validateSnapshotSelection({ version: manifest.snapshotVersion, selection });
+  const ignoreSnapshot = selection?.version === 4;
+  if (ignoreSnapshot) {
+    validateIgnoreSnapshotIdentity({
+      id: manifest.snapshotId,
+      createdAt: manifest.createdAt,
+      machine: manifest.machine,
+      profile: manifest.profile,
+    });
+    validateIgnoreSnapshotSessionFlag(selection, manifest.snapshotSyncSessions);
+  }
   const selected = selection?.scope ? configuredSnapshotPathMatcher(selection) : undefined;
+  const byteLimit = ignoreSnapshot ? MAX_AGENT_DIRECTORY_BYTES : MAX_GIT_SNAPSHOT_BYTES;
   let total = 0;
+  let hasSessionFiles = false;
   const paths = new Set<string>();
   for (const rawFile of manifest.files) {
     if (!rawFile || typeof rawFile !== "object" || Array.isArray(rawFile)) {
@@ -117,6 +137,7 @@ export function requireGitManifest(value: unknown): GitManifest {
       !isSafeSnapshotPath(file.path) ||
       (selected !== undefined && !selected(file.path)) ||
       typeof file.sha256 !== "string" ||
+      (ignoreSnapshot && file.sha256.length !== 64) ||
       !/^[0-9a-f]{64}$/u.test(file.sha256) ||
       typeof file.size !== "number" ||
       !isGitPayloadSizeAllowed(file.size) ||
@@ -125,10 +146,17 @@ export function requireGitManifest(value: unknown): GitManifest {
       throw new Error("Git publication manifest file is malformed.");
     }
     total += file.size;
-    if (!Number.isSafeInteger(total) || total > MAX_GIT_SNAPSHOT_BYTES) {
-      throw new Error(`Git snapshot content exceeds the ${MAX_GIT_SNAPSHOT_BYTES}-byte limit.`);
+    if (!Number.isSafeInteger(total) || total > byteLimit) {
+      throw new Error(`Git snapshot content exceeds the ${byteLimit}-byte limit.`);
+    }
+    if (ignoreSnapshot) {
+      if (file.path === "settings.json") assertAgentDirectorySettingsSize(file.size);
+      if (file.path.startsWith("sessions/")) hasSessionFiles = true;
     }
     paths.add(file.path);
+  }
+  if (ignoreSnapshot && manifest.syncSessions !== (manifest.snapshotSyncSessions === true || hasSessionFiles)) {
+    throw new Error("Invalid Git ignore snapshot session metadata.");
   }
   if (selected) assertAgentDirectoryPathLayout(paths);
   else assertNoPathConflicts([...paths]);
@@ -160,7 +188,7 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
 }
 
 export function prepareGitSnapshot(snapshot: Snapshot, namespace: string) {
-  snapshotSelectionInclude(snapshot);
+  if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) snapshotSelectionInclude(snapshot);
   validatePortableSnapshot(snapshot);
   if (
     typeof snapshot.id !== "string" ||

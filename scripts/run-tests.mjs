@@ -11,7 +11,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 
 export function runTests({ root = repositoryRoot, env = process.env, execute = spawnSync, log = console.log } = {}) {
   const outDir = path.join(root, "node_modules", ".cache", "pi-extensions-test");
-  const tsc = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+  const tsc = path.join(root, "node_modules", "typescript", "bin", "tsc");
   const vitest = path.join(root, "node_modules", "vitest", "vitest.mjs");
   // Diagnostics are advisory: an unlink failure must not replace a command's exit status.
   try {
@@ -48,14 +48,19 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
   }
 
   if (env.PI_EXTENSIONS_BUILD_READY !== "1") {
-    const command = env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
-    const args = env.npm_execpath ? [env.npm_execpath, "run", "build"] : ["run", "build"];
+    const npmCli =
+      env.npm_execpath ||
+      (process.platform === "win32"
+        ? path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js")
+        : undefined);
+    const command = npmCli ? process.execPath : "npm";
+    const args = npmCli ? [npmCli, "run", "build"] : ["run", "build"];
     const status = run("Build", command, args);
     if (status !== 0) return status;
   } else log("[test timing] Build: reused successful prerequisite output");
 
   fs.rmSync(outDir, { recursive: true, force: true });
-  const compilationStatus = run("Test compilation", tsc, ["-p", "tsconfig.test.json"]);
+  const compilationStatus = run("Test compilation", process.execPath, [tsc, "-p", "tsconfig.test.json"]);
   if (compilationStatus !== 0) return compilationStatus;
 
   const sourceTestFiles = [
@@ -69,7 +74,9 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
   }
 
   const canonicalTempDir = fs.realpathSync(os.tmpdir());
-  return run("Vitest", process.execPath, [vitest, "run", ...testFiles], {
+  // Full-suite discovery belongs to Vitest's configured projects, not a Windows-sized argv inventory.
+  const filters = selection.mode === "full" ? [] : testFiles;
+  return run("Vitest", process.execPath, [vitest, "run", ...filters], {
     ...env,
     // Cache bytecode, not module instances: isolated forks keep fresh runtime state.
     // Honor Node's overrides and do not opt external V8 coverage into less precise

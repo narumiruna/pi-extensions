@@ -183,7 +183,7 @@ export async function executeCommand(
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
         const outcome = await operations.syncBoth(ctx, options);
-        return { kind: "completed", ...(retryRefusal && outcome ? { outcome } : {}) };
+        return { kind: "completed", ...(retryRefusal && outcome && outcome !== "archived" ? { outcome } : {}) };
       }
       case "history": {
         const operations = await loaders.operations();

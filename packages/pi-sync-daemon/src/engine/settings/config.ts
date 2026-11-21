@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import { normalizeGitBranch, normalizeGitDirectory, normalizeGitRemote } from "../backends/git/git-config.js";
 import { normalizeWebDavPath, normalizeWebDavUrl } from "../backends/webdav/webdav-config.js";
+import { getEngineRoot } from "../host.js";
+import { type IgnorePolicyInput, loadEffectiveIgnorePolicy } from "../ignore/effective-ignore-policy.js";
+import { DEFAULT_IGNORE_FILENAME, readIgnoreSource, validateIgnoreFilename } from "../ignore/ignore-source.js";
 import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { normalizeLocalFields } from "../sync/local-field-policy.js";
 import {
@@ -11,7 +14,12 @@ import {
   syncDirectoryPolicyKey,
   syncSessionsSelected,
 } from "../sync/sync-policy.js";
-import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "./config-file.js";
+import {
+  type LocalConfigDocument,
+  localConfigPath,
+  readActiveLocalConfigDocumentForRepair,
+  withLockedLocalConfigDocument,
+} from "./config-file.js";
 import { requireSettings } from "./settings-store.js";
 import type {
   AnySyncConfig,
@@ -35,15 +43,96 @@ import {
 } from "./settings-validation.js";
 
 export async function loadConfig(setupName?: string): Promise<AnySyncConfig> {
-  return configFromSettings(await requireSettings(), setupName);
+  return requireLegacyOperationConfig(configFromSettings(await requireSettings(), setupName));
 }
 
 /** A background freshness read must never trigger legacy-file publication. */
 export async function loadConfigForCheck(): Promise<AnySyncConfig> {
-  const document = await readActiveLocalConfigDocumentForRepair();
+  return requireLegacyOperationConfig(configFromSettings(await readSettingsForCheck()));
+}
+
+export async function loadSettingsConfig(setupName?: string): Promise<AnySyncConfig> {
+  return configFromSettings(await readSettingsForCheck(), setupName);
+}
+
+async function readSettingsForCheck() {
+  return settingsFromCheckDocument(await readActiveLocalConfigDocumentForRepair());
+}
+
+function settingsFromCheckDocument(document: LocalConfigDocument | undefined) {
   if (!document) throw new Error(`Missing pi-sync settings: ${localConfigPath()}`);
-  validateSettingsDocument(document.parsed);
-  return configFromSettings(document.parsed as PiSyncSettingsV3);
+  return validateSettingsDocument(document.parsed);
+}
+
+export function requireLegacyOperationConfig(config: AnySyncConfig): AnySyncConfig {
+  if (config.pathPolicy === "ignore-file" || config.ignorePolicy || config.reservedIgnoreNames !== undefined) {
+    throw new Error("This Pi Sync operation does not yet support settings with ignore-file policies.");
+  }
+  return config;
+}
+
+export async function resolveIgnoreConfig(
+  settings: PiSyncSettingsV3,
+  setupName?: string,
+  signal?: AbortSignal,
+): Promise<AnySyncConfig> {
+  signal?.throwIfAborted();
+  const config = configFromSettings(validateSettingsDocument(settings), setupName);
+  if (config.pathPolicy !== "ignore-file") return requireLegacyOperationConfig(config);
+  const root = getEngineRoot();
+  const validateRoot = () => {
+    if (root !== getEngineRoot())
+      throw new Error("The Pi agent directory changed; reopen the review before continuing.");
+  };
+  const settingsFingerprint = syncCheckConfigFingerprint(config);
+  const validateSettings = (document: PiSyncSettingsV3) => {
+    signal?.throwIfAborted();
+    validateRoot();
+    const current = configFromSettings(document, setupName);
+    if (settingsFingerprint !== syncCheckConfigFingerprint(current)) {
+      throw new Error("Pi Sync settings changed; reopen the review before continuing.");
+    }
+    return current;
+  };
+  const ignorePolicy = await loadEffectiveIgnorePolicy(root, ignorePolicyInput(config), signal);
+  signal?.throwIfAborted();
+  validateRoot();
+  return {
+    ...config,
+    ignorePolicy,
+    validateIgnorePolicy: async () => {
+      signal?.throwIfAborted();
+      validateRoot();
+      await withLockedLocalConfigDocument(
+        async (document, recheck) => {
+          const current = validateSettings(settingsFromCheckDocument(document));
+          const source = await readIgnoreSource(root, current.ignoreFile, signal);
+          validateRoot();
+          recheck();
+          if (source.sourceDigest !== ignorePolicy.sourceDigest) {
+            throw new Error("Pi Sync ignore policy changed; reopen the review before continuing.");
+          }
+          if (!source.present) {
+            throw new Error(
+              `Ignore file "${source.filename}" is missing; starter rules can only be used for a preview.`,
+            );
+          }
+        },
+        signal,
+        true,
+      );
+      signal?.throwIfAborted();
+      validateRoot();
+    },
+  };
+}
+
+function ignorePolicyInput(config: AnySyncConfig): IgnorePolicyInput {
+  return {
+    filename: config.ignoreFile,
+    sessions: config.include.includes("sessions"),
+    configuredFilenames: config.reservedIgnoreNames ?? [],
+  };
 }
 
 export function configFromSettings(settings: PiSyncSettingsV3, setupName?: string): AnySyncConfig {
@@ -59,6 +148,12 @@ export function configFromSettings(settings: PiSyncSettingsV3, setupName?: strin
       `Invalid pi-sync settings: sync setup “${selectedName}” references missing storage connection “${connectionName}”.`,
     );
   }
+  const ignoreNames = new Set<string>();
+  for (const { sync } of Object.values(settings.syncSetups)) {
+    if (sync.pathPolicy === "ignore-file")
+      ignoreNames.add(validateIgnoreFilename(sync.ignoreFile ?? DEFAULT_IGNORE_FILENAME).toLowerCase());
+  }
+  if (ignoreNames.size > 0) ignoreNames.add(DEFAULT_IGNORE_FILENAME);
   return {
     ...resolveSyncConfig(
       selectedName,
@@ -70,6 +165,7 @@ export function configFromSettings(settings: PiSyncSettingsV3, setupName?: strin
       settings.showStatus ?? true,
     ),
     debug: settings.debug ?? false,
+    ...(ignoreNames.size > 0 ? { reservedIgnoreNames: [...ignoreNames].sort() } : {}),
   };
 }
 
@@ -80,12 +176,13 @@ export type SyncSetupStorageReview = Pick<
 
 /** A validated setup-facing projection used by manager and settings UI. */
 export async function loadPartialConfig(setupName?: string): Promise<PartialConfig> {
-  const config = await loadConfig(setupName);
+  const config = configFromSettings(await requireSettings(), setupName);
   return {
     setupName: config.setupName,
     ...storageReviewFromConfig(config),
     include: [...config.include],
     ...(config.scope === undefined ? {} : { scope: config.scope }),
+    ...(config.pathPolicy === undefined ? {} : { pathPolicy: config.pathPolicy, ignoreFile: config.ignoreFile }),
     ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
     ...(config.reinclude === undefined ? {} : { reinclude: [...config.reinclude] }),
     automatic: config.automatic,
@@ -120,7 +217,10 @@ export function syncSetupReviewIdentity(
 }
 
 export function syncConfigReviewIdentity(config: AnySyncConfig) {
-  const directoryPolicy = syncDirectoryPolicyKey(config);
+  const directoryPolicy =
+    config.pathPolicy === "ignore-file" && !config.ignorePolicy
+      ? JSON.stringify([config.pathPolicy, config.ignoreFile])
+      : syncDirectoryPolicyKey(config);
   return JSON.stringify([
     config.setupName,
     config.connectionName,
@@ -184,6 +284,12 @@ function resolveSyncConfig(
       ? {
           scope: policy.scope,
           include: policy.sessions ? ["sessions"] : [],
+          ...(policy.pathPolicy === "ignore-file"
+            ? {
+                pathPolicy: policy.pathPolicy,
+                ignoreFile: validateIgnoreFilename(policy.ignoreFile ?? DEFAULT_IGNORE_FILENAME),
+              }
+            : {}),
           ...(policy.exclude === undefined ? {} : { exclude: normalizeDirectoryRules(policy.exclude) }),
           ...(policy.reinclude === undefined ? {} : { reinclude: normalizeDirectoryRules(policy.reinclude) }),
         }

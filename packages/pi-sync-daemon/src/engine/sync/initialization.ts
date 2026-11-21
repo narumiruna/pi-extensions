@@ -1,5 +1,5 @@
 import type { EngineContext } from "../host.js";
-import { configFromSettings, loadConfig } from "../settings/config.js";
+import { loadConfig } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
@@ -29,7 +29,8 @@ export async function initializeSync(ctx: EngineContext, signal: AbortSignal, pu
         validate();
         const settings = await readLocalConfigObject();
         validate();
-        const config = settings?.activeSyncSetup ? configFromSettings(settings) : undefined;
+        const config = settings?.activeSyncSetup ? await loadConfig() : undefined;
+        validate();
         const sessionDir =
           config?.scope === "agent-directory"
             ? await effectiveSessionRoot(ctx, config, signal)

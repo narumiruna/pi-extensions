@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RemoteHead } from "../backends/sync-backend.js";
 import { toPosix } from "../paths.js";
 import { canonicalSnapshotPathForConfig, filterSnapshotForConfigPolicy, isSessionPath } from "../snapshot/snapshot.js";
@@ -6,6 +7,7 @@ import type { SyncState } from "../state/state-types.js";
 import { sameSyncExclude } from "./exclude-policy.js";
 import { portableSnapshot, sameLocalFields } from "./local-fields.js";
 import {
+  compareIgnorePolicy,
   configuredSnapshotPathMatcher,
   customIncludePathsByLower,
   includeFromSelectionConfig,
@@ -16,6 +18,10 @@ import {
 } from "./sync-policy.js";
 
 type SyncPolicyConfig = SyncSelectionConfig & { localFields?: string[] };
+function ignorePolicyKey(config: SyncPolicyConfig) {
+  const key = config.ignorePolicy && syncDirectoryPolicyKey(config);
+  return key === undefined ? undefined : createHash("sha256").update(key).digest("hex");
+}
 
 export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncPolicyConfig) {
   return (
@@ -34,6 +40,10 @@ export function remoteChangedSinceState(
   sameRevision: (left: string, right: string) => boolean,
 ) {
   if (!head) return Boolean(state.lastAppliedSnapshot);
+  if (head.selection) {
+    const comparison = compareIgnorePolicy(config.ignorePolicy, head.selection);
+    if (comparison && comparison !== "match") return true;
+  }
   if (head.snapshotId !== state.lastAppliedSnapshot) return true;
   if (state.lastRemoteRevision && !sameRevision(head.revision, state.lastRemoteRevision)) return true;
   if (syncPolicyChanged(state, config)) return true;
@@ -50,6 +60,8 @@ export function hasRemoteChanges(
   config: SyncPolicyConfig,
   ignoredPaths = new Set<string>(),
 ) {
+  const comparison = compareIgnorePolicy(config.ignorePolicy, remote.selection);
+  if (comparison && comparison !== "match") return true;
   if (remote.id === state.lastAppliedSnapshot && !syncPolicyChanged(state, config)) return false;
   return !snapshotHashesMatchState(
     portableSnapshot(filterSnapshotForConfigPolicy(remote, config), remote.localFields),
@@ -126,14 +138,13 @@ export function shouldRefreshSyncedState(
   );
 }
 
-export function acceptedSelection(config: {
-  include: string[];
-  exclude?: string[];
-  scope?: "agent-directory";
-  reinclude?: string[];
-}) {
+export function acceptedSelection(
+  config: SyncPolicyConfig & { include: string[]; exclude?: string[]; reinclude?: string[] },
+) {
+  const key = ignorePolicyKey(config);
   return {
-    include: [...config.include],
+    include: config.ignorePolicy ? includeFromSelectionConfig(config) : [...config.include],
+    ...(key === undefined ? {} : { ignorePolicyKey: key }),
     ...(config.exclude === undefined ? {} : { exclude: [...config.exclude] }),
     ...(config.scope === undefined ? {} : { scope: config.scope }),
     ...(config.reinclude === undefined ? {} : { reinclude: [...config.reinclude] }),
@@ -141,6 +152,8 @@ export function acceptedSelection(config: {
 }
 
 function sameSelectionRules(state: SyncState, config: SyncPolicyConfig) {
+  const key = ignorePolicyKey(config);
+  if (key !== undefined || state.ignorePolicyKey !== undefined) return key === state.ignorePolicyKey;
   return config.scope === "agent-directory" && state.scope === config.scope
     ? syncDirectoryPolicyKey(state) === syncDirectoryPolicyKey(config)
     : sameSyncExclude(state.exclude, config.exclude);

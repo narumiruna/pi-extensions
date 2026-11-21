@@ -8,7 +8,7 @@ import {
 } from "../host.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { configuredSnapshotPathMatcher, type SyncSelectionConfig } from "../sync/sync-policy.js";
-import { agentDirectorySessionRoot } from "./snapshot-exclude-safety.js";
+import { agentDirectorySessionRoot, reservedIgnoreTargetGuard } from "./snapshot-exclude-safety.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import type { Snapshot, SnapshotOptions } from "./snapshot-types.js";
 
@@ -24,10 +24,18 @@ export function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionCo
   return typeof getSessionDir === "function" ? (getSessionDir.call(manager) as string | undefined) : undefined;
 }
 
-export async function configuredSessionDir() {
+export async function configuredSessionDir(options: Pick<SnapshotOptions, "reservedIgnoreNames" | "signal"> = {}) {
+  const root = agentDir();
+  const target = path.join(root, "settings.json");
+  const guardReserved = reservedIgnoreTargetGuard(root, options);
   let content: string;
   try {
-    content = await fs.readFile(path.join(agentDir(), "settings.json"), "utf8");
+    if (guardReserved) {
+      const { readLegacySnapshotSource } = await import("./snapshot.js");
+      content = (await readLegacySnapshotSource(target, guardReserved, options.signal)).toString("utf8");
+    } else {
+      content = await fs.readFile(target, "utf8");
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -48,17 +56,21 @@ export async function effectiveSessionRoot(
   signal?: AbortSignal,
 ) {
   const sessionDir = sessionDirFromContext(ctx);
+  const root = agentDir();
   if (policy?.scope === "agent-directory") {
-    const root = agentDir();
     if (sessionDir !== undefined || ctx.sessionManager.usesDefaultSessionDir?.())
-      return agentDirectorySessionRoot(root, sessionDir);
+      return agentDirectorySessionRoot(root, sessionDir, policy.ignorePolicy, policy.reservedIgnoreNames);
     if (!configuredSnapshotPathMatcher(policy)("settings.json"))
       throw new Error("Pi session storage is unknown and settings.json is excluded. Use an active Pi context to sync.");
     const { agentDirectoryConfiguredSessionDir } = await import("./snapshot.js");
     signal?.throwIfAborted();
-    return agentDirectorySessionRoot(root, await agentDirectoryConfiguredSessionDir(signal));
+    const configured = await agentDirectoryConfiguredSessionDir(signal, root, policy);
+    return agentDirectorySessionRoot(root, configured, policy.ignorePolicy, policy.reservedIgnoreNames);
   }
-  return path.resolve(sessionStorageRoot(agentDir(), sessionDir ?? (await configuredSessionDir())));
+  const resolved = sessionStorageRoot(root, sessionDir ?? (await configuredSessionDir({ ...policy, signal })));
+  const guardReserved = reservedIgnoreTargetGuard(root, policy ?? {});
+  if (guardReserved) await guardReserved(resolved);
+  return resolved;
 }
 
 export async function sessionDirForApply(
@@ -69,15 +81,22 @@ export async function sessionDirForApply(
   const contextSessionDir = sessionDirFromContext(ctx);
   if (options.scope === "agent-directory") {
     const root = await effectiveSessionRoot(ctx, options, options.signal);
-    if (root !== agentDirectorySessionRoot(agentDir(), options.sessionDir))
+    if (
+      root !==
+      agentDirectorySessionRoot(agentDir(), options.sessionDir, options.ignorePolicy, options.reservedIgnoreNames)
+    )
       throw new Error("Pi session storage changed during transfer; retry from a fresh review.");
     return root;
   }
-  const localSessionDir = await configuredSessionDir();
-  if (contextSessionDir && path.resolve(contextSessionDir) !== path.resolve(localSessionDir ?? "")) {
-    return contextSessionDir;
-  }
-  return sessionDirFromSnapshot(snapshot) ?? contextSessionDir;
+  const localSessionDir = await configuredSessionDir(options);
+  const sessionDir =
+    contextSessionDir && path.resolve(contextSessionDir) !== path.resolve(localSessionDir ?? "")
+      ? contextSessionDir
+      : (sessionDirFromSnapshot(snapshot) ?? contextSessionDir);
+  const root = agentDir();
+  const guardReserved = reservedIgnoreTargetGuard(root, options);
+  if (guardReserved) await guardReserved(sessionStorageRoot(root, sessionDir));
+  return sessionDir;
 }
 
 /** Hash-only merge plans cannot describe installation into a different session root. */
@@ -155,8 +174,12 @@ export function snapshotOptionsForContext(
   return {
     include: config.include,
     ...(config.scope === undefined ? {} : { scope: config.scope }),
+    ...(config.ignorePolicy
+      ? { ignorePolicy: config.ignorePolicy, validateIgnorePolicy: config.validateIgnorePolicy }
+      : {}),
     ...(config.exclude === undefined ? {} : { exclude: config.exclude }),
     ...(config.reinclude === undefined ? {} : { reinclude: config.reinclude }),
+    ...(config.reservedIgnoreNames === undefined ? {} : { reservedIgnoreNames: config.reservedIgnoreNames }),
     sessionDir: sessionDirFromContext(ctx) ?? defaultScopedSessionDir,
   };
 }

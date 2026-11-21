@@ -6,9 +6,9 @@ import {
   removeStorageConnection,
   updateStorageConnection,
 } from "../settings/settings-management.js";
-import { readLocalConfigObject } from "../settings/settings-store.js";
 import { isCloudflareR2Endpoint, normalizeS3Endpoint, ownRecord } from "../settings/settings-validation.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
+import { ignoreSetupRecovery, loadSettingsCatalog } from "./settings-review.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./setup/git-ui.js";
 import { applyS3CredentialUpdate, chooseS3Credentials, chooseS3CredentialUpdate } from "./setup/s3-credentials-ui.js";
 import { promptResourceName } from "./setup/setup-prompts.js";
@@ -32,11 +32,11 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
           kind: "actions",
           title: "Storage connections",
           lines: state.supportedVersion
-            ? ["Server addresses and sign-in details, reusable across sync setups."]
+            ? (state.recovery ?? ["Server addresses and sign-in details, reusable across sync setups."])
             : ["Create supported pi-sync settings before managing storage connections."],
           items: state.supportedVersion
             ? [
-                { id: "add", label: "Add storage connection", action: "add" as const },
+                ...(state.recovery ? [] : [{ id: "add", label: "Add storage connection", action: "add" as const }]),
                 ...names.map((name, index) => {
                   const id = `connection:${index}`;
                   nameById.set(id, name);
@@ -58,8 +58,8 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         lines: state.selected?.lines ?? ["This storage connection no longer exists."],
         items: state.selected
           ? [
-              { id: "edit", label: "Edit storage connection…", action: "edit" },
-              ...(state.selected.usedBy.length === 0
+              ...(state.recovery ? [] : [{ id: "edit", label: "Edit storage connection…", action: "edit" as const }]),
+              ...(!state.recovery && state.selected.usedBy.length === 0
                 ? [
                     {
                       id: "remove",
@@ -75,7 +75,8 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
       }),
     },
     actions: {
-      add: async () => {
+      add: async ({ state }) => {
+        if (state.recovery) return { kind: "rejected" };
         try {
           await showAddStorageConnection(ctx, signal);
         } catch (error) {
@@ -90,7 +91,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         return selectedName ? { kind: "to", screen: "detail" } : { kind: "rejected" };
       },
       edit: async ({ state }) => {
-        if (!state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
+        if (state.recovery || !state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
         try {
           await editStorageConnection(ctx, state.selected.name, state.selected.profile, state.selected.usedBy, signal);
         } catch (error) {
@@ -99,7 +100,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         return { kind: "stay" };
       },
       remove: async ({ state }) => {
-        if (!state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
+        if (state.recovery || !state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
         const name = state.selected.name;
         const confirmed = await ctx.ui.confirm(
           "Remove storage connection?",
@@ -131,14 +132,19 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
 }
 
 async function loadStorageMenuState(selectedName: string | undefined, signal?: AbortSignal) {
-  const raw = await readLocalConfigObject();
-  if (signal?.aborted) throw signal.reason;
-  const profiles = ownRecord(raw?.storageConnections) ?? {};
+  const catalog = await loadSettingsCatalog();
+  signal?.throwIfAborted();
+  const raw = catalog?.settings;
+  const profiles = raw?.storageConnections ?? {};
+  const recovery = catalog?.ignoreSetups.length
+    ? ["Connection changes are unavailable while any setup uses an ignore file.", ...ignoreSetupRecovery(catalog.path)]
+    : undefined;
   const profile = selectedName ? ownRecord(profiles[selectedName]) : undefined;
   if (!selectedName || !profile) {
     return {
       supportedVersion: raw !== undefined,
       profiles,
+      recovery,
       selected: undefined,
     };
   }
@@ -146,16 +152,18 @@ async function loadStorageMenuState(selectedName: string | undefined, signal?: A
   return {
     supportedVersion: raw !== undefined,
     profiles,
+    recovery,
     selected: {
       name: selectedName,
       profile,
       usedBy,
       lines: [
+        ...(recovery ?? []),
         `Type: ${connectionType(profile)}`,
         `Endpoint: ${connectionEndpoint(profile)}`,
         `Credentials: ${credentialSource(profile)}`,
         `Used by: ${usedBy.length > 0 ? usedBy.map(safeTerminalText).join(", ") : "No sync setups"}`,
-        ...(usedBy.length > 0
+        ...(!recovery && usedBy.length > 0
           ? [
               "Remove unavailable: remove the listed sync setups first. Switch away from a current setup before removing it if other setups remain.",
             ]

@@ -735,7 +735,7 @@ Capture occurs after accepted directions or journaled merge; cache staging prece
 Missing/corrupt cache never invents a baseline from current data or assumes remote retention.
 Preserve unknown/corrupted or nonprivate records and pending journals for manual review; pruning applies the same storage/schema/byte validation as reading.
 Journal identity distinguishes absent and explicit empty policies.
-Integrity validation uses the journal's recorded rules, so intact old-policy journals remain readable after a settings change; ordinary replay still rejects mismatched current rules, while reviewed force push/pull may archive that evidence.
+Integrity validation uses the journal's recorded rules, so intact old-policy journals remain readable after a settings change; ordinary replay still rejects mismatched current rules, while a reviewed force push or pull may archive a legacy path-policy journal.
 Older absence-conflating journal identities fail closed and remain available for an explicitly reviewed force direction; do not downgrade portable setups.
 To return to an older client, first use this version to review rule removal and publish a complete nonportable copy to a separate version-3 setup, with Pi closed during the change.
 Never reinterpret portable snapshots with an old binary.

@@ -5,7 +5,12 @@ import path from "node:path";
 import { assertWithinRoot, isDeniedPath, isPathInside, parentPaths, safeJoin, toPosix } from "../paths.js";
 import { syncDirectory } from "../state/json-file.js";
 import { stateDir } from "../state/state-directory.js";
-import { compileSyncPolicyExclude } from "../sync/sync-policy.js";
+import {
+  compileSyncPolicyExclude,
+  requireLegacyTransferPolicy,
+  sameSnapshotSelection,
+  selectionForSnapshot,
+} from "../sync/sync-policy.js";
 import { agentDir } from "./session-paths.js";
 import {
   agentDirectoryConfiguredSessionDir,
@@ -23,7 +28,13 @@ import { agentDirectoryPhysicalSessionPath, assertUnexcludedTargets } from "./sn
 import { decodeBase64Strict } from "./snapshot-payload.js";
 import { reviewedSnapshotPreimages } from "./snapshot-reviewed-preimages.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
-import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
+import { ignorePolicyValidator } from "./snapshot-transaction-policy.js";
+import {
+  IGNORE_SNAPSHOT_VERSION,
+  type Snapshot,
+  type SnapshotApplyPlan,
+  type SnapshotOptions,
+} from "./snapshot-types.js";
 
 function sha256(value: Buffer) {
   return createHash("sha256").update(value).digest("hex");
@@ -31,6 +42,18 @@ function sha256(value: Buffer) {
 
 function fileHashMap(snapshot: Snapshot) {
   return Object.fromEntries(snapshot.files.map((file) => [file.path, file.sha256]));
+}
+
+function assertSnapshotApplyPolicy(snapshot: Snapshot, options: SnapshotOptions) {
+  if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) {
+    requireLegacyTransferPolicy(snapshot);
+    if (options.ignorePolicy)
+      throw new Error("Project the snapshot into the reviewed local ignore-file policy before applying it.");
+    return;
+  }
+  if (options.scope !== "agent-directory" || !options.ignorePolicy) requireLegacyTransferPolicy(snapshot);
+  if (!sameSnapshotSelection(snapshot.selection, selectionForSnapshot(undefined, undefined, options)))
+    throw new Error("Snapshot does not match the local ignore-file policy; review and project it before applying it.");
 }
 
 export async function applySnapshot(
@@ -42,21 +65,29 @@ export async function applySnapshot(
     | "exclude"
     | "scope"
     | "reinclude"
+    | "ignorePolicy"
+    | "reservedIgnoreNames"
     | "sessionDir"
     | "syncFiles"
     | "syncSessions"
     | "extraFiles"
     | "signal"
     | "validateMutation"
+    | "validateIgnorePolicy"
     | "expectedFileHashes"
   > & { reviewedLocal?: Pick<Snapshot, "files"> } = {},
 ) {
+  assertSnapshotApplyPolicy(snapshot, options);
+  const validateIgnorePolicy = ignorePolicyValidator(options);
   const root = agentDir();
   if (snapshot.version === 5 && options.scope !== "agent-directory")
     throw new Error("Agent-directory snapshot apply requires the local agent-directory policy.");
   const sessionDir =
     options.scope === "agent-directory"
-      ? sessionStorageRoot(root, options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(options.signal, root)))
+      ? sessionStorageRoot(
+          root,
+          options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(options.signal, root, options)),
+        )
       : options.sessionDir;
   options.validateMutation?.();
   options = { ...options, sessionDir };
@@ -75,6 +106,7 @@ export async function applySnapshot(
     ),
   };
   options.validateMutation?.();
+  if (validateIgnorePolicy) await validateIgnorePolicy();
   await recoverPendingSnapshotTransactions(transactionOptions);
   const current = await createSnapshot(snapshot.profile, {
     ...options,
@@ -156,6 +188,7 @@ export function preflightSnapshotApply(
   current: Snapshot,
   options: SnapshotOptions = {},
 ): SnapshotApplyPlan {
+  assertSnapshotApplyPolicy(snapshot, options);
   const seenPaths = new Set<string>();
   const remotePaths = new Set<string>();
   const writes: Array<{ target: string; content: Buffer }> = [];
@@ -226,7 +259,7 @@ export async function addTopLevelCaseVariantDeletes(
   snapshot: Pick<Snapshot, "files" | "selection">,
   options: SnapshotOptions = {},
 ): Promise<SnapshotApplyPlan> {
-  if (options.scope === "agent-directory" || snapshot.selection?.version === 3) return plan;
+  if (options.scope === "agent-directory" || snapshot.selection?.scope === "agent-directory") return plan;
   const excluded = compileSyncPolicyExclude(options);
   const topLevelPaths = new Map<string, string>();
   for (const file of snapshot.files) {
@@ -292,7 +325,12 @@ function isSafeSnapshotPath(relativePath: string) {
 function excludedApplyPath(root: string, options: SnapshotOptions) {
   const excluded = compileSyncPolicyExclude(options);
   if (options.scope !== "agent-directory") return excluded;
-  const physicalSessionPath = agentDirectoryPhysicalSessionPath(root, options.sessionDir);
+  const physicalSessionPath = agentDirectoryPhysicalSessionPath(
+    root,
+    options.sessionDir,
+    options.ignorePolicy,
+    options.reservedIgnoreNames,
+  );
   return (relative: string) =>
     excluded(relative) ||
     (/^sessions(?:\/|$)/iu.test(relative) ? !isSessionFilePath(relative) : physicalSessionPath(relative));
@@ -300,7 +338,7 @@ function excludedApplyPath(root: string, options: SnapshotOptions) {
 
 type MutationGuards = Pick<
   SnapshotOptions,
-  "signal" | "validateMutation" | "exclude" | "scope" | "include" | "reinclude"
+  "signal" | "validateMutation" | "exclude" | "scope" | "include" | "reinclude" | "ignorePolicy" | "reservedIgnoreNames"
 >;
 
 export async function preflightSnapshotMutations(

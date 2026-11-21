@@ -40,6 +40,14 @@ export function scopedIdentity(stat: BigIntStats) {
   return identity;
 }
 
+export function installedVacancyIdentityMatches(image: ScopedImage, expected: string) {
+  if (image.kind === "missing" || !isScopedIdentity(expected)) return false;
+  if (scopedIdentity(image.stat) === expected) return true;
+  if (process.platform !== "win32" || image.kind !== "file" || image.stat.ino === 0n) return false;
+  const [device, inode] = expected.split(":");
+  return image.stat.dev.toString() === device && image.stat.ino.toString() === inode;
+}
+
 export function stableScopedIdentity(target: string, stat: BigIntStats) {
   const identity = scopedIdentity(stat);
   if (stat.birthtimeNs > 0n) {
@@ -202,7 +210,16 @@ export async function scopedTransactionImage(
     const hash = createHash("sha256");
     const copy = destination ? await fs.open(destination, "wx", 0o600) : undefined;
     try {
-      if (copy) await beforeCopyFile?.(copy);
+      if (copy && beforeCopyFile) {
+        if (process.platform === "darwin") {
+          validate(guards);
+          await copy.utimes(observed.atime, observed.mtime);
+          validate(guards);
+          await copy.sync();
+          validate(guards);
+        }
+        await beforeCopyFile(copy);
+      }
       await readStableFile(source, observed, guards, async (chunk) => {
         hash.update(chunk);
         if (copy) await copy.writeFile(chunk);
@@ -259,7 +276,17 @@ export function scopedDescendant(image: ScopedImage, relative: string) {
   return node;
 }
 
-export async function removeScopedImage(target: string, image: ScopedImage, guards: Guards) {
+export async function recheckScopedImage(target: string, image: ScopedImage, guards: Guards) {
+  if (image.kind !== "missing") await recheck(target, image.stat, guards);
+  else if (await lstat(target, guards)) changedImage();
+}
+
+export async function removeScopedImage(
+  target: string,
+  image: ScopedImage,
+  guards: Guards,
+  validateIgnorePolicy?: () => Promise<void>,
+) {
   if (image.kind === "missing") return;
   async function remove(target: string, node: ScopedNode): Promise<void> {
     await recheck(target, node.stat, guards);
@@ -267,11 +294,16 @@ export async function removeScopedImage(target: string, image: ScopedImage, guar
       const observed = await scopedTransactionImage(target, guards);
       if (observed.kind !== "file" || !sameObservation(node.stat, observed.stat) || observed.value !== node.value)
         changedImage();
+      if (validateIgnorePolicy) {
+        await validateIgnorePolicy();
+        await recheck(target, node.stat, guards);
+      }
       validate(guards);
       await fs.unlink(target);
       return;
     }
     for (const [name, child] of node.children) await remove(path.join(target, name), child);
+    if (validateIgnorePolicy) await validateIgnorePolicy();
     await recheck(target, node.stat, guards, true);
     validate(guards);
     await fs.rmdir(target);

@@ -163,7 +163,7 @@ test("an exact source fingerprint does not authorize relabeling an unsupported o
     const file = path.join(root, "pi-sync.json");
     const client = await connect();
     for (const [source, error] of [
-      [{ ...template, version: 8 }, /Unsupported pi-sync settings/u],
+      [{ ...template, version: 9 }, /Unsupported pi-sync settings/u],
       [{ ...template, debug: "invalid" }, /debug must be boolean/u],
     ] as const) {
       const original = `${JSON.stringify(source)}\n`;

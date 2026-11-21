@@ -1,9 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type MenuSettingItem, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig } from "../settings/config.js";
-import { localConfigPath } from "../settings/config-file.js";
+import { configFromSettings, loadConfig, loadSettingsConfig } from "../settings/config.js";
+import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { updateLocalConfig } from "../settings/settings-store.js";
+import { validateSettingsDocument } from "../settings/settings-validation.js";
 import { normalizeLocalFields, sameLocalFields } from "../sync/local-fields.js";
 import {
   SETUP_SWITCH_ACTION_OPTIONS,
@@ -20,8 +21,10 @@ import {
 } from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js";
+import { ignoreFileSettingsAvailable, manualIgnoreFileGuidance, showIgnoreFileAction } from "./ignore-file-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
+import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery } from "./settings-review.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
 import { showStorageConnections } from "./storage-connections-ui.js";
 import { AUTOMATIC_SYNC_DESCRIPTION, STARTUP_TRANSFER_DESCRIPTION, startupTransferSummary } from "./sync-behavior.js";
@@ -41,49 +44,76 @@ export async function showSyncSettings(
     disposition = "exit";
     return { kind: "close" as const };
   };
-  if (ctx.mode !== "tui") {
-    if (ctx.mode === "rpc" && ctx.hasUI) {
-      // Preserve RPC catalog management; preference/credential editing stays TUI-only.
-      const config = await loadConfig(reviewedSetup).catch(() => undefined);
-      if (signal?.aborted) return disposition;
-      ctx.ui.notify(
-        [
-          `Edit pi-sync settings manually: ${safeTerminalText(localConfigPath())}`,
-          ...(config?.scope === "agent-directory" ? directoryScopeSummary(config) : []),
-        ].join("\n"),
-        "info",
-      );
-      const management = defineMenu<undefined, "management", "setups" | "connections", ExtensionCommandContext>({
-        start: "management",
-        screens: {
-          management: () => ({
-            kind: "actions",
-            title: "Sync settings management",
-            items: [
-              { id: "setups", label: "Manage sync setups", action: "setups" },
-              { id: "connections", label: "Manage storage connections", action: "connections" },
-            ],
-            hint: "back",
-          }),
-        },
-        actions: {
-          setups: async ({ signal: actionSignal }) => {
-            const result = await showSyncSetupManager(ctx, runRoute, actionSignal);
-            return result === "exit" ? exitSettings() : { kind: "stay" };
-          },
-          connections: async ({ signal: actionSignal }) => {
-            await showStorageConnections(ctx, actionSignal);
-            return { kind: "stay" };
-          },
-        },
-      });
-      await runMenu(ctx, management, { getState: () => undefined, signal, isCurrent: () => !signal?.aborted });
+  if (!ctx.hasUI || signal?.aborted || (ctx.mode !== "tui" && ctx.mode !== "rpc")) return disposition;
+  const validateSettingsOwner = captureMutationOwner(ctx, signal);
+  const isCurrent = () => {
+    try {
+      validateSettingsOwner();
+      return true;
+    } catch {
+      return false;
     }
+  };
+  if (ctx.mode === "rpc") {
+    // Preserve RPC catalog management; preference/credential editing stays TUI-only.
+    const document = await readActiveLocalConfigDocumentForRepair().catch(() => null);
+    if (!isCurrent()) return disposition;
+    const settingsPath = document?.path ?? localConfigPath();
+    let config: Awaited<ReturnType<typeof loadSettingsConfig>> | undefined;
+    try {
+      if (document) config = configFromSettings(validateSettingsDocument(document.parsed), reviewedSetup);
+    } catch {
+      config = undefined;
+    }
+    ctx.ui.notify(
+      [
+        document === null
+          ? "Could not read the active pi-sync settings file. Check file access or repair the JSON before reopening /sync."
+          : `Edit pi-sync settings manually: ${safeTerminalText(settingsPath)}`,
+        ...(config?.reservedIgnoreNames !== undefined
+          ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(settingsPath)]
+          : []),
+        ...(config?.pathPolicy === "ignore-file"
+          ? [manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
+          : config?.scope === "agent-directory"
+            ? directoryScopeSummary(config)
+            : []),
+      ].join("\n"),
+      "info",
+    );
+    const management = defineMenu<undefined, "management", "setups" | "connections", ExtensionCommandContext>({
+      start: "management",
+      screens: {
+        management: () => ({
+          kind: "actions",
+          title: "Sync settings management",
+          items: [
+            { id: "setups", label: "Manage sync setups", action: "setups" },
+            { id: "connections", label: "Manage storage connections", action: "connections" },
+          ],
+          hint: "back",
+        }),
+      },
+      actions: {
+        setups: async ({ signal: actionSignal }) => {
+          const result = await showSyncSetupManager(ctx, runRoute, actionSignal);
+          return result === "exit" ? exitSettings() : { kind: "stay" };
+        },
+        connections: async ({ signal: actionSignal }) => {
+          await showStorageConnections(ctx, actionSignal);
+          return { kind: "stay" };
+        },
+      },
+    });
+    await runMenu(ctx, management, { getState: () => undefined, signal, isCurrent });
     return disposition;
   }
-  const initial = await loadConfig(reviewedSetup);
-  if (signal?.aborted) return "back";
+  const initial = await loadSettingsConfig(reviewedSetup);
+  if (!isCurrent()) return disposition;
+  const ignoreAvailable = await ignoreFileSettingsAvailable(ctx, signal);
+  if (!isCurrent()) return disposition;
   const setupName = initial.setupName;
+  type SettingsState = Awaited<ReturnType<typeof loadSettingsConfig>>;
   type Action =
     | "automatic"
     | "automatic-transfer"
@@ -98,6 +128,9 @@ export async function showSyncSettings(
     | "on-switch"
     | "include"
     | "exclude"
+    | "ignore-switch"
+    | "ignore-edit"
+    | "ignore-migrate"
     | "remote-include"
     | "storage-location"
     | "setups"
@@ -105,7 +138,7 @@ export async function showSyncSettings(
   let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
   // Keep Kit's existing settings adapter: native SettingsList has no async save/rollback
   // contract or injected keybindings. Kit preserves these safety and accessibility behaviors.
-  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, "settings", Action, ExtensionCommandContext>({
+  const menu = defineMenu<SettingsState, "settings", Action, ExtensionCommandContext>({
     start: "settings",
     screens: {
       settings: ({ state }) => ({
@@ -113,174 +146,231 @@ export async function showSyncSettings(
         title: "Pi Sync Settings",
         lines: [
           `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
-          saveStatus,
-        ],
-        items: [
-          ...(state.scope === "agent-directory"
+          ...(state.reservedIgnoreNames !== undefined
             ? [
-                {
-                  id: "include",
-                  label: "Agent directory scope",
-                  description:
-                    "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
-                  currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
-                  action: "include" as const,
-                },
+                "Setup preferences are read-only; adding, editing, and switching setups are unavailable.",
+                state.pathPolicy === "ignore-file" && !ignoreAvailable
+                  ? manualIgnoreFileGuidance(state.ignoreFile ?? ".syncignore")
+                  : "Open Manage sync setups for manual recovery.",
               ]
-            : [
-                {
-                  id: "include",
-                  label: "Included paths",
-                  description:
-                    "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
-                  currentValue: `${state.include.length} paths · Edit`,
-                  action: "include" as const,
-                },
-                {
-                  id: "exclude",
-                  label: "Excluded paths",
-                  description:
-                    "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
-                  currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
-                  action: "exclude" as const,
-                },
-              ]),
-          {
-            id: "remoteInclude",
-            label: state.scope === "agent-directory" ? "Compare sync policies" : "Compare included paths",
-            description:
-              "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
-            currentValue: "Review",
-            action: "remote-include",
-          },
-          {
-            id: "localFields",
-            label: "Machine-local fields",
-            description:
-              "This setup: settings.json root fields excluded from future portable snapshots, not project overrides. Policy changes require reviewed directional migration; old history remains.",
-            currentValue: `${state.localFields?.length ?? 0} fields · Edit`,
-            action: "local-fields",
-          },
-          {
-            id: "storageLocation",
-            label: "Storage location",
-            description: "This setup: review and save bucket, branch, or path changes. Remote history is not moved.",
-            currentValue:
-              state.backend.type === "s3"
-                ? `${safeTerminalText(state.backend.destination.bucket)} · ${safeTerminalText(state.backend.destination.prefix)}`
-                : state.backend.type === "git"
-                  ? `${safeTerminalText(state.backend.destination.branch)} · ${safeTerminalText(state.backend.destination.directory)}`
-                  : safeTerminalText(state.backend.destination.path),
-            action: "storage-location",
-          },
-          {
-            id: "setups",
-            label: "Manage sync setups",
-            description:
-              "This device: add, switch, edit, or remove sync setups. Each edit identifies its owner before saving.",
-            currentValue: "Open",
-            action: "setups",
-          },
-          {
-            id: "connections",
-            label: "Manage storage connections",
-            description:
-              "Shared connections on this device: review affected setups before saving server or credential changes.",
-            currentValue: "Open",
-            action: "connections",
-          },
-          {
-            id: "automatic",
-            label: "Automatic sync",
-            description: AUTOMATIC_SYNC_DESCRIPTION,
-            currentValue: state.automatic ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "automatic",
-          },
-          {
-            id: "automaticTransfer",
-            label: "Startup transfer",
-            description: `${STARTUP_TRANSFER_DESCRIPTION} Saved preference and requirements: ${startupTransferSummary(state)}.`,
-            currentValue: state.automaticTransfer ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "automatic-transfer",
-          },
-          {
-            id: "agentMode",
-            label: "Autonomous sync",
-            description: AGENT_MODE_DESCRIPTION,
-            currentValue: state.agentMode ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "agent-mode",
-          },
-          {
-            id: "continuous",
-            label: "Continuous sync",
-            description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Autonomous sync is enabled." : ""}`,
-            currentValue: state.continuous ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "continuous",
-          },
-          {
-            id: "onSwitch",
-            label: "On setup switch",
-            description:
-              "All setups on this device: ask before a pull review, open it automatically, or switch without pulling. Applies to subsequent switches.",
-            currentValue: setupSwitchActionLabel(state.onSwitch),
-            values: SETUP_SWITCH_ACTION_OPTIONS.map(({ label }) => label),
-            action: "on-switch",
-          },
-          {
-            id: "mergeSettings",
-            label: "Merge settings fields",
-            description:
-              "This setup, opt-in: merge independent global settings.json root fields with a verified private ancestor. Arrays and nested objects remain atomic. Applies to subsequent sync; no reload.",
-            currentValue: state.mergeSettings ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "merge-settings",
-          },
-          {
-            id: "contentPolicy",
-            label: "Content merge / partial progress",
-            description: `This setup, opt-in: ${state.scope === "agent-directory" ? "review format compatibility" : "review the version-5 upgrade"} before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.`,
-            currentValue: state.mergeContent
-              ? state.partialSync
-                ? "Merge + partial"
-                : "Merge only"
-              : state.partialSync
-                ? "Partial only"
-                : "Off",
-            values: ["Off", "Merge only", "Merge + partial", "Partial only"],
-            action: "content-policy",
-          },
-          {
-            id: "skipSecretScan",
-            label: "Skip secret scan",
-            description:
-              "All setups on this device: skip possible-secret checks on subsequent pushes, including automatic pushes. Other safety checks remain. Diagnostics still scans.",
-            currentValue: state.skipSecretScan ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "skip-secret-scan",
-          },
-          {
-            id: "showStatus",
-            label: "Show sync status",
-            description:
-              "All setups on this device: saved and applied immediately to Pi status. Review widgets and notifications remain available.",
-            currentValue: state.showStatus ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "show-status",
-          },
-          {
-            id: "debug",
-            label: "Debug startup timings",
-            description:
-              "All setups on this device: show startup durations in the TUI transcript or RPC notifications, including initial Continuous sync. Applies next session start; no credentials or file contents.",
-            currentValue: state.debug ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "debug",
-          },
-        ] satisfies MenuSettingItem<Action>[],
+            : [saveStatus]),
+        ],
+        items: (
+          [
+            ...(state.pathPolicy === "ignore-file"
+              ? ignoreAvailable
+                ? [
+                    {
+                      id: "ignoreFile",
+                      label: "Ignore file",
+                      description: "Select another existing file in the Pi agent directory. No transfer starts.",
+                      currentValue: safeTerminalText(state.ignoreFile ?? ".syncignore"),
+                      action: "ignore-switch" as const,
+                    },
+                    {
+                      id: "ignoreRules",
+                      label: "Edit ignore rules…",
+                      description: `Edit the existing local rules, then confirm separately. Sessions: ${state.include.includes("sessions") ? "opted in (ignore rules still apply)" : "off"}.`,
+                      currentValue: "Edit",
+                      action: "ignore-edit" as const,
+                    },
+                  ]
+                : []
+              : ignoreAvailable
+                ? [
+                    {
+                      id: "migrateIgnoreFile",
+                      label: "Migrate to ignore file…",
+                      description:
+                        "Review the scope change for this legacy setup. Migration does not start a transfer.",
+                      currentValue: "Review",
+                      action: "ignore-migrate" as const,
+                    },
+                  ]
+                : state.reservedIgnoreNames !== undefined
+                  ? []
+                  : state.scope === "agent-directory"
+                    ? [
+                        {
+                          id: "include",
+                          label: "Agent directory scope",
+                          description:
+                            "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
+                          currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
+                          action: "include" as const,
+                        },
+                      ]
+                    : [
+                        {
+                          id: "include",
+                          label: "Included paths",
+                          description:
+                            "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
+                          currentValue: `${state.include.length} paths · Edit`,
+                          action: "include" as const,
+                        },
+                        {
+                          id: "exclude",
+                          label: "Excluded paths",
+                          description:
+                            "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
+                          currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
+                          action: "exclude" as const,
+                        },
+                      ]),
+            ...(state.reservedIgnoreNames !== undefined
+              ? []
+              : [
+                  {
+                    id: "remoteInclude",
+                    label:
+                      ignoreAvailable || state.scope === "agent-directory"
+                        ? "Compare sync policies"
+                        : "Compare included paths",
+                    description:
+                      "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
+                    currentValue: "Review",
+                    action: "remote-include" as const,
+                  },
+                ]),
+            {
+              id: "localFields",
+              label: "Machine-local fields",
+              description:
+                "This setup: settings.json root fields excluded from future portable snapshots, not project overrides. Policy changes require reviewed directional migration; old history remains.",
+              currentValue: `${state.localFields?.length ?? 0} fields · Edit`,
+              action: "local-fields",
+            },
+            {
+              id: "storageLocation",
+              label: "Storage location",
+              description: "This setup: review and save bucket, branch, or path changes. Remote history is not moved.",
+              currentValue:
+                state.backend.type === "s3"
+                  ? `${safeTerminalText(state.backend.destination.bucket)} · ${safeTerminalText(state.backend.destination.prefix)}`
+                  : state.backend.type === "git"
+                    ? `${safeTerminalText(state.backend.destination.branch)} · ${safeTerminalText(state.backend.destination.directory)}`
+                    : safeTerminalText(state.backend.destination.path),
+              action: "storage-location",
+            },
+            {
+              id: "setups",
+              label: "Manage sync setups",
+              description:
+                state.reservedIgnoreNames !== undefined
+                  ? "Review configured setups and recovery options. Adding, editing, and switching are unavailable."
+                  : "This device: add, switch, edit, or remove sync setups. Each edit identifies its owner before saving.",
+              currentValue: "Open",
+              action: "setups",
+            },
+            {
+              id: "connections",
+              label: "Manage storage connections",
+              description:
+                state.reservedIgnoreNames !== undefined
+                  ? "Review shared connections. Connection changes are unavailable while ignore-file setups are configured."
+                  : "Shared connections on this device: review affected setups before saving server or credential changes.",
+              currentValue: "Open",
+              action: "connections",
+            },
+            {
+              id: "automatic",
+              label: "Automatic sync",
+              description: AUTOMATIC_SYNC_DESCRIPTION,
+              currentValue: state.automatic ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "automatic",
+            },
+            {
+              id: "automaticTransfer",
+              label: "Startup transfer",
+              description: `${STARTUP_TRANSFER_DESCRIPTION} Saved preference and requirements: ${startupTransferSummary(state)}.`,
+              currentValue: state.automaticTransfer ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "automatic-transfer",
+            },
+            {
+              id: "agentMode",
+              label: "Autonomous sync",
+              description: AGENT_MODE_DESCRIPTION,
+              currentValue: state.agentMode ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "agent-mode",
+            },
+            {
+              id: "continuous",
+              label: "Continuous sync",
+              description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Autonomous sync is enabled." : ""}`,
+              currentValue: state.continuous ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "continuous",
+            },
+            {
+              id: "onSwitch",
+              label: "On setup switch",
+              description:
+                "All setups on this device: ask before a pull review, open it automatically, or switch without pulling. Applies to subsequent switches.",
+              currentValue: setupSwitchActionLabel(state.onSwitch),
+              values: SETUP_SWITCH_ACTION_OPTIONS.map(({ label }) => label),
+              action: "on-switch",
+            },
+            {
+              id: "mergeSettings",
+              label: "Merge settings fields",
+              description:
+                "This setup, opt-in: merge independent global settings.json root fields with a verified private ancestor. Arrays and nested objects remain atomic. Applies to subsequent sync; no reload.",
+              currentValue: state.mergeSettings ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "merge-settings",
+            },
+            {
+              id: "contentPolicy",
+              label: "Content merge / partial progress",
+              description: `This setup, opt-in: ${state.scope === "agent-directory" ? "review format compatibility" : "review the version-5 upgrade"} before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.`,
+              currentValue: state.mergeContent
+                ? state.partialSync
+                  ? "Merge + partial"
+                  : "Merge only"
+                : state.partialSync
+                  ? "Partial only"
+                  : "Off",
+              values: ["Off", "Merge only", "Merge + partial", "Partial only"],
+              action: "content-policy",
+            },
+            {
+              id: "skipSecretScan",
+              label: "Skip secret scan",
+              description:
+                "All setups on this device: skip possible-secret checks on subsequent pushes, including automatic pushes. Other safety checks remain. Diagnostics still scans.",
+              currentValue: state.skipSecretScan ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "skip-secret-scan",
+            },
+            {
+              id: "showStatus",
+              label: "Show sync status",
+              description:
+                "All setups on this device: saved and applied immediately to Pi status. Review widgets and notifications remain available.",
+              currentValue: state.showStatus ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "show-status",
+            },
+            {
+              id: "debug",
+              label: "Debug startup timings",
+              description:
+                "All setups on this device: show startup durations in the TUI transcript or RPC notifications, including initial Continuous sync. Applies next session start; no credentials or file contents.",
+              currentValue: state.debug ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "debug",
+            },
+          ] satisfies MenuSettingItem<Action>[]
+        ).map((item) =>
+          state.reservedIgnoreNames !== undefined &&
+          !["setups", "connections", "ignoreFile", "ignoreRules", "migrateIgnoreFile"].includes(item.id)
+            ? { ...item, disabled: true }
+            : item,
+        ),
       }),
     },
     actions: {
@@ -585,7 +675,11 @@ export async function showSyncSettings(
         await showExcludedPaths(ctx, setupName, editorSignal);
         return resumeSettings(editorSignal);
       },
-      "remote-include": async ({ signal: actionSignal }) => {
+      "ignore-switch": ignoreAction("switch"),
+      "ignore-edit": ignoreAction("edit"),
+      "ignore-migrate": ignoreAction("migrate"),
+      "remote-include": async ({ state, signal: actionSignal }) => {
+        if (state.reservedIgnoreNames !== undefined) return { kind: "rejected" };
         const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
         if (reviewSignal.aborted) return { kind: "rejected" };
@@ -629,11 +723,20 @@ export async function showSyncSettings(
       return result;
     };
   }
+  function ignoreAction(action: Parameters<typeof showIgnoreFileAction>[2]) {
+    return async ({ state, signal: actionSignal }: { state: SettingsState; signal: AbortSignal }) => {
+      if (!ignoreAvailable || (state.pathPolicy === "ignore-file") === (action === "migrate"))
+        return { kind: "rejected" as const };
+      const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+      await showIgnoreFileAction(ctx, setupName, action, state.ignoreFile ?? ".syncignore", editorSignal);
+      return resumeSettings(editorSignal);
+    };
+  }
   async function resumeSettings(editorSignal: AbortSignal) {
-    if (editorSignal.aborted) return { kind: "close" as const };
+    if (editorSignal.aborted || !isCurrent()) return { kind: "close" as const };
     try {
-      const active = await loadConfig();
-      if (editorSignal.aborted || active.setupName !== setupName) return { kind: "close" as const };
+      const active = await loadSettingsConfig();
+      if (editorSignal.aborted || !isCurrent() || active.setupName !== setupName) return { kind: "close" as const };
       // Stay reloads authoritative rows without pushing a duplicate screen or clearing search.
       return { kind: "stay" as const };
     } catch {
@@ -641,9 +744,9 @@ export async function showSyncSettings(
     }
   }
   await runMenu({ ...ctx, ui: boundedSettingsUI(ctx) }, menu, {
-    getState: () => loadConfig(setupName),
+    getState: () => loadSettingsConfig(setupName),
     signal,
-    isCurrent: () => !signal?.aborted,
+    isCurrent,
   });
   return disposition;
 }

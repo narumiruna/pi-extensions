@@ -1,6 +1,11 @@
 import path from "node:path";
 import { isDeniedPath, toPosix } from "../paths.js";
-import type { DirectoryScope, Snapshot, SnapshotSelection } from "../snapshot/snapshot-types.js";
+import {
+  type DirectoryScope,
+  IGNORE_SNAPSHOT_VERSION,
+  type Snapshot,
+  type SnapshotSelection,
+} from "../snapshot/snapshot-types.js";
 import { compilePathRules, compileSyncExclude, normalizeSyncExclude, sameSyncExclude } from "./exclude-policy.js";
 
 export const BUILT_IN_SYNC_ROOTS = [
@@ -135,6 +140,24 @@ export function normalizeDirectoryRules(value: unknown): string[] {
 
 export function portableSnapshotSelection(value: unknown): SnapshotSelection {
   const selection = value as Partial<SnapshotSelection> | null;
+  if (selection && typeof selection === "object" && !Array.isArray(selection) && selection.version === 4) {
+    if (
+      selection.scope !== "agent-directory" ||
+      typeof selection.sessions !== "boolean" ||
+      typeof selection.fingerprint !== "string" ||
+      selection.fingerprint.length !== 64 ||
+      !/^[0-9a-f]{64}$/u.test(selection.fingerprint) ||
+      Object.keys(selection).length !== 4 ||
+      !["version", "scope", "sessions", "fingerprint"].every((key) => Object.hasOwn(selection, key))
+    )
+      throw new Error("Invalid ignore-file snapshot policy.");
+    return {
+      version: 4,
+      scope: "agent-directory",
+      fingerprint: selection.fingerprint,
+      sessions: selection.sessions,
+    };
+  }
   if (selection && typeof selection === "object" && !Array.isArray(selection) && selection.version === 3) {
     if (
       selection.scope !== "agent-directory" ||
@@ -164,7 +187,9 @@ export function portableSnapshotSelection(value: unknown): SnapshotSelection {
 }
 
 export function snapshotSelectionInclude(snapshot: Pick<Snapshot, "selection">) {
-  return snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection).include;
+  if (snapshot.selection === undefined) return undefined;
+  const selection = portableSnapshotSelection(snapshot.selection);
+  return selection.version === 4 ? (selection.sessions ? ["sessions"] : []) : selection.include;
 }
 
 export function snapshotSelectionExclude(snapshot: Pick<Snapshot, "selection">) {
@@ -189,6 +214,15 @@ export function selectionForSnapshot(
   exclude?: unknown,
   directory?: DirectoryScope,
 ): SnapshotSelection {
+  if (directory?.ignorePolicy) {
+    if (directory.scope !== "agent-directory") throw new Error("Ignore rules require agent-directory scope.");
+    return portableSnapshotSelection({
+      version: 4,
+      scope: directory.scope,
+      fingerprint: directory.ignorePolicy.fingerprint,
+      sessions: directory.ignorePolicy.sessions,
+    });
+  }
   if (directory?.scope === "agent-directory") return directorySelection(include, exclude, directory.reinclude);
   const normalized = normalizeSyncInclude(include);
   return exclude === undefined
@@ -210,6 +244,13 @@ export function validateSnapshotSelection(snapshot: Pick<Snapshot, "version" | "
     throw new Error("Exclude policy requires snapshot version 4 and selection version 2.");
   if ((snapshot.version === 5) !== (selection?.version === 3))
     throw new Error("Agent-directory policy requires snapshot version 5 and selection version 3.");
+  if ((snapshot.version === IGNORE_SNAPSHOT_VERSION) !== (selection?.version === 4))
+    throw new Error("Ignore-file policy requires snapshot version 6 and selection version 4.");
+}
+
+export function requireLegacyTransferPolicy(snapshot: Partial<Pick<Snapshot, "version" | "selection">>) {
+  if (snapshot.version === IGNORE_SNAPSHOT_VERSION || snapshot.selection?.version === 4)
+    throw new Error("This setup cannot transfer an ignore-file snapshot without a reviewed local ignore policy.");
 }
 
 export function sameSyncInclude(left: unknown, right: unknown) {
@@ -233,9 +274,13 @@ export function compareSyncInclude(local: unknown, remote: unknown) {
   };
 }
 
+export type IgnorePolicyComparison = "match" | "mismatch" | "local-ignore-remote-legacy" | "local-legacy-remote-ignore";
+
+type PortableDirectoryScope = Pick<DirectoryScope, "scope" | "reinclude">;
+
 export type RemoteSelectionState =
-  | { kind: "legacy"; discovered: string[] }
-  | ({ kind: "same"; include: string[]; exclude?: string[] } & DirectoryScope)
+  | { kind: "legacy"; discovered: string[]; ignorePolicyComparison?: never }
+  | ({ kind: "same"; include: string[]; exclude?: string[]; ignorePolicyComparison?: "match" } & PortableDirectoryScope)
   | ({
       kind: "different";
       include: string[];
@@ -243,10 +288,44 @@ export type RemoteSelectionState =
       remoteOnly: string[];
       localOnly: string[];
       excludeChanged?: boolean;
-    } & DirectoryScope);
+      ignorePolicyComparison?: Exclude<IgnorePolicyComparison, "match">;
+    } & PortableDirectoryScope);
+
+export function compareIgnorePolicy(
+  local: DirectoryScope["ignorePolicy"],
+  remote: SnapshotSelection | undefined,
+): IgnorePolicyComparison | undefined {
+  if (remote?.version !== 4) return local ? "local-ignore-remote-legacy" : undefined;
+  if (!local) return "local-legacy-remote-ignore";
+  return local.fingerprint === remote.fingerprint && local.sessions === remote.sessions ? "match" : "mismatch";
+}
+
+export function formatIgnorePolicyComparison(comparison: IgnorePolicyComparison) {
+  switch (comparison) {
+    case "match":
+      return "Remote ignore-file policy matches this device.";
+    case "mismatch":
+      return "Remote ignore-file policy differs. Edit local rules to match, or review publishing this device's policy.";
+    case "local-ignore-remote-legacy":
+      return "Remote uses a legacy content policy. Review publishing this device's ignore-file policy.";
+    case "local-legacy-remote-ignore":
+      return "Remote uses an ignore-file policy. Configure matching local rules before transferring.";
+  }
+}
 
 export function syncDirectoryPolicyKey(config: SyncSelectionConfig) {
   if (config.scope !== "agent-directory") return undefined;
+  const policy = config.ignorePolicy;
+  if (policy) {
+    return JSON.stringify([
+      "ignore-file",
+      policy.fingerprint,
+      policy.sessions,
+      policy.filename,
+      policy.sourceDigest,
+      policy.reservedNames,
+    ]);
+  }
   return JSON.stringify([
     config.scope,
     includeFromSelectionConfig(config).includes("sessions"),
@@ -262,6 +341,17 @@ export function inspectRemoteSelection(
   directory?: DirectoryScope,
 ): RemoteSelectionState {
   const selection = snapshot.selection === undefined ? undefined : portableSnapshotSelection(snapshot.selection);
+  const ignorePolicyComparison = compareIgnorePolicy(directory?.ignorePolicy, selection);
+  if (ignorePolicyComparison !== undefined) {
+    const include = snapshotSelectionInclude(snapshot) ?? discoverLegacySnapshotInclude(snapshot);
+    const scope = selection?.scope;
+    if (ignorePolicyComparison === "match") return { kind: "same", include, scope, ignorePolicyComparison };
+    const comparison = compareSyncInclude(
+      directory?.ignorePolicy ? (directory.ignorePolicy.sessions ? ["sessions"] : []) : localInclude,
+      include,
+    );
+    return { kind: "different", include, scope, ...comparison, ignorePolicyComparison };
+  }
   if (!selection && !directory?.scope) return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
   const remoteInclude = selection?.include ?? discoverLegacySnapshotInclude(snapshot);
   const exclude = selection?.exclude;
@@ -294,8 +384,9 @@ export interface RemoteSelectionDecision {
   remoteInclude: readonly string[];
   localExclude?: readonly string[];
   remoteExclude?: readonly string[];
-  localDirectory?: DirectoryScope;
-  remoteDirectory?: DirectoryScope;
+  localDirectory?: PortableDirectoryScope;
+  remoteDirectory?: PortableDirectoryScope;
+  ignorePolicyComparison?: IgnorePolicyComparison;
 }
 
 export class RemoteSelectionMismatchError extends Error {
@@ -312,20 +403,23 @@ export class RemoteSelectionMismatchError extends Error {
     localExclude?: string[],
     remoteExclude?: string[],
     localDirectory?: DirectoryScope,
-    remoteDirectory?: DirectoryScope,
+    remoteDirectory?: PortableDirectoryScope,
+    ignorePolicyComparison?: IgnorePolicyComparison,
   ) {
     const local = normalizeSyncInclude(localInclude);
     const remote = normalizeSyncInclude(remoteInclude);
     super(
-      formatRemoteSelectionMismatch(
-        setupName,
-        local,
-        remote,
-        localExclude,
-        remoteExclude,
-        localDirectory,
-        remoteDirectory,
-      ),
+      ignorePolicyComparison
+        ? formatIgnorePolicyComparison(ignorePolicyComparison)
+        : formatRemoteSelectionMismatch(
+            setupName,
+            local,
+            remote,
+            localExclude,
+            remoteExclude,
+            localDirectory,
+            remoteDirectory,
+          ),
     );
     this.name = "RemoteSelectionMismatchError";
     this.setupName = setupName;
@@ -336,15 +430,19 @@ export class RemoteSelectionMismatchError extends Error {
       configIdentity,
       localInclude: [...local],
       remoteInclude: [...remote],
-      ...(localExclude === undefined ? {} : { localExclude: normalizeSyncExclude(localExclude) }),
-      ...(remoteExclude === undefined ? {} : { remoteExclude: normalizeSyncExclude(remoteExclude) }),
-      ...(localDirectory?.scope ? { localDirectory: directoryRules(localDirectory) } : {}),
-      ...(remoteDirectory?.scope ? { remoteDirectory: directoryRules(remoteDirectory) } : {}),
+      ...(ignorePolicyComparison
+        ? { ignorePolicyComparison }
+        : {
+            ...(localExclude === undefined ? {} : { localExclude: normalizeSyncExclude(localExclude) }),
+            ...(remoteExclude === undefined ? {} : { remoteExclude: normalizeSyncExclude(remoteExclude) }),
+            ...(localDirectory?.scope ? { localDirectory: directoryRules(localDirectory) } : {}),
+            ...(remoteDirectory?.scope ? { remoteDirectory: directoryRules(remoteDirectory) } : {}),
+          }),
     };
   }
 }
 
-function directoryRules(directory: DirectoryScope): DirectoryScope {
+function directoryRules(directory: PortableDirectoryScope): PortableDirectoryScope {
   return { scope: directory.scope, reinclude: normalizeDirectoryRules(directory.reinclude) };
 }
 
@@ -353,7 +451,7 @@ export function remoteSelectionMismatch(
   remoteInclude: unknown,
   configIdentity?: string,
   remoteExclude?: string[],
-  remoteDirectory?: DirectoryScope,
+  remoteDirectory?: PortableDirectoryScope & { ignorePolicyComparison?: IgnorePolicyComparison },
 ) {
   return new RemoteSelectionMismatchError(
     config.setupName,
@@ -364,6 +462,7 @@ export function remoteSelectionMismatch(
     remoteExclude,
     config,
     remoteDirectory,
+    remoteDirectory?.ignorePolicyComparison,
   );
 }
 
@@ -466,6 +565,9 @@ export function customIncludePathsByLower(value: unknown) {
 }
 
 export interface SyncSelectionConfig extends DirectoryScope {
+  version?: number;
+  fingerprint?: string;
+  sessions?: boolean;
   include?: unknown;
   exclude?: unknown;
   syncFiles?: unknown;
@@ -474,8 +576,10 @@ export interface SyncSelectionConfig extends DirectoryScope {
 }
 
 export function includeFromSelectionConfig(config: SyncSelectionConfig) {
+  if (config.ignorePolicy) return config.ignorePolicy.sessions ? ["sessions"] : [];
   if (config.include !== undefined) return normalizeSyncInclude(config.include);
-  if (config.scope === "agent-directory") return [];
+  if (config.scope === "agent-directory")
+    return isIgnoreSnapshotSelection(config) && config.sessions ? ["sessions"] : [];
   return [
     ...normalizeSyncFiles(config.syncFiles),
     ...normalizeExtraFiles(config.extraFiles),
@@ -532,12 +636,46 @@ function isProtectedDirectoryPath(relativePath: string) {
   return false;
 }
 
+export function isIgnoreControlPath(relativePath: string, reservedNames?: ReadonlySet<string>) {
+  const first = (relativePath.split("/", 1)[0] ?? "").toLowerCase();
+  return first === ".syncignore" || reservedNames?.has(first) === true;
+}
+
+function isIgnoreSnapshotSelection(config: SyncSelectionConfig) {
+  return config.version === 4 && config.fingerprint !== undefined;
+}
+
+function compileIgnoreControlPath(config: SyncSelectionConfig) {
+  const local = config.ignorePolicy;
+  if (!local && !config.reservedIgnoreNames && !isIgnoreSnapshotSelection(config)) return undefined;
+  const names = new Set(
+    [...(local ? [local.filename, ...local.reservedNames] : []), ...(config.reservedIgnoreNames ?? [])].map((name) =>
+      name.toLowerCase(),
+    ),
+  );
+  return (relativePath: string) => isIgnoreControlPath(relativePath, names);
+}
+
 function compileDirectoryPolicy(config: SyncSelectionConfig) {
-  const excluded = compilePathRules(normalizeDirectoryRules(config.exclude));
-  const restored = compilePathRules(normalizeDirectoryRules(config.reinclude));
+  const localIgnore = config.ignorePolicy;
+  const ignoreSelection = localIgnore !== undefined || isIgnoreSnapshotSelection(config);
+  const controlPath = compileIgnoreControlPath(config);
   const sessions = includeFromSelectionConfig(config).includes("sessions");
   const blocked = (relativePath: string) =>
-    isProtectedDirectoryPath(relativePath) || (!sessions && /^sessions(?:\/|$)/iu.test(relativePath));
+    isProtectedDirectoryPath(relativePath) ||
+    (ignoreSelection && !relativePath.isWellFormed()) ||
+    controlPath?.(relativePath) === true ||
+    (!sessions && /^sessions(?:\/|$)/iu.test(relativePath));
+  if (localIgnore) {
+    return {
+      excludes: (relativePath: string, directory = false) =>
+        blocked(relativePath) || localIgnore.matches(relativePath, directory),
+      descends: (relativePath: string) => !blocked(relativePath) && !localIgnore.matches(relativePath, true),
+    };
+  }
+
+  const excluded = compilePathRules(normalizeDirectoryRules(config.exclude));
+  const restored = compilePathRules(normalizeDirectoryRules(config.reinclude));
   return {
     excludes: (relativePath: string) =>
       blocked(relativePath) || (excluded.matches(relativePath) && !restored.matches(relativePath)),
@@ -571,15 +709,18 @@ export function assertAgentDirectoryPathLayout(files: Iterable<string>) {
   }
 }
 
-export function compileSyncPolicyExclude(config: SyncSelectionConfig) {
-  return config.scope === "agent-directory"
-    ? compileDirectoryPolicy(config).excludes
-    : compileSyncExclude(config.exclude);
+export function compileSyncPolicyExclude(
+  config: SyncSelectionConfig,
+): (relativePath: string, directory?: boolean) => boolean {
+  if (config.scope === "agent-directory") return compileDirectoryPolicy(config).excludes;
+  const excludes = compileSyncExclude(config.exclude);
+  const controlPath = compileIgnoreControlPath(config);
+  return controlPath ? (relativePath) => controlPath(toPosix(relativePath)) || excludes(relativePath) : excludes;
 }
 
 export function compileSyncPolicyTraversal(config: SyncSelectionConfig) {
   if (config.scope === "agent-directory") return compileDirectoryPolicy(config).descends;
-  const excludes = compileSyncExclude(config.exclude);
+  const excludes = compileSyncPolicyExclude(config);
   return (relativePath: string) => !excludes(relativePath);
 }
 
@@ -604,7 +745,7 @@ export function configuredSnapshotPathMatcher(config: SyncSelectionConfig) {
       (!relativePath.startsWith("sessions/") || relativePath.endsWith(".jsonl"));
   }
   const selection = syncIncludeSelection(includeFromSelectionConfig(config));
-  const excluded = compileSyncExclude(config.exclude);
+  const excluded = compileSyncPolicyExclude(config);
   return (relativePath: string) => {
     const normalized = toPosix(relativePath);
     if (excluded(normalized)) return false;

@@ -1,11 +1,23 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RemoteHead } from "../backends/sync-backend.js";
+import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
+import type { CommandOptions } from "../commands/command-types.js";
+import type { EngineContext } from "../host.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import type { Snapshot } from "../snapshot/snapshot-types.js";
+import {
+  assertRecoveryPolicy,
+  IGNORE_POLICY_JOURNAL_VERSION,
+  ignorePolicyValidator,
+  ignoreSourceBinding,
+  type TransactionJournalPolicy,
+  validateJournalPolicy,
+} from "../snapshot/snapshot-transaction-policy.js";
+import { IGNORE_SNAPSHOT_VERSION, type Snapshot } from "../snapshot/snapshot-types.js";
 import { readJsonIfExists, syncDirectory, writeJson } from "../state/json-file.js";
-import { statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { readStateForConfig, statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { confirmMergeReview } from "../ui/merge-review.js";
+import { safeTerminalText } from "../ui/terminal-text.js";
 import { normalizeSyncExclude } from "./exclude-policy.js";
 import { planFileMerge } from "./file-merge-planner.js";
 import {
@@ -15,11 +27,19 @@ import {
   validateSnapshotFieldPolicy,
 } from "./local-fields.js";
 import type { PartialProgress } from "./partial-progress.js";
-import { configuredSnapshotPathMatcher, syncDirectoryPolicyKey, validateSnapshotSelection } from "./sync-policy.js";
+import {
+  configuredSnapshotPathMatcher,
+  sameSnapshotSelection,
+  syncDirectoryPolicyKey,
+  validateSnapshotSelection,
+} from "./sync-policy.js";
 import { fileHashMap, sameHashes } from "./sync-state.js";
 
-export interface MergeJournal {
-  version: 1;
+type MergeJournalPolicy =
+  | { version: 1; ignoreSource?: never }
+  | { version: 2; ignoreSource: NonNullable<TransactionJournalPolicy["ignoreSource"]> };
+
+export type MergeJournal = MergeJournalPolicy & {
   identity: string;
   before: Snapshot;
   after: Snapshot;
@@ -35,6 +55,46 @@ export interface MergeJournal {
   /** Effective collection/apply root; absent legacy evidence cannot authorize session recovery. */
   sessionRoot?: string;
   warnings?: string[];
+};
+
+export function mergeJournalPolicy(config: AnySyncConfig): MergeJournalPolicy {
+  return config.ignorePolicy ? { version: 2, ignoreSource: ignoreSourceBinding(config.ignorePolicy) } : { version: 1 };
+}
+
+function ignoreRecoveryPolicy(journal: MergeJournal): TransactionJournalPolicy {
+  return {
+    version: IGNORE_POLICY_JOURNAL_VERSION,
+    ignoreSource: journal.ignoreSource,
+    selection: journal.upload.selection,
+  };
+}
+
+export function assertMergeJournalPolicy(journal: MergeJournal, config: AnySyncConfig) {
+  if (journal.version === 1 && !config.ignorePolicy && config.pathPolicy !== "ignore-file") return;
+  if (journal.version !== 2)
+    throw new Error("Pending merge lacks ignore-file policy evidence; preserve its journal for reviewed recovery.");
+  assertRecoveryPolicy(ignoreRecoveryPolicy(journal), config);
+  try {
+    const identity: unknown = JSON.parse(journal.identity);
+    if (
+      !Array.isArray(identity) ||
+      typeof identity[1] !== "string" ||
+      journal.identity !== mergeJournalIdentity(config, identity[1])
+    )
+      throw new Error("Inconsistent merge identity.");
+  } catch {
+    throw new Error("Pending merge belongs to a different setup or local policy; preserve its journal.");
+  }
+  const configured = configuredSnapshotPathMatcher(config);
+  for (const snapshot of [
+    journal.before,
+    journal.after,
+    journal.accepted,
+    journal.applyOnly ? undefined : journal.upload,
+  ]) {
+    if (snapshot?.files.some((file) => !configured(file.path)))
+      throw new Error("Pending merge contains paths outside the current ignore-file policy; preserve its journal.");
+  }
 }
 
 export function mergeJournalIdentity(config: AnySyncConfig, backendIdentity: string) {
@@ -66,9 +126,11 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
     // A JSON parser error may quote sensitive journal contents; do not retain it in a public error.
     throw new Error("Cannot read the private merge journal; preserve it and review recovery.");
   }
-  if (!journal) return;
+  if (journal === undefined) return;
   if (
-    journal.version !== 1 ||
+    !journal ||
+    (journal.version !== 1 && journal.version !== 2) ||
+    (journal.version === 1 && journal.ignoreSource !== undefined) ||
     typeof journal.identity !== "string" ||
     typeof journal.backup !== "string" ||
     typeof journal.stateIdentity !== "string" ||
@@ -98,6 +160,15 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
     throw new Error("Unsupported or damaged merge journal; preserve it and review recovery before syncing.");
   // Verify every path and byte, including the unmanaged remote files retained for publication.
   try {
+    if (journal.version === 2) {
+      validateJournalPolicy(ignoreRecoveryPolicy(journal));
+      if (
+        [journal.expectedHead.selection, journal.committedHead?.selection].some(
+          (selection) => selection !== undefined && !sameSnapshotSelection(selection, journal.upload.selection),
+        )
+      )
+        throw new Error("Inconsistent merge head policy.");
+    }
     const pinnedPaths = new Set(journal.progress?.groups.flatMap((group) => group.paths) ?? []);
     for (const snapshot of [
       journal.before,
@@ -108,7 +179,10 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
       validateSnapshotFieldPolicy(snapshot);
       validateSnapshotSelection(snapshot);
       if (
-        ![1, 2, 3, 4, 5].includes(snapshot.version) ||
+        (journal.version === 2
+          ? snapshot.version !== IGNORE_SNAPSHOT_VERSION ||
+            !sameSnapshotSelection(snapshot.selection, journal.upload.selection)
+          : ![1, 2, 3, 4, 5].includes(snapshot.version)) ||
         typeof snapshot.id !== "string" ||
         typeof snapshot.profile !== "string" ||
         snapshot.files.length > 16_384 ||
@@ -220,16 +294,101 @@ export async function clearMergeJournal(config: AnySyncConfig) {
 }
 
 export async function retireMergeJournal(config: AnySyncConfig) {
-  if (!(await readMergeJournal(config))) return;
+  const journal = await readMergeJournal(config);
+  if (!journal) return;
+  assertMergeJournalPolicy(journal, config);
+  const validateIgnore = ignorePolicyValidator(config);
+  if (validateIgnore) await validateIgnore();
+  if (journal.version === 2) throw new Error(ignoreMergeRecoveryGuidance);
+  await archiveMergeJournal(config);
+}
+
+async function archiveMergeJournal(config: AnySyncConfig) {
   const file = mergeJournalPath(config);
   await fs.rename(file, `${file}.${randomUUID()}.resolved`);
   await syncDirectory(path.dirname(file));
 }
 
+export async function reviewInactiveIgnoreMerge(
+  ctx: EngineContext,
+  config: AnySyncConfig,
+  backend: SyncBackend,
+  journal: MergeJournal,
+  head: RemoteHead,
+  options: CommandOptions,
+  validateFresh: () => Promise<void>,
+  isCurrent?: () => boolean,
+) {
+  if (
+    !isCurrent ||
+    options.auto ||
+    options.background ||
+    options.agentAcceptance ||
+    options.yes ||
+    !ctx.hasUI ||
+    (ctx.mode !== "tui" && ctx.mode !== "rpc")
+  ) {
+    throw new Error(ignoreMergeRecoveryGuidance);
+  }
+  await validateFresh();
+  if (
+    !(await confirmMergeReview(
+      ctx,
+      "Archive the inactive merge journal?",
+      [
+        `Setup: ${safeTerminalText(config.setupName)}`,
+        "The original remote head and accepted baseline still match the journal, but local files changed.",
+        "Archive only the journal. Keep its backup and all current local and remote files. Do not change the baseline.",
+        "Run Sync now again to review a fresh plan.",
+      ].join("\n"),
+      options.signal,
+      isCurrent,
+      "archive journal only",
+    ))
+  )
+    return "cancelled" as const;
+
+  const state = await readStateForConfig(config);
+  await validateFresh();
+  const latest = await backend.readHead(options.signal);
+  if (!isCurrent()) return "cancelled" as const;
+  if (!sameMergeRecoveryHead(backend, head, latest) || syncStateFingerprint(state) !== journal.stateIdentity) {
+    throw new Error("Remote head or sync baseline changed during recovery review; journal and backup retained.");
+  }
+  await archiveMergeJournal(config);
+  if (!options.silent && isCurrent())
+    ctx.ui.notify(
+      "Archived the inactive merge journal. Local files, remote files, baseline and backup were kept. Run Sync now again for a fresh plan.",
+      "info",
+    );
+  return "archived" as const;
+}
+
+export function sameMergeRecoveryHead(
+  backend: SyncBackend,
+  left: RemoteHead | undefined,
+  right: RemoteHead | undefined,
+) {
+  if (!left || !right) return left === right;
+  return (
+    backend.sameRevision(left.revision, right.revision) &&
+    left.snapshotId === right.snapshotId &&
+    left.snapshotRef === right.snapshotRef &&
+    sameSnapshotSelection(left.selection, right.selection)
+  );
+}
+
+const ignoreMergeRecoveryGuidance =
+  "An ignore-file merged transfer needs recovery; directional --force cannot bypass it. Inactive journal archiving requires foreground review where supported; --yes does not approve it. Preserve the journal, backup and current files if recovery is unavailable. Do not downgrade or restore old bytes blindly.";
+
 export async function requireNoMergeJournal(config: AnySyncConfig, options: { force?: boolean } = {}) {
   const journal = await readMergeJournal(config);
-  if (options.force || !journal) return;
-  if (journal) {
+  if (!journal) return;
+  assertMergeJournalPolicy(journal, config);
+  const validateIgnore = ignorePolicyValidator(config);
+  if (validateIgnore) await validateIgnore();
+  if (journal.version === 2) throw new Error(ignoreMergeRecoveryGuidance);
+  if (!options.force) {
     throw new Error(
       "A merged transfer needs recovery. Run /sync sync to reconcile it. If newer local edits or remote revisions prevent recovery, review /sync diff and explicitly choose push --force or pull --force; the selected directional result will archive the old journal, not restore old bytes. Keep its backup; do not downgrade while recovery is pending.",
     );

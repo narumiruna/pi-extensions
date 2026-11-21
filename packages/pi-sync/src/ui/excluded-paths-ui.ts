@@ -100,6 +100,8 @@ export async function showExcludedPaths(ctx: ExtensionCommandContext, setupName:
         setupName,
         (setup) => {
           validate();
+          if (setup.sync.pathPolicy === "ignore-file")
+            throw new Error("Edit the ignore file to change this setup's policy.");
           return { ...setup, sync: { ...setup.sync, exclude } };
         },
         { expectedConfigFingerprint: syncCheckConfigFingerprint(config), upgradeExclude: true, signal },
@@ -217,7 +219,8 @@ export async function showDirectoryScope(ctx: ExtensionCommandContext, config: A
                   config.setupName,
                   (setup) => {
                     validate();
-                    if (setup.sync.scope !== "agent-directory") throw new Error("Sync scope changed during review.");
+                    if (setup.sync.scope !== "agent-directory" || setup.sync.pathPolicy === "ignore-file")
+                      throw new Error("Sync scope changed during review.");
                     return {
                       ...setup,
                       sync: {

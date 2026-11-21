@@ -4,15 +4,50 @@ export interface SnapshotFile {
   sha256: string;
 }
 
+export interface EffectiveIgnorePolicy {
+  filename: string;
+  sourceDigest: string;
+  fingerprint: string;
+  sessions: boolean;
+  reservedNames: readonly string[];
+  matches(path: string, directory?: boolean): boolean;
+}
+
 export interface DirectoryScope {
   scope?: "agent-directory";
   reinclude?: readonly string[];
+  ignorePolicy?: EffectiveIgnorePolicy;
+  reservedIgnoreNames?: readonly string[];
+}
+
+export const IGNORE_SNAPSHOT_VERSION = 6;
+
+export function isSupportedSnapshotVersion(version: unknown) {
+  return (
+    version === 1 ||
+    version === 2 ||
+    version === 3 ||
+    version === 4 ||
+    version === 5 ||
+    version === IGNORE_SNAPSHOT_VERSION
+  );
+}
+
+export interface IgnoreSnapshotSelection {
+  version: 4;
+  scope: "agent-directory";
+  fingerprint: string;
+  sessions: boolean;
+  include?: never;
+  exclude?: never;
+  reinclude?: never;
 }
 
 export type SnapshotSelection =
   | { version: 1; include: string[]; exclude?: never; scope?: never; reinclude?: never }
   | { version: 2; include: string[]; exclude: string[]; scope?: never; reinclude?: never }
-  | { version: 3; scope: "agent-directory"; include: string[]; exclude: string[]; reinclude: string[] };
+  | { version: 3; scope: "agent-directory"; include: string[]; exclude: string[]; reinclude: string[] }
+  | IgnoreSnapshotSelection;
 
 export interface Snapshot {
   version: number;
@@ -42,6 +77,7 @@ export interface SnapshotOptions extends DirectoryScope {
   signal?: AbortSignal;
   /** Caller-owned session/generation guard, rechecked at file-mutation boundaries. */
   validateMutation?: () => void;
+  validateIgnorePolicy?: () => Promise<void>;
   /** Reviewed regular-file preimages; null means the path was absent. Checked under mutation queues. */
   expectedFileHashes?: Readonly<Record<string, string | null>>;
   include?: string[];

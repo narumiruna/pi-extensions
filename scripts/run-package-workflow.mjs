@@ -1,13 +1,28 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { findPackageJSON } from "node:module";
+import { dirname, join, resolve } from "node:path";
 
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const piCommand = process.platform === "win32" ? "pi.cmd" : "pi";
+const npmCommand = "npm";
+const piCommand = "pi";
 const unscopedNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function run(command, args, options = {}) {
   const { allowFailure = false, ...spawnOptions } = options;
+  if (command === npmCommand) {
+    const npmCli =
+      process.env.npm_execpath ||
+      (process.platform === "win32" ? join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js") : undefined);
+    if (npmCli) {
+      command = process.execPath;
+      args = [npmCli, ...args];
+    }
+  } else if (command === piCommand && process.platform === "win32") {
+    const manifestPath = findPackageJSON("@earendil-works/pi-coding-agent", import.meta.url);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    command = process.execPath;
+    args = [resolve(dirname(manifestPath), manifest.bin.pi), ...args];
+  }
   const result = spawnSync(command, args, { stdio: "inherit", ...spawnOptions });
   if (result.error) {
     console.error(result.error.message);

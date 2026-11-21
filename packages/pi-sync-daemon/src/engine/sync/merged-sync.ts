@@ -21,6 +21,7 @@ import {
   regenerateSnapshotIdentity,
   scanSnapshot,
 } from "../snapshot/snapshot.js";
+import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import {
   hasCurrentMergeBaseline,
@@ -53,10 +54,14 @@ import { planFileMerge } from "./file-merge-planner.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields } from "./local-fields.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "./merge-apply.js";
 import {
+  assertMergeJournalPolicy,
   clearMergeJournal,
   type MergeJournal,
   mergeJournalIdentity,
+  mergeJournalPolicy,
   readMergeJournal,
+  reviewInactiveIgnoreMerge,
+  sameMergeRecoveryHead,
   writeMergeJournal,
 } from "./merge-journal.js";
 import { mergeTransferError } from "./merge-transfer-error.js";
@@ -113,6 +118,8 @@ export async function mergeSync(
   };
   const config = await loadConfig(options.setup);
   validateOwner(config);
+  if (config.pathPolicy === "ignore-file" && !config.ignorePolicy)
+    throw new Error("Merged sync requires the resolved local ignore-file policy.");
   validateRetryAuthorization(config);
   const configToken = syncCheckConfigFingerprint(config);
   const modelToken = JSON.stringify(ctx.model);
@@ -145,13 +152,29 @@ export async function mergeSync(
       if (options.auto && (!startupTransferEnabled(latest) || !ctx.isIdle()))
         throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
     });
-  await validate();
-  const backend = await timings.measure("transfer backend initialization", () => factory(config));
-  await validate();
+  const validateIgnore = ignorePolicyValidator({
+    ...config,
+    signal: options.signal,
+    validateMutation: () => {
+      validateOwner();
+      if (options.auto && !ctx.isIdle())
+        throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
+    },
+  });
+  const validateFresh = validateIgnore
+    ? async () => {
+        await validate();
+        await validateIgnore();
+      }
+    : validate;
+  await validateFresh();
   const pending = await timings.measure("transfer journal read", () => readMergeJournal(config));
   await validate();
   if (pending && options.agentRetryRefusal)
     throw new Error("A pending merge journal requires ordinary Sync now before retrying a refused candidate.");
+  if (pending) assertMergeJournalPolicy(pending, config);
+  const backend = await timings.measure("transfer backend initialization", () => factory(config));
+  await validate();
   if (pending) {
     const recovered = await timings.measure("transfer journal recovery", () =>
       completeJournal(
@@ -159,13 +182,13 @@ export async function mergeSync(
         config,
         backend,
         pending,
-        validate,
+        { validate, validateFresh, validateOwner },
         timings,
-        options.signal,
-        options.auto,
-        options.background?.validate,
+        options,
+        resolution ? undefined : isCurrent,
       ),
     );
+    if (recovered === "archived" || recovered === "cancelled") return recovered;
     if (!recovered) {
       if ((options.auto || !options.silent) && !options.signal?.aborted)
         ctx.ui.notify(
@@ -240,10 +263,13 @@ export async function mergeSync(
         }
       }
       const rawRemote = head
-        ? await timings.measure("transfer snapshot download", () => readSnapshotForHead(backend, head, options.signal))
+        ? await timings.measure("transfer snapshot download", () =>
+            readSnapshotForHead(backend, head, options.signal, config),
+          )
         : undefined;
       await validate();
       if (rawRemote) {
+        requireCompatibleRemoteSelection(config, rawRemote);
         const files = [...local.files, ...rawRemote.files];
         if (
           files.length > 16_384 ||
@@ -261,7 +287,6 @@ export async function mergeSync(
           )
         : undefined;
       if (rawRemote) {
-        requireCompatibleRemoteSelection(config, rawRemote);
         const validation = await timings.measure("transfer merge planning", () =>
           planFileMerge({
             baseline: state.lastFileHashes,
@@ -361,7 +386,7 @@ export async function mergeSync(
           head,
           plan,
           snapshotOptions,
-          validate,
+          validateFresh,
         );
         await validate();
         if (plan.kind !== "planned" || (plan.conflicts.length && !config.partialSync))
@@ -516,7 +541,7 @@ export async function mergeSync(
         await options.agentAcceptance?.commitCandidate?.();
         await validate();
         await timings.measure("transfer baseline write", () =>
-          writeAcceptedState(config, head, accepted, validate, progress),
+          writeAcceptedState(config, head, accepted, validateFresh, progress),
         );
         await timings.measure("transfer cleanup", () =>
           pruneMergeBaselines(
@@ -608,9 +633,9 @@ export async function mergeSync(
       const backup = await timings.measure("transfer backup", () =>
         backupLocal(config.snapshotIdentity, snapshotOptions, options.signal),
       );
-      await validate();
+      await validateFresh();
       const journal: MergeJournal = {
-        version: 1,
+        ...mergeJournalPolicy(config),
         identity: mergeJournalIdentity(config, backend.identity),
         before: localRaw,
         after,
@@ -634,7 +659,7 @@ export async function mergeSync(
       );
       await validate();
       if (!sameHashes(fileHashMap(atCommit), fileHashMap(localRaw)) || atCommitState !== journal.stateIdentity) {
-        await validate();
+        await validateFresh();
         await clearMergeJournal(config);
         throw new ContinuousError(
           "stale",
@@ -649,18 +674,19 @@ export async function mergeSync(
             ...[ctx.sessionManager.getSessionFile?.()].filter((file): file is string => Boolean(file)),
           ]),
         );
-        await validate();
       } catch (error) {
-        await validate();
+        await validateFresh();
         await clearMergeJournal(config);
         throw error;
       }
+      await validateFresh();
       try {
         if (publish) {
           const result = await timings.measure("transfer remote publication", () =>
             backend.publishSnapshot(upload, expectedRemoteHead(head), {
               signal: options.signal,
               onCommit: options.onCommit,
+              ...(validateIgnore ? { validateIgnorePolicy: validateFresh } : {}),
             }),
           );
           journal.committedHead = result.head;
@@ -673,6 +699,7 @@ export async function mergeSync(
           error.phase === "before-commit" &&
           !error.candidateMayHaveBeenActive
         ) {
+          await validateFresh();
           await clearMergeJournal(config);
           if (attempt + 1 < MAX_ATTEMPTS) continue;
           throw new Error("Remote changed before commit in all three attempts; retry later.", { cause: error });
@@ -682,17 +709,7 @@ export async function mergeSync(
         throw mergeTransferError(error, config.backend);
       }
       const completed = await timings.measure("transfer journal recovery", () =>
-        completeJournal(
-          ctx,
-          config,
-          backend,
-          journal,
-          validate,
-          timings,
-          options.signal,
-          options.auto,
-          options.background?.validate,
-        ),
+        completeJournal(ctx, config, backend, journal, { validate, validateFresh, validateOwner }, timings, options),
       );
       if (!completed) {
         if (!options.signal?.aborted && (options.auto || !options.silent))
@@ -727,12 +744,20 @@ async function completeJournal(
   config: AnySyncConfig,
   backend: SyncBackend,
   journal: MergeJournal,
-  validate: () => Promise<void>,
+  {
+    validate,
+    validateFresh,
+    validateOwner,
+  }: { validate: () => Promise<void>; validateFresh: () => Promise<void>; validateOwner: () => void },
   timings: StartupTimings,
-  signal?: AbortSignal,
-  auto = false,
-  validateBackground?: () => void,
+  options: CommandOptions,
+  isCurrent?: () => boolean,
 ) {
+  const { auto, signal } = options;
+  const validateMutation = () => {
+    validateOwner();
+    if (auto && !ctx.isIdle()) throw new Error("Automatic file apply is no longer idle; evidence retained.");
+  };
   if (
     journal.identity !== mergeJournalIdentity(config, backend.identity) ||
     !sameLocalFields(journal.upload.localFields, config.localFields)
@@ -740,7 +765,7 @@ async function completeJournal(
     throw new Error(
       "Merge journal belongs to a different setup, selection or local-field policy; preserve it for reviewed recovery.",
     );
-  await validate();
+  await validateFresh();
   const sessionRoot =
     config.scope === "agent-directory" || syncSessionsSelected(config)
       ? await effectiveSessionRoot(ctx, config, signal)
@@ -748,42 +773,42 @@ async function completeJournal(
   await validate();
   if (sessionRoot !== undefined && journal.sessionRoot !== sessionRoot) {
     throw new Error(
-      "Merge journal session root is missing or differs from this context; preserve evidence and use reviewed directional recovery.",
+      "Merge journal session root is missing or differs from this context; preserve its journal and backup for review.",
     );
   }
   const snapshotOptions = { ...snapshotOptionsForContext(ctx, config), sessionDir: sessionRoot, signal };
   const head = await timings.measure("transfer remote head", () => backend.readHead(signal));
-  if (
-    !journal.committedHead &&
-    head &&
-    (backend.sameRevision(head.revision, journal.expectedHead.revision) ||
-      backend.matchesUncommittedRecoveryHead?.(head, journal.expectedHead))
-  ) {
-    await validate();
+  await validate();
+  const readRetirementEvidence = async () => {
+    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
+    await validateFresh();
     const local = await timings.measure("transfer local snapshot", () =>
       createSnapshot(config.snapshotIdentity, snapshotOptions),
     );
-    if (
-      !sameHashes(fileHashMap(local), fileHashMap(journal.before)) ||
-      syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
-        journal.stateIdentity
-    ) {
-      throw new Error(
-        "Uncertain publication is not active, but local content or baseline changed; keep the journal for reviewed recovery.",
-      );
-    }
-    await clearMergeJournal(config);
-    return false;
-  }
-  await validate();
+    validateMutation();
+    const latest = await timings.measure("transfer remote head", () => backend.readHead(signal));
+    validateMutation();
+    if (!sameMergeRecoveryHead(backend, head, latest))
+      throw new Error("Remote head changed during merge recovery; journal and backup retained.");
+    return {
+      sameBaseline: syncStateFingerprint(state) === journal.stateIdentity,
+      sameLocal: sameHashes(fileHashMap(local), fileHashMap(journal.before)),
+    };
+  };
   // Baseline publication is the durable completion boundary. A later remote revision
   // cannot undo that acceptance; retire only the journal for the recorded commit.
-  if (journal.committedHead && (!head || !backend.sameRevision(head.revision, journal.committedHead.revision))) {
+  if (
+    journal.committedHead?.snapshotId === journal.upload.id &&
+    typeof journal.committedHead.revision === "string" &&
+    journal.committedHead.revision &&
+    (!head || !backend.sameRevision(head.revision, journal.committedHead.revision))
+  ) {
     const state = await timings.measure("transfer state read", () => readStateForConfig(config));
     await validate();
     if (
       matchesAcceptedState(state, config, journal.committedHead, journal.accepted ?? journal.after, journal.progress)
     ) {
+      if (config.ignorePolicy) await validateFresh();
       await clearMergeJournal(config);
       await validate();
       await pruneMergeBaselines(config, state, captureMutationOwner(ctx, signal));
@@ -791,16 +816,47 @@ async function completeJournal(
       return true;
     }
   }
-  if (journal.applyOnly && (!head || !backend.sameRevision(head.revision, journal.expectedHead.revision))) {
-    const local = await timings.measure("transfer local snapshot", () =>
-      createSnapshot(config.snapshotIdentity, snapshotOptions),
-    );
-    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
-    await validate();
+  if (
+    head &&
+    (journal.version === 2 || head.selection?.version === 4) &&
+    inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config).kind !==
+      "same"
+  )
+    throw new Error("Remote ignore-file policy differs or is unavailable; preserve the pending merge for review.");
+  if (
+    !journal.committedHead &&
+    head &&
+    (backend.sameRevision(head.revision, journal.expectedHead.revision) ||
+      backend.matchesUncommittedRecoveryHead?.(head, journal.expectedHead))
+  ) {
     if (
-      sameHashes(fileHashMap(local), fileHashMap(journal.before)) &&
-      syncStateFingerprint(state) === journal.stateIdentity
-    ) {
+      journal.version === 2 &&
+      (head.snapshotId !== journal.expectedHead.snapshotId ||
+        head.snapshotRef !== journal.expectedHead.snapshotRef ||
+        head.snapshotId === journal.upload.id)
+    )
+      throw new Error("Cannot verify that the ignore-file candidate is inactive; preserve the journal and backup.");
+    const { sameBaseline, sameLocal } = await readRetirementEvidence();
+    validateMutation();
+    if (!sameBaseline || !sameLocal) {
+      if (journal.version === 2) {
+        if (!sameBaseline)
+          throw new Error(
+            "Sync baseline changed after uncertain publication; preserve the journal and backup for review.",
+          );
+        return reviewInactiveIgnoreMerge(ctx, config, backend, journal, head, options, validateFresh, isCurrent);
+      }
+      throw new Error(
+        "Uncertain publication is not active, but local content or baseline changed; keep the journal for reviewed recovery.",
+      );
+    }
+    await clearMergeJournal(config);
+    return false;
+  }
+  if (journal.applyOnly && (!head || !backend.sameRevision(head.revision, journal.expectedHead.revision))) {
+    const { sameBaseline, sameLocal } = await readRetirementEvidence();
+    validateMutation();
+    if (sameBaseline && sameLocal) {
       await clearMergeJournal(config);
       return false;
     }
@@ -816,7 +872,7 @@ async function completeJournal(
     );
   }
   const observed = await timings.measure("transfer snapshot download", () =>
-    readSnapshotForHead(backend, head, signal),
+    readSnapshotForHead(backend, head, signal, config),
   );
   requireCompatibleRemoteSelection(config, observed);
   if (
@@ -826,7 +882,7 @@ async function completeJournal(
     throw new Error("Remote snapshot does not match the recorded merge publication.");
   const state = await timings.measure("transfer state read", () => readStateForConfig(config));
   if (matchesAcceptedState(state, config, head, journal.accepted ?? journal.after, journal.progress)) {
-    await validate();
+    await validateFresh();
     await clearMergeJournal(config);
     await validate();
     await pruneMergeBaselines(config, state, captureMutationOwner(ctx, signal));
@@ -838,16 +894,10 @@ async function completeJournal(
   }
   if (inspectRemoteSelection(config.include, observed, config.exclude, config).kind !== "same")
     throw new Error(
-      "Pending merge has unavailable remote selection metadata; preserve its journal and choose a reviewed explicit direction.",
+      "Pending merge has unavailable remote selection metadata; preserve its journal and backup for review.",
     );
   if (sessionRoot !== undefined) requireStableMergeSessionRoot(journal.before, journal.after, config.scope);
   await validate();
-  const validateOwner = captureMutationOwner(ctx, signal);
-  const validateMutation = () => {
-    validateOwner();
-    validateBackground?.();
-    if (auto && !ctx.isIdle()) throw new Error("Automatic file apply is no longer idle; evidence retained.");
-  };
   await timings.measure("transfer local apply", () =>
     applyMergedSnapshot(
       journal.before,
@@ -864,9 +914,9 @@ async function completeJournal(
   if (!headAtAcceptance || !backend.sameRevision(headAtAcceptance.revision, head.revision))
     throw new Error("Remote changed during merged apply; journal and backup retained for review.");
   await timings.measure("transfer baseline write", () =>
-    writeAcceptedState(config, head, journal.accepted ?? journal.after, validate, journal.progress),
+    writeAcceptedState(config, head, journal.accepted ?? journal.after, validateFresh, journal.progress),
   );
-  await validate();
+  await validateFresh();
   await clearMergeJournal(config);
   await validate();
   await timings.measure("transfer cleanup", () =>

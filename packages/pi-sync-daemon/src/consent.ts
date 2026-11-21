@@ -220,6 +220,7 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   await requireHandover(execution);
   const { loadConfig } = await import("./engine/settings/config.js");
   const config = await loadConfig();
+  execution.validate();
   const facts = execution.facts();
   const binding = JSON.stringify({ model: facts?.model, sessionDir: facts?.sessionDir, cwd: facts?.cwd });
   const fingerprint = consentFingerprint(execution.root, config);
@@ -228,8 +229,13 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   if (payload.afterExit && (!config.continuous || !config.agentMode))
     throw new Error("Enable the reviewed Autonomous and Continuous policies first.");
   const paths = (rules?: readonly string[]) => rules?.map(safeTerminalText).join(", ") || "none";
-  const selection =
-    config.scope === "agent-directory"
+  const selection = config.ignorePolicy
+    ? [
+        "Selected content: eligible files in the Pi agent directory",
+        `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
+        `Session opt-in: ${config.ignorePolicy.sessions ? "On — ignore rules still apply" : "Off"}`,
+      ].join("\n")
+    : config.scope === "agent-directory"
       ? [
           "Selected content: all eligible files in the Pi agent directory",
           `Excluded paths: ${paths(config.exclude)}`,
@@ -245,6 +251,14 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   if (accepted !== true) return false;
   const latest = await loadConfig();
   execution.validate();
+  if (config.ignorePolicy) {
+    const { ignorePolicyValidator } = await import("./engine/snapshot/snapshot-transaction-policy.js");
+    await ignorePolicyValidator({
+      ...config,
+      signal: execution.signal,
+      validateMutation: () => execution.validate(),
+    })?.();
+  }
   if (
     consentFingerprint(execution.root, latest) !== fingerprint ||
     JSON.stringify({

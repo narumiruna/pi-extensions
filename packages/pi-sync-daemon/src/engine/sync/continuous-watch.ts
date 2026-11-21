@@ -47,7 +47,13 @@ export async function watchContinuous(
         if (!file || closed || options.signal?.aborted) return;
         const target = path.resolve(directory, String(file));
         if (!relativeWithin(directory, target)) return;
-        if (target === path.join(root, "pi-sync.json")) changed(true);
+        if (
+          target === path.join(root, "pi-sync.json") ||
+          (config.ignorePolicy &&
+            path.dirname(target) === root &&
+            path.basename(target).toLowerCase() === config.ignorePolicy.filename.toLowerCase())
+        )
+          changed(true);
         else if (scoped) {
           const relative = scopedPath(target);
           if (relative && (managed(relative) || (event === "rename" && traverse(relative)))) changed(false);

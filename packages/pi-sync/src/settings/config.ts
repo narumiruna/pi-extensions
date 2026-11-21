@@ -6,6 +6,7 @@ export {
   loadConfig,
   loadConfigForCheck,
   loadPartialConfig,
+  loadSettingsConfig,
   sessionTokenWarnings,
   syncCheckConfigFingerprint,
   syncConfigReviewFingerprint,

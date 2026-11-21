@@ -1,9 +1,8 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
-import { activeLocalConfigPath } from "../settings/config-file.js";
-import { readLocalConfigObject } from "../settings/settings-store.js";
-import type { AnySyncConfig } from "../settings/settings-types.js";
-import { isCloudflareR2Endpoint, ownRecord } from "../settings/settings-validation.js";
+import { configFromSettings, loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
+import { activeLocalConfigPath, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
+import type { AnySyncConfig, PiSyncSettingsV3 } from "../settings/settings-types.js";
+import { isCloudflareR2Endpoint, validateSettingsDocument } from "../settings/settings-validation.js";
 import {
   inspectOperationAvailability,
   type OperationAvailability,
@@ -39,6 +38,7 @@ export interface ManagerDescription {
   title: string;
   actions: string[];
   configReview?: { setupName: string; fingerprint: string };
+  settingsReview?: { setupName: string; fingerprint: string };
   operation?: OperationAvailability;
   attention?: SyncAttentionState;
   observation?: StartupObservation;
@@ -52,10 +52,13 @@ export async function describeManagerState(
   inspectOperation: () => Promise<OperationAvailability> = inspectOperationAvailability,
   observation?: StartupObservation,
 ): Promise<ManagerDescription> {
-  let raw: Record<string, unknown> | undefined;
+  let raw: PiSyncSettingsV3 | undefined;
   try {
-    raw = await readLocalConfigObject();
+    const document = await readActiveLocalConfigDocumentForRepair();
+    signal?.throwIfAborted();
+    if (document) raw = validateSettingsDocument(document.parsed);
   } catch (error) {
+    if (signal?.aborted) throw error;
     return {
       title: [
         "Manage sync",
@@ -75,12 +78,8 @@ export async function describeManagerState(
       actions: ["Set up sync", "Help"],
     };
   }
-  const configuredTargets = ownRecord(raw.syncSetups);
-  if (
-    (raw.version === 3 || raw.version === 4 || raw.version === 5 || raw.version === 6 || raw.version === 7) &&
-    configuredTargets &&
-    Object.keys(configuredTargets).length === 0
-  ) {
+  const configuredTargets = raw.syncSetups;
+  if (Object.keys(configuredTargets).length === 0) {
     return {
       title: [
         "Manage sync",
@@ -94,6 +93,21 @@ export async function describeManagerState(
     };
   }
   try {
+    const settingsConfig = configFromSettings(raw);
+    if (settingsConfig.reservedIgnoreNames !== undefined) {
+      return {
+        title: [
+          "Manage sync",
+          `Current sync setup: ${safeTerminalText(settingsConfig.setupName)}`,
+          "Transfers are unavailable while ignore-file setups are configured.",
+        ].join("\n"),
+        actions: ["Settings", "Sync setups…", "Storage connections…", "Help"],
+        settingsReview: {
+          setupName: settingsConfig.setupName,
+          fingerprint: syncCheckConfigFingerprint(settingsConfig),
+        },
+      };
+    }
     const config = await loadConfig();
     const operation = await inspectOperation();
     const changesBlocked = operationBlocksChanges(operation);

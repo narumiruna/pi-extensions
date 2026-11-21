@@ -39,6 +39,23 @@ export function createEngineService(root: string) {
   const monitor = createMonitor(root, host);
   const execute: Execute = (operation, payload, execution) =>
     host.run(execution, async () => {
+      if (operation === "ignore.capabilities") {
+        execution.validate();
+        return { available: false };
+      }
+      if (operation === "ignore.migration-offer" || operation === "ignore.migration-defer") {
+        execution.validate();
+        const { readIgnoreMigrationOffer, deferIgnoreMigrationOffer } = await import(
+          "./engine/ignore/ignore-migration-prompt.js"
+        );
+        return operation === "ignore.migration-offer"
+          ? readIgnoreMigrationOffer(payload, execution)
+          : deferIgnoreMigrationOffer(payload, execution);
+      }
+      if (operation === "ignore.save") {
+        execution.validate();
+        throw new Error("Daemon ignore-file saves are unavailable. Edit the existing rule file manually.");
+      }
       await monitor.pause();
       execution.validate();
       if (operation === "daemon.authorize") return authorizeAfterExit(execution, payload);
@@ -65,6 +82,11 @@ export function createEngineService(root: string) {
         };
       }
       if (operation === "monitor.pause") return;
+      if (operation === "ignore.read") {
+        const { readIgnoreFileEdit } = await import("./engine/ignore/ignore-edit.js");
+        execution.validate();
+        return readIgnoreFileEdit(payload, execution);
+      }
       if (operation === "settings.read" || operation === "settings.repair-read") {
         const { readLocalConfigDocument } = await import("./engine/settings/settings-store.js");
         const { readActiveLocalConfigDocumentForRepair } = await import("./engine/settings/config-file.js");
@@ -90,8 +112,10 @@ export function createEngineService(root: string) {
         const { updateLocalConfigDocument, peekLocalConfigDocument } = await import("./engine/settings/config-file.js");
         const { localConfigTemplate } = await import("./engine/settings/settings-store.js");
         const { validateSettingsDocument } = await import("./engine/settings/settings-validation.js");
-        const next = payload.next;
-        validateSettingsDocument(next);
+        const next = validateSettingsDocument(payload.next);
+        if (Object.values(next.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file")) {
+          throw new Error("Ignore-file setup activation is not available in this Daemon build.");
+        }
         if (Buffer.byteLength(JSON.stringify(next)) > MAX_SETTINGS_BYTES)
           throw new Error("Settings exceed the editable local API byte limit; no fields were dropped.");
         const validateSource = (document: { bytes: Buffer; identity: { dev: number; ino: number } } | undefined) => {

@@ -102,6 +102,8 @@ export class S3SyncBackend implements SyncBackend {
   ): Promise<PublishSnapshotResult> {
     throwIfAborted(options.signal);
     assertSnapshotIdentity(snapshot, this.config.destination.namespace);
+    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    throwIfAborted(options.signal);
     await verifyS3Conditions(this.config, options.signal);
     throwIfAborted(options.signal);
     const stagedKey = snapshotKey(this.config, snapshot.id);
@@ -109,6 +111,8 @@ export class S3SyncBackend implements SyncBackend {
     throwIfAborted(options.signal);
     const pointer = pointerFor(this.config, snapshot, sha256(encoded));
     const cancellableClient = new S3Client(this.config, options.signal);
+    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    throwIfAborted(options.signal);
     try {
       await cancellableClient.putBuffer(stagedKey, encoded, "application/gzip", {
         ifAbsent: true,
@@ -140,6 +144,7 @@ export class S3SyncBackend implements SyncBackend {
       });
     }
     const condition = currentObject.missing ? { ifAbsent: true } : { ifMatch: requireS3Etag(currentObject.etag) };
+    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
     options.onCommit?.();
 
