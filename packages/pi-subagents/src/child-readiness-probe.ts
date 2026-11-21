@@ -79,6 +79,7 @@ export function createChildReadinessProbe(
         const providerConfig = registry.getRegisteredProviderConfig(pair.provider);
         const assertContext = () => {
           signal.throwIfAborted();
+          const currentTools = toolState();
           if (
             ctx.modelRegistry !== registry ||
             ctx.sessionManager !== manager ||
@@ -87,9 +88,10 @@ export function createChildReadinessProbe(
             ctx.isProjectTrusted() !== trusted ||
             registry.getRegisteredNativeProvider(pair.provider) !== nativeProvider ||
             registry.getRegisteredProviderConfig(pair.provider) !== providerConfig ||
-            JSON.stringify(toolState()) !== JSON.stringify(tools)
+            JSON.stringify(currentTools) !== JSON.stringify(tools)
           )
             throw new ReadinessError("Subagent child context changed during model readiness.");
+          return currentTools;
         };
         const assertInitialModel = () => {
           assertContext();
@@ -139,7 +141,7 @@ export function createChildReadinessProbe(
           selectedModel = registration;
         }
         const assertSelected = () => {
-          assertContext();
+          const currentTools = assertContext();
           assertRegistration();
           const model = ctx.model;
           if (
@@ -150,6 +152,7 @@ export function createChildReadinessProbe(
             JSON.stringify(model) !== registeredDefinition
           )
             throw new ReadinessError("Subagent child model changed during exact initial selection.");
+          return currentTools;
         };
         assertSelected();
         // setModel applies model/global defaults and awaits model_select hooks. Restore the request
@@ -160,13 +163,13 @@ export function createChildReadinessProbe(
         // synchronous thinking hooks; Pi does not await their later asynchronous continuations.
         const availableAfterSelection = await registry.getAvailableOfType("chat", pair.provider, { signal });
         if (settled) return;
-        assertSelected();
+        const selectedTools = assertSelected();
         if (!availableAfterSelection.some((entry) => entry.provider === pair.provider && entry.id === pair.id)) {
           throw new ReadinessError(
             "Subagent child model is unavailable as an exact chat model with current credentials.",
           );
         }
-        publish({ ok: true, sources: tools.sources, model: pair });
+        publish({ ok: true, sources: selectedTools.sources, model: pair });
       } catch (error) {
         // Provider/auth errors can contain secrets and paths. Publish only bounded probe-owned diagnostics.
         publish({

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { toolSourceId } from "./attachment-utils.js";
 import {
   assertChildBootstrapCapacity,
   BROKER_CREDENTIAL_FD,
@@ -587,6 +588,12 @@ async function executeProcess(
           if (!frame.ok) {
             failReadiness(frame.error);
             return;
+          }
+          for (const tool of request.tools) {
+            if (frame.sources[expectedTools.indexOf(tool)] !== toolSourceId(`builtin:${tool}`)) {
+              failReadiness(`Subagent work tool ${tool} was not provided by the child Pi as a built-in tool.`);
+              return;
+            }
           }
           for (const extension of request.extensions) {
             for (const tool of extension.tools) {

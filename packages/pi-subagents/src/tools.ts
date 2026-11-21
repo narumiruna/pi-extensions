@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { assertChildBootstrapCapacity, MAX_BOOTSTRAP_BYTES } from "./broker-credentials.js";
+import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
@@ -18,24 +19,20 @@ import { assertChildCommandCapacity, selectedChildTools } from "./process.js";
 import {
   MAX_ATTACHED_EXTENSIONS,
   MAX_ATTACHED_SKILLS,
-  MAX_EXTENSION_TOOL_NAME_LENGTH,
   MAX_RESOURCE_PATH_BYTES,
   MAX_SELECTED_TOOLS,
+  MAX_TOOL_NAME_LENGTH,
   resolveResourceAttachments,
+  resolveToolName,
 } from "./resource-attachments.js";
 import { type RuntimeDependencies, type SubagentModelOverrides, SubagentRuntime } from "./runtime.js";
 import { prepareTimeoutArguments, resolveTimeoutMs } from "./timeout.js";
 import { subagentToolProgress, subagentToolRenderers } from "./tool-renderers.js";
-import {
-  CHILD_CORE_TOOL_NAMES,
-  DEFAULT_SUBAGENT_TOOLS,
-  SUBAGENT_THINKING_LEVELS,
-  type SubagentThinkingLevel,
-} from "./types.js";
+import { SUBAGENT_THINKING_LEVELS, type SubagentThinkingLevel } from "./types.js";
 
 const MAX_TASK_BYTES = 50 * 1024;
 const MAX_TOOLS = MAX_SELECTED_TOOLS;
-const CHILD_CORE_TOOL_SET = new Set<string>(CHILD_CORE_TOOL_NAMES);
+const COMMUNICATION_TOOL_SET = new Set<string>(CHILD_COMMUNICATION_TOOL_NAMES);
 const THINKING_LEVEL_SET = new Set<string>(SUBAGENT_THINKING_LEVELS);
 
 const SpawnParameters = Type.Object(
@@ -61,13 +58,14 @@ const SpawnParameters = Type.Object(
     ),
     tools: Type.Optional(
       Type.Array(
-        Type.Unsafe<(typeof CHILD_CORE_TOOL_NAMES)[number]>(
-          StringEnum(CHILD_CORE_TOOL_NAMES, {
-            description: "Available Pi core child work tool name.",
-          }),
-        ),
+        Type.String({
+          description: "Exact Pi core tool name or codemode; checked against the child Pi before task delivery.",
+          minLength: 1,
+          maxLength: MAX_TOOL_NAME_LENGTH,
+        }),
         {
-          description: "Child work tools. Defaults to read, grep, find, and ls. Communication tools are always added.",
+          description:
+            "Select only the work tools required by this job. Omit or pass [] for no core work tools. Communication tools are always added.",
           maxItems: MAX_TOOLS,
         },
       ),
@@ -99,7 +97,7 @@ const SpawnParameters = Type.Object(
               Type.String({
                 description: "Exact extension-specific tool name to activate initially; built-in names are rejected.",
                 minLength: 1,
-                maxLength: MAX_EXTENSION_TOOL_NAME_LENGTH,
+                maxLength: MAX_TOOL_NAME_LENGTH,
               }),
               {
                 description:
@@ -406,18 +404,15 @@ function validateTask(value: string, toolName: string): string {
 }
 
 function resolveTools(value: unknown): string[] {
-  if (value === undefined) return [...DEFAULT_SUBAGENT_TOOLS];
+  if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > MAX_TOOLS) {
     throw new Error(`Subagent tools must be an array of at most ${MAX_TOOLS} names.`);
   }
   const tools: string[] = [];
   for (const candidate of value) {
-    if (typeof candidate !== "string") throw new Error("Subagent tool names must be strings.");
-    const name = candidate.trim();
-    if (!CHILD_CORE_TOOL_SET.has(name)) {
-      throw new Error(
-        `Unavailable subagent tool: ${sanitizeTerminalText(name).slice(0, 128) || "(empty)"}. Available: ${CHILD_CORE_TOOL_NAMES.join(", ")}.`,
-      );
+    const name = resolveToolName(candidate, "work");
+    if (COMMUNICATION_TOOL_SET.has(name)) {
+      throw new Error(`Subagent communication tool ${name} is added automatically.`);
     }
     if (!tools.includes(name)) tools.push(name);
   }

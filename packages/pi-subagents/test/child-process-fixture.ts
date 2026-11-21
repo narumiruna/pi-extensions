@@ -21,7 +21,7 @@ export function installFakePi(directory: string, source: string, options: FakePi
   const executablePath = path.join(packageDirectory, executableName);
   const readinessSetup = {
     success:
-      'signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId(firstExtension)), model: selectedModel }) + "\\n");',
+      'signalReadiness(JSON.stringify({ ok: true, sources: fixtureToolSources(), model: selectedModel }) + "\\n");',
     manual: "",
     failure:
       'signalReadiness(JSON.stringify({ ok: false, error: "Requested extension tool is unavailable." }) + "\\n");',
@@ -48,6 +48,10 @@ const selectedModel = { provider: selection.provider, id: selection.model };
 const sourceId = (value) => createHash("sha256").update(value).digest("hex");
 const firstExtensionFlag = process.argv.indexOf("-e", process.argv.indexOf("-e") + 1);
 const firstExtension = firstExtensionFlag < 0 ? "" : process.argv[firstExtensionFlag + 1];
+const bridge = process.argv[process.argv.indexOf("-e") + 1];
+const fixtureToolSources = () => expectedTools.map((tool) =>
+  sourceId(tool === "custom_search" ? firstExtension : tool.startsWith("subagent_") ? bridge : "builtin:" + tool)
+);
 const closeReadiness = () => fs.closeSync(4);
 const signalReadiness = (frame) => {
   try {

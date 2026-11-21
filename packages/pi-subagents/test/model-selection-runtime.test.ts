@@ -12,6 +12,13 @@ const parentModel = "parent-model";
 const childModels = ["child/path:high", `${childProvider}/base`, "BASE"];
 type Startup = "normal" | "default" | "late" | "missing" | "unavailable";
 
+interface ToolSelection {
+  tools?: string[];
+  override?: boolean;
+  inactive?: boolean;
+  error?: RegExp;
+}
+
 interface VisibleTool {
   name: string;
   description: string;
@@ -51,6 +58,7 @@ function providerFixture(
   selectedProvider: string,
   caseCollision: boolean,
   startup: Startup,
+  toolSelection: ToolSelection,
 ): string {
   return `
 import { appendFileSync } from "node:fs";
@@ -58,6 +66,7 @@ import {
   fauxProvider, fauxAssistantMessage, fauxToolCall,
   getCurrentSystemPrompt, getCurrentTools,
 } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 const record = (value) => appendFileSync(${JSON.stringify(evidence)}, JSON.stringify(value) + "\\n");
 const visibleTool = ({ name, description, parameters, constrainedSampling }) =>
@@ -104,6 +113,13 @@ export default function (pi) {
     models: [{ id: "base", reasoning: true }, { id: ${JSON.stringify(childModel)}, reasoning: false }],
     tokensPerSecond: 0,
   });
+  if (isChild && ${Boolean(toolSelection.override)}) {
+    pi.registerTool({
+      name: "read", label: "Override", description: "An attachment must not impersonate Pi core",
+      parameters: Type.Object({}),
+      execute: () => ({ content: [], details: undefined }),
+    });
+  }
   // No parent's catalog or auth configuration is required for the requested child pair.
   if (!isChild || startup !== "late") pi.registerProvider(parent.provider);
   const registerChild = () => pi.registerProvider(startup === "unavailable"
@@ -132,6 +148,7 @@ export default function (pi) {
   pi.on("resources_discover", (_event, ctx) => {
     if (!isChild) return;
     if (startup === "late") registerChild();
+    if (${Boolean(toolSelection.inactive)}) pi.setActiveTools(pi.getActiveTools().filter((tool) => tool !== "read"));
     record({ kind: "child-before-probe", model: pair(ctx.model),
       registered: Boolean(ctx.modelRegistry.find(${JSON.stringify(selectedProvider)}, ${JSON.stringify(childModel)})),
     });
@@ -157,7 +174,8 @@ export default function (pi) {
     respond(() => call("subagent_spawn", {
       task: "Return the synthetic child result.",
       provider: ${JSON.stringify(selectedProvider)}, model: ${JSON.stringify(childModel)},
-      tools: [], extensions: [{ path: ${JSON.stringify(fixture)}, tools: [] }], thinkingLevel: "high",
+      ...${JSON.stringify({ tools: toolSelection.tools })},
+      extensions: [{ path: ${JSON.stringify(fixture)}, tools: [] }], thinkingLevel: "high",
     }, "spawn-literal-model")),
     respond((context) => {
       const result = resultOf(context, "subagent_spawn");
@@ -330,29 +348,52 @@ function rpcHarness(args: string[], agentDir: string, signal: AbortSignal) {
   };
 }
 
-const selections = [
-  ...childModels.map((model) => ({
+const selections: Array<{
+  model: string;
+  provider: string;
+  caseCollision: boolean;
+  startup: Startup;
+  toolSelection: ToolSelection;
+}> = [
+  ...childModels.map((model, index) => ({
     model,
     provider: childProvider,
     caseCollision: false,
-    startup: "normal" as Startup,
+    startup: "normal" as const,
+    toolSelection: [{ tools: ["read"] }, { tools: [] }, {}][index] ?? {},
   })),
   ...["SELECTION-CHILD", childProvider].map((provider) => ({
     model: "shared",
     provider,
     caseCollision: true,
-    startup: "normal" as Startup,
+    startup: "normal" as const,
+    toolSelection: { tools: ["write"] },
   })),
   ...(["default", "late", "missing", "unavailable"] as const).map((startup) => ({
     model: "child-only",
     provider: childProvider,
     caseCollision: false,
     startup,
+    toolSelection: {},
+  })),
+  ...(
+    [
+      { tools: ["unknown_core_tool"], error: /Unavailable subagent tools: unknown_core_tool/u },
+      { tools: ["read"], override: true, error: /read was not provided by the child Pi as a built-in tool/u },
+      { tools: ["read"], inactive: true, error: /Unavailable subagent tools: read/u },
+    ] satisfies ToolSelection[]
+  ).map((toolSelection) => ({
+    model: "tool-readiness",
+    provider: childProvider,
+    caseCollision: false,
+    startup: "normal" as const,
+    toolSelection,
   })),
 ];
 
-for (const { model: childModel, provider: selectedProvider, caseCollision, startup } of selections) {
-  test(`package-directory RPC preserves parent prefixes with exact child model ${selectedProvider}/${childModel} (${startup})`, async ({
+for (const { model: childModel, provider: selectedProvider, caseCollision, startup, toolSelection } of selections) {
+  const outcome = toolSelection.override ? "overridden" : toolSelection.inactive ? "inactive" : startup;
+  test(`package-directory RPC preserves parent prefixes with ${selectedProvider}/${childModel} (${outcome}, ${toolSelection.tools?.join(",") ?? "omitted"})`, async ({
     signal,
   }) => {
     const root = await mkdtemp(join(packageDirectory, ".model-selection-runtime-"));
@@ -382,7 +423,7 @@ for (const { model: childModel, provider: selectedProvider, caseCollision, start
       );
       await writeFile(
         fixture,
-        providerFixture(evidence, fixture, childModel, selectedProvider, caseCollision, startup),
+        providerFixture(evidence, fixture, childModel, selectedProvider, caseCollision, startup, toolSelection),
       );
       rpc = rpcHarness(
         [
@@ -492,7 +533,7 @@ for (const { model: childModel, provider: selectedProvider, caseCollision, start
       assert.ok(spawnCall);
       assert.equal(spawnCall.arguments.provider, selectedProvider);
       assert.equal(spawnCall.arguments.model, childModel);
-      assert.deepEqual(spawnCall.arguments.tools, []);
+      assert.deepEqual(spawnCall.arguments.tools, toolSelection.tools);
       const admitted = records.find((record) => record.kind === "spawn-result")?.result;
       assert.ok(admitted?.jobId, "model lookup must not reject the spawn before job admission");
       assert.equal(admitted.state, "queued");
@@ -506,6 +547,15 @@ for (const { model: childModel, provider: selectedProvider, caseCollision, start
       );
       if (startup !== "normal") {
         assert.equal(records.find((record) => record.kind === "parent-registration")?.registered, false);
+      }
+      if (toolSelection.error) {
+        assert.equal(result.state, "failed");
+        assert.match(result.error ?? "", toolSelection.error);
+        assert.equal(
+          records.some((record) => ["child", "child-task-dispatch"].includes(record.kind)),
+          false,
+        );
+        return;
       }
       if (startup === "missing" || startup === "unavailable") {
         assert.equal(result.state, "failed");
@@ -551,7 +601,7 @@ for (const { model: childModel, provider: selectedProvider, caseCollision, start
         `exact child task must run: ${JSON.stringify(records.find((record) => record.kind === "wait-result"))}`,
       );
       assert.deepEqual(children[0]?.input.model, { provider: selectedProvider, id: childModel });
-      assert.deepEqual(children[0]?.input.names, ["subagent_send", "subagent_wait"]);
+      assert.deepEqual(children[0]?.input.names, [...(toolSelection.tools ?? []), "subagent_send", "subagent_wait"]);
       assert.deepEqual(
         records.find((record) => record.kind === "child-state"),
         {

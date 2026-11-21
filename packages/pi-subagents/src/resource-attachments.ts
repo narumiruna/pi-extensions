@@ -21,7 +21,6 @@ import {
 } from "./attachment-utils.js";
 import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
 import { assertLoadablePackageSkills, assertLoadableSkills } from "./skill-attachments.js";
-import { CHILD_CORE_TOOL_NAMES } from "./types.js";
 
 export {
   MAX_SKILL_IGNORE_BYTES,
@@ -34,12 +33,23 @@ export const MAX_ATTACHED_SKILLS = 16;
 export const MAX_ATTACHED_EXTENSIONS = 16;
 export const MAX_SELECTED_TOOLS = 64;
 export const MAX_RESOURCE_PATH_BYTES = 4 * 1024;
-export const MAX_EXTENSION_TOOL_NAME_LENGTH = 128;
+export const MAX_TOOL_NAME_LENGTH = 128;
 export const MAX_EXTENSION_SCAN_DEPTH = 32;
 export const MAX_EXTENSION_SCAN_ENTRIES = 4_096;
 export const MAX_EXTENSION_METADATA_BYTES = 1024 * 1024;
 
-const RESERVED_CHILD_TOOL_NAMES = new Set<string>([...CHILD_CORE_TOOL_NAMES, ...CHILD_COMMUNICATION_TOOL_NAMES]);
+const RESERVED_EXTENSION_TOOL_NAMES = new Set<string>([
+  "read",
+  "bash",
+  "powershell",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+  "codemode",
+  ...CHILD_COMMUNICATION_TOOL_NAMES,
+]);
 
 export interface ExtensionAttachment {
   path: string;
@@ -97,10 +107,13 @@ export async function resolveResourceAttachments(
     }
     const resolved = resolveResourcePath(candidate.path, "extension", cwd, canonicalCwd, options.projectTrusted);
     const toolInputs = optionalArray(candidate.tools, "extension tools", MAX_SELECTED_TOOLS, false);
-    const tools = toolInputs.map(resolveExtensionToolName);
+    const tools = toolInputs.map((tool) => resolveToolName(tool, "extension"));
     for (const tool of tools) {
-      if (RESERVED_CHILD_TOOL_NAMES.has(tool)) {
+      if (RESERVED_EXTENSION_TOOL_NAMES.has(tool)) {
         throw new Error(`Subagent extension tool name conflicts with the built-in ${tool} tool.`);
+      }
+      if (options.coreTools.includes(tool)) {
+        throw new Error(`Subagent tool ${tool} cannot be selected as both a core and an extension tool.`);
       }
     }
     let attachment = extensionsByPath.get(resolved);
@@ -697,12 +710,12 @@ function hasExtensionGlob(value: string): boolean {
   return value.includes("*") || value.includes("?");
 }
 
-function resolveExtensionToolName(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error("Subagent extension tool name is required.");
+export function resolveToolName(value: unknown, kind: "work" | "extension"): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Subagent ${kind} tool name is required.`);
   const name = value.trim();
-  if (name.length > MAX_EXTENSION_TOOL_NAME_LENGTH || name.includes(",") || hasControlCharacter(name)) {
+  if (value.length > MAX_TOOL_NAME_LENGTH || hasControlCharacter(value) || /[,*?]/u.test(name) || /^[+-]/u.test(name)) {
     throw new Error(
-      `Subagent extension tool name must be at most ${MAX_EXTENSION_TOOL_NAME_LENGTH} characters without commas or control characters.`,
+      `Subagent ${kind} tool name must be exact: at most ${MAX_TOOL_NAME_LENGTH} characters without commas, controls, wildcards, or a leading + or -.`,
     );
   }
   return name;

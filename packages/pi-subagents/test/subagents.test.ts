@@ -98,17 +98,12 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   )?.items;
   assert.equal(extensionItem?.properties?.path?.maxLength, 4_096);
   assert.equal(extensionItem?.properties?.tools?.maxItems, 64);
-  assert.deepEqual((tools[0]?.parameters.properties?.tools as { items?: { enum?: string[] } })?.items?.enum, [
-    "read",
-    "bash",
-    "powershell",
-    "edit",
-    "write",
-    "grep",
-    "find",
-    "ls",
-    "codemode",
-  ]);
+  const toolItem = (tools[0]?.parameters.properties?.tools as { items?: Record<string, unknown> })?.items;
+  assert.equal(toolItem?.type, "string");
+  assert.equal(toolItem?.maxLength, 128);
+  assert.equal(toolItem?.enum, undefined);
+  assert.equal(Check(tools[0]?.parameters, { task: "No work tools", tools: [] }), true);
+  assert.equal(Check(tools[0]?.parameters, { task: "A new work tool", tools: ["future_tool"] }), true);
   assert.deepEqual(tools[0]?.parameters.properties?.thinkingLevel?.enum, [
     "off",
     "minimal",
@@ -248,7 +243,7 @@ test.each(["pi-subagents-completion", "pi-subagents-message"])(
   },
 );
 
-test("spawns jobs with default and explicit tools and thinking levels", async () => {
+test("spawns jobs with omitted and explicit tools and thinking levels", async () => {
   const requests: ChildRequest[] = [];
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -276,7 +271,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     "explicit",
     {
       task: "Implement one thing",
-      tools: ["read", "edit", "read", "write", "codemode", "codemode"],
+      tools: ["read", "edit", "read", "write", "codemode", "codemode", "future_tool"],
       skills: ["packages/pi-subagents/skills/using-pi-subagents"],
       extensions: [
         {
@@ -304,7 +299,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     })),
     [
       {
-        tools: ["read", "grep", "find", "ls"],
+        tools: [],
         skills: [],
         extensions: [],
         provider: "test-provider",
@@ -312,7 +307,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
         thinkingLevel: "high",
       },
       {
-        tools: ["read", "edit", "write", "codemode"],
+        tools: ["read", "edit", "write", "codemode", "future_tool"],
         skills: [path.resolve("packages/pi-subagents/skills/using-pi-subagents")],
         extensions: [
           {
@@ -535,8 +530,9 @@ test("rejects invalid spawn arguments and nesting before child launch", async ()
     { task: "bad item", tools: [1] },
     { task: "too many", tools: Array.from({ length: 65 }, (_, index) => `tool_${index}`) },
     { task: "bad name", tools: ["read,bash"] },
-    { task: "typo", tools: ["baash"] },
-    { task: "extension tool", tools: ["subagent_spawn"] },
+    ...["", " ", "read*", "read?", "+read", "-read", "read\n", "x".repeat(129), "subagent_send", "subagent_wait"].map(
+      (name) => ({ task: "bad work tool", tools: [name] }),
+    ),
     { task: "bad thinking", thinkingLevel: "turbo" },
     { task: "bad timeout", timeout: 0 },
     { task: "remote skill", skills: ["https://example.com/skill"] },

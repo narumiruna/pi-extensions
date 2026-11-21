@@ -248,6 +248,18 @@ test("ties selected extension tools to their resolved entrypoints", async () => 
   );
 });
 
+test("rejects an attachment name already selected as a dynamically resolved core tool", async () => {
+  const extension = path.join(project, "overlap.ts");
+  writeFileSync(extension, "export default () => {};\n");
+  await assert.rejects(
+    resolveResourceAttachments(
+      { extensions: [{ path: extension, tools: ["future_tool"] }] },
+      { cwd: project, projectTrusted: true, coreTools: ["future_tool"] },
+    ),
+    /both a core and an extension tool/u,
+  );
+});
+
 test("matches Pi's tool source for a package entrypoint outside its root", async () => {
   const packageDirectory = path.join(external, "package-with-external-entry");
   const entrypoint = path.join(external, "outside.js");
@@ -1200,7 +1212,10 @@ test("rejects remote, missing, invalid, and oversized attachment inputs", async 
     { value: { skills: [`${regularFile}\0suffix`] }, error: /control/i },
     { value: { skills: [`${regularFile}${"界".repeat(1_400)}`] }, error: /4096 UTF-8 bytes/i },
     { value: { extensions: [{ path: regularFile, tools: "read" }] }, error: /tools.*array/i },
-    { value: { extensions: [{ path: regularFile, tools: ["bad,name"] }] }, error: /tool name/i },
+    ...["bad,name", "read*", "read?", "+read", "-read"].map((tool) => ({
+      value: { extensions: [{ path: regularFile, tools: [tool] }] },
+      error: /tool name/i,
+    })),
     { value: { extensions: [{ path: regularFile, tools: ["bad\u001bname"] }] }, error: /tool name/i },
     { value: { extensions: [{ path: regularFile, tools: ["x".repeat(129)] }] }, error: /128 characters/i },
     { value: { extensions: [{ path: regularFile, tools: ["read"] }] }, error: /conflicts.*built-in read/i },
