@@ -4,8 +4,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
-import { DaemonConnection, ensureDaemon, stopDaemon } from "../dist/client.js";
-import { type DocumentView, documentFingerprint } from "../dist/document.js";
+import {
+  DaemonConnection,
+  type DocumentView,
+  documentFingerprint,
+  ensureDaemon,
+  findDaemon,
+  stopDaemon,
+} from "../dist/index.js";
 import { runtimePaths } from "../src/identity.js";
 
 const template = {
@@ -15,11 +21,14 @@ const template = {
   syncSetups: {},
   future: { preserved: true },
 };
-async function fixture(run: (root: string, connect: () => Promise<DaemonConnection>) => Promise<void>) {
+async function fixture(
+  run: (root: string, connect: (passive?: boolean) => Promise<DaemonConnection>) => Promise<void>,
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-daemon-settings-"));
   const clients: DaemonConnection[] = [];
-  const connect = async () => {
-    const daemon = await ensureDaemon(root);
+  const connect = async (passive = false) => {
+    const daemon = passive ? await findDaemon(root) : await ensureDaemon(root);
+    assert.ok(daemon);
     const client = await new DaemonConnection(
       daemon.paths,
       daemon.identity,
@@ -28,12 +37,13 @@ async function fixture(run: (root: string, connect: () => Promise<DaemonConnecti
         generation: randomUUID(),
         pid: process.pid,
         cwd: root,
-        mode: "rpc",
-        hasUI: true,
-        idle: true,
+        mode: passive ? "json" : "rpc",
+        hasUI: !passive,
+        idle: !passive,
       },
       {
         callback: async (callback) => {
+          if (passive) return false;
           if (
             callback.kind === "confirm" &&
             (callback.payload as { title?: string }).title === "Adopt pi-sync-daemon as the synchronization owner?"
@@ -77,6 +87,40 @@ test("two clients share one authoritative settings writer and preserve unknown f
     assert.deepEqual(stored.future, { preserved: true });
     assert.equal(stored.debug, true);
     if (process.platform !== "win32") assert.equal((await fs.stat(path.join(root, "pi-sync.json"))).mode & 0o077, 0);
+  }));
+
+test("passive settings clients cannot approve handover but can add an exclusion after handover", () =>
+  fixture(async (root, connect) => {
+    const owner = await connect();
+    const editor = await connect(true);
+    const file = path.join(root, "pi-sync.json");
+    const original = {
+      ...template,
+      version: 6,
+      activeSyncSetup: "home",
+      storageConnections: { git: { type: "git", remote: "git@example.invalid:owner/sync.git" } },
+      syncSetups: {
+        home: {
+          storage: { connection: "git", branch: "sync", path: "./" },
+          sync: { include: ["settings.json"], exclude: ["skills/private"], automatic: false },
+        },
+      },
+    };
+    assert.equal(await editor.run("settings.read", {}), null);
+    await assert.rejects(editor.run("settings.cas", { expected: null, next: original }), /not approved/u);
+    await assert.rejects(fs.stat(file), { code: "ENOENT" });
+    await owner.run("settings.cas", { expected: null, next: original });
+    const source = (await editor.run("settings.read", {})) as DocumentView;
+    const next = structuredClone(source.parsed) as typeof original;
+    next.syncSetups.home.sync.exclude.push("npm", "sessions");
+    const proposal = { expected: documentFingerprint(source), next };
+    await editor.run("settings.cas", proposal);
+    const saved = (await editor.run("settings.read", {})) as DocumentView;
+    assert.deepEqual(saved.parsed, next);
+    assert.deepEqual(next.syncSetups.home.sync.exclude, ["skills/private", "npm", "sessions"]);
+    assert.deepEqual(next.future, original.future);
+    await assert.rejects(editor.run("settings.cas", proposal), /Settings changed/u);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), next);
   }));
 
 test("repeated canonical saves round-trip exact bytes without temporary files", () =>
