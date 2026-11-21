@@ -187,7 +187,8 @@ try {
     /configure-pi-sync/u,
     "manual-only metadata must not enter ordinary prompts",
   );
-  const questions = [
+  const requestsToExpand = [
+    "Exclude npm/ from my active setup.",
     "How do I set up Git without automatic sync?",
     "Where do I enter my WebDAV app password?",
     "What does ./ mean for R2 and S3?",
@@ -197,13 +198,13 @@ try {
     "Which version supports localFields, including an empty array?",
     "Which version supports mergeContent and partialSync?",
   ];
-  for (const question of questions) {
-    await prompt(`/skill:configure-pi-sync ${question}`);
+  for (const message of requestsToExpand) {
+    await prompt(`/skill:configure-pi-sync ${message}`);
     const request = latestUserMessage();
     assert.match(request, /<skill name=\\"configure-pi-sync/u);
-    assert.ok(request.includes(question));
-    assert.ok(request.includes("This skill provides guidance only"));
-    assert.ok(request.includes("Do not read, create, edit, validate, back up, or migrate"));
+    assert.ok(request.includes(message));
+    assert.ok(request.includes("Apply the user's requested local Pi Sync settings changes"));
+    assert.ok(request.includes("expected: documentFingerprint(document), next"));
   }
   const beforeReload = requests.length;
   await send("prompt", { message: "/skill-smoke-reload" });
@@ -211,7 +212,7 @@ try {
   assert.match(JSON.stringify(afterReload), /skill:configure-pi-sync/u);
   assert.equal(requests.length, beforeReload, "reload must not contact the provider");
   await prompt("/skill:configure-pi-sync What changed after reload?");
-  assert.match(latestUserMessage(), /This skill provides guidance only/u);
+  assert.match(latestUserMessage(), /Apply the user's requested local Pi Sync settings changes/u);
   assert.match(latestUserMessage(), /What changed after reload\?/u);
   cli.stdin?.end();
   assert.equal(await exited, 0, stderr);
@@ -225,7 +226,7 @@ try {
       result: "PASS",
       mode: "rpc",
       entry: "packages/pi-sync",
-      explicitQuestions: questions.length,
+      explicitRequests: requestsToExpand.length,
       localFixtureRequests: requests.length,
       externalProviderRequests: 0,
       tools: "disabled",

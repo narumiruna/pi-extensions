@@ -17,7 +17,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
 - Offers default-off Autonomous sync for eligible startup and Sync now transfers without another transfer confirmation, with model-assisted conflict resolution and a separate Continuous sync opt-in.
 - Shares one detached synchronization service across Pi clients, with a generated split UI client runtime.
-- Bundles a manual-only skill for configuration questions and safe setup guidance.
+- Bundles an on-demand skill for agent-assisted settings edits and configuration questions.
 
 ## 📦 Install
 
@@ -290,9 +290,8 @@ Read the [settings reference](./skills/configure-pi-sync/references/configuratio
 
 ## 🧠 Skills
 
-Run `/skill:configure-pi-sync` before asking Pi about storage choices, included content, automatic controls, or settings recovery.
-The [configuration skill](./skills/configure-pi-sync/SKILL.md) is manual-only and provides guidance only: it does not inspect private settings, collect credentials, edit files, execute diagnostics, or sync content.
-Enter credentials in the existing masked TUI and perform settings changes and reviewed transfers through `/sync` yourself.
+Run `/skill:configure-pi-sync Exclude npm/` to have the agent add an exclusion to the active setup and verify the saved change. The [configuration skill](./skills/configure-pi-sync/SKILL.md) is loaded only on request and uses the running local daemon for authorized settings edits. It can also answer configuration questions.
+Use `/sync` for initial setup, masked credential entry, and changes or transfers that require a separate review. The skill does not run diagnostics, check remote connectivity, or start a transfer.
 The skill's instructions are not a permission sandbox for the agent's other tools.
 Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) directly when no agent assistance is needed.
 
@@ -414,7 +413,7 @@ packages/pi-sync/
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Operational audits and settings link compatibility
-├── skills/configure-pi-sync/           # Manual-only guidance and authoritative settings reference
+├── skills/configure-pi-sync/           # Agent settings edits and authoritative settings reference
 └── test/                              # Behavior and lifecycle coverage
 ```
 
