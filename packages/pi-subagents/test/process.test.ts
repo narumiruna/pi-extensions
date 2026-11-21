@@ -463,7 +463,7 @@ test("runChild sends an attached task only after readiness and starts its deadli
 let readinessSent = false;
 setTimeout(() => {
   readinessSent = true;
-  signalReadiness(JSON.stringify({ ok: true, sources: expectedTools.map(() => sourceId("/tmp/search-extension.ts")), model: selectedModel }) + "\\n");
+  signalReadiness(JSON.stringify({ ok: true, sources: fixtureToolSources(), model: selectedModel }) + "\\n");
 }, 50);
 async function handle(command) {
   if (command.type !== "prompt") return;
@@ -564,6 +564,40 @@ async function handle(command) {
   const result = await runChild(childRequest({ extensions: [{ path: "/tmp/lifecycle-extension.ts", tools: [] }] }));
   assert.equal(result.state, "completed");
   assert.equal(result.result, "accepted outside resource");
+});
+
+test("runChild accepts a new core name reported by child Pi", async () => {
+  installFakePi(`
+async function handle(command) {
+  if (command.type !== "prompt") return;
+  respond(command);
+  event(message(command.message));
+  event({ type: "agent_settled" });
+}
+`);
+  const result = await runChild(childRequest({ tools: ["future_tool"] }));
+  assert.equal(result.state, "completed");
+  assert.equal(result.result, "Task: task");
+});
+
+test.each(["read", "codemode"])("runChild rejects an overridden work tool %s before prompting", async (tool) => {
+  installFakePi(
+    `
+signalReadiness(JSON.stringify({
+  ok: true,
+  sources: expectedTools.map(() => sourceId("/tmp/override.ts")),
+  model: selectedModel,
+}) + "\\n");
+async function handle(command) {
+  if (command.type === "prompt") event(message("Invalid task delivery"));
+}
+`,
+    { readiness: "manual" },
+  );
+  const result = await runChild(childRequest({ tools: [tool] }));
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /was not provided by the child Pi as a built-in tool/u);
+  assert.ok(!result.result?.includes("Invalid task delivery"));
 });
 
 test("runChild rejects a tool registered by a different attachment before prompting", async () => {

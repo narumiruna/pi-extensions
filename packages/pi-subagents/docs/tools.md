@@ -7,7 +7,7 @@
 | `task` | `string` | Yes | Self-contained task, up to 50 KiB of UTF-8 text. |
 | `provider` | `string` | No | Exact provider ID; defaults to the main agent's effective provider at spawn time. |
 | `model` | `string` | No | Exact model ID within the selected provider; defaults independently to the main agent's effective model ID at spawn time. |
-| `tools` | `string[]` | No | Pi tools: `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, `codemode`; defaults to `read`, `grep`, `find`, `ls`. |
+| `tools` | `string[]` | No | Exact Pi core tool names or `codemode`; omission and `[]` both select no core work tools. |
 | `skills` | `string[]` | No | Up to 16 local skill files or directories; Pi uses progressive disclosure. |
 | `extensions` | `{ path: string; tools: string[] }[]` | No | Up to 16 trusted local extensions and their initially selected tools. |
 | `thinkingLevel` | `string` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to the main agent's level. |
@@ -18,7 +18,12 @@ Starts one job and returns its `jobId` without waiting for child startup. The ch
 Select `codemode` explicitly with the other required tools, for example `tools: ["read", "grep", "codemode"]`.
 Pi's built-in codemode extension runs scripts against the child's callable tools, including `subagent_send` and `subagent_wait`; automatic resource discovery stays disabled.
 Codemode also exposes Pi's classifier and image model API using child-visible credentials; these calls can send data to providers and incur costs.
-The default tools do not include codemode.
+Tool names must be nonempty and at most 128 characters. Both `tools` and `extensions[].tools` reject commas, control characters, wildcards, and a leading `+` or `-`; these fields are not Pi CLI patterns or modifiers.
+Malformed names, communication names in `tools`, and conflicting tool selections throw before job admission.
+A valid name that is absent, inactive, or registered by an extension instead of Pi core fails the admitted job before sending the task to the child model. Use `subagent_wait` to see the error.
+Extension and MCP tools do not become core tools merely because the parent can use them.
+
+**Upgrade:** Pass `tools: ["read", "grep", "find", "ls"]` explicitly to keep the previous read-only default. Reload the extension or start a fresh Pi session to load the new fixed schema. The schema stays the same across ordinary turns and different job selections.
 
 Skills do not add tools or inject their entire bodies. An extension's `tools` list selects its initial tools; use an empty list for provider or lifecycle behavior only. An attached extension runs trusted code with full child-process permissions, not in a sandbox.
 

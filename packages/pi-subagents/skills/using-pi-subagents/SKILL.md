@@ -28,11 +28,9 @@ The task defines the child's specialization, objective, constraints, and expecte
 
 The selected tools define what the child can do.
 
-Select only from `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, and `codemode`.
+Name the required Pi core tools explicitly, such as `["read", "grep"]` for a focused review. The child checks the names against its own Pi runtime, not the parent’s tool list.
 
-Omit `tools` for the read-only default of `read`, `grep`, `find`, and `ls`.
-
-Pass an explicit empty list when the child needs no work tools.
+Omit `tools` or pass an empty list when the child needs no core work tools.
 
 Add only the smallest sufficient tool set for the task.
 
@@ -92,7 +90,7 @@ Tell a reviewer or researcher not to edit files even when its selected tools are
 
 Do not rely on the child seeing unstated conversation context.
 
-Use a research task such as:
+Select `tools: ["read"]` for a single-file review such as:
 
 ```text
 Review src/auth.ts for authentication bypass risks.

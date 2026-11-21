@@ -38,8 +38,8 @@ test("repository example skill documents every minimal-runtime operating respons
   for (const evidence of [
     /prefer direct work/i,
     /subagent_spawn/i,
-    /default of `read`, `grep`, `find`, and `ls`/i,
-    /select only from `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, and `codemode`/i,
+    /omit `tools` or pass an empty list.*no core work tools/i,
+    /against its own Pi runtime, not the parent’s tool list/i,
     /Select `codemode` explicitly/i,
     /smallest sufficient tool set/i,
     /`bash` and `powershell` as unrestricted command execution/i,

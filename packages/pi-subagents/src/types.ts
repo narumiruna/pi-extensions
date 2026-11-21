@@ -13,18 +13,6 @@ export const TERMINAL_JOB_STATES = new Set<SubagentJobState>([
   "cancelled",
 ]);
 
-export const CHILD_CORE_TOOL_NAMES = [
-  "read",
-  "bash",
-  "powershell",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-  "codemode",
-] as const;
-export const DEFAULT_SUBAGENT_TOOLS = ["read", "grep", "find", "ls"] as const;
 export const SUBAGENT_THINKING_LEVELS = [
   "off",
   "minimal",

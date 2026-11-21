@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { test } from "vitest";
 import { toolSourceId } from "../src/attachment-utils.js";
@@ -25,6 +25,18 @@ for (const mode of ["on", "only"] as const) {
       await writeFile(
         join(agentDir, "settings.json"),
         JSON.stringify({ codemode: { mode }, retry: { enabled: false } }),
+      );
+      const mcpMarker = join(root, "mcp-started");
+      await writeFile(
+        join(agentDir, "mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            must_not_start: {
+              command: process.execPath,
+              args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(mcpMarker)}, '')`],
+            },
+          },
+        }),
       );
       await writeFile(join(root, "input.txt"), "selected-read-result");
       process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -96,6 +108,7 @@ export default function(pi) {
       assert.equal(result.state, "completed", JSON.stringify(result));
       assert.equal(result.result, "child-codemode-passed");
       assert.deepEqual(messages, ["child-script-request"]);
+      await assert.rejects(access(mcpMarker), { code: "ENOENT" });
     } finally {
       controller.abort();
       await child;

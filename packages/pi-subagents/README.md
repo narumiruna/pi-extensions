@@ -8,7 +8,7 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 
 - Runs each job in an isolated Pi child process and returns its job ID immediately.
 - Uses the task to define the child's specialization and explicit tools, skills, and extensions to define its capabilities.
-- Defaults work tools to `read`, `grep`, `find`, and `ls`.
+- Gives each job only the work tools you select; the child Pi validates selected core tool names.
 - Can attach validated local skills and trusted local extensions to one job without enabling automatic discovery.
 - Verifies requested extension tools before sending the task to the child model.
 - Supports exact per-job provider and model selection, with independent inheritance and no fallback.
@@ -211,7 +211,7 @@ The package intentionally registers and publishes no skill; the repository-only 
   task: string;
   provider?: string;
   model?: string;
-  tools?: Array<"read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "codemode">;
+  tools?: string[];
   skills?: string[];
   extensions?: Array<{ path: string; tools: string[] }>;
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -223,7 +223,7 @@ The package intentionally registers and publishes no skill; the repository-only 
 A provider-only override retains the parent's model ID and fails if that pair is unavailable. To select another pair explicitly:
 
 ```ts
-{ task: "Review the parser without changing files.", provider: "openai", model: "gpt-5.5" }
+{ task: "Review the parser without changing files.", tools: ["read", "grep"], provider: "openai", model: "gpt-5.5" }
 ```
 
 Only the child checks exact model registration and current availability. Every job requires a registered chat model and child-visible credentials, including jobs that inherit both fields.
@@ -231,10 +231,11 @@ A missing or unavailable model fails the job after `subagent_spawn` returns its 
 Unlisted custom IDs previously accepted by Pi's CLI now fail; register the exact model in Pi's `models.json` or attach a trusted extension that registers it in the child.
 See [Model selection](./docs/tools.md#model-selection) for exact matching, error timing, and virtual-model behavior.
 
-The optional `tools` list selects Pi core work tools and the built-in `codemode` tool.
-Omitting it selects `read`, `grep`, `find`, and `ls`, while an empty list gives the child no core work tools.
-The runtime always adds `subagent_send` and child `subagent_wait` and removes duplicate names.
-Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
+The optional `tools` list selects Pi core work tools by exact name, plus the built-in `codemode` tool.
+The child Pi checks the selected names before it receives the task; the parent does not share its tool list.
+Omitting `tools` or passing `[]` selects no core work tools. The runtime always adds `subagent_send` and child `subagent_wait`.
+If older calls relied on the read-only default, pass `tools: ["read", "grep", "find", "ls"]` explicitly.
+See [Tools](./docs/tools.md#subagent_spawn) for argument validation, failure timing, and upgrade guidance.
 
 Add `"codemode"` explicitly to let the child run JavaScript that calls its selected tools and communication tools, including parallel calls and output filtering.
 For example, `tools: ["read", "grep", "codemode"]` enables scripted read and search operations without shell or file-mutation tools.
@@ -293,8 +294,7 @@ Describe the child's specialization in `task` and grant only the required work t
 ## 🔒 Security and privacy
 
 The selected work tools run in the current working directory.
-The default list contains no shell or file-mutation tool.
-It is not a filesystem sandbox because its read tools can inspect files available to the user account.
+Selecting tools limits the initial loadout, not filesystem access: read tools can inspect files available to the user account.
 Selecting `bash`, `powershell`, `edit`, or `write` permits workspace mutation with the Pi process environment and user permissions.
 
 Every child disables session persistence and automatic discovery of extensions, skills, and prompt templates.
