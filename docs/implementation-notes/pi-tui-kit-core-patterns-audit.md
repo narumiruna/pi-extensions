@@ -29,13 +29,11 @@ Authoritative installed implementations are under `node_modules/@earendil-works/
 
 ### TaskLoader: implement
 
-The actual component regression failed before the fix: borders and message became green, while the hint retained red ANSI colors. A second regression failed because an oversized grapheme exceeded a narrow supplied width. The local CallbackText rebuilds its source through the callback-owned theme. TaskLoader floors finite widths, returns no rows below one cell, and clips every child line by display cells.
-
-The hint text, configured cancellation keys, hard Ctrl+C, non-cancellable behavior, and normal-width presentation are unchanged. Tests dispose the harness in finally blocks; fake-timer tests prove exactly one stop after repeated disposal and no subsequent timer redraws. No asynchronous production code or task ownership changes are introduced.
+The actual component regression failed before the fix: borders and message became green, while the hint retained red ANSI colors. A second regression failed because an oversized grapheme exceeded a narrow supplied width. The fix preserves cancellation behavior and task ownership; see the [loader regressions](../../packages/pi-tui-kit/test/task.test.ts).
 
 ### SettingsList comment: implement
 
-The installed `selectItem()` API disproves the old cursor-initialization claim. The comment now retains the disabled-row, search-focus, async-save, and rollback reasons. No adapter implementation changes.
+The installed `selectItem()` API disproved the old cursor-initialization claim. This was a comment correction only.
 
 ### Markdown retention: defer after measurement
 
@@ -45,7 +43,7 @@ The bounded fixture is `packages/pi-tui-kit/scripts/benchmark-document-rendering
 node packages/pi-tui-kit/scripts/benchmark-document-rendering.mjs
 ```
 
-It measures complete presentations with search metadata for fixed prose and table/code documents, eight operations per sample, seven samples after one warm-up, serially. All timing comparisons used the same Node `26.5.0` process environment and installed Pi `1.1.0`; final repository gates use the required Node `26.11.1` and bundled npm `11.20.0`. It covers repeated search preparation, alternating 60/80-cell widths, and alternating callback theme output with invalidation. Two complete baseline runs preceded two prototype runs; a final run followed prototype removal. The cold-import/first-frame benchmark is not used as a substitute.
+All timing comparisons used the same Node `26.5.0` process environment and installed Pi `1.1.0`; final repository gates use the required Node `26.11.1` and bundled npm `11.20.0`. Two complete baseline runs preceded two prototype runs; a final run followed prototype removal. The cold-import/first-frame benchmark is not used as a substitute.
 
 The discarded prototype retained exactly one public Markdown component per interaction cache, shared across display/reference/boundary widths, replaced it for renderLatex changes, and called public invalidate on theme invalidation. It added no imports, public API, width-keyed map, or global retention. Source/options and transformed Mermaid text were revalidated on each presentation. It was removed in full because theme output was not equivalent and table improvements were not repeatable.
 
@@ -60,9 +58,9 @@ Each cell below is median milliseconds ± median absolute deviation, for eight o
 | Tables/alternating width | 102.29 ± 1.42 | 97.59 ± 0.46 | 103.75 ± 0.34 | 109.13 ± 9.22 | Yes |
 | Tables/theme invalidation | 110.22 ± 0.88 | 106.72 ± 0.71 | 109.53 ± 0.72 | 109.68 ± 3.15 | No |
 
-SHA-256 covers complete styled output, search lines, wrap metadata, and table reading-order sources. Theme hashes differed because Markdown's defaultStylePrefix retains the old color around inline-style transitions even after public invalidate. Resetting that private field is not acceptable. Recreating the component on invalidation would remove the measured invalidation benefit and needs separate evidence; it is not retained as a speculative workaround. All six final hashes match the original baseline. Raw samples, dispersion, hashes, and Input probe output are in [pi-tui-kit-core-patterns-evidence.json](./pi-tui-kit-core-patterns-evidence.json) beside this note.
+Theme hashes differed because Markdown's defaultStylePrefix retains the old color around inline-style transitions even after public invalidate. Resetting that private field is not acceptable. Recreating the component on invalidation would remove the measured invalidation benefit and needs separate evidence; it is not retained as a speculative workaround. All six final hashes match the original baseline. Raw samples, dispersion, hashes, and Input probe output are in [pi-tui-kit-core-patterns-evidence.json](./pi-tui-kit-core-patterns-evidence.json) beside this note.
 
-No cache code is retained. Existing exact text/code/diff, search coordinates, table reading order, Mermaid widths, RPC pagination, and lazy-loading behavior stay on their existing implementation and regression gates. Optimization timing is host-dependent and is not a deterministic acceptance threshold.
+Optimization timing is host-dependent and is not a deterministic acceptance threshold.
 
 ### Input composition: defer
 
@@ -74,7 +72,7 @@ The probe checks display-cell bounds at normal, narrow, and zero widths and focu
 
 The audit includes formatInteractionHints normalization, exclusions and deduplication; selector canonical modifier ordering and reachability plans; live-choice matching; menu compact-frame key classification; browse search hints; and review's separate binding formatter. TaskLoader and questionnaire already have local macOS display conversion, and those policies are unchanged.
 
-Normalization/exclusion/deduplication currently uses canonical `alt` strings. CompactMenuHint parses displayed segments into key sets and intersects them with generated groups. Consumers can supply raw custom hint text: converting only generated groups to `option` would stop raw `alt+...` segments matching their cancellation/confirmation priority group. Review's separate formatter also retains canonical strings, while browse uses formatInteractionHints. DocumentSearchController does not parse modifier hints itself, but rendered search hints and tests must remain aligned with these producers.
+Consumers can supply raw custom hint text. Converting only generated groups to `option` would stop raw `alt+...` segments matching their cancellation or confirmation priority group.
 
 A global display-only replacement is therefore not proven classification-neutral. Retain canonical formatting rather than add a parser migration or platform option for an optional presentation change. Existing hint/selector/renderer tests cover aliases, modifier order, invalid strings, legacy collisions, terminal protocols, earlier listeners, and usable fallback keys. No new platform support claim is made.
 
@@ -84,14 +82,14 @@ Completed evidence:
 
 - Root `npm install` succeeds without manifest or lockfile changes. It reports five existing dependency-audit findings (three high, two critical); no audit-fix command was run.
 - `node scripts/check-install-policy.mjs` passes with the repository-required Node `26.11.1` and bundled npm `11.20.0`, selected with `fnm exec --using 26.11.1` without changing the default toolchain.
-- `npm run format`, `git diff --check`, and `npm run check` pass. The check includes builds, Biome, package boundaries, and all workspace typechecks. Initial changed-file Biome import-order and control-character-regex diagnostics were corrected before the final passing gate.
+- `npm run format`, `git diff --check`, and `npm run check` pass. Initial changed-file Biome import-order and control-character-regex diagnostics were corrected before the final passing gate.
 - Focused Kit suite passes 46 files and 834 tests, including exact documents, search, Markdown, Mermaid, RPC, input/paste, hints, lazy loading, lifecycle, and package exports.
 - `npm test` passes 598 files: 8,567 tests pass and eight suite-defined skips remain. The gate runs separately from checks, builds Kit before consumer tests, and changes no timeout or skip policy. The first full invocation was interrupted by the command tool's 300-second limit; the final invocation ran to completion with an explicitly captured zero exit status.
 - The initial default-toolchain run exposed an npm optional-dependency policy failure; it passes with the required bundled npm. A baseline-identical progress-menu assertion also rejected correctly wrapped settings-path rows. Its test-only correction accepts row wrapping while still requiring the settings label and filename. Both affected files then pass all 39 focused tests; no progress runtime or settings behavior changes.
 - Two serial baseline/prototype benchmark runs and final restored output hashes support the Markdown deferral. The Input probe covers custom prompt width, horizontal scrolling, wide graphemes, narrow/zero widths, and focused IME-marker placement.
 - `npm run changeset:status` identifies only the intended Kit patch. No public export, dependency, consumer floor, manifest, or runtime-loading graph changes.
 
-The loader renderer regressions run through real regular/fullscreen Pi renderers and their Terminal.start input pipeline. They cover dark-to-light callback theme invalidation, cell-bounded resize, remapped cancellation with hard Ctrl+C, task abort/draining, focus restoration, and preserved main-editor drafts followed by normal editing. Existing renderer tests retain earlier-listener, terminal-protocol, search, pointer, and review behavior. The existing `renderer-loader-smoke.test.ts` also passes: DefaultResourceLoader/Jiti loads the actual extension fixture and triggers its lazy selector command in both renderers, observing notifications and draft/focus restoration.
+The [loader renderer regressions](../../packages/pi-tui-kit/test/renderer-interaction.test.ts) and the existing [Jiti loader smoke](../../packages/pi-tui-kit/test/renderer-loader-smoke.test.ts) pass in both Pi renderer modes.
 
 Pack and package-directory loading are inapplicable: no metadata, generated import targets, or runtime-loading boundaries change. Existing package-export and lazy-import tests remain passing. No interactive Pi command was opened. Physical terminal emulators, real palette discovery, platform clipboard services, and live providers are not tested; no new support claims depend on those paths. The renderer custom-dialog adapter remains a documented simulation of the reviewed host contract.
 
