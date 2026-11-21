@@ -20,7 +20,6 @@ function directoryStat(absolute: string) {
   }
 }
 
-/** Compare the directory prefix by filesystem identity, independently of portable snapshot names. */
 function physicalRelative(root: string, target: string): string | undefined {
   root = path.resolve(root);
   target = path.resolve(target);
@@ -39,7 +38,6 @@ function physicalRelative(root: string, target: string): string | undefined {
 function sameDirectoryPrefix(left: string, right: string): boolean {
   if (left === right) return true;
   const samePortableName = mergePathIdentity(left) === mergePathIdentity(right);
-  // Windows can expose a short path name that does not share its long name's portable spelling.
   if (!samePortableName && process.platform !== "win32") return false;
   const boundary = directoryStat(left);
   const candidate = directoryStat(right);
@@ -50,13 +48,11 @@ function sameDirectoryPrefix(left: string, right: string): boolean {
         boundary.dev === candidate.dev &&
         boundary.ino === candidate.ino,
     );
-  // Missing paths can still alias. Compare existing ancestors before reserving both spellings.
   return (
     samePortableName && path.dirname(left) !== left && sameDirectoryPrefix(path.dirname(left), path.dirname(right))
   );
 }
 
-/** Symlinks above both configured roots are part of the host path; below this anchor they are not. */
 export function agentDirectoryAnchor(root: string, boundary: string) {
   let anchor = path.dirname(path.resolve(root));
   while (!isPathInside(anchor, boundary)) {
@@ -79,7 +75,6 @@ export function agentDirectorySessionRoot(root: string, sessionDir?: string) {
   return sessionRoot;
 }
 
-/** A nested custom store belongs to virtual sessions, never to its physical name. */
 export function agentDirectoryPhysicalSessionPath(root: string, sessionDir?: string) {
   const sessionRoot = agentDirectorySessionRoot(root, sessionDir);
   const nested = physicalRelative(root, sessionRoot) !== undefined;
@@ -184,7 +179,7 @@ export async function assertUnexcludedTargets(
         if (stat.isSymbolicLink()) throw new Error("Refusing to follow symlink during snapshot mutation.");
         if (!stat.isDirectory()) {
           if (includeTarget) throw new Error("Pi session storage is not a directory.");
-          break; // A reviewed file ancestor may be replaced first.
+          break;
         }
       } catch (error) {
         validate();

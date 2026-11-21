@@ -18,7 +18,6 @@ function image(entry: string | DirectoryImage): string {
   return `directory:${createHash("sha256").update(JSON.stringify(rows)).digest("hex")}`;
 }
 
-/** Bind the plan to the reviewed bytes. Vacant and directory targets need preimages too. */
 export function reviewedSnapshotPreimages(
   root: string,
   sessionDir: string | undefined,

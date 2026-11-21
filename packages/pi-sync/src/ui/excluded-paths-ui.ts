@@ -126,7 +126,6 @@ export function directoryScopeSummary(config: AnySyncConfig) {
   ];
 }
 
-/** One draft and one checked write for exclusions, exceptions, and session consent. */
 export async function showDirectoryScope(ctx: ExtensionCommandContext, config: AnySyncConfig, signal?: AbortSignal) {
   const validate = captureMutationOwner(ctx, signal);
   const isCurrent = () => {

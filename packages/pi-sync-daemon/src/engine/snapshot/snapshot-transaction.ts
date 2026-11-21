@@ -10,16 +10,17 @@ import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import { includeFromSelectionConfig, type SyncSelectionConfig, selectionForSnapshot } from "../sync/sync-policy.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
-import {
-  agentDirectoryConfiguredSessionDir,
-  agentDirectorySessionDirFromSettings,
-  readAgentDirectorySettings,
-} from "./snapshot.js";
+import { agentDirectoryConfiguredSessionDir } from "./snapshot.js";
 import { caseReplacementSpelling, coalesceCaseReplacements } from "./snapshot-case-replacement.js";
+import { recheckAgentDirectoryBudget } from "./snapshot-entry-projection.js";
 import { assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { withMissingTargetQueues, withTargetQueues } from "./snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
-import { prepareSessionRootTransition, resolveTransitionSessionRoot } from "./snapshot-root-transition.js";
+import {
+  prepareSessionRootTransition,
+  resolveTransitionSessionRoot,
+  stableAgentDirectorySettingsImage,
+} from "./snapshot-root-transition.js";
 import { pendingTransactionEntries, transactionRoot } from "./snapshot-transaction-directory.js";
 import {
   legacyImage,
@@ -33,15 +34,15 @@ import {
   scopedIdentity,
   scopedPathIdentity,
   scopedTransactionImage,
+  stableScopedIdentity,
 } from "./snapshot-transaction-images.js";
-import { fileImage, indexTransactionPlan } from "./snapshot-transaction-plan.js";
+import { indexTransactionPlan } from "./snapshot-transaction-plan.js";
 import {
   AGENT_DIRECTORY_JOURNAL_VERSION,
   assertAllowedTarget,
   assertRecoveryPolicy,
   isScopedJournal,
   isStrictlyInside,
-  LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION,
   type TransactionEntry,
   type TransactionJournal,
   transactionHasSessionTargets,
@@ -169,6 +170,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
       (entry) => !heldKeys.has(entry.target) || (entry.afterTarget && !heldKeys.has(entry.afterTarget)),
     );
     try {
+      if (scoped && transaction.deletes.length) await recheckAgentDirectoryBudget(root, plan, options, stateDir(root));
       for (const target of transaction.deletes.sort((a, b) => a.length - b.length)) {
         options.signal?.throwIfAborted();
         const entry = entriesByTarget.get(target);
@@ -183,6 +185,8 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         heldKeys,
         options,
         async () => {
+          if (scoped && plan.writes.length)
+            await recheckAgentDirectoryBudget(root, { deletes: [], writes: plan.writes }, options);
           await retireRemovalIntent(
             transaction.directory,
             transaction.journal,
@@ -246,8 +250,6 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
       // Aborted owners cannot roll back files after another session has replaced them.
       if (options.signal?.aborted)
         throw new Error("Snapshot apply cancelled; guarded transaction evidence retained for review.");
-      // A refused scoped removal may already have deleted some reviewed leaves. Preserve the
-      // original evidence; do not reinterpret the result as a fresh automatic rollback attempt.
       if (error instanceof ScopedRemovalError) throw error;
       // Additional queues have been released. Recovery must reserve missing keys afresh.
       if (changesQueueKey)
@@ -333,21 +335,6 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
       restoreTransaction(directory, journal, { ...options, sessionDir }, heldKeys),
     );
   }
-}
-
-async function stableAgentDirectorySettingsImage(root: string, plan: SnapshotApplyPlan, options: TransactionOptions) {
-  const settingsTarget = mergePathIdentity(path.join(root, "settings.json"));
-  const write = plan.writes.find(({ target }) => mergePathIdentity(target) === settingsTarget);
-  const target = write?.target ?? plan.deletes.find((target) => mergePathIdentity(target) === settingsTarget);
-  if (!target) return;
-  const beforeBytes = await readAgentDirectorySettings(options.signal, root);
-  const before = beforeBytes === undefined ? undefined : agentDirectorySessionDirFromSettings(beforeBytes);
-  options.validateMutation?.();
-  options.signal?.throwIfAborted();
-  const after = write ? agentDirectorySessionDirFromSettings(write.content) : undefined;
-  if (sessionStorageRoot(root, before) !== sessionStorageRoot(root, after))
-    throw new Error("Agent-directory transfers cannot change Pi session storage; keep the local sessionDir setting.");
-  return { target, image: beforeBytes === undefined ? "missing" : fileImage(beforeBytes) };
 }
 
 async function prepareTransaction(
@@ -542,7 +529,6 @@ async function restoreQueuedTransaction(
       }
     }
   }
-  // Legacy sibling stages have no identity and can be retired only if complete.
   for (const entry of journal.entries) {
     if (!entry.recoveryStaged) continue;
     options.validateMutation?.();
@@ -555,7 +541,7 @@ async function restoreQueuedTransaction(
     options.validateMutation?.();
     options.signal?.throwIfAborted();
   }
-  if (journal.version === LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION) {
+  if (scoped && journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION) {
     journal.version = AGENT_DIRECTORY_JOURNAL_VERSION;
     for (const entry of journal.entries) delete entry.recoveryStaged;
     options.validateMutation?.();
@@ -701,12 +687,12 @@ async function restoreScopedEntry(
   if (!entry.vacantInstall)
     await buildScopedRecoveryStage(directory, entry, options, () => persistJournal(directory, journal));
   const verifyStage = async () => {
-    const stage = await inspectScopedRecoveryStage(directory, entry, options);
+    const stage = await inspectScopedRecoveryStage(directory, entry, options, true);
     if (!stage || stage.image.kind === "missing" || stage.image.value !== before || stage.partial.kind !== "missing")
       throw new Error("Staged recovery image changed; evidence retained.");
-    const identity = scopedIdentity(stage.image.stat);
-    if (entry.vacantInstall && identity !== entry.vacantInstall)
+    if (entry.vacantInstall && scopedIdentity(stage.image.stat) !== entry.vacantInstall)
       throw new Error("Recovery vacancy has a different staging image; preserve evidence for review.");
+    const identity = stableScopedIdentity(stage.payload, stage.image.stat);
     return { payload: stage.payload, identity };
   };
   await verifyStage();
@@ -732,8 +718,6 @@ async function restoreScopedEntry(
           throw new Error("Transaction target changed after removal; preserve evidence for review.");
         const stage = await verifyStage();
         if (needsVacantTarget && !entry.vacantInstall) {
-          // Keep absence authorized until this exact payload is installed. No file that
-          // appears in the vacancy may be treated as an ordinary before/after image.
           entry.vacantInstall = stage.identity;
           delete entry.removalPending;
           delete entry.replacementStarted;
@@ -849,7 +833,6 @@ async function removeOwnedTarget(
     if (restoringBefore !== undefined && current.value === restoringBefore) return false;
     if (scoped && apply && current.value !== current.before)
       throw new Error("Reviewed removal image changed; preserve evidence for review.");
-    // Persist intent before removing paths, including separately journaled descendants.
     // Until replacement is armed, interrupted removal can recognize absence without accepting unknown bytes.
     upgradeRemovalEvidence(journal);
     for (const affected of journal.entries) {
@@ -858,9 +841,16 @@ async function removeOwnedTarget(
       affected.replacementStarted = false;
       if (affected.vacantInstall)
         throw new Error("Transaction removal overlaps a recovery vacancy; preserve evidence for review.");
-      if (!current.scoped || affected.scopedRemoval) continue;
-      const observed = scopedDescendant(current.scoped, path.relative(entry.target, affected.target));
+      if (!current.scoped) continue;
+      const relative = path.relative(entry.target, affected.target);
+      const observed = scopedDescendant(current.scoped, relative);
       if (!observed || observed.kind === "missing") continue;
+      const observedPath = path.join(entry.target, relative);
+      const mayChange = observed.kind === "directory" && observed.children.length > 0;
+      if (affected.scopedRemoval) {
+        if (mayChange) stableScopedIdentity(observedPath, observed.stat);
+        continue;
+      }
       const image =
         observed.value === affected.beforeImage
           ? "before"
@@ -868,7 +858,10 @@ async function removeOwnedTarget(
             ? "after"
             : undefined;
       if (!image) continue;
-      affected.scopedRemoval = { image, identity: scopedIdentity(observed.stat) };
+      affected.scopedRemoval = {
+        image,
+        identity: mayChange ? stableScopedIdentity(observedPath, observed.stat) : scopedIdentity(observed.stat),
+      };
     }
     options.validateMutation?.();
     options.signal?.throwIfAborted();

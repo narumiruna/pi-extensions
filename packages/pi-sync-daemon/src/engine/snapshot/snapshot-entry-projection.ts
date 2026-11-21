@@ -1,13 +1,43 @@
 import path from "node:path";
 import { isPathInside, toPosix } from "../paths.js";
-import { compileSyncPolicyTraversal, MAX_AGENT_DIRECTORY_ENTRIES } from "../sync/sync-policy.js";
-import type { AgentDirectoryInventory, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
+import {
+  compileSyncPolicyTraversal,
+  MAX_AGENT_DIRECTORY_ENTRIES,
+  MAX_AGENT_DIRECTORY_FILES,
+  type SyncSelectionConfig,
+} from "../sync/sync-policy.js";
+import { type AgentDirectoryScanOptions, scanAgentDirectoryInventory } from "./snapshot.js";
+import { MAX_AGENT_DIRECTORY_BYTES } from "./snapshot-bounds.js";
+import type { AgentDirectoryInventory, SnapshotApplyPlan } from "./snapshot-types.js";
 
-/** Count the entries that the next scan actually visits, not just portable file prefixes. */
-export function assertProjectedAgentDirectoryEntries(
-  { root, sessionRoot, scanSessions, entries, routingDirectories, walkedDirectories }: AgentDirectoryInventory,
-  plan: Pick<SnapshotApplyPlan, "deletes"> & { writes: readonly { target: string }[] },
-  options: SnapshotOptions,
+export async function recheckAgentDirectoryBudget(
+  root: string,
+  plan: SnapshotApplyPlan,
+  options: AgentDirectoryScanOptions,
+  pendingStateEntry?: string,
+) {
+  const inventory = await scanAgentDirectoryInventory(root, options, pendingStateEntry);
+  options.signal?.throwIfAborted();
+  options.validateMutation?.();
+  assertProjectedAgentDirectoryBudget(
+    inventory,
+    { deletes: plan.deletes, writes: plan.writes.map(({ target, content }) => ({ target, size: content.length })) },
+    options,
+  );
+}
+
+export function assertProjectedAgentDirectoryBudget(
+  {
+    root,
+    sessionRoot,
+    scanSessions,
+    entries,
+    fileSizes,
+    routingDirectories,
+    walkedDirectories,
+  }: AgentDirectoryInventory,
+  plan: Pick<SnapshotApplyPlan, "deletes"> & { writes: readonly { target: string; size?: number }[] },
+  options: SyncSelectionConfig,
 ) {
   const removed = new Map(plan.deletes.map((target) => [target, true]));
   const isRemoved = (target: string): boolean => {
@@ -19,12 +49,22 @@ export function assertProjectedAgentDirectoryEntries(
     return value;
   };
   let count = 0;
+  const files = new Map(
+    plan.writes.flatMap(({ target, size }) => (size === undefined ? [] : [[target, size] as const])),
+  );
   for (const target of entries.keys()) {
-    if (!isRemoved(target)) count++;
+    if (!isRemoved(target)) {
+      count++;
+      const size = fileSizes.get(target);
+      if (size !== undefined && !files.has(target)) files.set(target, size);
+    }
   }
+  if (files.size > MAX_AGENT_DIRECTORY_FILES) throw new Error("Projected agent directory exceeds the scan file bound.");
+  let bytes = 0;
+  for (const size of files.values()) bytes += size;
+  if (bytes > MAX_AGENT_DIRECTORY_BYTES)
+    throw new Error("Projected agent directory exceeds the 64 MiB scan byte bound.");
 
-  // A write can recreate a removed file as a directory and introduce its parents.
-  // Ordinary ancestors of an in-tree session root may also be created by the write.
   const introduced = new Set<string>();
   for (const { target } of plan.writes) {
     const boundary = isPathInside(root, target) ? root : sessionRoot;

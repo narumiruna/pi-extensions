@@ -126,7 +126,6 @@ export function shouldRefreshSyncedState(
   );
 }
 
-/** Capture the accepted projection, not the current file inventory. */
 export function acceptedSelection(config: {
   include: string[];
   exclude?: string[];

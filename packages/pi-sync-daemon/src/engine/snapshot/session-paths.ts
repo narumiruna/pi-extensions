@@ -68,8 +68,6 @@ export async function sessionDirForApply(
 ) {
   const contextSessionDir = sessionDirFromContext(ctx);
   if (options.scope === "agent-directory") {
-    // A scoped operation uses the physical root reported by Pi, even when sessions are off.
-    // Reading excluded settings to infer the root would violate the collection policy.
     const root = await effectiveSessionRoot(ctx, options, options.signal);
     if (root !== agentDirectorySessionRoot(agentDir(), options.sessionDir))
       throw new Error("Pi session storage changed during transfer; retry from a fresh review.");

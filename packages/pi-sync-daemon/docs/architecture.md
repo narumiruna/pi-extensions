@@ -189,6 +189,12 @@ Pi core's settings storage has separate existing-file and missing-file branches 
 
 These guarantees cover cooperating registered clients. Unregistered old Pi versions, external editors, shell commands, and arbitrary extensions remain independent writers. Preserve conservative preimage checks, recovery evidence, and explicit upgrade preconditions.
 
+### Agent-directory recovery evidence
+
+Version 10 journals use unique workspace slots. Scratch files get separate unique slots in private directories on the destination filesystem. Recovery reads only the names that the durable journal or scratch record identifies. A failed publication can leave unrecorded objects, but it cannot block a new slot or authorize deleting the old one. The synced path policy excludes these private objects. Older journals keep their exact paths and identity checks; an upgrade does not adopt unrecorded data.
+
+An identity that must survive edits uses the filesystem device, inode, and creation time. A change timestamp is not creation time: libuv's Unix stat fallback can report `ctime` as `birthtimeNs`, and Linux `statx` can report zero when birth time is absent. With equal positive timestamps on Linux or Android, the engine rechecks the object with synchronous `lstat` and looks for a same-device ancestor with a distinct birth time. These calls share libuv's synchronous `statx` path, which disables itself after falling back. If the engine cannot verify creation time, it stops before an action that needs durable identity. Atomic unlink and empty-directory removal do not need that proof. No identity check makes path-based operations atomic with respect to unrelated writers.
+
 ## Explicit Continuous retry
 
 Validated `/sync sync` and manager **Sync now** requests record the requesting client's last target setup. Startup transfers, status reads, and separate refusal retries do not set this intent. Keep intents separate across clients, and retain them while another client is busy. Cancellation, session-generation replacement, disabled Continuous policy, and service shutdown cannot carry an old intent into a later activation.

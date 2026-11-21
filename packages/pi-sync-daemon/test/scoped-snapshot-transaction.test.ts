@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import nodeFs, { type BigIntStats, constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,10 +12,11 @@ import {
   recoverPendingSnapshotTransactions,
 } from "../src/engine/snapshot/snapshot-transaction.js";
 import { transactionRoot } from "../src/engine/snapshot/snapshot-transaction-directory.js";
-import { scopedTransactionImage } from "../src/engine/snapshot/snapshot-transaction-images.js";
+import { scopedIdentity, scopedTransactionImage } from "../src/engine/snapshot/snapshot-transaction-images.js";
 import { fileImage } from "../src/engine/snapshot/snapshot-transaction-plan.js";
 import {
   AGENT_DIRECTORY_JOURNAL_VERSION,
+  FIXED_WORKSPACE_JOURNAL_VERSION,
   LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION,
   type TransactionEntry,
   type TransactionJournal,
@@ -183,7 +184,29 @@ async function recoveryFixture(root: string, entry: TransactionEntry, version = 
   const token = createHash("sha256").update(directory).update("\\0").update(entry.backupName).digest("hex");
   const suffix = entry.kind === "file" ? "restore" : "restore-tree";
   const stage = path.join(path.dirname(entry.target), `.pi-sync.json.${token}.${suffix}`);
-  return { before, evidence, stage, workspace: `${stage}.workspace` };
+  return {
+    before,
+    evidence,
+    stage,
+    workspace: `${stage}.workspace`,
+    scratchEvidence: path.join(directory, `scratch-${entry.backupName}.json`),
+  };
+}
+
+async function recordedWorkspace(base: string, journalFile: string) {
+  const journal = JSON.parse(await fs.readFile(journalFile, "utf8")) as TransactionJournal;
+  const slot = journal.entries[0]?.recoveryWorkspaceId;
+  assert.ok(slot);
+  return `${base}.${slot}`;
+}
+
+function scratchCandidate(file: unknown, workspaceBase: string) {
+  return (
+    typeof file === "string" &&
+    file.startsWith(`${workspaceBase}.`) &&
+    path.basename(path.dirname(file)).includes(".scratch.") &&
+    path.basename(file) === "bytes"
+  );
 }
 
 for (const change of ["none", "late child", "different spelling"] as const) {
@@ -289,13 +312,308 @@ for (const change of ["none", "partial", "extra child", "late child"] as const) 
     }));
 }
 
+function substituteBirthtime(match: (file: unknown) => boolean, source: "ctime" | "missing") {
+  const substitute = (stat: BigIntStats) => {
+    stat.birthtimeNs = source === "ctime" ? stat.ctimeNs : 0n;
+    return stat;
+  };
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
+    const stat = await lstat(...args);
+    return stat && "birthtimeNs" in stat && match(args[0]) ? substitute(stat as BigIntStats) : stat;
+  }) as typeof fs.lstat);
+  // The synchronous statx path cannot succeed again after a permanent fallback.
+  const lstatSync = nodeFs.lstatSync.bind(nodeFs);
+  let fallback = false;
+  vi.spyOn(nodeFs, "lstatSync").mockImplementation(((...args: Parameters<typeof nodeFs.lstatSync>) => {
+    const stat = lstatSync(...args);
+    fallback ||= match(args[0]);
+    return stat && "birthtimeNs" in stat && fallback ? substitute(stat as BigIntStats) : stat;
+  }) as typeof nodeFs.lstatSync);
+  const open = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode);
+    if (match(file)) {
+      const statFile = handle.stat.bind(handle);
+      handle.stat = (async (...args: Parameters<typeof handle.stat>) => {
+        const stat = await statFile(...args);
+        return "birthtimeNs" in stat ? substitute(stat as BigIntStats) : stat;
+      }) as typeof handle.stat;
+    }
+    return handle;
+  });
+}
+
+for (const source of ["ctime", "missing"] as const) {
+  const ambiguousPlatform = !["darwin", "freebsd", "netbsd", "win32"].includes(process.platform);
+  for (const affected of ["workspace", "scratch", "vacancy", "removal"] as const) {
+    test.skipIf(source === "ctime" && !ambiguousPlatform)(
+      `scoped ${affected} fails closed with ${source} birth time`,
+      () =>
+        fixture(async (root) => {
+          const target = path.join(root, "tree");
+          const leaf = path.join(target, "incoming");
+          await fs.mkdir(target);
+          await fs.writeFile(leaf, newBytes);
+          const { before, evidence, workspace } = await recoveryFixture(root, {
+            target,
+            backupName: "0",
+            kind: "file",
+            beforeImage: fileImage(oldBytes),
+            afterImage: "missing",
+            postFiles: [{ relative: "incoming", image: fileImage(newBytes) }],
+          });
+          await fs.writeFile(before, oldBytes);
+          const belongsToWorkspace = (file: unknown) => typeof file === "string" && file.startsWith(`${workspace}.`);
+          substituteBirthtime((file) => {
+            if (affected === "removal") return file === target;
+            if (affected === "scratch") return scratchCandidate(file, workspace);
+            if (!belongsToWorkspace(file) || typeof file !== "string") return false;
+            if (affected === "vacancy") return path.basename(file) === "image";
+            return path.dirname(file) === root && !scratchCandidate(file, workspace);
+          }, source);
+          const remove = vi.spyOn(fs, "unlink");
+          await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), (error: Error) => {
+            if (affected === "removal") {
+              assert.match(error.message, /scoped transaction removal stopped/i);
+              assert.ok(error.cause instanceof Error);
+              error = error.cause;
+            }
+            assert.match(error.message, /stable filesystem birth time is unavailable/i);
+            return true;
+          });
+          assert.equal(
+            remove.mock.calls.some(([file]) => file === leaf),
+            false,
+          );
+          assert.deepEqual(await fs.readFile(leaf), newBytes);
+          assert.deepEqual(await fs.readFile(before), oldBytes);
+          const journal = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
+          assert.equal(journal.entries[0]?.vacantInstall, undefined);
+          assert.equal(journal.entries[0]?.removalPending, undefined);
+        }),
+    );
+  }
+}
+
+for (const kind of ["file", "directory"] as const) {
+  test(`scoped atomic ${kind} removal does not require birth time`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "incoming");
+      if (kind === "file") await fs.writeFile(target, newBytes);
+      else await fs.mkdir(target);
+      await recoveryFixture(root, {
+        target,
+        backupName: "0",
+        kind: "missing",
+        beforeImage: "missing",
+        afterImage: kind === "file" ? fileImage(newBytes) : directoryImage([]),
+        postFiles: [],
+      });
+      substituteBirthtime((file) => file === target, "missing");
+      await recoverPendingSnapshotTransactions(selection(root));
+      await assert.rejects(fs.lstat(target), { code: "ENOENT" });
+      assert.deepEqual(await fs.readdir(transactionRoot()), []);
+    }));
+}
+
+for (const outcome of ["not committed", "committed", "replacement"] as const) {
+  test(`scoped retry after interrupted workspace ownership publication (${outcome})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "note");
+      await fs.writeFile(target, newBytes);
+      const { before, evidence, workspace } = await recoveryFixture(root, {
+        target,
+        backupName: "0",
+        kind: "file",
+        beforeImage: fileImage(oldBytes),
+        afterImage: fileImage(newBytes),
+        postFiles: [],
+      });
+      await fs.writeFile(before, oldBytes);
+      const rename = fs.rename.bind(fs);
+      const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (to !== evidence) return rename(from, to);
+        if (outcome !== "not committed") await rename(from, to);
+        throw new Error("workspace evidence write interrupted");
+      });
+      await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /workspace evidence write interrupted/);
+      fault.mockRestore();
+      assert.deepEqual(await fs.readFile(target), newBytes);
+      const [candidate, ...others] = (await fs.readdir(root)).filter((name) =>
+        name.startsWith(`${path.basename(workspace)}.`),
+      );
+      assert.ok(candidate);
+      assert.deepEqual(others, []);
+      const original = path.join(root, candidate);
+      const sentinel = path.join(original, "unverified");
+      if (outcome === "replacement") {
+        const saved = await fs.readFile(evidence);
+        await fs.rename(original, path.join(root, "moved"));
+        await fs.mkdir(original);
+        await assert.rejects(
+          recoverPendingSnapshotTransactions(selection(root)),
+          /unrecognized recovery staging image/i,
+        );
+        assert.ok((await fs.lstat(original)).isDirectory());
+        assert.deepEqual(await fs.readFile(target), newBytes);
+        assert.deepEqual(await fs.readFile(evidence), saved);
+        return;
+      }
+      if (outcome === "not committed") await fs.writeFile(sentinel, "leave untouched");
+      await recoverPendingSnapshotTransactions(selection(root));
+      assert.deepEqual(await fs.readFile(target), oldBytes);
+      await assert.rejects(fs.lstat(evidence), { code: "ENOENT" });
+      if (outcome === "committed") await assert.rejects(fs.lstat(original), { code: "ENOENT" });
+      else assert.equal(await fs.readFile(sentinel, "utf8"), "leave untouched");
+    }));
+}
+
+for (const published of [false, true]) {
+  test(`scoped scratch ownership publication can be retried (${published ? "committed" : "not committed"})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "tree");
+      await fs.writeFile(target, newBytes);
+      const { before, evidence, workspace, scratchEvidence } = await recoveryFixture(root, {
+        target,
+        backupName: "0",
+        kind: "directory",
+        beforeImage: directoryImage([
+          ["a", fileImage(oldBytes)],
+          ["b", fileImage(oldBytes)],
+        ]),
+        afterImage: fileImage(newBytes),
+        postFiles: [],
+      });
+      await fs.mkdir(before);
+      await fs.writeFile(path.join(before, "a"), oldBytes);
+      await fs.writeFile(path.join(before, "b"), oldBytes);
+      const open = fs.open.bind(fs);
+      const candidates: string[] = [];
+      vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        const handle = await open(file, flags, mode);
+        if (typeof file === "string" && flags === "wx" && scratchCandidate(file, workspace)) candidates.push(file);
+        return handle;
+      });
+      const rename = fs.rename.bind(fs);
+      const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (typeof from === "string" && scratchCandidate(from, workspace) && process.platform !== "win32")
+          assert.equal((await fs.stat(path.dirname(from))).mode & 0o077, 0);
+        if (to !== scratchEvidence || candidates.length !== 2) return rename(from, to);
+        if (published) await rename(from, to);
+        throw new Error("scratch evidence write interrupted");
+      });
+      await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /scratch evidence write interrupted/);
+      fault.mockRestore();
+      const [first, second] = candidates;
+      assert.ok(first && second);
+      await assert.rejects(fs.lstat(first), { code: "ENOENT" });
+      assert.equal((await fs.lstat(second)).size, 0);
+      assert.deepEqual(await fs.readFile(target), newBytes);
+      assert.deepEqual(
+        await fs.readFile(path.join(await recordedWorkspace(workspace, evidence), "image", "a")),
+        oldBytes,
+      );
+      if (!published) await fs.writeFile(second, "leave untouched");
+      await recoverPendingSnapshotTransactions(selection(root));
+      assert.deepEqual(await fs.readFile(path.join(target, "a")), oldBytes);
+      assert.deepEqual(await fs.readFile(path.join(target, "b")), oldBytes);
+      await assert.rejects(fs.lstat(evidence), { code: "ENOENT" });
+      if (published) await assert.rejects(fs.lstat(second), { code: "ENOENT" });
+      else assert.equal(await fs.readFile(second, "utf8"), "leave untouched");
+      assert.equal(candidates.length, 3);
+    }));
+}
+
+for (const change of [
+  "valid",
+  "workspace replaced",
+  "scratch replaced",
+  "old timestamp mismatches",
+  "workspace has no birth time",
+] as const) {
+  test(`scoped recovery preserves exact v9 stage identity checks (${change})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "note");
+      await fs.writeFile(target, newBytes);
+      const { before, evidence, workspace, scratchEvidence } = await recoveryFixture(
+        root,
+        {
+          target,
+          backupName: "0",
+          kind: "file",
+          beforeImage: fileImage(oldBytes),
+          afterImage: fileImage(newBytes),
+          postFiles: [],
+        },
+        FIXED_WORKSPACE_JOURNAL_VERSION,
+      );
+      await fs.writeFile(before, oldBytes);
+      await fs.mkdir(workspace);
+      const scratch = path.join(workspace, "scratch");
+      const partial = oldBytes.subarray(0, 3);
+      await fs.writeFile(scratch, partial);
+      const stat = await fs.lstat(scratch, { bigint: true });
+      const identity =
+        change === "old timestamp mismatches"
+          ? `${stat.dev}:${stat.ino}:${stat.birthtimeNs + 1n}`
+          : scopedIdentity(stat);
+      await fs.writeFile(
+        scratchEvidence,
+        JSON.stringify({ identity, file: createHash("sha256").update("").digest("hex") }),
+      );
+      const journal = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
+      const [entry] = journal.entries;
+      assert.ok(entry);
+      const workspaceStat = await fs.lstat(workspace, { bigint: true });
+      if (change === "workspace has no birth time") {
+        workspaceStat.birthtimeNs = 0n;
+        substituteBirthtime((file) => file === workspace, "missing");
+      }
+      entry.recoveryWorkspace = scopedIdentity(workspaceStat);
+      const prior = JSON.stringify(journal);
+      await fs.writeFile(evidence, prior);
+      if (change === "workspace replaced") {
+        await fs.rename(workspace, path.join(root, "moved"));
+        await fs.mkdir(workspace);
+        await fs.writeFile(scratch, partial);
+      }
+      if (change === "scratch replaced") {
+        await fs.rename(scratch, path.join(root, "moved"));
+        await fs.writeFile(scratch, partial);
+      }
+      if (change === "valid") {
+        await recoverPendingSnapshotTransactions(selection(root));
+        assert.deepEqual(await fs.readFile(target), oldBytes);
+        await assert.rejects(fs.lstat(workspace), { code: "ENOENT" });
+      } else {
+        await assert.rejects(
+          recoverPendingSnapshotTransactions(selection(root)),
+          change === "workspace has no birth time"
+            ? /stable filesystem birth time/i
+            : /unrecognized recovery staging image/i,
+        );
+        assert.deepEqual(await fs.readFile(scratch), partial);
+        assert.deepEqual(await fs.readFile(target), newBytes);
+        // The legacy journal may have been upgraded before rechecking its writable workspace.
+        const saved = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
+        assert.deepEqual(saved.entries, journal.entries);
+        if (change !== "workspace has no birth time") assert.equal(JSON.stringify(saved), prior);
+      }
+    }));
+}
+
 for (const change of ["none", "changed scratch", "foreign scratch", "oversized scratch", "foreign payload"] as const) {
   test(`scoped restarted copy requires ownership of partial bytes (${change})`, () =>
     fixture(async (root) => {
       const target = path.join(root, "tree");
       const big = Buffer.alloc(80 * 1024, 53);
       await fs.writeFile(target, newBytes);
-      const { before, evidence, workspace } = await recoveryFixture(root, {
+      const {
+        before,
+        evidence,
+        workspace: workspaceBase,
+      } = await recoveryFixture(root, {
         target,
         backupName: "0",
         kind: "directory",
@@ -306,9 +624,7 @@ for (const change of ["none", "changed scratch", "foreign scratch", "oversized s
         afterImage: fileImage(newBytes),
         postFiles: [],
       });
-      const scratch = path.join(workspace, "scratch");
-      const stagedFirst = path.join(workspace, "image", "a");
-      const stagedSecond = path.join(workspace, "image", "b");
+      let scratch: string | undefined;
       await fs.mkdir(before);
       await fs.writeFile(path.join(before, "a"), oldBytes);
       await fs.writeFile(path.join(before, "b"), big);
@@ -316,7 +632,8 @@ for (const change of ["none", "changed scratch", "foreign scratch", "oversized s
       let started = 0;
       const fault = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
         const handle = await open(file, flags, mode);
-        if (file === scratch && flags === "wx" && ++started === 2) {
+        if (typeof file === "string" && scratchCandidate(file, workspaceBase) && flags === "wx" && ++started === 2) {
+          scratch = file;
           const write = handle.writeFile.bind(handle);
           handle.writeFile = async (chunk) => {
             await write(chunk);
@@ -327,6 +644,10 @@ for (const change of ["none", "changed scratch", "foreign scratch", "oversized s
       });
       await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /copy interrupted/);
       fault.mockRestore();
+      assert.ok(scratch);
+      const workspace = await recordedWorkspace(workspaceBase, evidence);
+      const stagedFirst = path.join(workspace, "image", "a");
+      const stagedSecond = path.join(workspace, "image", "b");
       assert.deepEqual(await fs.readFile(target), newBytes);
       assert.deepEqual(await fs.readFile(stagedFirst), oldBytes);
       await assert.rejects(fs.lstat(stagedSecond), { code: "ENOENT" });
@@ -376,7 +697,11 @@ for (const change of ["none", "install completed", "foreign preimage", "foreign 
       const target = path.join(root, "tree");
       await fs.mkdir(target);
       await fs.writeFile(path.join(target, "incoming"), newBytes);
-      const { before, evidence, workspace } = await recoveryFixture(root, {
+      const {
+        before,
+        evidence,
+        workspace: workspaceBase,
+      } = await recoveryFixture(root, {
         target,
         backupName: "0",
         kind: "file",
@@ -385,15 +710,16 @@ for (const change of ["none", "install completed", "foreign preimage", "foreign 
         postFiles: [{ relative: "incoming", image: fileImage(newBytes) }],
       });
       await fs.writeFile(before, oldBytes);
-      const payload = path.join(workspace, "image");
       const rename = fs.rename.bind(fs);
       const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-        if (from !== payload || to !== target) return rename(from, to);
+        if (typeof from !== "string" || !from.startsWith(`${workspaceBase}.`) || to !== target) return rename(from, to);
         if (change === "install completed") await rename(from, to);
         throw new Error("recovery interrupted at installation");
       });
       await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /interrupted at installation/);
       fault.mockRestore();
+      const workspace = await recordedWorkspace(workspaceBase, evidence);
+      const payload = path.join(workspace, "image");
       const originalEvidence = await fs.readFile(evidence);
       const journal = JSON.parse(originalEvidence.toString()) as TransactionJournal;
       assert.ok(journal.entries[0]?.vacantInstall);

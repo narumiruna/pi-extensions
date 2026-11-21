@@ -234,7 +234,6 @@ export function createContinuousSync(
         return await watchContinuous(config, changed, { sessionDir, signal });
       } catch {
         validate();
-        // A failed hint must not suppress the scheduler's authoritative inspection.
         return () => {};
       }
     };
