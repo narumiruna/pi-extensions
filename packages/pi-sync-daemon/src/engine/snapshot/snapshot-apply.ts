@@ -4,10 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertWithinRoot, isDeniedPath, isPathInside, parentPaths, safeJoin, toPosix } from "../paths.js";
 import { syncDirectory } from "../state/json-file.js";
+import { stateDir } from "../state/state-directory.js";
 import { compileSyncPolicyExclude } from "../sync/sync-policy.js";
 import { agentDir } from "./session-paths.js";
 import {
   agentDirectoryConfiguredSessionDir,
+  agentDirectoryInventory,
   createSnapshot,
   isSessionFilePath,
   isSessionPath,
@@ -16,7 +18,9 @@ import {
   snapshotTarget,
 } from "./snapshot.js";
 import { assertAgentDirectorySnapshotBound } from "./snapshot-bounds.js";
+import { assertProjectedAgentDirectoryEntries } from "./snapshot-entry-projection.js";
 import { agentDirectoryPhysicalSessionPath, assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
+import { decodeBase64Strict } from "./snapshot-payload.js";
 import { reviewedSnapshotPreimages } from "./snapshot-reviewed-preimages.js";
 import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./snapshot-types.js";
@@ -72,15 +76,15 @@ export async function applySnapshot(
   };
   options.validateMutation?.();
   await recoverPendingSnapshotTransactions(transactionOptions);
-  const scanned = await createSnapshot(snapshot.profile, {
+  const current = await createSnapshot(snapshot.profile, {
     ...options,
     ...(options.scope === undefined && options.include === undefined
       ? { syncSessions: snapshotIncludesSessions(snapshot) }
       : {}),
     sessionDir,
   });
-  const current = options.reviewedLocal ? { ...scanned, files: options.reviewedLocal.files } : scanned;
-  if (options.reviewedLocal && !sameReviewedFiles(scanned, current))
+  const inventory = agentDirectoryInventory(current);
+  if (options.reviewedLocal && !sameReviewedFiles(current, options.reviewedLocal))
     throw new Error("Reviewed local files changed before apply; reopen the transfer preview.");
   if (options.scope === "agent-directory") {
     assertAgentDirectorySnapshotBound([
@@ -99,14 +103,36 @@ export async function applySnapshot(
     snapshot,
     options,
   );
-  if (options.reviewedLocal) {
-    for (const [target, image] of reviewedSnapshotPreimages(root, sessionDir, current.files, plan)) {
+  if (inventory) {
+    // The transaction can create the private state directory. Its own entry counts, not its children.
+    assertProjectedAgentDirectoryEntries(
+      inventory,
+      { ...plan, writes: [...plan.writes, { target: stateDir(root) }] },
+      options,
+    );
+    await preflightSnapshotMutations(root, plan, sessionDir, options);
+  }
+  if (options.reviewedLocal || inventory) {
+    const images = reviewedSnapshotPreimages(root, sessionDir, current.files, plan, inventory);
+    const reviewed = options.reviewedLocal;
+    if (reviewed && inventory) {
+      const approved = reviewedSnapshotPreimages(
+        root,
+        sessionDir,
+        reviewed.files,
+        plan,
+        agentDirectoryInventory(reviewed),
+      );
+      if ([...images].some(([target, image]) => image !== approved.get(target)))
+        throw new Error("Reviewed directory preimage changed before apply; reopen the transfer preview.");
+    }
+    for (const [target, image] of images) {
       const existing = transactionOptions.expectedPreimages.get(target);
       if (existing !== undefined && existing !== image) throw new Error("Reviewed preimage evidence is inconsistent.");
       transactionOptions.expectedPreimages.set(target, image);
     }
   }
-  await preflightSnapshotMutations(root, plan, sessionDir, options);
+  if (!inventory) await preflightSnapshotMutations(root, plan, sessionDir, options);
   await applySnapshotTransaction(plan, transactionOptions);
   return appliedFileHashMap(snapshot, current, protectedRelativePaths);
 }
@@ -152,6 +178,10 @@ export function preflightSnapshotApply(
   }
 
   const deletePaths = new Set<string>();
+  const inventory = options.scope === "agent-directory" ? agentDirectoryInventory(current) : undefined;
+  for (const { target } of writes) {
+    if (inventory?.entries.get(target) === "directory") deletePaths.add(target);
+  }
   for (const file of current.files) {
     const normalized = toPosix(file.path);
     if (excluded(normalized)) continue;
@@ -252,13 +282,6 @@ function isSafeSnapshotPath(relativePath: string) {
     path.posix.normalize(normalized) === normalized &&
     !isDeniedPath(normalized)
   );
-}
-
-function decodeBase64Strict(value: string, filePath: string) {
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
-    throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
-  }
-  return Buffer.from(value, "base64");
 }
 
 function excludedApplyPath(root: string, options: SnapshotOptions) {

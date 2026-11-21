@@ -71,6 +71,17 @@ test("snapshot v5 requires directory metadata and rejects local-only content eve
   const selection = selectionForSnapshot([], [], { ...directory, reinclude: ["**"] });
   const good = { ...snapshot([{ path: "notes.md", content: Buffer.from("portable") }]), version: 5, selection };
   assert.deepEqual(await decodeSnapshot(await encodeSnapshot(good)), good);
+  for (const contentBase64 of ["!!!!", "abc\n", "Zg", "a===", "AA_A", 1234, null]) {
+    const bad = { ...good, files: [{ ...good.files[0], contentBase64 }] };
+    await assert.rejects(decodeSnapshot(gzipSync(JSON.stringify(bad))), /Invalid base64 content/);
+  }
+  const paddingCases = {
+    ...good,
+    files: snapshot(
+      ["", "a", "ab", "abc"].map((content, index) => ({ path: `notes/${index}.md`, content: Buffer.from(content) })),
+    ).files,
+  };
+  assert.deepEqual(await decodeSnapshot(await encodeSnapshot(paddingCases)), paddingCases);
   for (const file of ["auth.json", "auth.json.", "trust.json", "SETTINGS.JSON", "sessions/private.jsonl"]) {
     const bad = { ...good, files: snapshot([{ path: file, content: Buffer.from("private") }]).files };
     await assert.rejects(encodeSnapshot(bad), /excluded or unsafe agent-directory paths/);

@@ -1,4 +1,5 @@
 import { assertAgentDirectoryPathLayout } from "../sync/sync-policy.js";
+import { snapshotBase64Size } from "./snapshot-payload.js";
 import type { SnapshotFile } from "./snapshot-types.js";
 
 export const MAX_AGENT_DIRECTORY_BYTES = 64 * 1024 * 1024;
@@ -13,7 +14,7 @@ export function assertAgentDirectorySnapshotBound(files: readonly SnapshotFile[]
   assertAgentDirectoryPathLayout(files.map((file) => file.path));
   let bytes = 0;
   for (const file of files) {
-    const size = Buffer.byteLength(file.contentBase64, "base64");
+    const size = snapshotBase64Size(file.contentBase64, file.path);
     if (file.path.toLowerCase() === "settings.json") assertAgentDirectorySettingsSize(size);
     bytes += size;
     if (bytes > MAX_AGENT_DIRECTORY_BYTES)

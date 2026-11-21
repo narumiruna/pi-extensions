@@ -39,11 +39,16 @@ import {
   syncIncludeSelection,
   syncSessionsSelected,
 } from "../sync/sync-policy.js";
-import type { Snapshot, SnapshotFile, SnapshotOptions } from "./snapshot-types.js";
+import type { AgentDirectoryInventory, Snapshot, SnapshotFile, SnapshotOptions } from "./snapshot-types.js";
 
 export { canonicalSnapshotPathForConfig, isConfiguredSnapshotPath } from "../sync/sync-policy.js";
 
 const VERSION = 1;
+const scanInventories = new WeakMap<Pick<Snapshot, "files">, AgentDirectoryInventory>();
+
+export function agentDirectoryInventory(snapshot: Pick<Snapshot, "files">) {
+  return scanInventories.get(snapshot);
+}
 const TOP_LEVEL_FILES: readonly string[] = DEFAULT_SYNC_INCLUDE.filter((name) => name.includes("."));
 const TOP_LEVEL_DIRS = new Set<string>(DEFAULT_SYNC_INCLUDE.filter((name) => !name.includes(".")));
 const SECRET_PATTERNS = [
@@ -117,16 +122,12 @@ export async function createSnapshot(profile: string, options: SnapshotOptions =
       ? options.sessionDir
       : (options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir() : undefined));
   options.signal?.throwIfAborted();
-  const files = await collectFiles(
-    agentDir(),
-    {
-      ...policy,
-      sessionDir,
-    },
-    excluded,
-  );
+  const collectionOptions = { ...policy, sessionDir };
+  const collected =
+    options.scope === "agent-directory" ? await collectAgentDirectory(agentDir(), collectionOptions) : undefined;
+  const files = collected?.files ?? (await collectFiles(agentDir(), collectionOptions, excluded));
   options.signal?.throwIfAborted();
-  return {
+  const snapshot: Snapshot = {
     version: options.scope === "agent-directory" ? 5 : options.exclude === undefined ? VERSION : 4,
     id: snapshotId(),
     createdAt: new Date().toISOString(),
@@ -136,6 +137,8 @@ export async function createSnapshot(profile: string, options: SnapshotOptions =
     selection: selectionForSnapshot(include, options.exclude, options),
     files,
   };
+  if (collected) scanInventories.set(snapshot, collected.inventory);
+  return snapshot;
 }
 
 function effectiveInclude(options: SnapshotOptions) {
@@ -153,7 +156,7 @@ export async function collectFiles(
   options: SnapshotOptions = {},
   excluded = compileSyncExclude(options.exclude),
 ): Promise<SnapshotFile[]> {
-  if (options.scope === "agent-directory") return collectAgentDirectory(root, options);
+  if (options.scope === "agent-directory") return (await collectAgentDirectory(root, options)).files;
   const signal = options.signal;
   signal?.throwIfAborted();
   const results: SnapshotFile[] = [];
@@ -296,7 +299,8 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
   const sessionRoot = agentDirectorySessionRoot(root, sessionDir);
   const directories: ScannedPath[] = [];
   const candidates: Array<ScannedPath & { snapshotPath: string }> = [];
-  let entries = 0;
+  const entries = new Map<string, "file" | "directory" | "unreviewed">();
+  const routingDirectories = new Set<string>();
   let bytes = 0;
 
   async function walk(directory: ScannedPath, prefix: string, sessions: boolean) {
@@ -305,7 +309,9 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
     const children: Dirent[] = [];
     for await (const entry of await fs.opendir(directory.absolute)) {
       signal?.throwIfAborted();
-      if (++entries > MAX_AGENT_DIRECTORY_ENTRIES) throw new Error("Agent directory exceeds the scan entry bound.");
+      const absolute = path.join(directory.absolute, entry.name);
+      if (entries.size >= MAX_AGENT_DIRECTORY_ENTRIES) throw new Error("Agent directory exceeds the scan entry bound.");
+      entries.set(absolute, "unreviewed");
       children.push(entry);
     }
     await recheck(directory, signal);
@@ -320,14 +326,17 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
         path.join(directory.canonical, entry.name),
         signal,
       );
-      if (entry.isDirectory()) await walk(candidate, snapshotPath, sessions);
-      else {
+      if (entry.isDirectory()) {
+        if (!excluded(snapshotPath)) entries.set(candidate.absolute, "directory");
+        await walk(candidate, snapshotPath, sessions);
+      } else {
         if (!candidate.stat.isFile() || candidate.stat.nlink !== 1) changedScan();
         if (snapshotPath.toLowerCase() === "settings.json") assertAgentDirectorySettingsSize(candidate.stat.size);
         bytes += candidate.stat.size;
         if (bytes > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Agent directory exceeds the 64 MiB scan byte bound.");
         if (candidates.length >= MAX_AGENT_DIRECTORY_FILES)
           throw new Error("Agent directory exceeds the scan file bound.");
+        entries.set(candidate.absolute, "file");
         candidates.push({ ...candidate, snapshotPath });
       }
     }
@@ -337,7 +346,7 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
   const absoluteRoot = path.resolve(root);
   const canonicalRoot = path.join(await fs.realpath(path.dirname(absoluteRoot)), path.basename(absoluteRoot));
   const selectedSessions = syncSessionsSelected(options);
-  async function identifySessionRoot() {
+  async function identifySessionRoot(routing?: Set<string>) {
     // Validate the custom root even when opted out: an external alias could otherwise hide an in-tree store.
     if (!sessionDir && !selectedSessions) return undefined;
     let absolute = agentDirectoryAnchor(absoluteRoot, sessionRoot);
@@ -350,6 +359,7 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
         canonical = path.join(canonical, part);
         directory = await identify(absolute, canonical, signal);
         if (!directory.stat.isDirectory()) changedScan();
+        routing?.add(absolute);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -357,7 +367,7 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
     }
     return directory;
   }
-  const sessionDirectory = await identifySessionRoot();
+  const sessionDirectory = await identifySessionRoot(routingDirectories);
   await walk(await identify(absoluteRoot, canonicalRoot, signal), "", false);
   if (selectedSessions && sessionDirectory) await walk(sessionDirectory, "sessions", true);
 
@@ -382,7 +392,17 @@ async function collectAgentDirectory(root: string, options: SnapshotOptions) {
     changedScan();
   for (const candidate of candidates) await recheck(candidate, signal);
   signal?.throwIfAborted();
-  return results.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    files: results.sort((left, right) => left.path.localeCompare(right.path)),
+    inventory: {
+      root: absoluteRoot,
+      sessionRoot,
+      scanSessions: selectedSessions,
+      entries,
+      walkedDirectories: new Set(directories.map(({ absolute }) => absolute)),
+      routingDirectories,
+    },
+  };
 }
 
 async function collectIncludedPath(
