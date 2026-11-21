@@ -91,8 +91,10 @@
     "esbuild": "0.28.2"
   },
   "devDependencies": {
+    "@babel/parser": "8.1.2",
     "@biomejs/biome": "2.6.8",
     "@changesets/cli": "3.0.3",
+    "@csstools/css-tokenizer": "4.0.3",
     "@earendil-works/chord": "1.6.0",
     "@earendil-works/pi-agent-core": "1.6.0",
     "@earendil-works/pi-ai": "1.6.0",

@@ -171,8 +171,6 @@ export default function cacheHitMonitor(pi: ExtensionAPI): void {
 
   pi.on("agent_settled", (_event, ctx) => {
     if (!ownsSession(ctx)) return;
-    // Pi exposes persisted cache-warm usage but no public warm-completion event.
-    // Reconcile only at deterministic lifecycle boundaries instead of guessing from hook timing.
     restore(ctx);
     publish(ctx);
   });
@@ -204,7 +202,6 @@ function createCacheMonitorWidget(
     : view.session.requestCount > 0
       ? "aggregate usage only"
       : "waiting for provider cache usage";
-  // Adapt structured report rows before styling or wrapping; RPC keeps the full report.
   const report = formatMonitorLines(view);
   const body: MonitorLine[] = view.latest
     ? [
@@ -217,7 +214,6 @@ function createCacheMonitorWidget(
     : view.session.requestCount > 0
       ? report.slice(1)
       : [{ role: "dim", text: "Cache usage is unknown until this provider reports cache activity." }];
-  // Kit normalizes fractional and invalid widths before body wrapping.
   return new EditorStatusWidget({
     theme,
     name: "Cache hit monitor",

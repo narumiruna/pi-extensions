@@ -141,7 +141,6 @@ function summarizeActiveTools(
   const metadata = new Map(configuredTools.map((tool) => [tool.name, tool]));
   const names = new Set(toolNames);
   for (const tool of configuredTools) {
-    // Pi maps MCP codemode exposure to deferred; both are callable without activation.
     if (tool.exposure === "codemode" || tool.exposure === "deferred") names.add(tool.name);
   }
   const mcpNamespaces = new Map<string | undefined, number>();
@@ -229,7 +228,6 @@ function createActiveToolWidget(
   state?: EditorStatusWidgetState,
   summary?: string,
 ): EditorStatusWidget {
-  // Kit normalizes fractional and invalid widths and clips wrapped glyphs wider than the row.
   return new EditorStatusWidget({
     theme,
     name: "Active tools",
