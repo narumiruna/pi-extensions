@@ -417,6 +417,37 @@ for (const kind of ["file", "directory"] as const) {
     }));
 }
 
+test("scoped recovery retries after copying a backdated backup", () =>
+  fixture(async (root) => {
+    const target = path.join(root, "note");
+    await fs.writeFile(target, newBytes);
+    const { before, workspace } = await recoveryFixture(root, {
+      target,
+      backupName: "0",
+      kind: "file",
+      beforeImage: fileImage(oldBytes),
+      afterImage: fileImage(newBytes),
+      postFiles: [],
+    });
+    await fs.writeFile(before, oldBytes);
+    const oldTime = new Date("2020-01-01T00:00:00Z");
+    await fs.utimes(before, oldTime, oldTime);
+    const rename = fs.rename.bind(fs);
+    const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (scratchCandidate(from, workspace)) throw new Error("staging interrupted after copying the backup");
+      await rename(from, to);
+    });
+
+    await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /staging interrupted after copying/);
+    assert.deepEqual(await fs.readFile(target), newBytes);
+    fault.mockRestore();
+
+    await recoverPendingSnapshotTransactions(selection(root));
+    assert.deepEqual(await fs.readFile(target), oldBytes);
+    assert.equal((await fs.stat(target)).mtimeMs, oldTime.getTime());
+    assert.deepEqual(await fs.readdir(transactionRoot()), []);
+  }));
+
 for (const outcome of ["not committed", "committed", "replacement"] as const) {
   test(`scoped retry after interrupted workspace ownership publication (${outcome})`, () =>
     fixture(async (root) => {
