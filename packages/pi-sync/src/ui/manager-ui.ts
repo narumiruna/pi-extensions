@@ -5,6 +5,7 @@ import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
+import { showIgnoreMigrationPrompt } from "./ignore-migration-prompt.js";
 import {
   attentionMainMenuItems,
   blockedSyncMenuItem,
@@ -365,23 +366,38 @@ export async function showSyncManager(
         }, customOptions),
     },
   };
+  let firstOpen = true;
+  const describe = async (signal: AbortSignal) => {
+    const pendingAttention = options.getAttention?.();
+    const observation = options.getObservation?.();
+    const manager = await describeManagerState(signal, pendingAttention, undefined, observation);
+    if (signal.aborted || !isCurrent()) return manager;
+    // A busy operation suppresses baseline reads, not the stored check-time hint.
+    if (
+      observation &&
+      options.getObservation?.() === observation &&
+      !manager.observation &&
+      !(manager.operation && operationBlocksChanges(manager.operation))
+    ) {
+      options.onObservationInvalidated?.();
+    }
+    if (pendingAttention && options.getAttention?.() === pendingAttention && !manager.attention) {
+      options.onSelectionResolved?.(pendingAttention);
+    }
+    return manager;
+  };
   await runMenu(menuContext, menu, {
-    getState: async () => {
-      const pendingAttention = options.getAttention?.();
-      const observation = options.getObservation?.();
-      const manager = await describeManagerState(sessionSignal, pendingAttention, undefined, observation);
-      if (sessionSignal?.aborted) return { manager };
-      // A busy operation suppresses baseline reads, not the stored check-time hint.
+    getState: async ({ signal }) => {
+      const offerOnOpen = firstOpen;
+      firstOpen = false;
+      let manager = await describe(signal);
       if (
-        observation &&
-        options.getObservation?.() === observation &&
-        !manager.observation &&
-        !(manager.operation && operationBlocksChanges(manager.operation))
+        offerOnOpen &&
+        manager.operation?.kind === "free" &&
+        manager.configReview &&
+        (await showIgnoreMigrationPrompt(ctx, manager.configReview.setupName, signal, isCurrent))
       ) {
-        options.onObservationInvalidated?.();
-      }
-      if (pendingAttention && options.getAttention?.() === pendingAttention && !manager.attention) {
-        options.onSelectionResolved?.(pendingAttention);
+        if (!signal.aborted && isCurrent()) manager = await describe(signal);
       }
       return { manager };
     },

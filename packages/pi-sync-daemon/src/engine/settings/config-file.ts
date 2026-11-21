@@ -166,10 +166,10 @@ export async function peekLocalConfigDocument(): Promise<LocalConfigDocument | u
   return queueConfigOperation(() => withLocalConfigReadLockIfNeeded(peekUnlocked));
 }
 
-async function peekUnlocked(maxBytes?: number): Promise<LocalConfigDocument | undefined> {
+async function peekUnlocked(maxBytes?: number, securePermissions = true): Promise<LocalConfigDocument | undefined> {
   const canonicalPath = localConfigPath();
   const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyLocalConfigPath();
-  const snapshot = await readConfigSnapshotIfExists(filePath, maxBytes);
+  const snapshot = await readConfigSnapshotIfExists(filePath, maxBytes, securePermissions);
   return snapshot ? { path: filePath, ...snapshot } : undefined;
 }
 
@@ -177,13 +177,14 @@ export function withLockedLocalConfigDocument<T>(
   run: (document: LocalConfigDocument | undefined, recheck: () => void) => Promise<T>,
   signal?: AbortSignal,
   forWrite = false,
+  { securePermissions = true }: { securePermissions?: boolean } = {},
 ): Promise<T> {
   if (engineHost().config) throw new Error("This operation requires the authoritative settings writer.");
   return queueConfigOperation(() => {
     signal?.throwIfAborted();
     const withLock = forWrite ? withLocalConfigFileLock : withLocalConfigReadLockIfNeeded;
     return withLock(async () => {
-      const document = await peekUnlocked(MAX_SETTINGS_BYTES);
+      const document = await peekUnlocked(MAX_SETTINGS_BYTES, securePermissions);
       signal?.throwIfAborted();
       return run(document, () => {
         signal?.throwIfAborted();
@@ -515,7 +516,11 @@ function assertCurrentDocument(document: LocalConfigDocument | undefined) {
   }
 }
 
-async function readConfigSnapshotIfExists(filePath: string, maxBytes?: number): Promise<ConfigSnapshot | undefined> {
+async function readConfigSnapshotIfExists(
+  filePath: string,
+  maxBytes?: number,
+  securePermissions = true,
+): Promise<ConfigSnapshot | undefined> {
   let pathStat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     pathStat = await fs.lstat(filePath);
@@ -539,7 +544,7 @@ async function readConfigSnapshotIfExists(filePath: string, maxBytes?: number): 
     if (openedStat.dev !== pathStat.dev || openedStat.ino !== pathStat.ino) {
       throw new Error(`pi-sync config changed while opening: ${filePath}`);
     }
-    if (process.platform !== "win32" && (openedStat.mode & 0o777) !== 0o600) {
+    if (securePermissions && process.platform !== "win32" && (openedStat.mode & 0o777) !== 0o600) {
       await handle.chmod(0o600);
     }
     let bytes: Buffer;

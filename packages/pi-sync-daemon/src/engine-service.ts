@@ -39,6 +39,19 @@ export function createEngineService(root: string) {
   const monitor = createMonitor(root, host);
   const execute: Execute = (operation, payload, execution) =>
     host.run(execution, async () => {
+      if (operation === "ignore.capabilities") {
+        execution.validate();
+        return { available: false };
+      }
+      if (operation === "ignore.migration-offer" || operation === "ignore.migration-defer") {
+        execution.validate();
+        const { readIgnoreMigrationOffer, deferIgnoreMigrationOffer } = await import(
+          "./engine/ignore/ignore-migration-prompt.js"
+        );
+        return operation === "ignore.migration-offer"
+          ? readIgnoreMigrationOffer(payload, execution)
+          : deferIgnoreMigrationOffer(payload, execution);
+      }
       await monitor.pause();
       execution.validate();
       if (operation === "daemon.authorize") return authorizeAfterExit(execution, payload);

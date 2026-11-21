@@ -33,6 +33,12 @@ flowchart LR
 
 Read-only display state is not a second settings writer. A client proposes a validated new document with the exact source fingerprint; the authoritative writer checks the fingerprint under its settings lock. A stale editor must reopen rather than merge a stale approval automatically. Invalid existing JSON remains intact. Unknown fields remain in the proposed source clone.
 
+### Local ignore migration deferral
+
+`ignore.migration-offer` and `ignore.migration-defer` require a current attached TUI client. The read returns an opaque token only for the requested active legacy setup without a deferral. Opening or dismissing a prompt does not persist a choice. An explicit decline must present the same setup and token, which binds the active document's path, file identity, and bytes to the migration version. `ignore.capabilities` reports `{ available: false }`; it does not enable migration. None of these operations pause the monitor, take the sync lock, contact a backend, or change settings or rules.
+
+The local settings queue orders both operations. A read checks the active document under the cross-process config lock when settings or a writer lock are present. A decline always holds that lock. Before publishing a decline, the daemon rechecks the source and client and exclusively creates an empty private marker in the canonical root. This serializes cooperating writers; it is an optimistic check, not an atomic comparison against external editors or parent-directory replacement. Existing markers must be regular, private, single-link, and empty; unsafe paths are not overwritten. The marker name is denied by the snapshot path policy and stores only a hash of the setup name and migration version. Declining applies to that name on this device, including across settings edits and daemon restarts. Success waits for the file flush and, on POSIX, the root directory flush. Once created, the marker stays in place if its durability is uncertain; the operation reports the failure without modifying settings or removing the marker.
+
 ## Context inventory
 
 | Former Pi dependency | Engine host boundary | Source |
