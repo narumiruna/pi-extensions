@@ -1,5 +1,12 @@
 # @narumitw/pi-sync-daemon
 
+## 0.6.2
+
+### Patch Changes
+
+- bb79479: Align the Sync daemon's model SDK with Pi 1.6. Keep pi-otel's Durable tracing compatible with Pi 1.6 and its parked tool states without exporting additional trace data.
+- 77c45c6: Explain how to recover when the Sync daemon refuses a model whose definition or authentication source differs from the Pi host. Exact matching and no-fallback behavior are unchanged.
+
 ## 0.6.1
 
 ### Patch Changes
