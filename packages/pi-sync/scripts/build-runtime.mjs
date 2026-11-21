@@ -3,6 +3,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRuntimeBuilder } from "../../../scripts/runtime-builder.mjs";
+import { daemonName, embeddedAlias, embeddedDirectory, stageDaemon, validateDaemon } from "./embedded-daemon.mjs";
 
 const forbiddenEagerInputs = [
   "src/commands/command-handler.ts",
@@ -32,17 +33,21 @@ export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publish
   forbiddenEagerExternals: [
     "@narumitw/pi-tui-kit",
     "fast-xml-parser",
-    "@narumitw/pi-sync-daemon/engine/backends",
-    "@narumitw/pi-sync-daemon/engine/sync/agent-runner",
-    "@narumitw/pi-sync-daemon/engine/sync/agent-plan",
-    "@narumitw/pi-sync-daemon/engine/sync/agent-store",
-    "@narumitw/pi-sync-daemon/engine/sync/continuous-sync",
-    "@narumitw/pi-sync-daemon/engine/sync/sync-operations",
-    "@narumitw/pi-sync-daemon/engine/snapshot/snapshot",
-    "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-codec",
-    "@narumitw/pi-sync-daemon/engine/snapshot/snapshot-transaction",
+    `${embeddedAlias}/engine/backends`,
+    `${embeddedAlias}/engine/sync/agent-runner`,
+    `${embeddedAlias}/engine/sync/agent-plan`,
+    `${embeddedAlias}/engine/sync/agent-store`,
+    `${embeddedAlias}/engine/sync/continuous-sync`,
+    `${embeddedAlias}/engine/sync/sync-operations`,
+    `${embeddedAlias}/engine/snapshot/snapshot`,
+    `${embeddedAlias}/engine/snapshot/snapshot-codec`,
+    `${embeddedAlias}/engine/snapshot/snapshot-transaction`,
   ],
   includeDynamicExternals: true,
+  alias: { [daemonName]: embeddedAlias },
+  additionalRuntimeDirectory: embeddedDirectory,
+  stageFiles: stageDaemon,
+  validateFiles: validateDaemon,
   validateGraph({ allInputs }) {
     for (const input of forbiddenEagerInputs) {
       if (!allInputs.has(`/${input}`))

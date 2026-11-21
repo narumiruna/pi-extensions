@@ -28,34 +28,55 @@ async function fixture(run: (root: string) => Promise<void>) {
     }
     await mkdir(join(root, "node_modules"));
     await symlink(resolve("node_modules/semver"), join(root, "node_modules/semver"), "dir");
-    await workspace(root, "pi-tui-kit", {}, true);
-    await workspace(root, "bridge", { "@narumitw/pi-tui-kit": "^1.0.0" }, false);
-    await workspace(root, "pi-agentfs", { "@narumitw/bridge": "^1.0.0" }, true);
+    await workspace(root, "pi-tui-kit");
+    await workspace(root, "bridge", { dependencies: { "@narumitw/pi-tui-kit": "^1.0.0" }, build: false });
+    await workspace(root, "pi-agentfs", {
+      dependencies: { "@narumitw/bridge": "^1.0.0" },
+      prerequisites: ["pi-tui-kit"],
+    });
     await run(root);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
-async function workspace(root: string, directory: string, dependencies: Record<string, string>, build: boolean) {
+async function workspace(
+  root: string,
+  directory: string,
+  {
+    version = "1.0.0",
+    dependencies = {},
+    devDependencies = {},
+    build = true,
+    prerequisites = [],
+  }: {
+    version?: string;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    build?: boolean;
+    prerequisites?: string[];
+  } = {},
+) {
   const target = join(root, "packages", directory);
   await mkdir(target, { recursive: true });
   await writeFile(
     join(target, "package.json"),
     JSON.stringify({
       name: `@narumitw/${directory}`,
-      version: "1.0.0",
+      version,
       type: "module",
       dependencies,
+      devDependencies,
       scripts: build ? { build: "node build.mjs" } : {},
     }),
   );
-  const prerequisite =
-    directory === "pi-agentfs" ? 'await fs.access(new URL("../pi-tui-kit/dist/index.d.ts", import.meta.url));' : "";
+  const requireArtifacts = prerequisites.map(
+    (name) => `await fs.access(new URL(${JSON.stringify(`../${name}/dist/index.d.ts`)}, import.meta.url));`,
+  );
   await writeFile(
     join(target, "build.mjs"),
     `import fs from "node:fs/promises";
-${prerequisite}
+${requireArtifacts.join("\n")}
 await fs.mkdir(new URL("./dist/", import.meta.url));
 await fs.writeFile(new URL("./dist/index.d.ts", import.meta.url), "export {};\\n");
 await fs.appendFile(new URL("../../order.log", import.meta.url), ${JSON.stringify(`${directory}\n`)});
@@ -99,18 +120,29 @@ test("the pre-c846a729 workspace-order workaround fails the same cold fixture", 
 
 test("selected builds include transitive prerequisites and skip unrelated builds", async () => {
   await fixture(async (root) => {
-    await workspace(root, "unrelated", {}, true);
+    await workspace(root, "unrelated");
     assert.equal(runBuilds({ root, workspaceNames: ["@narumitw/pi-agentfs"] }), 0);
     assert.equal(await readFile(join(root, "order.log"), "utf8"), "pi-tui-kit\npi-agentfs\n");
   });
 });
 
-test("the renamed daemon builds before Pi Sync from a cold workspace", async () => {
+test("a cold Pi Sync build selects its daemon devDependency and Kit runtime dependency first", async () => {
   await fixture(async (root) => {
-    await workspace(root, "pi-sync-daemon", {}, true);
-    await workspace(root, "pi-sync", { "@narumitw/pi-sync-daemon": "^1.0.0" }, true);
+    for (const name of ["pi-sync-daemon", "pi-tui-kit", "pi-sync"]) {
+      const { version, dependencies, devDependencies } = JSON.parse(
+        await readFile(resolve("packages", name, "package.json"), "utf8"),
+      );
+      await workspace(root, name, {
+        version,
+        dependencies,
+        devDependencies,
+        prerequisites: name === "pi-sync" ? ["pi-sync-daemon", "pi-tui-kit"] : [],
+      });
+    }
     assert.equal(runBuilds({ root, workspaceNames: ["@narumitw/pi-sync"] }), 0);
-    assert.equal(await readFile(join(root, "order.log"), "utf8"), "pi-sync-daemon\npi-sync\n");
+    const order = (await readFile(join(root, "order.log"), "utf8")).trim().split("\n");
+    assert.equal(order.pop(), "pi-sync");
+    assert.deepEqual(order.sort(), ["pi-sync-daemon", "pi-tui-kit"]);
   });
 });
 
@@ -140,7 +172,7 @@ test("cycles and unknown workspaces fail before any build starts", async () => {
       return { status: 0 };
     };
     assert.throws(() => runBuilds({ root, workspaceNames: ["missing"], execute }), /Unknown build workspace: missing/u);
-    await workspace(root, "pi-tui-kit", { "@narumitw/pi-agentfs": "^1.0.0" }, true);
+    await workspace(root, "pi-tui-kit", { dependencies: { "@narumitw/pi-agentfs": "^1.0.0" } });
     assert.throws(
       () => runBuilds({ root, execute }),
       /Workspace dependency cycle:.*bridge.*pi-tui-kit.*pi-agentfs.*bridge.*package\.json/u,

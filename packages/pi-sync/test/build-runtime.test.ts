@@ -36,6 +36,7 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   ],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit", "fast-xml-parser"],
   includeDynamicExternals: true,
+  additionalRuntimeDirectory: "daemon",
 });
 
 test("generated runtime preserves every first-use import boundary", async () => {
@@ -355,6 +356,44 @@ test("failed runtime publication restores the previous output", async () => {
     );
     assert.deepEqual(await listFiles(root), ["dist/previous.ts"]);
     assert.equal(await readFile(join(output, "previous.ts"), "utf8"), "previous");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("invalid embedded metadata and native or Jiti imports fail before publication", async () => {
+  const builder = await loadBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
+  const output = join(root, "dist");
+  try {
+    await mkdir(output);
+    await writeFile(join(output, "previous.ts"), "previous");
+    await assert.rejects(
+      builder.buildRuntime({
+        outputDirectory: output,
+        validateOutput: async (staging) => {
+          for (const [file, replacement, expected] of [
+            ["daemon/package.json", '{"version":"0.0.0"}', /Invalid embedded daemon version/u],
+            ["daemon/dist/index.js", 'export * from "./missing.js";', /relative import has no exact runtime target/u],
+            ["index.ts", 'import("#pi-sync-daemon/engine/missing");', /Embedded daemon import has no exact/u],
+            ["daemon/dist/index.js", 'import("./cli.js");', /host graph reaches the Node-only CLI/u],
+          ] as const) {
+            const path = join(staging, file);
+            const original = await readFile(path, "utf8");
+            await writeFile(path, file.endsWith(".json") ? replacement : `${original}\n${replacement}\n`);
+            try {
+              await assert.rejects(builder.validateGeneratedFiles(staging), expected);
+            } finally {
+              await writeFile(path, original);
+            }
+          }
+          await rm(join(staging, "daemon/dist/cli.js"));
+          await builder.validateGeneratedFiles(staging);
+        },
+      }),
+      /Embedded daemon is missing cli.js/u,
+    );
+    assert.deepEqual(await listFiles(root), ["dist/previous.ts"]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

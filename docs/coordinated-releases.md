@@ -8,6 +8,12 @@ Add a Changeset for Kit and each consumer that adopts the API. The consumer must
 
 Run the existing `version-packages` command only in the normal versioning workflow or a disposable fixture. It changes versions, changelogs, and the lockfile. The lockfile command resolves an unpublished Kit through its local workspace, not the registry. The separate Docker smoke manifest and lockfile are not part of root workspace version propagation.
 
+### Pi Sync and the daemon
+
+Pi Sync builds after the local daemon workspace and embeds that build in its npm tarball. Its daemon `devDependencies` entry is a local build edge, not a registry publication edge. A daemon-only release does not update a packed Pi Sync version. Add an explicit `@narumitw/pi-sync` Changeset whenever Pi Sync needs to adopt a daemon build, including security or correctness fixes. Confirm the selected daemon version is in the build range. Changesets can update that range without bumping Pi Sync, so a range update alone does not ship a new embedded build. Use a separate Changeset when standalone behavior changes; both packages can ship in the same batch without a daemon-first registry requirement for Pi Sync.
+
+Kit remains an ordinary Pi Sync runtime dependency at the existing floor. Keep Kit-first publication when both packages ship together, and verify the exact Kit registry artifact before publishing Pi Sync even when Kit was already published. See the [embedded-daemon decision](adr/0009-pi-sync-ship-daemon-in-package.md) and [build requirements](runtime-builder.md#pi-syncs-embedded-daemon).
+
 ## Publication
 
 The pack job builds tarballs and records their SHA256 hashes in the publish-plan artifact. The publish job downloads that artifact and runs `npm run publish-packages -- --from-pack-dir <directory>` through the pinned Changesets publish Action. The command validates every local tarball before invoking native `changeset publish` for each dependency-ordered chunk. It copies the exact packed bytes and release entries into temporary chunk directories; it does not rebuild or repack them.

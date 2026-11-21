@@ -23,7 +23,7 @@ Merging a Version PR consumes its versioned changesets and updates manifests, ch
 
 Workflow permissions default to none. Mode selection and packing have only repository read access. Versioning has repository and pull-request write access and uses `PAT_TOKEN` so the generated PR triggers CI. Version commits are signed through the GitHub API. Publishing alone has `id-token: write` for npm Trusted Publishing and repository write access for tags and GitHub releases; it does not use the PAT.
 
-Keep npm trusted-publisher bindings pointed at this repository's `publish.yml`. All release jobs disable persisted checkout credentials and dependency caches. Checks and tests run in PR CI, not in this workflow. The pack job builds packages in its fresh runner. The publish job installs dependencies without rebuilding packages and publishes the exact tarballs passed from pack via the same run's artifact ID.
+Keep npm trusted-publisher bindings pointed at this repository's `publish.yml`. All release jobs disable persisted checkout credentials and dependency caches. Checks and tests run in PR CI, not in this workflow. The pack job builds packages in dependency order in its fresh runner, including local build prerequisites that are not runtime dependencies. For example, it builds the daemon before [packing Pi Sync](coordinated-releases.md#pi-sync-and-the-daemon) even though publishing Pi Sync does not require a standalone daemon artifact. The publish job installs dependencies without rebuilding packages and publishes the exact tarballs passed from pack via the same run's artifact ID.
 
 ## Failures and recovery
 

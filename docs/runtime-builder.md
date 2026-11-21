@@ -15,13 +15,28 @@ The applicable guide is `docs/extension-conventions.md`, especially **Build-back
 | Package loading | Preserve standalone entrypoints, registration, lazy activation and lifecycle | Existing package-local generated-entry tests and package-directory Pi smokes |
 | Repository tooling | Keep package-specific policy local; no published builder dependency | Diff and manifest review; root builds, boundaries, typechecks and tests |
 
-The shared build tool does not change runtime source, settings, commands, UI, model-visible prefixes, or published package dependencies. Its root production dependency also supports Git installation preparation. Existing lifecycle and cancellation tests remain local. No Changeset is needed for output-equivalent repository tooling.
+The shared tool does not own runtime source, settings, commands, UI, model-visible prefixes, or package dependencies. Its root production dependency also supports Git installation preparation. Existing lifecycle and cancellation tests remain local. No Changeset is needed for output-equivalent repository tooling; changes to published behavior belong to the affected package.
 
 ## Production Git preparation
 
 `scripts/prepare.mjs` prepares Kit, then pi-sync-daemon, before Inspector assets; Git hook installation is a separate, explicit `prek install` step. Their thin `prepare-kit-runtime.mjs` and `prepare-daemon-runtime.mjs` wrappers use `scripts/prepare-workspace-runtime.mjs`. Pi Git installs omit development dependencies and link both workspaces, so preparation emits their source modules as ESM JavaScript without TypeScript tooling; the daemon also requires and marks its CLI entry executable. It does not bundle package imports or collapse lazy boundaries. Exact relative targets and source maps are validated before staged output replaces `dist`; failed publication restores the previous directory, and failed restoration retains a named backup. Concurrent preparers and crash recovery are not supported.
 
 This runtime-only preparation does not replace either library’s package build or prepack: those still generate declarations for library consumers. Root checks rebuild both complete libraries before typechecks and tests. `test/prepare-kit-runtime.test.ts` verifies output, failure recovery, and a clean production layout without development tools through Pi’s Jiti loader, including Edit Scope’s lazy menu, Kit’s lazy questionnaire, Pi Sync’s source/lazy Help route, and standalone daemon start/API/stop.
+
+## Pi Sync's embedded daemon
+
+Build the complete local `@narumitw/pi-sync-daemon` workspace before building or packing `@narumitw/pi-sync`. The dependency-ordered root `npm run build` builds both in that order. The daemon's full build hashes its source and build inputs before compilation and rejects changes detected before writing `.daemon-build.json` in the workspace root, outside published `dist`. Build from stable inputs; the comparison does not make concurrent editing or building safe. Pi Sync checks that the workspace version matches its `devDependencies` range, that resolution points to that workspace, and that the record matches current source, build inputs, and emitted JavaScript and maps. Runtime-only Git preparation is not a substitute for this build; it serves the repository's source entrypoint.
+
+Pi Sync's wrapper stages the daemon's native files, license, and version metadata under `dist/daemon/`, and writes `dist/package.json` to map private `#pi-sync-daemon` imports from the Jiti graph to the native files. The package validator checks those mappings and the native graph's exact import targets, separately from the common `.ts` chunk validator. The embedded CLI is `dist/daemon/dist/cli.js`. The [decision record](adr/0009-pi-sync-ship-daemon-in-package.md) explains why only this CLI loads the pinned SDK bootstrap, and why the staged daemon metadata omits `type`.
+
+For an installed-artifact smoke on Linux, run the dependency-ordered build and pack both packages with `npm pack --ignore-scripts`. Use separate temporary npm roots for Pi Sync, the standalone daemon, and the host Pi SDK. Prepare a fresh npm cache with only the declared external dependencies (including Kit), then install the Pi Sync tarball offline with `--omit=peer`. Confirm that the cache contains no registry metadata or artifact for the standalone daemon. Install the standalone daemon from its local tarball and run:
+
+```sh
+env -u NODE_PATH node packages/pi-sync/test/installed-artifact-smoke.mjs \
+  /path/to/installed/pi-sync /path/to/host/npm-root /path/to/installed/pi-sync-daemon
+```
+
+The smoke uses Pi's Jiti loader, a temporary agent root, and real local IPC. It does not contact a storage backend or invoke a model.
 
 ## Variation audit
 
@@ -54,13 +69,13 @@ This historical audit includes `pi-typesafe-search`, now archived under `depreca
 | pi-tool | Catalog lazy; alternate banner | Declarative; migrate |
 | pi-otel | Separate TypeScript and JavaScript graphs, library-chunks, tsc declaration generation, cross-graph and declaration validation | Retain local builder and all tests: migration would require a second build pipeline/declaration hook used by no other package |
 
-Parsed, non-bundling esbuild validation replaces import-like string matching in migrated builders. Every actual relative static import, re-export and dynamic import must target an emitted `.ts` runtime exactly. Ordinary strings are not imports. Stray `.js` output is rejected consistently, including the old stamp/sync gaps. These checks do not alter emitted output.
+The original migration replaced import-like string matching with parsed, non-bundling esbuild validation. In the generated Jiti graph, every relative static import, re-export and dynamic import must target an emitted `.ts` file exactly. Ordinary strings are not imports. Stray `.js` output is rejected outside any separately validated native runtime directory.
 
 ## Builder contract
 
-`createRuntimeBuilder` accepts only confirmed wrapper variations: package root, temporary prefix, banner, optional named entries, forbidden eager inputs/externals, exact allowed externals, external subpath/dynamic matching, and additive graph/file validators. It does not accept arbitrary esbuild options or build callbacks. The default build remains split ESM, ES2024, external packages, `.ts` JavaScript output and source maps.
+`createRuntimeBuilder` accepts package root, temporary prefix, banner, optional named entries, forbidden eager inputs/externals, exact allowed externals, external subpath/dynamic matching, and additive graph/file validators. It also supports build-time `alias` mappings and a `stageFiles` callback to add files to the staging directory before validation. A wrapper can designate an `additionalRuntimeDirectory` outside the common `.ts` inventory; the package must validate those files separately. The default build remains split ESM, ES2024, external packages, `.ts` JavaScript output and source maps.
 
-Package graph validators receive normalized input sets and the main eager graph. File validators receive the staged directory and runtime inventory after common validation. They cannot replace the common policy. The per-build `validateOutput` seam supports failure injection after normal validation.
+Package graph validators receive normalized input sets and the main eager graph. After common validation, file validators receive the staged directory, `.ts` inventory, and parsed imports. They cannot replace the common policy. The per-build `validateOutput` seam supports failure injection after normal validation.
 
 Only `dist` and the wrapper's test-output prefix are writable. Staging must be a build-owned sibling, and symlink outputs, staging links and parent aliases are rejected. Output ownership is checked again after validation. Publication preserves the previous directory until staging validates, restores it if the final rename fails, and retains a recovery backup if restoration itself fails. This is same-filesystem rename publication, not a cross-process lock or crash-durable transaction; concurrent builds of one destination are not supported.
 

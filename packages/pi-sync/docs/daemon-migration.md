@@ -1,16 +1,27 @@
 # Daemon migration and release restrictions
 
-This daemon extraction is experimental. Deterministic Linux verification passed, but publication and production cutover remain separate, unauthorized actions. Keep the restrictions below until their owners complete the required checks.
+The daemon migration is experimental. Publication and production cutover require separate approval. Keep the restrictions below until their owners complete the required checks.
+
+## Daemon CLI
+
+The Pi Sync npm package includes its own daemon build and does not install a `pi-sync-daemon` command. With only Pi Sync installed, use Node.js 22.19.0 or later to run the bundled CLI:
+
+```sh
+node "/path/to/installed/pi-sync/dist/daemon/dist/cli.js" status --root "/path/to/agent-directory"
+```
+
+Use the directory containing the installed Pi Sync `package.json` and the exact agent directory used by Pi. For a repository or Git source install, run `node packages/pi-sync-daemon/dist/cli.js` from the repository root after daemon runtime preparation, with the same action and `--root` arguments.
+
+If you installed the [standalone daemon package](https://www.npmjs.com/package/@narumitw/pi-sync-daemon), use `pi-sync-daemon status --root "/path/to/agent-directory"` instead. The standalone package and executable replaced `@narumitw/sync-daemon` and `sync-daemon`; the old executable name is not an alias. Neither the rename nor the bundled distribution changes IPC names, authorization digests, settings, or state formats.
 
 ## Ownership and upgrade
 
-The non-extension npm package is `@narumitw/pi-sync-daemon`; its executable is `pi-sync-daemon`. These replace `@narumitw/sync-daemon` and `sync-daemon`; the new package does not provide the old executable alias. The rename changes the package and executable names, not the IPC names, authorization digests, or
-settings and state formats. The Pi extension remains `@narumitw/pi-sync`. Pi uses one detached service
-per canonical agent directory. It does not install an OS service.
+The daemon remains a separate process. Pi uses one detached service per canonical agent directory and does not install an OS service. Updating the standalone package does not update the build bundled in Pi Sync. To get a newer bundled daemon, install a Pi Sync release that includes it.
 
-After an update, use `/reload` in open Pi sessions. On the next active connection, the new client
-checks the owner's build over compatible, authenticated IPC. For an older or unversioned owner, the
-client checks that no retained unattended permission blocks the upgrade. It then requests a stop
+After an update, use `/reload` in open Pi sessions. On the next active connection, the client
+checks the owner's daemon build version, not the Pi Sync version, over authenticated, compatible
+IPC. It reuses a compatible owner on the same or a newer build. For an older or unversioned owner,
+the client checks that no retained unattended permission blocks the upgrade. It then requests a stop
 and starts the replacement only after the owner releases its identity and exits. If any check fails,
 follow manual recovery. The upgrade does not run a transfer, replay an operation, or change sync
 settings. Passive print, JSON, and shutdown paths do not replace an older owner. If an upgrade fails
@@ -28,7 +39,7 @@ Manual recovery:
    Without a pending record, `repair-upgrade` returns `repaired: false` and does not revoke permission.
    If no compatible client is available or revocation fails, stop here and preserve the consent,
    identity, and recovery files.
-2. Run `pi-sync-daemon status --root <agent-directory>`.
+2. Run `status --root <agent-directory>` using the [daemon CLI](#daemon-cli).
    - A verified `pid` identifies the owner that answered the handshake. Record it before stopping
      that owner. Check `pendingUpgradePid` for any pending owner, even if `running` is `false` or `null`.
    - `running: null` means the handshake failed, even if there is no pending upgrade. `recordedPid`
@@ -36,15 +47,15 @@ Manual recovery:
      or compatibility. Use diagnostics from an already available compatible version to identify the
      owner. If you cannot identify it, stop here and preserve the records.
 
-   To stop an identified, running owner, use `pi-sync-daemon stop --root <agent-directory>` if
-   compatible. This works even if the old executable was removed. If the old executable is still
-   installed and compatible, you can use `sync-daemon stop --root <agent-directory>` instead.
+   To stop an identified, running owner, use `stop --root <agent-directory>` from a compatible
+   bundled or standalone CLI. This works even if the old executable was removed. If the old
+   executable is still installed and compatible, you can use `sync-daemon stop --root <agent-directory>` instead.
 3. Check the recorded PID in the operating system. On macOS or Linux, use `ps -p <pid> -o pid,args`.
    On Windows, look up the PID in Task Manager's **Details** tab. A successful `stop` confirms
    identity release, not process exit. Wait for the old process to exit. If exit is uncertain, do
    not force a second owner or delete recovery files.
 4. If a pending upgrade still blocks restart after exit, close other Pi sessions for that root.
-   Run `pi-sync-daemon repair-upgrade --root <agent-directory>`. It verifies exit, revokes all
+   Run `repair-upgrade --root <agent-directory>` with the daemon CLI. It verifies exit, revokes all
    retained after-exit grants for that root, and moves the upgrade record and any stale identity
    to the private archive path it reports. It does not start a daemon or transfer data. If repair
    fails, keep the records. Do not edit or delete them to force startup.
@@ -96,7 +107,7 @@ stop or restart the service, and it does not extend transfer or model permission
 
 If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
 
-Use `pi-sync-daemon status --root <agent-directory>` without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers. If the initial consent check blocked the update before a pending record was created, follow step 1 of [manual recovery](#ownership-and-upgrade); `repair-upgrade` cannot help in that case.
+Use the [daemon CLI](#daemon-cli) `status` command without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers. If the initial consent check blocked the update before a pending record was created, follow step 1 of [manual recovery](#ownership-and-upgrade); `repair-upgrade` cannot help in that case.
 
 A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
 
@@ -114,13 +125,13 @@ Operation retries are instance-bound and deduplicated. An expired result or old 
 
 ## Verification status
 
-The following evidence records the earlier daemon extraction, including its former idle-persistence policy. It does not verify the new automatic-exit policy; that policy requires separate runtime verification. Native and production restrictions below remain unchanged.
+The following evidence records the earlier daemon extraction, including its former idle-persistence policy and npm dependency on the standalone daemon. It does not verify the bundled npm artifact or the automatic-exit policy; those require separate runtime verification. Native and production restrictions below remain unchanged.
 
 Completed on disposable roots and synthetic loopback endpoints:
 
 - `npm run format` and `npm run check`: builds, Biome, package boundaries, dependency compatibility, and workspace types.
 - `npm test`: 1,035 passing files, one skipped file; 23,291 passing tests, 18 skipped, no failures or unhandled errors; the configured five-second case timeout is unchanged.
-- Scoped package workflow and cold build-order regressions; the real Changeset raises the scoped dependency floor and plans a public daemon-first release using a simulated unpublished registry entry.
+- Scoped package workflow and cold build-order regressions; release planning for the former runtime dependency against a simulated registry.
 - Both package-workflow dry packs; inspected real daemon/client tarballs; a fresh independent install with the local daemon tarball and the public SDK resolved in that install scope.
 - Standalone import, executable symlink/Help, start/API/stop, package-directory native Jiti loading, lazy `/sync help`, and survival after the installed Pi process exited.
 - Production Git preparation without development tools: Kit and daemon runtime JavaScript, exact imports, executable CLI, source-entry Jiti Help, and daemon start/API/stop.
@@ -172,7 +183,7 @@ The archived previous engine also held its real operation lock in a separate pro
 
 | Responsible role | Prerequisite and action | Expected result | Unverified behavior and restriction |
 | --- | --- | --- | --- |
-| npm/release account owner | Passing package gates and explicit approval; verify publication rights for `@narumitw/pi-sync-daemon` and dependency-first publication | The daemon resolves before the dependent Pi client is released | Scope permissions and first publication are not verified; no publication, visibility change, tags, or workflow dispatch without approval |
+| npm/release account owner | Passing package gates and explicit approval; verify publication rights for each selected package, the embedded daemon version in the Pi Sync tarball, and the required Kit artifact | Pi Sync publishes without waiting for a standalone daemon artifact; standalone daemon releases stay independent | No publication, visibility change, tags, or workflow dispatch without approval |
 | Device operator | Verified builds and an isolated setup; suspend and wake the target device, then run `/sync daemon status` and `/sync status` in the same Pi session | Both commands work without reload; the daemon and session stay the same | Physical wake timing is not verified by clock-controlled tests; do not claim tested platforms without this check |
 | Deployment operator | Verified cutover/recovery evidence and backups; close older Pi processes and authorize each real root | One recognized owner with unchanged compatible data | Only the explicitly approved checkout-service stop/restart was used for package-identity and runtime maintenance; no production-storage transfer or settings change was made, and no real-data cutover is included |
 | Native platform maintainer | Prepared transport/process tests; run native Windows/macOS checks | Correct local transport, permissions, independent lifetime, and recovery | Native ACL/named-pipe, logout, and physical power-loss behavior remain unverified; do not advertise new unverified guarantees or silently remove previous support |
