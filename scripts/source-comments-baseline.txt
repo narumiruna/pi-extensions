@@ -916,7 +916,6 @@
 "packages/pi-inline/src/filelinks.ts"	64abe8088d6796fc482402ba90c873f9c9d21e09cad96dc2ee5b3df639c29446
 "packages/pi-inline/src/filelinks.ts"	a8dbff99b0b3ca26245a39eacfb7799413ea4daccf00fa6eaba08c04c2f03584
 "packages/pi-inline/src/filelinks.ts"	a9ee4c247c9c61695a71f85514340d7e265abdbb34ef45ad154bdbdf118422fb
-"packages/pi-inline/src/filelinks.ts"	d49d40eb678f0154baaff21b3623fdb65ed52ac6421205bc8357c169b2cb9a25
 "packages/pi-inline/src/filelinks.ts"	da48b0947f77ea657c32175c3e76b89930d97108e96eb34f59559716bfd54d3b
 "packages/pi-inline/src/hover-preview.ts"	0c32bf68e24a1dde8101bfa1ffb9c07e31c0e5206ae4c580ae8685304ec36c63
 "packages/pi-inline/src/hover-preview.ts"	1770997ab19e3d371e6d8dd968bc23a8e2bfff0aa7e07fd533918f9552b8359c
@@ -958,7 +957,6 @@
 "packages/pi-inline/src/settings.ts"	97fa29ecdd238420bf9a1933975401bd7483177a9127ce32d515ce2c95a317bd
 "packages/pi-inline/src/settings.ts"	bf1872110038842a0d82ee00a27eb422edf907b7517ec5160fc1cec18418a597
 "packages/pi-inline/src/settings.ts"	cdb8e6c6885510b4f65f42204db9f198abef582d207e93febcb6fe232a6265e3
-"packages/pi-inline/src/settings.ts"	d494430929a48559d5b15011d3a94365db010c2b178bee8b2fc498ee9e85121a
 "packages/pi-inline/src/settings.ts"	f1e7080e4abf160e79b7f1f765e231b8e3b48495a6d4489123ba6a82c57e9cdb
 "packages/pi-inline/src/settings.ts"	f38260ef09e1fd2f01aa9fdbe1bd18bda6130fb59168def367057e58e949974c
 "packages/pi-inline/src/wikilink-index.ts"	9396dbd2ea1d24de2fcf25b7b9dc31f6f759cb8de4beb51423d2242a79d663f8

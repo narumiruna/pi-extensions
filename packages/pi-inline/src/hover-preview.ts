@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { parse, resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
@@ -9,15 +9,7 @@ import {
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import type { createExternalLinkMarker } from "./external-link-marker.js";
-import {
-  classifyLinkPath,
-  type ExternalPreviewRoot,
-  parseLineRange,
-  readExcerpt,
-  relativePreviewPath,
-  renderFilePreview,
-  resolveLinkPath,
-} from "./filelinks.js";
+import { classifyLinkPath, parseLineRange, readExcerpt, renderFilePreview } from "./filelinks.js";
 import { prepareImagePreview, previewImageMime } from "./image-preview.js";
 import {
   hoverLinkLine,
@@ -39,7 +31,7 @@ interface Point {
 interface Hover extends Point {
   href: string;
   path?: string;
-  externalRoot?: ExternalPreviewRoot;
+  external: boolean;
   preview?: WikiPreview;
   controller: AbortController;
 }
@@ -49,10 +41,7 @@ export function createHoverPreview(
   theme: Theme,
   cwd: string,
   findWikiPreview: (href: string) => WikiPreview | undefined,
-  external: {
-    marker: ReturnType<typeof createExternalLinkMarker>;
-    roots(): readonly ExternalPreviewRoot[];
-  },
+  marker: ReturnType<typeof createExternalLinkMarker>,
 ): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,17 +62,17 @@ export function createHoverPreview(
     return tui instanceof TuiAltScreen ? (tui.getScreenLines()[row] ?? "") : "";
   }
 
-  function stillOnLink({ row, col, href, preview, externalRoot }: Hover): boolean {
+  function stillOnLink({ row, col, href, preview, external }: Hover): boolean {
     const line = screenLine(row);
     return (
       getOsc8LinkAtColumn(hoverLinkLine(line), col) === href &&
       findWikiPreview(href) === preview &&
-      (!externalRoot || external.marker.matches(line, col, href))
+      (!external || marker.matches(line, col, href))
     );
   }
 
   async function show(target: Hover): Promise<void> {
-    const { preview, path, controller, externalRoot } = target;
+    const { preview, path, controller, external } = target;
     if (hover !== target) return;
     if (
       !viewport ||
@@ -98,7 +87,7 @@ export function createHoverPreview(
     const { columns, rows } = tui.terminal;
     const below = rows - target.row - 1;
     const above = target.row;
-    const imageMime = !externalRoot && !preview && path ? previewImageMime(path) : undefined;
+    const imageMime = !external && !preview && path ? previewImageMime(path) : undefined;
     const placeBelow = below >= above || (!imageMime && below >= MAX_HEIGHT);
     const availableRows = placeBelow ? below : above;
     const width = imageMime ? columns : Math.min(columns, preview ? 56 : 60);
@@ -124,7 +113,7 @@ export function createHoverPreview(
     } else {
       if (!path) return;
       const lineRange = preview ? undefined : parseLineRange(target.href);
-      const excerpt = await readExcerpt(externalRoot ?? cwd, path, controller.signal, lineRange);
+      const excerpt = await readExcerpt(external ? parse(path).root : cwd, path, controller.signal, lineRange);
       if (!excerpt) return;
       draw = () =>
         preview
@@ -179,24 +168,20 @@ export function createHoverPreview(
       href === hover.href &&
       point.row === hover.row &&
       preview === hover.preview &&
-      (!hover.externalRoot || external.marker.matches(line, point.col, href))
+      (!hover.external || marker.matches(line, point.col, href))
     ) {
       hover.col = point.col;
       return;
     }
     hide();
     if (!href || tui.hasOverlay()) return;
-    let path = preview ? ("path" in preview ? preview.path : undefined) : resolveLinkPath(cwd, href);
-    let externalRoot: ExternalPreviewRoot | undefined;
-    if (!preview && !path) {
-      const local = classifyLinkPath(cwd, href);
-      if (local?.kind !== "external" || previewImageMime(local.path)) return;
-      externalRoot = external.roots().find((root) => relativePreviewPath(root.path, local.path));
-      if (!externalRoot || !external.marker.matches(line, point.col, href)) return;
-      path = local.path;
-    }
+    const local = preview ? undefined : classifyLinkPath(cwd, href);
+    if (!preview && !local) return;
+    const external = local?.kind === "external";
+    if (external && (previewImageMime(local.path) || !marker.matches(line, point.col, href))) return;
+    const path = preview && "path" in preview ? preview.path : local?.path;
 
-    const target: Hover = { ...point, href, path, externalRoot, preview, controller: new AbortController() };
+    const target: Hover = { ...point, href, path, external, preview, controller: new AbortController() };
     hover = target;
     viewport = { columns: tui.terminal.columns, rows: tui.terminal.rows };
     timer = setTimeout(() => void show(target), HOVER_DELAY_MS);

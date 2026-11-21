@@ -21,12 +21,7 @@ export interface PreviewExcerpt {
   lineRange?: LineRange;
 }
 
-export interface ExternalPreviewRoot {
-  path: string;
-  identity: Pick<BigIntStats, "dev" | "ino">;
-}
-
-export function relativePreviewPath(root: string, path: string): string | undefined {
+function relativePreviewPath(root: string, path: string): string | undefined {
   const local = relative(root, path);
   if (!local || isAbsolute(local) || local === ".." || local.startsWith(`..${sep}`)) return undefined;
   if (local.split(sep).includes("node_modules")) return undefined;
@@ -47,11 +42,6 @@ function localLinkPath(root: string, href: string): string | undefined {
   } catch {
     return undefined; // Malformed percent escape.
   }
-}
-
-export function resolveLinkPath(root: string, href: string): string | undefined {
-  const path = localLinkPath(root, href);
-  return path && relativePreviewPath(root, path) ? path : undefined;
 }
 
 /** Classifies local links for display without checking whether a file exists. */
@@ -98,44 +88,29 @@ function selectLines(
   };
 }
 
-function sameFile(a: ExternalPreviewRoot["identity"], b: ExternalPreviewRoot["identity"]): boolean {
+function sameFile(a: BigIntStats, b: BigIntStats): boolean {
   return a.dev === b.dev && a.ino === b.ino;
 }
 
-async function isCurrentRoot(root: ExternalPreviewRoot, signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted || (await realpath(root.path)) !== root.path || signal.aborted) return false;
-  const stat = await lstat(root.path, { bigint: true });
-  return !signal.aborted && stat.isDirectory() && sameFile(stat, root.identity);
-}
-
 /** Opens a regular preview file without following symlinks. The caller owns the handle. */
-export async function openPreviewFile(root: string | ExternalPreviewRoot, path: string, signal: AbortSignal) {
+export async function openPreviewFile(root: string, path: string, signal: AbortSignal) {
   try {
-    const external = typeof root === "string" ? undefined : root;
-    const rootPath = typeof root === "string" ? root : root.path;
-    const local = relativePreviewPath(rootPath, path);
+    const local = relativePreviewPath(root, path);
     if (!local || signal.aborted) return undefined;
-    if (external && !(await isCurrentRoot(external, signal))) return undefined;
-    const directory = external ? rootPath : await realpath(rootPath);
+    const directory = await realpath(root);
     if (signal.aborted) return undefined;
     const candidate = resolve(directory, local);
     if ((await realpath(candidate)) !== candidate || signal.aborted) return undefined;
     const verified = await lstat(candidate, { bigint: true });
     if (!verified.isFile() || signal.aborted) return undefined;
-    if (external && !(await isCurrentRoot(external, signal))) return undefined;
-    if (signal.aborted) return undefined;
 
     const file = await open(candidate, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     let keepOpen = false;
     try {
       if (signal.aborted) return undefined;
       const stat = await file.stat({ bigint: true });
-      if (signal.aborted || !stat.isFile()) return undefined;
-      // Do not read a different file if the target changed between lstat and open.
-      if (external) {
-        if (!sameFile(verified, stat) || !(await isCurrentRoot(external, signal)) || signal.aborted) return undefined;
-        if ((await realpath(candidate)) !== candidate || signal.aborted) return undefined;
-      }
+      if (signal.aborted || !stat.isFile() || !sameFile(verified, stat)) return undefined;
+      if ((await realpath(candidate)) !== candidate || signal.aborted) return undefined;
       keepOpen = true;
       return {
         file,
@@ -152,7 +127,7 @@ export async function openPreviewFile(root: string | ExternalPreviewRoot, path: 
 }
 
 export async function readExcerpt(
-  root: string | ExternalPreviewRoot,
+  root: string,
   path: string,
   signal: AbortSignal,
   lineRange?: LineRange,
