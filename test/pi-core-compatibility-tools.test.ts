@@ -80,11 +80,7 @@ test("native active-tool selection keeps retained order and cache prefixes acros
           ),
         ),
         providerTools: JSON.parse(JSON.stringify(convertResponsesTools(tools))),
-        messages: JSON.parse(
-          JSON.stringify(
-            convertResponsesMessages(model, context, new Set([model.provider]), { includeSystemPrompt: false }),
-          ),
-        ),
+        messages: JSON.parse(JSON.stringify(convertResponsesMessages(model, context, new Set([model.provider]), {}))),
       });
       return fauxAssistantMessage("Ordinary fixture response.");
     };
@@ -102,6 +98,7 @@ test("native active-tool selection keeps retained order and cache prefixes acros
       assert.deepEqual(input.names, expected);
       assert.deepEqual(input.definitions, JSON.parse(JSON.stringify(expected.map((name) => definitions.get(name)))));
       assert.equal(session.systemPrompt, input.systemPrompt);
+      assert.deepEqual(input.messages[0], { role: "system", content: input.systemPrompt });
       for (const name of names) {
         assert.equal(input.systemPrompt.includes(`Inspect ${name} values`), expected.includes(name));
         assert.equal(input.systemPrompt.includes(`Use ${name} only when requested.`), expected.includes(name));
@@ -167,8 +164,9 @@ test("native active-tool selection keeps retained order and cache prefixes acros
       assert.deepEqual(session.getActiveToolNames(), scenario.expected);
       const baseline = await request(scenario.label, scenario.expected);
       if (previous) {
-        assert.deepEqual(baseline.messages.slice(0, previous.messages.length), previous.messages);
         if (scenario.transition) {
+          // Only the leading prompt may change at a deliberate loadout transition.
+          assert.deepEqual(baseline.messages.slice(1, previous.messages.length), previous.messages.slice(1));
           assert.notDeepEqual(baseline.names, previous.names);
           assert.notEqual(baseline.systemPrompt, previous.systemPrompt);
         } else {

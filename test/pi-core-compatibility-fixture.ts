@@ -29,7 +29,10 @@ interface SessionOptions {
 interface CompatibilityFixture {
   directory: string;
   credentials: InMemoryCredentialStore;
-  createSession(options: SessionOptions): Promise<AgentSession>;
+  createSession(
+    options: SessionOptions,
+    bindings?: Parameters<AgentSession["bindExtensions"]>[0],
+  ): Promise<AgentSession>;
 }
 
 export async function withCoreCompatibilityFixture(
@@ -66,7 +69,7 @@ export async function withCoreCompatibilityFixture(
     await run({
       directory,
       credentials,
-      async createSession(options) {
+      async createSession(options, bindings = { mode: "print" }) {
         runtime.registerNativeProvider(options.provider);
         const refreshed = await runtime.refresh({ allowNetwork: false });
         assert.deepEqual([...refreshed.errors], []);
@@ -107,7 +110,7 @@ export async function withCoreCompatibilityFixture(
           thinkingLevel: "off",
         });
         sessions.push(session);
-        await session.bindExtensions({ mode: "print" });
+        await session.bindExtensions(bindings);
         return session;
       },
     });

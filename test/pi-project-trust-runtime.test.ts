@@ -52,19 +52,8 @@ for (const scenario of cases) {
       });
     const assertObservations = (runtime: ProjectTrustRpc, expected: [TrustObservation["phase"], string?][]) => {
       const observed = runtime.observations();
-      // RPC can bind the replacement session twice; verify every trust value without fixing that count.
-      const lifecycle = observed.filter((entry, index) => {
-        const previous = observed[index - 1];
-        return !(
-          entry.phase === "start" &&
-          entry.reason === "new" &&
-          previous?.phase === "start" &&
-          previous.reason === "new" &&
-          previous.sessionId === entry.sessionId
-        );
-      });
       assert.deepEqual(
-        lifecycle.map((entry) => [entry.phase, entry.reason]),
+        observed.map((entry) => [entry.phase, entry.reason]),
         expected.map(([phase, reason]) => [phase, reason]),
       );
       for (const entry of observed) {
@@ -134,9 +123,21 @@ for (const scenario of cases) {
       assertHandled(await client.request({ type: "prompt", message: "/trust-runtime-observe" }));
       assertHandled(await client.request({ type: "prompt", message: "/trust-runtime-reload" }));
       assertHandled(await client.request({ type: "prompt", message: "/trust-runtime-observe" }));
+      const replacementStart = client.observations().length;
       const replacement = await client.request({ type: "new_session" });
       assert.ok(replacement.success && replacement.command === "new_session", JSON.stringify(replacement));
       assert.equal(replacement.data.cancelled, false);
+      // Startup can arrive before this response; the reader retains those notifications.
+      assert.deepEqual(
+        client
+          .observations()
+          .slice(replacementStart)
+          .map(({ phase, reason }) => [phase, reason]),
+        [
+          ["shutdown", "new"],
+          ["start", "new"],
+        ],
+      );
       assertHandled(await client.request({ type: "prompt", message: "/trust-runtime-observe" }));
       const messages = await client.request({ type: "get_messages" });
       assert.ok(messages.success && messages.command === "get_messages", JSON.stringify(messages));

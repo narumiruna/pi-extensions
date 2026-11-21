@@ -113,6 +113,15 @@ test("native pi.exec retains spawn failure diagnostics without reporting overflo
   });
 });
 
+test.skipIf(process.platform === "win32")("native pi.exec reports a nonzero POSIX signal exit", async () => {
+  await withExec(async (exec) => {
+    const result = await exec(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"]);
+    assert.equal(result.code, 143);
+    assert.equal(result.killed, false);
+    assert.equal(result.truncated, false);
+  });
+});
+
 async function stoppedChild(kind: "timeout" | "abort"): Promise<void> {
   await withExec(async (exec, directory) => {
     const controller = new AbortController();
