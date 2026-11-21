@@ -270,6 +270,7 @@ test("file-scoped Biome checks preserve ordered repository gates", () => {
   const commands = [
     ["biome-migrate", "npx @biomejs/biome migrate --write"],
     ["biome-check", "npx @biomejs/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched"],
+    ["check-source-comments", "node scripts/check-source-comments.mjs"],
     ["check-readmes", "uv run scripts/check_readmes.py"],
     ["zizmor", "uvx zizmor --pedantic .github"],
     ["typecheck-staged", "npm run typecheck -- --staged"],

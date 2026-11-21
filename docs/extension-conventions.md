@@ -31,9 +31,9 @@ is changed: command work adopts command conventions, settings work follows the s
 package work adopts package conventions. A small unrelated change does not require a whole-package
 migration.
 
-Keep exceptions close to their owner. Explain a non-obvious deviation in the package README or an
-adjacent code comment rather than in a central exception table. Pull-request discussion may provide
-additional context, but it is not durable documentation.
+Keep exceptions close to their owner. Explain a non-obvious deviation in the package README or a
+linked decision record. The [source comment ratchet](source-comments.md) prevents new comments in
+package source. Pull-request discussion can provide context, but it is not durable documentation.
 
 ## Official Pi conventions
 

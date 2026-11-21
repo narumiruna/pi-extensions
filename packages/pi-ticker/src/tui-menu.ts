@@ -15,7 +15,6 @@ type Row = TickerRow | ActionRow;
 
 const PASTE_START = "\u001b[200~";
 const PASTE_END = "\u001b[201~";
-// Keep these aligned with Input.handleInput so configured editing actions beat additive reorder.
 const RESERVED_INPUT_BINDINGS = [
   "tui.select.up",
   "tui.select.down",
@@ -41,9 +40,6 @@ const RESERVED_INPUT_BINDINGS = [
   "tui.editor.cursorWordRight",
 ] as const;
 
-// Pi TUI Kit multi-select screens do not expose in-place row-reorder shortcuts.
-// This specialized TUI keeps the same search, toggle, action, binding, and cancellation behavior
-// while RPC mode continues to use the Kit's declarative adapter in menu.ts.
 export async function showTickerTuiMenu(ctx: ExtensionCommandContext, options: TickerMenuOptions): Promise<void> {
   const {
     canonicalizeConfiguredKey,
