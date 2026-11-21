@@ -25,6 +25,19 @@ The stored [checkpoint schema](../src/checkpoint.ts) is version 3. Older v1 and 
 
 See [model-switch validation](model-switch-validation.md) for the reproduced failure, regression coverage, and observed cross-model backend compatibility.
 
+### Pi 1.6 wire verification
+
+The offline Codex fixture uses Pi's real provider adapter with a fake HTTP endpoint. It verifies
+that Pi 1.5 sends the system prompt in `instructions`, while Pi 1.6 sends it as the first
+`developer` item. It also checks that Pi 1.6 retains `configuration_update` effort items through
+ordinary requests, compaction, checkpoint replay, and recovery.
+
+Hosted acceptance and cache behavior for this request layout remain unverified. A maintainer with
+an approved Codex account and the selected protocol's entitlement can compact and continue a
+synthetic, disposable Pi 1.6 session, then check that the server accepts the checkpoint and that
+continuation uses the retained context. Inspect cache usage separately; request-prefix equality
+alone does not prove a cache hit. Do not use production history for this check.
+
 ## Provider changes
 
 When the selected provider differs from the checkpoint issuer but its API/profile remains compatible, the context hook first validates the persisted summary identity and retained-history fingerprints. With `checkpointRecovery: "summarize"`, it resolves the original provider/model and its authentication independently and asks that issuer to summarize only the checkpoint's replacement history. This reuses the recovery stream's terminal-output, size, timeout, and cancellation validation; tools and compaction triggers are disabled. Opaque state and issuer credentials are never substituted into the target provider's request.

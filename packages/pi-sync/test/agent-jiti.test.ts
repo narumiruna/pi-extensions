@@ -12,6 +12,7 @@ import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { sessionDirFromContext } from "../src/snapshot/session-paths.js";
 import { regenerateSnapshotIdentity } from "../src/snapshot/snapshot.js";
+import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { push } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
@@ -48,8 +49,28 @@ afterAll(async () => {
   if (fixtureRoot) await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
-for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"] as const)
-  test(`generated Jiti runtime resolves a real WebDAV conflict via ${trigger}`, async ({ signal }) => {
+for (const trigger of [
+  "command",
+  "startup",
+  "continuous",
+  "retry",
+  "after-exit",
+  "missing-model",
+  "changed-model",
+  "parent-only",
+  "different-auth",
+  "non-agent",
+] as const)
+  test(`generated Jiti runtime: ${trigger} with an isolated WebDAV backend`, async ({ signal }) => {
+    const refusal =
+      trigger === "parent-only"
+        ? /No independently available daemon resolver model is authorized/u
+        : trigger === "missing-model" || trigger === "changed-model"
+          ? /No fallback model was selected\. Align the host and daemon Pi model catalogs/u
+          : trigger === "different-auth"
+            ? /Check model access and retry later/u
+            : undefined;
+    const foreground = trigger === "command" || trigger === "retry" || trigger === "non-agent" || refusal !== undefined;
     // A timeout can leave an uncancellable build or reload pending; do not overlap HOME scopes.
     await scenarioReady.catch(() => {});
     signal.throwIfAborted();
@@ -64,7 +85,7 @@ for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"
       let replies = 0;
       let watcher: FSWatcher | undefined;
       const mock = agentContext(selectRemote);
-      mock.ctx.isIdle = () => trigger !== "command" && trigger !== "retry" && trigger !== "after-exit";
+      mock.ctx.isIdle = () => !foreground && trigger !== "after-exit";
       resolver = new MockResolverServer(({ units }) =>
         trigger === "retry" && ++replies === 1
           ? JSON.stringify({ version: 1, results: units.map((unit) => ({ id: unit.id, refuse: true })) })
@@ -100,11 +121,23 @@ for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"
         await fs.mkdir(agentDir, { recursive: true });
         await resolver.start();
         await resolver.configure(agentDir, mock.ctx);
+        const model = mock.ctx.model;
+        assert.ok(model);
+        if (trigger === "missing-model") mock.ctx.model = { ...model, id: "resolver-next" };
+        if (trigger === "changed-model") {
+          mock.ctx.model = { ...model, compat: { ...model.compat, supportsMidConvoEffort: true } };
+        }
+        if (trigger === "parent-only" || trigger === "non-agent") {
+          mock.ctx.modelRegistry.getRegisteredProviderIds = () => [model.provider];
+        }
+        if (trigger === "different-auth") {
+          mock.ctx.modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+        }
         signal.throwIfAborted();
         const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
         settings.storageConnections.dav.url = server.url;
         Object.assign(settings.syncSetups.home.sync, {
-          agentMode: true,
+          agentMode: trigger !== "non-agent",
           ...(["continuous", "after-exit"].includes(trigger) ? { continuous: true } : {}),
         });
         await fs.writeFile(localConfigPath(), JSON.stringify(settings));
@@ -114,6 +147,7 @@ for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"
         await push(mock.ctx, { ...mergeOptions, signal });
         signal.throwIfAborted();
         const config = await loadConfig();
+        const acceptedState = refusal ? await readStateForConfig(config) : undefined;
         signal.throwIfAborted();
         const backend = await createSyncBackend(config);
         signal.throwIfAborted();
@@ -131,7 +165,9 @@ for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"
           { signal },
         );
         signal.throwIfAborted();
-        await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
+        const conflictHead = await backend.readHead(signal);
+        assert.ok(conflictHead);
+        if (trigger !== "non-agent") await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
         signal.throwIfAborted();
         await adoptFixtureRoot(agentDir);
         signal.throwIfAborted();
@@ -151,13 +187,13 @@ for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"
         assert.equal(loaded.extensions.length, 1);
         assert.ok(extension);
         assert.equal(extension.resolvedPath, entry);
-        if (trigger === "command" || trigger === "retry") {
+        if (foreground) {
           for (const start of extension.handlers.get("session_start") ?? [])
             await start({ type: "session_start", reason: "startup" }, mock.ctx);
           signal.throwIfAborted();
           const command = extension.commands.get("sync");
           assert.ok(command);
-          await command.handler("sync", mock.ctx as ExtensionCommandContext);
+          await command.handler(trigger === "non-agent" ? "sync --yes" : "sync", mock.ctx as ExtensionCommandContext);
           signal.throwIfAborted();
           if (trigger === "retry") {
             assert.equal(resolver.requests.length, 1);
@@ -246,13 +282,22 @@ for (const trigger of ["command", "startup", "continuous", "retry", "after-exit"
         }
         await stop();
         signal.throwIfAborted();
-        assert.equal(resolver.requests.length, trigger === "retry" ? 2 : 1, JSON.stringify(mock.notifications));
+        const expectedRequests = refusal || trigger === "non-agent" ? 0 : trigger === "retry" ? 2 : 1;
+        assert.equal(resolver.requests.length, expectedRequests, JSON.stringify(mock.notifications));
         assert.equal(mock.requests.length, 0, "The parent transport must not be captured by the daemon.");
         assert.equal(
           await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"),
-          "remote\n",
+          refusal ? "local\n" : "remote\n",
           JSON.stringify(mock.notifications),
         );
+        if (refusal) {
+          assert.ok(
+            mock.notifications.some(({ level, message }) => level === "error" && refusal.test(message)),
+            JSON.stringify(mock.notifications),
+          );
+          assert.deepEqual(await backend.readHead(signal), conflictHead, "Refusal must not publish over the conflict.");
+          assert.deepEqual(await readStateForConfig(config), acceptedState, "Refusal must retain the accepted state.");
+        }
         signal.throwIfAborted();
         assert.equal(mock.statuses.get("sync"), undefined);
       } finally {

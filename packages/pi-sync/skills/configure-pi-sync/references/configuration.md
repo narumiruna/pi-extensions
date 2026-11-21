@@ -446,8 +446,10 @@ First-source selection, policy migrations, explicit push/pull, and rollback keep
 `--yes` does not enable Autonomous sync or authorize model disclosure.
 Completed transfers never reload resources automatically.
 
-The resolver uses the initiating session's selected model through Pi's public provider/authentication registry.
-It has an independent in-memory SDK conversation, no tools, no parent conversation, and no discovered extensions, skills, project instructions, or MCP servers.
+The daemon uses the initiating session's selected model only if both agree on its full definition and authentication source.
+If the daemon refuses the model, align the Pi host and the daemon's bundled Pi catalog or verify a model that matches on both sides. Selecting an older ID does not help if its definition still differs.
+The daemon does not choose a fallback; ordinary sync without model resolution is unaffected.
+The resolver has an independent in-memory SDK conversation, no tools, no parent conversation, and no discovered extensions, skills, project instructions, or MCP servers.
 Only conflict units are disclosed.
 Settings units contain only the conflicting root fields, with coupled fields kept together; the model selects a complete local or remote unit.
 Other fields are assembled by deterministic code.
