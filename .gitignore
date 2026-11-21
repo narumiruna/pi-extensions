@@ -102,6 +102,7 @@ build/Release
 node_modules/
 packages/*/.workspace-runtime-staging-*/
 packages/*/.workspace-runtime-backup-*/
+/packages/pi-sync-daemon/.daemon-build.json
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)

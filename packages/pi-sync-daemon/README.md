@@ -16,7 +16,19 @@
 
 ## 📦 Install
 
-The Pi client declares this service as a normal dependency; do not add it to `pi.extensions` or load it with `pi -e`. The npm package is `@narumitw/pi-sync-daemon`; the executable is `pi-sync-daemon`. For the previous package and executable names, see the [rename instructions](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#ownership-and-upgrade).
+Use Node.js 22.19.0 or later. The [Pi Sync npm package](https://www.npmjs.com/package/@narumitw/pi-sync) includes its own daemon build, so you do not need to install this standalone package to use Pi Sync. To install the standalone CLI:
+
+```sh
+npm install --global @narumitw/pi-sync-daemon
+```
+
+To try the standalone CLI without installing it globally:
+
+```sh
+npm exec --package=@narumitw/pi-sync-daemon -- pi-sync-daemon --help
+```
+
+This package is not an extension; do not add it to `pi.extensions` or load it with `pi -e`. See the [daemon CLI guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#daemon-cli) for the previous executable name and for running the copy bundled with Pi Sync.
 
 For a local checkout, run from the repository root:
 
@@ -25,7 +37,7 @@ npm install
 npm --workspace @narumitw/pi-sync-daemon run build
 ```
 
-The build emits JavaScript, declarations, and an executable under `dist/`. A global npm installation is not required for the Pi client to locate its dependency. Registry installation remains blocked until publication rights and the dependency-first release are approved.
+The build emits JavaScript, declarations, and the executable `dist/cli.js`.
 
 ## 🚀 Quick start
 
@@ -73,6 +85,8 @@ Close or upgrade every old Pi process before reviewed handover. An absent operat
 ## Recovery and development
 
 Automatic exit first stops new automatic work, cancels cancellable work, and drains writes, queue-release acknowledgements, persistence, and owned callbacks before releasing ownership. It adds no final sync or model request. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused with evidence retained; automatic restart must not restore an older grant. Repair persistence and use the existing revocation/repair path before explicit restart. The next eligible interactive client or explicit command can restart through singleton startup only after the old owner's exit is proven; print/JSON never launch a replacement.
+
+The standalone package is versioned and released independently. Updating it does not change the daemon bundled in an installed Pi Sync package. Update Pi Sync to get a newer bundled build.
 
 Stop the service and verify owner exit before an in-place rebuild or rollback. Preserve pending
 journals and backups. Rebuilding without changing the package version does not replace the running

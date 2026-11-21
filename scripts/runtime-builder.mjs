@@ -15,6 +15,9 @@ export function createRuntimeBuilder({
   matchExternalSubpaths = true,
   includeDynamicExternals = false,
   validateGraph,
+  alias,
+  stageFiles,
+  additionalRuntimeDirectory,
   validateFiles,
 }) {
   packageRoot = resolve(packageRoot);
@@ -73,7 +76,9 @@ export function createRuntimeBuilder({
   }
 
   async function validateGeneratedFiles(outputDirectory) {
-    const files = await listFiles(outputDirectory);
+    const files = (await listFiles(outputDirectory)).filter(
+      (file) => !additionalRuntimeDirectory || !file.startsWith(`${additionalRuntimeDirectory}/`),
+    );
     const runtimeFiles = files.filter((path) => path.endsWith(".ts"));
     if (files.some((path) => path.endsWith(".js"))) throw new Error("Generated runtime retains a .js file");
     for (const name of Object.keys(entryPoints)) {
@@ -93,6 +98,7 @@ export function createRuntimeBuilder({
       metafile: true,
       write: false,
     });
+    const imports = Object.values(parsed.metafile.outputs).flatMap((output) => output.imports);
     for (const output of Object.values(parsed.metafile.outputs)) {
       for (const imported of output.imports) {
         if (!imported.path.startsWith("./") && !imported.path.startsWith("../")) continue;
@@ -112,7 +118,7 @@ export function createRuntimeBuilder({
       if (!source.startsWith(banner)) throw new Error(`Generated marker is missing from ${runtimePath}`);
       if (!files.includes(`${runtimePath}.map`)) throw new Error(`Source map is missing for ${runtimePath}`);
     }
-    await validateFiles?.({ outputDirectory, runtimeFiles });
+    await validateFiles?.({ outputDirectory, runtimeFiles, imports });
   }
 
   async function assertSafeOutputDirectory(outputDirectory) {
@@ -186,6 +192,7 @@ export function createRuntimeBuilder({
     try {
       const result = await build({
         absWorkingDir: packageRoot,
+        alias,
         banner: { js: banner },
         bundle: true,
         chunkNames: "chunks/[name]-[hash]",
@@ -204,6 +211,7 @@ export function createRuntimeBuilder({
         write: true,
       });
       validateEagerGraph(result.metafile);
+      await stageFiles?.(stagingDirectory);
       await validateGeneratedFiles(stagingDirectory);
       await validateOutput?.(stagingDirectory);
       await publishRuntime(stagingDirectory, resolvedOutputDirectory);

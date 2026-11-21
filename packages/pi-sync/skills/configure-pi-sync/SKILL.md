@@ -24,8 +24,11 @@ If the reference does not establish an answer, state the missing evidence instea
 ## Apply and verify a local settings edit
 
 1. Resolve the active agent directory with Pi's `getAgentDir()` or use the exact agent directory stated by the user; do not guess or edit a project override.
-2. Load `@narumitw/pi-sync-daemon` from the Pi Sync package's dependency tree and use `findDaemon(root)` to locate the existing daemon without starting or upgrading it.
-   If it is not running, ask the user to connect with `/sync daemon status` and then retry the edit.
+2. Locate the Pi Sync package that supplied this skill.
+   For the built package, import its `dist/daemon/dist/index.js` in the local Node.js script using a file URL from `pathToFileURL()`.
+   For a repository or Git source install, load the documented `@narumitw/pi-sync-daemon` root export resolved from the Pi Sync workspace.
+   If you cannot locate the client, stop and report the problem. Do not download a daemon package or use a global installation as a fallback.
+   Use `findDaemon(root)` to locate the existing daemon without starting or upgrading it. If the daemon is not running, ask the user to connect with `/sync daemon status` and then retry the edit.
 3. Attach a `DaemonConnection` with the returned `paths` and `identity`, fresh `id` and `generation`, the local script's `pid` and `cwd`, `mode: "json"`, `hasUI: false`, and `idle: false`.
    Decline all callbacks and dispose the connection in `finally`.
    If daemon handover is required, ask the user to review `/sync daemon handover`; never approve it on their behalf.
