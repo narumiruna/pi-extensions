@@ -44,7 +44,7 @@ beforeAll(async () => {
   runner = await import(pathToFileURL(path.join(repositoryRoot, "scripts/run-tests.mjs")).href);
 });
 beforeEach(() => {
-  root = mkdtempSync(path.join(os.tmpdir(), "pi-test-runner-"));
+  root = mkdtempSync(path.join(os.tmpdir(), "pi test runner &-"));
   mkdirSync(path.join(root, "packages"));
   mkdirSync(path.join(root, "test"));
   writeFileSync(path.join(root, "package.json"), JSON.stringify({ workspaces: ["packages/*"] }));
@@ -73,9 +73,14 @@ for (const ready of [undefined, "0", "true", "1"]) {
     writeFileSync(path.join(cache, "stale.js"), "stale");
     assert.equal(run({ PI_EXTENSIONS_BUILD_READY: ready }), 0);
     assert.equal(calls.length, ready === "1" ? 2 : 3);
-    if (ready !== "1") assert.deepEqual(calls[0]?.args, ["run", "build"]);
-    assert.deepEqual(calls.at(-2)?.args, ["-p", "tsconfig.test.json"]);
-    assert.deepEqual(calls.at(-1)?.args.slice(1), ["run", path.join(root, "test/example.test.ts")]);
+    if (ready !== "1") assert.deepEqual(calls[0]?.args.slice(-2), ["run", "build"]);
+    assert.equal(calls.at(-2)?.command, process.execPath);
+    assert.deepEqual(calls.at(-2)?.args, [
+      path.join(root, "node_modules/typescript/bin/tsc"),
+      "-p",
+      "tsconfig.test.json",
+    ]);
+    assert.deepEqual(calls.at(-1)?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run"]);
     assert.equal(calls.at(-1)?.command, process.execPath);
     assert.equal(existsSync(cache), false);
     const temp = calls.at(-1)?.options.env;
@@ -174,11 +179,35 @@ test("optional report cleanup failure warns without replacing the test exit code
   }
 });
 
-test("npm_execpath runs npm through the current Node executable", () => {
-  assert.equal(run({ npm_execpath: "/fixture/npm-cli.js" }), 0);
-  assert.equal(calls[0]?.command, process.execPath);
-  assert.deepEqual(calls[0]?.args, ["/fixture/npm-cli.js", "run", "build"]);
-});
+for (const platform of ["win32", "linux"]) {
+  for (const npmCli of [undefined, path.join("npm path & spaces", "npm-cli.js")]) {
+    test(`launchers use executable entries without a shell (${platform}, npm_execpath=${String(npmCli)})`, () => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      assert.ok(descriptor);
+      try {
+        Object.defineProperty(process, "platform", { value: platform });
+        assert.equal(run({ npm_execpath: npmCli }), 0);
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+      const cli =
+        npmCli ??
+        (platform === "win32"
+          ? path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js")
+          : undefined);
+      assert.equal(calls[0]?.command, cli ? process.execPath : "npm");
+      assert.deepEqual(calls[0]?.args, [...(cli ? [cli] : []), "run", "build"]);
+      assert.equal(calls[1]?.command, process.execPath);
+      assert.deepEqual(calls[1]?.args, [
+        path.join(root, "node_modules/typescript/bin/tsc"),
+        "-p",
+        "tsconfig.test.json",
+      ]);
+      assert.ok(calls.every(({ options }) => !Object.hasOwn(options, "shell")));
+      assert.ok(calls.every(({ options }) => options.cwd === root && options.stdio === "inherit"));
+    });
+  }
+}
 
 for (const [stage, results, count, code] of [
   ["Build", [{ status: 17 }], 1, 17],
@@ -192,15 +221,17 @@ for (const [stage, results, count, code] of [
   });
 }
 
-for (const result of [{ status: null }, { status: null, error: new Error("fixture spawn failure") }]) {
-  test(`an unavailable child fails closed (${result.error ? "spawn error" : "signal"})`, () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    assert.equal(run({}, [result]), 1);
-    assert.equal(calls.length, 1);
-  });
+for (const stage of [0, 1, 2]) {
+  for (const result of [{ status: null }, { status: null, error: new Error("fixture spawn failure") }]) {
+    test(`an unavailable child fails closed (stage=${stage}, ${result.error ? "spawn error" : "signal"})`, () => {
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      assert.equal(run({}, [...Array.from({ length: stage }, () => ({ status: 0 })), result]), 1);
+      assert.equal(calls.length, stage + 1);
+    });
+  }
 }
 
-test("the CLI runs through a symlink while importing its API stays side-effect free", () => {
+function cliFixture() {
   const scripts = path.join(root, "scripts");
   mkdirSync(scripts);
   const entry = path.join(scripts, "run-tests.mjs");
@@ -215,19 +246,38 @@ test("the CLI runs through a symlink while importing its API stays side-effect f
     path.join(root, "packages/missing/package.json"),
     JSON.stringify({ pi: { extensions: ["./index.ts"] } }),
   );
-  const alias = path.join(scripts, "alias.mjs");
-  symlinkSync(entry, alias);
-  for (const script of [entry, alias]) {
-    const result = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
-    assert.equal(result.status, 1, result.stderr);
-    assert.match(result.stderr, /Missing test files for active extension/u);
-  }
+  return entry;
+}
+
+function assertCliValidation(script: string) {
+  const result = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Missing test files for active extension/u);
+}
+
+test("the CLI validates its inventory while importing its API stays side-effect free", () => {
+  const entry = cliFixture();
+  assertCliValidation(entry);
   const imported = execFileSync(
     process.execPath,
     ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(entry).href)})`],
     { cwd: root, encoding: "utf8" },
   );
   assert.equal(imported, "");
+});
+
+test("the CLI runs through a symlink when the host permits its creation", ({ skip }) => {
+  const entry = cliFixture();
+  const alias = path.join(path.dirname(entry), "alias.mjs");
+  try {
+    symlinkSync(entry, alias);
+  } catch (error) {
+    if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") {
+      skip("Windows file symlinks require Developer Mode or symlink privileges.");
+    }
+    throw error;
+  }
+  assertCliValidation(alias);
 });
 
 test("missing active-extension tests fail before build", () => {
@@ -253,20 +303,55 @@ test("a failed selection falls back to the full suite", () => {
   assert.equal(run({ PI_EXTENSIONS_TEST_BASE: "not-a-commit" }), 0);
   assert.equal(calls.length, 3);
   assert.match(logs[0] ?? "", /selection failed/u);
+  assert.deepEqual(calls.at(-1)?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run"]);
 });
 
+function git(args: string[]) {
+  return execFileSync(
+    "git",
+    ["-c", "commit.gpgsign=false", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args],
+    {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
+}
+
+for (const changedFile of ["test/example.test.ts", "packages/base/src/index.ts", "scripts/shared.mjs"]) {
+  test(`selection retains affected filters and delegates full discovery (${changedFile})`, () => {
+    for (const name of ["base", "consumer", "unrelated"]) {
+      mkdirSync(path.join(root, "packages", name, "test"), { recursive: true });
+      writeFileSync(path.join(root, "packages", name, "test/example.test.ts"), "// fixture\n");
+      writeFileSync(
+        path.join(root, "packages", name, "package.json"),
+        JSON.stringify({ name, version: "1.0.0", dependencies: name === "consumer" ? { base: "*" } : {} }),
+      );
+    }
+    git(["init", "-q"]);
+    git(["add", "package.json", "test", "packages"]);
+    git(["commit", "-qm", "fixture base"]);
+    const base = git(["rev-parse", "HEAD"]);
+    mkdirSync(path.dirname(path.join(root, changedFile)), { recursive: true });
+    writeFileSync(path.join(root, changedFile), "// changed\n");
+    git(["add", changedFile]);
+    git(["commit", "-qm", "fixture change"]);
+    assert.equal(run({ PI_EXTENSIONS_TEST_BASE: base }), 0);
+    const filters =
+      changedFile === "scripts/shared.mjs"
+        ? []
+        : [
+            path.join(root, "test/example.test.ts"),
+            ...(changedFile.startsWith("packages/")
+              ? ["base", "consumer"].map((name) => path.join(root, "packages", name, "test/example.test.ts"))
+              : []),
+          ];
+    assert.deepEqual(calls.at(-1)?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run", ...filters]);
+    assert.equal(calls.length, 3);
+  });
+}
+
 test("documentation-only changes skip all commands", () => {
-  function git(args: string[]) {
-    return execFileSync(
-      "git",
-      ["-c", "commit.gpgsign=false", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args],
-      {
-        cwd: root,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ).trim();
-  }
   git(["init", "-q"]);
   git(["add", "package.json", "test/example.test.ts"]);
   git(["commit", "-qm", "fixture base"]);

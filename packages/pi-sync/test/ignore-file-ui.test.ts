@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
@@ -267,7 +268,7 @@ for (const mode of ["rpc", "print", "json"] as const) {
       await flow.finished;
       expect(operations()).toEqual([]);
       expect(custom).not.toHaveBeenCalled();
-      if (mode === "rpc") expect(flow.notifications.at(-1)?.message).toContain(path);
+      if (mode === "rpc") expect(flow.notifications.at(-1)?.message).toContain(resolve("/agent", source.filename));
       else expect(flow.notifications).toEqual([]);
     } finally {
       await flow.cleanup();

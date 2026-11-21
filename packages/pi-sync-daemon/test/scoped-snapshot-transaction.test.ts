@@ -823,3 +823,146 @@ for (const change of ["none", "added child", "changed child", "foreign tree", "v
       }
     }));
 }
+
+for (const change of [
+  "birth time",
+  "different inode",
+  "different device",
+  "wrong bytes",
+  "wrong spelling",
+  "late bytes",
+  "late inode",
+  "cancelled",
+] as const) {
+  test(`Windows recovery rechecks an installed vacancy after interruption (${change})`, () =>
+    fixture(async (root) => {
+      const target = path.join(root, "tree");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "incoming"), newBytes);
+      const {
+        before,
+        evidence,
+        workspace: workspaceBase,
+      } = await recoveryFixture(root, {
+        target,
+        backupName: "0",
+        kind: "file",
+        beforeImage: fileImage(oldBytes),
+        afterImage: "missing",
+        postFiles: [{ relative: "incoming", image: fileImage(newBytes) }],
+      });
+      await fs.writeFile(before, oldBytes);
+      const rename = fs.rename.bind(fs);
+      const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (typeof from === "string" && from.startsWith(`${workspaceBase}.`) && to === target)
+          throw new Error("recovery interrupted after installation");
+      });
+      await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /interrupted after installation/);
+      fault.mockRestore();
+      const workspace = await recordedWorkspace(workspaceBase, evidence);
+      const journal = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
+      const entry = journal.entries[0];
+      assert.ok(entry?.vacantInstall);
+      const installed = await fs.lstat(target, { bigint: true });
+      entry.vacantInstall = `${installed.dev}:${installed.ino}:${installed.birthtimeNs + 1n}`;
+      if (change === "different inode") {
+        await fs.rename(target, path.join(root, "saved-installed"));
+        await fs.writeFile(target, oldBytes);
+      }
+      if (change === "different device")
+        entry.vacantInstall = `${installed.dev + 1n}:${installed.ino}:${installed.birthtimeNs + 1n}`;
+      if (change === "wrong bytes") await fs.writeFile(target, newBytes);
+      await fs.writeFile(evidence, JSON.stringify(journal));
+      const originalEvidence = await fs.readFile(evidence);
+      if (["wrong spelling", "late bytes", "late inode"].includes(change)) {
+        const readdir = fs.readdir.bind(fs);
+        let observed = false;
+        vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
+          const names = await Reflect.apply(readdir, fs, args);
+          if (args[0] !== root || args.length !== 1 || observed) return names;
+          observed = true;
+          if (change === "wrong spelling") return names.map((name: string) => (name === "tree" ? "TREE" : name));
+          if (change === "late inode") {
+            await fs.rename(target, path.join(root, "late-installed"));
+            await fs.writeFile(target, oldBytes);
+          } else await fs.writeFile(target, newBytes);
+          return names;
+        }) as typeof fs.readdir);
+      }
+      const controller = new AbortController();
+      if (change === "cancelled") controller.abort();
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      assert.ok(descriptor);
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        const retry = recoverPendingSnapshotTransactions({ ...selection(root), signal: controller.signal });
+        if (change === "birth time") {
+          await retry;
+          assert.deepEqual(await fs.readFile(target), oldBytes);
+          await assert.rejects(fs.lstat(workspace), { code: "ENOENT" });
+          await assert.rejects(fs.lstat(evidence), { code: "ENOENT" });
+        } else {
+          await assert.rejects(
+            retry,
+            change === "cancelled" ? /abort/i : /unrecognized or newer bytes|changed or is unsafe/,
+          );
+          assert.deepEqual(await fs.readFile(evidence), originalEvidence);
+          assert.deepEqual(
+            await fs.readFile(target),
+            ["wrong bytes", "late bytes"].includes(change) ? newBytes : oldBytes,
+          );
+        }
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+    }));
+}
+
+test("recovery vacancy birth-time tolerance never applies to the staged payload", () =>
+  fixture(async (root) => {
+    const target = path.join(root, "tree");
+    await fs.mkdir(target);
+    await fs.writeFile(path.join(target, "incoming"), newBytes);
+    const {
+      before,
+      evidence,
+      workspace: workspaceBase,
+    } = await recoveryFixture(root, {
+      target,
+      backupName: "0",
+      kind: "file",
+      beforeImage: fileImage(oldBytes),
+      afterImage: "missing",
+      postFiles: [{ relative: "incoming", image: fileImage(newBytes) }],
+    });
+    await fs.writeFile(before, oldBytes);
+    const rename = fs.rename.bind(fs);
+    const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (typeof from === "string" && from.startsWith(`${workspaceBase}.`) && to === target)
+        throw new Error("recovery interrupted before installation");
+      await rename(from, to);
+    });
+    await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /interrupted before installation/);
+    fault.mockRestore();
+    const workspace = await recordedWorkspace(workspaceBase, evidence);
+    const payload = path.join(workspace, "image");
+    const journal = JSON.parse(await fs.readFile(evidence, "utf8")) as TransactionJournal;
+    const entry = journal.entries[0];
+    assert.ok(entry?.vacantInstall);
+    const stat = await fs.lstat(payload, { bigint: true });
+    entry.vacantInstall = `${stat.dev}:${stat.ino}:${stat.birthtimeNs + 1n}`;
+    await fs.writeFile(evidence, JSON.stringify(journal));
+    const originalEvidence = await fs.readFile(evidence);
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    assert.ok(descriptor);
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      await assert.rejects(recoverPendingSnapshotTransactions(selection(root)), /no verified staging image/);
+      await assert.rejects(fs.lstat(target), { code: "ENOENT" });
+      assert.deepEqual(await fs.readFile(payload), oldBytes);
+      assert.deepEqual(await fs.readFile(evidence), originalEvidence);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  }));

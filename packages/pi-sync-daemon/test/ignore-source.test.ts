@@ -183,24 +183,45 @@ test("rejects replacement between the initial stat and open", () =>
     }
   }));
 
-test("a replacement installed during the byte read does not produce a source for the detached file", () =>
+test("replacement during the byte read cannot authorize a detached source or bypass a Windows sharing lock", () =>
   fixture(async (root) => {
     const target = path.join(root, DEFAULT_IGNORE_FILENAME);
     const replacement = path.join(root, "replacement");
     await fs.writeFile(target, "old\n");
     await fs.writeFile(replacement, "new\n");
     const open = fs.open;
+    let sharingDenied = false;
+    let closed = false;
     const spy = vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
       const handle = await open(...args);
       const read = handle.read;
+      const close = handle.close.bind(handle);
       vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
-        await fs.rename(replacement, target);
+        try {
+          await fs.rename(replacement, target);
+        } catch (error) {
+          sharingDenied = process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM";
+          throw error;
+        }
         return Reflect.apply(read, handle, readArgs);
       });
+      handle.close = async () => {
+        await close();
+        closed = true;
+      };
       return handle;
     });
     try {
-      await assert.rejects(readIgnoreSource(root), /\.syncignore.*changed during the read/u);
+      await assert.rejects(readIgnoreSource(root), (error: Error) => {
+        assert.match(
+          error.message,
+          sharingDenied ? /\.syncignore.*could not verify or read/u : /\.syncignore.*changed during the read/u,
+        );
+        if (sharingDenied) assert.equal((error.cause as NodeJS.ErrnoException).code, "EPERM");
+        return true;
+      });
+      assert.equal(closed, true);
+      assert.equal(await fs.readFile(target, "utf8"), sharingDenied ? "old\n" : "new\n");
     } finally {
       spy.mockRestore();
     }

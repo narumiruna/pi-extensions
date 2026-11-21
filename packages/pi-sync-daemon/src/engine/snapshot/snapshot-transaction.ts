@@ -24,9 +24,7 @@ import { pendingTransactionEntries, transactionRoot } from "./snapshot-transacti
 import {
   legacyImage,
   MAX_TRANSACTION_JOURNAL_BYTES,
-  ownedLegacyPostTree,
   ownedScopedPostTree,
-  ownedScopedSubset,
   readTransactionJournal,
   recheckScopedImage,
   removeScopedImage,
@@ -65,6 +63,7 @@ import {
   prepareLegacyRecoveryStage,
   recoveryStagePath,
 } from "./snapshot-transaction-stage.js";
+import { verifyTarget } from "./snapshot-transaction-verification.js";
 import type { SnapshotApplyPlan } from "./snapshot-types.js";
 
 const JOURNAL_VERSION = 4;
@@ -782,67 +781,6 @@ async function restoreScopedEntry(
   await cleanScopedWorkspace(directory, entry, options);
 }
 
-async function verifyTarget(
-  directory: string,
-  entry: TransactionEntry,
-  journal: TransactionJournal,
-  options: TransactionOptions,
-  deletedByThisCall = false,
-) {
-  await assertSafeParents(journal.root, journal.sessionRoot, entry.target);
-  const isScoped = isScopedJournal(journal);
-  // Hash the potentially large backup before observing the live target, not after it.
-  const backup =
-    isScoped && entry.kind !== "missing"
-      ? await scopedTransactionImage(path.join(directory, "before", entry.backupName), options)
-      : undefined;
-  const before = isScoped ? (backup?.value ?? "missing") : await legacyBeforeImage(directory, entry);
-  if ((backup && backup.kind !== entry.kind) || (journal.version >= 2 && before !== entry.beforeImage))
-    throw new Error("Transaction backup changed; preserve evidence for review.");
-  const spelling = entry.afterTarget ? await caseReplacementSpelling(entry.target, entry.afterTarget) : entry.target;
-  const scoped = isScoped ? await scopedTransactionImage(entry.target, options) : undefined;
-  const value = scoped?.value ?? (await legacyImage(entry.target));
-  const result = { value, before, scoped };
-  const postFiles = entry.postFiles ?? [];
-  if (entry.vacantInstall) {
-    if (
-      scoped?.kind === "missing" ||
-      (scoped && value === before && spelling === entry.target && scopedIdentity(scoped.stat) === entry.vacantInstall)
-    )
-      return result;
-  } else if (value === "missing") {
-    if (
-      value === before ||
-      deletedByThisCall ||
-      (journal.version >= 4 && entry.removalPending && !entry.replacementStarted)
-    )
-      return result;
-  } else if (scoped && entry.scopedRemoval) {
-    const removal = entry.scopedRemoval;
-    if (
-      (removal.image === "before"
-        ? backup && ownedScopedSubset(scoped, backup)
-        : value === entry.afterImage || ownedScopedPostTree(scoped, postFiles, false)) &&
-      scoped.kind !== "missing" &&
-      scopedIdentity(scoped.stat) === removal.identity
-    )
-      return result;
-  } else if (value === before || (journal.version >= 2 && value === entry.afterImage)) {
-    return result;
-  } else if (journal.version >= 2) {
-    const requireComplete = journal.version < 4 || entry.replacementStarted === true || !entry.removalPending;
-    if (
-      scoped
-        ? ownedScopedPostTree(scoped, postFiles, true)
-        : await ownedLegacyPostTree(entry.target, postFiles, requireComplete)
-    )
-      return result;
-  }
-  throw new Error(
-    "Transaction target has unrecognized or newer bytes; automatic rollback refused. Preserve the transaction and review its backup with Pi closed.",
-  );
-}
-
 async function removeOwnedTarget(
   directory: string,
   entry: TransactionEntry,
@@ -965,15 +903,6 @@ async function retireRestorationIntent(
 
 function persistJournal(directory: string, journal: TransactionJournal) {
   return writeJson(path.join(directory, "journal.json"), journal, { maxBytes: MAX_TRANSACTION_JOURNAL_BYTES });
-}
-
-async function legacyBeforeImage(directory: string, entry: TransactionEntry) {
-  if (entry.kind === "missing") return "missing";
-  const backup = path.join(directory, "before", entry.backupName);
-  if (entry.kind === "symlink") return `symlink:${entry.linkTarget}`;
-  const value = await legacyImage(backup);
-  if (value === "missing") throw new Error("Transaction backup is missing; preserve evidence for review.");
-  return value;
 }
 
 async function completeTransaction(directory: string, journal: TransactionJournal) {
