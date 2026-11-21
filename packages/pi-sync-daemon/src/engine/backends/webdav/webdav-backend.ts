@@ -80,6 +80,8 @@ export class WebDavSyncBackend implements SyncBackend {
   ): Promise<PublishSnapshotResult> {
     throwIfAborted(options.signal);
     assertSnapshotIdentity(snapshot, this.config.destination.namespace);
+    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    throwIfAborted(options.signal);
     await this.ensureAtomicConditions(options.signal);
     throwIfAborted(options.signal);
     const client = new WebDavClient(this.config, options.signal);
@@ -88,6 +90,8 @@ export class WebDavSyncBackend implements SyncBackend {
     throwIfAborted(options.signal);
     const pointer = createLatestPointer(this.config.destination.namespace, snapshot, sha256(encoded));
     const stagedPath = snapshotPath(this.config, snapshot.id);
+    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    throwIfAborted(options.signal);
     try {
       await client.putBuffer(stagedPath, encoded, "application/gzip", { ifAbsent: true });
     } catch (error) {
@@ -114,6 +118,7 @@ export class WebDavSyncBackend implements SyncBackend {
       });
     }
     const condition = publicationCondition(currentObject, expected, this.identity);
+    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
     options.onCommit?.();
     const commitClient = new WebDavClient(

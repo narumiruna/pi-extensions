@@ -25,6 +25,7 @@ function contentLines(config: AnySyncConfig) {
     config.scope === "agent-directory"
       ? "included content: eligible files in the Pi agent directory"
       : `included content: ${config.include.map(safeTerminalText).join(", ") || "none"}`,
+    ...(config.ignorePolicy ? ["path policy: local ignore file (rule text is not published)"] : []),
     ...(config.exclude === undefined
       ? []
       : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),
@@ -106,12 +107,17 @@ export async function diff(
     ...warnings,
   ].join("\n");
   const level = warnings.length > 0 || selectionState?.kind === "different" ? "warning" : "info";
+  if (selectionState?.ignorePolicyComparison === "local-legacy-remote-ignore") {
+    ctx.ui.notify(`${header}\n\nFile comparison requires a configured local ignore-file policy.`, level);
+    return;
+  }
   if (!remote) {
     ctx.ui.notify(`${header}\n\n${formatSnapshotOnlyDiff("Remote is empty. Local push would upload", local)}`, level);
     return;
   }
 
-  ctx.ui.notify(`${header}\n\n${formatDiff(local, portableSnapshot(remote, remote.localFields))}`, level);
+  const projection = config.ignorePolicy ? "Remote paths shown under this device's ignore rules.\n\n" : "";
+  ctx.ui.notify(`${header}\n\n${projection}${formatDiff(local, portableSnapshot(remote, remote.localFields))}`, level);
 }
 
 export async function doctor(
@@ -234,6 +240,7 @@ export async function history(
       rollback(ctx, { ...options, args: [snapshot.snapshotRef], yes: false }, factory, {
         backendIdentity: backend.identity,
         setup: config.setupName,
+        snapshotId: snapshot.snapshotId,
       }),
     );
     return;

@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { regenerateSnapshotIdentity } from "../snapshot/snapshot.js";
 import { assertAgentDirectorySnapshotBound } from "../snapshot/snapshot-bounds.js";
-import type { Snapshot, SnapshotFile } from "../snapshot/snapshot-types.js";
+import {
+  IGNORE_SNAPSHOT_VERSION,
+  type IgnoreSnapshotSelection,
+  isSupportedSnapshotVersion,
+  type Snapshot,
+  type SnapshotFile,
+} from "../snapshot/snapshot-types.js";
 import {
   type JsonDocument,
   type JsonNode,
@@ -16,7 +22,7 @@ export { normalizeLocalFields } from "./local-field-policy.js";
 
 /** Shared transport contract: older snapshots cannot carry portable policy metadata. */
 export function validateSnapshotFieldPolicy(snapshot: Pick<Snapshot, "version" | "localFields">) {
-  if (![1, 2, 3, 4, 5].includes(snapshot.version)) throw new Error("Unsupported snapshot format.");
+  if (!isSupportedSnapshotVersion(snapshot.version)) throw new Error("Unsupported snapshot format.");
   if (snapshot.version === 1 && snapshot.localFields !== undefined)
     throw new Error("Portable field policy requires snapshot version 2.");
   if (snapshot.version !== 1) {
@@ -25,16 +31,96 @@ export function validateSnapshotFieldPolicy(snapshot: Pick<Snapshot, "version" |
     normalizeLocalFields(snapshot.localFields);
   }
 }
+export function validateIgnoreSnapshotSessionFlag(selection: IgnoreSnapshotSelection, syncSessions: unknown) {
+  if (
+    (syncSessions !== undefined && typeof syncSessions !== "boolean") ||
+    (syncSessions === true && !selection.sessions)
+  )
+    throw new Error("Invalid ignore snapshot session metadata.");
+}
+
+export function validateIgnoreSnapshotIdentity({
+  id,
+  createdAt,
+  machine,
+  profile,
+}: Pick<Snapshot, "id" | "createdAt" | "machine" | "profile">) {
+  if (
+    typeof id !== "string" ||
+    id.length > 512 ||
+    id === "." ||
+    id === ".." ||
+    !/^[A-Za-z0-9._-]+(?![\s\S])/u.test(id) ||
+    typeof createdAt !== "string" ||
+    createdAt.length > 64 ||
+    /[\p{Cc}\p{Cs}]/u.test(createdAt) ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    typeof machine !== "string" ||
+    machine.length > 256 ||
+    /[\p{Cc}\p{Cs}]/u.test(machine) ||
+    typeof profile !== "string" ||
+    !profile ||
+    profile.length > 256 ||
+    /[\p{Cc}\p{Cs}]/u.test(profile)
+  )
+    throw new Error("Invalid ignore snapshot identity.");
+}
+
+function validateIgnoreSnapshotEnvelope(snapshot: Snapshot, selection: IgnoreSnapshotSelection) {
+  validateIgnoreSnapshotIdentity(snapshot);
+  validateIgnoreSnapshotSessionFlag(selection, snapshot.syncSessions);
+  if (
+    !Array.isArray(snapshot.files) ||
+    Object.keys(snapshot).some(
+      (key) =>
+        ![
+          "version",
+          "id",
+          "createdAt",
+          "machine",
+          "profile",
+          "syncSessions",
+          "selection",
+          "localFields",
+          "files",
+        ].includes(key),
+    )
+  )
+    throw new Error("Invalid ignore snapshot payload.");
+}
+
+function validateIgnoreSnapshotFiles(files: SnapshotFile[]) {
+  for (const file of files) {
+    if (
+      Object.keys(file).length !== 3 ||
+      !Object.hasOwn(file, "path") ||
+      !Object.hasOwn(file, "contentBase64") ||
+      !Object.hasOwn(file, "sha256") ||
+      typeof file.sha256 !== "string" ||
+      file.sha256.length !== 64
+    )
+      throw new Error("Invalid ignore snapshot file.");
+    const content = Buffer.from(file.contentBase64, "base64");
+    if (
+      content.toString("base64") !== file.contentBase64 ||
+      createHash("sha256").update(content).digest("hex") !== file.sha256
+    )
+      throw new Error("Ignore snapshot file checksum or encoding mismatch.");
+  }
+}
+
 /** Portable transport images must not carry values declared machine-local. Physical journal images are different. */
 export function validatePortableSnapshot(snapshot: Snapshot) {
   validateSnapshotFieldPolicy(snapshot);
   validateSnapshotSelection(snapshot);
   const selection = snapshot.selection;
+  if (selection?.version === 4) validateIgnoreSnapshotEnvelope(snapshot, selection);
   if (selection?.scope) {
     const selected = configuredSnapshotPathMatcher(selection);
     if (snapshot.files.some((file) => typeof file?.path !== "string" || !selected(file.path)))
       throw new Error("Portable snapshot retains excluded or unsafe agent-directory paths.");
     assertAgentDirectorySnapshotBound(snapshot.files);
+    if (snapshot.version === IGNORE_SNAPSHOT_VERSION) validateIgnoreSnapshotFiles(snapshot.files);
   } else {
     const excludedPath = compileSyncPolicyExclude(selection ?? {});
     if (snapshot.files.some((file) => excludedPath(file.path)))

@@ -10,7 +10,7 @@ interface BackendFixture {
 
 type BackendFactory = () => SyncBackend | BackendFixture | Promise<SyncBackend | BackendFixture>;
 
-export function registerSyncBackendContractSuite(name: string, create: BackendFactory) {
+export function registerSyncBackendContractSuite(name: string, create: BackendFactory, objectStorage = false) {
   test(`${name} contract: head, revision, snapshot, history, and diagnostics`, async () => {
     await withBackend(create, async (backend) => {
       assert.ok(backend.identity);
@@ -112,6 +112,52 @@ export function registerSyncBackendContractSuite(name: string, create: BackendFa
       assert.equal((await backend.readHead())?.snapshotId, image.id);
     });
   });
+
+  if (objectStorage) {
+    test(`${name} contract: stale ignore policy cannot stage new bytes or change the active head`, async () => {
+      await withBackend(create, async (backend) => {
+        const image = (id: string, content: string) => ({
+          ...snapshot([{ path: "skills/public.md", content: Buffer.from(content) }]),
+          id,
+          version: 6,
+          selection: {
+            version: 4 as const,
+            scope: "agent-directory" as const,
+            fingerprint: "a".repeat(64),
+            sessions: false,
+          },
+        });
+        const publishAt = (
+          next: ReturnType<typeof image>,
+          rejectAt: number,
+          expected = expectedRemoteHead(undefined),
+        ) => {
+          let checks = 0;
+          return backend.publishSnapshot(next, expected, {
+            validateIgnorePolicy: async () => {
+              if (++checks === rejectAt) throw new Error("Ignore policy changed");
+            },
+            onCommit: () => assert.fail("stale policy must not reach the commit boundary"),
+          });
+        };
+        await assert.rejects(publishAt(image("first", "old-policy bytes"), 2), /Ignore policy changed/u);
+        assert.equal(await backend.readHead(), undefined);
+        const current = image("first", "fresh-policy bytes");
+        const accepted = await backend.publishSnapshot(current, { kind: "missing" });
+        assert.deepEqual(await backend.readSnapshot(accepted.head.snapshotRef), current);
+        assert.deepEqual(accepted.head.selection, current.selection);
+
+        const expected = expectedRemoteHead(accepted.head);
+        await assert.rejects(publishAt(image("pending", "verified once"), 3, expected), /Ignore policy changed/u);
+        assert.deepEqual(await backend.readHead(), accepted.head);
+        await assert.rejects(
+          backend.publishSnapshot(image("pending", "other bytes"), expected),
+          SyncBackendConflictError,
+        );
+        assert.deepEqual(await backend.readHead(), accepted.head);
+      });
+    });
+  }
 
   test(`${name} contract: excluded root values never enter portable storage`, async () => {
     await withBackend(create, async (backend) => {

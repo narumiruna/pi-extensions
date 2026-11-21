@@ -187,8 +187,12 @@ async function showSelectionDifference(
         items: [
           {
             id: "review",
-            label: "Review all paths (recommended)",
-            description: "Compare exact remote-only, device-only, and ordered lists.",
+            label: state.decision.ignorePolicyComparison
+              ? "Review policy difference"
+              : "Review all paths (recommended)",
+            description: state.decision.ignorePolicyComparison
+              ? "Compare published policy information without adopting rules."
+              : "Compare exact remote-only, device-only, and ordered lists.",
             to: "review",
           },
           ...(adoptionUnavailable(state.decision)
@@ -201,12 +205,14 @@ async function showSelectionDifference(
                   action: "adopt" as const,
                 },
               ]),
-          ...(scopesDiffer(state.decision)
+          ...(!canPublishLocalPolicy(state.decision)
             ? []
             : [
                 {
                   id: "keep",
-                  label: "Keep this device's content list and update remote…",
+                  label: state.decision.ignorePolicyComparison
+                    ? "Review publishing this device's policy…"
+                    : "Keep this device's content list and update remote…",
                   description: "Open the existing exact force-push preview without skipping confirmation.",
                   action: "keep" as const,
                 },
@@ -339,16 +345,19 @@ async function showSelectionDifference(
         }
       },
       keep: async ({ state, signal: actionSignal }) => {
+        if (!canPublishLocalPolicy(state.decision)) return { kind: "stay" as const };
         if (!runRoute) {
           ctx.ui.notify("The reviewed update-remote route is unavailable.", "error");
           return { kind: "stay" as const };
         }
         const signal = combineSignals(sessionSignal, actionSignal);
         try {
-          const latest = await loadConfig(state.decision.setupName);
-          if (signal.aborted) return { kind: "close" as const };
-          validateOwner();
-          assertLocalSelectionCurrent(latest, state.decision);
+          if (!state.decision.ignorePolicyComparison) {
+            const latest = await loadConfig(state.decision.setupName);
+            if (signal.aborted) return { kind: "close" as const };
+            validateOwner();
+            assertLocalSelectionCurrent(latest, state.decision);
+          }
           const result = await runCancellableOperation(
             ctx,
             "Preparing this device's push preview…",
@@ -519,6 +528,7 @@ async function revalidateAndAdopt(
       const refusal = adoptionUnavailable(decision);
       if (refusal) throw new Error(refusal);
       const exclude = adoptedExclude(decision);
+      if (setup.sync.pathPolicy === "ignore-file") throw new Error("An ignore-file setup cannot adopt remote rules.");
       if (setup.sync.scope === "agent-directory") {
         return {
           ...setup,
@@ -636,7 +646,18 @@ function scopesDiffer(decision: RemoteSelectionDecision) {
   return decision.localDirectory?.scope !== decision.remoteDirectory?.scope;
 }
 
+function canPublishLocalPolicy(decision: RemoteSelectionDecision) {
+  if (decision.ignorePolicyComparison) {
+    return (
+      decision.ignorePolicyComparison !== "match" && decision.ignorePolicyComparison !== "local-legacy-remote-ignore"
+    );
+  }
+  return !scopesDiffer(decision);
+}
+
 function adoptionUnavailable(decision: RemoteSelectionDecision) {
+  if (decision.ignorePolicyComparison)
+    return "Ignore files are local. Published metadata cannot reconstruct remote rules.";
   if (scopesDiffer(decision))
     return "Scope differs. Configure a setup with the remote scope to join it; this location is not migrated in place.";
   if (
@@ -674,6 +695,15 @@ function directoryReviewLines(decision: RemoteSelectionDecision) {
 }
 
 function selectionSummaryLines(decision: RemoteSelectionDecision) {
+  if (decision.ignorePolicyComparison) {
+    return [
+      `Sync setup: ${safeTerminalText(decision.setupName)}`,
+      adoptionUnavailable(decision) ?? "Nothing changed.",
+      decision.ignorePolicyComparison === "local-legacy-remote-ignore"
+        ? "The remote uses an ignore policy. Migrate and review your local setup before transferring."
+        : "Review a fresh push before publishing this device's policy. No files or settings have changed.",
+    ];
+  }
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     `Sync setup: ${safeTerminalText(decision.setupName)}`,
@@ -691,6 +721,7 @@ function selectionSummaryLines(decision: RemoteSelectionDecision) {
 }
 
 function formatSelectionDifference(decision: RemoteSelectionDecision) {
+  if (decision.ignorePolicyComparison) return selectionSummaryLines(decision).join("\n");
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     ...directoryReviewLines(decision),
@@ -727,6 +758,7 @@ function formatSelectionDifference(decision: RemoteSelectionDecision) {
 }
 
 function formatRemoteSelectionSummary(decision: RemoteSelectionDecision) {
+  if (decision.ignorePolicyComparison) return selectionSummaryLines(decision).join("\n");
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
   return [
     `Synced content for “${safeTerminalText(decision.setupName)}” differs from this device.`,
@@ -769,6 +801,7 @@ function decisionFromState(
   return {
     setupName: config.setupName,
     configIdentity: syncConfigReviewFingerprint(config),
+    ignorePolicyComparison: state.ignorePolicyComparison,
     localInclude: [...config.include],
     remoteInclude: [...state.include],
     ...(config.exclude === undefined ? {} : { localExclude: [...config.exclude] }),

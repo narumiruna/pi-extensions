@@ -9,6 +9,7 @@ export interface SyncState {
   exclude?: string[];
   scope?: "agent-directory";
   reinclude?: string[];
+  ignorePolicyKey?: string;
   localFields?: string[];
   lastObservedSnapshot?: string;
   lastObservedRevision?: string;

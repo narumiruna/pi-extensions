@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
   mkdir,
   mkdirSync,
+  openSync,
+  readSync,
   realpath,
   realpathSync,
   rmdir,
@@ -14,6 +20,7 @@ import {
 import fs from "node:fs/promises";
 import path from "node:path";
 import lockfile from "proper-lockfile";
+import { MAX_SETTINGS_BYTES } from "../../protocol.js";
 import { engineHost, getEngineRoot as getAgentDir } from "../host.js";
 
 export const CONFIG_FILE_NAME = "pi-sync.json";
@@ -156,15 +163,34 @@ export async function readActiveLocalConfigDocumentForRepair(): Promise<LocalCon
 
 /** Read-only bootstrap: no authority recursion, migration, or document creation. */
 export async function peekLocalConfigDocument(): Promise<LocalConfigDocument | undefined> {
+  return queueConfigOperation(() => withLocalConfigReadLockIfNeeded(peekUnlocked));
+}
+
+async function peekUnlocked(maxBytes?: number): Promise<LocalConfigDocument | undefined> {
   const canonicalPath = localConfigPath();
-  const legacyPath = legacyLocalConfigPath();
-  return queueConfigOperation(() =>
-    withLocalConfigReadLockIfNeeded(async () => {
-      const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyPath;
-      const snapshot = await readConfigSnapshotIfExists(filePath);
-      return snapshot ? { path: filePath, ...snapshot } : undefined;
-    }),
-  );
+  const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyLocalConfigPath();
+  const snapshot = await readConfigSnapshotIfExists(filePath, maxBytes);
+  return snapshot ? { path: filePath, ...snapshot } : undefined;
+}
+
+export function withLockedLocalConfigDocument<T>(
+  run: (document: LocalConfigDocument | undefined, recheck: () => void) => Promise<T>,
+  signal?: AbortSignal,
+  forWrite = false,
+): Promise<T> {
+  if (engineHost().config) throw new Error("This operation requires the authoritative settings writer.");
+  return queueConfigOperation(() => {
+    signal?.throwIfAborted();
+    const withLock = forWrite ? withLocalConfigFileLock : withLocalConfigReadLockIfNeeded;
+    return withLock(async () => {
+      const document = await peekUnlocked(MAX_SETTINGS_BYTES);
+      signal?.throwIfAborted();
+      return run(document, () => {
+        signal?.throwIfAborted();
+        assertCurrentDocument(document);
+      });
+    });
+  });
 }
 
 export async function readMigratingLocalConfigDocument(
@@ -216,10 +242,12 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
   validate: (value: Record<string, unknown>) => void,
   signal?: AbortSignal,
   validateSource?: (document: LocalConfigDocument | undefined) => void,
+  beforePublish?: (document: LocalConfigDocument | undefined, next: T) => Promise<void>,
 ): Promise<T> {
   const authority = engineHost().config;
   if (authority) {
-    if (validateSource) throw new Error("Source validators must run in the authoritative settings writer.");
+    if (validateSource || beforePublish)
+      throw new Error("Source validators must run in the authoritative settings writer.");
     return authority.update(defaultValue, update, validate, signal);
   }
   return queueConfigOperation(() => {
@@ -238,6 +266,8 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
       validate(next);
       signal?.throwIfAborted();
       if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
+      if (beforePublish) await beforePublish(document, next);
+      signal?.throwIfAborted();
       if (document) await replaceLocalConfigDocumentUnlocked(document, next, signal);
       else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), signal);
       return next;
@@ -447,7 +477,45 @@ async function secureIgnoredLegacyIfPresent(filePath: string) {
   }
 }
 
-async function readConfigSnapshotIfExists(filePath: string): Promise<ConfigSnapshot | undefined> {
+function assertCurrentDocument(document: LocalConfigDocument | undefined) {
+  const canonical = localConfigPath();
+  const legacy = legacyLocalConfigPath();
+  const filePath = lstatSync(canonical, { throwIfNoEntry: false }) ? canonical : legacy;
+  const before = lstatSync(filePath, { throwIfNoEntry: false });
+  if (!document) {
+    if (before) throw settingsChangedError();
+    return;
+  }
+  const matches = (stat: typeof before) =>
+    stat?.isFile() &&
+    stat.size === document.bytes.length &&
+    stat.dev === document.identity.dev &&
+    stat.ino === document.identity.ino;
+  if (filePath !== document.path || !matches(before)) throw settingsChangedError();
+  const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    if (!matches(fstatSync(fd))) throw settingsChangedError();
+    const buffer = Buffer.alloc(document.bytes.length + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = readSync(fd, buffer, offset, buffer.length - offset, offset);
+      if (!read) break;
+      offset += read;
+    }
+    if (
+      offset !== document.bytes.length ||
+      !buffer.subarray(0, offset).equals(document.bytes) ||
+      !matches(fstatSync(fd)) ||
+      !matches(lstatSync(filePath, { throwIfNoEntry: false })) ||
+      (filePath === legacy && lstatSync(canonical, { throwIfNoEntry: false }))
+    )
+      throw settingsChangedError();
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function readConfigSnapshotIfExists(filePath: string, maxBytes?: number): Promise<ConfigSnapshot | undefined> {
   let pathStat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     pathStat = await fs.lstat(filePath);
@@ -459,8 +527,13 @@ async function readConfigSnapshotIfExists(filePath: string): Promise<ConfigSnaps
     throw new Error(`Refusing to read symlinked pi-sync config: ${filePath}`);
   }
   if (!pathStat.isFile()) throw new Error(`pi-sync config is not a regular file: ${filePath}`);
+  if (maxBytes !== undefined && pathStat.size > maxBytes)
+    throw new Error("Settings exceed the editable local API byte limit.");
 
-  const handle = await fs.open(filePath, "r");
+  const handle = await fs.open(
+    filePath,
+    maxBytes === undefined ? "r" : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
   try {
     const openedStat = await handle.stat();
     if (openedStat.dev !== pathStat.dev || openedStat.ino !== pathStat.ino) {
@@ -469,7 +542,20 @@ async function readConfigSnapshotIfExists(filePath: string): Promise<ConfigSnaps
     if (process.platform !== "win32" && (openedStat.mode & 0o777) !== 0o600) {
       await handle.chmod(0o600);
     }
-    const bytes = await handle.readFile();
+    let bytes: Buffer;
+    if (maxBytes === undefined) bytes = await handle.readFile();
+    else {
+      if (openedStat.size > maxBytes) throw new Error("Settings exceed the editable local API byte limit.");
+      const buffer = Buffer.alloc(openedStat.size + 1);
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      if (offset !== openedStat.size) throw settingsChangedError();
+      bytes = buffer.subarray(0, offset);
+    }
     return {
       bytes,
       identity: { dev: openedStat.dev, ino: openedStat.ino },

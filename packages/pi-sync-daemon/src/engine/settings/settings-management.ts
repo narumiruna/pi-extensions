@@ -7,7 +7,7 @@ import {
 } from "./config.js";
 import { localConfigPath } from "./config-file.js";
 import { updateLocalConfig } from "./settings-store.js";
-import type { StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
+import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./settings-types.js";
 import { effectiveSyncSetupRemoteIdentity, validateConfigName } from "./settings-validation.js";
 
 export class SyncSetupReviewChangedError extends Error {
@@ -38,7 +38,7 @@ export async function saveNewV3Settings(
     }
     return {
       ...current,
-      version: setup.sync.scope === "agent-directory" ? 7 : current.version,
+      version: setupSettingsVersion(current.version, setup),
       activeSyncSetup: setupName,
       storageConnections: { [connectionName]: connection },
       syncSetups: { [setupName]: setup },
@@ -107,7 +107,7 @@ export async function addSyncSetup(
     assertUniqueLocations(nextSetups, settings.storageConnections);
     return {
       ...settings,
-      version: setup.sync.scope === "agent-directory" ? 7 : settings.version,
+      version: setupSettingsVersion(settings.version, setup),
       syncSetups: nextSetups,
       ...(settings.activeSyncSetup ? {} : { activeSyncSetup: name }),
     };
@@ -167,13 +167,11 @@ export async function updateSyncSetup(
     }
     const nextSetups = { ...settings.syncSetups, [name]: nextSetup };
     assertUniqueLocations(nextSetups, settings.storageConnections);
-    const version =
-      nextSetup.sync.scope === "agent-directory"
-        ? 7
-        : options.upgradeExclude && settings.version < 6
-          ? 6
-          : settings.version;
-    return { ...settings, version, syncSetups: nextSetups };
+    return {
+      ...settings,
+      version: setupSettingsVersion(settings.version, nextSetup, options.upgradeExclude),
+      syncSetups: nextSetups,
+    };
   }, options.signal);
 }
 
@@ -207,6 +205,17 @@ export async function removeStorageConnection(name: string, signal?: AbortSignal
     delete storageConnections[name];
     return { ...settings, storageConnections };
   }, signal);
+}
+
+function setupSettingsVersion(
+  current: PiSyncSettingsV3["version"],
+  setup: SyncSetupSettings,
+  upgradeExclude?: boolean,
+): PiSyncSettingsV3["version"] {
+  if (setup.sync.pathPolicy === "ignore-file") return 8;
+  if (current < 7 && setup.sync.scope === "agent-directory") return 7;
+  if (current < 6 && upgradeExclude) return 6;
+  return current;
 }
 
 function referencingSetupNames(setups: Record<string, SyncSetupSettings>, connection: string) {

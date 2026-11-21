@@ -342,7 +342,7 @@ test("the directory policy fragment validates inside a version-7 setup without i
   validateSettingsDocument(settings);
 });
 
-for (const version of [undefined, 1, 2, 8]) {
+for (const version of [undefined, 1, 2, 9]) {
   test(`unsupported settings version ${String(version)} is not interpreted as a supported example`, () => {
     const settings = configurationExample();
     settings.version = version;

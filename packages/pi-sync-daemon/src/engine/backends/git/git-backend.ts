@@ -1,8 +1,9 @@
+import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { posixJoin } from "../../paths.js";
-import type { Snapshot, SnapshotFile } from "../../snapshot/snapshot-types.js";
+import { IGNORE_SNAPSHOT_VERSION, type Snapshot, type SnapshotFile } from "../../snapshot/snapshot-types.js";
 import { stateDir } from "../../state/state-directory.js";
 import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
@@ -188,6 +189,10 @@ export class GitSyncBackend implements SyncBackend {
       throw this.redactedError(error);
     }
     throwIfAborted(options.signal);
+    if (options.validateIgnorePolicy) {
+      await options.validateIgnorePolicy();
+      throwIfAborted(options.signal);
+    }
     options.onCommit?.();
 
     const ref = this.remoteRef();
@@ -380,6 +385,15 @@ export class GitSyncBackend implements SyncBackend {
       parsed = JSON.parse(bytes.toString("utf8"));
     } catch (error) {
       throw new Error("Git publication manifest is malformed.", { cause: error });
+    }
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "snapshotVersion" in parsed &&
+      parsed.snapshotVersion === IGNORE_SNAPSHOT_VERSION &&
+      !isUtf8(bytes)
+    ) {
+      throw new Error("Git publication manifest is not valid UTF-8.");
     }
     return requireGitManifest(parsed);
   }
@@ -581,18 +595,23 @@ export class GitSyncBackend implements SyncBackend {
 
   private async readPublication(commit: string, signal?: AbortSignal) {
     const manifest = await this.readManifest(commit, signal);
-    const entries = await this.readPublicationTree(commit, signal);
+    const entries = await this.readPublicationTree(
+      commit,
+      signal,
+      manifest.snapshotVersion === IGNORE_SNAPSHOT_VERSION,
+    );
     const payloadEntries = validateGitPublicationTree(entries, manifest, this.manifestPath(), (filePath) =>
       this.filePath(filePath),
     );
     return { manifest, payloadEntries };
   }
 
-  private async readPublicationTree(commit: string, signal?: AbortSignal) {
+  private async readPublicationTree(commit: string, signal?: AbortSignal, strictUtf8 = false) {
     const result = await this.git(["ls-tree", "-r", "-z", commit], {
       signal,
       maxOutputBytes: MAX_GIT_TREE_OUTPUT_BYTES,
     });
+    if (strictUtf8 && !isUtf8(result.stdout)) throw new Error("Git snapshot tree paths must be valid UTF-8.");
     return parseGitTree(result.stdout);
   }
 

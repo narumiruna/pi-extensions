@@ -65,6 +65,21 @@ export function createEngineService(root: string) {
         };
       }
       if (operation === "monitor.pause") return;
+      if (operation === "ignore.read" || operation === "ignore.save") {
+        const { readIgnoreFileEdit, saveIgnoreFileEdit } = await import("./engine/ignore/ignore-edit.js");
+        execution.validate();
+        if (operation === "ignore.read") return readIgnoreFileEdit(payload, execution);
+        const result = await saveIgnoreFileEdit(
+          payload,
+          execution,
+          () => requireHandover(execution),
+          () => {
+            if (!readConsent(root)) throw new Error("Saving ignore files requires reviewed daemon handover.");
+          },
+        );
+        execution.validate();
+        return result;
+      }
       if (operation === "settings.read" || operation === "settings.repair-read") {
         const { readLocalConfigDocument } = await import("./engine/settings/settings-store.js");
         const { readActiveLocalConfigDocumentForRepair } = await import("./engine/settings/config-file.js");
@@ -90,8 +105,10 @@ export function createEngineService(root: string) {
         const { updateLocalConfigDocument, peekLocalConfigDocument } = await import("./engine/settings/config-file.js");
         const { localConfigTemplate } = await import("./engine/settings/settings-store.js");
         const { validateSettingsDocument } = await import("./engine/settings/settings-validation.js");
-        const next = payload.next;
-        validateSettingsDocument(next);
+        const next = validateSettingsDocument(payload.next);
+        if (Object.values(next.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file")) {
+          throw new Error("Ignore-file setup activation is not available in this Daemon build.");
+        }
         if (Buffer.byteLength(JSON.stringify(next)) > MAX_SETTINGS_BYTES)
           throw new Error("Settings exceed the editable local API byte limit; no fields were dropped.");
         const validateSource = (document: { bytes: Buffer; identity: { dev: number; ino: number } } | undefined) => {

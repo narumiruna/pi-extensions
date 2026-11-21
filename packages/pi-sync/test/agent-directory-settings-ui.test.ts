@@ -229,7 +229,8 @@ for (const mode of ["save", "cancel", "hard-cancel", "stale", "opt in only", "op
             if (frame.includes("Review agent directory scope")) {
               if (mode === "stale") {
                 await updateSyncSetup("home", (setup) => {
-                  if (setup.sync.scope !== "agent-directory") throw new Error("Unexpected scope");
+                  if (setup.sync.scope !== "agent-directory" || setup.sync.pathPolicy === "ignore-file")
+                    throw new Error("Unexpected scope");
                   return { ...setup, sync: { ...setup.sync, reinclude: ["from-another-write"] } };
                 });
               }
@@ -363,9 +364,15 @@ test("adding directory scope promotes a legacy document without changing its act
     assert.equal(withDirectory?.version, 7);
     assert.equal(withDirectory?.activeSyncSetup, "home");
     assert.deepEqual(withDirectory?.syncSetups.home, document.syncSetups.home);
-    await updateSyncSetup("home", (setup) => ({ ...setup, sync: { ...setup.sync, exclude: ["private"] } }), {
-      upgradeExclude: true,
-    });
+    await updateSyncSetup(
+      "home",
+      (setup) => {
+        assert.notEqual(setup.sync.pathPolicy, "ignore-file");
+        if (setup.sync.pathPolicy === "ignore-file") throw new Error("Unexpected scope");
+        return { ...setup, sync: { ...setup.sync, exclude: ["private"] } };
+      },
+      { upgradeExclude: true },
+    );
     const result = await readLocalConfigObject();
     assert.equal(result?.version, 7);
     assert.deepEqual(result?.syncSetups.directory, added);

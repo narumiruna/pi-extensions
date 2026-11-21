@@ -20,6 +20,7 @@ import {
 } from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js";
+import { ignoreFileSettingsAvailable, manualIgnoreFileGuidance, showIgnoreFileAction } from "./ignore-file-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
@@ -44,12 +45,21 @@ export async function showSyncSettings(
   if (ctx.mode !== "tui") {
     if (ctx.mode === "rpc" && ctx.hasUI) {
       // Preserve RPC catalog management; preference/credential editing stays TUI-only.
+      const validate = captureMutationOwner(ctx, signal);
       const config = await loadConfig(reviewedSetup).catch(() => undefined);
-      if (signal?.aborted) return disposition;
+      try {
+        validate();
+      } catch {
+        return disposition;
+      }
       ctx.ui.notify(
         [
           `Edit pi-sync settings manually: ${safeTerminalText(localConfigPath())}`,
-          ...(config?.scope === "agent-directory" ? directoryScopeSummary(config) : []),
+          ...(config?.pathPolicy === "ignore-file"
+            ? [manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
+            : config?.scope === "agent-directory"
+              ? directoryScopeSummary(config)
+              : []),
         ].join("\n"),
         "info",
       );
@@ -81,9 +91,22 @@ export async function showSyncSettings(
     }
     return disposition;
   }
+  if (!ctx.hasUI || signal?.aborted) return disposition;
+  const validateSettingsOwner = captureMutationOwner(ctx, signal);
+  const isCurrent = () => {
+    try {
+      validateSettingsOwner();
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const initial = await loadConfig(reviewedSetup);
-  if (signal?.aborted) return "back";
+  if (!isCurrent()) return disposition;
+  const ignoreAvailable = await ignoreFileSettingsAvailable(ctx, signal);
+  if (!isCurrent()) return disposition;
   const setupName = initial.setupName;
+  type SettingsState = Awaited<ReturnType<typeof loadConfig>>;
   type Action =
     | "automatic"
     | "automatic-transfer"
@@ -98,6 +121,9 @@ export async function showSyncSettings(
     | "on-switch"
     | "include"
     | "exclude"
+    | "ignore-switch"
+    | "ignore-edit"
+    | "ignore-migrate"
     | "remote-include"
     | "storage-location"
     | "setups"
@@ -105,7 +131,7 @@ export async function showSyncSettings(
   let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
   // Keep Kit's existing settings adapter: native SettingsList has no async save/rollback
   // contract or injected keybindings. Kit preserves these safety and accessibility behaviors.
-  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, "settings", Action, ExtensionCommandContext>({
+  const menu = defineMenu<SettingsState, "settings", Action, ExtensionCommandContext>({
     start: "settings",
     screens: {
       settings: ({ state }) => ({
@@ -113,46 +139,87 @@ export async function showSyncSettings(
         title: "Pi Sync Settings",
         lines: [
           `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
+          ...(state.pathPolicy === "ignore-file" && !ignoreAvailable
+            ? [
+                "The connected daemon does not offer ignore-file settings. Use /reload to check for a compatible daemon.",
+              ]
+            : []),
           saveStatus,
         ],
         items: [
-          ...(state.scope === "agent-directory"
-            ? [
-                {
-                  id: "include",
-                  label: "Agent directory scope",
-                  description:
-                    "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
-                  currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
-                  action: "include" as const,
-                },
-              ]
+          ...(state.pathPolicy === "ignore-file"
+            ? ignoreAvailable
+              ? [
+                  {
+                    id: "ignoreFile",
+                    label: "Ignore file",
+                    description: "Select another existing file in the Pi agent directory. No transfer starts.",
+                    currentValue: safeTerminalText(state.ignoreFile ?? ".syncignore"),
+                    action: "ignore-switch" as const,
+                  },
+                  {
+                    id: "ignoreRules",
+                    label: "Edit ignore rules…",
+                    description: `Edit the existing local rules, then confirm separately. Sessions: ${state.include.includes("sessions") ? "opted in (ignore rules still apply)" : "off"}.`,
+                    currentValue: "Edit",
+                    action: "ignore-edit" as const,
+                  },
+                ]
+              : []
+            : ignoreAvailable
+              ? [
+                  {
+                    id: "migrateIgnoreFile",
+                    label: "Migrate to ignore file…",
+                    description: "Review the scope change for this legacy setup. Migration does not start a transfer.",
+                    currentValue: "Review",
+                    action: "ignore-migrate" as const,
+                  },
+                ]
+              : state.scope === "agent-directory"
+                ? [
+                    {
+                      id: "include",
+                      label: "Agent directory scope",
+                      description:
+                        "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
+                      currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
+                      action: "include" as const,
+                    },
+                  ]
+                : [
+                    {
+                      id: "include",
+                      label: "Included paths",
+                      description:
+                        "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
+                      currentValue: `${state.include.length} paths · Edit`,
+                      action: "include" as const,
+                    },
+                    {
+                      id: "exclude",
+                      label: "Excluded paths",
+                      description:
+                        "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
+                      currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
+                      action: "exclude" as const,
+                    },
+                  ]),
+          ...(state.pathPolicy === "ignore-file" && !ignoreAvailable
+            ? []
             : [
                 {
-                  id: "include",
-                  label: "Included paths",
+                  id: "remoteInclude",
+                  label:
+                    ignoreAvailable || state.scope === "agent-directory"
+                      ? "Compare sync policies"
+                      : "Compare included paths",
                   description:
-                    "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
-                  currentValue: `${state.include.length} paths · Edit`,
-                  action: "include" as const,
-                },
-                {
-                  id: "exclude",
-                  label: "Excluded paths",
-                  description:
-                    "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
-                  currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
-                  action: "exclude" as const,
+                    "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
+                  currentValue: "Review",
+                  action: "remote-include" as const,
                 },
               ]),
-          {
-            id: "remoteInclude",
-            label: state.scope === "agent-directory" ? "Compare sync policies" : "Compare included paths",
-            description:
-              "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
-            currentValue: "Review",
-            action: "remote-include",
-          },
           {
             id: "localFields",
             label: "Machine-local fields",
@@ -585,6 +652,9 @@ export async function showSyncSettings(
         await showExcludedPaths(ctx, setupName, editorSignal);
         return resumeSettings(editorSignal);
       },
+      "ignore-switch": ignoreAction("switch"),
+      "ignore-edit": ignoreAction("edit"),
+      "ignore-migrate": ignoreAction("migrate"),
       "remote-include": async ({ signal: actionSignal }) => {
         const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
@@ -629,11 +699,20 @@ export async function showSyncSettings(
       return result;
     };
   }
+  function ignoreAction(action: Parameters<typeof showIgnoreFileAction>[2]) {
+    return async ({ state, signal: actionSignal }: { state: SettingsState; signal: AbortSignal }) => {
+      if (!ignoreAvailable || (state.pathPolicy === "ignore-file") === (action === "migrate"))
+        return { kind: "rejected" as const };
+      const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+      await showIgnoreFileAction(ctx, setupName, action, state.ignoreFile ?? ".syncignore", editorSignal);
+      return resumeSettings(editorSignal);
+    };
+  }
   async function resumeSettings(editorSignal: AbortSignal) {
-    if (editorSignal.aborted) return { kind: "close" as const };
+    if (editorSignal.aborted || !isCurrent()) return { kind: "close" as const };
     try {
       const active = await loadConfig();
-      if (editorSignal.aborted || active.setupName !== setupName) return { kind: "close" as const };
+      if (editorSignal.aborted || !isCurrent() || active.setupName !== setupName) return { kind: "close" as const };
       // Stay reloads authoritative rows without pushing a duplicate screen or clearing search.
       return { kind: "stay" as const };
     } catch {
@@ -643,7 +722,7 @@ export async function showSyncSettings(
   await runMenu({ ...ctx, ui: boundedSettingsUI(ctx) }, menu, {
     getState: () => loadConfig(setupName),
     signal,
-    isCurrent: () => !signal?.aborted,
+    isCurrent,
   });
   return disposition;
 }

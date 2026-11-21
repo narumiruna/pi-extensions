@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside } from "../paths.js";
 import { syncDirectory, writeJson } from "../state/json-file.js";
 import { withLock } from "../state/lock.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
 import { stateDir } from "../state/state-directory.js";
 import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
-import { includeFromSelectionConfig, type SyncSelectionConfig, selectionForSnapshot } from "../sync/sync-policy.js";
+import { includeFromSelectionConfig, selectionForSnapshot } from "../sync/sync-policy.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
 import { agentDirectoryConfiguredSessionDir } from "./snapshot.js";
 import { caseReplacementSpelling, coalesceCaseReplacements } from "./snapshot-case-replacement.js";
@@ -29,6 +28,7 @@ import {
   ownedScopedPostTree,
   ownedScopedSubset,
   readTransactionJournal,
+  recheckScopedImage,
   removeScopedImage,
   scopedDescendant,
   scopedIdentity,
@@ -41,10 +41,17 @@ import {
   AGENT_DIRECTORY_JOURNAL_VERSION,
   assertAllowedTarget,
   assertRecoveryPolicy,
+  assertSafeParents,
+  IGNORE_POLICY_JOURNAL_VERSION,
+  ignorePolicyValidator,
+  ignoreSourceBinding,
   isScopedJournal,
   isStrictlyInside,
+  StaleIgnorePolicyError,
   type TransactionEntry,
   type TransactionJournal,
+  type TransactionOptions,
+  touchesProtectedTarget,
   transactionHasSessionTargets,
   validateJournal,
   validateJournalPolicy,
@@ -63,24 +70,14 @@ import type { SnapshotApplyPlan } from "./snapshot-types.js";
 const JOURNAL_VERSION = 4;
 class ScopedRemovalError extends Error {}
 
-interface TransactionOptions extends SyncSelectionConfig {
-  sessionDir?: string;
-  exclude?: readonly string[];
-  signal?: AbortSignal;
-  validateMutation?: () => void;
-  protectedTargets?: readonly string[];
-  /** Fresh apply authorization only; recovery remains bound to durable journal images. */
-  expectedPreimages?: ReadonlyMap<string, string>;
-  resolveConfiguredSessionDir?: boolean;
-}
-
 export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options: TransactionOptions = {}) {
   options.validateMutation?.();
   const root = path.resolve(agentDir());
   if (options.scope === "agent-directory") {
-    const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(options.signal, root));
+    const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(options.signal, root, options));
     options = { ...options, sessionDir: sessionStorageRoot(root, sessionDir) };
   }
+  const validateIgnorePolicy = ignorePolicyValidator(options);
   await recoverPendingSnapshotTransactions(options);
   const coalesced = await coalesceCaseReplacements(root, plan);
   options.validateMutation?.();
@@ -89,17 +86,10 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
   if (targets.length > 16_384)
     throw new Error("Snapshot transaction exceeds its target bound; review a smaller transfer.");
   return withTargetQueues(targets, options, async (heldKeys) => {
+    if (validateIgnorePolicy) await validateIgnorePolicy();
     await assertUnexcludedTargets(root, [...targets, ...coalesced.replacements.values()], options);
     options.signal?.throwIfAborted();
-    if (
-      targets.some((target) =>
-        options.protectedTargets?.some(
-          (protectedTarget) =>
-            mergePathIdentity(target) === mergePathIdentity(protectedTarget) ||
-            isPathInside(mergePathIdentity(target), mergePathIdentity(protectedTarget)),
-        ),
-      )
-    )
+    if (targets.some((target) => touchesProtectedTarget(target, options.protectedTargets)))
       throw new Error("Snapshot transaction targets the current session; review is required.");
     for (const [before, after] of coalesced.replacements) {
       if ((await caseReplacementSpelling(before, after)) !== before)
@@ -109,6 +99,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
     }
     const originalTargets = new Map([...coalesced.replacements].map(([before, after]) => [after, before]));
     const scoped = options.scope === "agent-directory";
+    /** Fresh apply authorization only; recovery remains bound to durable journal images. */
     const expectedPreimages = new Map(
       [...(options.expectedPreimages ?? [])]
         .filter(([target]) => !scoped || !originalTargets.has(target))
@@ -146,13 +137,14 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
       }
     }
     for (const [target, expected] of expectedPreimages) {
-      if (scoped) await assertUnexcludedTargets(root, [target], options);
+      if (scoped || options.reservedIgnoreNames?.length) await assertUnexcludedTargets(root, [target], options);
       const current = scoped ? (await scopedTransactionImage(target, options)).value : await legacyImage(target);
       options.validateMutation?.();
       options.signal?.throwIfAborted();
       if (current !== expected)
         throw new Error("Reviewed file preimage changed before apply; snapshot installation refused.");
     }
+    if (validateIgnorePolicy) await validateIgnorePolicy();
     const transaction = await prepareTransaction(
       coalesced.plan,
       targets,
@@ -185,8 +177,10 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         heldKeys,
         options,
         async () => {
+          if (validateIgnorePolicy) await validateIgnorePolicy();
           if (scoped && plan.writes.length)
             await recheckAgentDirectoryBudget(root, { deletes: [], writes: plan.writes }, options);
+          if (validateIgnorePolicy) await validateIgnorePolicy();
           await retireRemovalIntent(
             transaction.directory,
             transaction.journal,
@@ -202,11 +196,12 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
             const entry = entriesByTarget.get(item.target);
             if (!entry) throw new Error("Unowned transaction target.");
             const deletedByThisCall = uninstalledWrites.delete(entry.target);
-            if (options.scope === "agent-directory")
+            if (options.scope === "agent-directory" || options.reservedIgnoreNames?.length)
               await assertUnexcludedTargets(transaction.journal.root, [item.target], options);
             await verifyTarget(transaction.directory, entry, transaction.journal, options, deletedByThisCall);
             options.validateMutation?.();
             options.signal?.throwIfAborted();
+            if (validateIgnorePolicy) await validateIgnorePolicy();
             await fs.mkdir(path.dirname(item.target), { recursive: true });
             options.validateMutation?.();
             options.signal?.throwIfAborted();
@@ -226,9 +221,19 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
               } finally {
                 await handle.close();
               }
-              await verifyTarget(transaction.directory, entry, transaction.journal, options, deletedByThisCall);
+              const verified = await verifyTarget(
+                transaction.directory,
+                entry,
+                transaction.journal,
+                options,
+                deletedByThisCall,
+              );
               options.signal?.throwIfAborted();
               options.validateMutation?.();
+              if (validateIgnorePolicy && verified.scoped) {
+                await validateIgnorePolicy();
+                await recheckScopedImage(item.target, verified.scoped, options);
+              }
               await fs.rename(temp, item.target);
               await syncDirectory(path.dirname(item.target));
             } finally {
@@ -244,13 +249,15 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
           );
           options.validateMutation?.();
           options.signal?.throwIfAborted();
+          if (validateIgnorePolicy) await validateIgnorePolicy();
         },
       );
+      if (validateIgnorePolicy) await validateIgnorePolicy();
     } catch (error) {
       // Aborted owners cannot roll back files after another session has replaced them.
       if (options.signal?.aborted)
         throw new Error("Snapshot apply cancelled; guarded transaction evidence retained for review.");
-      if (error instanceof ScopedRemovalError) throw error;
+      if (error instanceof ScopedRemovalError || error instanceof StaleIgnorePolicyError) throw error;
       // Additional queues have been released. Recovery must reserve missing keys afresh.
       if (changesQueueKey)
         throw new Error("Snapshot apply failed; guarded transaction evidence retained for review.", {
@@ -302,12 +309,16 @@ export async function recoverPendingSnapshotTransactions(options: TransactionOpt
       throw new Error("Cannot recover malformed pi-sync transaction; preserve private evidence for review.");
     }
     validateJournalPolicy(journal);
-    if (!journal.completed) assertRecoveryPolicy(journal, options);
+    if (!journal.completed) {
+      assertRecoveryPolicy(journal, options);
+      ignorePolicyValidator(options);
+    }
     let sessionDir = options.sessionDir;
     if (sessionDir === undefined && !journal.completed) {
-      if (options.scope === "agent-directory") sessionDir = await agentDirectoryConfiguredSessionDir(options.signal);
+      if (options.scope === "agent-directory")
+        sessionDir = await agentDirectoryConfiguredSessionDir(options.signal, agentDir(), options);
       else if (options.resolveConfiguredSessionDir && transactionHasSessionTargets(journal))
-        sessionDir = await configuredSessionDir();
+        sessionDir = await configuredSessionDir(options);
     }
     options.validateMutation?.();
     options.signal?.throwIfAborted();
@@ -346,6 +357,7 @@ async function prepareTransaction(
   const { sessionDir } = options;
   const root = path.resolve(agentDir());
   const wholeDirectory = options.scope === "agent-directory";
+  const ignoreSource = options.ignorePolicy ? ignoreSourceBinding(options.ignorePolicy) : undefined;
   const sessionRoot = sessionDir || wholeDirectory ? path.resolve(sessionStorageRoot(root, sessionDir)) : undefined;
   const indexed = indexTransactionPlan(plan, targets);
   const directory = path.join(transactionRoot(), randomUUID());
@@ -357,7 +369,7 @@ async function prepareTransaction(
     options.validateMutation?.();
     assertAllowedTarget(root, sessionRoot, target);
     await assertSafeParents(root, sessionRoot, target);
-    if (wholeDirectory) await assertUnexcludedTargets(root, [target], options);
+    if (wholeDirectory || options.reservedIgnoreNames?.length) await assertUnexcludedTargets(root, [target], options);
     const entry: TransactionEntry = { target, backupName: `${index}`, kind: "missing" };
     if (replacements.has(target)) entry.afterTarget = replacements.get(target);
     const backup = path.join(backupDirectory, entry.backupName);
@@ -394,14 +406,17 @@ async function prepareTransaction(
     ? undefined
     : await prepareSessionRootTransition(directory, root, effectiveRoot, entries, plan, options);
   const journal: TransactionJournal = {
-    version: wholeDirectory
-      ? AGENT_DIRECTORY_JOURNAL_VERSION
-      : sessionRootTransition
-        ? 7
-        : replacements.size
-          ? 5
-          : JOURNAL_VERSION,
+    version: ignoreSource
+      ? IGNORE_POLICY_JOURNAL_VERSION
+      : wholeDirectory
+        ? AGENT_DIRECTORY_JOURNAL_VERSION
+        : sessionRootTransition
+          ? 7
+          : replacements.size
+            ? 5
+            : JOURNAL_VERSION,
     root,
+    ignoreSource,
     ...(wholeDirectory
       ? { selection: selectionForSnapshot(includeFromSelectionConfig(options), options.exclude, options) }
       : options.exclude === undefined
@@ -493,21 +508,20 @@ async function restoreQueuedTransaction(
 ) {
   validateJournal(directory, journal, options.sessionDir);
   const scoped = isScopedJournal(journal);
+  const validateIgnorePolicy = ignorePolicyValidator(options);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
+  if (validateIgnorePolicy) {
+    assertRecoveryPolicy(journal, options);
+    await validateIgnorePolicy();
+  }
   await assertUnexcludedTargets(
     journal.root,
     journal.entries.flatMap((entry) => [entry.target, ...(entry.afterTarget ? [entry.afterTarget] : [])]),
     options,
   );
   for (const entry of journal.entries) {
-    if (
-      options.protectedTargets?.some(
-        (target) =>
-          mergePathIdentity(target) === mergePathIdentity(entry.target) ||
-          isPathInside(mergePathIdentity(entry.target), mergePathIdentity(target)),
-      )
-    )
+    if (touchesProtectedTarget(entry.target, options.protectedTargets))
       throw new Error(
         "Pending transaction touches the current session; resume a different session before guarded recovery.",
       );
@@ -541,7 +555,7 @@ async function restoreQueuedTransaction(
     options.validateMutation?.();
     options.signal?.throwIfAborted();
   }
-  if (scoped && journal.version !== AGENT_DIRECTORY_JOURNAL_VERSION) {
+  if (scoped && journal.version < AGENT_DIRECTORY_JOURNAL_VERSION) {
     journal.version = AGENT_DIRECTORY_JOURNAL_VERSION;
     for (const entry of journal.entries) delete entry.recoveryStaged;
     options.validateMutation?.();
@@ -554,7 +568,10 @@ async function restoreQueuedTransaction(
     const spellingMatches = async () =>
       !entry.afterTarget || (await caseReplacementSpelling(entry.target, entry.afterTarget)) === entry.target;
     if (current === before && (await spellingMatches())) {
-      if (entry.recoveryWorkspace) await cleanScopedWorkspace(directory, entry, options);
+      if (entry.recoveryWorkspace) {
+        if (validateIgnorePolicy) await validateIgnorePolicy();
+        await cleanScopedWorkspace(directory, entry, options);
+      }
       continue;
     }
     options.signal?.throwIfAborted();
@@ -668,6 +685,7 @@ async function restoreQueuedTransaction(
   );
   options.validateMutation?.();
   options.signal?.throwIfAborted();
+  if (validateIgnorePolicy) await validateIgnorePolicy();
   await completeTransaction(directory, journal);
 }
 
@@ -680,12 +698,16 @@ async function restoreScopedEntry(
   before: string,
   spellingMatches: () => Promise<boolean>,
 ) {
+  const validateIgnorePolicy = ignorePolicyValidator(options);
   options.validateMutation?.();
   options.signal?.throwIfAborted();
+  if (validateIgnorePolicy) await validateIgnorePolicy();
   await fs.mkdir(path.dirname(entry.target), { recursive: true });
   await assertSafeParents(journal.root, journal.sessionRoot, entry.target);
-  if (!entry.vacantInstall)
+  if (!entry.vacantInstall) {
+    if (validateIgnorePolicy) await validateIgnorePolicy();
     await buildScopedRecoveryStage(directory, entry, options, () => persistJournal(directory, journal));
+  }
   const verifyStage = async () => {
     const stage = await inspectScopedRecoveryStage(directory, entry, options, true);
     if (!stage || stage.image.kind === "missing" || stage.image.value !== before || stage.partial.kind !== "missing")
@@ -693,7 +715,7 @@ async function restoreScopedEntry(
     if (entry.vacantInstall && scopedIdentity(stage.image.stat) !== entry.vacantInstall)
       throw new Error("Recovery vacancy has a different staging image; preserve evidence for review.");
     const identity = stableScopedIdentity(stage.payload, stage.image.stat);
-    return { payload: stage.payload, identity };
+    return { payload: stage.payload, identity, image: stage.image };
   };
   await verifyStage();
   const { value: verified } = await verifyTarget(directory, entry, journal, options);
@@ -712,12 +734,14 @@ async function restoreScopedEntry(
     ) {
       const queueTargets = needsVacantTarget ? [entry.target, ...(entry.afterTarget ? [entry.afterTarget] : [])] : [];
       await withMissingTargetQueues(queueTargets, heldKeys, options, async () => {
+        if (validateIgnorePolicy) await validateIgnorePolicy();
         const { value: atRename } = await verifyTarget(directory, entry, journal, options);
         if (atRename === before && (await spellingMatches())) return;
         if (needsVacantTarget && atRename !== "missing")
           throw new Error("Transaction target changed after removal; preserve evidence for review.");
         const stage = await verifyStage();
         if (needsVacantTarget && !entry.vacantInstall) {
+          if (validateIgnorePolicy) await validateIgnorePolicy();
           entry.vacantInstall = stage.identity;
           delete entry.removalPending;
           delete entry.replacementStarted;
@@ -735,12 +759,17 @@ async function restoreScopedEntry(
         }
         if ((await scopedPathIdentity(stage.payload, options)) !== stage.identity)
           throw new Error("Staged recovery image changed before restoration; preserve evidence for review.");
-        const { value: atInstall } = await verifyTarget(directory, entry, journal, options);
-        if (atInstall === before && (await spellingMatches())) return;
-        if (atInstall !== atRename)
+        const atInstall = await verifyTarget(directory, entry, journal, options);
+        if (atInstall.value === before && (await spellingMatches())) return;
+        if (atInstall.value !== atRename)
           throw new Error("Transaction target changed before restoration; preserve evidence for review.");
         options.validateMutation?.();
         options.signal?.throwIfAborted();
+        if (validateIgnorePolicy && atInstall.scoped) {
+          await validateIgnorePolicy();
+          await recheckScopedImage(stage.payload, stage.image, options);
+          await recheckScopedImage(entry.target, atInstall.scoped, options);
+        }
         await fs.rename(stage.payload, entry.target);
         await syncDirectory(path.dirname(entry.target));
         await syncDirectory(path.dirname(stage.payload));
@@ -749,6 +778,7 @@ async function restoreScopedEntry(
       });
     }
   }
+  if (validateIgnorePolicy) await validateIgnorePolicy();
   await cleanScopedWorkspace(directory, entry, options);
 }
 
@@ -821,7 +851,9 @@ async function removeOwnedTarget(
   { apply, restoringBefore }: { apply?: boolean; restoringBefore?: string } = {},
 ) {
   const scoped = isScopedJournal(journal);
+  const validateIgnorePolicy = ignorePolicyValidator(options);
   try {
+    if (validateIgnorePolicy) await validateIgnorePolicy();
     await assertUnexcludedTargets(
       journal.root,
       [entry.target, ...(entry.afterTarget ? [entry.afterTarget] : [])],
@@ -873,14 +905,14 @@ async function removeOwnedTarget(
     if (current.scoped) {
       if (current.value !== verified.value) throw new Error("Transaction removal image changed.");
       await assertUnexcludedTargets(journal.root, [entry.target], options);
-      await removeScopedImage(entry.target, current.scoped, options);
+      await removeScopedImage(entry.target, current.scoped, options, validateIgnorePolicy);
     } else {
       await fs.rm(entry.target, { recursive: true, force: true });
     }
     await syncDirectory(path.dirname(entry.target));
     return true;
   } catch (error) {
-    if (!scoped) throw error;
+    if (!scoped || error instanceof StaleIgnorePolicyError) throw error;
     throw new ScopedRemovalError("Scoped transaction removal stopped; preserve transaction and backup for review.", {
       cause: error,
     });
@@ -944,25 +976,6 @@ async function legacyBeforeImage(directory: string, entry: TransactionEntry) {
   return value;
 }
 
-async function assertSafeParents(root: string, sessionRoot: string | undefined, target: string) {
-  assertAllowedTarget(root, sessionRoot, target);
-  const boundary = isPathInside(root, target) ? root : sessionRoot;
-  for (
-    let parent = path.dirname(target);
-    boundary && mergePathIdentity(parent) !== mergePathIdentity(boundary);
-    parent = path.dirname(parent)
-  ) {
-    if (path.dirname(parent) === parent) throw new Error("Transaction parent did not reach its owned boundary.");
-    try {
-      const stat = await fs.lstat(parent);
-      if ((!stat.isDirectory() && !stat.isFile()) || stat.isSymbolicLink())
-        throw new Error("Unsafe transaction parent.");
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-    }
-  }
-}
 async function completeTransaction(directory: string, journal: TransactionJournal) {
   // Publish completion before deleting any backup. A surviving journal after power loss
   // may only retry cleanup, never roll back already accepted files.

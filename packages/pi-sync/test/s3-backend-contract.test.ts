@@ -5,13 +5,17 @@ import { createSyncBackend } from "./backend-factory-eager.js";
 import { S3ProbeHarness } from "./s3-probe-harness.js";
 
 for (const prefix of ["pi-sync", "./"]) {
-  registerSyncBackendContractSuite(`s3 (${prefix})`, () => {
-    const harness = new ContractS3Harness();
-    const config = s3Config();
-    config.backend.destination.prefix = prefix;
-    config.storagePath = prefix;
-    return { backend: createSyncBackend(config), dispose: harness.install() };
-  });
+  registerSyncBackendContractSuite(
+    `s3 (${prefix})`,
+    () => {
+      const harness = new ContractS3Harness();
+      const config = s3Config();
+      config.backend.destination.prefix = prefix;
+      config.storagePath = prefix;
+      return { backend: createSyncBackend(config), dispose: harness.install() };
+    },
+    true,
+  );
 }
 
 class ContractS3Harness {

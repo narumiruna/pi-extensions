@@ -24,7 +24,7 @@ The proposed per-setup `sync.ignoreFile` field names the local file. Omit it to 
 
 Only a single safe filename is accepted: no directory separators, traversal, absolute paths, or collision with protected files. Read and edit only regular files under the agent directory; do not follow symlinks or read a linked alias of another file. Setups share the default file unless they name different files. There are no project overrides or nested ignore files.
 
-If the default file is absent, use these rules without creating a file on read. An explicit editor save can create the file with these starter rules:
+When the user confirms a new setup or explicitly migrates an existing setup to the default ignore-file policy, Pi Sync creates `.syncignore` automatically if it is absent. There is no separate create action. Opening Pi Sync, reading settings, and upgrading a legacy setup do not create the file. Read-only previews can use these starter rules in memory while the default file is absent:
 
 ```gitignore
 /npm/
@@ -33,7 +33,7 @@ If the default file is absent, use these rules without creating a file on read. 
 /truth.json
 ```
 
-The leading `/` anchors each rule to the agent directory. An existing file, even an empty one, replaces the starter rules. If an explicitly selected alternative is missing, or the selected file is unreadable, unsafe, invalid UTF-8, or over the supported size limit, stop the operation and show which file to fix. Do not fall back to a broader scope.
+The leading `/` anchors each rule to the agent directory. Never overwrite a pre-existing file during initialization. An existing file, even an empty one, replaces the starter rules unless there is an unfinished creation record. Record creation durably before opening the absent path exclusively, then verify the resulting file before clearing the record. If interrupted, stop work that depends on the file until it is verified or repaired. Do not activate the new setup or policy while creation is incomplete. If an explicitly selected alternative is missing, or the selected file is unreadable, unsafe, invalid UTF-8, or over the supported size limit, stop the operation and show which file to fix. Do not fall back to a broader scope.
 
 `auth.json` and Pi's actual `trust.json` remain protected independently of these rules. `truth.json` is the requested default exclusion, not an alternative name for Pi's trust file. Keep the engine's other hard protections, including Pi Sync settings and state. Keep `.syncignore` and configured alternative ignore files local and out of snapshot payloads. Rules cannot bypass any hard protection. Sessions still require separate opt-in; opting in while `/sessions/` remains in the file does not sync sessions.
 
@@ -50,8 +50,8 @@ Users who sync sessions match their logical `sessions/` paths even if Pi stores 
 
 ### Menu and skill
 
-- **`/sync` → Settings → Ignore file** shows the active filename and changes which file the current setup uses. Validate the candidate file before saving the pointer. A user entering a new name can create its starter file first, after explicit confirmation.
-- **`/sync` → Settings → Edit ignore rules…** opens the file in Pi's multiline editor. Show the path and warn if other setups use it. Save only after explicit confirmation; cancellation leaves the file unchanged. Show a stale-edit error if the file changed since opening. In non-TUI modes, do not open an editor; RPC can show the path for manual editing.
+- **`/sync` → Settings → Ignore file** shows the active filename and lets the user choose a different, existing file. Validate it before saving the pointer. This row does not create files.
+- **`/sync` → Settings → Edit ignore rules…** opens the existing file in Pi's multiline editor. Show the path and warn if other setups use it. Save only after explicit confirmation; cancellation leaves the file unchanged. If the file is missing, show its path without creating it. Show a stale-edit error if the file changed since opening. In non-TUI modes, do not open an editor; RPC can show the path for manual editing.
 - Remove **Included paths**, **Excluded paths**, and the legacy rule editor from normal settings. Keep **Compare sync policies** as a read-only comparison and a way into the existing reviewed resolution flow; do not add a new slash-command route.
 - Update the bundled `configure-pi-sync` skill to direct path changes to the active ignore file, not JSON arrays. Allow a scoped edit of that text file only when the user explicitly asks for it and the active filename is known; otherwise ask for the filename or direct the user to the editor. Do not read private `pi-sync.json` to discover the filename, change JSON settings, or start a transfer. Explain any scope expansion and the retained-history limitation.
 
@@ -73,7 +73,7 @@ One editable file replaces path arrays and their editors. A setup can use its ow
 | Area | Evidence required |
 | --- | --- |
 | Patterns and defaults | Table-driven cases checked against Git, including root anchoring, directory-only rules, comments, exceptions, parent pruning, and case behavior. Test missing default, empty file, custom filename, unsafe files, and session and credential protections. |
-| Settings and menu | Test no write on load, explicit creation, two setups sharing a file, stale saves, invalid settings, unknown-field preservation, atomic-write failure, and unchanged state on cancellation, disposal, or session replacement. Verify native TUI editing and non-TUI fallback without adding a new command route. |
+| Settings and menu | Test no write on load, automatic creation during confirmed setup or migration, no overwrite of a concurrent creation, and refusal to use a partially written file after restart. Test two setups sharing a file, stale saves, invalid settings, unknown-field preservation, atomic-write failure, and unchanged state on cancellation, disposal, or session replacement. Verify native TUI editing and non-TUI fallback without adding a new command route. |
 | Engine and compatibility | Test that a legacy setup is unchanged before migration, mixed versions refuse unsupported policy, and policy mismatch or an edit after review blocks mutation. Verify protected paths across collection, transfer, rollback, automatic work, and recovery; check wire metadata on Git, WebDAV, and S3. |
 | Skill and release | Validate skill format and discovery; exercise guidance, explicit file-edit scope, and refusal to touch credentials or run transfers. Update the package README and skill reference when behavior ships. Run `npm run check`, `npm test`, and an isolated Pi package-load smoke. |
 

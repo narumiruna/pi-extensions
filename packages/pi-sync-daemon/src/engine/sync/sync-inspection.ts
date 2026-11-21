@@ -4,9 +4,10 @@ import type { AnySyncConfig } from "../settings/settings-types.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
+import { inspectHeadSelection } from "./remote-snapshot.js";
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
-import { inspectRemoteSelection, syncSelectionHasContent } from "./sync-policy.js";
+import { syncSelectionHasContent } from "./sync-policy.js";
 import { fileHashMap, hasLocalChanges, remoteChangedSinceState } from "./sync-state.js";
 
 /** Advisory baseline-relative observation, never an authorization to transfer files. */
@@ -28,6 +29,8 @@ export async function inspectSync(
   throwIfAborted(signal);
   const head = await timings.measure("remote head", () => backend.readHead(signal));
   throwIfAborted(signal);
+  const selectionState = head ? await inspectHeadSelection(backend, config, head, signal) : undefined;
+  throwIfAborted(signal);
   const freshness: { localIdentity?: string } = {
     localIdentity: createHash("sha256")
       .update(JSON.stringify(fileHashMap(local)))
@@ -36,12 +39,12 @@ export async function inspectSync(
   return {
     ...freshness,
     head,
-    selectionState: head
-      ? inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config)
-      : undefined,
+    selectionState,
     localFiles: local.files.length,
     localChanged: hasLocalChanges(local, state, config),
-    remoteChanged: remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)),
+    remoteChanged:
+      (selectionState?.kind === "different" && !!selectionState.ignorePolicyComparison) ||
+      remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)),
     firstSync: !state.lastAppliedSnapshot,
     emptyInclude: !syncSelectionHasContent(config),
     stateIdentity: syncStateFingerprint(state),
