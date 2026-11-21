@@ -202,7 +202,16 @@ export async function scopedTransactionImage(
     const hash = createHash("sha256");
     const copy = destination ? await fs.open(destination, "wx", 0o600) : undefined;
     try {
-      if (copy) await beforeCopyFile?.(copy);
+      if (copy && beforeCopyFile) {
+        if (process.platform === "darwin") {
+          validate(guards);
+          await copy.utimes(observed.atime, observed.mtime);
+          validate(guards);
+          await copy.sync();
+          validate(guards);
+        }
+        await beforeCopyFile(copy);
+      }
       await readStableFile(source, observed, guards, async (chunk) => {
         hash.update(chunk);
         if (copy) await copy.writeFile(chunk);
