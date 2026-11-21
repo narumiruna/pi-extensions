@@ -18,7 +18,7 @@ import {
 import type { EditorStatusMode, EditorStatusTrigger } from "@narumitw/pi-tui-kit/editor-status-view";
 import type { SubagentSettings } from "./settings.js";
 import type { SubagentWidgetControls } from "./widget.js";
-import { renderSubagentWidgetPreview } from "./widget-renderer.js";
+import { renderSubagentWidgetPreview } from "./widget-preview.js";
 
 interface SubagentSettingsUIOptions {
   signal: AbortSignal;
@@ -91,6 +91,7 @@ export async function showSubagentSettings(
         }
       };
       const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
+      const previewRule = new HorizontalRule({ ruleStyle: (text) => theme.fg("borderMuted", text) });
       // Keep native SettingsList semantics, but use this screen's callback theme.
       const listTheme = {
         ...getSettingsListTheme(),
@@ -262,6 +263,10 @@ export async function showSubagentSettings(
             list.updateValue("pinView", view.pinned ? "Yes" : "No");
           }
           const content = list.render(Math.max(4, renderedWidth)).slice(0, chooser ? undefined : -2);
+          const nativeRows = content.map((line, index): { line: string; nativeIndex?: number } => ({
+            line,
+            nativeIndex: index,
+          }));
           const preview: string[] = [];
           if (view) {
             const draft = { ...initial };
@@ -271,25 +276,61 @@ export async function showSubagentSettings(
             preview.push(
               theme.fg("muted", "Preview · sample jobs"),
               ...renderSubagentWidgetPreview(draft, previewMode, theme, renderedWidth),
+              ...previewRule.render(renderedWidth),
             );
           }
           contentHeight = content.length;
-          const focusedRow = content.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
-          mouseRows.clear();
-
+          const nativeFocus = content.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
-          const frame = renderBoundedFrameLayout({
+          const title = new Text(theme.fg("accent", theme.bold("Subagents Settings")), 0, 0).render(renderedWidth);
+          const frameOptions = {
             width: renderedWidth,
             maxRows: Math.max(1, terminalRows - 3),
             rule: rule.render(renderedWidth)[0] ?? "",
-            title: new Text(theme.fg("accent", theme.bold("Subagents Settings")), 0, 0).render(renderedWidth),
-            context: [theme.fg("muted", "Saved changes apply immediately. View controls are session-only.")],
-            content,
-            hints: [...preview, ...new Text(theme.fg("muted", "Ctrl+C close"), 0, 0).render(renderedWidth)],
-            priorityRows: focusedRow < 0 ? [] : [focusedRow],
-            focusedRow,
-          });
-          for (const { frameIndex, contentIndex } of frame.contentRows) mouseRows.set(frameIndex, contentIndex);
+            hints: new Text(theme.fg("muted", "Ctrl+C close"), 0, 0).render(renderedWidth),
+          };
+          const renderFrame = (rows: typeof nativeRows, showPreview: boolean) => {
+            const focusedRow = rows.findIndex(({ nativeIndex }) => nativeIndex === nativeFocus);
+            return renderBoundedFrameLayout({
+              ...frameOptions,
+              title: showPreview ? [...title, ...preview] : title,
+              content: rows.map(({ line }) => line),
+              priorityRows: focusedRow < 0 ? [] : [focusedRow],
+              focusedRow,
+            });
+          };
+          let groupRows: typeof nativeRows | undefined;
+          if (view && !chooser) {
+            const heading = (label: string) => ({ line: theme.fg("muted", theme.bold(label)) });
+            groupRows = [
+              heading("Saved preferences"),
+              ...nativeRows.slice(0, flags.length),
+              heading("This session"),
+              ...nativeRows.slice(flags.length, items.length),
+            ];
+          }
+          let rows = groupRows
+            ? [...groupRows, ...nativeRows.slice(items.length).filter(({ line }) => line.trim() !== "")]
+            : nativeRows;
+          let frame = renderFrame(rows, true);
+          if (groupRows && frame.contentRows.length < rows.length) {
+            const previewFrame = renderFrame(groupRows, true);
+            if (previewFrame.contentRows.length === groupRows.length) {
+              rows = groupRows;
+              frame = previewFrame;
+            } else {
+              frame = renderFrame(rows, false);
+              if (frame.contentRows.length < rows.length) {
+                rows = nativeRows;
+                frame = renderFrame(rows, false);
+              }
+            }
+          }
+          mouseRows.clear();
+          for (const { frameIndex, contentIndex } of frame.contentRows) {
+            const nativeIndex = rows[contentIndex]?.nativeIndex;
+            if (nativeIndex !== undefined) mouseRows.set(frameIndex, nativeIndex);
+          }
           return frame.lines;
         },
         invalidate() {
