@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { type BigIntStats, constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, parse, resolve } from "node:path";
+import { lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { parseTree } from "jsonc-parser";
-import { type ExternalPreviewRoot, relativePreviewPath } from "./filelinks.js";
 import { INLINE_FORMATTING_PROMPT } from "./prompt.js";
 
 export type PromptHintSettings = { enabled: boolean; text: string };
@@ -14,7 +12,6 @@ export type PromptHintChange = { key: "promptHintEnabled"; value: boolean } | { 
 export const DEFAULT_PROMPT_HINT: PromptHintSettings = Object.freeze({ enabled: true, text: INLINE_FORMATTING_PROMPT });
 
 type PromptSettings = { prompt: PromptHintSettings; saveBlocked?: true };
-type Settings = PromptSettings & { roots: readonly ExternalPreviewRoot[]; invalid?: true };
 type SettingsDocument = Record<string, unknown>;
 
 type DocumentSnapshot = { document: SettingsDocument; source?: string; stat?: BigIntStats };
@@ -90,40 +87,6 @@ function readPromptHint(document: SettingsDocument): PromptHintSettings | undefi
   return typeof enabled === "boolean" && text !== undefined ? { enabled, text } : undefined;
 }
 
-// Path syntax is a setting value. Filesystem availability and authorization are separate.
-function readRootPaths(document: SettingsDocument): string[] | undefined {
-  if (!Object.hasOwn(document, "externalPreviewRoots")) return [];
-  const values = document.externalPreviewRoots;
-  if (!Array.isArray(values)) return undefined;
-  const paths: string[] = [];
-  for (const value of values) {
-    if (typeof value !== "string" || !isAbsolute(value) || /[*?[\]{}\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u.test(value))
-      return undefined;
-    const path = resolve(value);
-    if (path === parse(path).root) return undefined;
-    paths.push(path);
-  }
-  return paths;
-}
-
-async function authorizeRoots(paths: readonly string[], signal: AbortSignal): Promise<ExternalPreviewRoot[]> {
-  if (!paths.length) return [];
-  signal.throwIfAborted();
-  const home = resolve(homedir());
-  const realHome = await realpath(home).catch(() => home);
-  const roots: ExternalPreviewRoot[] = [];
-  for (const path of paths) {
-    signal.throwIfAborted();
-    if (path === home || path === realHome || relativePreviewPath(path, realHome)) throw new Error();
-    const identity = await lstat(path, { bigint: true });
-    signal.throwIfAborted();
-    if (!identity.isDirectory() || (await realpath(path)) !== path) throw new Error();
-    signal.throwIfAborted();
-    roots.push({ path, identity });
-  }
-  return roots;
-}
-
 async function readSettings(signal: AbortSignal): Promise<SettingsDocument | undefined> {
   if (signal.aborted) return undefined;
   const path = settingsPath();
@@ -135,33 +98,12 @@ async function readSettings(signal: AbortSignal): Promise<SettingsDocument | und
   }
 }
 
-function describePrompt(prompt: PromptHintSettings | undefined, paths: readonly string[] | undefined): PromptSettings {
-  return {
-    prompt: prompt ?? { ...DEFAULT_PROMPT_HINT },
-    ...(!prompt || !paths ? { saveBlocked: true } : {}),
-  };
-}
-
-export async function loadSettings(signal: AbortSignal): Promise<Settings> {
-  const defaults = { roots: [], prompt: { ...DEFAULT_PROMPT_HINT } };
-  const document = await readSettings(signal);
-  if (signal.aborted) return defaults;
-  if (!document) return { ...defaults, invalid: true, saveBlocked: true };
-  const paths = readRootPaths(document);
-  const prompt = describePrompt(readPromptHint(document), paths);
-  if (!paths) return { ...prompt, roots: [], invalid: true };
-  try {
-    const roots = await authorizeRoots(paths, signal);
-    return signal.aborted ? defaults : { ...prompt, roots };
-  } catch {
-    return signal.aborted ? defaults : { ...prompt, roots: [], invalid: true };
-  }
-}
-
 export async function loadPromptSettings(signal: AbortSignal): Promise<PromptSettings> {
   const document = await readSettings(signal);
-  if (signal.aborted) return { prompt: { ...DEFAULT_PROMPT_HINT } };
-  return describePrompt(document && readPromptHint(document), document && readRootPaths(document));
+  const defaults = { prompt: { ...DEFAULT_PROMPT_HINT } };
+  if (signal.aborted) return defaults;
+  const prompt = document && readPromptHint(document);
+  return prompt ? { prompt } : { ...defaults, saveBlocked: true };
 }
 
 function editPromptSetting(source: string | undefined, key: PromptHintChange["key"], value: boolean | string): string {
@@ -255,7 +197,7 @@ export async function savePromptHint(
       const snapshot = await readDocument(path, signal);
       if (signal.aborted) return false;
       const prompt = readPromptHint(snapshot.document);
-      if (!prompt || !readRootPaths(snapshot.document)) throw new Error();
+      if (!prompt) throw new Error();
       const current = enabled ? prompt.enabled : prompt.text;
       if (current !== baseline) {
         fail = stale;

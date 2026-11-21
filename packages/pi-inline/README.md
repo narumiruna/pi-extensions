@@ -8,7 +8,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 ## ✨ Features
 
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
-- Hover over a file link in fullscreen mode to preview a workspace image or text file, or text in an approved external directory.
+- Hover over a file link in fullscreen mode to preview local text files, including files outside the workspace, or workspace images.
 - Turn on filename lookup for wikilinks in the current session.
 - Edit or turn off the system prompt hint for badges and file citations.
 
@@ -49,8 +49,10 @@ extension. Do not load both copies. Use `/inline` to open the settings menu.
 
 Start Pi in a directory with a `README.md` file. Send a message containing
 `[README](./README.md)` to see a file icon next to the label. In fullscreen mode,
-hover over the link to preview the file. If Pi detects Kitty graphics support,
-hover over an image link such as `[Cat Photo](./cat.png)` to see the image.
+hover over the link to preview the file. Absolute and relative paths outside the
+workspace also work for text previews without any setup. If Pi detects Kitty
+graphics support, hover over a workspace image link such as
+`[Cat Photo](./cat.png)` to see the image.
 
 ## 💬 Commands
 
@@ -105,13 +107,12 @@ and refreshes five seconds after each scan.
 
 ## ⚙️ Settings
 
-Both settings groups use `pi-inline.json` in Pi's agent directory (by default
+Prompt hint settings use `pi-inline.json` in Pi's agent directory (by default
 `~/.pi/agent/`). Project settings are ignored. Use a regular file, not a
 symbolic link. If its content is invalid, repair it before saving through the
 menu. Settings writes are ordered within one Pi process, not between processes.
 Finish saving before editing the file by hand or from another Pi process.
-
-### Prompt hint
+The former `externalPreviewRoots` field is ignored and can be removed.
 
 `promptHintEnabled` accepts a boolean and defaults to `true`. `promptHintText`
 accepts a non-blank string, including multiple lines. Line endings are saved as
@@ -123,34 +124,14 @@ Use [[label]] for badges.
 Use Markdown links with workspace-relative paths for file citations, for example [file](./path/to/file#L12-L20).
 ```
 
-### External text previews
-
-To allow external text previews, set `externalPreviewRoots`:
-
-```json
-{
-  "externalPreviewRoots": ["/home/alex/.agents/plans"]
-}
-```
-
-A conversation link can trigger a file read inside an approved directory when
-you hover over it. Approve only narrow directories you control, not shared
-directories. Use existing absolute directories without symbolic links. Do not
-use globs, a filesystem root, your home directory, or a directory that contains
-your home directory.
-
-The default is `[]`. Invalid roots or an unreadable file leave external
-previews off. Changes take effect on session start or `/reload`. To revoke
-access, remove the field or set it to `[]`, then run `/reload`. Link icons do not
-depend on this setting.
-
 ## 🔒 Security and privacy
 
-Hover can show hidden files, including files that contain secrets. Previews
-exclude `node_modules` and symbolic links. External previews are text-only.
-External PNG, JPEG, GIF, and WebP links can be opened but never start an image
-preview. The extension does not add preview contents to model context or
-stored messages.
+Hovering over a local Markdown link can display a file Pi can read, even outside
+the workspace. This includes hidden files and files that contain secrets. Avoid
+hovering over untrusted links, especially when sharing your screen. Previews
+exclude `node_modules` and symbolic links. External PNG, JPEG, GIF, and WebP
+links can be opened but not previewed. The extension does not add preview
+contents to model context or stored messages.
 
 In the terminal UI, Pi sends the enabled prompt hint to the model provider and
 can retain it in session history. Do not put secrets in the hint. Editing or

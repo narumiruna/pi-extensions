@@ -55,7 +55,6 @@ let agentDir: string;
 let settingsFile: string;
 let plan: string;
 let extension: typeof import("../src/index.js").default;
-let loadSettings: typeof import("../src/settings.js").loadSettings;
 
 beforeEach(async () => {
   base = await realpath(await mkdtemp(join(tmpdir(), "pi-inline-external-")));
@@ -71,7 +70,6 @@ beforeEach(async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
   vi.resetModules();
   ({ default: extension } = await import("../src/index.js"));
-  ({ loadSettings } = await import("../src/settings.js"));
   initTheme("dark");
   setCapabilityOverrides({ hyperlinks: true, images: "kitty" });
 });
@@ -221,7 +219,7 @@ test("only loads the user settings file, without writing missing defaults or loa
   const session = fixture(onTestFinished);
   const projectDir = join(cwd, CONFIG_DIR_NAME);
   await mkdir(projectDir);
-  await writeFile(join(projectDir, "pi-inline.json"), JSON.stringify({ externalPreviewRoots: [plans] }));
+  await writeFile(join(projectDir, "pi-inline.json"), JSON.stringify({ promptHintEnabled: "invalid" }));
   clearIo();
   await session.start("rpc");
   for (const fn of io) expect(fn).not.toHaveBeenCalled();
@@ -231,15 +229,11 @@ test("only loads the user settings file, without writing missing defaults or loa
   expect(readFile).not.toHaveBeenCalled();
   await expect(lstat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
   expect(session.notify).not.toHaveBeenCalled();
-  session.link("[Note](../plans/rename%20plan.md)");
-  await session.hover();
-  expect(open).not.toHaveBeenCalled();
-  expect(readExcerpt).not.toHaveBeenCalled();
 });
 
 test("warns without echoing malformed settings or read errors", async ({ onTestFinished }) => {
   const session = fixture(onTestFinished);
-  await writeSettings({ externalPreviewRoots: [plans] });
+  await writeSettings({});
   await writeFile(settingsFile, "{ invalid \x1b[31msecret");
   await session.start();
   vi.mocked(readFile).mockRejectedValueOnce(new Error("secret settings path"));
@@ -247,35 +241,13 @@ test("warns without echoing malformed settings or read errors", async ({ onTestF
   expect(session.notify.mock.calls).toEqual(
     Array(2).fill(["pi-inline: Invalid or unreadable settings were ignored.", "warning"]),
   );
-  session.link("[Note](../plans/rename%20plan.md)");
-  await session.hover();
-  expect(readExcerpt).not.toHaveBeenCalled();
-});
-
-test("rejects the entire allowlist when a root is invalid", async () => {
-  const link = join(base, "link");
-  await symlink(plans, link, "dir");
-  const signal = new AbortController().signal;
-  for (const value of [
-    null,
-    [],
-    { externalPreviewRoots: {} },
-    ...["plans", "~/plans", `${plans}/*`, parse(home).root, home, base, plan, link, join(base, "missing"), 1].map(
-      (invalid) => ({ externalPreviewRoots: [plans, invalid] }),
-    ),
-  ]) {
-    await writeSettings(value);
-    await expect(loadSettings(signal)).resolves.toMatchObject({ roots: [], invalid: true });
-  }
-  await writeSettings({ externalPreviewRoots: [plans, `${plans}/`], unrelated: true });
-  await expect(loadSettings(signal)).resolves.toMatchObject({ roots: [{ path: plans }, { path: plans }] });
 });
 
 test.for(["replacement", "shutdown"] as const)(
   "discards delayed settings on %s",
   async (action, { onTestFinished }) => {
     const session = fixture(onTestFinished);
-    await writeSettings({ externalPreviewRoots: [plans] });
+    await writeSettings({ promptHintText: "Old prompt" });
     const pending = Promise.withResolvers<Buffer<ArrayBuffer>>();
     const entered = Promise.withResolvers<AbortSignal | undefined>();
     vi.mocked(readFile).mockImplementationOnce((_file, options) => {
@@ -284,35 +256,34 @@ test.for(["replacement", "shutdown"] as const)(
     });
     const old = session.start();
     const signal = await entered.promise;
-    if (action === "replacement") await writeSettings({ externalPreviewRoots: [] });
+    if (action === "replacement") await writeSettings({ promptHintText: "New prompt" });
     const next = action === "replacement" ? session.start() : session.stop();
     expect(signal?.aborted).toBe(true);
-    pending.resolve(
-      Buffer.from(action === "shutdown" ? "invalid JSON" : JSON.stringify({ externalPreviewRoots: [plans] })),
-    );
+    pending.resolve(Buffer.from("invalid JSON"));
     await Promise.all([old, next]);
-    clearIo();
-    session.link("[Note](../plans/rename%20plan.md)");
-    await session.hover();
-    expect(readExcerpt).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
     expect(session.notify).not.toHaveBeenCalled();
   },
 );
 
-test.for(["", "#L2-L3"])(
-  "shows a bounded external Markdown excerpt for anchor %s and revokes on reload",
-  async (anchor, { onTestFinished }) => {
+test.for([
+  { absolute: true, anchor: "", legacy: undefined },
+  { absolute: false, anchor: "#L2-L3", legacy: { externalPreviewRoots: [] } },
+  { absolute: true, anchor: "#L2-L3", legacy: { externalPreviewRoots: "invalid" } },
+])(
+  "shows a bounded external Markdown excerpt without approval (%j)",
+  async ({ absolute, anchor, legacy }, { onTestFinished }) => {
     const session = fixture(onTestFinished);
-    await writeSettings({ externalPreviewRoots: [plans] });
+    if (legacy) await writeSettings(legacy);
     await session.start();
-    const source = `[rename plan](../plans/rename%20plan.md${anchor})`;
+    const directory = absolute ? plans : "../plans";
+    const source = `[rename plan](${directory}/rename%20plan.md${anchor})`;
     const shown = Promise.withResolvers<void>();
     session.show.mockImplementationOnce(() => {
       shown.resolve();
       return { hide: session.hide } as unknown as OverlayHandle;
     });
-    session.link(source);
+    const rendered = session.link(source);
+    expect(readExcerpt).not.toHaveBeenCalled();
     await session.hover();
     await shown.promise;
     const [[overlay, options]] = session.show.mock.calls;
@@ -330,81 +301,60 @@ test.for(["", "#L2-L3"])(
       expect(text).not.toContain("**Second line**");
     }
     expect(session.render(source)).not.toMatch(/Preview title|Second line/);
-    await writeSettings({});
+    expect(session.notify).not.toHaveBeenCalled();
     await session.stop("reload");
     expect(session.hide).toHaveBeenCalledOnce();
     await session.start();
-    const line = session.link(source);
-    expect(stripTerminalSequences(line)).toContain("📄");
+    session.screen.mockReturnValue([rendered]);
     vi.mocked(readExcerpt).mockClear();
     await session.hover();
     expect(readExcerpt).not.toHaveBeenCalled();
   },
 );
 
-test("rejects unauthorized targets before reads and unsafe paths before open", async ({ onTestFinished }) => {
+test("does not read external targets from unsigned or changed links, images, or excluded paths", async ({
+  onTestFinished,
+}) => {
   const session = fixture(onTestFinished);
-  await mkdir(`${plans}-other`);
-  await writeFile(join(`${plans}-other`, "other.md"), "Denied");
   await writeFile(join(plans, "image.png"), "Not a preview");
-  await symlink(`${plans}-other`, join(plans, "escape"), "dir");
-  await mkdir(join(plans, "directory"));
-  if (process.platform !== "win32") execFileSync("mkfifo", [join(plans, "pipe")]);
-  await writeSettings({ externalPreviewRoots: [plans] });
   await session.start();
   clearIo();
   const unsigned = hyperlink("Note", "../plans/rename%20plan.md");
   session.screen.mockReturnValue([unsigned]);
   await session.hover();
   const signed = session.link("[Note](../plans/rename%20plan.md)");
-  session.screen.mockReturnValue([signed.replace("rename%20plan.md", "image.txt")]);
+  session.screen.mockReturnValue([signed.replace("rename%20plan.md", "other.txt")]);
   await session.hover();
-  for (const href of ["../plans-other/other.md", "../plans/%2e%2e/plans-other/other.md", "../plans/image.png"]) {
-    const line = session.link(`[Note](${href})`);
-    expect(getOsc8LinkAtColumn(line, 0)).toBe(href);
+  for (const href of ["../plans/image.png", "../node_modules/dependency.md", "https://example.test/a.md"]) {
+    session.link(`[Note](${href})`);
     await session.hover();
   }
   for (const fn of io) expect(fn).not.toHaveBeenCalled();
   expect(readExcerpt).not.toHaveBeenCalled();
   expect(prepareImagePreview).not.toHaveBeenCalled();
-
-  const signal = new AbortController().signal;
-  const {
-    roots: [root],
-  } = await loadSettings(signal);
-  expect(root).toBeDefined();
-  clearIo();
-  for (const path of ["escape/other.md", "missing.md", "directory", "pipe", "../plans-other/other.md"]) {
-    await expect(readExcerpt(root, join(plans, path), signal)).resolves.toBeUndefined();
-  }
-  expect(open).not.toHaveBeenCalled();
   expect(session.show).not.toHaveBeenCalled();
 });
 
-test.for(["symlink", "replacement"])("rejects an approved root after %s", async (change) => {
-  await writeSettings({ externalPreviewRoots: [plans] });
+test("rejects missing and nonregular external paths and symlinks before opening a file", async () => {
+  await symlink(plans, join(base, "alias"), "dir");
+  await symlink(plan, join(plans, "link.md"), "file");
+  await mkdir(join(plans, "directory"));
+  if (process.platform !== "win32") execFileSync("mkfifo", [join(plans, "pipe")]);
+  clearIo();
+  const root = parse(base).root;
   const signal = new AbortController().signal;
-  const {
-    roots: [root],
-  } = await loadSettings(signal);
-  const previous = `${plans}-previous`;
-  await rename(plans, previous);
-  if (change === "symlink") await symlink(previous, plans, "dir");
-  else {
-    await mkdir(plans);
-    await writeFile(plan, "Replacement content");
+  for (const path of [
+    join(base, "alias", "rename plan.md"),
+    ...["link.md", "missing.md", "directory", "pipe", "node_modules/ignored.md"].map((name) => join(plans, name)),
+  ]) {
+    await expect(readExcerpt(root, path, signal)).resolves.toBeUndefined();
   }
-  vi.mocked(open).mockClear();
-  await expect(readExcerpt(root, plan, signal)).resolves.toBeUndefined();
   expect(open).not.toHaveBeenCalled();
 });
 
 test("closes the wrong handle without reading if the target changes during open", async () => {
-  await writeSettings({ externalPreviewRoots: [plans] });
   const signal = new AbortController().signal;
-  const {
-    roots: [root],
-  } = await loadSettings(signal);
+  const root = parse(base).root;
   const replacement = join(plans, "different.md");
   await writeFile(replacement, "Unexpected content");
   const other = await open(replacement, "r");
@@ -423,11 +373,10 @@ test("closes the wrong handle without reading if the target changes during open"
   }
 });
 
-test.for(["leave", "resize", "dispose", "reload"] as const)(
+test.for(["leave", "resize", "dispose", "replacement", "shutdown", "reload"] as const)(
   "cancels a delayed external read on %s",
   async (action, { onTestFinished }) => {
     const session = fixture(onTestFinished);
-    await writeSettings({ externalPreviewRoots: [plans] });
     await session.start();
     session.link("[Note](../plans/rename%20plan.md)");
     const pending = Promise.withResolvers<Awaited<ReturnType<typeof readExcerpt>>>();
@@ -439,7 +388,9 @@ test.for(["leave", "resize", "dispose", "reload"] as const)(
     if (action === "reload") {
       await session.stop("reload");
       await session.start();
-    } else if (action === "dispose") session.dispose();
+    } else if (action === "replacement") await session.start();
+    else if (action === "shutdown") await session.stop();
+    else if (action === "dispose") session.dispose();
     else if (action === "leave") process.stdin.emit("data", "\x1b[<35;120;1M");
     else {
       session.columns.mockReturnValue(90);

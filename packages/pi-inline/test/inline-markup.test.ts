@@ -36,7 +36,7 @@ import {
 } from "@earendil-works/pi-tui";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { parseLineRange, readExcerpt, renderFilePreview, resolveLinkPath } from "../src/filelinks.js";
+import { classifyLinkPath, parseLineRange, readExcerpt, renderFilePreview } from "../src/filelinks.js";
 import { prepareImagePreview, previewImageMime } from "../src/image-preview.js";
 import { showInlineSettings } from "../src/settings-menu.js";
 
@@ -458,21 +458,26 @@ test("plain badges do not index, link, or preview an existing file", async ({ on
   expect(session.setWidget).toHaveBeenLastCalledWith("pi-inline-markup.preview", undefined);
 });
 
-test("only resolves eligible workspace paths", () => {
-  expect(resolveLinkPath(fixtureRoot, "./notes/a%20b.md#part")).toBe(join(fixtureRoot, "notes", "a b.md"));
-  expect(resolveLinkPath(fixtureRoot, "./notes/.hidden.md")).toBe(join(fixtureRoot, "notes", ".hidden.md"));
+test("classifies eligible local paths inside and outside the workspace", () => {
   const workflow = join(fixtureRoot, ".github", "workflows", "ci.yml");
-  expect(resolveLinkPath(fixtureRoot, `${workflow}#L1`)).toBe(workflow);
+  const outside = join(dirname(fixtureRoot), ".outside.md");
+  for (const [href, kind, path] of [
+    ["./notes/a%20b.md#part", "workspace", join(fixtureRoot, "notes", "a b.md")],
+    ["./notes/.hidden.md", "workspace", join(fixtureRoot, "notes", ".hidden.md")],
+    [`${workflow}#L1`, "workspace", workflow],
+    ["./%2e%2e/.outside.md", "external", outside],
+    [outside, "external", outside],
+  ]) {
+    expect(classifyLinkPath(fixtureRoot, href), href).toEqual({ kind, path });
+  }
   for (const href of [
     "https://example.test/a.md",
     `file://${join(fixtureRoot, "a.md")}`,
     "//example.test/a.md",
-    "../outside.md",
-    "./%2e%2e/.outside.md",
-    join(dirname(fixtureRoot), ".outside.md"),
     "./.hidden/node_modules/pkg/README.md",
+    "../node_modules/pkg/README.md",
   ]) {
-    expect(resolveLinkPath(fixtureRoot, href), href).toBeUndefined();
+    expect(classifyLinkPath(fixtureRoot, href), href).toBeUndefined();
   }
 });
 
@@ -519,7 +524,7 @@ test("scans beyond the first excerpt while bounding the source search and output
   expect(await readExcerpt(fixtureRoot, path, signal, { start: 4, end: 4 })).toBeUndefined();
 });
 
-test("still excludes files outside the workspace, node_modules, directories, and symlinks", async () => {
+test("excludes files outside the supplied root, node_modules, directories, and symlinks", async () => {
   const project = await mkdtemp(join(fixtureRoot, "project-"));
   const outside = join(fixtureRoot, ".outside.md");
   const hidden = join(project, ".hidden.md");

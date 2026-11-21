@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, parse } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { INLINE_FORMATTING_PROMPT } from "../src/prompt.js";
 
@@ -64,7 +64,6 @@ async function expectIntact(source: string): Promise<void> {
 
 test("loads defaults and leaves a missing user settings directory untouched until a changed save", async () => {
   expect(settings.DEFAULT_PROMPT_HINT).toEqual(defaults);
-  await expect(settings.loadSettings(signal)).resolves.toEqual({ prompt: defaults, roots: [] });
   await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults });
   await expect(settings.savePromptHint(defaults, textChange(defaults.text), signal)).resolves.toBe(false);
   await expect(lstat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
@@ -77,20 +76,11 @@ test("loads defaults and leaves a missing user settings directory untouched unti
   expect(await readdir(agentDir)).toEqual(["pi-inline.json"]);
 });
 
-test("reads a legacy allowlist once and keeps the original prompt default", async () => {
-  const root = join(base, "plans");
-  await mkdir(root);
-  await setDocument({ externalPreviewRoots: [root] });
-  await expect(settings.loadSettings(signal)).resolves.toMatchObject({ prompt: defaults, roots: [{ path: root }] });
-  expect(readFile).toHaveBeenCalledOnce();
-});
-
 test("normalizes CRLF and leaves significant whitespace and unknown fields intact", async () => {
   const rawText = "  First line\t\r\n\r\n\tLast line  \r\n";
   const expected = { enabled: false, text: rawText.replaceAll("\r\n", "\n") };
   const original = {
     ["__proto__"]: { future: true },
-    externalPreviewRoots: [join(base, "missing")],
     unknown: [false, null, { enabled: true }],
     promptHintEnabled: false,
     promptHintText: rawText,
@@ -101,7 +91,6 @@ test("normalizes CRLF and leaves significant whitespace and unknown fields intac
   await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: expected });
   expect(lstat).toHaveBeenCalledExactlyOnceWith(settingsFile, { bigint: true });
   expect(vi.mocked(realpath).mock.calls.every(([path]) => path === settingsFile)).toBe(true);
-  await expect(settings.loadSettings(signal)).resolves.toEqual({ roots: [], prompt: expected, invalid: true });
   await expect(settings.savePromptHint(expected, textChange(rawText), signal)).resolves.toBe(false);
   await expectIntact(source);
   await expect(settings.savePromptHint(expected, { key: "promptHintEnabled", value: true }, signal)).resolves.toBe(
@@ -132,12 +121,6 @@ test("updates only prompt keys and preserves unrecognized JSON values byte for b
 
 test.for(["{broken\x1b[31msecret", "null", "[]", '"string"'])("does not replace invalid JSON (%j)", async (source) => {
   await setSource(source);
-  await expect(settings.loadSettings(signal)).resolves.toEqual({
-    roots: [],
-    prompt: defaults,
-    invalid: true,
-    saveBlocked: true,
-  });
   await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults, saveBlocked: true });
   await expect(settings.savePromptHint(defaults, disable, signal)).rejects.toThrow(
     "Settings cannot be saved. Repair the user pi-inline.json file and reopen the menu.",
@@ -166,54 +149,28 @@ test.for([
   { promptHintText: "Unexpected\u200e" },
   { promptHintText: "Unexpected\u202e" },
   { promptHintText: "Unexpected\u2066" },
-])("uses the default hint but retains the valid allowlist for invalid prompt values (%j)", async (overrides) => {
-  const root = join(base, "plans");
-  await mkdir(root);
+])("uses the default hint and blocks saving for invalid prompt values (%j)", async (overrides) => {
   const source = await setDocument({
-    externalPreviewRoots: [root],
     promptHintEnabled: false,
     promptHintText: "Custom hint",
     ...overrides,
   });
-  await expect(settings.loadSettings(signal)).resolves.toEqual({
-    roots: [{ path: root, identity: expect.objectContaining({ ino: expect.any(BigInt), dev: expect.any(BigInt) }) }],
-    prompt: defaults,
-    saveBlocked: true,
-  });
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults, saveBlocked: true });
   await expect(settings.savePromptHint(defaults, disable, signal)).rejects.toThrow("Repair the user pi-inline.json");
   await expectIntact(source);
 });
 
-test.for([null, {}, ["relative"], ["/wild*card"], [parse(process.cwd()).root]])(
-  "retains the valid hint but blocks saving when allowlist values are invalid (%j)",
+test.for([null, {}, [], ["/no-longer-checked"]])(
+  "ignores and preserves the removed external preview setting (%j)",
   async (externalPreviewRoots) => {
-    const source = await setDocument({ externalPreviewRoots, promptHintEnabled: false, promptHintText: "Keep this" });
-    const prompt = { enabled: false, text: "Keep this" };
-    await expect(settings.loadSettings(signal)).resolves.toEqual({
-      roots: [],
-      prompt,
-      invalid: true,
-      saveBlocked: true,
-    });
-    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt, saveBlocked: true });
-    await expect(settings.savePromptHint(prompt, textChange("New text"), signal)).rejects.toThrow("Repair the user");
-    await expectIntact(source);
+    const source = `{"externalPreviewRoots": ${JSON.stringify(externalPreviewRoots)}, "promptHintText": "Keep this"}`;
+    await setSource(source);
+    const prompt = { enabled: true, text: "Keep this" };
+    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt });
+    await expect(settings.savePromptHint(prompt, textChange("New text"), signal)).resolves.toBe(true);
+    await expectIntact(source.replace("Keep this", "New text"));
   },
 );
-
-test("does not replace a path that cannot be authorized for previews", async () => {
-  await mkdir(join(base, "real"));
-  const root = join(base, "alias");
-  await symlink(join(base, "real"), root, "dir");
-  await setDocument({ externalPreviewRoots: [root] });
-  await expect(settings.loadSettings(signal)).resolves.toEqual({ roots: [], prompt: defaults, invalid: true });
-  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults });
-  await expect(settings.savePromptHint(defaults, disable, signal)).resolves.toBe(true);
-  expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({
-    externalPreviewRoots: [root],
-    promptHintEnabled: false,
-  });
-});
 
 test.for(["directory", "symlink", ...(process.platform === "win32" ? [] : ["fifo"])])(
   "does not read or replace a settings %s",
@@ -245,12 +202,7 @@ test("uses nofollow and closes the handle without reading a different regular fi
     return other;
   });
   try {
-    await expect(settings.loadSettings(signal)).resolves.toEqual({
-      roots: [],
-      prompt: defaults,
-      invalid: true,
-      saveBlocked: true,
-    });
+    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults, saveBlocked: true });
     expect(open).toHaveBeenCalledExactlyOnceWith(
       settingsFile,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -270,7 +222,7 @@ test("rejects invalid input without revealing the submitted text or creating a f
   await expect(lstat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-test("orders first saves and both loaders through a directory alias and rejects stale edits of the same key", async () => {
+test("orders first saves and loads through a directory alias and rejects stale edits of the same key", async () => {
   const actualAgentDir = join(base, "agent-target");
   await mkdir(actualAgentDir);
   await symlink(actualAgentDir, agentDir, "dir");
@@ -289,14 +241,12 @@ test("orders first saves and both loaders through a directory alias and rejects 
     "Settings changed. Reopen the menu before saving.",
   );
   const hint = settings.loadPromptSettings(signal);
-  const full = settings.loadSettings(signal);
   const expected = { enabled: false, text: "Second change" };
   resume.resolve();
   await expect(first).resolves.toBe(true);
   await expect(text).resolves.toBe(true);
   await replaced;
   await expect(hint).resolves.toEqual({ prompt: expected });
-  await expect(full).resolves.toEqual({ roots: [], prompt: expected });
   expect(rename).toHaveBeenCalledTimes(2);
 });
 

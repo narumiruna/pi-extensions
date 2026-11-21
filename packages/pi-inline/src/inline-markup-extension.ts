@@ -1,10 +1,9 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { createExternalLinkMarker } from "./external-link-marker.js";
-import type { ExternalPreviewRoot } from "./filelinks.js";
 import { createHoverPreview } from "./hover-preview.js";
 import { renderInlineMarkup } from "./inline-markup.js";
-import { loadPromptSettings, loadSettings, type PromptHintSettings, savePromptHint } from "./settings.js";
+import { loadPromptSettings, type PromptHintSettings, savePromptHint } from "./settings.js";
 import { showInlineSettings } from "./settings-menu.js";
 import { createWikilinks } from "./wikilinks.js";
 
@@ -48,14 +47,10 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
     if (mode !== "tui") return;
     const settings = new AbortController();
     const marker = createExternalLinkMarker();
-    let roots: readonly ExternalPreviewRoot[] = [];
     ui.setWidget(
       WIDGET_KEY,
       (tui, theme) => {
-        const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href), {
-          marker,
-          roots: () => roots,
-        });
+        const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href), marker);
         const current: Session = {
           cwd,
           theme,
@@ -71,7 +66,6 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
           dispose() {
             if (session === current) session = undefined;
             settings.abort();
-            roots = [];
             current.menu?.abort();
             preview.dispose();
             current.wiki?.dispose();
@@ -89,12 +83,10 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
       },
       { placement: "belowEditor" },
     );
-    const snapshot = await loadSettings(settings.signal);
+    const snapshot = await loadPromptSettings(settings.signal);
     if (settings.signal.aborted || session?.marker !== marker) return;
-    roots = snapshot.roots;
     session.prompt = snapshot.prompt;
-    if ((snapshot.invalid || snapshot.saveBlocked) && hasUI)
-      ui.notify("pi-inline: Invalid or unreadable settings were ignored.", "warning");
+    if (snapshot.saveBlocked && hasUI) ui.notify("pi-inline: Invalid or unreadable settings were ignored.", "warning");
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
