@@ -22,16 +22,10 @@ The following runtime couplings remain in the reviewed implementations. This lis
 
 ## Audit Boundary
 
-Generic use of Pi-owned surfaces—such as enumerating tools, rendering arbitrary status keys, or
-observing lifecycle events without package-specific branching—is not a violation. Documentation-only
-comparisons and migration instructions are also excluded here because they do not change runtime
-behavior.
-
-Generic raw-key icon mapping, documented aliases, and suppression follow the
-[status display policy](../extension-conventions.md#status-and-persistent-ui) and are not themselves
-independence violations. Parsing another producer's private status grammar is a separate coupling.
-Predecessor-schema migrations are counted consistently for Accounts and Goal; this note does not
-approve removing either compatibility path.
+This audit excludes generic Pi API use, generic rendering covered by the
+[status display policy](../extension-conventions.md#status-and-persistent-ui), and documentation-only
+comparisons or migration instructions. It counts private status grammars and predecessor schemas as
+runtime coupling; this does not approve removing the Accounts or Goal compatibility paths.
 
 The boundary validator checks package imports and manifests, not private message grammars or legacy
 schemas. Relevant regression coverage is in `packages/pi-statusline/test/statusline.test.ts`,
