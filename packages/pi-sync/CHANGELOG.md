@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.62.0
+
+### Minor Changes
+
+- 5b9146b: Let the `configure-pi-sync` skill apply and verify requested local settings edits, such as adding exclusions, through the running Pi Sync daemon without starting a transfer.
+
 ## 0.61.0
 
 ### Minor Changes
