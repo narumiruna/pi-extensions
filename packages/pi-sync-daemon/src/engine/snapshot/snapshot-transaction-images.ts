@@ -40,6 +40,14 @@ export function scopedIdentity(stat: BigIntStats) {
   return identity;
 }
 
+export function installedVacancyIdentityMatches(image: ScopedImage, expected: string) {
+  if (image.kind === "missing" || !isScopedIdentity(expected)) return false;
+  if (scopedIdentity(image.stat) === expected) return true;
+  if (process.platform !== "win32" || image.kind !== "file" || image.stat.ino === 0n) return false;
+  const [device, inode] = expected.split(":");
+  return image.stat.dev.toString() === device && image.stat.ino.toString() === inode;
+}
+
 export function stableScopedIdentity(target: string, stat: BigIntStats) {
   const identity = scopedIdentity(stat);
   if (stat.birthtimeNs > 0n) {

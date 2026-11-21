@@ -142,26 +142,40 @@ test("mixed safety preflight refuses rule paths and ancestor replacements even w
     }
   }));
 
-test("mixed operations refuse settings aliases, linked source files and reserved physical session storage", () =>
+test("mixed operations refuse settings symlinks when the host permits their creation", ({ skip }) =>
   fixture(async (root) => {
     const privateFile = await put(root, "Work.Rules", '{"sessionDir":"/unrelated"}');
     const settings = path.join(root, "settings.json");
-    await fs.symlink(privateFile, settings);
+    try {
+      await fs.symlink(privateFile, settings);
+    } catch (error) {
+      if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") {
+        skip("Windows file symlinks require Developer Mode or symlink privileges.");
+      }
+      throw error;
+    }
     assert.equal(await configuredSessionDir(), "/unrelated");
     await assert.rejects(configuredSessionDir(reserved), protectedPath);
     await assert.rejects(createSnapshot("legacy", { ...reserved, include: ["settings.json"] }), protectedPath);
-    await fs.unlink(settings);
+  }));
+
+test("mixed operations refuse linked source files without requiring symlink privileges", () =>
+  fixture(async (root) => {
+    const privateFile = await put(root, "Work.Rules", '{"sessionDir":"/unrelated"}');
+    const settings = path.join(root, "settings.json");
     await fs.link(privateFile, settings);
     await assert.rejects(configuredSessionDir(reserved), /unsafe filesystem layout/);
     await assert.rejects(
       preflightSnapshotMutations(root, { deletes: [settings], writes: [] }, undefined, reserved),
       /hard link/,
     );
+  }));
 
-    await fs.unlink(settings);
+test("mixed operations refuse reserved physical session storage through directory aliases", () =>
+  fixture(async (root) => {
     const privateDir = path.dirname(await put(root, "Alternate.Rules/session.jsonl"));
     const logicalSessionAlias = path.join(root, "alias");
-    await fs.symlink(privateDir, logicalSessionAlias, "dir");
+    await fs.symlink(privateDir, logicalSessionAlias, process.platform === "win32" ? "junction" : "dir");
     await assert.rejects(
       createSnapshot("legacy", { ...reserved, include: ["sessions"], sessionDir: logicalSessionAlias }),
       protectedPath,

@@ -114,6 +114,35 @@ test("a marker appearing during a normal read invalidates both an absent and a p
     await assert.rejects(readIgnoreSource(root), unfinished);
   }));
 
+test.runIf(process.platform === "win32").each(["missing", "pending", "partial"] as const)(
+  "Windows initialization refuses %s creation without changing recovery evidence",
+  (state) =>
+    fixture(async (root, target, markerPath) => {
+      if (state !== "missing") await fs.writeFile(markerPath, record, { mode: 0o600 });
+      if (state === "partial") await fs.writeFile(target, "/npm/");
+      const entries = await fs.readdir(root);
+      const before = await Promise.all(
+        entries.map(async (entry) => {
+          const file = path.join(root, entry);
+          return { entry, bytes: await fs.readFile(file), stat: await fs.lstat(file, { bigint: true }) };
+        }),
+      );
+      await assert.rejects(
+        initializeDefaultIgnoreSource(root),
+        /platform does not support durable directory-relative creation/u,
+      );
+      assert.deepEqual(await fs.readdir(root), entries);
+      for (const { entry, bytes, stat } of before) {
+        const file = path.join(root, entry);
+        assert.deepEqual(await fs.readFile(file), bytes);
+        const current = await fs.lstat(file, { bigint: true });
+        assert.equal(current.ino, stat.ino);
+        assert.equal(current.mtimeNs, stat.mtimeNs);
+        assert.equal(current.ctimeNs, stat.ctimeNs);
+      }
+    }),
+);
+
 posixCreation("confirmed calls share one complete default file and never touch alternatives", () =>
   fixture(async (root, target, markerPath) => {
     const alternative = path.join(root, ".work.syncignore");
