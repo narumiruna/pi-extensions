@@ -198,12 +198,15 @@ syncBuiltinESMExports();
       calls,
       run: async (command, name, status = 0) => {
         await fs.writeFile(log, "");
-        const env = {
+        const env: NodeJS.ProcessEnv = {
           ...process.env,
-          npm_execpath: options.npmExecpath ?? "",
           TEST_WORKFLOW_LOG: log,
           TEST_VIEW_STATUS: String(status),
         };
+        for (const key of Object.keys(env)) {
+          if (key.toLowerCase() === "npm_execpath") delete env[key];
+        }
+        env.npm_execpath = options.npmExecpath ?? "";
         try {
           await exec(process.execPath, ["--import", pathToFileURL(preload).href, script, command, name], {
             cwd: root,
