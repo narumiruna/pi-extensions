@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { onTestFinished, test, vi } from "vitest";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "../../../test/support.js";
@@ -173,7 +174,8 @@ for (const region of regions) {
           delete: async () => undefined,
         },
         modelsPath,
-        modelsStorePath: join(root, "models-cache.json"),
+        // Virtual model registration refreshes the catalog in the background, even offline.
+        modelsStore: new InMemoryModelsStore(),
         allowModelNetwork: false,
         refreshOnCreate: false,
       });
