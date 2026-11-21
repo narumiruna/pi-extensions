@@ -2,6 +2,12 @@
 
 Versions through 0.54.3 were released as `@narumitw/pi-langfuse`.
 
+## 0.55.1
+
+### Patch Changes
+
+- bb79479: Align the Sync daemon's model SDK with Pi 1.6. Keep pi-otel's Durable tracing compatible with Pi 1.6 and its parked tool states without exporting additional trace data.
+
 ## 0.55.0
 
 ### Minor Changes

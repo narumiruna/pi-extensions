@@ -1,5 +1,11 @@
 # @narumitw/pi-illustrate
 
+## 0.2.1
+
+### Patch Changes
+
+- 253ea89: Keep the settings save indicator from changing Pi's render rows when frames are reused.
+
 ## 0.2.0
 
 ### Minor Changes
