@@ -1,6 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig, syncConfigReviewIdentity } from "../../settings/config.js";
+import {
+  loadConfigForCheck,
+  loadSettingsConfig,
+  syncCheckConfigFingerprint,
+  syncConfigReviewIdentity,
+} from "../../settings/config.js";
 import { loadOnSwitch, readLocalConfigObject } from "../../settings/settings-store.js";
 import type { AnySyncConfig } from "../../settings/settings-types.js";
 import { ownRecord } from "../../settings/settings-validation.js";
@@ -103,8 +108,11 @@ export async function showSetupSwitcher(
     return false;
   }
   let config: AnySyncConfig;
+  let metadata: AnySyncConfig;
   try {
-    config = await loadConfig(name);
+    metadata = await loadSettingsConfig(name);
+    if (signal?.aborted) return false;
+    config = await loadConfigForCheck(name, signal);
     if (signal?.aborted) return false;
   } catch (error) {
     ctx.ui.notify(
@@ -116,20 +124,24 @@ export async function showSetupSwitcher(
   const onSwitch = await loadOnSwitch();
   if (signal?.aborted) return false;
   const switchEffect =
-    onSwitch === "ask-before-pull"
-      ? "After switching, pi-sync will ask whether to review a pull for this setup."
-      : onSwitch === "pull-after-switch"
-        ? "After switching, pi-sync will check this setup and show exact changes before applying them."
-        : "After switching, pi-sync will not pull or modify synced files.";
+    config.reservedIgnoreNames !== undefined
+      ? "This switch only saves the active setup. To transfer, use a reviewed /sync command."
+      : onSwitch === "ask-before-pull"
+        ? "After switching, pi-sync will ask whether to review a pull for this setup."
+        : onSwitch === "pull-after-switch"
+          ? "After switching, pi-sync will check this setup and show exact changes before applying them."
+          : "After switching, pi-sync will not pull or modify synced files.";
   const confirmed = await ctx.ui.confirm(
     "Switch sync setup?",
     [
       `From: ${safeTerminalText(active ?? "none")}`,
       `To: ${safeTerminalText(name)}`,
       `Storage: ${backendStorageDescription(config)}`,
-      config.scope === "agent-directory"
-        ? `Scope: Pi agent directory · ${config.exclude?.length ?? 0} excluded and ${config.reinclude?.length ?? 0} re-included rules`
-        : `Included content: ${config.include.length} paths`,
+      config.pathPolicy === "ignore-file"
+        ? `Scope: Pi agent directory · ignore file: ${safeTerminalText(config.ignoreFile ?? ".syncignore")}`
+        : config.scope === "agent-directory"
+          ? `Scope: Pi agent directory · ${config.exclude?.length ?? 0} excluded and ${config.reinclude?.length ?? 0} re-included rules`
+          : `Included content: ${config.include.length} paths`,
       `Automatic sync: ${automaticSyncSummary(config.automatic)} · Sessions: ${syncSessionsSelected(config) ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,
@@ -168,7 +180,8 @@ export async function showSetupSwitcher(
       },
       onSwitch,
       signal,
-      syncConfigReviewIdentity(config),
+      syncConfigReviewIdentity(metadata),
+      syncCheckConfigFingerprint(config),
     );
     if (pullClosed) return "closed";
     return result.pullApplied ? "pull-attempted" : "switched";

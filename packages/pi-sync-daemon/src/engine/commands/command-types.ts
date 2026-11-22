@@ -10,6 +10,7 @@ export interface CommandOptions {
   reload: boolean;
   auto: boolean;
   setup?: string;
+  automaticFingerprint?: string;
   signal?: AbortSignal;
   onCommit?: () => void;
   /** In-memory startup diagnostics only; never persisted or sent to a backend. */
@@ -17,7 +18,7 @@ export interface CommandOptions {
   /** Internal validated resolver result; never parsed from command arguments. */
   agentAcceptance?: AgentAcceptance;
   /** Internal cycle authorization, ownership and durable request reservation; never command arguments. */
-  background?: { validate(config?: AnySyncConfig): void; reserve(key: string, signal?: AbortSignal): Promise<void> };
+  background?: { validate(config?: AnySyncConfig): void; reserve?(key: string, signal?: AbortSignal): Promise<void> };
   /** Manager-only, separately confirmed retry; never parsed from command arguments. */
   agentRetryRefusal?: boolean;
   args: string[];

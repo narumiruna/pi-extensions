@@ -21,7 +21,12 @@ import {
   recoverPendingSnapshotTransactions,
 } from "../src/engine/snapshot/snapshot-transaction.js";
 import { transactionRoot } from "../src/engine/snapshot/snapshot-transaction-directory.js";
+import {
+  BOUND_INCLUDED_PATHS_JOURNAL_VERSION,
+  type TransactionJournal,
+} from "../src/engine/snapshot/snapshot-transaction-policy.js";
 import type { Snapshot, SnapshotOptions } from "../src/engine/snapshot/snapshot-types.js";
+import { acceptedSelection, syncPolicyChanged } from "../src/engine/sync/sync-state.js";
 
 const reserved = { reservedIgnoreNames: [".syncignore", "alternate.rules", "work.rules"] } as const;
 const rules = [".SYNCIGNORE", "Alternate.Rules", "WORK.Rules"] as const;
@@ -89,7 +94,8 @@ test.each(scopes.map((options, idx) => ({ options, version: [1, 4, 5][idx] })))(
       assert.deepEqual(paths(preserved), paths(local));
       assert.deepEqual(preserved.selection, legacy.selection);
 
-      const applied = await applySnapshot(incoming, new Set(), mixed);
+      await assert.rejects(applySnapshot(incoming, new Set(), mixed), /freshness check/);
+      const applied = await applySnapshot(incoming, new Set(), { ...mixed, validateIgnorePolicy: async () => {} });
       assert.deepEqual(Object.keys(applied), ["notes/alternate.rules"]);
       for (const file of rules) assert.equal(await fs.readFile(path.join(root, file), "utf8"), file);
       assert.equal(await fs.readFile(path.join(root, "notes/alternate.rules"), "utf8"), "remote:notes/alternate.rules");
@@ -123,6 +129,31 @@ test("reserved names are local snapshot options derived from all setups in a mix
   assert.deepEqual(options.reservedIgnoreNames, reserved.reservedIgnoreNames);
   assert.deepEqual(options.include, ["WORK.Rules"]);
   assert.equal(options.ignorePolicy, undefined);
+});
+
+test("mixed legacy baselines bind the setup and normalized reservations without changing wire selection", () => {
+  const config = { setupName: "legacy", include: ["notes"], ...reserved };
+  const accepted = {
+    version: 1,
+    profile: "legacy",
+    lastAppliedSnapshot: "accepted",
+    lastFileHashes: {},
+    ...acceptedSelection(config),
+  };
+  assert.equal(syncPolicyChanged(accepted, config), false);
+  assert.equal(
+    syncPolicyChanged(accepted, {
+      ...config,
+      reservedIgnoreNames: [...reserved.reservedIgnoreNames].reverse().map((name) => name.toUpperCase()),
+    }),
+    false,
+  );
+  for (const changed of [
+    { ...config, setupName: "other" },
+    { ...config, reservedIgnoreNames: [...reserved.reservedIgnoreNames, "another.rules"] },
+    { ...config, reservedIgnoreNames: undefined },
+  ])
+    assert.equal(syncPolicyChanged(accepted, changed), true);
 });
 
 test("mixed safety preflight refuses rule paths and ancestor replacements even without glob rules", () =>
@@ -230,7 +261,173 @@ test("mixed recovery retains a legacy journal that would restore over a newly re
     assert.equal(await fs.readFile(file, "utf8"), "after");
     const pending = await fs.readdir(transactionRoot());
     assert.equal(pending.length, 1);
-    await assert.rejects(recoverPendingSnapshotTransactions(reserved), protectedPath);
+    await assert.rejects(recoverPendingSnapshotTransactions(reserved), /different setup or ignore policy evidence/);
     assert.deepEqual(await fs.readdir(transactionRoot()), pending);
     assert.equal(await fs.readFile(file, "utf8"), "after");
+  }));
+
+test.each(
+  (["apply write", "apply delete", "restore file", "restore directory"] as const).flatMap((operation) =>
+    (["cancelled", "ownership lost"] as const).map((stop) => ({ operation, stop })),
+  ),
+)("mixed legacy $operation stops when $stop during final image verification", ({ operation, stop }) =>
+  fixture(async (root) => {
+    const directory = operation === "restore directory";
+    const restoring = directory || operation === "restore file";
+    const deleting = directory || operation === "apply delete";
+    const target = path.join(root, "notes");
+    const original = await put(root, directory ? "notes/child" : "notes", "before");
+    const plan = deleting
+      ? { deletes: [target], writes: [] }
+      : { deletes: [], writes: [{ target, content: Buffer.from("after") }] };
+    const options = { ...reserved, setupName: "legacy", validateIgnorePolicy: async () => {} };
+    const initial = restoring ? new AbortController() : undefined;
+    const cancellation = new AbortController();
+    const reason = new Error(stop);
+    let journalFile: string | undefined;
+    let finalCheck = false;
+    let verificationReached = false;
+    const rename = fs.rename.bind(fs);
+    const rm = fs.rm.bind(fs);
+    const lstat = fs.lstat.bind(fs);
+    const renames = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (typeof to === "string" && path.basename(to) === "journal.json") journalFile = to;
+      if (to === target) initial?.abort();
+    });
+    const removals = vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
+      await rm(file, options);
+      if (file === target) initial?.abort();
+    });
+    const reads = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      try {
+        return await lstat(...args);
+      } finally {
+        // Only the image verification uses bigint stats; the exclude check uses regular stats.
+        if (finalCheck && !verificationReached && args[0] === target && args[1]?.bigint) {
+          verificationReached = true;
+          renames.mockClear();
+          removals.mockClear();
+          if (stop === "cancelled") cancellation.abort(reason);
+        }
+      }
+    });
+    try {
+      if (initial)
+        await assert.rejects(applySnapshotTransaction(plan, { ...options, signal: initial.signal }), /apply cancelled/);
+      const guarded = {
+        ...options,
+        signal: cancellation.signal,
+        validateMutation: () => {
+          if (stop === "ownership lost" && verificationReached) throw reason;
+        },
+        validateIgnorePolicy: async () => {
+          if (operation === "apply write") {
+            finalCheck = (await fs.readdir(root)).some((name) => name.endsWith(".apply"));
+          } else if (journalFile) {
+            const { entries } = JSON.parse(await fs.readFile(journalFile, "utf8")) as TransactionJournal;
+            finalCheck = restoring ? entries[0]?.replacementStarted === true : entries[0]?.removalPending === true;
+          }
+        },
+      };
+      if (restoring) await assert.rejects(recoverPendingSnapshotTransactions(guarded), (error) => error === reason);
+      else
+        await assert.rejects(
+          applySnapshotTransaction(plan, guarded),
+          stop === "cancelled" ? /apply cancelled/ : /guarded recovery requires review/,
+        );
+      assert.ok(verificationReached);
+      assert.equal(
+        renames.mock.calls.some(([, to]) => to === target),
+        false,
+        "live target was renamed",
+      );
+      assert.equal(
+        removals.mock.calls.some(([file]) => file === target),
+        false,
+        "live target was removed",
+      );
+    } finally {
+      reads.mockRestore();
+      removals.mockRestore();
+      renames.mockRestore();
+    }
+    if (directory) await assert.rejects(fs.lstat(target), { code: "ENOENT" });
+    else assert.equal(await fs.readFile(target, "utf8"), restoring ? "after" : "before");
+    assert.ok(journalFile);
+    const journalBytes = await fs.readFile(journalFile, "utf8");
+    const journal = JSON.parse(journalBytes) as TransactionJournal;
+    assert.equal(journal.version, BOUND_INCLUDED_PATHS_JOURNAL_VERSION);
+    assert.equal(journal.completed, undefined);
+    const backup = path.join(path.dirname(journalFile), "before", "0");
+    assert.equal(await fs.readFile(directory ? path.join(backup, "child") : backup, "utf8"), "before");
+    if (directory) {
+      // A vacancy is no longer accepted after the journal arms replacement.
+      await assert.rejects(recoverPendingSnapshotTransactions(options), /automatic rollback refused/);
+      assert.equal(await fs.readFile(journalFile, "utf8"), journalBytes);
+    } else {
+      await recoverPendingSnapshotTransactions(options);
+      assert.equal(await fs.readFile(original, "utf8"), "before");
+      assert.deepEqual(await fs.readdir(transactionRoot()), []);
+    }
+  }),
+);
+
+test("mixed legacy recovery rejects changed or removed reservations and restores only with the original binding", () =>
+  fixture(async (root) => {
+    const target = await put(root, "notes.md", "before");
+    const original = { ...reserved, include: ["notes.md"], setupName: "legacy", validateIgnorePolicy: async () => {} };
+    const cancellation = new AbortController();
+    const rename = fs.rename.bind(fs);
+    const patch = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === target) cancellation.abort();
+    });
+    try {
+      await assert.rejects(
+        applySnapshotTransaction(
+          { deletes: [], writes: [{ target, content: Buffer.from("after") }] },
+          {
+            ...original,
+            signal: cancellation.signal,
+          },
+        ),
+        /transaction evidence retained/,
+      );
+    } finally {
+      patch.mockRestore();
+    }
+    const pending = await fs.readdir(transactionRoot());
+    assert.equal(pending.length, 1);
+    for (const candidate of [
+      { ...original, reservedIgnoreNames: undefined },
+      { ...original, reservedIgnoreNames: [...reserved.reservedIgnoreNames, "notes.md"] },
+      { ...original, setupName: "other" },
+    ]) {
+      await assert.rejects(recoverPendingSnapshotTransactions(candidate), /different setup or ignore policy evidence/);
+      assert.deepEqual(await fs.readdir(transactionRoot()), pending);
+      assert.equal(await fs.readFile(target, "utf8"), "after");
+    }
+    const interruptedRecovery = new AbortController();
+    const stagePatch = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (
+        typeof to === "string" &&
+        path.basename(to) === "journal.json" &&
+        (await fs.readFile(to, "utf8")).includes('"recoveryStaged": true')
+      )
+        interruptedRecovery.abort();
+    });
+    try {
+      await assert.rejects(recoverPendingSnapshotTransactions({ ...original, signal: interruptedRecovery.signal }), {
+        name: "AbortError",
+      });
+      assert.ok(interruptedRecovery.signal.aborted);
+      assert.equal(await fs.readFile(target, "utf8"), "after");
+    } finally {
+      stagePatch.mockRestore();
+    }
+    await recoverPendingSnapshotTransactions(original);
+    assert.equal(await fs.readFile(target, "utf8"), "before");
+    assert.deepEqual(await fs.readdir(transactionRoot()), []);
   }));

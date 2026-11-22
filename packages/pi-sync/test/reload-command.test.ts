@@ -52,7 +52,7 @@ test("History rollback closes the loader and manager before reloading", () =>
     // Keep the native History selector separate from the Kit custom screens.
     (ctx as ExtensionCommandContext).ui.select = async (title, choices) => {
       selections.push(title);
-      return choices[0];
+      return choices.includes("Not now") ? "Not now" : choices[0];
     };
     let running: Promise<unknown> | undefined;
     try {

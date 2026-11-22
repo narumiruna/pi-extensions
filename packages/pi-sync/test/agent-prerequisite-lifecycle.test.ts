@@ -60,6 +60,7 @@ for (const prerequisite of ["validation", "reservation", "postresponse"] as cons
                   assert.ok(options.background);
                   const reserve = options.background.reserve;
                   options.background.reserve = async (key, signal) => {
+                    if (!reserve) throw new Error("Expected an automatic request reservation");
                     await reserve(key, signal);
                     await block(signal);
                   };

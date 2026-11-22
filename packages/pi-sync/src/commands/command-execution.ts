@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
-import { loadConfig, sessionTokenWarnings, syncSessionsWarnings } from "../settings/config.js";
+import { loadSettingsConfig, sessionTokenWarnings, syncSessionsWarnings } from "../settings/config.js";
 import { activeLocalConfigPath, createLocalConfigDocument, localConfigPath } from "../settings/config-file.js";
 import { localConfigTemplate, readLocalConfigObject } from "../settings/settings-store.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
@@ -11,6 +11,7 @@ import type { SyncLoaders } from "../sync/sync-loaders.js";
 import { RemoteSelectionMismatchError, syncSessionsSelected } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
 import type { RunRouteResult } from "../ui/cancellable-operation.js";
+import { manualIgnoreFileGuidance } from "../ui/ignore-file-ui.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
 import { startupTransferSummary } from "../ui/sync-behavior.js";
 import { setSyncStatus } from "../ui/sync-status.js";
@@ -256,7 +257,8 @@ async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 }
 
 async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions) {
-  const config = await loadConfig(options.setup);
+  const config = await loadSettingsConfig(options.setup);
+  throwIfAborted(options.signal);
   const warnings = [
     ...(config.backend.type === "s3" ? sessionTokenWarnings(config.backend.profile) : []),
     ...syncSessionsWarnings(config),
@@ -276,12 +278,14 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `autonomous sync: ${config.agentMode ? "On" : "Off"}`,
       `continuous sync: ${config.continuous ? (config.agentMode ? "On" : "paused; Autonomous sync is Off") : "Off"}`,
       config.scope ? "sync scope: Pi agent directory" : `included content: ${config.include.join(", ") || "none"}`,
-      ...(config.scope
-        ? [
-            `excluded paths: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}`,
-            `re-included paths: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
-          ]
-        : []),
+      ...(config.pathPolicy === "ignore-file"
+        ? ["path policy: local ignore file", manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
+        : config.scope
+          ? [
+              `excluded paths: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}`,
+              `re-included paths: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
+            ]
+          : []),
       `sessions: ${syncSessionsSelected(config) ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,
       ...warnings,

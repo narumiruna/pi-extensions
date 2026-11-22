@@ -75,6 +75,7 @@ export async function resolveAgentPlan(
     1,
     backend.identity,
     syncConfigReviewIdentity(config),
+    ...(config.configDocumentFingerprint ? [config.configDocumentFingerprint] : []),
     syncStateFingerprint(state),
     head.revision,
     fileHashMap(localRaw),

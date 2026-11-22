@@ -40,11 +40,14 @@ import {
   assertAllowedTarget,
   assertRecoveryPolicy,
   assertSafeParents,
+  BOUND_DIRECTORY_JOURNAL_VERSION,
+  BOUND_INCLUDED_PATHS_JOURNAL_VERSION,
   IGNORE_POLICY_JOURNAL_VERSION,
   ignorePolicyValidator,
   ignoreSourceBinding,
   isScopedJournal,
   isStrictlyInside,
+  recoveryPolicyKey,
   StaleIgnorePolicyError,
   type TransactionEntry,
   type TransactionJournal,
@@ -161,6 +164,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
       (entry) => !heldKeys.has(entry.target) || (entry.afterTarget && !heldKeys.has(entry.afterTarget)),
     );
     try {
+      if (options.validateApplyReview) await options.validateApplyReview();
       if (scoped && transaction.deletes.length) await recheckAgentDirectoryBudget(root, plan, options, stateDir(root));
       for (const target of transaction.deletes.sort((a, b) => a.length - b.length)) {
         options.signal?.throwIfAborted();
@@ -176,6 +180,8 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         heldKeys,
         options,
         async () => {
+          if (options.validateApplyReview && transaction.journal.entries.some((entry) => entry.removalPending))
+            await options.validateApplyReview();
           if (validateIgnorePolicy) await validateIgnorePolicy();
           if (scoped && plan.writes.length)
             await recheckAgentDirectoryBudget(root, { deletes: [], writes: plan.writes }, options);
@@ -229,10 +235,16 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
               );
               options.signal?.throwIfAborted();
               options.validateMutation?.();
-              if (validateIgnorePolicy && verified.scoped) {
+              if (validateIgnorePolicy) {
                 await validateIgnorePolicy();
-                await recheckScopedImage(item.target, verified.scoped, options);
+                if (verified.scoped) await recheckScopedImage(item.target, verified.scoped, options);
+                else {
+                  await assertUnexcludedTargets(root, [item.target], options);
+                  await verifyTarget(transaction.directory, entry, transaction.journal, options, deletedByThisCall);
+                }
               }
+              options.validateMutation?.();
+              options.signal?.throwIfAborted();
               await fs.rename(temp, item.target);
               await syncDirectory(path.dirname(item.target));
             } finally {
@@ -357,6 +369,7 @@ async function prepareTransaction(
   const root = path.resolve(agentDir());
   const wholeDirectory = options.scope === "agent-directory";
   const ignoreSource = options.ignorePolicy ? ignoreSourceBinding(options.ignorePolicy) : undefined;
+  const localPolicyKey = recoveryPolicyKey(options);
   const sessionRoot = sessionDir || wholeDirectory ? path.resolve(sessionStorageRoot(root, sessionDir)) : undefined;
   const indexed = indexTransactionPlan(plan, targets);
   const directory = path.join(transactionRoot(), randomUUID());
@@ -405,17 +418,22 @@ async function prepareTransaction(
     ? undefined
     : await prepareSessionRootTransition(directory, root, effectiveRoot, entries, plan, options);
   const journal: TransactionJournal = {
-    version: ignoreSource
-      ? IGNORE_POLICY_JOURNAL_VERSION
-      : wholeDirectory
-        ? AGENT_DIRECTORY_JOURNAL_VERSION
-        : sessionRootTransition
-          ? 7
-          : replacements.size
-            ? 5
-            : JOURNAL_VERSION,
+    version: localPolicyKey
+      ? wholeDirectory
+        ? BOUND_DIRECTORY_JOURNAL_VERSION
+        : BOUND_INCLUDED_PATHS_JOURNAL_VERSION
+      : ignoreSource
+        ? IGNORE_POLICY_JOURNAL_VERSION
+        : wholeDirectory
+          ? AGENT_DIRECTORY_JOURNAL_VERSION
+          : sessionRootTransition
+            ? 7
+            : replacements.size
+              ? 5
+              : JOURNAL_VERSION,
     root,
     ignoreSource,
+    localPolicyKey,
     ...(wholeDirectory
       ? { selection: selectionForSnapshot(includeFromSelectionConfig(options), options.exclude, options) }
       : options.exclude === undefined
@@ -588,6 +606,8 @@ async function restoreQueuedTransaction(
     );
     if (entry.kind === "file") {
       try {
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
         await fs.mkdir(path.dirname(entry.target), { recursive: true });
         await fs.copyFile(path.join(directory, "before", entry.backupName), temporary);
         // Windows requires write access to flush an existing regular file.
@@ -630,6 +650,13 @@ async function restoreQueuedTransaction(
             options.validateMutation?.();
             options.signal?.throwIfAborted();
             if (atInstall === before && (await spellingMatches())) return;
+            if (validateIgnorePolicy) {
+              await validateIgnorePolicy();
+              await assertUnexcludedTargets(journal.root, [entry.target], options);
+              await verifyTarget(directory, entry, journal, options, atRename === "missing");
+            }
+            options.validateMutation?.();
+            options.signal?.throwIfAborted();
             await fs.rename(temporary, entry.target);
             await syncDirectory(path.dirname(entry.target));
           },
@@ -640,6 +667,8 @@ async function restoreQueuedTransaction(
       continue;
     }
     try {
+      options.validateMutation?.();
+      options.signal?.throwIfAborted();
       await fs.mkdir(path.dirname(entry.target), { recursive: true });
       await assertSafeParents(journal.root, journal.sessionRoot, entry.target);
       if (entry.kind === "directory") {
@@ -670,6 +699,13 @@ async function restoreQueuedTransaction(
         options.validateMutation?.();
         options.signal?.throwIfAborted();
         if (atInstall === before) return;
+        if (validateIgnorePolicy) {
+          await validateIgnorePolicy();
+          await assertUnexcludedTargets(journal.root, [entry.target], options);
+          await verifyTarget(directory, entry, journal, options, atRename === "missing");
+        }
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
         await fs.rename(temporary, entry.target);
         await syncDirectory(path.dirname(entry.target));
       });
@@ -845,6 +881,13 @@ async function removeOwnedTarget(
       await assertUnexcludedTargets(journal.root, [entry.target], options);
       await removeScopedImage(entry.target, current.scoped, options, validateIgnorePolicy);
     } else {
+      if (validateIgnorePolicy) {
+        await validateIgnorePolicy();
+        await assertUnexcludedTargets(journal.root, [entry.target], options);
+        await verifyTarget(directory, entry, journal, options);
+      }
+      options.validateMutation?.();
+      options.signal?.throwIfAborted();
       await fs.rm(entry.target, { recursive: true, force: true });
     }
     await syncDirectory(path.dirname(entry.target));
@@ -912,7 +955,8 @@ async function completeTransaction(directory: string, journal: TransactionJourna
     path.join(directory, "journal.json"),
     {
       ...journal,
-      version: isScopedJournal(journal) ? journal.version : journal.sessionRootTransition ? 7 : 6,
+      version:
+        isScopedJournal(journal) || journal.localPolicyKey ? journal.version : journal.sessionRootTransition ? 7 : 6,
       completed: true,
     },
     {

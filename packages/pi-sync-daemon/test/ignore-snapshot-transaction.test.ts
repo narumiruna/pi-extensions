@@ -17,6 +17,7 @@ import {
 import { transactionRoot } from "../src/engine/snapshot/snapshot-transaction-directory.js";
 import {
   AGENT_DIRECTORY_JOURNAL_VERSION,
+  BOUND_DIRECTORY_JOURNAL_VERSION,
   IGNORE_POLICY_JOURNAL_VERSION,
   type TransactionJournal,
   validateJournalPolicy,
@@ -29,6 +30,53 @@ const input = { filename, configuredFilenames: [".alternate.syncignore"], sessio
 const rules = "/ignored/\n";
 const changedRules = `${rules}notes.md\n`;
 const newBytes = Buffer.from("new content");
+
+test("interrupted snapshot recovery binds the originating setup even if setups share the same rule source", () =>
+  fixture(async (root, options) => {
+    const bound = {
+      ...options,
+      setupName: "original",
+      recoverySetupKey: "destination-a",
+      ignoreSourceIdentity: "fixture-source",
+    };
+    const target = path.join(root, "notes.md");
+    await fs.writeFile(target, "original bytes");
+    const cancel = new AbortController();
+    const rename = fs.rename.bind(fs);
+    const patch = vi.spyOn(fs, "rename").mockImplementation(async (before, after) => {
+      await rename(before, after);
+      if (after === target) cancel.abort();
+    });
+    try {
+      await assert.rejects(
+        applySnapshotTransaction(
+          { writes: [{ target, content: newBytes }], deletes: [] },
+          {
+            ...bound,
+            signal: cancel.signal,
+          },
+        ),
+        /evidence retained/,
+      );
+    } finally {
+      patch.mockRestore();
+    }
+    const { journal, bytes } = await journalState();
+    assert.equal(journal.version, BOUND_DIRECTORY_JOURNAL_VERSION);
+    assert.match(journal.localPolicyKey ?? "", /^[0-9a-f]{64}$/u);
+    for (const candidate of [
+      { ...bound, setupName: "another" },
+      { ...bound, recoverySetupKey: "destination-b" },
+      { ...bound, ignoreSourceIdentity: "replaced-source" },
+    ]) {
+      await assert.rejects(recoverPendingSnapshotTransactions(candidate), /different setup or ignore policy evidence/);
+      assert.equal((await journalState()).bytes, bytes);
+      assert.deepEqual(await fs.readFile(target), newBytes);
+    }
+    await recoverPendingSnapshotTransactions(bound);
+    assert.equal(await fs.readFile(target, "utf8"), "original bytes");
+    assert.deepEqual(await fs.readdir(transactionRoot()), []);
+  }));
 
 function host(root: string, reserveTargets?: EngineHost["reserveTargets"]) {
   configureEngineHost({

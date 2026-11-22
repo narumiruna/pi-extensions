@@ -6,18 +6,25 @@ import path from "node:path";
 import { test, vi } from "vitest";
 import { configureEngineHost, type ReviewRequest } from "../src/engine/host.js";
 import { deferIgnoreMigrationOffer, readIgnoreMigrationOffer } from "../src/engine/ignore/ignore-migration-prompt.js";
-import { migrateIgnoreSetup, newIgnoreFilename, switchIgnoreFile } from "../src/engine/ignore/ignore-settings.js";
+import {
+  migrateIgnoreSetup,
+  newIgnoreFilename,
+  prepareReviewedIgnoreSource,
+  reviewNewIgnoreSource,
+  switchIgnoreFile,
+} from "../src/engine/ignore/ignore-settings.js";
 import { DEFAULT_IGNORE_CREATION_RECORD, DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
 import { withConfigPublicationReadyHookForTest } from "../src/engine/settings/config-file.js";
 import type { PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import type { ClientFacts, Execution } from "../src/protocol.js";
 
-const { headRead, remote, publish } = vi.hoisted(() => ({
+const { headRead, remote, publish, requireHandover } = vi.hoisted(() => ({
   headRead: vi.fn(),
   remote: vi.fn(),
   publish: vi.fn(),
+  requireHandover: vi.fn(async () => {}),
 }));
-vi.mock("../src/consent.js", () => ({ requireHandover: async () => {} }));
+vi.mock("../src/consent.js", () => ({ requireHandover }));
 vi.mock("../src/engine/backends/backend-factory.js", () => ({
   createSyncBackend: async () => ({
     destination: "local fixture",
@@ -60,6 +67,7 @@ async function fixture(
     headRead.mockReset();
     remote.mockReset();
     publish.mockReset();
+    requireHandover.mockClear();
     await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(fixtureSettings), { mode: 0o600 });
     await fs.writeFile(path.join(root, "settings.json"), "{}\n");
     await fs.writeFile(path.join(root, "new-file.md"), "line\n");
@@ -177,13 +185,14 @@ test("reviewed migration requires canonical settings and does not promote the le
     assert.equal(await fs.readFile(path.join(root, "pi-sync", backup), "utf8"), original);
   }));
 
-test("cancelled migration does not create the default or change settings", () =>
+test.skipIf(process.platform !== "linux")("cancelled migration does not create the default or change settings", () =>
   fixture(async (root, execution, proposal) => {
     proposal(async () => false);
     assert.equal(await migrateIgnoreSetup(execution, "home"), "cancelled");
     await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
     assert.deepEqual(await readSettings(root), fixtureSettings);
-  }));
+  }),
+);
 
 test.skipIf(process.platform !== "linux")(
   "cancelling confirmed migration after starter creation begins does not save settings",
@@ -222,6 +231,7 @@ test.skipIf(process.platform !== "linux")(
 
 test("accepting a valid offer opens the review without saving when that review is cancelled", () =>
   fixture(async (root, execution, proposal) => {
+    await fs.writeFile(path.join(root, file), "");
     const facts = execution.facts();
     assert.ok(facts);
     const tui = { ...execution, facts: () => ({ ...facts, mode: "tui" as const }) };
@@ -236,12 +246,13 @@ test("accepting a valid offer opens the review without saving when that review i
     assert.equal(await migrateIgnoreSetup(tui, "home", offer.token), "cancelled");
     assert.equal(reviewed, true);
     assert.deepEqual(await readIgnoreMigrationOffer({ setup: "home" }, tui), offer);
-    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.equal(await fs.readFile(path.join(root, file), "utf8"), "");
     assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
 
 test("changing the active setup after an offer refuses migration before opening a review", () =>
   fixture(async (root, execution) => {
+    await fs.writeFile(path.join(root, file), "");
     const facts = execution.facts();
     assert.ok(facts);
     const tui = { ...execution, facts: () => ({ ...facts, mode: "tui" as const }) };
@@ -251,12 +262,13 @@ test("changing the active setup after an offer refuses migration before opening 
     await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(next), { mode: 0o600 });
     await assert.rejects(migrateIgnoreSetup(tui, "home", offer.token), /offer is stale/u);
     assert.equal(headRead.mock.calls.length, 0);
-    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.equal(await fs.readFile(path.join(root, file), "utf8"), "");
     assert.deepEqual(await readSettings(root), next);
   }));
 
 test("deferring an offer while its review is open prevents publication", () =>
   fixture(async (root, execution, proposal) => {
+    await fs.writeFile(path.join(root, file), "");
     const facts = execution.facts();
     assert.ok(facts);
     const tui = { ...execution, facts: () => ({ ...facts, mode: "tui" as const }) };
@@ -268,11 +280,11 @@ test("deferring an offer while its review is open prevents publication", () =>
     });
     await assert.rejects(migrateIgnoreSetup(tui, "home", offer.token), /offer is stale/u);
     assert.equal(await readIgnoreMigrationOffer({ setup: "home" }, tui), null);
-    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.equal(await fs.readFile(path.join(root, file), "utf8"), "");
     assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
 
-test("migration refuses scope or remote changes while the review is open", () =>
+test.skipIf(process.platform !== "linux")("migration refuses scope or remote changes while the review is open", () =>
   fixture(async (root, execution, proposal) => {
     proposal(async () => {
       await fs.writeFile(path.join(root, "another.md"), "new\n");
@@ -286,7 +298,8 @@ test("migration refuses scope or remote changes while the review is open", () =>
     await assert.rejects(migrateIgnoreSetup(execution, "home"), /Reopen/u);
     await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
     assert.deepEqual(await readSettings(root), fixtureSettings);
-  }));
+  }),
+);
 
 test("migration rechecks local scope after the pre-scan head lookup and settings preparation", () =>
   fixture(async (root, execution, proposal) => {
@@ -459,7 +472,118 @@ test.each(["current", "legacy edited", "canonical appeared"] as const)(
     }),
 );
 
-test("the pointer editor does not recreate an absent default", () =>
+function manualGuidance(target: string) {
+  return (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.ok(error.message.includes(target));
+    assert.ok(error.message.includes(DEFAULT_IGNORE_RULES));
+    assert.match(error.message, /manually.*then retry/u);
+    return true;
+  };
+}
+
+function unavailableCreation() {
+  return vi
+    .spyOn(fs, "access")
+    .mockRejectedValue(Object.assign(new Error("directory is not writable"), { code: "EACCES" }));
+}
+
+test("manual default creation precedes setup review and migration review or backend I/O", () =>
+  fixture(async (root, execution, proposal) => {
+    const target = path.join(root, file);
+    const before = await fs.readdir(root);
+    const unavailable = unavailableCreation();
+    try {
+      await assert.rejects(reviewNewIgnoreSource(root, file, execution), manualGuidance(target));
+      await assert.rejects(migrateIgnoreSetup(execution, "home"), manualGuidance(target));
+      assert.equal(requireHandover.mock.calls.length, 0);
+      assert.equal(headRead.mock.calls.length, 0);
+      assert.equal(remote.mock.calls.length, 0);
+      assert.deepEqual(await fs.readdir(root), before);
+      assert.equal(await fs.readFile(path.join(root, "pi-sync.json"), "utf8"), JSON.stringify(fixtureSettings));
+
+      await fs.writeFile(target, "/local-only/\n");
+      const original = await fs.stat(target, { bigint: true });
+      proposal(async () => true);
+      const reviewed = await reviewNewIgnoreSource(root, file, execution);
+      assert.equal(reviewed.present, true);
+      assert.deepEqual(await prepareReviewedIgnoreSource(root, reviewed, execution), {
+        source: reviewed,
+        created: false,
+      });
+      assert.equal(await migrateIgnoreSetup(execution, "home"), "saved");
+      assert.equal((await readSettings(root)).syncSetups.home.sync.pathPolicy, "ignore-file");
+      assert.equal(await fs.readFile(target, "utf8"), "/local-only/\n");
+      assert.equal((await fs.stat(target, { bigint: true })).ctimeNs, original.ctimeNs);
+    } finally {
+      unavailable.mockRestore();
+    }
+  }));
+
+test.skipIf(process.platform !== "linux")("setup rechecks safe creation after review without writing on failure", () =>
+  fixture(async (root, execution, proposal) => {
+    proposal(async () => true);
+    const reviewed = await reviewNewIgnoreSource(root, file, execution);
+    assert.equal(reviewed.present, false);
+    const before = await fs.readdir(root);
+    const open = fs.open;
+    const flush = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === root) {
+        handle.sync = async () => {
+          throw Object.assign(new Error("directory fsync not supported"), { code: "EINVAL" });
+        };
+      }
+      return handle;
+    });
+    try {
+      const target = path.join(root, file);
+      await assert.rejects(prepareReviewedIgnoreSource(root, reviewed, execution), manualGuidance(target));
+      await assert.rejects(migrateIgnoreSetup(execution, "home"), manualGuidance(target));
+      assert.equal(requireHandover.mock.calls.length, 0);
+      assert.equal(headRead.mock.calls.length, 0);
+      assert.deepEqual(await fs.readdir(root), before);
+    } finally {
+      flush.mockRestore();
+    }
+  }),
+);
+
+test("unavailable safe creation preserves partial rules and the interrupted marker before migration review", () =>
+  fixture(async (root, execution) => {
+    const marker = path.join(root, DEFAULT_IGNORE_CREATION_RECORD);
+    const target = path.join(root, file);
+    const record = `pi-sync-ignore-creation-v1\n${DEFAULT_IGNORE_RULES}`;
+    await fs.writeFile(marker, record, { mode: 0o600 });
+    await fs.writeFile(target, "/npm/");
+    const before = await fs.readdir(root);
+    const unavailable = unavailableCreation();
+    try {
+      for (const run of [
+        () => reviewNewIgnoreSource(root, file, execution),
+        () => migrateIgnoreSetup(execution, "home"),
+      ]) {
+        await assert.rejects(run, (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.ok(error.message.includes(target));
+          assert.ok(error.message.includes(marker));
+          assert.match(error.message, /Preserve.*Retry/su);
+          assert.doesNotMatch(error.message, /Create a regular UTF-8 text file/u);
+          return true;
+        });
+      }
+      assert.equal(requireHandover.mock.calls.length, 0);
+      assert.equal(headRead.mock.calls.length, 0);
+      assert.deepEqual(await fs.readdir(root), before);
+      assert.equal(await fs.readFile(marker, "utf8"), record);
+      assert.equal(await fs.readFile(target, "utf8"), "/npm/");
+      assert.deepEqual(await readSettings(root), fixtureSettings);
+    } finally {
+      unavailable.mockRestore();
+    }
+  }));
+
+test.each([file, "alternate.ignore"])("the pointer editor requires an existing %s", (filename) =>
   fixture(async (root, execution) => {
     const next = structuredClone(fixtureSettings);
     next.version = 8;
@@ -470,7 +594,19 @@ test("the pointer editor does not recreate an absent default", () =>
       automatic: false,
     };
     await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(next));
-    await assert.rejects(switchIgnoreFile(execution, "home", file, "per-setup.ignore"), /does not exist/u);
-    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    const target = path.join(root, filename);
+    const before = await fs.readdir(root);
+    await assert.rejects(switchIgnoreFile(execution, "home", filename, "per-setup.ignore"), manualGuidance(target));
+    assert.equal(requireHandover.mock.calls.length, 0);
+    assert.deepEqual(await fs.readdir(root), before);
     assert.deepEqual(await readSettings(root), next);
+  }),
+);
+
+test("new setup with a missing alternate gives manual guidance and never offers the default preview", () =>
+  fixture(async (root, execution) => {
+    const filename = "alternate.ignore";
+    const before = await fs.readdir(root);
+    await assert.rejects(reviewNewIgnoreSource(root, filename, execution), manualGuidance(path.join(root, filename)));
+    assert.deepEqual(await fs.readdir(root), before);
   }));

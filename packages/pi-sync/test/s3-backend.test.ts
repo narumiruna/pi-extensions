@@ -13,6 +13,7 @@ import type { SyncConfig } from "../src/settings/settings-types.js";
 import type { Snapshot } from "../src/snapshot/snapshot-types.js";
 import { createSyncBackend } from "./backend-factory-eager.js";
 import { snapshot } from "./helpers.js";
+import { s3ClientConfig, startS3TestServer } from "./s3-http-test-helpers.js";
 import { S3ProbeHarness } from "./s3-probe-harness.js";
 
 test("S3 factory exposes a stable secret-free identity, conditional capability, and read-only diagnostics", async () => {
@@ -68,6 +69,63 @@ test("S3 factory exposes a stable secret-free identity, conditional capability, 
       },
     }).identity,
   );
+});
+
+test("S3 loopback preserves an existing head when ignore policy changes at publication", async () => {
+  const objects = new Map<string, { body: Buffer; etag: string }>();
+  const server = await startS3TestServer((request, response) => {
+    const current = objects.get(request.path);
+    if (request.method === "GET" || request.method === "HEAD") {
+      if (!current) return void response.writeHead(404).end();
+      return void response
+        .writeHead(200, { etag: current.etag })
+        .end(request.method === "GET" ? current.body : undefined);
+    }
+    if (request.method === "DELETE") {
+      objects.delete(request.path);
+      return void response.writeHead(204).end();
+    }
+    assert.equal(request.method, "PUT");
+    if (
+      (current && request.headers["if-none-match"] === "*") ||
+      (request.headers["if-match"] && request.headers["if-match"] !== current?.etag)
+    ) {
+      return void response.writeHead(412).end();
+    }
+    const etag = `"${createHash("sha256").update(request.body).digest("hex")}"`;
+    objects.set(request.path, { body: request.body, etag });
+    response.writeHead(200, { etag }).end();
+  });
+  try {
+    const backend = new S3SyncBackend(s3ClientConfig(server.url));
+    const legacy = snapshot([{ path: "notes.md", content: Buffer.from("existing") }]);
+    const first = await backend.publishSnapshot(legacy, { kind: "missing" });
+    const next: Snapshot = {
+      ...legacy,
+      id: "ignore-activation",
+      version: 6,
+      selection: { version: 4, scope: "agent-directory", sessions: false, fingerprint: "a".repeat(64) },
+    };
+    await assert.rejects(
+      backend.publishSnapshot(next, expectedRemoteHead(first.head), {
+        validateIgnorePolicy: async () => {
+          if (
+            server.requests.some(({ method, path }) => method === "PUT" && path.endsWith("/ignore-activation.json.gz"))
+          ) {
+            throw new Error("ignore policy changed before head publication");
+          }
+        },
+      }),
+      /ignore policy changed/u,
+    );
+    assert.deepEqual(await backend.readHead(), first.head);
+    const published = await backend.publishSnapshot(next, expectedRemoteHead(first.head));
+    assert.deepEqual(await backend.readSnapshot(published.head.snapshotRef), next);
+    assert.deepEqual(await backend.readSnapshot(first.head.snapshotRef), legacy);
+    assert.deepEqual(server.errors, []);
+  } finally {
+    await server.close();
+  }
 });
 
 test("S3 backend reads an opaque revision and validates immutable snapshot checksums", async () => {

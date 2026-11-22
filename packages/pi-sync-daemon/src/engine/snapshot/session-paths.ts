@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import {
   type EngineContext as ExtensionCommandContext,
   type EngineContext as ExtensionContext,
@@ -174,9 +175,13 @@ export function snapshotOptionsForContext(
   return {
     include: config.include,
     ...(config.scope === undefined ? {} : { scope: config.scope }),
-    ...(config.ignorePolicy
-      ? { ignorePolicy: config.ignorePolicy, validateIgnorePolicy: config.validateIgnorePolicy }
+    ...(config.setupName === undefined ? {} : { setupName: config.setupName }),
+    ...(config.backend && (config.ignorePolicy || config.reservedIgnoreNames !== undefined)
+      ? { recoverySetupKey: JSON.stringify([backendIdentityCoordinates(config), config.localFields]) }
       : {}),
+    ...(config.ignorePolicy ? { ignorePolicy: config.ignorePolicy } : {}),
+    ...(config.ignoreSourceIdentity === undefined ? {} : { ignoreSourceIdentity: config.ignoreSourceIdentity }),
+    ...(config.validateIgnorePolicy === undefined ? {} : { validateIgnorePolicy: config.validateIgnorePolicy }),
     ...(config.exclude === undefined ? {} : { exclude: config.exclude }),
     ...(config.reinclude === undefined ? {} : { reinclude: config.reinclude }),
     ...(config.reservedIgnoreNames === undefined ? {} : { reservedIgnoreNames: config.reservedIgnoreNames }),

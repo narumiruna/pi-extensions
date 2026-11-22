@@ -7,7 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, vi } from "vitest";
-import { initializeDefaultIgnoreSource } from "../src/engine/ignore/ignore-initialization.js";
+import {
+  AutomaticIgnoreCreationUnavailable,
+  checkAutomaticIgnoreCreation,
+  initializeDefaultIgnoreSource,
+} from "../src/engine/ignore/ignore-initialization.js";
 import {
   DEFAULT_IGNORE_CREATION_RECORD,
   DEFAULT_IGNORE_FILENAME,
@@ -114,36 +118,39 @@ test("a marker appearing during a normal read invalidates both an absent and a p
     await assert.rejects(readIgnoreSource(root), unfinished);
   }));
 
-test.runIf(process.platform === "win32").each(["missing", "pending", "partial"] as const)(
-  "Windows initialization refuses %s creation without changing recovery evidence",
+test.each(["missing", "pending", "partial"] as const)(
+  "portable initialization handles %s creation without a directory anchor",
   (state) =>
     fixture(async (root, target, markerPath) => {
       if (state !== "missing") await fs.writeFile(markerPath, record, { mode: 0o600 });
       if (state === "partial") await fs.writeFile(target, "/npm/");
-      const entries = await fs.readdir(root);
-      const before = await Promise.all(
-        entries.map(async (entry) => {
-          const file = path.join(root, entry);
-          return { entry, bytes: await fs.readFile(file), stat: await fs.lstat(file, { bigint: true }) };
-        }),
-      );
-      await assert.rejects(
-        initializeDefaultIgnoreSource(root),
-        /platform does not support durable directory-relative creation/u,
-      );
-      assert.deepEqual(await fs.readdir(root), entries);
-      for (const { entry, bytes, stat } of before) {
-        const file = path.join(root, entry);
-        assert.deepEqual(await fs.readFile(file), bytes);
-        const current = await fs.lstat(file, { bigint: true });
-        assert.equal(current.ino, stat.ino);
-        assert.equal(current.mtimeNs, stat.mtimeNs);
-        assert.equal(current.ctimeNs, stat.ctimeNs);
+      const stat = fs.stat;
+      const noAnchor = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        if (/^\/(?:proc\/self|dev)\/fd\//u.test(String(args[0]))) {
+          throw Object.assign(new Error("no directory anchor"), { code: "ENOTDIR" });
+        }
+        return stat(...args);
+      });
+      try {
+        await checkAutomaticIgnoreCreation(root, new AbortController().signal);
+        if (state === "partial") {
+          await assert.rejects(initializeDefaultIgnoreSource(root), /unfinished creation/u);
+          await assert.rejects(readIgnoreSource(root), unfinished);
+          assert.equal(await fs.readFile(target, "utf8"), "/npm/");
+          assert.equal(await fs.readFile(markerPath, "utf8"), record);
+        } else {
+          const result = await initializeDefaultIgnoreSource(root);
+          assert.equal(result.text, starter);
+          assert.equal(await fs.readFile(target, "utf8"), starter);
+          await assertMissing(markerPath);
+        }
+      } finally {
+        noAnchor.mockRestore();
       }
     }),
 );
 
-posixCreation("confirmed calls share one complete default file and never touch alternatives", () =>
+test("confirmed calls share one complete default file and never touch alternatives", () =>
   fixture(async (root, target, markerPath) => {
     const alternative = path.join(root, ".work.syncignore");
     await fs.writeFile(alternative, "/work/\n");
@@ -154,10 +161,9 @@ posixCreation("confirmed calls share one complete default file and never touch a
     assert.deepEqual(await initializeDefaultIgnoreSource(root), first);
     assert.equal(await fs.readFile(alternative, "utf8"), "/work/\n");
     await assertMissing(markerPath);
-  }),
-);
+  }));
 
-posixCreation.each(["active", "late"] as const)("an %s contender leaves the winner's file usable", (ordering) =>
+test.each(["active", "late"] as const)("an %s contender leaves the winner's file usable", (ordering) =>
   fixture(async (root, target, markerPath) => {
     const open = fs.open;
     const contenderAtMarker = Promise.withResolvers<void>();
@@ -208,7 +214,7 @@ posixCreation.each(["active", "late"] as const)("an %s contender leaves the winn
   }),
 );
 
-posixCreation.each([
+test.each([
   { scenario: "with custom rules", contents: "external\n", cancelled: false },
   { scenario: "with no rules", contents: "", cancelled: false },
   { scenario: "during cancellation", contents: "external\n", cancelled: true },
@@ -448,12 +454,9 @@ posixCreation.each(["exclusive open", "file flush", "directory flush", "handle c
     }),
 );
 
-posixCreation("fails without writing if directory-relative lookup or directory fsync is unavailable", () =>
+posixCreation("fails without writing if directory fsync is unavailable", () =>
   fixture(async (root) => {
-    const stat = vi.spyOn(fs, "stat").mockRejectedValue(Object.assign(new Error("no anchor"), { code: "ENOTDIR" }));
-    await assert.rejects(initializeDefaultIgnoreSource(root), /directory-relative creation is unavailable/u);
-    stat.mockRestore();
-    assert.deepEqual(await fs.readdir(root), []);
+    const signal = new AbortController().signal;
     const open = fs.open;
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await open(...args);
@@ -464,7 +467,9 @@ posixCreation("fails without writing if directory-relative lookup or directory f
       }
       return handle;
     });
-    await assert.rejects(initializeDefaultIgnoreSource(root), /could not safely create or flush/u);
+    const noFlush = { constructor: AutomaticIgnoreCreationUnavailable, message: /does not support flushing/u };
+    await assert.rejects(checkAutomaticIgnoreCreation(root, signal), noFlush);
+    await assert.rejects(initializeDefaultIgnoreSource(root), noFlush);
     assert.deepEqual(await fs.readdir(root), []);
   }),
 );
@@ -584,30 +589,31 @@ async function crashChild(root: string, phase: string) {
   assert.deepEqual(await exit, [null, "SIGKILL"]);
 }
 
-posixCreation.each(["before-open", "target-eexist", "after-open", "partial-write", "before-clear"])(
-  "a process crash at %s blocks ordinary reads and preserves ambiguous targets",
-  (phase) =>
-    fixture(async (root, target, markerPath) => {
-      await crashChild(root, phase);
+const crashPhases = ["before-open", "target-eexist", "after-open", "partial-write"];
+if (process.platform === "linux") crashPhases.push("before-clear");
+
+test.each(crashPhases)("a process crash at %s blocks ordinary reads and preserves ambiguous targets", (phase) =>
+  fixture(async (root, target, markerPath) => {
+    await crashChild(root, phase);
+    assert.equal(await fs.readFile(markerPath, "utf8"), record);
+    if (process.platform !== "win32") assert.equal((await fs.stat(markerPath)).mode & 0o777, 0o600);
+    await assert.rejects(readIgnoreSource(root), unfinished);
+    if (phase === "target-eexist" || phase === "after-open" || phase === "partial-write") {
+      const partial = phase === "partial-write" ? starter.slice(0, 5) : "";
+      assert.equal(await fs.readFile(target, "utf8"), partial);
+      await assert.rejects(initializeDefaultIgnoreSource(root), /unfinished creation/u);
+      assert.equal(await fs.readFile(target, "utf8"), partial);
       assert.equal(await fs.readFile(markerPath, "utf8"), record);
-      assert.equal((await fs.stat(markerPath)).mode & 0o777, 0o600);
-      await assert.rejects(readIgnoreSource(root), unfinished);
-      if (phase === "target-eexist" || phase === "after-open" || phase === "partial-write") {
-        const partial = phase === "partial-write" ? starter.slice(0, 5) : "";
-        assert.equal(await fs.readFile(target, "utf8"), partial);
-        await assert.rejects(initializeDefaultIgnoreSource(root), /unfinished creation/u);
-        assert.equal(await fs.readFile(target, "utf8"), partial);
-        assert.equal(await fs.readFile(markerPath, "utf8"), record);
-        await fs.rename(target, path.join(path.dirname(root), "syncignore.saved-evidence"));
-      } else if (phase === "before-open") {
-        await assertMissing(target);
-      }
-      const original = phase === "before-clear" ? await fs.stat(target) : undefined;
-      const recovered = await initializeDefaultIgnoreSource(root);
-      assert.equal(recovered.text, starter);
-      assert.equal(recovered.present, true);
-      if (original) assert.equal((await fs.stat(target)).ino, original.ino);
-      assert.deepEqual(await readIgnoreSource(root), recovered);
-      await assertMissing(markerPath);
-    }),
+      await fs.rename(target, path.join(path.dirname(root), "syncignore.saved-evidence"));
+    } else if (phase === "before-open") {
+      await assertMissing(target);
+    }
+    const original = phase === "before-clear" ? await fs.stat(target) : undefined;
+    const recovered = await initializeDefaultIgnoreSource(root);
+    assert.equal(recovered.text, starter);
+    assert.equal(recovered.present, true);
+    if (original) assert.equal((await fs.stat(target)).ino, original.ino);
+    assert.deepEqual(await readIgnoreSource(root), recovered);
+    await assertMissing(markerPath);
+  }),
 );

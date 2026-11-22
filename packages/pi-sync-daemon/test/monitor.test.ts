@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { test, vi } from "vitest";
 import * as consent from "../src/consent.js";
 import * as config from "../src/engine/settings/config.js";
@@ -28,6 +29,7 @@ async function fixture(
     continuous: ReturnType<typeof mockContinuous>;
     peers: ClientFacts[];
     execution(peer: ClientFacts, signal?: AbortSignal): Execution;
+    explicitSync(setup: string, peer: ClientFacts, signal?: AbortSignal): void;
     idle: { value: boolean };
     idleRead: ReturnType<typeof vi.fn<() => boolean>>;
     settings: PiSyncSettingsV3;
@@ -99,7 +101,9 @@ async function fixture(
     monitor.bind(server);
     await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 1), { interval: 5 });
     await monitor.pause();
-    await run({ root, monitor, continuous, peers, execution, idle, idleRead, settings, save });
+    const explicitSync = (setup: string, peer: ClientFacts, signal?: AbortSignal) =>
+      monitor.explicitSync({ ...config.configFromSettings(settings), setupName: setup }, execution(peer, signal));
+    await run({ root, monitor, continuous, peers, execution, explicitSync, idle, idleRead, settings, save });
   } finally {
     await monitor.close();
     vi.restoreAllMocks();
@@ -115,14 +119,14 @@ function mockContinuous() {
 
 for (const route of ["active", "other", "last-other", "two-clients", "cancelled", "replaced"] as const)
   test(`Continuous consumes one eligible setup-scoped retry: ${route}`, () =>
-    fixture(async ({ monitor, continuous, peers, execution }) => {
+    fixture(async ({ monitor, continuous, peers, explicitSync }) => {
       const first = peers[0];
       const second = peers[1];
       assert.ok(first && second);
       const controller = new AbortController();
-      monitor.explicitSync(route === "other" ? "other" : "home", execution(first, controller.signal));
-      if (route === "last-other") monitor.explicitSync("other", execution(first));
-      if (route === "two-clients") monitor.explicitSync("other", execution(second));
+      explicitSync(route === "other" ? "other" : "home", first, controller.signal);
+      if (route === "last-other") explicitSync("other", first);
+      if (route === "two-clients") explicitSync("other", second);
       if (route === "cancelled") controller.abort();
       if (route === "replaced") peers[0] = { ...first, generation: randomUUID() };
       monitor.schedule();
@@ -143,11 +147,11 @@ for (const route of ["active", "other", "last-other", "two-clients", "cancelled"
     }));
 
 test("busy eligibility does not consume an explicit retry", () =>
-  fixture(async ({ monitor, continuous, peers, execution, idle, idleRead }) => {
+  fixture(async ({ monitor, continuous, peers, explicitSync, idle, idleRead }) => {
     const peer = peers[0];
     assert.ok(peer);
     idle.value = false;
-    monitor.explicitSync("home", execution(peer));
+    explicitSync("home", peer);
     const calls = idleRead.mock.calls.length;
     monitor.schedule();
     await vi.waitFor(() => assert.ok(idleRead.mock.calls.length > calls), { interval: 5 });
@@ -159,11 +163,11 @@ test("busy eligibility does not consume an explicit retry", () =>
   }));
 
 test("disabled Continuous drops an intent instead of carrying it into a later activation", () =>
-  fixture(async ({ monitor, continuous, peers, execution, settings, save }) => {
+  fixture(async ({ monitor, continuous, peers, explicitSync, settings, save }) => {
     const peer = peers[0];
     const setup = settings.syncSetups.home;
     assert.ok(peer && setup);
-    monitor.explicitSync("home", execution(peer));
+    explicitSync("home", peer);
     setup.sync.continuous = false;
     await save();
     const original = config.loadConfigForCheck;
@@ -184,11 +188,11 @@ test("disabled Continuous drops an intent instead of carrying it into a later ac
 
 for (const change of ["cancelled", "replaced"] as const)
   test(`retry origin is revalidated after resolver preparation: ${change}`, () =>
-    fixture(async ({ monitor, continuous, peers, execution }) => {
+    fixture(async ({ monitor, continuous, peers, explicitSync }) => {
       const peer = peers[0];
       assert.ok(peer);
       const controller = new AbortController();
-      monitor.explicitSync("home", execution(peer, controller.signal));
+      explicitSync("home", peer, controller.signal);
       const host = await resolver.prepareResolverHost("", undefined);
       const entered = deferred<void>();
       const prepared = deferred<resolver.ResolverHost>();
@@ -200,16 +204,76 @@ for (const change of ["cancelled", "replaced"] as const)
       await entered.promise;
       if (change === "cancelled") controller.abort();
       else peers[0] = { ...peer, generation: randomUUID() };
-      prepared.resolve(host);
+      if (change === "replaced") {
+        const settle = vi.spyOn(host, "settle");
+        prepared.resolve(host);
+        await vi.waitFor(() => assert.equal(settle.mock.calls.length, 1), { interval: 5 });
+        assert.equal(continuous.start.mock.calls.length, 1);
+        await monitor.factsChanged();
+      } else prepared.resolve(host);
       await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 2), { interval: 5 });
       assert.equal(continuous.start.mock.calls[1]?.[2], false);
     }));
 
-test("close during resolver preparation settles it without activating a retry", () =>
-  fixture(async ({ monitor, continuous, peers, execution }) => {
+for (const recovery of ["review", "reload"] as const)
+  test(`settings publication blocks automatic work and drops the retry before ${recovery}`, () =>
+    fixture(async ({ monitor, continuous, peers, explicitSync, settings, save }) => {
+      const peer = peers[0];
+      assert.ok(peer);
+      explicitSync("home", peer);
+      settings.showStatus = false;
+      await save();
+      monitor.settingsCommitted(true);
+      const read = vi.spyOn(config, "loadConfigForCheck");
+      await monitor.factsChanged();
+      await setImmediate();
+      await monitor.pause();
+      assert.equal(read.mock.calls.length, 0, "blocked eligibility must not read settings");
+      assert.equal(continuous.start.mock.calls.length, 1);
+      if (recovery === "review") {
+        monitor.reviewedPolicy(config.configFromSettings(settings));
+        monitor.schedule();
+      } else {
+        assert.equal(await monitor.lifetime(), "exit", "there is no after-exit grant");
+        peers[0] = { ...peer, id: randomUUID(), generation: randomUUID() };
+        await monitor.factsChanged();
+      }
+      await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 2), { interval: 5 });
+      assert.equal(continuous.start.mock.calls[1]?.[2], false);
+    }));
+
+test("credentials changed during resolver preparation are not used for the scheduled attempt", () =>
+  fixture(async ({ monitor, continuous, peers, explicitSync, settings, save }) => {
     const peer = peers[0];
     assert.ok(peer);
-    monitor.explicitSync("home", execution(peer));
+    explicitSync("home", peer);
+    const host = await resolver.prepareResolverHost("", undefined);
+    const settle = vi.spyOn(host, "settle");
+    const entered = deferred<void>();
+    const prepared = deferred<resolver.ResolverHost>();
+    vi.spyOn(resolver, "prepareResolverHost").mockImplementation(() => {
+      entered.resolve();
+      return prepared.promise;
+    });
+    monitor.schedule();
+    await entered.promise;
+    const connection = settings.storageConnections.dav;
+    assert.ok(connection?.type === "webdav");
+    connection.credentials.password = "changed";
+    await save();
+    prepared.resolve(host);
+    await vi.waitFor(() => assert.equal(settle.mock.calls.length, 1), { interval: 5 });
+    assert.equal(continuous.start.mock.calls.length, 1);
+    monitor.schedule();
+    await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 2), { interval: 5 });
+    assert.equal(continuous.start.mock.calls[1]?.[2], false);
+  }));
+
+test("close during resolver preparation settles it without activating a retry", () =>
+  fixture(async ({ monitor, continuous, peers, explicitSync }) => {
+    const peer = peers[0];
+    assert.ok(peer);
+    explicitSync("home", peer);
     const original = resolver.prepareResolverHost;
     const entered = deferred<void>();
     const prepared = deferred<resolver.ResolverHost>();
@@ -229,10 +293,10 @@ test("close during resolver preparation settles it without activating a retry", 
   }));
 
 test("an authorization publication failure during config loading blocks the pending retry", () =>
-  fixture(async ({ monitor, continuous, peers, execution }) => {
+  fixture(async ({ monitor, continuous, peers, explicitSync }) => {
     const peer = peers[0];
     assert.ok(peer);
-    monitor.explicitSync("home", execution(peer));
+    explicitSync("home", peer);
     const original = config.loadConfigForCheck;
     const latest = await original();
     const entered = deferred<void>();

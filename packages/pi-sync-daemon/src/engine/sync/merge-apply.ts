@@ -311,7 +311,7 @@ export async function applyMergedSnapshot(
   if (options.scope === "agent-directory" && options.sessionDir === undefined) {
     options = {
       ...options,
-      sessionDir: sessionStorageRoot(root, await agentDirectoryConfiguredSessionDir(options.signal, root)),
+      sessionDir: sessionStorageRoot(root, await agentDirectoryConfiguredSessionDir(options.signal, root, options)),
     };
     options.validateMutation?.();
     options.signal?.throwIfAborted();
@@ -347,7 +347,7 @@ export async function applyMergedSnapshot(
     new Set(Object.keys(afterHashes)),
   );
   await assertCanonicalMutationTargets(targets, options);
-  if (options.scope === "agent-directory") await assertUnexcludedTargets(root, targets, options);
+  await assertUnexcludedTargets(root, targets, options);
   // Existing case aliases share Pi's non-reentrant realpath queue. Reserve the
   // missing destination separately only after deleting its reviewed preimage.
   const targetsByQueue = new Map<string, string[]>();
@@ -454,6 +454,7 @@ export async function applyMergedSnapshot(
     const removedTargets = new Set([...removed].map((item) => snapshotTarget(root, item, options.sessionDir)));
     await assertCanonicalMergedTargets(root, changed, options);
     await validate();
+    if (options.validateApplyReview) await options.validateApplyReview();
     const requireReviewedHash = (relative: string, hash?: string) => {
       if (hash !== beforeHashes[relative] && hash !== afterHashes[relative])
         throw new Error("Local content changed at the apply boundary; journal retained, newer bytes untouched.");
@@ -462,7 +463,7 @@ export async function applyMergedSnapshot(
       await validate();
       const relative = relativeByTarget.get(target);
       if (!relative) throw new Error("Unowned merge target.");
-      if (options.scope === "agent-directory") {
+      if (validateIgnore || options.scope === "agent-directory") {
         await assertCanonicalMutationTargets([target], options);
         await assertUnexcludedTargets(root, [target], options);
       }
@@ -536,6 +537,7 @@ export async function applyMergedSnapshot(
       // Writers registered after deletion must finish first; never accept their
       // bytes as our own, even if they match a recognizable pre/postimage.
       await requireAbsentDestinations();
+      if (deferredTargets.length && options.validateApplyReview) await options.validateApplyReview();
       if (validateIgnore) await validateIgnore();
       await writeTargets();
     }

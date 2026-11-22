@@ -210,6 +210,7 @@ export async function remoteOperation(ctx: ExtensionContext, operation: string, 
   const payload = {
     args,
     ...(setup === undefined ? {} : { setup }),
+    ...(options.automaticFingerprint === undefined ? {} : { automaticFingerprint: options.automaticFingerprint }),
     yes: options.yes,
     force: options.force,
     stale: options.stale,
@@ -329,13 +330,14 @@ export class PiDaemonClient {
       model: protectionOnly ? undefined : this.modelBinding(),
     };
   }
-  async configured() {
+  async configured(matches?: (settings: ReturnType<typeof validateSettingsDocument>) => boolean) {
     this.validate();
     await settingsQueue;
     this.validate();
     const document = await peekLocalConfigDocument();
     this.validate();
-    return Boolean(document && validateSettingsDocument(document.parsed).activeSyncSetup);
+    const settings = document && validateSettingsDocument(document.parsed);
+    return Boolean(settings?.activeSyncSetup && (matches?.(settings) ?? true));
   }
   async pauseForSessionChange() {
     this.validate();

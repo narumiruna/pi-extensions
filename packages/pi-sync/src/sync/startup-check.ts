@@ -76,7 +76,7 @@ export function createStartupCheck(
         .then(async () => {
           try {
             throwIfAborted(signal);
-            config = initialConfig ?? (await loadConfigForCheck());
+            config = initialConfig ?? (await loadConfigForCheck(undefined, signal));
             task.transfer = startupTransferEnabled(config);
             throwIfAborted(signal);
             if (!config.automatic && !startupTransferEnabled(config)) return;
@@ -86,7 +86,7 @@ export function createStartupCheck(
             setSyncStatus(ctx, "sync ...", { activity: "checking" });
             const { inspectSync } = await timings.measure("inspection import", () => loaders.inspection());
             throwIfAborted(signal);
-            const currentConfig = await loadConfigForCheck();
+            const currentConfig = await loadConfigForCheck(undefined, signal);
             throwIfAborted(signal);
             if (syncCheckConfigFingerprint(currentConfig) !== identity) return;
             // The daemon owns the operation and cache guards.
@@ -94,7 +94,7 @@ export function createStartupCheck(
               inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal, undefined, timings),
             );
             throwIfAborted(signal);
-            const latest = await loadConfigForCheck();
+            const latest = await loadConfigForCheck(undefined, signal);
             throwIfAborted(signal);
             if (syncCheckConfigFingerprint(latest) !== identity) return;
             const state = await withStateDirectoryAccess(() => readStateForConfig(latest));
@@ -115,7 +115,9 @@ export function createStartupCheck(
             ) {
               const operations = await timings.measure("operations import", () => loaders.operations());
               throwIfAborted(signal);
-              if (!isCurrent()) return;
+              const transferConfig = await loadConfigForCheck(undefined, signal);
+              throwIfAborted(signal);
+              if (!isCurrent() || syncCheckConfigFingerprint(transferConfig) !== identity) return;
               if (!ctx.isIdle()) {
                 pending = { ctx, signal: sessionSignal, config: captured };
                 return;
@@ -129,6 +131,7 @@ export function createStartupCheck(
                   silent: true,
                   reload: false,
                   auto: true,
+                  automaticFingerprint: identity,
                   signal,
                   startupTimings: timings,
                   onCommit: () => attention.clearObservation(),

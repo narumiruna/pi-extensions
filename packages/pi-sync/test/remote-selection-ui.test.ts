@@ -4,7 +4,7 @@ import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";
 import { loadConfig, syncConfigReviewFingerprint } from "../src/settings/config.js";
@@ -50,6 +50,46 @@ test("remote selection difference is review-first, sanitized, and bounded", asyn
     }
   });
 });
+
+test.each([undefined, "mismatch", "local-legacy-remote-ignore", "local-ignore-remote-legacy"] as const)(
+  "read-only policy comparison (%s) offers no publication or settings action",
+  async (ignorePolicyComparison) => {
+    const tui = createTuiHarness({ width: 100, rows: 24 });
+    const runRoute = vi.fn();
+    const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+    const running = showRemoteSelectionReview(ctx, undefined, undefined, undefined, {
+      readOnly: true,
+      runRoute,
+      decision: {
+        setupName: "home",
+        configIdentity: "captured",
+        localInclude: ["settings.json"],
+        remoteInclude: ["models.json"],
+        ignorePolicyComparison,
+      },
+    });
+    try {
+      await waitForSelectionScreen(tui);
+      const menu = tui.render().join("\n");
+      assert.match(menu, /Review (policy difference|all paths)/u);
+      assert.doesNotMatch(menu, /Use remote content list|publishing this device|update remote|Continue/u);
+      tui.press("tui.select.confirm");
+      await waitForSelectionScreen(tui);
+      assert.match(
+        tui.render().join("\n"),
+        ignorePolicyComparison ? /No files or settings have changed/u : /Remote-only/u,
+      );
+      tui.press("tui.select.cancel");
+      await waitForSelectionScreen(tui);
+      tui.press("tui.select.cancel");
+      await running;
+      assert.equal(runRoute.mock.calls.length, 0);
+    } finally {
+      tui.dispose();
+      await running;
+    }
+  },
+);
 
 test("captured setup text is sanitized at the review display boundary", async () => {
   const rendered = new Map<number, string[]>();

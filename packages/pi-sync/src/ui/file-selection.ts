@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
+import { loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { localConfigPath } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { agentDir } from "../snapshot/session-paths.js";
@@ -13,6 +13,7 @@ import {
   syncIncludeSelection,
 } from "../sync/sync-policy.js";
 import { showDirectoryScope } from "./excluded-paths-ui.js";
+import { manualIgnoreFileGuidance } from "./ignore-file-ui.js";
 
 const BUILT_IN_PREFIX = "builtin:";
 const CUSTOM_PREFIX = "custom:";
@@ -27,9 +28,13 @@ interface SelectionDraft {
 
 export async function showFileSelection(ctx: ExtensionCommandContext, setupName?: string, signal?: AbortSignal) {
   const validate = captureMutationOwner(ctx, signal);
-  const config = await loadConfig(setupName);
+  const config = await loadSettingsConfig(setupName);
   if (signal?.aborted) return;
   validate();
+  if (config.pathPolicy === "ignore-file") {
+    if (ctx.hasUI) ctx.ui.notify(manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore"), "info");
+    return;
+  }
   if (config.scope === "agent-directory") return showDirectoryScope(ctx, config, signal);
   const selection = syncIncludeSelection(config.include);
   const original: SelectionDraft = {

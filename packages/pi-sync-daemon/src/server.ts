@@ -66,6 +66,7 @@ interface Job {
   digest: string;
   client?: string;
   generation?: string;
+  participantGeneration?: number;
   controller: AbortController;
   committed: boolean;
   promise: Promise<void>;
@@ -126,6 +127,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   const pending = new Map<string, Pending>();
   const peersFile = path.join(paths.directory, "clients.json");
   let sequence = 0;
+  let participantGeneration = 0;
   let closed = false;
   let stopRequested = false;
   let automaticClosing = false;
@@ -137,6 +139,19 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   let closing: Promise<void> | undefined;
   let peerWrites = Promise.resolve();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  function participantsChanged() {
+    participantGeneration++;
+    for (const job of [...jobs.values(), ...backgroundJobs]) {
+      if (
+        job.participantGeneration !== undefined &&
+        !job.committed &&
+        (job.view.phase === "queued" || job.view.phase === "running")
+      )
+        job.controller.abort(
+          new DOMException("Daemon participants changed before automatic work completed.", "AbortError"),
+        );
+    }
+  }
   function savePeers(candidate?: { peer: Participant; facts: ClientFacts }) {
     idleExit?.changed();
     const operation = peerWrites.then(() => writePeers(candidate));
@@ -237,6 +252,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   };
   const assertOwner = () => {
     if (automaticClosing && !compromised) throw new DaemonStoppingError();
+    if (stopRequested) throw new DaemonStoppingError();
     if (closed || compromised) throw new Error("Daemon ownership is no longer valid.");
     assertRoot();
   };
@@ -257,11 +273,14 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   };
   const liveClientFacts = () =>
     [...participants.values()].filter((peer) => processExists(peer.facts.pid)).map((peer) => peer.facts);
+  const participates = (peer: Participant) => !peer.publishing && (peer.connected || peer.suspected);
   const participantFacts = () =>
     [...participants.values()]
-      .filter((peer) => !peer.publishing && (peer.connected || peer.suspected) && processExists(peer.facts.pid))
+      .filter((peer) => participates(peer) && processExists(peer.facts.pid))
       .map((peer) =>
-        peer.closing || peer.suspected ? { ...(peer.resumeFacts ?? peer.facts), idle: false } : peer.facts,
+        peer.closing || peer.suspected || Date.now() - peer.seen > 5_000
+          ? { ...(peer.resumeFacts ?? peer.facts), idle: false }
+          : peer.facts,
       );
   const contactState = (peer: Participant): ClientContact => {
     if (closed || stopRequested || compromised || peer.publishing || peer.closing || !processExists(peer.facts.pid))
@@ -288,6 +307,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       }
       assertOwner();
       job.controller.signal.throwIfAborted();
+      if (job.participantGeneration !== undefined && job.participantGeneration !== participantGeneration)
+        throw new Error("Daemon participants changed before automatic work completed.");
       if (job.client) {
         const peer = requireParticipant(job.client);
         if (peer.facts.generation !== job.generation) throw new Error("Client session generation changed.");
@@ -419,6 +440,14 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       digest,
       client,
       generation: peer.facts.generation,
+      participantGeneration: [
+        "startup-transfer",
+        "shutdown",
+        "daemon.authorize",
+        "daemon.authorize-connected",
+      ].includes(operation)
+        ? participantGeneration
+        : undefined,
       controller: new AbortController(),
       committed: false,
       promise: Promise.resolve(),
@@ -499,6 +528,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       recheck();
       // Expose the new binding to the monitor, but only as a non-ready, busy suspect.
       peer.resumeFacts = { ...candidate, ready: false };
+      participantsChanged();
       // Never wait for jobs or monitor transitions inside admission: they can need the fence.
       await Promise.race([
         Promise.all([hooks.factsChanged?.(), ...[...jobs.values()].filter(running).map((job) => job.promise)]),
@@ -530,6 +560,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         peer.resumeFacts = undefined;
         peer.suspected = false;
         peer.connected = true;
+        participantsChanged();
         hooks.idle?.();
         return poll(peer, 0);
       }, signal);
@@ -546,6 +577,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     }
     if (closedClients.has(id)) return poll(peer, 0);
     peer.closing = true;
+    participantsChanged();
     invalidateExpiry(peer);
     for (const waiting of [...pending.values()])
       if (waiting.target === id && !waiting.callback.kind.startsWith("queue-"))
@@ -556,6 +588,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       if (!job.committed) job.controller.abort(new DOMException("Client detached", "AbortError"));
     await Promise.allSettled(affected.map((job) => job.promise));
     peer.connected = false;
+    participantsChanged();
     // Orderly exit remains protected by PID, but is not an ambiguous active participant.
     peer.suspected = retain && handoff?.kind !== "exit";
     peer.closing = false;
@@ -598,6 +631,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         )
           throw new Error("Client identity collision.");
         if (old) invalidateExpiry(old);
+        participantsChanged();
         participants.set(params.id, {
           facts: structuredClone(params),
           reservations: old?.reservations,
@@ -620,6 +654,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         }
         const attached = requireParticipant(params.id, true);
         attached.publishing = false;
+        participantsChanged();
         // A shutdown-confirmed handoff keeps protection across SDK invalidation.
         // Publish the replacement first, then retire only the matching closed scope.
         for (const [id, peer] of participants) {
@@ -666,6 +701,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       requireParticipant(params.facts.id);
       peer.facts = structuredClone(params.facts);
       const published = peer.facts;
+      if (JSON.stringify(old) !== JSON.stringify(published)) participantsChanged();
       try {
         await savePeers();
       } catch (error) {
@@ -838,9 +874,11 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   async function expire() {
     if (closed) return;
     let changed = false;
+    let participationChanged = false;
     for (const [id, peer] of participants) {
       const exited = !processExists(peer.facts.pid);
       if (!exited && (!peer.connected || Date.now() - peer.seen <= 5_000)) continue;
+      participationChanged ||= participates(peer);
       peer.connected = false;
       peer.suspected = !exited;
       if (exited) invalidateExpiry(peer);
@@ -859,10 +897,9 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       }
       // Contact expiry alone retains the live session and its uncertain grants.
     }
-    if (changed) {
-      await savePeers();
-      await hooks.factsChanged?.();
-    }
+    if (participationChanged) participantsChanged();
+    if (changed) await savePeers();
+    if (participationChanged) await hooks.factsChanged?.();
   }
   const lifetime = async (): Promise<IdleExitPolicy> =>
     closed || compromised || peerWriteFailed ? "pause" : ((await hooks.lifetime?.()) ?? "pause");
@@ -959,6 +996,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     const job: Job = {
       view: { id: randomUUID(), phase: "running" },
       digest: "",
+      participantGeneration,
       controller: new AbortController(),
       committed: false,
       promise: Promise.resolve(),
@@ -982,12 +1020,15 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       return endpoint.retainedDirectory;
     },
     participants: participantFacts,
+    participantGeneration: () => participantGeneration,
     liveClients: liveClientFacts,
     expireClients,
     // The heartbeat and deterministic lifecycle tests use the same evaluation boundary.
     checkLifetime: () => idleExit?.tick() ?? Promise.resolve(),
     isIdle: () =>
-      !closed && [...jobs.values()].every((job) => job.view.phase !== "queued" && job.view.phase !== "running"),
+      !closed &&
+      !stopRequested &&
+      [...jobs.values()].every((job) => job.view.phase !== "queued" && job.view.phase !== "running"),
     get closed() {
       return closed;
     },

@@ -5,6 +5,7 @@ import { assertWithinRoot, isDeniedPath, isPathInside } from "../paths.js";
 import { normalizeSyncExclude, sameSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import {
+  localIgnorePolicyKey,
   portableSnapshotSelection,
   type SyncSelectionConfig,
   sameSnapshotSelection,
@@ -21,6 +22,20 @@ export const LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION = 8;
 export const FIXED_WORKSPACE_JOURNAL_VERSION = 9;
 export const AGENT_DIRECTORY_JOURNAL_VERSION = 10;
 export const IGNORE_POLICY_JOURNAL_VERSION = 11;
+export const BOUND_DIRECTORY_JOURNAL_VERSION = 12;
+export const BOUND_INCLUDED_PATHS_JOURNAL_VERSION = 13;
+
+function isLocallyBoundJournal(journal: TransactionJournalPolicy) {
+  return (
+    journal.version === BOUND_DIRECTORY_JOURNAL_VERSION || journal.version === BOUND_INCLUDED_PATHS_JOURNAL_VERSION
+  );
+}
+
+type RecoveryPolicyBinding = Pick<SnapshotOptions, "setupName" | "ignoreSourceIdentity" | "recoverySetupKey">;
+
+export function recoveryPolicyKey(options: SyncSelectionConfig & RecoveryPolicyBinding) {
+  return options.setupName || options.reservedIgnoreNames !== undefined ? localIgnorePolicyKey(options) : undefined;
+}
 
 export function isScopedJournal(journal: TransactionJournalPolicy) {
   return [
@@ -28,11 +43,12 @@ export function isScopedJournal(journal: TransactionJournalPolicy) {
     FIXED_WORKSPACE_JOURNAL_VERSION,
     AGENT_DIRECTORY_JOURNAL_VERSION,
     IGNORE_POLICY_JOURNAL_VERSION,
+    BOUND_DIRECTORY_JOURNAL_VERSION,
   ].includes(journal.version);
 }
 
 function usesSlottedWorkspace(journal: TransactionJournalPolicy) {
-  return journal.version === AGENT_DIRECTORY_JOURNAL_VERSION || journal.version === IGNORE_POLICY_JOURNAL_VERSION;
+  return journal.version >= AGENT_DIRECTORY_JOURNAL_VERSION && isScopedJournal(journal);
 }
 
 export function isRecoveryStageId(value: unknown): value is string {
@@ -57,6 +73,7 @@ export interface TransactionJournalPolicy {
   exclude?: string[];
   selection?: SnapshotSelection;
   ignoreSource?: IgnoreSourceBinding;
+  localPolicyKey?: string;
 }
 
 export function ignoreSourceBinding(
@@ -95,7 +112,11 @@ function sameIgnoreSource(left: IgnoreSourceBinding, right: IgnoreSourceBinding)
 
 type TransactionGuards = Pick<SnapshotOptions, "validateIgnorePolicy" | "signal" | "validateMutation">;
 
-export interface TransactionOptions extends SyncSelectionConfig, TransactionGuards {
+export interface TransactionOptions
+  extends SyncSelectionConfig,
+    TransactionGuards,
+    RecoveryPolicyBinding,
+    Pick<SnapshotOptions, "validateApplyReview"> {
   sessionDir?: string;
   exclude?: readonly string[];
   protectedTargets?: readonly string[];
@@ -106,9 +127,13 @@ export interface TransactionOptions extends SyncSelectionConfig, TransactionGuar
 export class StaleIgnorePolicyError extends Error {}
 
 export function ignorePolicyValidator(options: SyncSelectionConfig & TransactionGuards) {
-  if (!options.ignorePolicy && options.version !== 4) return;
+  const scopedIgnore = options.ignorePolicy !== undefined || options.version === 4;
+  if (!scopedIgnore && options.reservedIgnoreNames === undefined && !options.validateIgnorePolicy) return;
   const validateIgnorePolicy = options.validateIgnorePolicy;
-  if (!options.ignorePolicy || options.scope !== "agent-directory" || typeof validateIgnorePolicy !== "function")
+  if (
+    (scopedIgnore && (!options.ignorePolicy || options.scope !== "agent-directory")) ||
+    typeof validateIgnorePolicy !== "function"
+  )
     throw new Error("Ignore-file mutation requires an explicit local policy and a freshness check.");
   return async () => {
     options.validateMutation?.();
@@ -129,9 +154,21 @@ export function ignorePolicyValidator(options: SyncSelectionConfig & Transaction
 }
 
 export function validateJournalPolicy(journal: TransactionJournalPolicy) {
-  if (!journal || (![1, 2, 3, 4, 5, 6, 7].includes(journal.version) && !isScopedJournal(journal)))
+  if (
+    !journal ||
+    (![1, 2, 3, 4, 5, 6, 7].includes(journal.version) && !isScopedJournal(journal) && !isLocallyBoundJournal(journal))
+  )
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
-  if (journal.version === IGNORE_POLICY_JOURNAL_VERSION) {
+  if (
+    isLocallyBoundJournal(journal)
+      ? typeof journal.localPolicyKey !== "string" || !/^[0-9a-f]{64}$/u.test(journal.localPolicyKey)
+      : journal.localPolicyKey !== undefined
+  )
+    throw new Error("Invalid transaction local policy binding; preserve evidence for review.");
+  if (
+    journal.version === IGNORE_POLICY_JOURNAL_VERSION ||
+    (journal.version === BOUND_DIRECTORY_JOURNAL_VERSION && journal.selection?.version === 4)
+  ) {
     const binding = journal.ignoreSource;
     try {
       if (
@@ -161,10 +198,14 @@ export function validateJournalPolicy(journal: TransactionJournalPolicy) {
   normalizeSyncExclude(journal.exclude);
 }
 
-export function assertRecoveryPolicy(journal: TransactionJournalPolicy, options: SyncSelectionConfig) {
-  if (journal.version === IGNORE_POLICY_JOURNAL_VERSION || options.ignorePolicy || options.version === 4) {
+export function assertRecoveryPolicy(journal: TransactionJournalPolicy, options: TransactionOptions) {
+  const localKey = recoveryPolicyKey(options);
+  if (journal.localPolicyKey !== localKey)
+    throw new Error(
+      "Pending transaction has different setup or ignore policy evidence; preserve its backup for reviewed recovery.",
+    );
+  if (journal.ignoreSource || options.ignorePolicy || options.version === 4) {
     if (
-      journal.version === IGNORE_POLICY_JOURNAL_VERSION &&
       journal.ignoreSource &&
       options.scope === "agent-directory" &&
       options.ignorePolicy &&
@@ -217,18 +258,20 @@ export interface TransactionJournal extends TransactionJournalPolicy {
 export function validateJournal(directory: string, journal: TransactionJournal, sessionDir?: string) {
   validateJournalPolicy(journal);
   const wholeDirectory = isScopedJournal(journal);
+  const scopedWorkspace = wholeDirectory && journal.version >= FIXED_WORKSPACE_JOURNAL_VERSION;
   if (!Array.isArray(journal.entries) || journal.entries.length > 16_384)
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
   if (
     journal.completed !== undefined &&
-    ((!wholeDirectory && ![6, 7].includes(journal.version)) || journal.completed !== true)
+    ((!wholeDirectory && ![6, 7, BOUND_INCLUDED_PATHS_JOURNAL_VERSION].includes(journal.version)) ||
+      journal.completed !== true)
   )
     throw new Error("Invalid transaction completion evidence.");
   const root = path.resolve(agentDir());
   if (typeof journal.root !== "string" || path.resolve(journal.root) !== root)
     throw new Error("Transaction root no longer matches the Pi agent directory.");
   if (journal.sessionRootTransition !== undefined) {
-    if (journal.version !== 7 || typeof journal.sessionRoot !== "string")
+    if (![7, BOUND_INCLUDED_PATHS_JOURNAL_VERSION].includes(journal.version) || typeof journal.sessionRoot !== "string")
       throw new Error("Invalid session root-transition version.");
     validateSessionRootTransition(journal.sessionRootTransition);
   } else if (journal.version === 7) throw new Error("Missing session root-transition evidence.");
@@ -262,7 +305,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
     assertAllowedTarget(root, journal.sessionRoot, entry.target);
     if (
       entry.afterTarget !== undefined &&
-      ((!wholeDirectory && ![5, 6, 7].includes(journal.version)) ||
+      ((!wholeDirectory && ![5, 6, 7, BOUND_INCLUDED_PATHS_JOURNAL_VERSION].includes(journal.version)) ||
         typeof entry.afterTarget !== "string" ||
         !isCaseReplacement(root, entry.target, entry.afterTarget) ||
         path.resolve(entry.afterTarget) !== entry.afterTarget ||
@@ -277,10 +320,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
         (entry.postFiles === undefined ? !journal.completed : !Array.isArray(entry.postFiles)))
     )
       throw new Error("Invalid transaction postimage evidence.");
-    if (
-      entry.recoveryStaged !== undefined &&
-      (typeof entry.recoveryStaged !== "boolean" || journal.version >= FIXED_WORKSPACE_JOURNAL_VERSION)
-    )
+    if (entry.recoveryStaged !== undefined && (typeof entry.recoveryStaged !== "boolean" || scopedWorkspace))
       throw new Error("Invalid recovery staging evidence.");
     if (entry.removalPending !== undefined && (journal.version < 3 || typeof entry.removalPending !== "boolean"))
       throw new Error("Invalid transaction removal evidence.");
@@ -293,7 +333,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
       throw new Error("Conflicting transaction replacement evidence.");
     if (
       (entry.recoveryWorkspace !== undefined &&
-        (journal.version < FIXED_WORKSPACE_JOURNAL_VERSION ||
+        (!scopedWorkspace ||
           !isScopedIdentity(entry.recoveryWorkspace) ||
           entry.recoveryStaged ||
           !["file", "directory"].includes(entry.kind))) ||
@@ -302,7 +342,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
           !entry.recoveryWorkspace ||
           !isRecoveryStageId(entry.recoveryWorkspaceId))) ||
       (entry.scopedRemoval !== undefined &&
-        (journal.version < FIXED_WORKSPACE_JOURNAL_VERSION ||
+        (!scopedWorkspace ||
           !entry.removalPending ||
           !["before", "after"].includes(entry.scopedRemoval?.image) ||
           !isScopedIdentity(entry.scopedRemoval?.identity) ||
@@ -310,7 +350,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
             ? !["file", "directory"].includes(entry.kind)
             : entry.afterImage === "missing" && !entry.postFiles?.length))) ||
       (entry.vacantInstall !== undefined &&
-        (journal.version < FIXED_WORKSPACE_JOURNAL_VERSION ||
+        (!scopedWorkspace ||
           !entry.recoveryWorkspace ||
           !isScopedIdentity(entry.vacantInstall) ||
           entry.removalPending ||
