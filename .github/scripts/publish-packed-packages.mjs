@@ -106,15 +106,22 @@ function safeTarballPath(relative) {
   return relative;
 }
 
-function verifyRegistryIntegrity(bytes, integrity) {
-  if (typeof integrity !== "string") throw new Error("Missing registry integrity");
+function parseRegistryIntegrity(integrity, exact) {
   const tokens = integrity.trim().split(/\s+/u);
-  const supported = ["sha512", "sha384", "sha256", "sha1"];
+  const supported = { sha512: 64, sha384: 48, sha256: 32, sha1: 20 };
   // SRI selects the strongest supported algorithm, not a weaker matching alternative.
-  const algorithm = supported.find((name) => tokens.some((token) => token.startsWith(`${name}-`)));
-  if (!algorithm || !tokens.includes(`${algorithm}-${digest(bytes, algorithm)}`)) {
-    throw new Error("Registry artifact integrity mismatch");
+  const algorithm = Object.keys(supported).find((name) => tokens.some((token) => token.startsWith(`${name}-`)));
+  if (algorithm) {
+    const candidates = tokens
+      .filter((token) => token.startsWith(`${algorithm}-`))
+      .map((token) => token.slice(algorithm.length + 1));
+    const hashes = candidates.filter((candidate) => {
+      const bytes = Buffer.from(candidate, "base64");
+      return bytes.length === supported[algorithm] && bytes.toString("base64") === candidate;
+    });
+    if (hashes.length) return { algorithm, hashes };
   }
+  throw new Error(`Invalid registry metadata: ${exact} (integrity)`);
 }
 
 async function loadPackedPlan(cwd, packDir) {
@@ -281,7 +288,7 @@ export async function publishPackedPackages(
       metadata?.name !== name ||
       metadata.version !== manifest.version ||
       typeof metadata.dist?.tarball !== "string" ||
-      !metadata.dist.integrity
+      typeof metadata.dist.integrity !== "string"
     ) {
       throw new Error(`Invalid registry metadata: ${exact}`);
     }
@@ -294,6 +301,7 @@ export async function publishPackedPackages(
     } catch {
       throw new Error(`Invalid registry artifact URL: ${exact}`);
     }
+    const { algorithm, hashes } = parseRegistryIntegrity(metadata.dist.integrity, exact);
     let response;
     try {
       readiness.operation = "download tarball";
@@ -318,7 +326,7 @@ export async function publishPackedPackages(
         throw networkFailure(`Registry artifact unavailable: ${exact}`, error);
       }
       check();
-      verifyRegistryIntegrity(bytes, metadata.dist.integrity);
+      if (!hashes.includes(digest(bytes, algorithm))) throw new Error("Registry artifact integrity mismatch");
       const release = releases.get(name);
       if (artifacts.has(name) && release.tarball.integrity !== `sha256-${digest(bytes, "sha256")}`) {
         throw new Error(`Registry artifact differs from packed artifact: ${exact}`);

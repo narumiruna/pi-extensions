@@ -26,7 +26,7 @@ The guard retries npm and artifact HTTP 404, 408, 429, and 5xx failures. Recogni
 - `UND_ERR_CONNECT_TIMEOUT`, `UND_ERR_HEADERS_TIMEOUT`, `UND_ERR_BODY_TIMEOUT`, and `UND_ERR_SOCKET`.
 - `TimeoutError`, including errors surfaced by a download, while the shared budget remains.
 
-Authentication errors (`E401`, `E403`, and `ENEEDAUTH`), unknown failures, malformed or incorrect metadata, non-HTTP(S) URLs or URLs with credentials, redirects, and integrity mismatches stop without a readiness retry. Dependencies omitted from a fresh plan or represented by tag-only entries still require verified registry artifacts. The guard does not retry native publication commands, republish earlier chunks, or weaken exact-artifact checks.
+Authentication errors (`E401`, `E403`, and `ENEEDAUTH`), unknown failures, malformed or incorrect metadata, non-HTTP(S) URLs or URLs with credentials, redirects, and integrity mismatches stop without a readiness retry. Malformed integrity metadata blocks the download itself, even if the tarball is also unavailable. Dependencies omitted from a fresh plan or represented by tag-only entries still require verified registry artifacts. The guard does not retry native publication commands, republish earlier chunks, or weaken exact-artifact checks.
 
 ## Cleanup and limits
 

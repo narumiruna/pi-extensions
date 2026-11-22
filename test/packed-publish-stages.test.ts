@@ -217,6 +217,22 @@ for (const [failure, expected] of [
   });
 }
 
+test.each([{}, "", "md5-unrecognized", "sha512-invalid"])(
+  "invalid registry integrity %j fails before requesting a missing tarball",
+  async (sri) => {
+    const f = await fixture();
+    f.metadata({
+      name: "@test/core",
+      version: "2.0.0",
+      dist: { tarball: "https://registry.example/core.tgz", integrity: sri },
+    });
+    f.status(404);
+    await assert.rejects(f.execute(gate), /Invalid registry metadata/u);
+    assert.deepEqual(f.calls, ["view"]);
+    assert.deepEqual(f.waits, []);
+  },
+);
+
 test("the gate owns and releases a five-minute abort timer", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
