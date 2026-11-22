@@ -7,6 +7,13 @@ export const DISCUSSION_FINALIZE_PLAN_PROMPT =
 export const RETRY_FINALIZE_PLAN_PROMPT =
   "Your previous finalization response did not call plan_mode_question or plan_mode_complete. Both tools are available in the current Plan-mode request. If a material decision remains, call plan_mode_question now. Otherwise call plan_mode_complete alone with the complete decision-ready plan. Do not respond with prose about tool availability.";
 
+export function draftFinalizationPrompt(prompt: string) {
+  return prompt.replace(
+    / with the complete (?:decision-ready )?plan/u,
+    " using the workflow's current completion contract",
+  );
+}
+
 export type FinalizationRunOutcome = "normal" | "cancelled" | "error";
 export type FinalizationSettlementAction = "retry" | "failed" | undefined;
 

@@ -31,9 +31,7 @@ export async function exportStoredPlan(
   defaultPath = DEFAULT_PLAN_EXPORT_PATH,
 ) {
   const plan =
-    (state.enabled ? state.latestPlan : undefined)?.trim() ??
-    state.savedPlan?.plan.trim() ??
-    state.activeImplementation?.plan.trim();
+    (state.enabled ? state.latestPlan : undefined) ?? state.savedPlan?.plan ?? state.activeImplementation?.plan;
   if (!plan) {
     const error = new Error("No completed plan is available to export. Use /plan finalize when planning is complete.");
     if (!ctx.hasUI) throw error;
@@ -76,7 +74,7 @@ export async function exportPlanToFile(
     await mkdir(dirname(path), { recursive: true });
     throwIfCancelled(signal, isCurrent);
     try {
-      await writeFile(path, `${plan}\n`, { encoding: "utf8", flag: "wx" });
+      await writeFile(path, plan.endsWith("\n") ? plan : `${plan}\n`, { encoding: "utf8", flag: "wx" });
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === "EEXIST") {
         throw new Error(`Plan export target already exists: ${path}. Choose another path or remove it first.`);

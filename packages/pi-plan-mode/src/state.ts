@@ -1,10 +1,7 @@
-import {
-  normalizePlanModeCompletion,
-  PLAN_MODE_COMPLETE_TOOL_NAME,
-  planFromCompletionDetails,
-} from "./completion-tool.js";
+import { PLAN_MODE_COMPLETE_TOOL_NAME, planFromCompletionDetails, validatePlanText } from "./completion-tool.js";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
 import type { PlanInteractionMode } from "./interaction-contract.js";
+import { normalizePlanDraftIdentity, type PlanDraftIdentity } from "./plan-draft.js";
 import {
   IMPLEMENTATION_PLAN_RETENTIONS,
   type ImplementationPlanRetention,
@@ -61,6 +58,7 @@ export interface PlanModeState {
   interactionMode?: PlanInteractionMode;
   /** Historical model-visible anchors survive toggles and exits, not as active interaction state. */
   interactionRestorations?: PlanInteractionRestoration[];
+  draft?: PlanDraftIdentity;
   latestPlan?: string;
   latestPlanSource?: PlanCompletionSource;
   awaitingAction: boolean;
@@ -119,6 +117,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     enabled,
     ...(enabled && entry.data.interactionMode !== undefined ? { interactionMode } : {}),
     ...(interactionRestorations.length ? { interactionRestorations } : {}),
+    ...(enabled ? { draft: normalizePlanDraftIdentity(entry.data.draft) } : {}),
     latestPlan,
     latestPlanSource: enabled
       ? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
@@ -179,9 +178,9 @@ function normalizeWorkflowToolPolicy(value: unknown): PlanModeWorkflowToolPolicy
 function normalizeSavedPlan(value: unknown): SavedPlan | undefined {
   if (!isRecord(value)) return undefined;
   const source = planCompletionSource(value.source);
-  const normalized = normalizePlanModeCompletion({ plan: value.plan });
-  if (!source || !normalized.ok) return undefined;
-  return { plan: normalized.plan, source };
+  const plan = normalizePersistedPlan(value.plan);
+  if (!source || !plan) return undefined;
+  return { plan, source };
 }
 
 function normalizePendingImplementationRuntime(value: unknown): PendingImplementationRuntime | undefined {
@@ -216,20 +215,21 @@ function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan
   if (!isRecord(value)) return undefined;
   const id = typeof value.id === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value.id) ? value.id : undefined;
   const source = planCompletionSource(value.source);
-  const normalized = normalizePlanModeCompletion({ plan: value.plan });
+  const plan = normalizePersistedPlan(value.plan);
   const startedAt =
     typeof value.startedAt === "number" && Number.isSafeInteger(value.startedAt) && value.startedAt >= 0
       ? value.startedAt
       : undefined;
-  if (!id || !source || !normalized.ok || startedAt === undefined) return undefined;
+  if (!id || !source || !plan || startedAt === undefined) return undefined;
   const retention = IMPLEMENTATION_PLAN_RETENTIONS.includes(value.retention as ImplementationPlanRetention)
     ? (value.retention as ImplementationPlanRetention)
     : "keep";
-  return { id, plan: normalized.plan, source, startedAt, retention };
+  return { id, plan, source, startedAt, retention };
 }
 
 function normalizePersistedPlan(value: unknown) {
-  const normalized = normalizePlanModeCompletion({ plan: value });
+  if (typeof value !== "string") return undefined;
+  const normalized = validatePlanText(value);
   return normalized.ok ? normalized.plan : undefined;
 }
 

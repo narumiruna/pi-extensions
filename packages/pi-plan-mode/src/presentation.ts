@@ -19,6 +19,7 @@ export function updatePlanModeUi(
   toolSummary: () => string,
   interactionShortcut?: string,
   widgetState?: EditorStatusWidgetState,
+  managedDraft = false,
 ) {
   ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
   const discussion = state.interactionMode === "discussion";
@@ -38,10 +39,11 @@ export function updatePlanModeUi(
     };
   } else if (state.enabled) {
     const tools = toolSummary();
+    const edits = managedDraft ? "Only the managed Markdown draft can be edited." : "File edits remain blocked.";
     const discussionHint = "Plain-text questions are allowed; questionnaires are paused.";
     presentation = {
       summary: discussion ? "Free discussion" : "Planning",
-      body: ["File edits remain blocked.", tools, ...(discussion ? [discussionHint] : []), interactionHint],
+      body: [edits, tools, ...(discussion ? [discussionHint] : []), interactionHint],
       fallback: [
         discussion ? "Plan mode: free discussion" : "Plan mode: planning",
         tools,
@@ -104,12 +106,12 @@ export function clearPlanModeUi(ctx: ExtensionContext) {
 }
 
 export function showStoredPlan(pi: ExtensionAPI, ctx: ExtensionContext, state: PlanModeState) {
-  const readyPlan = state.enabled ? state.latestPlan?.trim() : undefined;
-  const savedPlan = state.savedPlan?.plan.trim();
+  const readyPlan = state.enabled ? state.latestPlan : undefined;
+  const savedPlan = state.savedPlan?.plan;
   if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
     throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
   }
-  const activePlan = state.activeImplementation?.plan.trim();
+  const activePlan = state.activeImplementation?.plan;
   const plan = readyPlan ?? savedPlan ?? activePlan;
   if (!plan) {
     ctx.ui.notify("No completed plan is available. Use /plan finalize when planning is complete.", "info");
@@ -135,14 +137,18 @@ export function showPlanModePlan(pi: ExtensionAPI, ctx: ExtensionContext, title:
   }
 }
 
-export function planModeStatusText(state: PlanModeState, toolSummary: () => string) {
+export function planModeStatusText(state: PlanModeState, toolSummary: () => string, managedDraft = false) {
   if (state.enabled) {
     const ready = state.latestPlan ? " A proposed plan is ready." : "";
     const interaction =
       state.interactionMode === "discussion"
         ? "Free discussion is active; questionnaires are paused and plain-text questions are allowed."
         : "Explore, ask, and finish with plan_mode_complete when decision-ready.";
-    return `Plan mode is active.${ready} ${interaction} File edits remain blocked. ${toolSummary()}`;
+    const edits =
+      managedDraft && !state.latestPlan
+        ? "Only the managed Markdown draft can be edited."
+        : "File edits remain blocked.";
+    return `Plan mode is active.${ready} ${interaction} ${edits} ${toolSummary()}`;
   }
   if (state.savedPlan) return "A plan is saved for later.";
   if (state.activeImplementation) return "An implementation plan is active.";

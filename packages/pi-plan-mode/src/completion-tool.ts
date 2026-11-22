@@ -14,13 +14,10 @@ export type PlanModeCompletionDetails = {
 export const PLAN_MODE_COMPLETE_PARAMS = {
   type: "object",
   additionalProperties: false,
-  required: ["plan"],
   properties: {
     plan: {
       type: "string",
-      minLength: 1,
-      maxLength: PLAN_MODE_MAX_CHARS,
-      description: "The complete decision-ready implementation plan in Markdown.",
+      description: "The complete decision-ready Markdown for read-only workflows. Omit in managed-draft workflows.",
     },
   },
 } as const;
@@ -31,8 +28,11 @@ export function normalizePlanModeCompletion(input: unknown): NormalizePlanModeCo
   if (!isRecord(input) || typeof input.plan !== "string") {
     return { ok: false, error: "plan must be a string" };
   }
-  const plan = input.plan.trim();
-  if (!plan) return { ok: false, error: "plan must not be empty" };
+  return validatePlanText(input.plan.trim());
+}
+
+export function validatePlanText(plan: string): NormalizePlanModeCompletionResult {
+  if (!plan.trim()) return { ok: false, error: "plan must not be empty" };
   if (plan.length > PLAN_MODE_MAX_CHARS) {
     return {
       ok: false,
@@ -47,7 +47,8 @@ export function planFromCompletionDetails(value: unknown) {
   if (value.version !== PLAN_MODE_COMPLETE_VERSION || value.source !== PLAN_MODE_COMPLETE_TOOL_NAME) {
     return undefined;
   }
-  const normalized = normalizePlanModeCompletion({ plan: value.plan });
+  if (typeof value.plan !== "string") return undefined;
+  const normalized = validatePlanText(value.plan);
   return normalized.ok ? normalized.plan : undefined;
 }
 
