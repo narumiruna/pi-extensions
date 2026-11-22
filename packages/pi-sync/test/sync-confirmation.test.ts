@@ -71,6 +71,20 @@ test("mouse cannot approve hidden facts but can open optional details", () => {
   }
 });
 
+test("a click on Yes approves once the entire summary is visible", () => {
+  const { harness, component } = componentHarness(["Changes: 801 add"], 16);
+  try {
+    const index = harness.render().findIndex((line) => line.includes("Yes,"));
+    assert.ok(index >= 0);
+    component.handleMouse({ ...mouse(index), type: "press" });
+    assert.equal(harness.result, undefined);
+    component.handleMouse(mouse(index));
+    assert.equal(harness.result, "approve");
+  } finally {
+    harness.dispose();
+  }
+});
+
 test("mouse wheel scrolls the summary independently of the selected action", () => {
   const { harness, component } = componentHarness(
     Array.from({ length: 30 }, (_, index) => `Fact ${index}`),

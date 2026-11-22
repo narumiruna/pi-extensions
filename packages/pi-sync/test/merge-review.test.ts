@@ -234,6 +234,65 @@ for (const keys of [defaultKeys, remappedKeys]) {
   }
 }
 
+test("a running older daemon's full directional summary does not block Yes on hundreds of paths", async () => {
+  const driver = tuiDriver(
+    [
+      [defaultKeys.up, defaultKeys.confirm],
+      ["\u001b[F", defaultKeys.cancel],
+      [defaultKeys.down, defaultKeys.confirm, defaultKeys.cancel],
+    ],
+    defaultKeys,
+    90,
+    48,
+  );
+  const lines = [
+    "Remote uses a legacy content policy. Review publishing this device's ignore-file policy.",
+    "Only files selected by this device's rules are published. Remote rules are not adopted.",
+    "Storage location: private bucket",
+    "Changes: 801 add · 3 update · 10 remove",
+    ...Array.from({ length: 801 }, (_, index) => `Add remotely: package/${index}/a-long-synthetic-package-path.md`),
+    ...Array.from({ length: 3 }, (_, index) => `Update remotely: updated-${index}.md`),
+    ...Array.from({ length: 10 }, (_, index) => `Remove remotely: removed-${index}.md`),
+    "Warning: possible-secret scanning is disabled for this push.",
+  ];
+  assert.equal(
+    await confirmMergeReview(
+      driver.ctx,
+      "Push pi settings?",
+      lines.join("\n"),
+      undefined,
+      () => true,
+      "apply reviewed transfer",
+      lines,
+    ),
+    true,
+  );
+  const initial = driver.frames[0].join("\n");
+  assert.match(initial, /801 add · 3 update · 10 remove/u);
+  assert.match(initial, /legacy content policy/u);
+  assert.match(initial, /possible-secret scanning is disabled/u);
+  assert.doesNotMatch(initial, /Add remotely:|page before Yes/u);
+  assert.ok(driver.frames.some((frame) => frame.some((line) => line.includes("removed-9.md"))));
+});
+
+test("unrecognized legacy path groups remain visible without dropping review lines", async () => {
+  const driver = tuiDriver([[defaultKeys.confirm]], defaultKeys);
+  const lines = ["Changes: 1 add · 0 update · 0 remove", "Update remotely: path.md"];
+  assert.equal(
+    await confirmMergeReview(
+      driver.ctx,
+      "Push pi settings?",
+      lines.join("\n"),
+      undefined,
+      () => true,
+      "apply reviewed transfer",
+      lines,
+    ),
+    false,
+  );
+  assert.match(driver.frames[0].join("\n"), /Update remotely: path\.md/u);
+});
+
 test("coalesced scroll input cannot count unseen layout rows as reviewed", async () => {
   const driver = tuiDriver(
     [["scroll-without-render", defaultKeys.down, defaultKeys.confirm, defaultKeys.cancel]],

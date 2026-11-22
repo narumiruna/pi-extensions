@@ -23,6 +23,10 @@ export async function confirmMergeReview(
       .map((line) => truncateToWidth(safeTerminalText(line), 100)),
     "View details for the complete review.",
   ];
+  const tuiLines =
+    ctx.mode === "tui" && confirmationLabel === "apply reviewed transfer" && summaryLines?.join("\n") === content
+      ? compactLegacyTransferSummary(lines)
+      : lines;
   while (isCurrent() && !signal?.aborted) {
     const choice: { value: "cancel" | "approve" | "details" } = { value: "cancel" };
     const menu = defineMenu<undefined, "confirm", "choose", ReviewContext>({
@@ -53,7 +57,7 @@ export async function confirmMergeReview(
       ctx.mode === "tui" && ctx.hasUI
         ? await runCustomInteraction<SyncConfirmationChoice, ReviewContext>(ctx, {
             create: ({ tui, theme, keybindings, complete }) =>
-              createSyncConfirmation({ title, lines, confirmationLabel, tui, theme, keybindings, complete }),
+              createSyncConfirmation({ title, lines: tuiLines, confirmationLabel, tui, theme, keybindings, complete }),
             signal,
             isCurrent,
             onError: () => {},
@@ -85,4 +89,27 @@ export async function confirmMergeReview(
     // Unlike Pi's native Yes-first dialog, approval requires moving off the safe default.
   }
   return false;
+}
+
+function compactLegacyTransferSummary(lines: readonly string[]): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    result.push(line);
+    const counts = /^Changes: (\d+) add · (\d+) update · (\d+) remove$/u.exec(line);
+    if (!counts) continue;
+    const expected = counts.slice(1).map(Number);
+    const actual = [0, 0, 0];
+    let side: string | undefined;
+    let end = index + 1;
+    for (; end < lines.length; end++) {
+      const row = /^(Add|Update|Remove) (locally|remotely): .+$/u.exec(lines[end] ?? "");
+      if (!row || (side && row[2] !== side)) break;
+      side = row[2];
+      const action = row[1] === "Add" ? 0 : row[1] === "Update" ? 1 : 2;
+      actual[action] = (actual[action] ?? 0) + 1;
+    }
+    if (actual.every((count, action) => count === expected[action])) index = end - 1;
+  }
+  return result;
 }
