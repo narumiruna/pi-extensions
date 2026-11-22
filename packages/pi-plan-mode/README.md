@@ -419,7 +419,10 @@ Read the [settings reference](./docs/settings.md) for all accepted values, tool-
 ## 🚧 Limitations
 
 The Plan pane shows the current Markdown draft, or the completed snapshot once it is ready. In read-only workflows it starts blank except for a waiting message. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
-It hides below 80 columns or 12 rows and reappears when the terminal is large enough. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
+
+The pane starts at about one-third of the terminal width. Drag the divider with the left mouse button to resize it on either side without moving keyboard focus. The pane keeps at least 24 columns and the conversation at least 48. The chosen width lasts until the pane closes, moves to the other side, or the fullscreen layout is replaced; it is not saved.
+
+The pane hides below 80 columns or 12 rows and restores the chosen width when space allows. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
 
 Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
 This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
