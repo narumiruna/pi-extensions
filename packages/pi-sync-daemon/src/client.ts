@@ -34,6 +34,7 @@ import {
   type JobView,
   MAX_MESSAGE_BYTES,
   MAX_REVIEW_BYTES,
+  OWNERSHIP_CLEANUP_REQUIRED,
   operationPrefix,
   REVIEW_PAGE_CHARS,
   type RemoteError,
@@ -96,7 +97,7 @@ export async function requestDaemon(
     request.end(body);
   });
 }
-async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSignal) {
+export async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSignal) {
   const value = await requestDaemon(paths, identity, "hello", {}, signal);
   if (
     !record(value) ||
@@ -113,7 +114,7 @@ async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSign
   return { needsUpgrade: typeof version !== "string" || lt(version, DAEMON_BUILD_VERSION) };
 }
 
-async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
+export async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
   const { readConsent } = await import("./consent.js");
   const { withStateDirectoryGuardForRoot } = await import("./engine/state/state-directory.js");
   signal?.throwIfAborted();
@@ -123,16 +124,23 @@ async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, 
     // An older owner cannot report an in-memory revocation failure.
     const consent = readConsent(paths.root);
     if (consent && Object.values(consent.setups).some((setup) => setup.afterExit))
-      throw new Error("Review or revoke unattended Pi Sync permission before restarting the older daemon.");
+      throw new Error("Review or revoke unattended Pi Sync permission before stopping or replacing the daemon.");
   });
   signal?.throwIfAborted();
   assertRoot();
 }
 
-async function finishUpgrade(paths: RuntimePaths, owner: UpgradeOwner, assertRoot: () => void, signal?: AbortSignal) {
+export async function finishUpgrade(
+  paths: RuntimePaths,
+  owner: UpgradeOwner,
+  assertRoot: () => void,
+  signal?: AbortSignal,
+) {
   await waitForProcessExit(owner, signal);
-  if ((await readIdentity(paths))?.instance === owner.instance)
-    throw new Error("The daemon exited without releasing its identity.");
+  const current = await readIdentity(paths);
+  if (current?.instance === owner.instance) throw new Error("The daemon exited without releasing its identity.");
+  if (current && owner.purpose === "cleanup")
+    throw new Error("Daemon owner changed during recovery. Review the current owner before retrying.");
   await checkUpgradeConsent(paths, assertRoot, signal);
   await clearUpgradeOwner(paths);
   signal?.throwIfAborted();
@@ -211,6 +219,11 @@ export async function ensureDaemon(root: string, signal?: AbortSignal) {
         upgraded = true;
         continue;
       }
+      if (upgrade?.purpose === "cleanup")
+        throw Object.assign(
+          new Error("Daemon recovery is incomplete. Use /sync daemon recover to finish the reviewed stop."),
+          { code: OWNERSHIP_CLEANUP_REQUIRED },
+        );
       if (!existing) break;
       // A sample taken only after hello could describe an unrelated process reusing the PID.
       const beforeHello = upgrade ? undefined : await readProcessBirth(existing.pid);

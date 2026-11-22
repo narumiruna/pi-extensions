@@ -23,8 +23,14 @@ export async function handleCommand(
   loaders: SyncLoaders,
   attention: SyncAttentionController,
   onExplicitSync?: (setup?: string) => void,
+  needsDaemonRecovery?: () => boolean,
 ) {
-  await reconcileObservation(attention, sessionSignal);
+  const args = splitArgs(rawArgs);
+  if (args[0] === "daemon" && args[1] === "recover") {
+    await executeCommand(rawArgs, ctx, sessionSignal, loaders);
+    return;
+  }
+  if (!needsDaemonRecovery?.()) await reconcileObservation(attention, sessionSignal);
   if (sessionSignal.aborted) return;
   const run = (
     route: string,
@@ -61,6 +67,7 @@ export async function handleCommand(
       const { showSyncManager } = await import("../ui/manager-ui.js");
       if (sessionSignal.aborted) return;
       await showSyncManager(ctx, run, sessionSignal, {
+        needsDaemonRecovery,
         getAttention: () => attention.current(),
         getObservation: () => attention.observation(),
         onObservationInvalidated: () => attention.clearObservation(),
@@ -73,13 +80,13 @@ export async function handleCommand(
       setSyncStatus(ctx, undefined);
       ctx.ui.notify(errorMessage(error), "error");
     }
-    if (sessionSignal.aborted) return;
+    if (sessionSignal.aborted || needsDaemonRecovery?.()) return;
     await reconcileObservation(attention, sessionSignal);
     if (!sessionSignal.aborted) await attention.publish(ctx, sessionSignal);
     return;
   }
   const result = await run(rawArgs);
-  if (sessionSignal.aborted) return;
+  if (sessionSignal.aborted || needsDaemonRecovery?.()) return;
   if (result.kind === "decision-required") {
     ctx.ui.notify(result.decision.directMessage, "error");
   } else if (result.kind === "remote-selection-required") {

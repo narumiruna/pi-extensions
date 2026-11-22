@@ -94,7 +94,11 @@ export async function executeCommand(
       case "daemon": {
         const client = piDaemonClient(ctx);
         const action = options.args[0] ?? "status";
-        if (action === "handover") {
+        if (action === "recover") {
+          if (rest.length !== 1) throw new Error("Usage: /sync daemon recover");
+          const { recoverDaemonOwnership } = await import("../daemon/ownership-recovery.js");
+          await recoverDaemonOwnership(ctx, client, signal);
+        } else if (action === "handover") {
           await client.run("daemon.handover", {}, options.signal);
         } else if (action === "allow-after-exit" || action === "revoke-after-exit") {
           await client.run("daemon.handover", {}, options.signal);
@@ -106,11 +110,15 @@ export async function executeCommand(
           );
         } else if (action === "status") {
           const connection = await client.verifyConnection(options.signal);
+          const guidance = client.ownershipCleanupRequired
+            ? "Use /sync daemon recover to review and stop the daemon."
+            : "Use pi-sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.";
+          const state = client.ownershipCleanupRequired ? "connected; recovery required" : "connected";
           ctx.ui.notify(
-            `pi-sync-daemon: connected\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\nUse pi-sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.`,
+            `pi-sync-daemon: ${state}\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\n${guidance}`,
             "info",
           );
-        } else throw new Error("Use /sync daemon status|handover|allow-after-exit|revoke-after-exit.");
+        } else throw new Error("Use /sync daemon status|recover|handover|allow-after-exit|revoke-after-exit.");
         return { kind: "completed" };
       }
       case "help":

@@ -10,12 +10,15 @@ import lockfile from "proper-lockfile";
 import { test, vi } from "vitest";
 import { DaemonConnection, requestDaemon } from "../src/client.js";
 import { engineHost } from "../src/engine/host.js";
+import { withLock } from "../src/engine/state/lock.js";
 import { runtimePaths } from "../src/identity.js";
 import { withCleanup } from "../src/lifecycle.js";
 import { ParticipantAdmission } from "../src/participant-admission.js";
 import type { ClientFacts, PollReply } from "../src/protocol.js";
+import { OWNERSHIP_CLEANUP_REQUIRED } from "../src/protocol.js";
 import { startServer } from "../src/server.js";
 import { installServiceHost } from "../src/service-host.js";
+import { withRpcServer } from "./rpc-server-fixture.js";
 
 function facts(root: string, mode: ClientFacts["mode"] = "rpc"): ClientFacts {
   return {
@@ -282,43 +285,96 @@ for (const mode of ["print", "json", "rpc"] as const)
         }
       }));
 
-test.each(["Pi queue", "settings lock"] as const)("a failed %s release blocks later mutations", (failure) =>
+test.each([
+  ["Pi queue error", /File-queue release is uncertain/u],
+  ["Pi queue negative acknowledgement", /File-queue release is uncertain/u],
+  ["settings lock", /Pi settings lock release failed/u],
+  ["settings lock and action", /Operation and cleanup both failed/u],
+] as const)("a failed %s release keeps the host blocked but removes the owned operation lock", (failure, message) =>
   fixture(async (root) => {
     const target = path.join(root, "settings.json");
     await fs.writeFile(target, "{}");
     const host = installServiceHost(root);
     const lockFile = lockfile.lock;
     const lock = vi.spyOn(lockfile, "lock").mockImplementation(async (file, options) => {
-      if (file !== target || failure !== "settings lock") return lockFile(file, options);
+      if (file !== target || !failure.startsWith("settings lock")) return lockFile(file, options);
       return async () => {
         throw new Error("settings lock release failed");
       };
     });
     let writes = 0;
-    const server = await startServer(root, async (_operation, _payload, execution) =>
-      host.run(execution, () => engineHost().mutate(target, async () => ++writes)),
-    );
-    const client = new DaemonConnection(server.paths, server.identity, facts(root), {
-      callback: async ({ kind }) => {
-        if (failure === "Pi queue" && kind === "queue-release") throw new Error("queue release failed");
-        return true;
-      },
-    });
     try {
-      await client.attach();
-      await assert.rejects(
-        client.run("write", {}),
-        failure === "Pi queue" ? /File-queue release is uncertain/u : /settings lock release failed/u,
+      await withRpcServer(
+        root,
+        async (_operation, _payload, execution) =>
+          host.run(execution, () =>
+            withLock("pull", () =>
+              engineHost().mutate(target, async () => {
+                writes++;
+                if (failure === "settings lock and action") throw new Error("write failed");
+              }),
+            ),
+          ),
+        async ({ createConnection }) => {
+          const client = createConnection(facts(root), {
+            callback: async ({ kind }) => {
+              if (kind !== "queue-release") return true;
+              if (failure === "Pi queue error") throw new Error("queue release failed");
+              return failure !== "Pi queue negative acknowledgement";
+            },
+          });
+          const isCleanupError = (pattern: RegExp) => (error: unknown) => {
+            assert.match((error as Error).message, pattern);
+            assert.equal(
+              (error as { remote: { properties: { code: string } } }).remote.properties.code,
+              OWNERSHIP_CLEANUP_REQUIRED,
+            );
+            return true;
+          };
+          await client.attach();
+          await assert.rejects(client.run("write", {}), isCleanupError(message));
+          assert.equal(host.cleanupRequired(), true);
+          await assert.rejects(async () => engineHost().root(), /stop and reconcile before restarting/u);
+          await assert.rejects(client.run("write", {}), isCleanupError(/Daemon ownership cleanup is uncertain/u));
+          const lockPath = path.join(root, "pi-sync", "lock");
+          for (const file of [lockPath, `${lockPath}.guard`]) await assert.rejects(fs.stat(file), { code: "ENOENT" });
+          assert.equal(writes, 1);
+        },
       );
-      await assert.rejects(client.run("write", {}), /Daemon ownership cleanup is uncertain/u);
-      assert.equal(writes, 1);
     } finally {
       lock.mockRestore();
-      await withCleanup(
-        () => client.dispose(),
-        () => server.close(),
-      );
     }
+  }),
+);
+
+test.each(["metadata", "directory"])("operation cleanup retains a replacement %s", (replacement) =>
+  fixture(async (root) => {
+    installServiceHost(root);
+    const directory = path.join(root, "pi-sync");
+    const file = path.join(directory, "lock");
+    const metadata = JSON.stringify({
+      id: "other-owner",
+      pid: process.pid,
+      command: "pull",
+      startedAt: new Date().toISOString(),
+    });
+    const operation = withLock("pull", async () => {
+      if (replacement === "directory") {
+        await fs.rename(directory, path.join(root, "detached"));
+        await fs.mkdir(directory);
+        await fs.mkdir(`${file}.guard`);
+      }
+      await fs.writeFile(file, metadata);
+    });
+    if (replacement === "directory") {
+      await assert.rejects(operation, /operation lock directory changed/u);
+      assert.equal((await fs.stat(`${file}.guard`)).isDirectory(), true);
+      assert.equal((await fs.stat(path.join(root, "detached", "lock.guard"))).isDirectory(), true);
+    } else {
+      await operation;
+      await assert.rejects(fs.stat(`${file}.guard`), { code: "ENOENT" });
+    }
+    assert.equal(await fs.readFile(file, "utf8"), metadata);
   }),
 );
 

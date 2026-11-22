@@ -8,6 +8,11 @@ export {
   stopDaemon,
   waitForDaemonExit,
 } from "./client.js";
+export {
+  type DaemonRecoveryTarget,
+  inspectDaemonRecovery,
+  stopDaemonForRecovery,
+} from "./daemon-recovery.js";
 export type { DocumentView } from "./document.js";
 export { documentFingerprint } from "./document.js";
 export type { EngineContext, EngineHost, EngineSession, ReviewRequest } from "./engine/host.js";
@@ -22,4 +27,4 @@ export type {
   JobView,
   RemoteError,
 } from "./protocol.js";
-export { MAX_SETTINGS_BYTES, PROTOCOL_VERSION } from "./protocol.js";
+export { MAX_SETTINGS_BYTES, OWNERSHIP_CLEANUP_REQUIRED, PROTOCOL_VERSION } from "./protocol.js";
