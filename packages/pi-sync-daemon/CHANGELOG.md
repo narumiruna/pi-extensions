@@ -1,5 +1,13 @@
 # @narumitw/pi-sync-daemon
 
+## 0.9.1
+
+### Patch Changes
+
+- eb17fcc: Explain how to reduce sync scope when the agent-directory scan exceeds its limit. Replace outdated Check setup directions with current Diagnostics and storage settings paths.
+- aa99878: Let Up and Down select sync confirmation actions immediately. Show directional counts and safety notes in the summary, with exact file paths available in View details instead of requiring a scroll through the entire file list.
+- 8e32b4b: Exclude top-level `git/` package checkouts in new `.syncignore` starter files and list the starter rules in alphabetical order. Preserve existing rule files and recover interrupted creation with its original rules.
+
 ## 0.9.0
 
 ### Minor Changes

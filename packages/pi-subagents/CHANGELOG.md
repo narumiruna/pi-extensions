@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 4.1.0
+
+### Minor Changes
+
+- 23b8aaf: Let each subagent opt in to specific Pi MCP servers with `mcpServers`. Jobs without a server selection do not connect to MCP servers.
+
 ## 4.0.2
 
 ### Patch Changes
