@@ -35,6 +35,7 @@ import {
   operationPrefix,
   REVIEW_PAGE_CHARS,
   record,
+  UNKNOWN_JOB_RESULT,
 } from "./protocol.js";
 import { STATE_WAIT_FAILURE_LIMIT, stateWaitJobs, stateWaitResult } from "./state-wait-jobs.js";
 
@@ -589,9 +590,15 @@ export class DaemonConnection {
             "poll",
             { client: this.facts.id, cursor: this.cursor, job: id },
             this.controller.signal,
-          );
-          this.consume(reply);
+          ).catch((error: unknown) => {
+            if (error instanceof DaemonError && error.message === UNKNOWN_JOB_RESULT) this.markWorkUncertain();
+            throw error;
+          });
           const job = record(reply) ? (reply.job as JobView | undefined) : undefined;
+          const missing = terminalObserved && (job?.id !== id || (job.phase !== "done" && job.phase !== "failed"));
+          if (missing) this.markWorkUncertain();
+          this.consume(reply);
+          if (missing) throw new Error(UNKNOWN_JOB_RESULT);
           if (job?.id === id && job.phase === "failed") {
             terminal = true;
             throw new DaemonError(job.error ?? { name: "Error", message: "Daemon operation failed." });
@@ -601,7 +608,6 @@ export class DaemonConnection {
             signal?.throwIfAborted();
             return job.result;
           }
-          if (terminalObserved) throw new Error("Daemon did not return a terminal operation result.");
           await this.wait(25, true);
         }
         throw new Error("Daemon client closed before operation completed.");
@@ -615,9 +621,7 @@ export class DaemonConnection {
           try {
             await requestDaemon(this.paths, this.identity, "cancel", { id, client: this.facts.id });
           } catch (error) {
-            this.uncertain = true;
-            for (const callback of this.callbacks.values())
-              if (callback.kind !== "queue-release") callback.controller.abort();
+            this.markWorkUncertain();
             throw new Error(
               "Operation outcome is uncertain; reload to reconnect and reconcile, never replay the write.",
               { cause: error },
@@ -628,6 +632,10 @@ export class DaemonConnection {
     ).finally(() => {
       this.pendingJobs.delete(id);
     });
+  }
+  private markWorkUncertain() {
+    this.uncertain = true;
+    for (const callback of this.callbacks.values()) if (callback.kind !== "queue-release") callback.controller.abort();
   }
   private publishContact(contact: ContactState | undefined) {
     this.contactRevision++;
@@ -922,17 +930,13 @@ export class DaemonConnection {
           ));
         // An older poll must not undo typed update expiry or a successful resume.
         if (revision === this.contactRevision) {
+          if (state?.missing.some((id) => this.jobWaiters.has(id))) this.markWorkUncertain();
           const contact = this.consume(reply);
           if (state) {
             this.stateRevision = state.version;
             this.terminalJobs = new Set(state.finished);
+            for (const id of state.missing) this.jobWaiters.get(id)?.reject(new Error(UNKNOWN_JOB_RESULT));
             for (const id of state.finished) this.jobWaiters.get(id)?.resolve("terminal");
-            for (const id of state.missing)
-              this.jobWaiters
-                .get(id)
-                ?.reject(
-                  new Error("Operation is unknown or its result expired; reconcile journals instead of replaying."),
-                );
           }
           this.reportedError = false;
           if (

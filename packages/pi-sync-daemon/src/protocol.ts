@@ -102,6 +102,8 @@ export interface JobView {
 }
 export type ClientContact = "active" | "expired" | "inactive";
 export const DAEMON_JOB_CAPACITY = 64;
+export const UNKNOWN_JOB_RESULT =
+  "Operation is unknown or its result expired; reconcile journals instead of replaying.";
 export const STATE_WAIT_HEARTBEAT_MS = 1_000;
 export interface StateWaitReply extends PollReply {
   stateRevision: string;

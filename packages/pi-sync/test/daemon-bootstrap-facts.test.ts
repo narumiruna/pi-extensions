@@ -287,6 +287,106 @@ test("model-binding and busy publications competing with bootstrap sample accept
   assert.deepEqual(f.connection.facts, f.stored);
 });
 
+test("failed reattachment can drain a model binding waiting behind its own facts turn", async (context) => {
+  const f = await fixture(context);
+  const failed = new Error("Reattachment failed.");
+  const cancelled = new DOMException("Callback cancelled during detach.", "AbortError");
+  const callback = new AbortController();
+  const attaching = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<void>();
+  const draining = Promise.withResolvers<void>();
+  const releaseDrain = Promise.withResolvers<void>();
+  const dispose = f.connection.dispose.bind(f.connection);
+  vi.spyOn(f.connection, "attach").mockImplementationOnce(async () => {
+    attaching.resolve();
+    try {
+      await reply.promise;
+    } catch (error) {
+      await f.connection.dispose();
+      throw error;
+    }
+  });
+  const reattaching = f.track(f.client.finishReattachment());
+  try {
+    await attaching.promise;
+    f.selectModel("changed");
+    const binding = f.binding(false, callback.signal);
+    const rejected = f.track(assert.rejects(binding, (error: unknown) => error === cancelled));
+    vi.spyOn(f.connection, "dispose").mockImplementationOnce(async () => {
+      // DaemonConnection aborts non-queue callbacks and waits for their tasks before attach can reject.
+      callback.abort(cancelled);
+      draining.resolve();
+      await Promise.race([binding.catch(() => {}), releaseDrain.promise]);
+      await dispose();
+    });
+    reply.reject(failed);
+    await draining.promise;
+    const outcome = reattaching.catch((error: unknown) => error);
+    assert.equal(
+      await Promise.race([outcome, setImmediate("still draining")]),
+      failed,
+      "disposal must finish without releasing the reattachment's facts turn first",
+    );
+    await rejected;
+    assert.deepEqual(f.wire, [{ method: "dispose", participant: f.participant }]);
+  } finally {
+    // Let the fixture unwind even if the regression leaves disposal blocked.
+    reply.resolve();
+    releaseDrain.resolve();
+  }
+});
+
+test("a model binding cancelled while queued rejects before its facts turn and never publishes", async (context) => {
+  const f = await fixture(context);
+  const reply = f.hold(f.onBootstrapReply, undefined);
+  const startup = f.bootstrap();
+  await reply.entered;
+  f.selectModel("changed");
+  const callback = new AbortController();
+  const rejected = f.track(assert.rejects(f.binding(false, callback.signal), { name: "AbortError" }));
+  callback.abort();
+  assert.equal(await Promise.race([rejected, setImmediate("still queued")]), undefined);
+  assert.deepEqual(f.wire, [{ method: "bootstrap" }]);
+
+  reply.release();
+  assert.equal(await startup, true);
+  await setImmediate();
+  assert.deepEqual(f.wire, [{ method: "bootstrap" }]);
+  assert.equal(f.stored.model?.id, "initial");
+  assert.equal(((await f.binding(false)) as ClientFacts["model"])?.id, "changed");
+  assert.equal(f.stored.ready, true);
+  assert.equal(f.stored.model?.id, "changed");
+});
+
+test("a model binding cancelled during its facts turn waits for publication to drain", async (context) => {
+  const f = await fixture(context);
+  assert.equal(await f.bootstrap(), true);
+  const update = f.hold(f.onUpdate, undefined);
+  f.selectModel("changed");
+  const callback = new AbortController();
+  const rejected = f.track(assert.rejects(f.binding(false, callback.signal), { name: "AbortError" }));
+  await update.entered;
+  const busy = f.track(f.client.setBusy("agent", true));
+  callback.abort();
+  assert.equal(await Promise.race([rejected, setImmediate("still publishing")]), "still publishing");
+  assert.deepEqual(
+    f.wire.map(({ method }) => method),
+    ["bootstrap", "update"],
+  );
+
+  update.release();
+  await Promise.all([rejected, busy]);
+  assert.deepEqual(
+    f.wire.map(({ method, facts }) => [method, facts?.ready, facts?.idle]),
+    [
+      ["bootstrap", undefined, undefined],
+      ["update", true, true],
+      ["update", true, false],
+    ],
+  );
+  assert.deepEqual(f.connection.facts, f.stored);
+});
+
 test("a busy update and a model callback do not wait for the active Pi job", async (context) => {
   const f = await fixture(context);
   assert.equal(await f.bootstrap(), true);

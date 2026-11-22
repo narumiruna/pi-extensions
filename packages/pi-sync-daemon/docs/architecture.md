@@ -129,6 +129,8 @@ After quiescence, the authenticated final fence returns `RemoteError.name = "Dae
 
 A later command can reconnect after a cancelled or failed unpublished attach. First, Pi Sync confirms the old connection's detach and drain, then releases its local queue grants. It uses a fresh client ID and generation for the next connection. Daemon retirement records stay intact, so late requests cannot revive the old attempt. Failed cleanup blocks a new identity and operation; it does not release uncertain grants. A cancelled or submitted operation is never replayed by this recovery.
 
+Reattachment is ordered with facts updates. If reattachment fails, cancellation releases a model-binding callback that is still waiting for its turn. A callback that already started must finish its work and recheck ownership before returning a binding.
+
 ### Recovering expired contact
 
 A running daemon can expire a Pi session's heartbeat after a computer sleeps. A
@@ -155,7 +157,7 @@ An attached interactive client can become ready without joining the foreground j
 
 ### Local transport and ledger writes
 
-An owner that advertises `stateWait` in its attach reply supports one cancellable `state-wait` request per client. It returns events, the complete pending callback set, contact state, and terminal job IDs. The client fetches each terminal result once. A separate per-participant revision wakes the waiter on changes even if no event was emitted. Idle waits return at the heartbeat interval. If more jobs are still waiting locally than fit in a request, the client rotates through the IDs. A failed observation does not cancel a submitted job. After three consecutive failures, the client polls the original job ID for its result. Older peers use the existing polling routes; neither path changes queue-release acknowledgement or permits replay after an uncertain result.
+An owner that advertises `stateWait` in its attach reply supports one cancellable `state-wait` request per client. It returns events, the complete pending callback set, contact state, and terminal job IDs. The client fetches each terminal result once. A separate per-participant revision wakes the waiter on changes even if no event was emitted. Idle waits return at the heartbeat interval. If more jobs are still waiting locally than fit in a request, the client rotates through the IDs. A failed observation does not cancel a submitted job. After three consecutive failures, the client polls the original job ID for its result. Older peers use the existing polling routes. If either path cannot find the result of a submitted job, the client treats the outcome as uncertain before it requests cancellation. A cancellation acknowledgement does not prove that an absent job never ran. The client blocks new jobs and contact repair until it is disposed. It still drains queue-release callbacks, and the caller must reconcile the original outcome before retrying.
 
 A facts update skips a ledger rewrite only after the serialized writer confirms that the same ledger image was already published. A queued or failed attempt is not evidence of publication. The update still confirms contact, checks ownership, and runs the monitor hook. Changed facts, including busy state and live-session protection, retain the existing acknowledgment and persistence boundaries.
 

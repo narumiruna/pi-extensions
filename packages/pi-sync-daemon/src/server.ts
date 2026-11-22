@@ -43,6 +43,7 @@ import {
   record,
   remoteError,
   type StateWaitReply,
+  UNKNOWN_JOB_RESULT,
   validateFacts,
   validateHandoff,
   validId,
@@ -851,8 +852,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (method === "poll") {
       const peer = requireParticipant(params.client, true);
       const job = typeof params.job === "string" ? jobs.get(params.job) : undefined;
-      if (params.job !== undefined && !job)
-        throw new Error("Operation is unknown or its result expired; reconcile journals instead of replaying.");
+      if (params.job !== undefined && !job) throw new Error(UNKNOWN_JOB_RESULT);
       if (job && job.client !== params.client) throw new Error("Operation belongs to another client.");
       return poll(peer, params.cursor, job);
     }

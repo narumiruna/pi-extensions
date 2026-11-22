@@ -579,6 +579,18 @@ export class PiDaemonClient {
     );
     return result;
   }
+  private async queueFactsWithAbortableWait<T>(signal: AbortSignal, publish: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const cancelled = Promise.withResolvers<never>();
+    const abort = () => cancelled.reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    const queued = this.queueFacts(() => {
+      signal.removeEventListener("abort", abort);
+      signal.throwIfAborted();
+      return publish();
+    });
+    return Promise.race([queued, cancelled.promise]);
+  }
   private validateFactsScope(connection?: DaemonConnection, signal?: AbortSignal) {
     this.validate();
     signal?.throwIfAborted();
@@ -954,7 +966,7 @@ export class PiDaemonClient {
     const combined = AbortSignal.any([signal, this.signal]);
     if (callback.kind === "model-binding") {
       if (protectionOnly) return null;
-      return this.queueFacts(async () => {
+      return this.queueFactsWithAbortableWait(combined, async () => {
         this.validateFactsScope(connection, combined);
         let facts = this.facts();
         if (JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {
