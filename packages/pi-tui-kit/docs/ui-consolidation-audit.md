@@ -47,6 +47,12 @@ Keep BTW's implementation and dependency floor unchanged. A follow-up can adopt 
 
 Safe Input/Editor rendering lacks a proven second compatible consumer: Imagegen sanitizes displayed raw drafts while Progress rejects and hides unsafe drafts. Reorder, fullscreen handoff, tree/session pickers, transcript workflows, and commit-aware cancellation retain specialized contracts. Langfuse's plaintext RPC setup requires a separate compatibility decision before masked-input adoption.
 
+## Follow-up API admission
+
+The later `key-syntax` entrypoint exposes the existing parser without the menu graph. BTW still owns persisted spelling, accepted-value policy, and key availability. Do not start that migration until the exact published Kit artifact contains the focused export.
+
+Progress and Subagents have the same pointer rules after framing, even though their screens differ. `createFramedSettingsMouseRouter()` shares the translation to native row coordinates and recovery from a stale native press. It does not wrap `SettingsList` or own rendering, redraws, focus, submenu transitions, cancellation, or saves. Progress can pass the original frame mapping; Subagents first maps around its heading and footer rows. Inline's editor-specific press behavior remains local. These consumers are not migrated in the API release change.
+
 ## Verification
 
 Final serial verification on 2026-10-24:
