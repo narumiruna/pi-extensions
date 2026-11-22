@@ -17,10 +17,13 @@ flowchart TD
     Plan --> Pack["Pack job: npm ci and npm run build"]
     Pack --> Tarballs["Pack existing build output with lifecycle scripts disabled"]
     Tarballs --> Artifact["Packed packages artifact"]
-    Artifact --> Publish["Publish job: npm ci and download packed packages"]
-    Publish --> Native["npm run publish-packages -- --from-pack-dir DIRECTORY"]
-    Native --> Action["Changesets Action: process publication events, push tags, create GitHub releases"]
-    Action --> Summary["Always run summary step: list reported published packages"]
+    Artifact --> First["publish-prerequisites: publish planned runtime dependencies"]
+    Artifact --> Gate["verify-registry: verify exact dependency versions and bytes"]
+    Artifact --> Final["publish: recheck dependencies and publish remaining packages"]
+    First -->|Success| Gate
+    Gate -->|Success| Final
+    Gate -->|Temporary failure| Retry["Re-run failed jobs with the same packed artifact"]
+    Retry --> Gate
     Mode -->|Neither| None["No version or publish job"]
 ```
 
@@ -31,9 +34,11 @@ flowchart TD
 | `select-mode` | Select version, publish, or neither with the Changesets Action. |
 | `version` | Check the effective release plan; if a package version would change, update versions and the lockfile, then create or update the version pull request. |
 | `pack` | Build packages and pack the selected publish plan into an artifact. |
-| `publish` | Download the artifact and invoke native Changesets artifact publication with npm provenance enabled. |
+| `publish-prerequisites` | Invoke native Changesets for entries required by another planned package. |
+| `verify-registry` | After `publish-prerequisites` succeeds, verify the exact runtime dependencies of the remaining entries without publishing. |
+| `publish` | After `verify-registry` succeeds, recheck those dependencies and invoke native Changesets for the remaining entries. |
 
-Each job checks out the repository, sets up Node.js, and runs `npm ci`. No job calls `ci.yml` or runs `npm run check` or `npm test`.
+Each job checks out the original event commit, sets up Node.js, and runs `npm ci`. No job calls `ci.yml` or runs `npm run check` or `npm test`. The three jobs after `pack` download the same artifact from the current run by the ID from `pack`, even across attempts. Missing IDs and download failures stop the job; it does not select another artifact or repack.
 
 Before the version action, `.github/scripts/check-version-plan.mjs` reads the CLI's `changeset status --output` plan. The action runs only when at least one planned `newVersion` differs from its `oldVersion`. This prevents empty release PRs when pending changesets target only private or ignored packages that Changesets will not version. Plan errors fail the job. A skipped plan leaves changesets pending and does not enable publishing.
 
@@ -41,8 +46,8 @@ The pack job completes `npm run build` before packing. Only the **Pack packages*
 
 ## Publication and failures
 
-`publish-packages` validates the packed plan and invokes native `changeset publish` for dependency-ordered chunks. Before a dependent chunk, the guard requires exact registry metadata and verifies its dependency tarballs against registry integrity and any packed hashes. Each dependency has one 30-second readiness budget shared by metadata queries, tarball fetches, body reads, and retry waits. Temporary failures wait up to two seconds within the remaining budget. Expiry cancels registry I/O and blocks consumers; registry subprocess termination has a separate one-second escalation grace before closure. Native publication remains outside this budget. Authentication, metadata validation, and integrity failures stop immediately. There is no package-specific Kit-first rule; the installed Changesets runtime dependency graph determines ordering. See [coordinated releases](coordinated-releases.md) and [registry diagnostics](publish-registry-diagnostics.md) for verification and retry limits.
+The installed Changesets runtime dependency graph determines ordering; there is no Kit-specific rule. The read-only gate has five minutes per exact dependency version, with waits of up to five seconds. Both publishing jobs check dependencies with the existing 30-second budget and waits of up to two seconds. The final check also protects a final-job-only rerun: gate success proves availability at the time of the check, not continued availability. An empty prerequisite stage succeeds without invoking native publication, and a gate with no dependencies makes no registry requests. See [coordinated releases](coordinated-releases.md) for stage commands and [registry diagnostics](publish-registry-diagnostics.md) for exact checks and cancellation.
 
-Publication is not atomic. A failed run can leave some packages published. The Action processes reported publication events, but tag or GitHub release operations can also fail. The summary step runs even after a failure and writes a table only when the Action returns published packages; an empty summary does not prove that nothing was published.
+Both publishing jobs use the pinned Changesets Action with npm provenance enabled. The Action processes native publication events, pushes tags, and creates GitHub releases. Each job summarizes the packages the Action reports, even if the job failed. Publication is not atomic, and an empty summary does not prove that nothing reached npm.
 
-See [coordinated releases](coordinated-releases.md) for dependency versioning and recovery limits.
+If the gate fails on temporary registry availability, use **Re-run failed jobs** on the same run while the packed artifact is retained. GitHub keeps the original commit and successful job outputs; `pack` and `publish-prerequisites` do not rerun for this failure. For other failures, see the [recovery matrix](release-workflow.md#failures-and-recovery).

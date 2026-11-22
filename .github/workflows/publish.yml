@@ -115,8 +115,8 @@ jobs:
           # Use the completed build; parallel prepack rebuilds can remove dependency output.
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
 
-  publish:
-    name: publish
+  publish-prerequisites:
+    name: publish-prerequisites
     needs: pack
     runs-on: ubuntu-latest
     permissions:
@@ -138,10 +138,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Download packed packages
+      - &download-packed-packages
+        name: Download packed packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          artifact-ids: ${{ needs.pack.outputs.pack-dir-artifact-id }}
+          # An empty ID would make the downloader select all artifacts instead.
+          artifact-ids: ${{ needs.pack.outputs.pack-dir-artifact-id || 'missing-pack-dir-artifact-id' }}
           path: ${{ runner.temp }}/changeset-pack
           merge-multiple: true
 
@@ -149,13 +151,14 @@ jobs:
         id: changesets
         uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          script: npm run publish-packages -- --from-pack-dir ${{ runner.temp }}/changeset-pack
+          script: npm run publish-packages -- --from-pack-dir ${{ runner.temp }}/changeset-pack --stage prerequisites
           create-github-releases: true
           push-git-tags: true
         env:
           NPM_CONFIG_PROVENANCE: "true"
 
-      - name: Summarize published packages
+      - &summarize-published-packages
+        name: Summarize published packages
         if: always()
         env:
           PUBLISHED_PACKAGES: ${{ steps.changesets.outputs.published-packages }}
@@ -179,3 +182,66 @@ jobs:
 
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
           NODE
+
+  verify-registry:
+    name: verify-registry
+    needs: [pack, publish-prerequisites]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - *download-packed-packages
+
+      - name: Verify registry artifacts
+        run: npm run publish-packages -- --from-pack-dir "$RUNNER_TEMP/changeset-pack" --stage verify-registry
+
+  publish:
+    name: publish
+    needs: [pack, verify-registry]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Create package tags and GitHub releases.
+      id-token: write # Authenticate to npm through trusted publishing and generate provenance.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - *download-packed-packages
+
+      - name: Publish packed packages
+        id: changesets
+        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          script: npm run publish-packages -- --from-pack-dir ${{ runner.temp }}/changeset-pack --stage remaining
+          create-github-releases: true
+          push-git-tags: true
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+
+      - *summarize-published-packages

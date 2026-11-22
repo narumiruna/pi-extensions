@@ -4,11 +4,18 @@ The packed publication guard reports retries with a `[registry]` prefix. Each re
 
 ## Readiness budget
 
-Each required dependency has one fixed 30-second budget measured with a monotonic clock. Metadata queries, tarball fetches, body reads, and waits all consume it. Each retry queries exact metadata again and verifies the artifact. Attempts and phase changes do not reset the deadline. Retry waits are two seconds, capped by the remaining time.
+Each exact dependency version gets one fixed budget per check, measured with a monotonic clock:
+
+| Check | Budget | Retry wait |
+| --- | --- | --- |
+| Read-only `verify-registry` job | Five minutes | Five seconds |
+| Checks inside `publish-prerequisites`, `publish`, or the unsplit command | 30 seconds | Two seconds |
+
+Metadata queries, downloads, body reads, and waits share the budget. Each retry queries exact metadata again and verifies the downloaded bytes. Attempts and operation changes do not reset the deadline. A wait never exceeds the remaining time.
 
 Expiry aborts the shared signal passed to the metadata subprocess, fetch, body read, and wait. The guard checks the budget after awaited operations, so late success cannot permit consumer publication. A timeout is retryable only while budget remains; expiry itself is terminal.
 
-This replaces the six-attempt policy. [Run 40103992769, attempt 1](https://github.com/narumiruna/pi-extensions/actions/runs/40103992769/attempts/1) reported successful Starship publication followed by six `query tarball URL` E404 failures from 14:53:36 to 14:53:48 UTC. That history does not establish that a ten-second wait window is sufficient. Thirty seconds is an initial bounded policy, not a verified registry propagation guarantee.
+In [run 45010061190, attempt 1](https://github.com/narumiruna/pi-extensions/actions/runs/45010061190/job/137170534598#step:6:1), Kit published but exact metadata returned E404 until the 30-second deadline. Five minutes is a bounded policy, not a registry propagation guarantee. If the gate expires on a temporary failure, [rerun the failed jobs](release-workflow.md#failures-and-recovery) with the original packed artifact rather than replaying successful prerequisite publication.
 
 ## Retry classes
 
@@ -19,7 +26,7 @@ The guard retries npm and artifact HTTP 404, 408, 429, and 5xx failures. Recogni
 - `UND_ERR_CONNECT_TIMEOUT`, `UND_ERR_HEADERS_TIMEOUT`, `UND_ERR_BODY_TIMEOUT`, and `UND_ERR_SOCKET`.
 - `TimeoutError`, including errors surfaced by a download, while the shared budget remains.
 
-Authentication errors (`E401`, `E403`, and `ENEEDAUTH`), unknown failures, malformed or incorrect metadata, invalid URLs, redirects, and integrity mismatches stop without a readiness retry. Dependencies omitted from a fresh plan or represented by tag-only entries still require verified registry artifacts. The guard does not retry native publication commands, republish earlier chunks, or weaken exact-artifact checks.
+Authentication errors (`E401`, `E403`, and `ENEEDAUTH`), unknown failures, malformed or incorrect metadata, non-HTTP(S) URLs or URLs with credentials, redirects, and integrity mismatches stop without a readiness retry. Dependencies omitted from a fresh plan or represented by tag-only entries still require verified registry artifacts. The guard does not retry native publication commands, republish earlier chunks, or weaken exact-artifact checks.
 
 ## Cleanup and limits
 
@@ -41,4 +48,4 @@ The first attempt of [run 41465301437](https://github.com/narumiruna/pi-extensio
 
 Deterministic tests cover delayed metadata and tarballs beyond the old retry window, mixed phases, exact deadline boundaries, stalled I/O, late success, terminal failures, output safety, and retained native reports. Controlled clocks and waits keep tests within the existing five-second timeout. An installed-CLI fixture uses fail-closed npm and Git shims. Local HTTP and Node child-process tests verify actual transport abort, signal delivery, process closure, escalation, resource cleanup, and CLI SIGINT/SIGTERM forwarding with preserved signal status without publication or real Git tags.
 
-The repository maintainer must approve any live publication, merge that starts release work, or release workflow dispatch. Normal release approval and existing npm Trusted Publishing configuration are prerequisites. Inspect versions, tags, releases, and the failed step before recovery; already-published packages remain published. Hosted-runner timing, the sufficiency of the 30-second budget, npm OIDC publication, and real GitHub tag/release creation remain unverified locally. POSIX process-group tests run locally on Linux; Windows descendant cleanup is not verified. No live publication, version tag, or release workflow dispatch is authorized by this tooling change.
+The repository maintainer must approve live publication, a merge that starts release work, or a release workflow dispatch. Hosted same-run artifact reuse across attempts, production npm propagation, OIDC provenance, and real GitHub tag/release writes remain unverified locally. On the next approved release, if the gate fails temporarily, confirm that **Re-run failed jobs** reuses the original artifact ID and does not repeat `pack` or `publish-prerequisites`. POSIX process-group tests run locally on Linux; Windows descendant cleanup is not verified.

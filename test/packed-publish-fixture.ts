@@ -33,7 +33,7 @@ export type Release = {
 type Manifest = { name: string; version: string; [key: string]: unknown };
 type Result = { code: number; stdout?: string; stderr?: string };
 
-export async function fixture(field = "dependencies", range = "^2.0.0") {
+export async function fixture(field = "dependencies", range = "^2.0.0", extra: Manifest[] = []) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "packed-publish-test-"));
   temporary.push(cwd);
   await writeFile(
@@ -44,8 +44,9 @@ export async function fixture(field = "dependencies", range = "^2.0.0") {
   const manifests: Manifest[] = [
     { name: "@test/core", version: "2.0.0" },
     { name: "@test/consumer", version: "3.0.0", [field]: { "@test/core": range } },
+    ...extra,
   ];
-  const bytes = [Buffer.from("exact core packed bytes"), Buffer.from("exact consumer packed bytes")];
+  const bytes = manifests.map(({ name }) => Buffer.from(`exact ${name} packed bytes`));
   const releases: Release[] = [];
   for (const [index, manifest] of manifests.entries()) {
     const dir = path.join(cwd, "packages", String(index));
@@ -102,12 +103,31 @@ export async function fixture(field = "dependencies", range = "^2.0.0") {
   ) => {
     assert.equal(options.cwd, cwd);
     if (command === "npm") {
-      assert.deepEqual(args, ["view", "@test/core@2.0.0", "--json"]);
+      const index = manifests.findIndex(({ name, version }) => args[1] === `${name}@${version}`);
+      assert.ok(index >= 0);
+      assert.deepEqual(args, ["view", args[1], "--json"]);
       assert.equal(options.capture, true);
-      calls.push("view");
+      calls.push(index === 0 ? "view" : `view ${args[1]}`);
       assert.ok(options.signal instanceof AbortSignal);
       await onView(options.signal);
-      return viewResult ?? { code: 0, stdout: JSON.stringify(metadata) };
+      const manifest = manifests[index];
+      return (
+        viewResult ?? {
+          code: 0,
+          stdout: JSON.stringify(
+            index === 0
+              ? metadata
+              : {
+                  name: manifest.name,
+                  version: manifest.version,
+                  dist: {
+                    tarball: `https://registry.example/${index}.tgz`,
+                    integrity: integrity(bytes[index], "sha512"),
+                  },
+                },
+          ),
+        }
+      );
     }
     assert.equal(command, process.execPath);
     assert.equal(options.signal, undefined);
@@ -138,11 +158,15 @@ export async function fixture(field = "dependencies", range = "^2.0.0") {
     return { code: publishCode };
   };
   const fetch = async (url: URL, options: RequestInit) => {
-    calls.push("fetch");
-    assert.equal(url.href, "https://registry.example/core.tgz");
+    const index =
+      url.href === "https://registry.example/core.tgz"
+        ? 0
+        : manifests.findIndex((_, i) => url.href === `https://registry.example/${i}.tgz`);
+    assert.ok(index >= 0);
+    calls.push(index === 0 ? "fetch" : `fetch ${manifests[index].name}`);
     assert.equal(options.redirect, "error");
     assert.ok(options.signal instanceof AbortSignal);
-    return new Response(fetchBytes, { status });
+    return new Response(index === 0 ? fetchBytes : bytes[index], { status });
   };
   return {
     cwd,
