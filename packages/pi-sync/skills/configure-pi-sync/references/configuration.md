@@ -3,19 +3,10 @@
 This is the authoritative public settings reference for Pi Sync.
 The configuration skill applies explicitly requested local settings and ignore-rule edits and investigates Pi Sync errors. The user performs operations that require a separate review.
 
-- [Complete version 3 example](#complete-version-3-example)
-- [Required backend shapes](#required-backend-shapes)
-- [Automatic sync controls](#automatic-sync-controls)
-- [Status display](#status-display)
-- [Secret scanning](#secret-scanning)
-- [Local troubleshooting](#local-troubleshooting)
-- [Autonomous sync](#autonomous-sync)
-- [Continuous sync](#continuous-sync)
-- [Daemon lifetime and unattended permission](#daemon-lifetime-and-unattended-permission)
-- [Ignore-file policy](#ignore-file-policy)
-- [Included content](#included-content)
-- [Excluded paths](#excluded-paths)
-- [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
+- **Configure a setup:** [Required fields](#settings-ownership-and-required-fields), [Manager](#editing-in-the-manager), [Version 3 example](#complete-version-3-example), [Backends](#required-backend-shapes)
+- **Choose what syncs:** [Ignore-file policy](#ignore-file-policy), [Legacy directory scope](#agent-directory-scope), [Included content](#included-content), [Excluded paths](#excluded-paths), [Machine-local settings fields](#settings-field-merge-and-machine-local-fields)
+- **Manage automatic work:** [Controls and approval](#automatic-sync-controls), [Startup transfer](#automatic-startup-transfer), [Autonomous sync](#autonomous-sync), [Daemon lifetime](#daemon-lifetime-and-unattended-permission), [Continuous sync](#continuous-sync)
+- **Handle problems:** [Status](#status-display), [Startup timings](#debug-startup-timings), [Secret scanning](#secret-scanning), [Diagnostics](#diagnostics), [Local troubleshooting](#local-troubleshooting), [Merge and partial progress](#content-merge-and-partial-progress), [Old settings and recovery](#unsupported-old-settings-and-recovery)
 
 ## ⚙️ Settings
 
@@ -28,12 +19,12 @@ The canonical private user file is:
 Pi's configured agent directory replaces `~/.pi/agent` when applicable.
 Missing settings load as unconfigured without creating an agent directory, file, temporary file, or lock.
 
-An explicit setup creates the file atomically.
-On POSIX, pi-sync creates and replaces it with mode `0600`.
-Pi-sync processes coordinate settings access through `pi-sync.json.mutation-lock`; lock-unaware editors are outside that serialization boundary and should not save the file while a pi-sync settings operation is running.
-Within one process, settings reads wait for earlier writes, including writes that have not acquired the lock yet.
-Under that lock, a save validates the existing document before editing it. A malformed, invalid, or unsupported source cannot be replaced by relabeling it as a supported version. The writer validates the proposed document before flushing a private temporary file and renaming it over the canonical file; the active file is not moved away first.
-Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
+Explicit setup creates the file atomically. On POSIX, Pi Sync creates and replaces it with mode `0600`.
+Pi Sync processes coordinate settings access through `pi-sync.json.mutation-lock`. Editors that do not use the lock should not save during a Pi Sync settings operation. Within one process, reads wait for earlier writes, even those still waiting for the lock.
+
+Under the lock, Pi Sync validates the existing and proposed documents before saving. Relabeling malformed, invalid, or unsupported settings as a supported version does not bypass validation. Pi Sync flushes a private temporary file and renames it over the canonical file without first moving the active file away.
+
+Credentials stay in the private settings file and never appear in menus, reviews, status, notifications, errors, logs, or completion metadata.
 
 A private `pi-sync.local.json` containing a valid supported document is copied byte-for-byte to `pi-sync.json`.
 The old file remains as a recovery copy.
@@ -73,9 +64,9 @@ The four controls select separate behaviors:
 - **Autonomous sync** (`sync.agentMode`, unchanged) allows eligible startup and **Sync now** transfers without another transfer confirmation, plus model assistance and disclosure for supported conflicts.
 - **Continuous sync** (`sync.continuous`) adds recurring work only with Autonomous sync enabled.
 
-If any setup in the settings file uses an ignore file, enabling these modes alone does not authorize transfers. Enable the modes you want for the current setup, then use **Settings → Review automatic transfers** in TUI. This applies even when the current setup uses a legacy policy. Review again after settings or rule-file changes. Work after the last Pi exits still requires [separate permission](#daemon-lifetime-and-unattended-permission).
+If any setup uses an ignore file, turning on these controls does not authorize transfers, even when the current setup uses a legacy policy. Enable the controls you need for the current setup, then use **Settings → Review automatic transfers** in TUI. Repeat the review after changing settings or rules. Work after the last Pi exits requires [separate permission](#daemon-lifetime-and-unattended-permission).
 
-Invoking the configuration skill does not enable these controls or grant any transfer authorization. Enable automatic behavior in the reviewed Settings flow.
+Invoking the configuration skill neither enables these controls nor grants transfer permission.
 
 ### Editing in the manager
 
@@ -90,15 +81,13 @@ Escape closes the screen without undoing successful saves.
 Complex values retain their input/review flows.
 This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.
 
-The manager separates current state from transfer, inspection, and management actions.
-**Check remote status** and **View differences** invoke the existing read/check routes only when selected.
-Last applied shows a compact snapshot ID with application time explicitly unavailable; full IDs remain in History.
-It never uses snapshot creation time as application time.
+The main menu shows cached status separately from transfer, inspection, and management actions. **Check remote status** and **View differences** run their checks only when selected.
+**Last applied** shows a compact snapshot ID and marks application time as unavailable instead of substituting snapshot creation time. **History** shows the full IDs.
 See the [TUI behavior contract](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/tui-contract.md) for scopes and transfer branches.
 
 RPC reports the manual settings path and offers the existing setup/connection catalog dialogs, not the TUI preference or masked-credential editors.
 Print/JSON do not support `/sync`; use the private settings file directly.
-Main-menu summaries remain cached observations; `/sync status`, `/sync diff`, and `/sync help` remain available through the visible command hints.
+Command hints list `/sync status`, `/sync diff`, and `/sync help`.
 
 ### Complete version 3 example
 
@@ -315,9 +304,10 @@ A local check does not verify remote connectivity or permissions. Diagnostics ca
 
 ### Ignore-file policy
 
-New TUI setups use `.syncignore` when the daemon advertises support. Existing setups, including legacy directory setups, keep their current policy and can coexist with ignore-file setups in a version 8 document. To migrate a legacy setup, choose **Review migration now** when offered on first opening the TUI manager or **Settings → Migrate to ignore file…** later. **Not now** defers the offer for that setup on this device; closing the offer without a choice does not persist a deferral. Review added and removed local and remote paths, and consider files that could be added later. Legacy selected paths and `reinclude` rules do not always translate directly.
+New TUI setups use `.syncignore` when the daemon advertises support. Existing setups keep their policy and can coexist with ignore-file setups in version 8.
+To migrate a legacy setup, choose **Review migration now** when first offered in the TUI manager, or **Settings → Migrate to ignore file…** later. **Not now** defers the offer for that setup on this device; closing the prompt without a choice does not save a deferral. Review local and remote paths that enter or leave scope, including what the rules would do for future files. Legacy selected paths and `reinclude` rules do not always translate directly.
 
-For reference, the `sync` object of a version 8 setup using the default rule file can look like this. This fragment is not a complete document or a substitute for review:
+This version 8 `sync` fragment shows a setup using the default rule file. It is not a complete settings document or a substitute for review:
 
 ```json
 {
@@ -328,7 +318,11 @@ For reference, the `sync` object of a version 8 setup using the default rule fil
 }
 ```
 
-On confirmation the daemon can create a missing default file on Linux, macOS, and Windows. If automatic creation is unavailable on your filesystem, use the exact path and starter text shown by Pi Sync. Create a regular UTF-8 file there without overwriting an existing file, then reopen the setup or migration and confirm the review. The starter rules are:
+#### Create or switch rule files
+
+After confirmation, the daemon can create a missing default file on Linux, macOS, and Windows. If your filesystem does not support automatic creation, create a regular UTF-8 file using the exact path and starter text Pi Sync shows. Do not overwrite an existing file. Reopen the setup or migration and confirm the review.
+
+The starter rules exclude, among other paths, Pi's top-level `git/` package checkouts:
 
 ```gitignore
 /auth.json
@@ -338,15 +332,28 @@ On confirmation the daemon can create a missing default file on Linux, macOS, an
 /truth.json
 ```
 
-A leading `/` anchors a rule to the agent directory; a trailing `/` matches a directory. Rules are case-sensitive on every device. Blank lines, comments, wildcards, and ordered `!` exceptions follow Git ignore patterns for a single root file. An exception cannot restore a child under an excluded parent. Use `/` as the path separator; escaped `/` is not supported. There are no nested or project rules. A valid existing file, even an empty one, is reused as-is. Another rule file must already exist: choose a single safe filename directly in the agent directory, not a path, symlink, or linked alias. Missing or unsafe rules block transfers; an absent default can inform preview but cannot authorize transfer.
+Pi Sync reuses a valid existing file, even an empty one. If creation was interrupted, it uses the starter rules recorded before the interruption, even after an upgrade.
+To switch files, choose an existing regular file by its safe filename directly in the agent directory, not a path, symlink, or linked alias. Missing or unsafe rules block transfers. An absent default can inform a preview, but cannot authorize a transfer.
 
-Use **Settings → Ignore file** to find the source or review a switch. For ignore-file setups, `/sync files` shows the rule-file path, not a list of matched paths. Edit the existing file with no sync review, transfer, or recovery running. Verify rule matches for the affected paths and reopen the transfer review. All setups sharing the file see the edit. There is no in-app rule save. Sessions require separate opt-in and must be allowed by the rules: the starter `/sessions/` still excludes them. Match sessions by logical `sessions/` paths even when stored elsewhere. Pi credentials and trust (`auth.json` and `trust.json`), Pi Sync private settings and state, and `.syncignore` and configured alternatives stay local independently of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Loaded sessions stay protected during apply. Ignored files are not replaced or removed by transfer. Retained snapshots and backups are not erased.
+**Settings → Ignore file** shows the active path and offers a reviewed switch. `/sync files` shows the path, not matched files. There is no in-app rule save. Edit the existing file only when no sync review, transfer, or recovery is running. Check the affected paths and reopen the transfer review. The edit affects every setup using that file.
 
-Setup, migration, switching the rule file, and editing rules do not start a transfer or grant permission for one. Upgrade all peers before publishing a version 6 snapshot. It carries a portable policy fingerprint, not the filename or rule text. Use the same rule text and session opt-in on peers; even comment or whitespace changes can change the fingerprint. Do not copy rules from the remote. A legacy or mismatched head requires separately reviewed directional policy publication, not `--yes` or automatic work. Use `/sync diff` to inspect the scope and `/sync` to review the direction. A pull cannot apply a foreign policy; rollback requires compatible history. If rules, setup, or head change during review, reopen the review rather than relying on stale approval.
+#### Matching and local protections
 
-New starter files exclude Pi's top-level `git/` package checkouts. Existing files are not rewritten. An interrupted creation uses the starter rules recorded before the interruption, even after an upgrade.
+Use `/` as the separator; escaped `/` is not supported. A leading `/` anchors a rule to the agent directory, and a trailing `/` matches a directory. Matching is case-sensitive on every device. Blank lines, comments, wildcards, and ordered `!` exceptions follow Git ignore patterns for a single root file. An exception cannot restore a child under an excluded parent. There are no nested or project rules.
 
-For blocked or interrupted creation or transfer, stop new work and preserve the rule file, creation marker, journals, backups, and consent records. Use the compatible daemon to review recovery with the originating setup and exact source. If source or remote evidence differs, keep it rather than forcing replay or deleting a marker. Before settings commit the old policy remains authoritative; a verified starter or settings backup can remain after a failed save. After any v6 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers; keep the retained history intact.
+Session sync requires both a separate opt-in and rules that allow sessions. The starter `/sessions/` still excludes them. Match sessions by their logical `sessions/` paths even if stored elsewhere. Loaded sessions stay protected during apply.
+
+Pi credentials and trust (`auth.json` and `trust.json`), Pi Sync private settings and state, and `.syncignore` and configured alternatives stay local regardless of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Transfers do not replace or remove ignored local files, and exclusions do not erase retained snapshots or backups.
+
+#### Transfer review and recovery
+
+Setup, migration, rule-file switching, and edits neither start nor authorize transfers. Upgrade all peers before publishing a version 6 snapshot. It stores a policy fingerprint, not the filename or rule text. Use the same rule text and session opt-in on peers: even comment or whitespace changes can change the fingerprint. Do not copy rules from the remote.
+
+A legacy or mismatched head requires separately reviewed directional policy publication. Neither `--yes` nor automatic work can authorize it. Inspect scope with `/sync diff` and review the direction in `/sync`. A pull cannot apply a foreign policy, and rollback requires compatible history. If the rules, setup, or head change, reopen the review.
+
+If creation or transfer is blocked or interrupted, stop new work. Preserve the rule file, creation marker, journals, backups, and consent records. Use a compatible daemon to review recovery with the originating setup and exact source. If source or remote evidence differs, preserve it instead of forcing replay or deleting a marker. The old policy remains authoritative until settings commit; a verified starter or settings backup can remain after a failed save.
+
+After any version 6 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers. Keep retained history intact.
 
 ### Agent-directory scope
 
@@ -540,8 +547,14 @@ Parent model prompts and tools are not changed.
 This is configuration isolation, not an OS sandbox or proof of semantic correctness.
 
 Eligible text is global `AGENTS.md` and `.md`/`.txt` files under `prompts/` or `skills/`.
-Global `settings.json` uses the existing strict JSON, numeric, coupled-field, unknown-field, and machine-local-field policies. With Autonomous sync enabled, `packages` merges by source identity and selects the higher explicit SemVer version for each npm package present on both sides, even when one side has not changed from the verified ancestor. No registry lookup occurs. Equal SemVer precedence does not select a winner: one-sided source edits are preserved, and divergent edits require atomic selection. Package filters must match. An existing local or remote array keeps its JSON spelling when it matches the merged result. Accepted settings files keep their bytes unless a package override is required; that override changes only the `packages` value. The ordered npm identity list can change on one side, or identically on both sides; conflicting order or membership changes retain atomic selection. This preserves insertion positions and resource precedence. Non-npm entries must remain unchanged across all three versions for per-package merging. Changed Git refs and local path aliases retain atomic selection instead of being combined as separate sources. Delete/upgrade conflicts, duplicate identities, incompatible filters, version ranges and tags also retain the existing atomic selection rules when deterministic merging is not possible. Other arrays and nested objects remain atomic.
-Code/scripts, keybindings, binaries, unknown formats, session histories, deletion/modification conflicts, path collisions, and session-root transitions are not model-resolved.
+Global `settings.json` follows the existing strict JSON, numeric, coupled-field, unknown-field, and machine-local-field policies. With Autonomous sync enabled, Pi Sync treats `packages` differently from other arrays and nested objects, which remain atomic:
+
+- Pi Sync matches packages by source identity. When an npm package is present on both sides with different explicit SemVer versions, the higher version wins, even if one side is unchanged from the verified ancestor. No registry lookup occurs. Equal SemVer precedence preserves a one-sided source edit but requires atomic selection for divergent edits.
+- Per-package merging requires matching filters and unchanged non-npm entries across the local, remote, and ancestor versions. One side may change the ordered npm identity list, or both sides may make the same change. Conflicting order or membership changes require atomic selection to preserve insertion positions and resource precedence.
+- Changed Git refs and local path aliases require atomic selection rather than merging them as separate sources. Delete/upgrade conflicts, duplicate identities, incompatible filters, version ranges, and tags also retain atomic selection when deterministic merging is not possible.
+- An existing local or remote array keeps its JSON spelling if it matches the merged result. Accepted settings files keep their original bytes unless Pi Sync must replace `packages`; then only that value changes.
+
+The model does not resolve code/scripts, keybindings, binaries, unknown formats, session histories, deletion/modification conflicts, path collisions, or session-root transitions.
 Existing deterministic merges still follow their own explicit settings.
 Unsupported or refused groups remain unresolved; only an explicitly enabled `partialSync` policy permits progress around them.
 Preserving versions does not mean a conflict is resolved.
