@@ -1,13 +1,18 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { addAbortListener } from "node:events";
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import lockfile from "proper-lockfile";
 import { DAEMON_BUILD_VERSION } from "./build-version.js";
+import type { DaemonDiagnosticSink } from "./daemon-debug.js";
 import { endpointOwner } from "./endpoint.js";
+import { debugOperation } from "./engine/debug-log.js";
+import { SyncDecisionRequiredError } from "./engine/sync/sync-errors.js";
 import {
   canonicalRootGuard,
   daemonPaths,
+  matchesPublishedIdentity,
   privateDirectory,
   processExists,
   publishIdentity,
@@ -75,6 +80,7 @@ interface Job {
   participantGeneration?: number;
   controller: AbortController;
   committed: boolean;
+  debugOutcome?: "blocked" | "cancelled" | "skipped";
   promise: Promise<void>;
   peers: Set<string>;
 }
@@ -99,6 +105,7 @@ export interface ServerHooks {
   quiesce?(): Promise<void>;
   stopped?(): void;
   failure?(): void;
+  diagnostic?: DaemonDiagnosticSink;
 }
 
 export async function startServer(root: string, execute: Execute, hooks: ServerHooks = {}) {
@@ -118,6 +125,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   if (previous && processExists(previous.pid)) throw new Error("A daemon owner is still alive; refusing replacement.");
   let compromised = false;
   let published = false;
+  let released = false;
   const release = await lockfile.lock(paths.directory, {
     realpath: false,
     lockfilePath: paths.owner,
@@ -128,6 +136,26 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       if (published) void close().catch(() => {});
     },
   });
+  const diagnostic = hooks.diagnostic;
+  const ownsLog = () => {
+    if (!published || compromised || released) return false;
+    assertRoot();
+    return (
+      lstatSync(paths.owner, { throwIfNoEntry: false })?.isDirectory() === true &&
+      matchesPublishedIdentity(paths, identity)
+    );
+  };
+  const debug: DaemonDiagnosticSink | undefined = diagnostic
+    ? (event, current) => {
+        try {
+          diagnostic(event, () => ownsLog() && (current?.() ?? true));
+        } catch {}
+      }
+    : undefined;
+  const failure = () => {
+    debug?.({ event: "lifecycle", outcome: "failed" });
+    hooks.failure?.();
+  };
   const participants = new Map<string, Participant>();
   const waiters = new WeakMap<Participant, ParticipantStateWait>();
   const admission = new ParticipantAdmission();
@@ -138,11 +166,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   // Retain tombstones after result eviction; replay must never dispatch a second write.
   const retired = new Set<string>();
   const pending = new Map<string, Pending>();
-  const ledger = createParticipantLedger(
-    paths,
-    () => participants.values(),
-    () => hooks.failure?.(),
-  );
+  const ledger = createParticipantLedger(paths, () => participants.values(), failure);
   let sequence = 0;
   let participantGeneration = 0;
   let closed = false;
@@ -384,6 +408,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       validate,
       request,
       emit: (kind, data, target = job.client) => emit(kind, data, target),
+      debug,
+      noteDebugOutcome(outcome) {
+        job.debugOutcome = outcome;
+      },
       committed: () => {
         job.committed = true;
         emit("commit", { job: job.view.id }, job.client);
@@ -437,19 +465,33 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (cancelled.has(`${client}:${id}`))
       job.controller.abort(new DOMException("Operation cancelled before dispatch", "AbortError"));
     const execution = makeExecution(job);
+    const kind = debug && debugOperation(operation);
+    const note = (outcome: "started" | "completed" | "failed" | "cancelled" | "blocked" | "skipped") => {
+      if (kind) debug?.({ event: "job", operation: kind, outcome, operationId: id });
+    };
     job.promise = queue
       .then(async () => {
         execution.validate();
         job.view.phase = "running";
+        note("started");
         const result = await execute(operation, payload, execution);
         if (Buffer.byteLength(JSON.stringify(result ?? null)) > MAX_MESSAGE_BYTES / 2)
           throw new Error("Operation result exceeds its byte limit; use bounded inspection.");
         job.view.result = result;
         job.view.phase = "done";
+        note(result === "cancelled" ? "cancelled" : (job.debugOutcome ?? "completed"));
       })
       .catch((error) => {
         job.view.phase = "failed";
         job.view.error = remoteError(error);
+        note(
+          !job.committed && (job.controller.signal.aborted || (error instanceof Error && error.name === "AbortError"))
+            ? "cancelled"
+            : (job.debugOutcome ??
+                (error instanceof SyncDecisionRequiredError || error instanceof DaemonStoppingError
+                  ? "blocked"
+                  : "failed")),
+        );
         if (job.committed)
           for (const id of new Set([client, ...job.peers])) {
             const affected = participants.get(id);
@@ -980,6 +1022,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     await publishIdentity(paths, identity);
     assertOwner();
     published = true;
+    debug?.({ event: "lifecycle", outcome: "starting" });
   } catch (error) {
     closed = true;
     return withCleanup(
@@ -1070,7 +1113,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           return true;
         }),
       resume: () => hooks.idle?.(),
-      failed: () => hooks.failure?.(),
+      failed: failure,
     });
     void idleExit.tick();
   }
@@ -1109,11 +1152,24 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       // A failed engine drain must retain the live owner, not permit an implicit restart.
       if (closeError) throw closeError;
       await endpoint.close();
-      if (await known()) await fs.rm(paths.identity, { force: true });
+      const owned = await known();
+      if (owned) await fs.rm(paths.identity, { force: true });
       await release();
+      released = true;
+      if (owned && !compromised) {
+        try {
+          diagnostic?.({ event: "lifecycle", outcome: "drained" }, () => {
+            assertRoot();
+            return (
+              !lstatSync(paths.owner, { throwIfNoEntry: false }) &&
+              !lstatSync(paths.identity, { throwIfNoEntry: false })
+            );
+          });
+        } catch {}
+      }
       hooks.stopped?.();
     })().catch((error) => {
-      hooks.failure?.();
+      failure();
       closing = undefined;
       throw error;
     });
@@ -1143,6 +1199,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     identity,
     paths,
     close,
+    recordBootOutcome: (outcome: "ready" | "failed") => debug?.({ event: "lifecycle", outcome }),
     backgroundExecution,
     get retainedEndpoint() {
       return endpoint.retainedDirectory;

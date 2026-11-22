@@ -27,38 +27,58 @@ export async function startSession(
     return { debug: false };
   }
   const timings = createStartupTimings(publish);
-  const { document, settings } = await timings.measure("settings read", () => client.readStartupSettings(signal));
-  client.validate();
-  throwIfAborted(signal);
-  const debug = settings?.debug ?? false;
-  configureSyncStatus(ctx, settings?.showStatus ?? true);
-  const { stateDirectoryMigrationNotice } = await import("../state/state-directory.js");
-  client.validate();
-  throwIfAborted(signal);
-  const notice = stateDirectoryMigrationNotice();
-  if (settings?.activeSyncSetup && document) {
-    const ready = !notice && (await client.tryStartupBootstrap(document, debug, signal));
+  let showLocalTimings = false;
+  let localStartupComplete = false;
+  try {
+    const { document, settings } = await timings.measure("settings read", () => client.readStartupSettings(signal));
     client.validate();
     throwIfAborted(signal);
-    if (ready) {
-      setSyncSetupCompletions(Object.keys(settings.syncSetups).sort((a, b) => a.localeCompare(b)));
-      timings.publish(ctx, debug, signal, "local initialization", "completed");
-      return { debug, config: configFromSettings(settings) };
-    }
-  } else {
-    const { pendingTransactionEntries } = await import("../snapshot/snapshot-transaction-directory.js");
-    const recoveryNeeded = (await pendingTransactionEntries()).length > 0;
+    const debug = settings?.debug ?? false;
+    client.setDebugPreference(debug);
+    configureSyncStatus(ctx, settings?.showStatus ?? true);
+    const { stateDirectoryMigrationNotice } = await import("../state/state-directory.js");
     client.validate();
     throwIfAborted(signal);
-    if (!recoveryNeeded) {
-      if (notice) ctx.ui.notify(notice, "warning");
-      setSyncSetupCompletions([]);
-      await client.markReady(debug);
+    const notice = stateDirectoryMigrationNotice();
+    if (settings?.activeSyncSetup && document) {
+      const ready = !notice && (await client.tryStartupBootstrap(document, debug, signal));
       client.validate();
       throwIfAborted(signal);
-      timings.publish(ctx, debug, signal, "local initialization", "completed");
-      return { debug };
+      if (ready) {
+        setSyncSetupCompletions(Object.keys(settings.syncSetups).sort((a, b) => a.localeCompare(b)));
+        showLocalTimings = debug;
+        localStartupComplete = true;
+        return { debug, config: configFromSettings(settings) };
+      }
+    } else {
+      const { pendingTransactionEntries } = await import("../snapshot/snapshot-transaction-directory.js");
+      const recoveryNeeded = (await pendingTransactionEntries()).length > 0;
+      client.validate();
+      throwIfAborted(signal);
+      if (!recoveryNeeded) {
+        if (notice) ctx.ui.notify(notice, "warning");
+        setSyncSetupCompletions([]);
+        await client.markReady(debug);
+        client.validate();
+        throwIfAborted(signal);
+        client.recordDebug({ event: "job", operation: "initialize", outcome: "skipped" });
+        showLocalTimings = debug;
+        localStartupComplete = true;
+        return { debug };
+      }
     }
+    localStartupComplete = true;
+  } finally {
+    timings.publish(
+      ctx,
+      showLocalTimings,
+      signal,
+      "local initialization",
+      localStartupComplete ? "completed" : "stopped",
+      client.debugEnabled && !signal.aborted
+        ? (report) => client.recordDebug({ event: "startup-timings", report })
+        : undefined,
+    );
   }
   const result = (await client.run("initialize", {}, signal)) as {
     debug: boolean;
@@ -85,11 +105,17 @@ export async function autoPushSessions(ctx: ExtensionContext, signal: AbortSigna
   try {
     const client = piDaemonClient(ctx);
     const eligible = (config: AnySyncConfig) => config.automatic && syncSessionsSelected(config);
-    if (!(await client.configured((settings) => eligible(configFromSettings(settings))))) return;
+    if (!(await client.configured((settings) => eligible(configFromSettings(settings))))) {
+      client.recordDebug({ event: "job", operation: "shutdown", outcome: "skipped" });
+      return;
+    }
     throwIfAborted(signal);
     const config = await loadConfigForCheck(undefined, signal);
     throwIfAborted(signal);
-    if (!eligible(config)) return;
+    if (!eligible(config)) {
+      client.recordDebug({ event: "job", operation: "shutdown", outcome: "skipped" });
+      return;
+    }
     const automaticFingerprint = syncCheckConfigFingerprint(config);
     await client.run(
       "shutdown",

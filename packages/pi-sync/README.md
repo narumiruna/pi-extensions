@@ -176,11 +176,15 @@ Missing settings stay unconfigured without creating files or locks. Legacy and i
 
 Legacy directory scope selects all eligible files, applies `exclude`, then restores matches from `reinclude`. Pi login credentials, project trust, and Pi Sync's own state stay local regardless of those rules. Folder-wide sync may include private files that the secret scan cannot identify. Review the content before transferring to a trusted destination. Existing setups keep their selected paths and are not migrated automatically. See [Agent-directory scope](./skills/configure-pi-sync/references/configuration.md#agent-directory-scope) for formats, precedence, and recovery.
 
-### Debug startup timings
+<a id="debug-startup-timings"></a>
 
-Set the top-level `"debug": true` in `pi-sync.json`, or enable **Settings → Debug startup timings**, then restart Pi or use `/reload`.
-The default is `false`. Timing reports remain in the TUI session transcript or arrive as RPC notifications, including the initial Continuous sync check. They do not enter model context or create a separate log file.
-See [Debug startup timings](./skills/configure-pi-sync/references/configuration.md#debug-startup-timings) for measured stages and limits.
+### Debug mode
+
+Turn on **/sync → Settings → Debug mode**, or set the top-level `"debug": true` in `pi-sync.json`. The default is **Off**. Use `/reload` or start a new Pi session for the client change. The daemon uses the agent directory's setting at its next owner, job, or Continuous sync cycle boundary without a restart.
+
+Both processes append startup timings and selected sync outcomes to the private, local-only `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`). It uses one JSON record per line; filter by `source` (`pi-sync` or `pi-sync-daemon`). Records omit raw errors, credentials, file contents, and model data. Turning Debug mode Off does not remove the file, and nothing rotates it automatically.
+
+Timing reports still appear in the TUI transcript or as RPC notifications without entering model context. The Pi client does not write debug records in print or JSON mode. The daemon's separate operational `lifecycle.log` is unchanged. See the [Debug mode reference](./skills/configure-pi-sync/references/configuration.md#debug-mode) for safe cleanup, older snapshots, and timing details.
 
 ### Background startup checks
 

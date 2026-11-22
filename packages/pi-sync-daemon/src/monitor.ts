@@ -52,6 +52,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       }
     | undefined;
   const timingOwners = new WeakMap<EngineContext, Execution>();
+  const cycleOutcomes = new Map<string, string>();
   const loaders = createEngineLoaders();
   let continuous: ReturnType<typeof createContinuousSync> | undefined;
   function schedule() {
@@ -131,8 +132,26 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     if (!continuous) {
       const { createContinuousSync } = await import("./engine/sync/continuous-sync.js");
       if (!available()) return;
-      continuous = createContinuousSync(loaders, undefined, (ctx, report) =>
-        timingOwners.get(ctx)?.emit("timings", { report }),
+      continuous = createContinuousSync(
+        loaders,
+        undefined,
+        (ctx, report) => timingOwners.get(ctx)?.emit("timings", { report }),
+        {
+          timing: (ctx, report) => timingOwners.get(ctx)?.debug?.({ event: "startup-timings", report }),
+          cycle(ctx, setup, outcome) {
+            const debug = timingOwners.get(ctx)?.debug;
+            if (!debug) return;
+            const key = `${outcome.outcome}:${outcome.reason ?? ""}`;
+            if (outcome.outcome !== "completed" && cycleOutcomes.get(setup) === key) return;
+            cycleOutcomes.delete(setup);
+            cycleOutcomes.set(setup, key);
+            if (cycleOutcomes.size > 64) {
+              const oldest = cycleOutcomes.keys().next().value;
+              if (oldest !== undefined) cycleOutcomes.delete(oldest);
+            }
+            debug({ event: "continuous-cycle", ...outcome });
+          },
+        },
       );
       // Re-enter every eligibility branch after importing the full engine graph.
       return start();

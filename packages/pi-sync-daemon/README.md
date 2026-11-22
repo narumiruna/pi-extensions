@@ -66,6 +66,14 @@ Existing `pi-sync.json`, canonical `pi-sync/`, and legacy `.pisync/` remain in t
 
 Automatic, Autonomous, and Continuous defaults remain unchanged. Old permission for work while Pi is open does not permit work after the last client exits. `/sync daemon allow-after-exit` reviews that extra permission for the current setup and selected independently reproducible provider/model; `/sync daemon revoke-after-exit` revokes it. Setup changes invalidate the saved digest. Changes to an interactive client’s model, working directory, or session-directory binding revoke older unattended grants, including across restart. Print/JSON never launch a service; passive attachment to an existing service protects their sessions and pauses automatic work. Registered live PIDs keep the service alive, including passive, disconnected, publishing, and orderly retired clients. A valid explicit after-exit grant for the active setup keeps service lifetime under the existing fingerprint and binding rules; it does not expand transfer or model permission. Temporary provider or backend unavailability does not itself revoke that grant. Lifetime checks do not call a model, contact a provider or storage, or execute credential commands. There is no new setting, environment variable, or keep-alive flag.
 
+### Debug mode
+
+The daemon reads the top-level `debug` boolean in `pi-sync.json` for its agent directory (`--root` in the CLI). It defaults to `false`. Use **/sync → Settings → Debug mode** in Pi or edit the settings file. The daemon applies the validated value at its next owner, job, or Continuous sync cycle boundary; no restart is needed.
+
+When enabled, the owner appends selected lifecycle, startup timing, job, and Continuous sync records to the private `<agent-directory>/pi-sync.log`. This includes already-authorized work after Pi exits but grants no new permission. Repeated successful unchanged polls do not add records. Filter the JSON lines by `source` to isolate `pi-sync-daemon` records from `pi-sync` client records.
+
+The file is local-only. Records omit raw errors, credentials, addresses, paths, synced contents, and model data. Logging is best effort, not a recovery journal. Turning it off leaves existing records in place; retention is manual. See the [Pi Sync Debug mode reference](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#debug-mode) for cleanup and older snapshots.
+
 ## 🔒 Security and privacy
 
 IPC uses a private root-bound Unix socket on POSIX or a user/root-bound named pipe on Windows. Requests negotiate protocol, instance, root, and a private capability token. Do not share runtime identity files. The service has the same filesystem and network permissions as your user.
@@ -96,7 +104,7 @@ CLI `status` reports `recordedPid` from a validated identity file and `pid` only
 
 Pi Sync can also review and stop the existing daemon from `/sync daemon recover`. The client library exposes `inspectDaemonRecovery(root)` and `stopDaemonForRecovery(target)` for that flow. Inspection does not start the daemon. A successful stop verifies identity release and process exit without starting a replacement. Keep recovery evidence and follow the [cleanup recovery guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#recover-from-uncertain-daemon-cleanup) if the stop cannot be verified.
 
-A verified handshake also reports the private lifecycle-log path. The log retains at most 8 KiB of timestamps and lifecycle phases, not exception text, credentials, model output, or sync content; older entries roll over. It is diagnostic evidence, not a recovery journal. Child stdio is detached and discarded.
+A verified handshake also reports the private operational `lifecycle.log` path. This log is separate from `pi-sync.log` and is not controlled by Debug mode. It retains at most 8 KiB of timestamps and lifecycle phases, not exception text, credentials, model output, or sync content; older entries roll over. It is diagnostic evidence, not a recovery journal. Child stdio is detached and discarded.
 
 The source-linked [architecture and safety contract](docs/architecture.md) defines ownership, resolver capability checks, write coordination, and the decision matrix. It distinguishes required checks from completed evidence.
 

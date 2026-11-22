@@ -1,11 +1,19 @@
 import path from "node:path";
 
+export const DEBUG_LOG_FILENAME = "pi-sync.log";
+
+export function isDebugLogPath(relativePath: string) {
+  const root = relativePath.split(/[/\\:]/u, 1)[0].toLowerCase();
+  return root.startsWith(DEBUG_LOG_FILENAME) && /^[ .]*$/u.test(root.slice(DEBUG_LOG_FILENAME.length));
+}
+
 export function isDeniedPath(relativePath: string) {
   const normalized = toPosix(relativePath);
   const lower = normalized.toLowerCase();
   const segments = lower.split("/");
   const base = path.posix.basename(lower);
   return (
+    isDebugLogPath(normalized) ||
     segments.includes("node_modules") ||
     segments.includes(".git") ||
     segments.includes(".pisync") ||

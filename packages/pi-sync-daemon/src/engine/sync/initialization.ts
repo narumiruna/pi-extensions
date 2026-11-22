@@ -11,7 +11,12 @@ import { createStartupTimings, type StartupTimingPublisher } from "./startup-tim
 import { errorMessage } from "./sync-errors.js";
 
 /** Shared engine initialization; the caller establishes process handover before recovery. */
-export async function initializeSync(ctx: EngineContext, signal: AbortSignal, publish?: StartupTimingPublisher) {
+export async function initializeSync(
+  ctx: EngineContext,
+  signal: AbortSignal,
+  publish?: StartupTimingPublisher,
+  observe?: (report: string) => void,
+) {
   return withStateDirectoryAccess(async () => {
     const timings = createStartupTimings(publish);
     let debug = false;
@@ -70,7 +75,7 @@ export async function initializeSync(ctx: EngineContext, signal: AbortSignal, pu
       }
       return { debug, settings };
     } finally {
-      timings.publish(ctx, debug, signal, "local initialization", outcome);
+      timings.publish(ctx, debug, signal, "local initialization", outcome, observe);
     }
   });
 }

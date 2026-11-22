@@ -585,6 +585,7 @@ export async function syncBoth(
   if (!options.auto && syncSelectionHasContent(config) && state.lastAppliedSnapshot)
     return mergeSync(ctx, options, factory);
   if (!syncSelectionHasContent(config)) {
+    options.noteDebugOutcome?.("skipped");
     if (!options.silent) {
       ctx.ui.notify(
         `Sync setup “${config.setupName}” includes no files. Choose included content in /sync Settings before syncing.`,
@@ -688,7 +689,7 @@ export async function syncBoth(
             "Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.",
         });
       }
-      await pullInitialSource();
+      if ((await pullInitialSource()) === "cancelled") options.noteDebugOutcome?.("cancelled");
       return;
     }
     await acceptMatchingState(remote);
@@ -707,16 +708,17 @@ export async function syncBoth(
     return;
   }
   if (remoteChanged) {
-    await pullInitialSource();
+    if ((await pullInitialSource()) === "cancelled") options.noteDebugOutcome?.("cancelled");
     return;
   }
   if (localChanged || !remote) {
-    await push(ctx, options, { config, state, local, backend }, factory);
+    if ((await push(ctx, options, { config, state, local, backend }, factory)) === "cancelled")
+      options.noteDebugOutcome?.("cancelled");
     return;
   }
   if (shouldRefreshSyncedState(remote, head, state, config, (left, right) => backend.sameRevision(left, right))) {
     await acceptMatchingState(remote);
-  }
+  } else options.noteDebugOutcome?.("skipped");
   if (!options.silent) ctx.ui.notify("pi-sync is already up to date.", "info");
 }
 

@@ -30,7 +30,9 @@ export function createStartupCheck(
       }
     | undefined;
 
-  let pending: { ctx: ExtensionContext; signal: AbortSignal; config: AnySyncConfig } | undefined;
+  let pending:
+    | { ctx: ExtensionContext; signal: AbortSignal; config: AnySyncConfig; logTimings?: (report: string) => void }
+    | undefined;
 
   const controllerApi = {
     async interrupt(ctx: ExtensionContext) {
@@ -43,12 +45,17 @@ export function createStartupCheck(
       const queued = pending;
       if (!queued || queued.ctx.sessionManager !== ctx.sessionManager || queued.signal.aborted || !ctx.isIdle()) return;
       pending = undefined;
-      controllerApi.start(ctx, queued.signal, queued.config);
+      controllerApi.start(ctx, queued.signal, queued.config, queued.logTimings);
     },
-    start(ctx: ExtensionContext, sessionSignal: AbortSignal, initialConfig?: AnySyncConfig) {
+    start(
+      ctx: ExtensionContext,
+      sessionSignal: AbortSignal,
+      initialConfig?: AnySyncConfig,
+      logTimings?: (report: string) => void,
+    ) {
       if (!ctx.hasUI || sessionSignal.aborted) return;
       if (initialConfig && startupTransferEnabled(initialConfig) && !ctx.isIdle()) {
-        pending = { ctx, signal: sessionSignal, config: initialConfig };
+        pending = { ctx, signal: sessionSignal, config: initialConfig, logTimings };
         return;
       }
       if (active) throw new Error("Previous startup check has not been drained.");
@@ -119,7 +126,7 @@ export function createStartupCheck(
               throwIfAborted(signal);
               if (!isCurrent() || syncCheckConfigFingerprint(transferConfig) !== identity) return;
               if (!ctx.isIdle()) {
-                pending = { ctx, signal: sessionSignal, config: captured };
+                pending = { ctx, signal: sessionSignal, config: captured, logTimings };
                 return;
               }
               await timings.measure("automatic transfer", () =>
@@ -191,6 +198,7 @@ export function createStartupCheck(
                 sessionSignal,
                 "background startup",
                 signal.aborted || stopped ? "stopped" : "completed",
+                logTimings,
               );
             }
             if (active === task) active = undefined;

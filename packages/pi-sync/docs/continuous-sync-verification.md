@@ -60,6 +60,8 @@ Final verification:
 
 ## Startup timing report verification
 
+This evidence predates the shared log. Session-start capture still governs the client timing display; daemon file logging uses the root setting at the next applicable owner, job, or cycle boundary. See the [Debug mode verification](tui-contract.md#debug-mode-verification) for the separate shared-log checks, including quiet repeated unchanged polls.
+
 Startup timing reports use native custom session entries in TUI and retain RPC notifications. Entry renderers and live append events were checked at the declared Pi peer floor. Tests verify transcript retention across renderer replacement and ordinary notifications, unchanged model context, control sanitization, and zero/narrow/resized rendering.
 
 Continuous timing tests cover the initial check, nested transfer stages, failure, timeout, later polls, foreground pauses, idle resume, replacement, and shutdown. Debug is captured during awaited session initialization, including when Continuous sync is initially Off or no setup exists; both directions of a later debug edit retain the session-start value. Automatic sync and startup transfer remain Off when not authorized. No new watcher, timer, setting, command, provider request, or model-visible prefix transition is added.

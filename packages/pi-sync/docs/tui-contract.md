@@ -35,11 +35,17 @@ All settings are private to this device. There are no project overrides. Default
 | Content merge / partial progress | `sync.mergeContent`, `sync.partialSync`, false/false | Current setup | Explicit compatibility review and atomic save; Off, Merge only, Merge + partial, Partial only preserve all combinations |
 | Skip secret scan | `skipSecretScan`, false | All setups | Immediate save; subsequent manual/automatic pushes; Diagnostics still scans |
 | Show sync status | `showStatus`, true | All setups | Immediate save and immediate status visibility change; notifications/widgets remain |
-| Debug startup timings | `debug`, false | All setups | Immediate save; fixed-label duration notifications from the next session start; TUI/RPC only |
+| Debug mode | `debug`, false | All setups | Immediate save; Pi logging and timing display use the next session start in TUI/RPC; daemon log uses the next owner, job, or Continuous sync cycle boundary |
 
 Opening foreground Settings cancels and drains startup work. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
 
 Writers queue the complete read-modify-write operation, hold the cross-process lock through validation and same-directory atomic replacement, preserve unknown fields and private permissions, and refuse invalid existing files. UI changes do not replace those writers.
+
+### Debug mode verification
+
+The row retains its **On**/**Off** values, existing save queue, and failure rollback. Changing it does not change the current Pi session's captured preference. Timing reports still use custom transcript entries in TUI and notifications in RPC, with no protocol or model-context changes. Print and JSON modes add no client log writes. The daemon's separate file-logging preference comes from the root at its own boundaries, not from the client timing flag. See the [Debug mode reference](../skills/configure-pi-sync/references/configuration.md#debug-mode).
+
+Check the setting's save and rollback with non-default bindings and verify next-session activation in both directions. Exercise TUI and RPC timing delivery, cancellation and session replacement, and print/JSON framing. Separately verify concurrent client/daemon appends, unsafe file and write failure isolation, local-only snapshot and watcher policy, detached owner logging, and disablement without owner replacement. Use a package-directory RPC smoke and inspect both package archives; the earlier timing-only checks do not establish shared-file behavior.
 
 ## Presentation decisions
 

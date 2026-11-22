@@ -535,7 +535,13 @@ export class DaemonConnection {
   private sameClient(facts: ClientFacts) {
     return facts.id === this.facts.id && facts.pid === this.facts.pid && facts.generation === this.facts.generation;
   }
-  async run(operation: string, payload: unknown, signal?: AbortSignal, onCommit?: () => void): Promise<unknown> {
+  async run(
+    operation: string,
+    payload: unknown,
+    signal?: AbortSignal,
+    onCommit?: () => void,
+    onSubmit?: (id: string) => void,
+  ): Promise<unknown> {
     if (
       this.closed ||
       this.uncertain ||
@@ -547,16 +553,13 @@ export class DaemonConnection {
     )
       throw new Error("Daemon client is unavailable; confirm contact and drain work before submitting.");
     signal?.throwIfAborted();
-    const id = `${operationPrefix(this.identity)}${randomUUID()}`;
+    const { paths, identity } = this;
+    const id = `${operationPrefix(identity)}${randomUUID()}`;
+    const jobParams = { id, client: this.facts.id };
+    const transport = this.controller.signal;
     this.pendingJobs.add(id);
     const abort = () => {
-      void requestDaemon(
-        this.paths,
-        this.identity,
-        "cancel",
-        { id, client: this.facts.id },
-        this.controller.signal,
-      ).catch(() => {});
+      void requestDaemon(paths, identity, "cancel", jobParams, transport).catch(() => {});
     };
     let terminal = false;
     if (onCommit) this.commits.set(id, { notify: onCommit, signal });
@@ -564,13 +567,10 @@ export class DaemonConnection {
     if (signal?.aborted) abort();
     return withCleanup(
       async () => {
-        await requestDaemon(
-          this.paths,
-          this.identity,
-          "submit",
-          { id, client: this.facts.id, operation, payload },
-          this.controller.signal,
-        );
+        try {
+          onSubmit?.(id);
+        } catch {}
+        await requestDaemon(paths, identity, "submit", { ...jobParams, operation, payload }, transport);
         let terminalObserved = this.observesState;
         if (terminalObserved && !this.terminalJobs.has(id)) {
           const completion = Promise.withResolvers<"terminal" | "poll">();
@@ -585,11 +585,11 @@ export class DaemonConnection {
         }
         while (!this.closed) {
           const reply = await requestDaemon(
-            this.paths,
-            this.identity,
+            paths,
+            identity,
             "poll",
-            { client: this.facts.id, cursor: this.cursor, job: id },
-            this.controller.signal,
+            { client: jobParams.client, cursor: this.cursor, job: id },
+            transport,
           ).catch((error: unknown) => {
             if (error instanceof DaemonError && error.message === UNKNOWN_JOB_RESULT) this.markWorkUncertain();
             throw error;
@@ -619,7 +619,7 @@ export class DaemonConnection {
           for (const callback of this.callbacks.values())
             if (callback.job === id && !callback.kind.startsWith("queue-")) callback.controller.abort();
           try {
-            await requestDaemon(this.paths, this.identity, "cancel", { id, client: this.facts.id });
+            await requestDaemon(paths, identity, "cancel", jobParams);
           } catch (error) {
             this.markWorkUncertain();
             throw new Error(

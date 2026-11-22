@@ -55,6 +55,9 @@ type PublishFile = (
   review?: PublicationReview,
 ) => Promise<void>;
 let configUpdateQueue: Promise<void> = Promise.resolve();
+let pendingMutations = 0;
+let mutationGeneration = 0;
+let localReadLock: string | undefined;
 let publishConfigFile: PublishFile = publishFileWithGuard;
 let beforeConfigPublicationHook: () => Promise<void> = async () => undefined;
 let afterMissingConfigReadProbeHook: () => Promise<void> = async () => undefined;
@@ -178,6 +181,29 @@ async function peekUnlocked(maxBytes?: number, securePermissions = true): Promis
   return readConfigDocumentIfExists(filePath, maxBytes, securePermissions);
 }
 
+export async function readLocalConfigForDiagnostics(root: string) {
+  if (pendingMutations) return undefined;
+  const generation = mutationGeneration;
+  const canonical = path.join(root, CONFIG_FILE_NAME);
+  const legacy = path.join(root, LEGACY_CONFIG_FILE_NAME);
+  const filePath = (await pathExists(canonical)) ? canonical : legacy;
+  if (filePath === legacy) await assertNoInterruptedConfigReplacement(canonical);
+  const document = await readConfigDocumentIfExists(filePath, MAX_SETTINGS_BYTES, false);
+  if (!document) return undefined;
+  const locked = () =>
+    pendingMutations ||
+    mutationGeneration !== generation ||
+    (localReadLock !== canonical && lstatSync(configMutationLockPath(canonical), { throwIfNoEntry: false }));
+  return {
+    document,
+    stillCurrent() {
+      if (locked()) return false;
+      assertCurrentDocument(document, canonical, legacy);
+      return !locked();
+    },
+  };
+}
+
 async function readConfigDocumentIfExists(filePath: string, maxBytes?: number, securePermissions = true) {
   const snapshot = await readConfigSnapshotIfExists(filePath, maxBytes, securePermissions);
   return snapshot ? { path: filePath, ...snapshot } : undefined;
@@ -201,7 +227,7 @@ export function withLockedLocalConfigDocument<T>(
         assertCurrentDocument(document);
       });
     });
-  });
+  }, forWrite);
 }
 
 export async function readMigratingLocalConfigDocument(
@@ -227,17 +253,25 @@ export async function readMigratingLocalConfigDocument(
 
 async function withLocalConfigReadLockIfNeeded<T>(read: () => Promise<T>): Promise<T> {
   if ((await pathExists(localConfigPath())) || (await pathExists(legacyLocalConfigPath()))) {
-    return withLocalConfigFileLock(read);
+    return withLocalConfigFileLock(read, true);
   }
   await afterMissingConfigReadProbeHook();
-  if (await pathExists(configMutationLockPath())) return withLocalConfigFileLock(read);
+  if (await pathExists(configMutationLockPath())) return withLocalConfigFileLock(read, true);
   await assertNoInterruptedConfigReplacement();
   return read();
 }
 
-function queueConfigOperation<T>(run: () => Promise<T>): Promise<T> {
+function beginConfigMutation() {
+  pendingMutations++;
+  mutationGeneration++;
+  return () => pendingMutations--;
+}
+
+function queueConfigOperation<T>(run: () => Promise<T>, mayMutate = false): Promise<T> {
   // Mutation callbacks use the unlocked helpers below, never a queued public read.
-  const operation = configUpdateQueue.then(run);
+  const finished = mayMutate ? beginConfigMutation() : undefined;
+  const queued = configUpdateQueue.then(run);
+  const operation = finished ? queued.finally(finished) : queued;
   configUpdateQueue = operation.then(
     () => undefined,
     () => undefined,
@@ -296,7 +330,7 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
       else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), signal, review);
       return next;
     });
-  });
+  }, true);
 }
 
 export function createLocalConfigDocument(value: Record<string, unknown>, signal?: AbortSignal) {
@@ -316,13 +350,16 @@ export function createLocalConfigDocument(value: Record<string, unknown>, signal
         throw error;
       }
     });
-  });
+  }, true);
 }
 
 export function replaceLocalConfigDocument(document: LocalConfigDocument, value: Record<string, unknown>) {
   const authority = engineHost().config;
   if (authority) return authority.replace(document, value);
-  return queueConfigOperation(() => withLocalConfigFileLock(() => replaceLocalConfigDocumentUnlocked(document, value)));
+  return queueConfigOperation(
+    () => withLocalConfigFileLock(() => replaceLocalConfigDocumentUnlocked(document, value)),
+    true,
+  );
 }
 
 async function replaceLocalConfigDocumentUnlocked(
@@ -436,7 +473,15 @@ async function prepareLocalConfigPath(validateForMigration: (settings: Record<st
   const legacy = await readConfigSnapshotIfExists(legacyPath);
   if (!legacy) return canonicalPath;
   validateForMigration(legacy.parsed);
+  const finished = beginConfigMutation();
+  try {
+    return await migrateLegacyConfig(canonicalPath, legacyPath, legacy);
+  } finally {
+    finished();
+  }
+}
 
+async function migrateLegacyConfig(canonicalPath: string, legacyPath: string, legacy: ConfigSnapshot) {
   let installedIdentity: FileIdentity;
   try {
     installedIdentity = await installPrivateConfigExclusively(canonicalPath, legacy.bytes);
@@ -502,9 +547,11 @@ async function secureIgnoredLegacyIfPresent(filePath: string) {
   }
 }
 
-function assertCurrentDocument(document: LocalConfigDocument | undefined) {
-  const canonical = localConfigPath();
-  const legacy = legacyLocalConfigPath();
+function assertCurrentDocument(
+  document: LocalConfigDocument | undefined,
+  canonical = localConfigPath(),
+  legacy = legacyLocalConfigPath(),
+) {
   const filePath = lstatSync(canonical, { throwIfNoEntry: false }) ? canonical : legacy;
   const before = lstatSync(filePath, { throwIfNoEntry: false });
   if (!document) {
@@ -678,8 +725,9 @@ async function configSnapshotStillMatches(filePath: string, snapshot: ConfigSnap
 }
 
 export function quarantineAndRemoveConfigIfMatches(filePath: string, identity: FileIdentity, expectedBytes: Buffer) {
-  return queueConfigOperation(() =>
-    withLocalConfigFileLock(() => quarantineAndRemoveConfigIfMatchesUnlocked(filePath, identity, expectedBytes)),
+  return queueConfigOperation(
+    () => withLocalConfigFileLock(() => quarantineAndRemoveConfigIfMatchesUnlocked(filePath, identity, expectedBytes)),
+    true,
   );
 }
 
@@ -748,11 +796,11 @@ async function restoreQuarantinedConfig(filePath: string, quarantinePath: string
   }
 }
 
-function configMutationLockPath() {
-  return `${localConfigPath()}.mutation-lock`;
+function configMutationLockPath(configPath = localConfigPath()) {
+  return `${configPath}.mutation-lock`;
 }
 
-export async function withLocalConfigFileLock<T>(run: () => Promise<T>): Promise<T> {
+export async function withLocalConfigFileLock<T>(run: () => Promise<T>, readOnly = false): Promise<T> {
   const configPath = localConfigPath();
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   let compromisedError: Error | undefined;
@@ -767,12 +815,14 @@ export async function withLocalConfigFileLock<T>(run: () => Promise<T>): Promise
       compromisedError = error;
     },
   });
+  if (readOnly) localReadLock = configPath;
   try {
     await assertNoInterruptedConfigReplacement();
     const result = await run();
     if (compromisedError) throw compromisedError;
     return result;
   } finally {
+    if (readOnly) localReadLock = undefined;
     await release();
   }
 }
@@ -820,8 +870,7 @@ async function renameFileWithoutReplacement(source: string, destination: string,
   await fs.rename(source, destination);
 }
 
-async function assertNoInterruptedConfigReplacement() {
-  const configPath = localConfigPath();
+async function assertNoInterruptedConfigReplacement(configPath = localConfigPath()) {
   if (await pathExists(configPath)) return;
   let names: string[];
   try {

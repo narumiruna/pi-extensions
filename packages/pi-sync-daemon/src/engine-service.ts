@@ -8,6 +8,7 @@ import {
   reviewAutomaticPolicy,
   revokeAfterExitGrants,
 } from "./consent.js";
+import { createDaemonDebug } from "./daemon-debug.js";
 import { type DocumentView, documentFingerprint } from "./document.js";
 import type { CommandOptions } from "./engine/commands/command-types.js";
 import type { EngineContext } from "./engine/host.js";
@@ -56,6 +57,7 @@ function optionsFrom(
     ...(typeof value.automaticFingerprint === "string" ? { automaticFingerprint: value.automaticFingerprint } : {}),
     signal: execution.signal,
     onCommit: execution.committed,
+    noteDebugOutcome: execution.noteDebugOutcome,
   };
 }
 /** Engine dispatch is loaded only by the service, never by the public IPC client. */
@@ -287,10 +289,15 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         const { syncSessionsSelected } = await import("./engine/sync/sync-policy.js");
         const config = await loadConfigForCheck(undefined, execution.signal);
         execution.validate();
-        if (!config.automatic || !syncSessionsSelected(config)) return;
+        if (!config.automatic || !syncSessionsSelected(config)) {
+          execution.noteDebugOutcome?.("skipped");
+          return;
+        }
       }
-      if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))
+      if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) {
+        execution.noteDebugOutcome?.("blocked");
         throw new Error("Synchronization requires an observable TUI or RPC client.");
+      }
       const { withStateDirectoryAccess, migrateLegacyStateDirectory } = await import(
         "./engine/state/state-directory.js"
       );
@@ -302,7 +309,10 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
             { signal: execution.signal },
           );
           execution.validate();
-          if (!accepted) return { status: "cancelled", message: "pi-sync state migration cancelled." };
+          if (!accepted) {
+            execution.noteDebugOutcome?.("cancelled");
+            return { status: "cancelled", message: "pi-sync state migration cancelled." };
+          }
         }
         execution.validate();
         const result = await migrateLegacyStateDirectory();
@@ -334,8 +344,10 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         }
         if (operation === "startup-transfer") {
           const { startupTransferEnabled } = await import("./engine/sync/agent-policy.js");
-          if (!automatic || !startupTransferEnabled(automatic.config) || !ctx.isIdle())
+          if (!automatic || !startupTransferEnabled(automatic.config) || !ctx.isIdle()) {
+            execution.noteDebugOutcome?.("blocked");
             throw new Error("Startup transfer is no longer authorized or idle.");
+          }
           options.auto = true;
           options.yes = true;
           options.silent = true;
@@ -350,6 +362,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
             automatic?.validate(config);
             execution.validate();
             if (config.agentMode && !automaticPolicyAuthorized(root, config)) {
+              execution.noteDebugOutcome?.("blocked");
               throw new Error(
                 "Autonomous sync requires a separate policy review. Use Settings → Review automatic transfers, or choose a reviewed push or pull.",
               );
@@ -405,10 +418,12 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
                     inspection.firstSync ||
                     !inspection.head ||
                     inspection.selectionState?.kind !== "same"
-                  )
+                  ) {
+                    execution.noteDebugOutcome?.("blocked");
                     throw new Error(
                       "Startup transfer requires a fresh initialized baseline, matching selection, and idle ready clients; use the reviewed foreground command.",
                     );
+                  }
                 }
                 return operations.syncBoth(ctx, current);
               });
@@ -417,9 +432,11 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
             }
           };
           return operation === "startup-transfer"
-            ? withJobTimings(ctx, execution, "daemon transfer", (timings) => {
+            ? withJobTimings(ctx, execution, "daemon transfer", async (timings) => {
                 options.startupTimings = timings;
-                return run();
+                const result = await run();
+                if (timings.wasUnchanged()) execution.noteDebugOutcome?.("skipped");
+                return result;
               })
             : run();
         }
@@ -434,6 +451,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
     execute,
     bind: monitor.bind,
     hooks: {
+      diagnostic: createDaemonDebug(root),
       startup: {
         captureReviewLock: captureStartupReviewLock,
         async probe(fingerprint: string, signal: AbortSignal, reviewLock?: () => boolean) {
@@ -470,6 +488,7 @@ async function withJobTimings<T>(
       execution.signal,
       label,
       completed ? "completed" : "stopped",
+      timingObserver(execution),
     );
   }
 }
@@ -507,14 +526,25 @@ async function initialize(ctx: EngineContext, execution: Execution, diagnostics 
     const settings = document ? validateSettingsDocument(document.parsed) : undefined;
     const config = settings?.activeSyncSetup ? configFromSettings(settings) : undefined;
     if (diagnostics) await requireStartupRecoveryCleared(execution);
+    execution.noteDebugOutcome?.("blocked");
     return { debug: settings?.debug ?? false, settings, config, handoverRequired: true };
   }
   const { initializeSync } = await import("./engine/sync/initialization.js");
-  const initialized = await initializeSync(ctx, execution.signal, (_ctx, report) => {
-    if (diagnostics) execution.emit("timings", { report });
-  });
+  const initialized = await initializeSync(
+    ctx,
+    execution.signal,
+    (_ctx, report) => {
+      if (diagnostics) execution.emit("timings", { report });
+    },
+    diagnostics ? timingObserver(execution) : undefined,
+  );
   execution.validate();
   if (diagnostics) await requireStartupRecoveryCleared(execution);
   execution.validate();
   return { ...initialized, handoverRequired: !readConsent(execution.root) };
+}
+
+function timingObserver(execution: Execution) {
+  const debug = execution.debug;
+  return debug ? (report: string) => debug({ event: "startup-timings", report }) : undefined;
 }

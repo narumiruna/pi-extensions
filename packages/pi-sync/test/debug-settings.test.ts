@@ -39,19 +39,19 @@ for (const failFirst of [false, true]) {
       };
       try {
         await tui.waitForOpen();
-        tui.send("\u001b[200~Debug startup timings\u001b[201~");
-        assert.match(tui.render().join("\n"), /Debug startup timings.*Off/u);
+        tui.send("\u001b[200~Debug mode\u001b[201~");
+        assert.match(tui.render().join("\n"), /Debug mode.*Off/u);
         if (failFirst) {
           await withConfigFilePublicationForTest(async () => {
             throw new Error("publication failed");
           }, toggle);
           assert.equal((await loadConfig()).debug, false);
-          assert.match(tui.render().join("\n"), /Debug startup timings.*Off/u);
+          assert.match(tui.render().join("\n"), /Debug mode.*Off/u);
           assert.ok(context.notifications.some((entry) => /save failed/iu.test(entry.message)));
         }
         await toggle();
         assert.equal((await loadConfig()).debug, true);
-        assert.match(tui.render().join("\n"), /Debug startup timings.*On/u);
+        assert.match(tui.render().join("\n"), /Debug mode.*On/u);
         assert.equal(JSON.parse(await fs.readFile(localConfigPath(), "utf8")).futureField, "keep");
         assert.ok(context.notifications.some((entry) => entry.message.includes("next session start")));
         tui.send("q");

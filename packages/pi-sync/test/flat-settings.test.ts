@@ -131,7 +131,7 @@ const settingLabels = [
   "Content merge / partial progress",
   "Skip secret scan",
   "Show sync status",
-  "Debug startup timings",
+  "Debug mode",
 ];
 
 test("content-policy cancellation retains the schema and saved policy", async () =>

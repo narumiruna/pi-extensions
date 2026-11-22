@@ -12,6 +12,7 @@ import {
   STARTUP_TIMING_ENTRY,
   type StartupTimingEntry,
 } from "../src/ui/startup-timings-entry.js";
+import { readClientDebug } from "./client-debug-records.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 const report = "pi-sync debug: local initialization (completed)\nsettings read: 1.0 ms\ntotal: 2.0 ms";
@@ -40,8 +41,13 @@ for (const mode of ["tui", "rpc"] as const) {
       const mock = createMockPi();
       const { ctx, notifications } = createMockContext({ mode, cwd: agentDir });
       const client = bindPiDaemonClient(ctx, new AbortController().signal, registerStartupTimings(mock.pi));
+      client.setDebugPreference(true);
       try {
         await client.run("initialize", {});
+        assert.equal(
+          (await readClientDebug(agentDir)).some(({ event }) => event === "startup-timings"),
+          false,
+        );
         let lines: string[];
         if (mode === "tui") {
           const entries = mock.entries.filter((entry) => entry.customType === STARTUP_TIMING_ENTRY);
