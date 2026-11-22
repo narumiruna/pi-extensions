@@ -41,7 +41,9 @@ function run(options: Options = {}) {
   const root = mkdtempSync(path.join(tmpdir(), options.checkoutPrefix ?? "pi typecheck runner-"));
   try {
     mkdirSync(path.join(root, "scripts"));
-    copyFileSync(path.resolve("scripts/run-typechecks.mjs"), path.join(root, "scripts/run-typechecks.mjs"));
+    for (const script of ["npm-invocation.mjs", "run-typechecks.mjs"]) {
+      copyFileSync(path.resolve("scripts", script), path.join(root, "scripts", script));
+    }
     for (const { directoryName } of workspaces) {
       mkdirSync(path.join(root, "packages", directoryName), { recursive: true });
     }
@@ -97,8 +99,7 @@ function run(options: Options = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
-        npm_execpath: options.missingNpm ? "" : npm,
-        ...(options.missingNpm ? { PATH: "" } : {}),
+        npm_execpath: options.missingNpm ? path.join(root, "missing-npm.mjs") : npm,
         PI_EXTENSIONS_BUILD_READY: options.ready ? "1" : "",
         TEST_TRACE: tracePath,
         TEST_WORKSPACES: JSON.stringify(options.noWorkspaces ? [] : workspaces),
@@ -220,10 +221,10 @@ test("tsc-rs preserves a compiler failure exit status and stops later checks", (
   assert.deepEqual(entries, compilerEntries(root, workspaceNames.slice(0, 1), "1"));
 });
 
-test("tsc-rs rejects an npm build spawn failure", () => {
+test("tsc-rs fails before checking when the configured npm CLI is missing", () => {
   const { result, entries } = run({ staged: false, missingNpm: true });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /ENOENT/u);
+  assert.match(result.stderr, /Cannot find module.*missing-npm\.mjs/u);
   assert.deepEqual(entries, []);
 });
 

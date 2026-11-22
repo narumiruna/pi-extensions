@@ -3,26 +3,23 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { findPackageJSON } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
-const npmCommand = "npm";
-const piCommand = "pi";
+import { npmInvocation } from "./npm-invocation.mjs";
+
 const unscopedNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function runNpm(args, options) {
+  return run(...npmInvocation(args), options);
+}
+
+function runPi(args) {
+  if (process.platform !== "win32") return run("pi", args);
+  const manifestPath = findPackageJSON("@earendil-works/pi-coding-agent", import.meta.url);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  return run(process.execPath, [resolve(dirname(manifestPath), manifest.bin.pi), ...args]);
+}
 
 function run(command, args, options = {}) {
   const { allowFailure = false, ...spawnOptions } = options;
-  if (command === npmCommand) {
-    const npmCli =
-      process.env.npm_execpath ||
-      (process.platform === "win32" ? join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js") : undefined);
-    if (npmCli) {
-      command = process.execPath;
-      args = [npmCli, ...args];
-    }
-  } else if (command === piCommand && process.platform === "win32") {
-    const manifestPath = findPackageJSON("@earendil-works/pi-coding-agent", import.meta.url);
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    command = process.execPath;
-    args = [resolve(dirname(manifestPath), manifest.bin.pi), ...args];
-  }
   const result = spawnSync(command, args, { stdio: "inherit", ...spawnOptions });
   if (result.error) {
     console.error(result.error.message);
@@ -52,11 +49,11 @@ function requireUnscopedName(name) {
 function doctor(packageName) {
   requireArgument(packageName, "npm run package:doctor -- <package>");
   console.log(`package: ${packageName}`);
-  run(npmCommand, ["whoami"], { allowFailure: true });
-  run(npmCommand, ["config", "get", "registry"]);
-  run(npmCommand, ["access", "get", "status", packageName], { allowFailure: true });
-  run(npmCommand, ["dist-tag", "ls", packageName], { allowFailure: true });
-  run(npmCommand, ["view", packageName, "version"], { allowFailure: true });
+  runNpm(["whoami"], { allowFailure: true });
+  runNpm(["config", "get", "registry"]);
+  runNpm(["access", "get", "status", packageName], { allowFailure: true });
+  runNpm(["dist-tag", "ls", packageName], { allowFailure: true });
+  runNpm(["view", packageName, "version"], { allowFailure: true });
 }
 
 function doctorAll() {
@@ -74,8 +71,8 @@ function doctorAll() {
 
 function makePublic(packageName) {
   requireArgument(packageName, "npm run package:public -- <package>");
-  run(npmCommand, ["access", "set", "status=public", packageName]);
-  run(npmCommand, ["view", packageName, "version"]);
+  runNpm(["access", "set", "status=public", packageName]);
+  runNpm(["view", packageName, "version"]);
 }
 
 function resolveWorkspace(name) {
@@ -93,7 +90,7 @@ function resolveWorkspace(name) {
 
 function pack(name) {
   const workspace = resolveWorkspace(name);
-  run(npmCommand, ["--workspace", workspace.name, "pack", "--dry-run"]);
+  runNpm(["--workspace", workspace.name, "pack", "--dry-run"]);
 }
 
 function install(name) {
@@ -104,17 +101,17 @@ function install(name) {
   }
   const workspace = resolveWorkspace(name);
   const packageName = workspace.name;
-  const isPublished = run(npmCommand, ["view", packageName, "version"], {
+  const isPublished = runNpm(["view", packageName, "version"], {
     allowFailure: true,
     stdio: "ignore",
   });
   if (workspace.service) {
-    if (!isPublished) run(npmCommand, ["--workspace", packageName, "run", "build"]);
-    run(npmCommand, ["install", "--global", isPublished ? packageName : `./${workspace.directory}`]);
+    if (!isPublished) runNpm(["--workspace", packageName, "run", "build"]);
+    runNpm(["install", "--global", isPublished ? packageName : `./${workspace.directory}`]);
   } else if (isPublished) {
-    run(piCommand, ["install", `npm:${packageName}`]);
+    runPi(["install", `npm:${packageName}`]);
   } else {
-    run(piCommand, ["install", `./${workspace.directory}`]);
+    runPi(["install", `./${workspace.directory}`]);
   }
 }
 

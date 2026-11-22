@@ -124,6 +124,7 @@
 | Rule | Enforcement |
 | --- | --- |
 | Derive workspace build order from package dependencies, not the root workspace list. | `scripts/run-builds.mjs` and `scripts/workspace-graph.mjs`; cold-build, historical-failure, cycle, and fail-fast tests in `test/workspace-build-order.test.ts` through `npm test`; CI runs `npm run check` and `npm test`. |
+| Use `npmInvocation()` for npm child processes in root tooling. | `scripts/npm-invocation.mjs` owns executable resolution; `scripts/lint/use-npm-invocation.grit` rejects known bypasses via `npm run check`, and the package-workflow and test-runner suites verify argument handling via `npm test`. |
 | Keep SemVer dev dependency ranges within declared peer ranges and install compatible dependencies. | `scripts/check-dependencies.mjs` via `npm run check:dependencies` in the local/CI `npm run check` gate; historical durable and hoisted OpenTelemetry regressions in `test/dependency-compatibility.test.ts` via `npm test`. |
 
 ## Publishing and release safety

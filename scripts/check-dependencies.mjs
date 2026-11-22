@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { readWorkspaces } from "./workspace-graph.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -49,13 +50,13 @@ export function dependencyProblems({ root = repositoryRoot, env = process.env, e
     }
   }
 
-  const command = env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
-  const prefix = env.npm_execpath ? [env.npm_execpath] : [];
   // npm owns peer resolution, hoisting, optional peers, aliases, overrides and workspace links.
   // A manifest-only comparison cannot detect a hoisted dependency resolving the wrong peer.
   const result = execute(
-    command,
-    [...prefix, "ls", "--all", "--depth=Infinity", "--include=dev", "--include=optional", "--include=peer", "--json"],
+    ...npmInvocation(
+      ["ls", "--all", "--depth=Infinity", "--include=dev", "--include=optional", "--include=peer", "--json"],
+      env,
+    ),
     {
       cwd: root,
       env,
