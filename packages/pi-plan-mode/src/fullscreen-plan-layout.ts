@@ -4,6 +4,9 @@ import * as tuiCore from "@earendil-works/pi-tui";
 
 const MIN_COLUMNS = 80;
 const MIN_ROWS = 12;
+const MIN_PANE_COLUMNS = 24;
+const MIN_CONVERSATION_COLUMNS = 48;
+const DIVIDER_COLUMNS = 1;
 
 export type PlanPaneSide = "left" | "right";
 
@@ -26,15 +29,26 @@ export function mountFullscreenPlanLayout(
   const original = readRoot();
   if (!isNativeFullscreenRoot(original, rendererChildren)) return;
 
-  const wrapper = createPlanSplitLayout(original, pane, side, tui, theme);
+  let active = true;
+  const wrapper = createPlanSplitLayout(
+    original,
+    pane,
+    side,
+    tui,
+    theme,
+    (): boolean => active && tui.mode === "fullscreen" && tui.children === rendererChildren && readRoot() === wrapper,
+  );
   const restore = () => {
+    active = false;
     if (tui.mode === "fullscreen" && readRoot() === wrapper) {
       tui.setLayoutRoot(original);
     }
   };
   try {
     tui.setLayoutRoot(wrapper);
-    return readRoot() === wrapper ? restore : undefined;
+    if (readRoot() === wrapper) return restore;
+    active = false;
+    return;
   } catch {
     restore();
     return;
@@ -71,14 +85,65 @@ function isNativeFullscreenRoot(value: unknown, rendererChildren: readonly Compo
   );
 }
 
-function createPlanSplitLayout(main: Component, pane: Component, side: PlanPaneSide, tui: TUI, theme: Theme) {
-  const divider = {
-    render: (width: number) =>
-      width < 1 ? [] : Array.from({ length: tui.terminal.rows }, () => theme.fg("borderMuted", "│")),
+function createPlanSplitLayout(
+  main: Component,
+  pane: Component,
+  side: PlanPaneSide,
+  tui: TUI,
+  theme: Theme,
+  ownsLayout: () => boolean,
+) {
+  let viewport = { width: 0, height: 0 };
+  let preferredWidth: number | undefined;
+  const visible = ({ width, height }: typeof viewport) => width >= MIN_COLUMNS && height >= MIN_ROWS;
+  const clampWidth = (width: number, requested: number) =>
+    Math.min(width - DIVIDER_COLUMNS - MIN_CONVERSATION_COLUMNS, Math.max(MIN_PANE_COLUMNS, requested));
+  const paneWidth = (width: number) => clampWidth(width, preferredWidth ?? Math.floor((width - DIVIDER_COLUMNS) / 3));
+  const canDrag = (start: typeof viewport) =>
+    start === viewport &&
+    start.width === tui.terminal.columns &&
+    start.height === tui.terminal.rows &&
+    visible(start) &&
+    ownsLayout();
+  const divider: Component = {
+    render: (width) =>
+      width < DIVIDER_COLUMNS ? [] : Array.from({ length: tui.terminal.rows }, () => theme.fg("borderMuted", "│")),
     invalidate() {},
+    handleMouse(event) {
+      if (event.type !== "press" || event.button !== "left" || !canDrag(viewport)) return;
+      let start: typeof viewport | undefined = viewport;
+      const capturedDrag: Component = {
+        render: () => [],
+        invalidate() {},
+        handleMouse(event) {
+          if (!start || !canDrag(start)) {
+            start = undefined;
+            return;
+          }
+          if (event.type !== "drag" || event.button !== "left") return;
+          const requested = side === "left" ? event.screenX : start.width - DIVIDER_COLUMNS - event.screenX;
+          const nextWidth = clampWidth(start.width, requested);
+          const render = nextWidth !== paneWidth(start.width);
+          preferredWidth = nextWidth;
+          return { handled: true, render };
+        },
+      };
+      return {
+        handled: true,
+        capture: true,
+        render: false,
+        target: {
+          component: capturedDrag,
+          originX: event.screenX - event.x,
+          originY: event.screenY - event.y,
+          width: event.width,
+          height: event.height,
+        },
+      };
+    },
   };
   const mainEntry = { component: main, basis: 0, grow: 1, minSize: 1 };
-  const dividerEntry = { component: divider, basis: 1, shrink: 0 };
+  const dividerEntry = { component: divider, basis: DIVIDER_COLUMNS, shrink: 0 };
   const sideEntry = { component: pane, basis: 1, shrink: 0 };
   return new (class extends tuiCore.HStack {
     constructor() {
@@ -86,13 +151,17 @@ function createPlanSplitLayout(main: Component, pane: Component, side: PlanPaneS
       const paneSlot = this.entries[side === "left" ? 0 : 2];
       const dividerSlot = this.entries[1];
       if (!paneSlot || !dividerSlot) return;
-      const visible = ({ width, height }: { width: number; height: number }) =>
-        width >= MIN_COLUMNS && Math.min(height, tui.terminal.rows) >= MIN_ROWS;
-      paneSlot.visible = (viewport) => {
-        paneSlot.basis = Math.floor((viewport.width - 1) / 3);
+      const updateViewport = ({ width, height }: typeof viewport) => {
+        const rows = Math.min(height, tui.terminal.rows);
+        if (viewport.width !== width || viewport.height !== rows) viewport = { width, height: rows };
         return visible(viewport);
       };
-      dividerSlot.visible = visible;
+      paneSlot.visible = (size) => {
+        if (!updateViewport(size)) return false;
+        paneSlot.basis = paneWidth(size.width);
+        return true;
+      };
+      dividerSlot.visible = updateViewport;
     }
   })();
 }

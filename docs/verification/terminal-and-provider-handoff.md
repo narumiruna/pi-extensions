@@ -12,6 +12,7 @@ A maintainer or tester needs the built local packages in the target terminal, th
 | Starship configuration chat | Check the main menu, inline Configuration summary, editor input, IME, resizing, save/discard, and return to the parent session. Follow the current [configuration chat runtime checklist](../../packages/pi-starship/docs/configuration-chat-runtime.md). |
 | Subagents widget | Check task-first rows, thinking shown only when it differs from the captured parent default, saved display overrides, narrow layouts, and resizing. Rows must remain readable and bounded without changing editor input. |
 | Plan questions | Answer a question, then expand its result. Questions, answers, and notes must remain readable, with complete expanded text when graphemes fit the viewport. |
+| Fullscreen Plan pane | Drag the divider on both sides in a terminal or multiplexer that reports mouse input. The divider must track the drag without moving keyboard focus. Check release, focus loss, and a terminal resize that hides and restores the pane. |
 | Starship individual statuses | With a disposable profile, inspect usage beside Provider/Model, sync on the last optional line, absent-status line collapse, and per-key colors at normal and narrow widths. |
 | Goal waiting display | Review recorded or synthetic `goal_wait` output in collapsed and expanded form with the normal theme and statusline. The footer must stay short, the tool block readable, and full details accessible through expansion and Goal status. |
 

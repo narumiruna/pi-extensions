@@ -37,6 +37,143 @@ function setup(mode?: "regular" | "fullscreen") {
   };
 }
 
+function dividerColumn(frame: readonly string[]) {
+  const index = frame[0]?.indexOf("│") ?? -1;
+  return index + 1;
+}
+
+function mouse(f: ReturnType<typeof setup>, button: number, column: number, suffix = "M", row = 4) {
+  f.send(`\u001b[<${button};${column};${row}${suffix}`);
+}
+
+test.each([
+  { side: "right", initial: 67, wider: 55, min: 76, max: 49 },
+  { side: "left", initial: 34, wider: 46, min: 25, max: 52 },
+] as const)("dragging the $side divider reflows the plan and respects both width limits", async (layout) => {
+  const f = setup();
+  try {
+    const plan = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen";
+    const original = await f.set(layout.side, plan);
+    assert.equal(dividerColumn(original), layout.initial);
+    assert.doesNotMatch(original.join("\n"), /one two three four five six seven eight nine/u);
+
+    mouse(f, 0, layout.initial);
+    mouse(f, 32, layout.wider);
+    assert.equal(dividerColumn(f.frame()), layout.wider, "the divider moves before release");
+    assert.match(f.frame().join("\n"), /one two three four five six seven eight nine/u);
+    mouse(f, 32, layout.side === "left" ? 1 : 100);
+    assert.equal(dividerColumn(f.frame()), layout.min, "the pane keeps at least 24 columns");
+    mouse(f, 32, layout.side === "left" ? 100 : 1);
+    assert.equal(dividerColumn(f.frame()), layout.max, "the conversation keeps at least 48 columns");
+    mouse(f, 0, layout.max, "m");
+    mouse(f, 32, layout.wider);
+    assert.equal(dividerColumn(f.frame()), layout.max, "motion after release cannot resize");
+    assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
+    f.send("\u001b[200~pasted\nline\u001b[201~");
+    assert.equal(f.editor.getExpandedText(), "main draftpasted\nline");
+    assert.ok(f.frame().every((row) => visibleWidth(row) <= 100));
+  } finally {
+    f.stop();
+  }
+});
+
+test("terminal resize clamps the saved width without changing it or continuing an interrupted drag", async () => {
+  const f = setup();
+  try {
+    await f.set("right", "# First plan");
+    mouse(f, 0, 67);
+    mouse(f, 32, 56);
+    assert.equal(dividerColumn(f.frame()), 56);
+    f.resize(100, 20);
+    mouse(f, 32, 73);
+    mouse(f, 0, 73, "m");
+    assert.equal(dividerColumn(f.frame()), 56, "a row-only resize cancels the drag before the next paint");
+    mouse(f, 0, 56);
+
+    f.resize(100, 11);
+    assert.equal(dividerColumn(f.frame()), 0);
+    f.resize(79, 12);
+    assert.equal(dividerColumn(f.frame()), 0);
+    f.resize(80, 12);
+    assert.equal(dividerColumn(f.frame()), 49);
+    f.resize(100, 18);
+    assert.equal(dividerColumn(f.frame()), 56);
+    mouse(f, 32, 73);
+    mouse(f, 0, 73, "m");
+    assert.equal(dividerColumn(await f.set("right", "# Revised plan")), 56);
+    assert.equal(dividerColumn(await f.set("off")), 0);
+    assert.equal(dividerColumn(await f.set("right")), 67);
+  } finally {
+    f.stop();
+  }
+});
+
+test("only a left-button press on the visible divider enables a resize", async () => {
+  const f = setup();
+  try {
+    await f.set("right");
+    mouse(f, 1, 67);
+    mouse(f, 33, 56);
+    mouse(f, 1, 56, "m");
+    mouse(f, 0, 60);
+    mouse(f, 32, 67);
+    mouse(f, 0, 67, "m");
+    assert.equal(dividerColumn(f.frame()), 67);
+
+    const input = new Input();
+    const overlay = f.terminal.fullscreen.showOverlay(input, { width: 20, anchor: "top-right", offsetX: -25 });
+    try {
+      f.frame();
+      mouse(f, 0, 67, "M", 1);
+      mouse(f, 32, 56, "M", 1);
+      mouse(f, 0, 56, "m", 1);
+      f.send("z");
+      assert.equal(input.getValue(), "z");
+    } finally {
+      overlay.hide();
+    }
+    assert.equal(dividerColumn(f.frame()), 67, "an overlay covering the divider gets the press");
+
+    mouse(f, 0, 67);
+    f.send("\u001b[O");
+    mouse(f, 32, 67);
+    mouse(f, 32, 56);
+    assert.equal(dividerColumn(f.frame()), 67, "focus loss ends the gesture even without release");
+    assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
+    mouse(f, 0, 67);
+    mouse(f, 32, 56);
+    mouse(f, 0, 56, "m");
+    assert.equal(dividerColumn(f.frame()), 56, "a new press starts a new gesture");
+  } finally {
+    f.stop();
+  }
+});
+
+test("a replaced layout cannot receive further resize updates from its captured drag", async () => {
+  const f = setup();
+  try {
+    const setter = vi.spyOn(f.terminal.fullscreen, "setLayoutRoot");
+    await f.set("right");
+    const originalSplit = setter.mock.calls[0]?.[0];
+    assert.ok(originalSplit);
+    mouse(f, 0, 67);
+    mouse(f, 32, 56);
+    assert.equal(dividerColumn(f.frame()), 56);
+    f.terminal.fullscreen.setLayoutRoot(new Text("Foreign layout", 0, 0));
+    mouse(f, 32, 70);
+    mouse(f, 0, 70, "m");
+    assert.match(f.frame().join("\n"), /Foreign layout/u);
+    f.terminal.fullscreen.setLayoutRoot(originalSplit);
+    assert.equal(dividerColumn(f.frame()), 56, "a detached split cannot change width");
+    f.switchMode("regular");
+    f.switchMode("fullscreen");
+    await Promise.resolve();
+    assert.equal(dividerColumn(f.frame()), 67, "a replacement renderer starts at the default width");
+  } finally {
+    f.stop();
+  }
+});
+
 test("fullscreen split reserves real columns and collapses below either resize threshold", async () => {
   const f = setup();
   try {
@@ -71,37 +208,44 @@ test("fullscreen split reserves real columns and collapses below either resize t
   }
 });
 
-test("right pane stays passive while editor, overlay and transcript keep Pi input", async () => {
+test.each([
+  { side: "left", divider: 34, resized: 45, planColumn: 10, chatColumn: 90 },
+  { side: "right", divider: 67, resized: 56, planColumn: 90, chatColumn: 10 },
+] as const)("the resized $side pane preserves editor, overlay and transcript input", async (layout) => {
   const f = setup();
   const overlayInput = new Input();
   const overlay = f.terminal.fullscreen.showOverlay(overlayInput, { width: 20, anchor: "top-left" });
   try {
     const plan = Array.from({ length: 40 }, (_, index) => `\`plan line ${index}\``).join("\n\n");
-    await f.set("right", plan);
+    await f.set(layout.side, plan);
     assert.equal(f.terminal.host.getFocusedComponent(), overlayInput);
     f.send("z");
     assert.equal(overlayInput.getValue(), "z");
     overlay.hide();
+    mouse(f, 0, layout.divider);
+    mouse(f, 32, layout.resized);
+    mouse(f, 0, layout.resized, "m");
+    assert.equal(dividerColumn(f.frame()), layout.resized);
     assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
     const pasted = "first line\nsecond line";
     f.send(`\u001b[200~${pasted}\u001b[201~`);
     assert.equal(f.editor.getExpandedText(), `main draft${pasted}`);
     const transcriptBefore = f.transcript.scrollTop;
-    for (let index = 0; index < 20; index += 1) f.send("\u001b[<73;90;5M");
+    for (let index = 0; index < 20; index += 1) mouse(f, 73, layout.planColumn);
     assert.match(f.frame().join("\n"), /plan line 39/u);
     assert.equal(f.transcript.scrollTop, transcriptBefore, "pane wheel at bottom must not scroll chat");
-    for (let index = 0; index < 20; index += 1) f.send("\u001b[<72;90;5M");
+    for (let index = 0; index < 20; index += 1) mouse(f, 72, layout.planColumn);
     assert.match(f.frame().join("\n"), /plan line 0/u);
     assert.equal(f.transcript.scrollTop, transcriptBefore, "pane wheel at top must not scroll chat");
     f.send("\u001b[5~");
     assert.ok(f.transcript.scrollTop < transcriptBefore);
     assert.match(f.frame().join("\n"), /plan line 0/u);
     const afterPage = f.transcript.scrollTop;
-    f.send("\u001b[<64;10;5M");
+    mouse(f, 64, layout.chatColumn);
     assert.ok(f.transcript.scrollTop < afterPage);
-    for (let index = 0; index < 6; index += 1) f.send("\u001b[<65;90;5M");
+    for (let index = 0; index < 6; index += 1) mouse(f, 65, layout.planColumn);
     assert.doesNotMatch(f.frame().join("\n"), /plan line 0\b/u);
-    assert.match((await f.set("right", "# Replaced plan")).join("\n"), /Replaced plan/u);
+    assert.match((await f.set(layout.side, "# Replaced plan")).join("\n"), /Replaced plan/u);
     assert.equal(f.editor.getExpandedText(), `main draft${pasted}`);
   } finally {
     overlay.hide();

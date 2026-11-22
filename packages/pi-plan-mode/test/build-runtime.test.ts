@@ -187,6 +187,12 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     );
     await runner.emit({ type: "agent_settled", aborted: false });
     assert.match(host.render().map(stripTerminalSequences).join("\n"), /│.*Generated-runtime fix/u);
+    const dividerColumn = () => stripTerminalSequences(host?.render()[0] ?? "").indexOf("│") + 1;
+    assert.equal(dividerColumn(), 67);
+    host.send("\u001b[<0;67;4M");
+    host.send("\u001b[<32;56;4M");
+    host.send("\u001b[<0;56;4m");
+    assert.equal(dividerColumn(), 56);
     assert.deepEqual(errors, []);
   } finally {
     try {
