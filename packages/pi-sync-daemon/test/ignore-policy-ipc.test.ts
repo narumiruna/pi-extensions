@@ -5,11 +5,11 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
-import { DaemonConnection } from "../src/client.js";
+import type { DaemonConnection } from "../src/client.js";
 import { DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
 import { createEngineService } from "../src/engine-service.js";
 import type { Callback, ClientFacts } from "../src/protocol.js";
-import { startServer } from "../src/server.js";
+import { withRpcServer } from "./rpc-server-fixture.js";
 
 async function fixture(
   available: boolean,
@@ -55,7 +55,6 @@ async function fixture(
     await fs.writeFile(path.join(root, "notes.md"), "local-only fixture\n");
     const service = createEngineService(root, available);
     try {
-      const server = await startServer(root, service.execute);
       const facts: ClientFacts = {
         id: randomUUID(),
         generation: randomUUID(),
@@ -66,11 +65,8 @@ async function fixture(
         idle: true,
       };
       let onCallback = async (request: Callback): Promise<boolean> => assert.fail(`Unexpected ${request.kind}`);
-      const connection = new DaemonConnection(server.paths, server.identity, facts, {
-        callback: (request) => onCallback(request),
-      });
-      try {
-        await connection.attach();
+      await withRpcServer(root, service.execute, async ({ createConnection }) => {
+        const connection = await createConnection(facts, { callback: (request) => onCallback(request) }).attach();
         await run({
           root,
           settingsPath,
@@ -81,13 +77,7 @@ async function fixture(
             onCallback = callback;
           },
         });
-      } finally {
-        try {
-          await connection.dispose();
-        } finally {
-          await server.close();
-        }
-      }
+      });
     } finally {
       await service.hooks.close();
     }

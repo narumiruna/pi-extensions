@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
+import { npmInvocation } from "../scripts/npm-invocation.mjs";
 
 const { runBuilds } = (await import(pathToFileURL(resolve("scripts/run-builds.mjs")).href)) as {
   runBuilds(options: {
@@ -23,7 +24,7 @@ async function fixture(run: (root: string) => Promise<void>) {
       JSON.stringify({ private: true, workspaces: ["packages/*"], scripts: { build: manifest.scripts.build } }),
     );
     await mkdir(join(root, "scripts"));
-    for (const script of ["run-builds.mjs", "workspace-graph.mjs"]) {
+    for (const script of ["npm-invocation.mjs", "run-builds.mjs", "workspace-graph.mjs"]) {
       await copyFile(resolve("scripts", script), join(root, "scripts", script));
     }
     await mkdir(join(root, "node_modules"));
@@ -85,16 +86,7 @@ await fs.appendFile(new URL("../../order.log", import.meta.url), ${JSON.stringif
 }
 
 function build(root: string, command = "build") {
-  const npm = process.env.npm_execpath;
-  return spawnSync(
-    npm ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm",
-    npm ? [npm, "run", command] : ["run", command],
-    {
-      cwd: root,
-      env: process.env,
-      encoding: "utf8",
-    },
-  );
+  return spawnSync(...npmInvocation(["run", command]), { cwd: root, encoding: "utf8" });
 }
 
 test("root builds cold dependencies before alphabetically earlier consumers, once, through no-build packages", async () => {

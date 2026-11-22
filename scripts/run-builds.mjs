@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { expandDependencies, orderDependenciesFirst, readWorkspaces } from "./workspace-graph.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -20,10 +21,8 @@ export function runBuilds({ root = repositoryRoot, workspaceNames, env = process
   const ordered = orderDependenciesFirst(workspaces, selected).filter(
     (name) => workspaceByName.get(name).hasBuildScript,
   );
-  const command = env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
-  const prefix = env.npm_execpath ? [env.npm_execpath] : [];
   for (const name of ordered) {
-    const result = execute(command, [...prefix, "--workspace", name, "run", "build"], {
+    const result = execute(...npmInvocation(["--workspace", name, "run", "build"], env), {
       cwd: root,
       stdio: "inherit",
       env,

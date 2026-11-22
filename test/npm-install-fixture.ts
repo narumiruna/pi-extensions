@@ -5,10 +5,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { npmInvocation } from "../scripts/npm-invocation.mjs";
 
 export const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const npmCli =
-  process.env.npm_execpath ?? path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js");
 const policy = readFileSync(path.join(repositoryRoot, ".npmrc"), "utf8");
 const markerScript = "node -e \"require('node:fs').writeFileSync('marker', 'executed')\"";
 
@@ -114,11 +113,11 @@ export async function createNpmRegistry() {
     return cwd;
   }
 
-  function command(cwd: string, args: string[], overrides: NodeJS.ProcessEnv = {}): Promise<CommandResult> {
+  function run(cwd: string, environment: NodeJS.ProcessEnv, file: string, args: string[]): Promise<CommandResult> {
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, args, {
+      const child = spawn(file, args, {
         cwd,
-        env: { ...env, ...overrides },
+        env: environment,
         detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -159,9 +158,13 @@ export async function createNpmRegistry() {
     registry,
     requests,
     fixture,
-    command,
+    command: (cwd: string, args: string[], overrides?: NodeJS.ProcessEnv) =>
+      run(cwd, { ...env, ...overrides }, process.execPath, args),
     cancelCommands,
-    npm: (cwd: string, args: string[], overrides?: NodeJS.ProcessEnv) => command(cwd, [npmCli, ...args], overrides),
+    npm: (cwd: string, args: string[], overrides?: NodeJS.ProcessEnv) => {
+      const environment = { ...env, ...overrides };
+      return run(cwd, environment, ...npmInvocation(args, environment));
+    },
     lockedVersion: (cwd: string, name = "policy-plain") =>
       JSON.parse(readFileSync(path.join(cwd, "package-lock.json"), "utf8")).packages[`node_modules/${name}`]?.version as
         | string

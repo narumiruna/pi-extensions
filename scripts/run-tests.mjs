@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { changedFilesSince, selectAffectedTests } from "./select-affected-tests.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,14 +49,7 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
   }
 
   if (env.PI_EXTENSIONS_BUILD_READY !== "1") {
-    const npmCli =
-      env.npm_execpath ||
-      (process.platform === "win32"
-        ? path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js")
-        : undefined);
-    const command = npmCli ? process.execPath : "npm";
-    const args = npmCli ? [npmCli, "run", "build"] : ["run", "build"];
-    const status = run("Build", command, args);
+    const status = run("Build", ...npmInvocation(["run", "build"], env));
     if (status !== 0) return status;
   } else log("[test timing] Build: reused successful prerequisite output");
 

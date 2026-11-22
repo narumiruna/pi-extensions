@@ -8,6 +8,16 @@
   "files": {
     "includes": ["**", "!deprecated", "!package-lock.json"]
   },
+  "overrides": [
+    {
+      "includes": ["scripts/**/*.mjs", ".github/scripts/**/*.mjs", "!scripts/npm-invocation.mjs"],
+      "plugins": ["./scripts/lint/use-npm-invocation.grit"]
+    },
+    {
+      "includes": ["packages/pi-sync-daemon/test/**/*.ts"],
+      "plugins": ["./scripts/lint/use-rpc-server-fixture.grit"]
+    }
+  ],
   "formatter": {
     "indentStyle": "space",
     "lineWidth": 120,

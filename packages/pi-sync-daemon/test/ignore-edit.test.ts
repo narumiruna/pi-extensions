@@ -4,11 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "vitest";
-import { DaemonConnection } from "../src/client.js";
 import { DEFAULT_IGNORE_CREATION_RECORD, MAX_IGNORE_BYTES } from "../src/engine/ignore/ignore-source.js";
 import { createEngineService } from "../src/engine-service.js";
+import { runtimePaths } from "../src/identity.js";
 import type { ClientFacts, Execution } from "../src/protocol.js";
-import { startServer } from "../src/server.js";
+import { withRpcServer } from "./rpc-server-fixture.js";
 
 function setup(directory: string, filename?: string) {
   return {
@@ -170,16 +170,16 @@ test("RPC refuses saves without touching unchanged, replaced or missing rules", 
   const { root, service, target, settingsPath } = await fixture();
   await fs.writeFile(target, "# original\n");
   const originalSettings = await fs.readFile(settingsPath);
-  const server = await startServer(root, service.execute);
+  const paths = await runtimePaths(root);
+  onTestFinished(() => fs.rm(paths.directory, { recursive: true, force: true }));
   const callbacks: string[] = [];
-  const connection = new DaemonConnection(server.paths, server.identity, client(root), {
-    callback: async ({ kind }) => {
-      callbacks.push(kind);
-      return false;
-    },
-  });
-  try {
-    await connection.attach();
+  await withRpcServer(root, service.execute, async ({ createConnection }) => {
+    const connection = await createConnection(client(root), {
+      callback: async ({ kind }) => {
+        callbacks.push(kind);
+        return false;
+      },
+    }).attach();
     assert.deepEqual(await connection.run("ignore.capabilities", {}), { available: false });
     const request = proposal(await connection.run("ignore.read", { setup: "home" }));
     const unavailable = /saves are unavailable.*edit the existing rule file manually/iu;
@@ -194,15 +194,5 @@ test("RPC refuses saves without touching unchanged, replaced or missing rules", 
     assert.deepEqual(await fs.readFile(settingsPath), originalSettings);
     assert.deepEqual(await fs.readdir(root), ["pi-sync.json"]);
     assert.deepEqual(callbacks, []);
-  } finally {
-    try {
-      await connection.dispose();
-    } finally {
-      try {
-        await server.close();
-      } finally {
-        await fs.rm(server.paths.directory, { recursive: true, force: true });
-      }
-    }
-  }
+  });
 });

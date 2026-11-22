@@ -5,13 +5,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test, vi } from "vitest";
-import { DaemonConnection } from "../src/client.js";
 import { isDeniedPath } from "../src/engine/paths.js";
 import { withLockedLocalConfigDocument } from "../src/engine/settings/config-file.js";
 import { createEngineService } from "../src/engine-service.js";
 import { runtimePaths } from "../src/identity.js";
 import type { ClientFacts, Execution } from "../src/protocol.js";
-import { startServer } from "../src/server.js";
+import { type RpcFixture, withRpcServer } from "./rpc-server-fixture.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
@@ -322,22 +321,14 @@ test("reopening the authenticated IPC service keeps Not now scoped to the setup"
   if (process.platform !== "win32") await fs.chmod(settingsPath, 0o640);
   const marker = markerPath(root);
   assert.ok(isDeniedPath(path.basename(marker)));
-  async function usingService(execute: typeof service.execute, run: (connection: DaemonConnection) => Promise<void>) {
-    const server = await startServer(root, execute);
-    const connection = new DaemonConnection(server.paths, server.identity, client(root), {
+  const connect = ({ createConnection }: RpcFixture) =>
+    createConnection(client(root), {
       callback: async ({ kind }) => {
         throw new Error(`Unexpected callback: ${kind}`);
       },
-    });
-    try {
-      await connection.attach();
-      await run(connection);
-    } finally {
-      await connection.dispose();
-      await server.close();
-    }
-  }
-  await usingService(service.execute, async (connection) => {
+    }).attach();
+  await withRpcServer(root, service.execute, async (rpc) => {
+    const connection = await connect(rpc);
     assert.deepEqual(await connection.run("ignore.capabilities", {}), { available: false });
     const setup = { setup: "home" };
     const first = token(await connection.run(OFFER, setup));
@@ -359,7 +350,8 @@ test("reopening the authenticated IPC service keeps Not now scoped to the setup"
   assert.deepEqual((await fs.readdir(root)).sort(), [path.basename(marker), ".syncignore", "pi-sync.json"]);
   const reopened = createEngineService(root);
   onTestFinished(() => reopened.hooks.close());
-  await usingService(reopened.execute, async (connection) => {
+  await withRpcServer(root, reopened.execute, async (rpc) => {
+    const connection = await connect(rpc);
     assert.equal(await connection.run(OFFER, { setup: "home" }), null);
     settings.activeSyncSetup = "work";
     await writeSettings();

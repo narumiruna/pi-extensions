@@ -1,0 +1,5 @@
+language js
+
+`try { $... } finally { $... await $client.dispose($...); $... await $server.close($...); $... }` where {
+  register_diagnostic(span=$client, message="Use withRpcServer() from rpc-server-fixture.ts so a failed client disposal cannot skip server shutdown.")
+}

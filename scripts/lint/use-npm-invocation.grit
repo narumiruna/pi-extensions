@@ -1,0 +1,14 @@
+language js
+
+$launch where {
+  $launch <: or {
+    `$env.npm_execpath`,
+    `$env["npm_execpath"]`,
+    `"npm.cmd"`,
+    `spawn("npm", $...)`,
+    `spawnSync("npm", $...)`,
+    `execFile("npm", $...)`,
+    `execFileSync("npm", $...)`
+  },
+  register_diagnostic(span=$launch, message="Use npmInvocation() from scripts/npm-invocation.mjs to launch npm without platform-specific shims.")
+}

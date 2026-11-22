@@ -6,10 +6,11 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { test, vi } from "vitest";
 import { DAEMON_BUILD_VERSION } from "../src/build-version.js";
-import { DaemonConnection, DaemonError, requestDaemon } from "../src/client.js";
+import { DaemonError, requestDaemon } from "../src/client.js";
 import { daemonPaths, privateDirectory, readIdentity, runtimePaths } from "../src/identity.js";
 import { type ClientFacts, type Execute, type JobView, operationPrefix, type PollReply } from "../src/protocol.js";
 import { startServer } from "../src/server.js";
+import { withRpcServer } from "./rpc-server-fixture.js";
 
 function facts(root: string): ClientFacts {
   return {
@@ -168,23 +169,18 @@ test("a cancellation that arrives before dispatch prevents execution", () =>
 test("client callbacks preserve request identity and their results", () =>
   fixture(async (root) => {
     const execute: Execute = async (_operation, _payload, context) => context.request("confirm", { title: "Review" });
-    const server = await startServer(root, execute);
-    const peer = facts(root);
     const seen: string[] = [];
-    const connection = await new DaemonConnection(server.paths, server.identity, peer, {
-      callback: async (callback) => {
-        seen.push(callback.id);
-        assert.deepEqual(callback.payload, { title: "Review" });
-        return true;
-      },
-    }).attach();
-    try {
+    await withRpcServer(root, execute, async ({ createConnection }) => {
+      const connection = await createConnection(facts(root), {
+        callback: async (callback) => {
+          seen.push(callback.id);
+          assert.deepEqual(callback.payload, { title: "Review" });
+          return true;
+        },
+      }).attach();
       assert.equal(await connection.run("review", {}), true);
       assert.equal(new Set(seen).size, 1);
-    } finally {
-      await connection.dispose();
-      await server.close();
-    }
+    });
   }));
 
 test("session-generation changes are not accepted as an ordinary update", () =>
@@ -639,39 +635,36 @@ test("disposing a client cancels an open review and drains acknowledged queue re
       granted = resolve;
     });
     let released = false;
-    const server = await startServer(root, async (_operation, _payload, execution) => {
+    const execute: Execute = async (_operation, _payload, execution) => {
       await execution.request("queue-acquire", {});
       try {
         return await execution.request("confirm", {});
       } finally {
         await execution.request("queue-release", {});
       }
-    });
-    const connection = await new DaemonConnection(server.paths, server.identity, facts(root), {
-      callback: async (callback, signal) => {
-        if (callback.kind === "queue-acquire") return true;
-        if (callback.kind === "queue-release") {
-          released = true;
-          return true;
-        }
-        granted();
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
-        );
-      },
-    }).attach();
-    const job = connection.run("review", {}).then(
-      () => undefined,
-      (error) => error,
-    );
-    try {
+    };
+    await withRpcServer(root, execute, async ({ createConnection, server }) => {
+      const connection = await createConnection(facts(root), {
+        callback: async (callback, signal) => {
+          if (callback.kind === "queue-acquire") return true;
+          if (callback.kind === "queue-release") {
+            released = true;
+            return true;
+          }
+          granted();
+          return new Promise((_resolve, reject) =>
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+          );
+        },
+      }).attach();
+      const job = connection.run("review", {}).then(
+        () => undefined,
+        (error) => error,
+      );
       await ready;
       await connection.dispose();
       assert.equal(released, true);
       assert.ok((await job) instanceof Error);
       assert.deepEqual(server.participants(), []);
-    } finally {
-      await connection.dispose();
-      await server.close();
-    }
+    });
   }));

@@ -3,6 +3,7 @@ import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, test } from "vitest";
+import { npmInvocation } from "../scripts/npm-invocation.mjs";
 
 interface PackageManifest {
   name: string;
@@ -84,8 +85,6 @@ const activeExtensions = readdirSync("packages", { withFileTypes: true })
 
 let packedPackages = new Map<string, PackedPackage>();
 beforeAll(() => {
-  const npmCli = process.env.npm_execpath;
-  const command = npmCli ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
   const args = [
     "pack",
     ...activeExtensions.flatMap(({ name }) => ["--workspace", name]),
@@ -94,10 +93,7 @@ beforeAll(() => {
     "--json",
   ];
   // Inspect completed builds without prepack rebuilding shared dependencies during consumer tests.
-  const result = spawnSync(command, npmCli ? [npmCli, ...args] : args, {
-    encoding: "utf8",
-    shell: !npmCli && process.platform === "win32",
-  });
+  const result = spawnSync(...npmInvocation(args), { encoding: "utf8" });
   packedPackages = inspectPackedPackages(
     result,
     activeExtensions.map(({ name }) => name),

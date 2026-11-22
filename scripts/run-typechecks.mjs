@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { runBuilds } from "./run-builds.mjs";
 import { selectStagedTypechecks, stagedFiles } from "./select-staged-typechecks.mjs";
 import { readWorkspaces } from "./workspace-graph.mjs";
@@ -73,9 +74,7 @@ function runWorkspaceTypechecks(workspaceNames) {
 }
 
 function runNpm(args) {
-  const command = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
-  const commandArgs = process.env.npm_execpath ? [process.env.npm_execpath, ...args] : args;
-  runCommand(command, commandArgs);
+  runCommand(...npmInvocation(args));
 }
 
 function runCommand(command, args, cwd = root) {

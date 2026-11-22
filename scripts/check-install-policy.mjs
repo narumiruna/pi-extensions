@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { npmInvocation } from "./npm-invocation.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const expectedNpm = "11.20.0";
@@ -14,7 +15,7 @@ const expectedConfig = {
 };
 
 function npm(args) {
-  const result = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", args, {
+  const result = spawnSync(...npmInvocation(args), {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

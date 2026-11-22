@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { npmInvocation } from "./npm-invocation.mjs";
 
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-
-function run(command, args) {
-  const result = spawnSync(command, args, { stdio: "inherit" });
+function runNpm(args) {
+  const result = spawnSync(...npmInvocation(args), { stdio: "inherit" });
   if (result.error) {
     console.error(result.error.message);
     process.exit(1);
@@ -30,16 +29,16 @@ function requireCleanWorktree() {
 
 function updateLock() {
   requireCleanWorktree();
-  run(npmCommand, ["exec", "--", "npm-check-updates", "--workspaces", "--root", "-u"]);
-  run(npmCommand, ["install", "--package-lock-only", "--ignore-scripts"]);
+  runNpm(["exec", "--", "npm-check-updates", "--workspaces", "--root", "-u"]);
+  runNpm(["install", "--package-lock-only", "--ignore-scripts"]);
 }
 
 function verifyUpdate() {
-  run(npmCommand, ["ci"]);
-  run(npmCommand, ["--workspaces", "--if-present", "run", "build:web"]);
-  run(npmCommand, ["run", "check"]);
-  run(npmCommand, ["test"]);
-  run(npmCommand, ["pack", "--workspaces", "--dry-run"]);
+  runNpm(["ci"]);
+  runNpm(["--workspaces", "--if-present", "run", "build:web"]);
+  runNpm(["run", "check"]);
+  runNpm(["test"]);
+  runNpm(["pack", "--workspaces", "--dry-run"]);
 }
 
 function printUsage() {

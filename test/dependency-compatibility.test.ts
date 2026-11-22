@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
+import { npmInvocation } from "../scripts/npm-invocation.mjs";
 
 const { dependencyProblems } = (await import(pathToFileURL(resolve("scripts/check-dependencies.mjs")).href)) as {
   dependencyProblems(options: {
@@ -32,18 +33,12 @@ test("the root dependency command exits nonzero for a mismatch and succeeds afte
   await fixture(async (root) => {
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
     await mkdir(join(root, "scripts"));
-    for (const script of ["check-dependencies.mjs", "workspace-graph.mjs"]) {
+    for (const script of ["check-dependencies.mjs", "npm-invocation.mjs", "workspace-graph.mjs"]) {
       await copyFile(resolve("scripts", script), join(root, "scripts", script));
     }
     await json(root, "node_modules/companion/package.json", { name: "companion", version: "1.2.0" });
     await cp(resolve("node_modules/semver"), join(root, "node_modules/semver"), { recursive: true });
-    const npm = process.env.npm_execpath;
-    const check = () =>
-      spawnSync(
-        npm ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm",
-        [...(npm ? [npm] : []), "run", "check:dependencies"],
-        { cwd: root, env: process.env, encoding: "utf8" },
-      );
+    const check = () => spawnSync(...npmInvocation(["run", "check:dependencies"]), { cwd: root, encoding: "utf8" });
     for (const [dev, peer, valid] of [
       ["1.2.0", "1.0.4", false],
       ["1.2.0", "^1.2.0", true],

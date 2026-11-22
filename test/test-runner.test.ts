@@ -235,7 +235,9 @@ function cliFixture() {
   const scripts = path.join(root, "scripts");
   mkdirSync(scripts);
   const entry = path.join(scripts, "run-tests.mjs");
-  copyFileSync(path.join(repositoryRoot, "scripts/run-tests.mjs"), entry);
+  for (const script of ["npm-invocation.mjs", "run-tests.mjs"]) {
+    copyFileSync(path.join(repositoryRoot, "scripts", script), path.join(scripts, script));
+  }
   // Early validation must run before either selector or any external command.
   writeFileSync(
     path.join(scripts, "select-affected-tests.mjs"),

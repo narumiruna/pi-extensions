@@ -6,10 +6,10 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, test } from "vitest";
+import { npmInvocation } from "../scripts/npm-invocation.mjs";
 
 const repositoryRoot = process.cwd();
 const kitName = "@narumitw/pi-tui-kit";
-const npmCli = path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js");
 const versionCommand = JSON.parse(readFileSync(path.join(repositoryRoot, "package.json"), "utf8")).scripts[
   "version-packages"
 ] as string;
@@ -29,7 +29,7 @@ describe("Version PR command with an unpublished npm workspace Kit", { concurren
 
   async function npm(args: string[]) {
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, [npmCli, ...args], {
+      const child = spawn(...npmInvocation(args, env), {
         cwd: fixture,
         env,
         detached: process.platform !== "win32",

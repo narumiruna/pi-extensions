@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
+import { npmInvocation } from "../scripts/npm-invocation.mjs";
 import { createNpmRegistry, expectSuccess, repositoryRoot } from "./npm-install-fixture.js";
 
-const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+const npmVersion = execFileSync(...npmInvocation(["--version"]), { encoding: "utf8" }).trim();
 let registry: Awaited<ReturnType<typeof createNpmRegistry>>;
 beforeAll(async () => {
   registry = await createNpmRegistry();
@@ -207,6 +208,7 @@ test("age filtering does not audit a young existing lock during maintenance or c
 function preflightFixture() {
   const cwd = registry.fixture({ allowScripts: { "policy-script": false } });
   mkdirSync(path.join(cwd, "scripts"));
+  copyFileSync(path.join(repositoryRoot, "scripts/npm-invocation.mjs"), path.join(cwd, "scripts/npm-invocation.mjs"));
   // Exercise policy checks with the test runtime, not the repository's CI pins.
   // The version guards remain active and are tested with explicit mismatches below.
   const script = readFileSync(path.join(repositoryRoot, "scripts/check-install-policy.mjs"), "utf8");
@@ -307,35 +309,25 @@ test("preflight accepts the validated baseline and ignored lower-priority allow-
   }
 });
 
-test("preflight fails on an unexpected npm version without logging configuration", async () => {
+function preflightWithNpmCli(source: string) {
   const cwd = preflightFixture();
-  const bin = path.join(cwd, "bin");
-  mkdirSync(bin);
-  writeFileSync(path.join(bin, "npm"), "#!/usr/bin/env node\nconsole.log('0.0.0');\n");
-  chmodSync(path.join(bin, "npm"), 0o755);
-  const result = await registry.command(cwd, ["scripts/check-install-policy.mjs"], {
-    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-  });
+  const cli = path.join(cwd, "fixture-npm.mjs");
+  writeFileSync(cli, source);
+  return registry.command(cwd, ["scripts/check-install-policy.mjs"], { npm_execpath: cli });
+}
+
+test("preflight fails on an unexpected npm version without logging configuration", async () => {
+  const result = await preflightWithNpmCli("console.log('0.0.0');\n");
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /bundled npm/u);
   assert.equal(result.stdout, "");
 });
 
 test("preflight refuses unreadable npm policy without leaking command output", async () => {
-  const cwd = preflightFixture();
-  const bin = path.join(cwd, "bin");
-  mkdirSync(bin);
-  writeFileSync(
-    path.join(bin, "npm"),
-    `#!/usr/bin/env node
+  const result = await preflightWithNpmCli(`
 if (process.argv.includes('--version')) console.log(${JSON.stringify(npmVersion)});
 else { console.error('fixture-secret-do-not-log'); process.exitCode = 1; }
-`,
-  );
-  chmodSync(path.join(bin, "npm"), 0o755);
-  const result = await registry.command(cwd, ["scripts/check-install-policy.mjs"], {
-    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-  });
+`);
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /Could not read npm installation policy/u);
   assert.doesNotMatch(result.stdout + result.stderr, /fixture-secret-do-not-log/u);
