@@ -2,11 +2,19 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  DefaultResourceLoader,
+  ExtensionRunner,
+  type ExtensionUIContext,
+  initTheme,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
+import { createPlanPaneHost } from "./plan-pane-support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
@@ -66,6 +74,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   let runner: ExtensionRunner | undefined;
+  let host: ReturnType<typeof createPlanPaneHost> | undefined;
   try {
     await builder.buildRuntime({ outputDirectory: output });
     await mkdir(agentDir, { recursive: true });
@@ -160,24 +169,30 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       "read",
       "mcp__docs__read",
     ]);
-    runner.setUIContext((mockContext.ctx as { ui: never }).ui, "tui");
+    initTheme("dark");
+    host = createPlanPaneHost();
+    const { ui } = mockContext.ctx as { ui: ExtensionUIContext };
+    runner.setUIContext({ ...ui, setWidget: host.setWidget }, "tui");
     await command.handler("start", runner.createCommandContext());
+    assert.match(host.render().map(stripTerminalSequences).join("\n"), /No completed plan yet\./u);
     const complete = runner.getToolDefinition("plan_mode_complete");
     assert.ok(complete);
     const signal = new AbortController().signal;
     await complete.execute(
       "complete-generated-plan",
-      { plan: "# Plan\n\nImplement the generated-runtime fix." },
+      { plan: "# Plan\n\nGenerated-runtime fix." },
       signal,
       undefined,
       runner.createToolContext("complete-generated-plan", signal),
     );
     await runner.emit({ type: "agent_settled", aborted: false });
+    assert.match(host.render().map(stripTerminalSequences).join("\n"), /│.*Generated-runtime fix/u);
     assert.deepEqual(errors, []);
   } finally {
     try {
       await runner?.emit({ type: "session_shutdown", reason: "quit" });
     } finally {
+      host?.stop();
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       await rm(root, { force: true, recursive: true });

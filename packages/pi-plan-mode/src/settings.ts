@@ -23,6 +23,7 @@ export const PLAN_MODE_THINKING_LEVELS = [
 export const IMPLEMENTATION_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const IMPLEMENTATION_PLAN_RETENTIONS = ["clear-on-start", "clear-after-first-run", "keep"] as const;
 export const DEFAULT_PLAN_EXPORT_PATH = "PLAN.md";
+export const PLAN_PANE_PLACEMENTS = ["right", "left", "off"] as const;
 const MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
 const BASE_KEYS = new Set([
   ..."abcdefghijklmnopqrstuvwxyz0123456789",
@@ -82,6 +83,7 @@ const MAX_PLAN_EXPORT_PATH_LENGTH = 4096;
 export type PlanModeThinkingLevel = (typeof PLAN_MODE_THINKING_LEVELS)[number];
 export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS)[number];
 export type PlanModeFixedThinkingLevel = (typeof IMPLEMENTATION_THINKING_LEVELS)[number];
+export type PlanPanePlacement = (typeof PLAN_PANE_PLACEMENTS)[number];
 export interface PlanModeSettings {
   thinkingLevel: PlanModeThinkingLevel;
   defaultPlanTools?: string[];
@@ -91,6 +93,7 @@ export interface PlanModeSettings {
   defaultPlanExportPath?: string;
   safeSubcommands?: SafeSubcommands;
   toggleShortcut?: KeyId;
+  planPane?: PlanPanePlacement;
 }
 export interface PlanModeSettingsPatch {
   thinkingLevel?: PlanModeThinkingLevel;
@@ -100,6 +103,7 @@ export interface PlanModeSettingsPatch {
   defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel | null;
   defaultPlanExportPath?: string | null;
   toggleShortcut?: KeyId | null;
+  planPane?: PlanPanePlacement;
 }
 export interface UpdatePlanModeSettingsOptions {
   settingsPath?: string;
@@ -170,6 +174,11 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
     const toggleShortcut = normalizeKeyId(Reflect.get(value, "toggleShortcut"));
     if (!toggleShortcut) return undefined;
     settings.toggleShortcut = toggleShortcut;
+  }
+  if (Object.hasOwn(value, "planPane")) {
+    const placement = normalizePlanPanePlacement(Reflect.get(value, "planPane"));
+    if (!placement) return undefined;
+    settings.planPane = placement;
   }
   if (Object.hasOwn(value, "safeSubcommands")) {
     const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
@@ -326,6 +335,7 @@ export function updatePlanModeSettings(
     else if (patch.toggleShortcut !== undefined) {
       updated.toggleShortcut = patch.toggleShortcut;
     }
+    if (patch.planPane !== undefined) updated.planPane = patch.planPane;
     const settings = normalizePlanModeSettings(updated);
     if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
     await publishSettings(settingsPath, updated, options.signal, options.beforeRename);
@@ -505,4 +515,12 @@ export function configuredPlanExportPath(settings: PlanModeSettings) {
 
 export function configuredPlanModeToggleShortcut(settings: PlanModeSettings): KeyId | undefined {
   return settings.toggleShortcut;
+}
+
+export function configuredPlanPane(settings: PlanModeSettings): PlanPanePlacement {
+  return settings.planPane ?? "right";
+}
+
+export function normalizePlanPanePlacement(value: unknown): PlanPanePlacement | undefined {
+  return PLAN_PANE_PLACEMENTS.find((placement) => placement === value);
 }

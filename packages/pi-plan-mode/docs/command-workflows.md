@@ -25,11 +25,21 @@ Reopen the selector to refresh newly registered tools.
 Active and ready workflows lock tools and settings; exit and start a new workflow to change the allowlist.
 See [Planning and implementation](../README.md#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
 
+## Managed Markdown drafts
+
+Plan mode admits one draft only for a new workflow using the automatic tool policy. At its first model request, the effective Pi tools named `read`, `write`, and `edit` must all be active, identifiable as native, and directly available. Plan mode does not activate tools. Workflows using `/plan tools` or `defaultPlanTools`, workflows already active before the feature, and workflows that cannot safely create the draft directory stay read-only. Changing tool availability later does not admit a draft to an already frozen workflow. If saving draft admission to the session fails, the next request can retry setup for the same workflow. Plan mode removes only the empty workflow directory it created for the failed admission.
+
+Plan mode creates a private directory under `<Pi agent directory>/pi-plan-mode/drafts/<workflow-uuid>/`. The first native `write` creates `plan.md`; no project file is created. Only direct, active native `write` and `edit` calls with that exact absolute path are admitted. Links, path aliases, nested writes, and same-named extension tools are not allowed. This is a tool policy, not a filesystem sandbox: do not use untrusted extensions, shell overrides, or programs that modify the draft directory while Pi is running. The file queue coordinates operations within one Pi process, not concurrent Pi processes.
+
+Successful writes refresh the fullscreen side pane from the file, not from tool arguments or diffs. The pane also refreshes on restore, after a cancelled mutation settles, and at completion. It does not watch external edits. Native `read` limits the whole draft to 50 KiB and 2,000 lines; Plan mode also requires at most 50,000 JavaScript characters and non-whitespace content for completion. A missing, blank, unreadable, or oversized draft cannot be completed. Update the file and retry `plan_mode_complete({})` in a separate call after all writes finish.
+
+Revisions reuse the same draft. Reload, resume, and tree navigation restore access only for the original Pi session. Historical branches of that workflow see the same mutable file, not historical file versions. A fork in a different session does not inherit write access, but it can still use a completed snapshot. Leaving or finishing the workflow revokes its draft write permission; Plan mode retains the file for historical restoration and does not clean up drafts automatically. Draft contents supplied to tools may also be retained in the Pi transcript.
+
 ## Questionnaires and free discussion
 
 Every new Plan workflow starts with questionnaires enabled.
 In TUI, F2 switches the active workflow between questionnaires and free discussion only while the main editor is idle or that workflow's questionnaire is open.
-It does not leave Plan mode or change its tool policy: file edits and unsafe shell forms remain blocked.
+It does not leave Plan mode or change its tool policy, including whether the model can edit a managed draft.
 If any effective native Pi keybinding uses F2, Plan mode does not register or display F2 and does not choose a replacement key.
 Use **Switch to free discussion** or **Enable questionnaires** in the active `/plan` menu instead, including when a completed plan is ready.
 The widget shows F2 only when available, otherwise the `/plan` entry point.
@@ -80,4 +90,4 @@ A failed export retains the TUI draft for correction or reopens the RPC input; E
 A successful ready-plan export ends Plan mode, restores thinking, and clears the ready state without starting a model turn or changing active tools.
 Saved and active implementation exports preserve their existing state.
 Failed or cancelled exports leave Plan state unchanged.
-Export is an explicit user-requested file mutation, and the resulting file can be read with normal tools; model-initiated Plan-mode writes remain blocked.
+Export is an explicit user-requested file mutation. The exported file is not the managed draft and cannot be changed by native Plan-mode editing calls.

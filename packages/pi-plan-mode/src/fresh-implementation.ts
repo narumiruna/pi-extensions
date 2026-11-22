@@ -67,7 +67,7 @@ export async function startFreshImplementationFromState(
   }
   const initialState = options.getState();
   const savedPlan = initialState.enabled ? undefined : initialState.savedPlan;
-  const plan = (initialState.enabled ? initialState.latestPlan : savedPlan?.plan)?.trim();
+  const plan = initialState.enabled ? initialState.latestPlan : savedPlan?.plan;
   const source = initialState.enabled ? initialState.latestPlanSource : savedPlan?.source;
   if (!plan || !source) {
     ctx.ui.notify("No completed plan is available to implement.", "warning");

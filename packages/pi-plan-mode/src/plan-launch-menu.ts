@@ -84,7 +84,7 @@ export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLau
         lines: [
           "Plan mode uses read-only exploration to understand the project before implementation.",
           "The agent can ask important decision questions, then returns a complete implementation-ready plan.",
-          "File mutation stays blocked until you explicitly choose to implement the completed plan.",
+          "Project files stay read-only until implementation. Eligible workflows can edit a private Markdown draft.",
         ],
         hint: "back",
       }),

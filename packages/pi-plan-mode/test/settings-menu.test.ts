@@ -142,7 +142,7 @@ test("native callable selection rolls back a failed save and preserves unknown f
   });
 });
 
-test("Plan settings show seven flat workflow rows without materializing a missing file", async () => {
+test("Plan settings show the pane default without materializing a missing file", async () => {
   await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
     const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
     await tui.waitForOpen();
@@ -155,6 +155,7 @@ test("Plan settings show seven flat workflow rows without materializing a missin
     assert.match(frame, /Fresh thinking\s+same as plan/);
     assert.match(frame, /Export destination\s+PLAN\.md/);
     assert.match(frame, /Plan mode shortcut\s+none/);
+    assert.match(frame, /Plan pane\s+right/);
     assert.ok(tui.render(34).every((line) => visibleWidth(line) <= 34));
     await assert.rejects(access(settingsPath));
 
@@ -162,6 +163,44 @@ test("Plan settings show seven flat workflow rows without materializing a missin
     await running;
     assert.deepEqual(saved, []);
     await assert.rejects(access(settingsPath));
+  });
+});
+
+test("Plan pane settings cycle and keep the previous placement on save failure", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved, notifications }) => {
+    const original = JSON.stringify({ retained: { value: true } });
+    await writeFile(settingsPath, original);
+    let attempt = 0;
+    const running = showPlanModeSettings(
+      ctx,
+      menuOptions(settingsPath, saved, {
+        updateSettings: async (patch, options) => {
+          if (attempt++ === 0) throw new Error("disk full");
+          return updatePlanModeSettings(patch, options);
+        },
+      }),
+    );
+    try {
+      await tui.waitForOpen();
+      for (let index = 0; index < 7; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      assert.equal(await readFile(settingsPath, "utf8"), original);
+      assert.equal(saved.length, 0);
+      assert.match(tui.render().join("\n"), /Plan pane\s+right/u);
+      assert.match(notifications.at(-1)?.message ?? "", /Could not save/u);
+      for (const planPane of ["left", "off", "right"]) {
+        tui.press("tui.select.confirm");
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        assert.equal(saved.at(-1)?.planPane, planPane);
+        assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { retained: { value: true }, planPane });
+      }
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
   });
 });
 

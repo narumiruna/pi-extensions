@@ -10,6 +10,7 @@ import {
   configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
+  configuredPlanPane,
   normalizePlanModeSettings,
   readPlanModeSettings,
   updatePlanModeSettings,
@@ -36,6 +37,16 @@ test("Plan-mode settings validate inherit and fixed thinking levels", async () =
     });
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Plan pane settings default to right and accept only supported placements", () => {
+  assert.equal(configuredPlanPane({ thinkingLevel: "inherit" }), "right");
+  for (const planPane of ["right", "left", "off"] as const) {
+    assert.deepEqual(normalizePlanModeSettings({ planPane }), { thinkingLevel: "inherit", planPane });
+  }
+  for (const planPane of ["bottom", "RIGHT", true, null, { side: "left" }]) {
+    assert.equal(normalizePlanModeSettings({ planPane }), undefined);
   }
 });
 

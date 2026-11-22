@@ -13,7 +13,7 @@
 
 ## ⚙️ Settings
 
-Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**.
+Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**. In the terminal UI, this screen also includes **Plan pane**.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
 `safeSubcommands` is JSON-only.
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
@@ -35,9 +35,16 @@ The shortcut is disabled when `toggleShortcut` is omitted.
     "kubectl": ["get", "apply"],
     "npm": ["run inspect-custom"]
   },
-  "toggleShortcut": "<your_key>"
+  "toggleShortcut": "<your_key>",
+  "planPane": "right"
 }
 ```
+
+### Plan pane
+
+`planPane` accepts `right` (default), `left`, or `off`. Saves from **Plan pane** take effect immediately, including during an active Plan workflow. Valid edits to the watched user file also take effect; an invalid update does not replace the active settings.
+
+The pane opens on a compatible Pi fullscreen layout without taking keyboard focus. It shows the current managed Markdown draft or a short waiting or error message, then switches to the completed snapshot. Read-only workflows only show completed plans. A changed document is displayed from the top. It closes when Plan mode ends, including when you save a plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
 
 ### Plan helper tools
 
@@ -74,7 +81,7 @@ Pi's `tool_search` can declare a tool without restarting an admitted workflow, b
 
 Allowing a custom tool trusts its effective implementation; Plan mode does not infer its side effects from arguments or annotations.
 Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead.
-Names `edit`, `write`, and `update_plan` stay blocked, and `bash` or `powershell` stays subject to its limited-shell policy, including nested calls and regardless of source metadata.
+The explicit tool list cannot enable `edit`, `write`, or `update_plan`. `bash` and `powershell` stay subject to their limited-shell policy, including nested calls and regardless of source metadata.
 
 A selection accepted through **Choose tools, then start…** or `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes.
 The global setting remains the policy baseline for fresh sessions and sessions without an explicit selection.
@@ -85,7 +92,7 @@ Settings saves immediately, but saved policy names and thinking apply only when 
 Pi's default selection leaves the registered built-ins `grep`, `find`, and `ls` inactive.
 Settings and `/plan tools` label these rows **inactive in Pi**, not **blocked by Plan policy**.
 Pi controls tool activation; `defaultPlanTools` only grants Plan-mode execution permission and never activates tools.
-Built-in `edit` and `write` remain policy-blocked even when active in Pi.
+Built-in `edit` and `write` are not selectable. Only eligible automatic workflows can use them for the [managed draft](./command-workflows.md#managed-markdown-drafts).
 
 Change the Pi settings used by the current session, **not** `pi-plan-mode.json`.
 For the CLI, the user file is normally `~/.pi/agent/settings.json`, or `$PI_CODING_AGENT_DIR/settings.json` when configured.

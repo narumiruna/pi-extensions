@@ -7,8 +7,9 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 ## ✨ Features
 
 - Starts and manages Plan mode through `/plan`, `/plan start`, or `/plan <prompt>`.
-- Blocks mutations, inactive helpers, and unsafe shell forms while keeping helper schemas stable.
-- Switches between structured questionnaires and free discussion without leaving read-only planning.
+- Keeps project files read-only and lets eligible workflows edit one private Markdown draft with Pi's native tools.
+- Shows the latest draft in the fullscreen side pane and snapshots it on completion.
+- Switches between structured questionnaires and free discussion without changing tool permissions.
 - Uses explicit completion for a decision-ready plan.
 - Reviews the complete plan before implementation, export, save, further planning, or discard.
 - Implements in the planning session or a fresh linked session with the approved plan.
@@ -54,7 +55,7 @@ Plan mode keeps exploration and implementation on opposite sides of an explicit 
 ```mermaid
 flowchart LR
     start["Start: /plan or /plan with a prompt"]
-    start --> explore["Explore safely: inspect and clarify"]
+    start --> explore["Inspect, clarify, and update the managed draft"]
     explore --> complete["Complete the plan with plan_mode_complete"]
     complete --> review["Review the ready plan: use /plan in discussion"]
     review -->|Revise| explore
@@ -64,7 +65,7 @@ flowchart LR
     review -->|Export| exported["Markdown file"]
 ```
 
-During planning, the agent can inspect the project and ask material questions, but Plan mode blocks editing tools and unsafe shell forms. Implementation starts only after the plan is complete and you choose a handoff:
+During planning, the agent can inspect the project, ask material questions, and update a managed draft when available. It cannot use native editing tools on project files. Implementation starts only after you review the completed plan and choose a handoff:
 
 ```mermaid
 sequenceDiagram
@@ -119,7 +120,7 @@ See [command workflows](./docs/command-workflows.md) for tool selection, busy-st
 
 ## 🔒 Security and privacy
 
-While Plan mode is active, the policy blocks built-in editing tools and instructs the agent not to edit files or implement the change.
+While Plan mode is active, the policy blocks project file edits by native tools and instructs the agent not to implement the change. Eligible automatic-policy workflows allow native `write` and `edit` on one managed draft only.
 It should explore first and ask structured questions when a preference or tradeoff materially changes the plan, or ask in plain text during free discussion.
 Configure persistent defaults or a one-workflow tool override before activation; active and ready workflows lock those controls.
 
@@ -127,7 +128,7 @@ Plan mode registers `plan_mode_question` and `plan_mode_complete` during extensi
 Another active-tool policy may hide them, in which case Plan start or restore fails without widening that policy.
 By default, the Plan policy allows active safe built-ins such as `read`, limited `bash`, limited `powershell`, `grep`, `find`, and `ls`.
 The optional native `powershell` tool must be active when an automatic Plan policy starts, for example through Pi's Windows `defaultTools` setting, unless its name was explicitly retained for first-request resolution.
-Tools named `edit`, `write`, or `update_plan` and deselected tools are blocked at execution time even though active schemas remain visible.
+`update_plan`, deselected tools, and `edit` or `write` calls outside the managed draft exception are blocked at execution time even though active schemas remain visible.
 Tools outside the reviewed core policy—including native MCP tools, native orchestration, extensions, and custom tools—are denied by default; explicitly allow their names before starting only when you accept the risk.
 Server annotations such as `readOnlyHint` are unverified hints, not permission or a safety guarantee.
 For example, opt into `mcp__docs__read`, `mcp__firecrawl__firecrawl_scrape`, or `lsp_diagnostics` through `/plan tools` or `defaultPlanTools` before the next workflow.
@@ -137,7 +138,7 @@ Registered `codemode` and `deferred` tools are selectable without direct activat
 MCP `codemode-deferred` follows its public `deferred` exposure.
 Select an orchestrator such as `codemode` or `tool_search` separately when needed: allowing it does not authorize its callees, and selecting an MCP tool does not enable its orchestrator.
 Pi's `tool_search` may declare tools independently, but declaration does not admit unselected names to the frozen Plan policy.
-Every nested call remains individually gated, including editing and limited-shell restrictions.
+Every nested call remains individually gated; the managed draft write exception is only for direct model calls.
 Hidden tools remain unavailable even when selected or listed as active; unsupported exposure and unavailable policy metadata fail closed.
 Registered but inactive direct tools, unregistered tools, blocked core tools, and unselected tools report distinct denial guidance.
 A tool admitted before later deactivation can be reactivated and reused in the current workflow without restarting.
@@ -174,10 +175,10 @@ Other running work does not accept the toggle.
 Switching from a questionnaire discards all unfinished answers and notes, leaves the main prompt draft unchanged, and stops the questionnaire run without sending a message.
 Enabling questionnaires again does not call the model or reopen old questions.
 
-Free discussion keeps the same read-only restrictions and allows plain-text questions without questionnaire dialogs.
+Free discussion keeps the same tool permissions and allows plain-text questions without questionnaire dialogs.
 Completed plans are still displayed, stored, and marked `plan ready`, but no automatic action menu opens; use `/plan` manually to implement, save, export, revise, exit, or enable questionnaires.
 The editor widget shows the interaction mode and the available F2 or `/plan` entry point, including when a plan is ready.
-In fullscreen TUI mode, click the **Plan mode** divider or any body row, including its blank right side, to collapse or expand it. Collapse changes only the display, not the workflow or read-only restrictions. The choice survives status updates and branch navigation, but resets on session replacement or reload. Open `/plan` without arguments to expand it from the keyboard.
+In fullscreen TUI mode, click the **Plan mode** divider or any body row, including its blank right side, to collapse or expand it. Collapse changes only the display, not the workflow or tool permissions. The choice survives status updates and branch navigation, but resets on session replacement or reload. Open `/plan` without arguments to expand it from the keyboard.
 The interaction mode restores with the active workflow on reload or resume; a new workflow starts with questionnaires enabled.
 See [interaction switching](./docs/command-workflows.md#questionnaires-and-free-discussion) for RPC behavior and recovery.
 
@@ -209,13 +210,11 @@ A tool registered or first made available later waits for the next Plan workflow
 If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
 
 A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions.
-The agent must call `plan_mode_complete({ plan })` alone as its final action, passing the complete Markdown plan.
-The tool rejects empty or whitespace-only plans and plans longer than 50,000 JavaScript characters; it does not truncate.
-Its visible result contains the full plan, and versioned result details let the extension restore it safely from the active session branch.
+In an eligible workflow, the agent maintains the Markdown draft with Pi's native `write`, `edit`, and `read`, then calls `plan_mode_complete({})` alone. The tool validates the file and stores its full contents as a session snapshot. `/plan show`, save, export, and implementation use that snapshot, not the live draft. See [managed Markdown drafts](./docs/command-workflows.md#managed-markdown-drafts) for eligibility, storage, and limits.
+Read-only workflows still call `plan_mode_complete({ plan })` with the complete Markdown. Neither workflow accepts empty or whitespace-only plans or plans longer than 50,000 JavaScript characters.
 
 `plan_mode_complete` uses Pi's `terminate: true` hint.
-Termination is best effort: if a model puts it in a parallel tool batch, Pi terminates the batch early only when every finalized sibling tool also terminates.
-The prompt therefore requires the completion call to be standalone and last.
+Managed-draft workflows reject nested or batched completion. In read-only workflows, termination is best effort for parallel batches, so the prompt still requires the call to be standalone and last.
 The extension deliberately does not infer completion from phrases such as “I will present the plan,” and ordinary research or clarification turns never trigger automatic retries.
 `/plan finalize` and its exact canonical finalization prompt are explicit recovery requests.
 With questionnaires enabled, if one of those requests ends normally without a valid structured question or completed plan, Plan mode waits for `agent_settled` and retries once with stronger tool guidance.
@@ -223,8 +222,7 @@ In free discussion, `/plan finalize` can finish the plan or ask a remaining mate
 A valid question, accepted completion, user cancellation, explicit exit, workflow supersession, reload, session replacement, or shutdown cancels the retry.
 A second prose-only failure leaves Plan mode active, warns in interactive modes, and requires another explicit `/plan finalize` request.
 
-Legacy sessions and models may still submit one non-empty `<proposed_plan>` block with tags on their own lines.
-That compatibility path remains accepted, but it is not the primary workflow.
+Read-only workflows still accept one non-empty `<proposed_plan>` block with tags on their own lines. Managed drafts are finalized only by the tool, never from a prose response.
 Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and produce a warning.
 
 After completion, `/plan` opens the ready actions when interactive UI is available.
@@ -307,7 +305,7 @@ While Plan mode is enabled, the extension also publishes a compact status for Pi
 With `@narumitw/pi-statusline`, this appears in the extension status area:
 
 - `plan active`: Plan mode is enabled with questionnaires available and is gathering context or drafting a plan.
-- `plan discussion`: Free discussion is active with questionnaires paused; file edits remain blocked.
+- `plan discussion`: Free discussion is active with questionnaires paused; tool permissions are unchanged.
 - `plan ready`: A completed plan is stored until you implement it, export it, save it, continue planning, or exit Plan mode; the widget still shows free discussion when active.
 - `plan saved`: One completed plan is stored outside model context in the current session until you implement or clear it.
 - `plan implementing`: The exact accepted plan is guaranteed under **Through first implementation run** or **Until manually cleared**.
@@ -403,7 +401,8 @@ By default, Plan mode inherits thinking, allows active safe built-ins, uses the 
 The existing Plan-mode toggle shortcut (`toggleShortcut`) is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, that shortcut binding stays unchanged.
 This setting is unrelated to the conditional F2 questionnaire/discussion toggle and does not configure it.
-Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
+In the terminal UI, choose **Plan pane** to move the read-only fullscreen pane left or right, or turn it off. The default is right, and changes apply immediately.
+Workflow defaults apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
 Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
 
@@ -418,6 +417,9 @@ Invalid settings remain untouched and make Settings read-only; session-start fai
 Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, shortcut configuration, shell-override examples, and legacy-file migration.
 
 ## 🚧 Limitations
+
+The Plan pane shows the current Markdown draft, or the completed snapshot once it is ready. In read-only workflows it starts blank except for a waiting message. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
+It hides below 80 columns or 12 rows and reappears when the terminal is large enough. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
 
 Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
 This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
