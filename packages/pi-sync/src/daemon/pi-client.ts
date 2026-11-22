@@ -776,6 +776,7 @@ export class PiDaemonClient {
   }
   tryStartupBootstrap(document: LocalConfigDocument, debug: boolean, signal: AbortSignal) {
     const ownedSignal = AbortSignal.any([signal, this.signal]);
+    let retirement: Promise<void> | undefined;
     const operation = this.work.then(async () => {
       const verify = (connection?: DaemonConnection) => {
         this.validateFactsScope(connection, ownedSignal);
@@ -786,26 +787,42 @@ export class PiDaemonClient {
       return this.queueFacts(async () => {
         verify(connection);
         if (connection.contactState !== "active" || connection.contactResumeState !== "idle") return false;
-        const ready = await requestStartupBootstrap(connection, fingerprint(document), debug, ownedSignal).catch(
-          (error: unknown) => {
-            verify(connection);
-            throw error;
-          },
-        );
-        verify(connection);
-        if (!ready) return false;
-        this.startupDebug = debug;
-        this.initialized = true;
-        Object.assign(connection.facts, { ready: true, startupDebug: debug });
-        if (connection.contactState === "active") this.confirmContact(connection);
-        return true;
+        const settingsFingerprint = fingerprint(document);
+        let mayHavePublished = true;
+        try {
+          const ready = await requestStartupBootstrap(connection, settingsFingerprint, debug, ownedSignal);
+          mayHavePublished = ready;
+          verify(connection);
+          if (!ready) return false;
+          if (connection.contactState === "active") this.confirmContact(connection);
+          this.startupDebug = debug;
+          this.initialized = true;
+          Object.assign(connection.facts, { ready: true, startupDebug: debug });
+          return true;
+        } catch (error) {
+          if (mayHavePublished) {
+            retirement = this.dispose();
+            void retirement.catch(() => {});
+          }
+          throw error;
+        }
       });
     });
     this.work = operation.then(
       () => {},
       () => {},
     );
-    return operation;
+    return operation.catch(async (error: unknown) => {
+      try {
+        await retirement;
+      } catch (cause) {
+        throw new AggregateError(
+          [error, cause],
+          "Startup readiness is uncertain; reconcile the daemon before reconnecting.",
+        );
+      }
+      throw error;
+    });
   }
   async markReady(debug: boolean) {
     this.validate();

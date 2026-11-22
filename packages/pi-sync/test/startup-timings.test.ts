@@ -196,6 +196,32 @@ for (const mode of ["tui", "rpc"] as const) {
   });
 }
 
+test("startup reports uncertain readiness after retiring the current client", async () => {
+  await withTempHome(async (root) => {
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+    const { PiDaemonClient } = await import("../src/daemon/pi-client.js");
+    const { default: sync } = await import("../src/sync-extension.js");
+    const bootstrap = vi.spyOn(PiDaemonClient.prototype, "tryStartupBootstrap").mockImplementation(async function (
+      this: InstanceType<typeof PiDaemonClient>,
+    ) {
+      await this.dispose();
+      throw new Error("Startup readiness is uncertain; reconcile the daemon before reconnecting.");
+    });
+    const mock = createMockPi();
+    const context = createMockContext({ mode: "tui" });
+    try {
+      sync(mock.pi);
+      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      assert.equal(bootstrap.mock.calls.length, 1);
+      assert.ok(context.notifications.some(({ message }) => message.includes("Startup readiness is uncertain")));
+    } finally {
+      bootstrap.mockRestore();
+      await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+    }
+  });
+});
+
 test("inspection measures backend, snapshot, state, and remote head separately without writing files", async () => {
   await configured(true, async () => {
     const config = await loadConfig();

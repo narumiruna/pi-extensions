@@ -14,8 +14,9 @@ vi.mock("@narumitw/pi-sync-daemon", async (original) => ({
 }));
 
 type ConnectionOptions = ConstructorParameters<typeof DaemonConnection>[3];
+type Participant = Pick<ClientFacts, "id" | "generation">;
 
-async function fixture(testContext: TestContext) {
+async function fixture(testContext: TestContext, disposeError?: Error) {
   vi.resetModules();
   const root = process.env.PI_CODING_AGENT_DIR;
   assert.ok(root, "The isolated Vitest setup must provide an agent directory before import");
@@ -54,67 +55,92 @@ async function fixture(testContext: TestContext) {
     session.abort();
     for (const release of finish) release();
     await Promise.allSettled(pending);
-    await client.dispose();
+    await client.dispose().catch((error: unknown) => {
+      if (error !== disposeError) throw error;
+    });
   });
 
-  let stored: ClientFacts;
-  let options: ConnectionOptions;
-  const wire: Array<{ method: string; facts?: ClientFacts }> = [];
+  const peers = new Map<string, ClientFacts>();
+  const wire: Array<{ method: string; facts?: ClientFacts; participant?: Participant }> = [];
   const onBootstrap = vi.fn(async () => true);
+  const onBootstrapReply = vi.fn(async () => {});
   const onUpdate = vi.fn(async () => {});
   const onResume = vi.fn(async () => {});
   const onRun = vi.fn(async () => {});
-  const connection = {
-    ...address,
-    facts: {} as ClientFacts,
-    contactState: "active" as ContactState | undefined,
-    contactResumeState: "idle",
-    hasPendingWork: false,
-    attach: async () => {
-      stored = { ...connection.facts };
-    },
-    update: async (facts: ClientFacts) => {
-      wire.push({ method: "update", facts });
-      await onUpdate();
-      if (connection.contactState === "expired") {
-        // Also report expiry from the observer before the update's caller handles the failure.
-        options.contact?.("expired");
-        throw new DaemonError({ name: "ClientContactExpiredError", message: "Contact expired." });
-      }
-      stored = { ...facts };
-      Object.assign(connection.facts, facts);
-    },
-    resumeContact: async (facts: ClientFacts) => {
-      wire.push({ method: "resume", facts });
-      await onResume();
-      connection.contactState = "active";
-      stored = { ...facts };
-      Object.assign(connection.facts, facts);
-    },
-    run: async () => {
-      wire.push({ method: "run" });
-      await onRun();
-    },
-    pause: async () => {},
-    dispose: async () => {},
-  };
+  function makeConnection(facts: ClientFacts, callbacks: ConnectionOptions) {
+    const { id, generation } = facts;
+    const participant = { id, generation };
+    let disposing: Promise<void> | undefined;
+    return {
+      ...address,
+      facts: { ...facts },
+      callbacks,
+      contactState: "active" as ContactState | undefined,
+      contactResumeState: "idle",
+      hasPendingWork: false,
+      async attach() {
+        wire.push({ method: "attach", participant });
+        peers.set(id, { ...this.facts });
+      },
+      async update(facts: ClientFacts) {
+        wire.push({ method: "update", facts });
+        await onUpdate();
+        if (this.contactState === "expired") {
+          // Also report expiry from the observer before the update's caller handles the failure.
+          callbacks.contact?.("expired");
+          throw new DaemonError({ name: "ClientContactExpiredError", message: "Contact expired." });
+        }
+        peers.set(id, { ...facts });
+        Object.assign(this.facts, facts);
+      },
+      async resumeContact(facts: ClientFacts) {
+        wire.push({ method: "resume", facts });
+        await onResume();
+        this.contactState = "active";
+        peers.set(id, { ...facts });
+        Object.assign(this.facts, facts);
+      },
+      async run() {
+        wire.push({ method: "run" });
+        await onRun();
+      },
+      pause: async () => {},
+      dispose() {
+        disposing ??= (async () => {
+          const { id, generation } = this.facts;
+          wire.push({ method: "dispose", participant: { id, generation } });
+          if (disposeError) throw disposeError;
+          if (peers.get(id)?.generation === generation) peers.delete(id);
+        })();
+        return disposing;
+      },
+    };
+  }
+  const connections: ReturnType<typeof makeConnection>[] = [];
   // biome-ignore lint/complexity/useArrowFunction: Vitest constructor mocks must be constructable.
   transport.connect.mockImplementation(function (_paths, _identity, facts: ClientFacts, callbacks: ConnectionOptions) {
-    options = callbacks;
-    Object.assign(connection.facts, facts);
+    const connection = makeConnection(facts, callbacks);
+    connections.push(connection);
     return connection;
   });
   transport.ensure.mockResolvedValue(address);
   transport.request.mockImplementation(async (_paths, _identity, method, params) => {
     assert.equal(method, "startup.bootstrap");
-    assert.equal(params.client, connection.facts.id);
-    assert.equal(params.generation, connection.facts.generation);
+    const stored = peers.get(params.client);
+    assert.ok(stored);
+    assert.equal(params.generation, stored.generation);
     wire.push({ method: "bootstrap" });
     const accepted = await onBootstrap();
-    if (accepted) stored = { ...stored, ready: true, startupDebug: params.debug };
+    if (accepted) peers.set(stored.id, { ...stored, ready: true, startupDebug: params.debug });
+    await onBootstrapReply();
     return accepted;
   });
   await client.connect();
+  const [connection] = connections;
+  assert.ok(connection);
+  const { id, generation } = connection.facts;
+  const participant = { id, generation };
+  wire.length = 0;
   function track<T>(operation: Promise<T>) {
     pending.push(operation);
     void operation.catch(() => {});
@@ -124,20 +150,32 @@ async function fixture(testContext: TestContext) {
     client,
     connection,
     onBootstrap,
+    onBootstrapReply,
     onUpdate,
     onResume,
     onRun,
+    peers,
+    participant,
     wire,
     track,
+    cancelSession() {
+      session.abort();
+    },
     get stored() {
+      const stored = peers.get(id);
+      assert.ok(stored);
       return stored;
     },
     selectModel(id: string) {
       model = id;
     },
-    replace() {
+    async replace() {
       const next = bindPiDaemonClient(ctx, session.signal);
       testContext.onTestFinished(() => next.dispose());
+      await next.connect();
+      const replacement = connections.at(-1);
+      assert.ok(replacement && replacement !== connection);
+      return replacement;
     },
     hold<T>(next: { mockImplementationOnce(action: () => Promise<T>): unknown }, result: T) {
       const entered = Promise.withResolvers<void>();
@@ -148,14 +186,17 @@ async function fixture(testContext: TestContext) {
         entered.resolve();
         return done.promise;
       });
-      return { entered: entered.promise, release };
+      return { entered: entered.promise, release, reject: done.reject };
     },
     bootstrap(signal = session.signal) {
       return track(client.tryStartupBootstrap(document, true, signal));
     },
     binding(background: boolean, signal = session.signal) {
       return track(
-        options.callback({ id: "binding", job: "job", kind: "model-binding", payload: { background } }, signal),
+        connection.callbacks.callback(
+          { id: "binding", job: "job", kind: "model-binding", payload: { background } },
+          signal,
+        ),
       );
     },
   };
@@ -182,11 +223,11 @@ test.for([
 
 test("an accepted bootstrap preserves readiness when contact expires before the reply arrives", async (context) => {
   const f = await fixture(context);
-  const bootstrap = f.hold(f.onBootstrap, true);
+  const reply = f.hold(f.onBootstrapReply, undefined);
   const startup = f.bootstrap();
-  await bootstrap.entered;
+  await reply.entered;
   f.connection.contactState = "expired";
-  bootstrap.release();
+  reply.release();
   assert.equal(await startup, true);
   assert.equal(f.connection.contactState, "expired");
   assert.equal(f.connection.facts.ready, true);
@@ -220,9 +261,9 @@ test("bootstrap waits for a pre-bootstrap busy publication to settle", async (co
 
 test("model-binding and busy publications competing with bootstrap sample accepted readiness", async (context) => {
   const f = await fixture(context);
-  const bootstrap = f.hold(f.onBootstrap, true);
+  const reply = f.hold(f.onBootstrapReply, undefined);
   const startup = f.bootstrap();
-  await bootstrap.entered;
+  await reply.entered;
   f.selectModel("changed");
   const binding = f.binding(false);
   const busy = f.track(f.client.setBusy("agent", true));
@@ -231,7 +272,7 @@ test("model-binding and busy publications competing with bootstrap sample accept
     f.wire.map(({ method }) => method),
     ["bootstrap"],
   );
-  bootstrap.release();
+  reply.release();
   assert.equal(await startup, true);
   assert.equal(((await binding) as ClientFacts["model"])?.id, "changed");
   await busy;
@@ -298,22 +339,74 @@ test("contact repair completes its non-ready admission and fresh publication bef
   assert.deepEqual(f.stored, f.connection.facts);
 });
 
-for (const outcome of ["refused", "unsupported", "failed"] as const)
+for (const outcome of ["refused", "unsupported"] as const)
   test(`${outcome} bootstrap releases the facts queue without setting readiness`, async (context) => {
     const f = await fixture(context);
-    if (outcome === "refused") f.onBootstrap.mockResolvedValueOnce(false);
-    else if (outcome === "unsupported")
-      f.onBootstrap.mockRejectedValueOnce(new DaemonError({ name: "Error", message: "Unknown daemon method." }));
-    else f.onBootstrap.mockRejectedValueOnce(new Error("Bootstrap failed."));
+    const refusal = f.hold(f.onBootstrap, false);
     const startup = f.bootstrap();
-    if (outcome === "failed") await assert.rejects(startup, /Bootstrap failed/u);
-    else assert.equal(await startup, false);
-    await f.client.update();
+    await refusal.entered;
+    const publish = f.track(f.client.update());
+    if (outcome === "refused") refusal.release();
+    else refusal.reject(new DaemonError({ name: "Error", message: "Unknown daemon method." }));
+    assert.equal(await startup, false);
+    await publish;
     assert.equal(f.stored.ready, false);
     await f.client.markReady(true);
     assert.equal(f.stored.ready, true);
     assert.equal(f.stored.startupDebug, true);
+    assert.deepEqual(
+      f.wire.map(({ method }) => method),
+      ["bootstrap", "update", "update"],
+    );
   });
+
+for (const loss of ["transport failure", "request abort"] as const)
+  test(`${loss} after bootstrap acceptance retires the original participant and blocks queued or future work`, async (context) => {
+    const f = await fixture(context);
+    const request = new AbortController();
+    const lost =
+      loss === "request abort"
+        ? new DOMException("Startup cancelled.", "AbortError")
+        : new Error("Bootstrap reply lost.");
+    const reply = f.hold(f.onBootstrapReply, undefined);
+    const startup = assert.rejects(f.bootstrap(request.signal), (error: unknown) => error === lost);
+    await reply.entered;
+    assert.equal(f.stored.ready, true);
+    assert.equal(f.connection.facts.ready, false);
+    const queued = [
+      assert.rejects(f.track(f.client.setBusy("agent", true))),
+      assert.rejects(f.track(f.client.run("sync", {}))),
+    ];
+    if (loss === "request abort") request.abort(lost);
+    reply.reject(lost);
+    await Promise.all([startup, ...queued]);
+    await assert.rejects(f.bootstrap());
+    await assert.rejects(f.client.markReady(true));
+    await assert.rejects(f.client.run("sync", {}));
+
+    assert.deepEqual(f.wire, [{ method: "bootstrap" }, { method: "dispose", participant: f.participant }]);
+    assert.equal(f.peers.has(f.participant.id), false);
+    assert.equal(f.connection.facts.ready, false);
+  });
+
+test("a failed retirement after a lost accepted reply surfaces uncertain readiness", async (context) => {
+  const lost = new Error("Bootstrap reply lost.");
+  const disposeError = new Error("Detach failed.");
+  const f = await fixture(context, disposeError);
+  f.onBootstrapReply.mockRejectedValueOnce(lost);
+  await assert.rejects(f.bootstrap(), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.message, /readiness is uncertain/u);
+    assert.deepEqual(error.errors, [lost, disposeError]);
+    return true;
+  });
+  await assert.rejects(f.bootstrap());
+  await assert.rejects(f.client.run("sync", {}));
+
+  assert.deepEqual(f.wire, [{ method: "bootstrap" }, { method: "dispose", participant: f.participant }]);
+  assert.equal(f.stored.ready, true, "the owner committed readiness and did not acknowledge retirement");
+  assert.equal(f.connection.facts.ready, false);
+});
 
 test("a cancelled bootstrap cannot send an RPC after waiting behind a facts publication", async (context) => {
   const f = await fixture(context);
@@ -332,24 +425,46 @@ test("a cancelled bootstrap cannot send an RPC after waiting behind a facts publ
     ["update"],
   );
   assert.equal(f.stored.ready, false);
+  assert.equal(await f.bootstrap(), true, "cancellation before dispatch does not retire this participant");
 });
 
-for (const change of ["pause", "replace", "dispose"] as const)
-  test(`${change} during bootstrap prevents a stale readiness latch or queued publication`, async (context) => {
+for (const change of ["cancel request", "cancel session", "pause", "replace", "dispose"] as const)
+  test(`${change} before an accepted reply arrives retires only the original participant`, async (context) => {
     const f = await fixture(context);
-    const bootstrap = f.hold(f.onBootstrap, true);
-    const startup = assert.rejects(f.bootstrap(), /paused|replaced/u);
-    await bootstrap.entered;
-    const publish = assert.rejects(f.track(f.client.setBusy("agent", true)), /paused|replaced/u);
-    let disposal: Promise<void> | undefined;
-    if (change === "pause") await f.client.pauseForSessionChange();
-    else if (change === "replace") f.replace();
-    else disposal = f.client.dispose();
-    bootstrap.release();
-    await Promise.all([startup, publish, disposal]);
-    assert.deepEqual(
-      f.wire.map(({ method }) => method),
-      ["bootstrap"],
+    const request = new AbortController();
+    const reply = f.hold(f.onBootstrapReply, undefined);
+    const startup = assert.rejects(
+      f.bootstrap(request.signal),
+      change.startsWith("cancel") ? { name: "AbortError" } : /paused|replaced/u,
     );
+    await reply.entered;
+    assert.equal(f.stored.ready, true);
+    const publish = assert.rejects(f.track(f.client.setBusy("agent", true)));
+    let disposal: Promise<void> | undefined;
+    const replacement = change === "replace" ? await f.replace() : undefined;
+    const replacementFacts = replacement && { ...replacement.facts };
+    if (change === "cancel request") request.abort();
+    else if (change === "cancel session") f.cancelSession();
+    else if (change === "pause") await f.client.pauseForSessionChange();
+    else if (change === "dispose") disposal = f.client.dispose();
+    reply.release();
+    await Promise.all([startup, publish, disposal]);
+    await assert.rejects(f.client.run("sync", {}));
+
+    const replacementParticipant = replacementFacts && {
+      id: replacementFacts.id,
+      generation: replacementFacts.generation,
+    };
+    assert.deepEqual(f.wire, [
+      { method: "bootstrap" },
+      ...(replacementFacts ? [{ method: "attach", participant: replacementParticipant }] : []),
+      { method: "dispose", participant: f.participant },
+    ]);
+    assert.equal(f.peers.has(f.participant.id), false);
     assert.equal(f.connection.facts.ready, false);
+    if (replacementFacts) {
+      assert.equal(replacementFacts.ready, false);
+      assert.deepEqual(replacement?.facts, replacementFacts);
+      assert.deepEqual(f.peers.get(replacementFacts.id), replacementFacts);
+    }
   });

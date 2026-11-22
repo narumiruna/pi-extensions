@@ -148,7 +148,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       } catch (error) {
         if (!signal.aborted && owner === client) {
           try {
-            client.validate();
+            ctx.isIdle();
             if (ctx.hasUI)
               ctx.ui.notify(`pi-sync recovery required: ${safeTerminalText(errorMessage(error))}`, "error");
           } catch {
