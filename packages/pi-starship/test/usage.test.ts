@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
-import { summarizeFooterUsage } from "../src/usage.js";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import { test, vi } from "vitest";
+import { createFooterHistoryReader, summarizeFooterUsage } from "../src/usage.js";
 
 function entry(value: unknown): SessionEntry {
   return value as SessionEntry;
@@ -17,6 +18,47 @@ function usage(input: number, output: number, cacheRead: number, cacheWrite: num
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
   };
 }
+
+test("branch and whole-session usage have separate cache boundaries", () => {
+  const manager = SessionManager.inMemory();
+  const append = () => manager.appendMessage({ role: "user", content: "prompt", timestamp: 0 });
+  const root = append();
+  const reply = manager.appendMessage({
+    ...fauxAssistantMessage("reply"),
+    durationMs: 1000,
+    usage: usage(4, 9, 0, 0, 0),
+  });
+  const getEntries = vi.spyOn(manager, "getEntries");
+  const getBranch = vi.spyOn(manager, "getBranch");
+  const history = createFooterHistoryReader(manager);
+  const full = { turnCount: 1, tokensPerSecond: 9 };
+  assert.deepEqual(history.branch(), full);
+  assert.deepEqual(history.branch(), full);
+  assert.equal(getBranch.mock.calls.length, 1);
+  assert.equal(history.totals().output, 9);
+  manager.branch(root);
+  assert.deepEqual(history.branch(), { turnCount: 1, tokensPerSecond: undefined });
+  assert.equal(history.totals().output, 9);
+  assert.equal(getEntries.mock.calls.length, 1);
+  manager.branch(reply);
+  assert.deepEqual(history.branch(), full);
+  manager.appendCompaction("summary", reply, 100);
+  const scansAfterCompaction = getEntries.mock.calls.length;
+  assert.deepEqual(history.branch(), full);
+  assert.equal(getBranch.mock.calls.length, 4);
+  assert.equal(history.totals().output, 9);
+  assert.equal(getEntries.mock.calls.length, scansAfterCompaction + 1);
+  manager.newSession({ id: manager.getSessionId() });
+  append();
+  append();
+  append();
+  assert.equal(manager.getEntryCount(), 3);
+  assert.deepEqual(history.branch(), { turnCount: 3, tokensPerSecond: undefined });
+  assert.equal(history.totals().output, 0);
+  history.clear();
+  assert.equal(history.totals().output, 0);
+  assert.equal(getEntries.mock.calls.length, scansAfterCompaction + 3);
+});
 
 test("footer usage includes every usage-bearing session entry and uses the latest assistant rate", () => {
   const entries = [

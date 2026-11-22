@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
-import { summarizeFooterUsage } from "../src/usage.js";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import { test, vi } from "vitest";
+import { createFooterUsageReader, summarizeFooterUsage } from "../src/usage.js";
 
 function entry(value: unknown): SessionEntry {
   return value as SessionEntry;
@@ -17,6 +18,36 @@ function usage(input: number, output: number, cacheRead: number, cacheWrite: num
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
   };
 }
+
+test("footer totals reuse stable history and refresh after append or same-count replacement", () => {
+  const manager = SessionManager.inMemory();
+  const append = (input: number) =>
+    manager.appendMessage({ ...fauxAssistantMessage("test"), usage: usage(input, 1, 0, 0, 0) });
+  const first = append(5);
+  const entries = vi.spyOn(manager, "getEntries");
+  const read = createFooterUsageReader(manager);
+  assert.equal(read().input, 5);
+  assert.equal(read().input, 5);
+  assert.equal(entries.mock.calls.length, 1);
+  append(15);
+  assert.equal(read().input, 20);
+  manager.branch(first);
+  assert.equal(read().input, 20, "totals include the whole session, not just the active branch");
+  const id = manager.getSessionId();
+  manager.newSession({ id });
+  append(10);
+  append(2);
+  assert.equal(manager.getEntryCount(), 2);
+  assert.equal(read().input, 12);
+  assert.equal(entries.mock.calls.length, 3);
+});
+
+test("footer totals use live entries on hosts without the count accessor", () => {
+  const entries = vi.fn(() => []);
+  const read = createFooterUsageReader({ getEntries: entries } as never);
+  assert.deepEqual(read(), read());
+  assert.equal(entries.mock.calls.length, 2);
+});
 
 test("footer usage includes every usage-bearing session entry and uses the latest assistant rate", () => {
   const entries = [

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { sep } from "node:path";
 import type { ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
 import {
@@ -25,6 +25,34 @@ function plain(value: string): string {
 function segment(name: SegmentName, text: string, block: RenderSegment["block"]): RenderSegment {
   return { name, text, block, color: "accent" };
 }
+
+test("statusline reads the usage summary once only when a displayed segment needs it", () => {
+  const getEntries = vi.fn(() => []);
+  const context = createMockContext({ sessionManager: { getEntries } });
+  const footerData: ReadonlyFooterDataProvider = {
+    getGitBranch: () => null,
+    getAvailableProviderCount: () => 0,
+    getExtensionStatuses: () => new Map(),
+    onBranchChange: () => () => undefined,
+  };
+  const runtime: RuntimeState = {
+    turnCount: 0,
+    isStreaming: false,
+    thinkingLevel: "off",
+    activeTools: new Map(),
+    duplicateExtensions: [],
+    extensionStatusIconAliases: new Map(),
+  };
+  const theme = {} as Theme;
+  const config = createDefaultConfig();
+  assert.notEqual(renderStatusline(80, context.ctx, footerData, theme, config, runtime), "");
+  assert.equal(getEntries.mock.calls.length, 0);
+  config.segments = ["tokens", "cache", "cost"];
+  assert.equal(renderStatusline(0, context.ctx, footerData, theme, config, runtime), "");
+  assert.equal(getEntries.mock.calls.length, 0);
+  assert.match(plain(renderStatusline(80, context.ctx, footerData, theme, config, runtime)), /tok 0.*\$0\.00/u);
+  assert.equal(getEntries.mock.calls.length, 1);
+});
 
 test("powerline renderer preserves configured segment order across repeated blocks", () => {
   const config = createDefaultConfig();

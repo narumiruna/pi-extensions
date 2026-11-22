@@ -1,4 +1,4 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 
 interface UsageLike {
   input?: number;
@@ -16,6 +16,42 @@ export interface FooterUsageSummary {
   cost: number;
   costTotalFromProvider: boolean;
   latestCacheHitRate?: number;
+}
+
+export function createFooterHistoryReader(
+  manager: ExtensionContext["sessionManager"] & Partial<Pick<SessionManager, "getEntryCount">>,
+) {
+  type Header = NonNullable<ReturnType<SessionManager["getHeader"]>>;
+  let usage: { header: Header; count: number; totals: FooterUsageSummary } | undefined;
+  let branch: { header: Header; leaf: SessionEntry | null; values: ReturnType<typeof summarizeBranch> } | undefined;
+  return {
+    totals(): FooterUsageSummary {
+      const count = manager.getEntryCount?.();
+      const header = count === undefined ? null : manager.getHeader?.();
+      if (header && usage?.header === header && usage.count === count) return usage.totals;
+      const totals = summarizeFooterUsage(manager.getEntries());
+      usage = header && count !== undefined ? { header, count, totals } : undefined;
+      return totals;
+    },
+    branch() {
+      const header = manager.getHeader?.();
+      const leaf = header ? manager.getLeafEntry?.() : undefined;
+      if (header && branch?.header === header && branch.leaf === leaf) return branch.values;
+      const values = summarizeBranch(manager.getBranch());
+      branch = header && leaf !== undefined ? { header, leaf, values } : undefined;
+      return values;
+    },
+    clear() {
+      usage = undefined;
+      branch = undefined;
+    },
+  };
+}
+
+function summarizeBranch(branch: readonly SessionEntry[]) {
+  let turnCount = 0;
+  for (const entry of branch) if (entry.type === "message" && entry.message.role === "user") turnCount++;
+  return { turnCount, tokensPerSecond: latestTokensPerSecond(branch) };
 }
 
 /** Use the latest assistant only: an untimed or incomplete response must not expose an older rate. */
