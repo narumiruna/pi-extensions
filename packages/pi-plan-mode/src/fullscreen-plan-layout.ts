@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, HStack, isViewportTUI, type TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import * as tuiCore from "@earendil-works/pi-tui";
 
 const MIN_COLUMNS = 80;
 const MIN_ROWS = 12;
@@ -13,12 +14,19 @@ export function mountFullscreenPlanLayout(
   pane: Component,
   theme: Theme,
 ): (() => void) | undefined {
-  if (tui.mode !== "fullscreen" || tui.children !== rendererChildren || !isViewportTUI(tui)) return;
+  if (
+    tui.mode !== "fullscreen" ||
+    tui.children !== rendererChildren ||
+    typeof tuiCore.HStack !== "function" ||
+    typeof tuiCore.isViewportTUI !== "function" ||
+    !tuiCore.isViewportTUI(tui)
+  )
+    return;
   const readRoot = (): unknown => Reflect.get(tui, "layoutRoot");
   const original = readRoot();
   if (!isNativeFullscreenRoot(original, rendererChildren)) return;
 
-  const wrapper = new PlanSplitLayout(original, pane, side, tui, theme);
+  const wrapper = createPlanSplitLayout(original, pane, side, tui, theme);
   const restore = () => {
     if (tui.mode === "fullscreen" && readRoot() === wrapper) {
       tui.setLayoutRoot(original);
@@ -63,26 +71,28 @@ function isNativeFullscreenRoot(value: unknown, rendererChildren: readonly Compo
   );
 }
 
-class PlanSplitLayout extends HStack {
-  constructor(main: Component, pane: Component, side: PlanPaneSide, tui: TUI, theme: Theme) {
-    const divider = {
-      render: (width: number) =>
-        width < 1 ? [] : Array.from({ length: tui.terminal.rows }, () => theme.fg("borderMuted", "│")),
-      invalidate() {},
-    };
-    const mainEntry = { component: main, basis: 0, grow: 1, minSize: 1 };
-    const dividerEntry = { component: divider, basis: 1, shrink: 0 };
-    const sideEntry = { component: pane, basis: 1, shrink: 0 };
-    super(side === "left" ? [sideEntry, dividerEntry, mainEntry] : [mainEntry, dividerEntry, sideEntry]);
-    const paneSlot = this.entries[side === "left" ? 0 : 2];
-    const dividerSlot = this.entries[1];
-    if (!paneSlot || !dividerSlot) return;
-    const visible = ({ width, height }: { width: number; height: number }) =>
-      width >= MIN_COLUMNS && Math.min(height, tui.terminal.rows) >= MIN_ROWS;
-    paneSlot.visible = (viewport) => {
-      paneSlot.basis = Math.floor((viewport.width - 1) / 3);
-      return visible(viewport);
-    };
-    dividerSlot.visible = visible;
-  }
+function createPlanSplitLayout(main: Component, pane: Component, side: PlanPaneSide, tui: TUI, theme: Theme) {
+  const divider = {
+    render: (width: number) =>
+      width < 1 ? [] : Array.from({ length: tui.terminal.rows }, () => theme.fg("borderMuted", "│")),
+    invalidate() {},
+  };
+  const mainEntry = { component: main, basis: 0, grow: 1, minSize: 1 };
+  const dividerEntry = { component: divider, basis: 1, shrink: 0 };
+  const sideEntry = { component: pane, basis: 1, shrink: 0 };
+  return new (class extends tuiCore.HStack {
+    constructor() {
+      super(side === "left" ? [sideEntry, dividerEntry, mainEntry] : [mainEntry, dividerEntry, sideEntry]);
+      const paneSlot = this.entries[side === "left" ? 0 : 2];
+      const dividerSlot = this.entries[1];
+      if (!paneSlot || !dividerSlot) return;
+      const visible = ({ width, height }: { width: number; height: number }) =>
+        width >= MIN_COLUMNS && Math.min(height, tui.terminal.rows) >= MIN_ROWS;
+      paneSlot.visible = (viewport) => {
+        paneSlot.basis = Math.floor((viewport.width - 1) / 3);
+        return visible(viewport);
+      };
+      dividerSlot.visible = visible;
+    }
+  })();
 }

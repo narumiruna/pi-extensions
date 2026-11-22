@@ -122,7 +122,13 @@ export function isBuiltinTool(tool: ToolInfo) {
   if (source?.source !== "builtin") return false;
   // Core tools own builtin:<name>; built-in extensions may own many tools or
   // expose model-only orchestration. Missing paths preserve legacy core policy.
-  return !source.path || (source.path === `builtin:${tool.name}` && tool.exposure !== "model-only");
+  return !source.path || (hasNativeToolSource(tool) && tool.exposure !== "model-only");
+}
+
+export function hasNativeToolSource(tool: ToolInfo) {
+  if (tool.sourceInfo?.source !== "builtin") return false;
+  const path = tool.sourceInfo.path;
+  return path === `builtin:${tool.name}` || path === `<builtin:${tool.name}>`;
 }
 
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {

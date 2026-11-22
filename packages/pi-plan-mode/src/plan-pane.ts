@@ -1,14 +1,18 @@
 import { type ExtensionContext, getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import * as tuiCore from "@earendil-works/pi-tui";
 import {
   type Component,
   Markdown,
-  ScrollView,
+  type ScrollView,
   type TUI,
   type TuiMouseEvent,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { mountFullscreenPlanLayout, type PlanPaneSide } from "./fullscreen-plan-layout.js";
+import type { DraftPreview } from "./plan-draft.js";
+
+type PlanPaneContent = string | DraftPreview | undefined;
 
 const WIDGET_KEY = "plan-mode.pane";
 
@@ -16,7 +20,7 @@ interface PaneBinding {
   session: ExtensionContext["sessionManager"];
   ui: ExtensionContext["ui"];
   side: PlanPaneSide;
-  plan: string | undefined;
+  plan: PlanPaneContent;
   widget?: PlanPaneWidget;
 }
 
@@ -37,8 +41,8 @@ export function createPlanPaneController() {
 
   return {
     clear,
-    update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: string | undefined) {
-      if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off") {
+    update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: PlanPaneContent) {
+      if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off" || typeof tuiCore.ScrollView !== "function") {
         clear();
         return;
       }
@@ -72,7 +76,7 @@ export function createPlanPaneController() {
 class PlanPaneWidget implements Component {
   disposed = false;
   private readonly body: PlanPaneBody;
-  private readonly scroll: PlanPaneScrollView;
+  private readonly scroll: ScrollView;
   private readonly attempted = new WeakSet<readonly Component[]>();
   private pending: readonly Component[] | undefined;
   private restore: (() => void) | undefined;
@@ -81,11 +85,11 @@ class PlanPaneWidget implements Component {
     private readonly tui: TUI,
     private readonly theme: Theme,
     private readonly side: PlanPaneSide,
-    private plan: string | undefined,
+    private plan: PlanPaneContent,
   ) {
     this.body = new PlanPaneBody(theme);
     this.body.setPlan(plan);
-    this.scroll = new PlanPaneScrollView(this.body, {
+    this.scroll = createPaneScrollView(this.body, {
       overscroll: "contain",
       scrollbar: "always",
       scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
@@ -99,9 +103,11 @@ class PlanPaneWidget implements Component {
     return [];
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.scroll.invalidate();
+  }
 
-  setPlan(plan: string | undefined) {
+  setPlan(plan: PlanPaneContent) {
     if (this.disposed || plan === this.plan) return;
     this.plan = plan;
     this.body.setPlan(plan);
@@ -146,34 +152,46 @@ class PlanPaneWidget implements Component {
   }
 }
 
-class PlanPaneScrollView extends ScrollView {
-  override handleMouse(event: TuiMouseEvent): ReturnType<ScrollView["handleMouse"]> {
+function createPaneScrollView(...args: ConstructorParameters<typeof tuiCore.ScrollView>): ScrollView {
+  const scroll = new tuiCore.ScrollView(...args);
+  scroll.handleMouse = (event: TuiMouseEvent) => {
     if (event.type !== "wheel") return;
-    this.scrollBy(event.wheelDelta ?? 0);
+    scroll.scrollBy(event.wheelDelta ?? 0);
     return {
       handled: true,
       render: false,
       target: {
-        component: this,
+        component: scroll,
         originX: event.screenX - event.x,
         originY: event.screenY - event.y,
         width: event.width,
         height: event.height,
       },
     };
-  }
+  };
+  return scroll;
 }
 
 class PlanPaneBody implements Component {
   private text: string | undefined;
+  private title = "Plan";
+  private placeholder = "No completed plan yet.";
   private markdown: Markdown | undefined;
   private width: number | undefined;
   private lines: string[] = [];
 
   constructor(private readonly theme: Theme) {}
 
-  setPlan(plan: string | undefined) {
-    this.text = plan === undefined ? undefined : sanitizeTerminalDocument(plan);
+  setPlan(plan: PlanPaneContent) {
+    const text = typeof plan === "string" ? plan : plan?.kind === "draft" ? plan.text : undefined;
+    this.text = text === undefined ? undefined : sanitizeTerminalDocument(text);
+    this.title = typeof plan === "string" ? "Plan · Ready" : plan ? "Plan draft" : "Plan";
+    this.placeholder =
+      typeof plan === "object"
+        ? plan.kind === "error"
+          ? plan.reason
+          : "Waiting for the Markdown draft."
+        : "No completed plan yet.";
     this.invalidate();
   }
 
@@ -186,9 +204,13 @@ class PlanPaneBody implements Component {
   render(width: number): readonly string[] {
     if (width < 1) return [];
     if (this.width === width) return this.lines;
-    const title = this.theme.bold(this.theme.fg("accent", "Plan"));
+    const title = this.theme.bold(this.theme.fg("accent", this.title));
     if (this.text) this.markdown ??= new Markdown(this.text, 0, 0, getMarkdownTheme());
-    const body = this.markdown?.render(width) ?? [this.theme.fg("muted", "No completed plan yet.")];
+    const body =
+      this.markdown?.render(width) ??
+      new Markdown(sanitizeTerminalDocument(this.placeholder), 0, 0, getMarkdownTheme(), {
+        color: (text) => this.theme.fg("muted", text),
+      }).render(width);
     this.width = width;
     this.lines = [title, "", ...body].map((line) => truncateToWidth(line, width));
     return this.lines;

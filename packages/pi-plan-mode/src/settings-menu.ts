@@ -175,7 +175,8 @@ export async function showPlanModeSettings(
                       {
                         id: "planPane",
                         label: "Plan pane",
-                        description: "Place the read-only plan on the right or left in fullscreen, or turn it off.",
+                        description:
+                          "Show the draft or completed plan on the right or left in fullscreen, or turn it off.",
                         currentValue: configuredPlanPane(state.settings),
                         values: PLAN_PANE_PLACEMENTS,
                         action: "set-pane" as const,
