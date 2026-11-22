@@ -11,6 +11,7 @@ import {
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { type MountedPlanLayout, mountFullscreenPlanLayout, type PlanPaneSide } from "./fullscreen-plan-layout.js";
 import type { DraftPreview } from "./plan-draft.js";
+import { getDraftChanges, renderDraftChanges } from "./plan-pane-diff.js";
 
 type PlanPaneContent = string | DraftPreview | undefined;
 
@@ -45,7 +46,13 @@ export function createPlanPaneController() {
       return binding?.session === session && binding.widget?.showsCompletedPlan(plan) === true;
     },
     update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: PlanPaneContent) {
-      if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off" || typeof tuiCore.ScrollView !== "function") {
+      if (
+        ctx.mode !== "tui" ||
+        !ctx.hasUI ||
+        placement === "off" ||
+        typeof tuiCore.ScrollView !== "function" ||
+        typeof tuiCore.VStack !== "function"
+      ) {
         clear();
         return;
       }
@@ -83,7 +90,8 @@ class PlanPaneWidget implements Component {
   private readonly attempted = new WeakSet<readonly Component[]>();
   private pending: readonly Component[] | undefined;
   private layout: MountedPlanLayout | undefined;
-  private hasDisplayablePlan = false;
+  private readonly pane: Component;
+  private togglePress: ReturnType<MountedPlanLayout["interactionViewport"]>;
 
   constructor(
     private readonly tui: TUI,
@@ -92,13 +100,25 @@ class PlanPaneWidget implements Component {
     private plan: PlanPaneContent,
   ) {
     this.body = new PlanPaneBody(theme);
-    this.hasDisplayablePlan = this.body.setPlan(plan);
+    this.body.setPlan(plan, false);
     this.scroll = createPaneScrollView(this.body, {
       overscroll: "contain",
       scrollbar: "always",
       scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
       scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
     });
+    const toggle: Component = {
+      render: (width) => {
+        const label = this.body.toggleLabel();
+        return width < 1 || !label ? [] : [truncateToWidth(theme.fg("accent", label), width)];
+      },
+      invalidate() {},
+      handleMouse: (event) => this.handleToggleMouse(event),
+    };
+    this.pane = new tuiCore.VStack([
+      { component: toggle, basis: 1, shrink: 0, visible: () => this.body.toggleLabel() !== undefined },
+      { component: this.scroll, basis: 0, grow: 1, minSize: 1 },
+    ]);
     this.observeRenderer();
   }
 
@@ -108,19 +128,40 @@ class PlanPaneWidget implements Component {
   }
 
   invalidate(): void {
-    this.scroll.invalidate();
+    this.pane.invalidate();
   }
 
   setPlan(plan: PlanPaneContent) {
     if (this.disposed || plan === this.plan) return;
     this.plan = plan;
-    this.hasDisplayablePlan = this.body.setPlan(plan);
+    if (!this.body.setPlan(plan, this.layout?.isVisible() === true)) return;
+    this.togglePress = undefined;
     this.scroll.scrollToStart();
     if (this.tui?.mode === "fullscreen") this.tui.requestRender();
   }
 
   showsCompletedPlan(plan: string) {
-    return !this.disposed && this.plan === plan && this.hasDisplayablePlan && this.layout?.isVisible() === true;
+    return !this.disposed && this.plan === plan && this.body.hasDisplayableText() && this.layout?.isVisible() === true;
+  }
+
+  private handleToggleMouse(event: TuiMouseEvent) {
+    if (this.disposed) return;
+    const viewport = this.layout?.interactionViewport();
+    const label = this.body.toggleLabel();
+    if (!viewport || !label) return;
+    if (event.type === "wheel") return this.scroll.handleMouse(event);
+    if (event.button !== "left" || event.y !== 0 || event.x < 0 || event.x >= label.length) return;
+    if (event.type === "press") {
+      this.togglePress = viewport;
+      return { handled: true, render: false };
+    }
+    if (event.type !== "click") return;
+    const press = this.togglePress;
+    this.togglePress = undefined;
+    if (viewport !== press) return;
+    this.body.toggleView();
+    this.scroll.scrollToStart();
+    return { handled: true, render: true };
   }
 
   dispose() {
@@ -142,7 +183,7 @@ class PlanPaneWidget implements Component {
       this.attempted.add(renderer);
       this.unmount();
       try {
-        this.layout = mountFullscreenPlanLayout(this.tui, renderer, this.side, this.scroll, this.theme);
+        this.layout = mountFullscreenPlanLayout(this.tui, renderer, this.side, this.pane, this.theme);
       } catch {
         return;
       }
@@ -152,6 +193,8 @@ class PlanPaneWidget implements Component {
   private unmount() {
     const layout = this.layout;
     this.layout = undefined;
+    this.togglePress = undefined;
+    if (this.body.clearComparison() && !this.disposed) this.scroll.scrollToStart();
     try {
       layout?.restore();
     } catch {
@@ -182,6 +225,10 @@ function createPaneScrollView(...args: ConstructorParameters<typeof tuiCore.Scro
 
 class PlanPaneBody implements Component {
   private text: string | undefined;
+  private isDraft = false;
+  private displayableText = false;
+  private changes: readonly string[] | undefined;
+  private showingChanges = false;
   private title = "Plan";
   private placeholder = "No completed plan yet.";
   private markdown: Markdown | undefined;
@@ -190,9 +237,18 @@ class PlanPaneBody implements Component {
 
   constructor(private readonly theme: Theme) {}
 
-  setPlan(plan: PlanPaneContent) {
-    const text = typeof plan === "string" ? plan : plan?.kind === "draft" ? plan.text : undefined;
-    this.text = text === undefined ? undefined : sanitizeTerminalDocument(text);
+  setPlan(plan: PlanPaneContent, compare: boolean) {
+    const raw = typeof plan === "string" ? plan : plan?.kind === "draft" ? plan.text : undefined;
+    const text = raw === undefined ? undefined : sanitizeTerminalDocument(raw);
+    const isDraft = typeof plan === "object" && plan.kind === "draft";
+    if (isDraft && this.isDraft && text === this.text) return false;
+    const previousDraft = compare && this.isDraft && this.displayableText ? this.text : undefined;
+    this.text = text;
+    this.isDraft = isDraft;
+    this.displayableText = Boolean(text?.trim());
+    this.changes =
+      isDraft && previousDraft && this.displayableText && text ? getDraftChanges(previousDraft, text) : undefined;
+    this.showingChanges = this.changes !== undefined;
     this.title = typeof plan === "string" ? "Plan · Ready" : plan ? "Plan draft" : "Plan";
     this.placeholder =
       typeof plan === "object"
@@ -201,7 +257,28 @@ class PlanPaneBody implements Component {
           : "Waiting for the Markdown draft."
         : "No completed plan yet.";
     this.invalidate();
-    return Boolean(this.text?.trim());
+    return true;
+  }
+
+  hasDisplayableText() {
+    return this.displayableText;
+  }
+
+  toggleLabel() {
+    return this.changes === undefined ? undefined : this.showingChanges ? "[Show Markdown]" : "[Show changes]";
+  }
+
+  toggleView() {
+    this.showingChanges = !this.showingChanges;
+    this.invalidate();
+  }
+
+  clearComparison() {
+    if (this.changes === undefined) return false;
+    this.changes = undefined;
+    this.showingChanges = false;
+    this.invalidate();
+    return true;
   }
 
   invalidate() {
@@ -213,15 +290,24 @@ class PlanPaneBody implements Component {
   render(width: number): readonly string[] {
     if (width < 1) return [];
     if (this.width === width) return this.lines;
-    const title = this.theme.bold(this.theme.fg("accent", this.title));
-    if (this.text) this.markdown ??= new Markdown(this.text, 0, 0, getMarkdownTheme());
+    const title = this.showingChanges ? "Plan draft · Changes" : this.title;
     const body =
-      this.markdown?.render(width) ??
-      new Markdown(sanitizeTerminalDocument(this.placeholder), 0, 0, getMarkdownTheme(), {
-        color: (text) => this.theme.fg("muted", text),
-      }).render(width);
+      this.showingChanges && this.changes
+        ? renderDraftChanges(this.changes, width, this.theme)
+        : this.renderMarkdown(width);
     this.width = width;
-    this.lines = [title, "", ...body].map((line) => truncateToWidth(line, width));
+    this.lines = [this.theme.bold(this.theme.fg("accent", title)), "", ...body].map((line) =>
+      truncateToWidth(line, width),
+    );
     return this.lines;
+  }
+
+  private renderMarkdown(width: number): readonly string[] {
+    this.markdown ??= this.text
+      ? new Markdown(this.text, 0, 0, getMarkdownTheme())
+      : new Markdown(sanitizeTerminalDocument(this.placeholder), 0, 0, getMarkdownTheme(), {
+          color: (text) => this.theme.fg("muted", text),
+        });
+    return this.markdown.render(width);
   }
 }

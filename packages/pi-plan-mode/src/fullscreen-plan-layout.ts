@@ -14,6 +14,7 @@ type Viewport = { width: number; height: number };
 
 export interface MountedPlanLayout {
   isVisible(): boolean;
+  interactionViewport(): Readonly<Viewport> | undefined;
   restore(): void;
 }
 
@@ -55,6 +56,7 @@ export function mountFullscreenPlanLayout(
     if (readRoot() === wrapper) {
       return {
         isVisible: () => ownsLayout() && canShowPane({ width: tui.terminal.columns, height: tui.terminal.rows }),
+        interactionViewport: () => wrapper.interactionViewport(),
         restore,
       };
     }
@@ -172,6 +174,10 @@ function createPlanSplitLayout(
         return true;
       };
       dividerSlot.visible = updateViewport;
+    }
+
+    interactionViewport() {
+      return canDrag(viewport) ? viewport : undefined;
     }
   })();
 }

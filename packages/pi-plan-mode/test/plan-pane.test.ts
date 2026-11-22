@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { type ExtensionContext, initTheme } from "@earendil-works/pi-coding-agent";
 import { Input, stripTerminalSequences, Text, visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
+import type { DraftPreview } from "../src/plan-draft.js";
 import { createPlanPaneController } from "../src/plan-pane.js";
 import { createPlanPaneHost, PANE_KEY } from "./plan-pane-support.js";
 import { createMockContext } from "./support.js";
@@ -25,7 +26,7 @@ function setup(mode?: "regular" | "fullscreen") {
     ctx,
     pane,
     frame: () => terminal.render().map(stripTerminalSequences),
-    async set(side: "left" | "right" | "off", plan?: string) {
+    async set(side: "left" | "right" | "off", plan?: string | DraftPreview) {
       pane.update(ctx, side, plan);
       await Promise.resolve();
       return terminal.render().map(stripTerminalSequences);
@@ -275,6 +276,145 @@ test("pane visibility requires a mounted layout and an exact, displayable comple
     assert.equal(f.pane.showsCompletedPlan(f.ctx.sessionManager, "\u202e"), false);
     f.pane.clear();
     assert.equal(shows(), false);
+  } finally {
+    f.stop();
+  }
+});
+
+function draft(text: string): DraftPreview {
+  return { kind: "draft", text };
+}
+
+test("visible draft revisions compare with the immediately preceding preview", async () => {
+  const f = setup();
+  try {
+    const first = await f.set("right", draft("# First draft\n\nKeep this.\n"));
+    assert.match(first.join("\n"), /First draft/u);
+    assert.doesNotMatch(first.join("\n"), /Show Markdown|@@|\+.*First draft/u);
+    const second = await f.set("right", draft("# Second draft\n\nKeep this.\n"));
+    assert.match(second.join("\n"), /-# First draft/u);
+    assert.match(second.join("\n"), /\+# Second draft/u);
+    assert.deepEqual(await f.set("right", draft("# Second draft\r\n\r\nKeep this.\r\n")), second);
+    const third = await f.set("right", draft("# Third draft\n\nKeep this.\n"));
+    assert.match(third.join("\n"), /-# Second draft/u);
+    assert.match(third.join("\n"), /\+# Third draft/u);
+    assert.doesNotMatch(third.join("\n"), /First draft/u);
+    const completed = await f.set("right", "# Third draft\n\nKeep this.\n");
+    assert.match(completed.join("\n"), /Plan · Ready/u);
+    assert.doesNotMatch(completed.join("\n"), /Show Markdown|@@|Second draft/u);
+  } finally {
+    f.stop();
+  }
+});
+
+test.each(["left", "right"] as const)(
+  "the %s draft toggle stays reachable and never takes editor focus",
+  async (side) => {
+    const f = setup();
+    const text = (word: string) =>
+      `# ${word}\n\n${Array.from({ length: 45 }, (_, i) => `${word} line ${i}`).join("\n")}\n`;
+    try {
+      f.resize(80, 12);
+      await f.set(side, draft(text("Original")));
+      const changes = await f.set(side, draft(text("Revised")));
+      const column = side === "left" ? 1 : dividerColumn(changes) + 1;
+      const view = () => f.frame().join("\n");
+      const click = () => {
+        mouse(f, 0, column, "M", 1);
+        mouse(f, 0, column, "m", 1);
+      };
+      assert.match(changes[0] ?? "", /\[Show Markdown\]/u);
+      const transcript = f.transcript.scrollTop;
+      for (let index = 0; index < 40; index += 1) mouse(f, 73, column, "M", 1);
+      assert.match(view(), /\+Revised line 44/u);
+      assert.match(f.frame()[0] ?? "", /\[Show Markdown\]/u);
+      assert.equal(f.transcript.scrollTop, transcript);
+      mouse(f, 0, column, "M", 1);
+      mouse(f, 32, column + 1, "M", 1);
+      mouse(f, 0, column, "m", 1);
+      assert.match(view(), /Show Markdown/u);
+      mouse(f, 0, column, "M", 1);
+      f.resize(81, 12);
+      f.frame();
+      f.resize(80, 12);
+      f.frame();
+      mouse(f, 0, column, "m", 1);
+      assert.match(view(), /Show Markdown/u);
+
+      const overlay = f.terminal.fullscreen.showOverlay(new Input(), {
+        anchor: side === "left" ? "top-left" : "top-right",
+        width: 18,
+      });
+      try {
+        f.frame();
+        const overlayColumn = side === "left" ? column : column + 10;
+        mouse(f, 0, overlayColumn, "M", 1);
+        mouse(f, 0, overlayColumn, "m", 1);
+      } finally {
+        overlay.hide();
+      }
+      assert.match(view(), /Show Markdown/u);
+      click();
+      assert.match(view(), /Show changes/u);
+      assert.match(view(), /Revised line 0/u);
+      assert.doesNotMatch(view(), /Original|@@|\+Revised/u);
+      mouse(f, 65, column, "M", 1);
+      const scrolled = view();
+      assert.deepEqual((await f.set(side, draft(text("Revised")))).join("\n"), scrolled);
+      click();
+      assert.match(view(), /-# Original/u);
+      assert.match(view(), /\+# Revised/u);
+      assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
+      assert.equal(f.transcript.scrollTop, transcript);
+      f.send("\u001b[200~kept\neditor\u001b[201~");
+      assert.equal(f.editor.getExpandedText(), "main draftkept\neditor");
+      assert.ok(f.frame().every((line) => visibleWidth(line) <= 80));
+    } finally {
+      f.stop();
+    }
+  },
+);
+
+test("hidden updates and replacement renderers reopen on Markdown without replaying changes", async () => {
+  const f = setup();
+  try {
+    await f.set("right", draft("# First"));
+    assert.match((await f.set("right", draft("# Second"))).join("\n"), /Show Markdown/u);
+    for (const [columns, rows] of [
+      [79, 18],
+      [100, 11],
+    ] as const) {
+      f.resize(columns, rows);
+      assert.doesNotMatch(f.frame().join("\n"), /Show Markdown|Second/u);
+      f.resize(100, 18);
+      assert.match(f.frame().join("\n"), /Show Markdown/u);
+    }
+    f.resize(79, 18);
+    await f.set("right", draft("# Unseen revision"));
+    f.resize(100, 18);
+    const latest = f.frame().join("\n");
+    assert.match(latest, /Unseen revision/u);
+    assert.doesNotMatch(latest, /Show Markdown|Second/u);
+    const next = (await f.set("right", draft("# Visible revision"))).join("\n");
+    assert.match(next, /-# Unseen revision/u);
+    mouse(f, 0, dividerColumn(f.frame()) + 1, "M", 1);
+    f.switchMode("regular");
+    await f.set("right", draft("# Regular revision"));
+    f.switchMode("fullscreen");
+    await Promise.resolve();
+    assert.match(f.frame().join("\n"), /Regular revision/u);
+    assert.doesNotMatch(f.frame().join("\n"), /Show Markdown|Visible revision/u);
+    assert.match((await f.set("right", draft("# Later revision"))).join("\n"), /-# Regular revision/u);
+    f.switchMode("regular");
+    f.switchMode("fullscreen");
+    await Promise.resolve();
+    assert.doesNotMatch(f.frame().join("\n"), /Show Markdown|Regular revision/u);
+    assert.match(f.frame().join("\n"), /Later revision/u);
+    await f.set("right", { kind: "error", reason: "Draft unavailable." });
+    assert.match((await f.set("right", draft("# Recovered"))).join("\n"), /Recovered/u);
+    assert.doesNotMatch(f.frame().join("\n"), /Show Markdown|Later revision/u);
+    assert.match((await f.set("right", draft("# Next"))).join("\n"), /-# Recovered/u);
+    assert.doesNotMatch((await f.set("left", draft("# Next"))).join("\n"), /Show Markdown|Recovered/u);
   } finally {
     f.stop();
   }

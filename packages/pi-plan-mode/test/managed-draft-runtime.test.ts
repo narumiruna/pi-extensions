@@ -166,6 +166,12 @@ test.each(modes)("real Pi in %s snapshots the draft and preserves the provider p
     for (const name of ["read", "write", "edit"]) assert.equal(native.get(name)?.path, `builtin:${name}`);
     await session.prompt("/plan start");
     await session.prompt("Prepare a plan.");
+    if (terminal) {
+      const frame = terminal.render().map(stripTerminalSequences).join("\n");
+      assert.match(frame, /-# 初稿/u);
+      assert.match(frame, /\+# 定稿/u);
+      assert.match(frame, /Show Markdown/u);
+    }
     assert.equal(await readFile(path, "utf8"), draftTwo);
     await assert.rejects(readFile(join(root, "forbidden.md")), { code: "ENOENT" });
     const messages = () => created.session.messages.filter((message) => message.role === "toolResult");
@@ -195,6 +201,7 @@ test.each(modes)("real Pi in %s snapshots the draft and preserves the provider p
     if (terminal) {
       const frame = terminal.render().map(stripTerminalSequences).join("\n");
       assert.match(frame, /Plan complete\. See the Plan pane\./u);
+      assert.doesNotMatch(frame, /Show Markdown|@@|初稿/u);
       assert.equal(frame.match(/定稿/gu)?.length, 1);
       const html = await readFile(await session.exportToHtml(join(root, "session.html")), "utf8");
       const base64 = /<script id="session-data" type="application\/json">([^<]+)<\/script>/u.exec(html)?.[1];

@@ -8,7 +8,7 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 
 - Starts and manages Plan mode through `/plan`, `/plan start`, or `/plan <prompt>`.
 - Keeps project files read-only and lets eligible workflows edit one private Markdown draft with Pi's native tools.
-- Shows the latest draft in the fullscreen side pane and snapshots it on completion.
+- Shows what changed between draft revisions in the fullscreen side pane and snapshots the full plan on completion.
 - Switches between structured questionnaires and free discussion without changing tool permissions.
 - Uses explicit completion for a decision-ready plan.
 - Reviews the complete plan before implementation, export, save, further planning, or discard.
@@ -419,7 +419,9 @@ Read the [settings reference](./docs/settings.md) for all accepted values, tool-
 
 ## 🚧 Limitations
 
-The Plan pane shows the current Markdown draft, or the completed snapshot once it is ready. In read-only workflows it starts blank except for a waiting message. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
+The Plan pane shows the first managed draft and the completed plan as Markdown. When the visible pane receives a revised draft, it shows `+` added lines and `-` removed lines against the previous draft preview. Click **Show Markdown** to read the full draft or **Show changes** to return to the diff. Each new visible revision opens in the diff view. The toggle does not edit the draft.
+
+The pane opens in Markdown after a reload or after draft changes while it was hidden. In read-only workflows it starts with a waiting message. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
 
 The pane starts at about one-third of the terminal width. Drag the divider with the left mouse button to resize it on either side without moving keyboard focus. The pane keeps at least 24 columns and the conversation at least 48. The chosen width lasts until the pane closes, moves to the other side, or the fullscreen layout is replaced; it is not saved.
 

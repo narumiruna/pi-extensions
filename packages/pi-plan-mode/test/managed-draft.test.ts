@@ -144,15 +144,21 @@ test.each(["right", "left", "off"] as const)(
       await createWriteTool(f.dir).execute("write", { path, content: raw });
       await f.end("write", "write");
       assert.equal((await f.frame()).includes("草稿"), planPane !== "off");
-      assert.doesNotMatch(await f.frame(), /\u202e/u);
+      assert.doesNotMatch(await f.frame(), /\u202e|Show Markdown|@@/u);
       assert.equal(await f.call("edit", path, "edit"), undefined);
       await createEditTool(f.dir).execute("edit", { path, edits: [{ oldText: "草稿", newText: "新版" }] });
       await f.end("edit", "edit");
-      assert.equal((await f.frame()).includes("新版"), planPane !== "off");
-      assert.doesNotMatch(await f.frame(), /草稿/u);
+      const revised = raw.replace("草稿", "新版");
+      const changes = await f.frame();
+      assert.equal(changes.includes("-# 草稿"), planPane !== "off");
+      assert.equal(changes.includes("+# 新版"), planPane !== "off");
+      assert.doesNotMatch(changes, /\u202e/u);
+      assert.equal(await readFile(path, "utf8"), revised);
       const completed = await f.complete({ plan: "Wrong plan" });
-      assert.equal(completed.details.plan, raw.replace("草稿", "新版"));
+      assert.equal(completed.details.plan, revised);
       assert.equal((await f.frame()).includes("Plan · Ready"), planPane !== "off");
+      assert.doesNotMatch(await f.frame(), /草稿|Show Markdown|@@/u);
+      assert.equal(await readFile(path, "utf8"), revised);
       assert.deepEqual(await f.call("write", path), {
         block: true,
         reason: "Only direct, active Pi native tools may change an unfinished Plan draft.",
@@ -366,6 +372,11 @@ test("invalid draft reads are recoverable and the last write is reread after can
       assert.match(await f.frame(), /Keep the draft within/u);
       await assert.rejects(f.complete(), /Keep the draft within/u);
     }
+    assert.equal(await f.call("write", path, "recovery"), undefined);
+    await writeFile(path, "# Recovered draft\n");
+    await f.end("write", "recovery");
+    assert.match(await f.frame(), /Recovered draft/u);
+    assert.doesNotMatch(await f.frame(), /Show Markdown|@@/u);
     const abort = new AbortController();
     Object.assign(f.ctx, { signal: abort.signal });
     assert.equal(await f.call("write", path, "cancelled"), undefined);
@@ -374,7 +385,8 @@ test("invalid draft reads are recoverable and the last write is reread after can
     await f.end("write", "cancelled", true);
     assert.doesNotMatch(await f.frame(), /Landed/u);
     await f.emit("agent_settled");
-    assert.match(await f.frame(), /Landed before abort/u);
+    assert.match(await f.frame(), /-# Recovered draft/u);
+    assert.match(await f.frame(), /\+# Landed before abort/u);
     Object.assign(f.ctx, { signal: undefined });
     assert.equal((await f.complete()).details.plan, "# Landed before abort");
   } finally {
@@ -382,7 +394,7 @@ test("invalid draft reads are recoverable and the last write is reread after can
   }
 });
 
-test("preview waits for native file mutation and cannot redraw after a workflow exits", async () => {
+test.each(["exit", "shutdown"] as const)("a pending draft preview cannot redraw after %s", async (boundary) => {
   const f = await fixture();
   let release!: () => void;
   const hold = new Promise<void>((resolve) => {
@@ -392,6 +404,10 @@ test("preview waits for native file mutation and cannot redraw after a workflow 
   try {
     await f.applyContext();
     const path = f.draftPath();
+    assert.equal(await f.call("write", path, "baseline"), undefined);
+    await writeFile(path, "# Previous draft");
+    await f.end("write", "baseline");
+    assert.match(await f.frame(), /Previous draft/u);
     const entered = new Promise<void>((resolve) => {
       unlock = withFileMutationQueue(path, async () => {
         resolve();
@@ -403,10 +419,11 @@ test("preview waits for native file mutation and cannot redraw after a workflow 
     assert.equal(await f.call("write", path, "write"), undefined);
     const refresh = f.end("write", "write");
     assert.doesNotMatch(await f.frame(), /Last bytes/u);
-    await f.invoke("exit");
+    if (boundary === "exit") await f.invoke("exit");
+    else await f.emit("session_shutdown", { reason: "reload" });
     release();
     await refresh;
-    assert.doesNotMatch(await f.frame(), /Last bytes|│/u);
+    assert.doesNotMatch(await f.frame(), /Last bytes|Previous draft|Show Markdown|│/u);
   } finally {
     release();
     await unlock;
@@ -419,6 +436,10 @@ test("serialized mutations publish the newest draft and same-session reload read
   try {
     await f.applyContext();
     const path = f.draftPath();
+    assert.equal(await f.call("write", path, "baseline"), undefined);
+    await writeFile(path, "# Visible baseline");
+    await f.end("write", "baseline");
+    assert.match(await f.frame(), /Visible baseline/u);
     await f.call("write", path, "first");
     await f.call("write", path, "second");
     const tool = createWriteTool(f.dir);
@@ -429,12 +450,15 @@ test("serialized mutations publish the newest draft and same-session reload read
     assert.doesNotMatch(await f.frame(), /Earlier text/u);
     await second;
     await f.end("write", "second");
-    assert.match(await f.frame(), /Newest text/u);
+    assert.match(await f.frame(), /-# Visible baseline/u);
+    assert.match(await f.frame(), /\+# Newest text/u);
+    assert.doesNotMatch(await f.frame(), /Earlier text/u);
     const state = f.currentState();
     await writeFile(path, "# Reloaded draft");
     await f.emit("session_shutdown", { reason: "reload" });
     await f.changeBranch(state, undefined, "session_start");
     assert.match(await f.frame(), /Reloaded draft/u);
+    assert.doesNotMatch(await f.frame(), /Show Markdown|Newest text/u);
     assert.equal(await f.call("write", path), undefined);
   } finally {
     await f.close();
