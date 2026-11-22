@@ -34,8 +34,8 @@ import {
   operationPrefix,
   REVIEW_PAGE_CHARS,
   record,
-  validId,
 } from "./protocol.js";
+import { STATE_WAIT_FAILURE_LIMIT, stateWaitJobs, stateWaitResult } from "./state-wait-jobs.js";
 
 export { DaemonError, requestDaemon } from "./client-transport.js";
 
@@ -342,7 +342,7 @@ export class DaemonConnection {
   private observesState = false;
   private stateRevision?: string;
   private terminalJobs = new Set<string>();
-  private jobWaiters = new Map<string, PromiseWithResolvers<void>>();
+  private jobWaiters = new Map<string, PromiseWithResolvers<"terminal" | "poll">>();
   private uncertain = false;
   private reportedError = false;
   private commits = new Map<string, { notify(): void; signal?: AbortSignal }>();
@@ -557,14 +557,15 @@ export class DaemonConnection {
           { id, client: this.facts.id, operation, payload },
           this.controller.signal,
         );
-        const negotiated = this.observesState;
-        if (negotiated && !this.terminalJobs.has(id)) {
-          const completion = Promise.withResolvers<void>();
+        let terminalObserved = this.observesState;
+        if (terminalObserved && !this.terminalJobs.has(id)) {
+          const completion = Promise.withResolvers<"terminal" | "poll">();
           this.jobWaiters.set(id, completion);
           const keepAlive = setInterval(() => {}, 30_000);
           try {
-            await completion.promise;
+            terminalObserved = (await completion.promise) === "terminal";
           } finally {
+            this.jobWaiters.delete(id);
             clearInterval(keepAlive);
           }
         }
@@ -587,7 +588,7 @@ export class DaemonConnection {
             signal?.throwIfAborted();
             return job.result;
           }
-          if (negotiated) throw new Error("Daemon did not return a terminal operation result.");
+          if (terminalObserved) throw new Error("Daemon did not return a terminal operation result.");
           await this.wait(25, true);
         }
         throw new Error("Daemon client closed before operation completed.");
@@ -612,7 +613,6 @@ export class DaemonConnection {
         }
       },
     ).finally(() => {
-      this.jobWaiters.delete(id);
       this.pendingJobs.delete(id);
     });
   }
@@ -866,7 +866,7 @@ export class DaemonConnection {
     }
   }
   private async observeState() {
-    const jobs = [...this.jobWaiters.keys()];
+    const jobs = stateWaitJobs(this.jobWaiters);
     const reply = await requestDaemon(
       this.paths,
       this.identity,
@@ -881,19 +881,19 @@ export class DaemonConnection {
       this.controller.signal,
       { onSocket: (socket) => socket.unref() },
     );
-    if (
-      !record(reply) ||
-      typeof reply.stateRevision !== "string" ||
-      !/^[0-9]{1,40}$/u.test(reply.stateRevision) ||
-      !Array.isArray(reply.finished) ||
-      !Array.isArray(reply.missing) ||
-      !reply.finished.every(validId) ||
-      !reply.missing.every(validId)
-    )
-      throw new Error("Invalid daemon state-wait response.");
-    return { reply, version: reply.stateRevision, finished: reply.finished, missing: reply.missing };
+    return stateWaitResult(reply);
   }
   private async poll() {
+    await withCleanup(
+      () => this.pollUntilClosed(),
+      async () => {
+        for (const waiter of this.jobWaiters.values())
+          waiter.reject(this.controller.signal.reason ?? new Error("Daemon client closed."));
+      },
+    );
+  }
+  private async pollUntilClosed() {
+    let failures = 0;
     while (!this.closed) {
       try {
         const revision = this.contactRevision;
@@ -913,7 +913,7 @@ export class DaemonConnection {
           if (state) {
             this.stateRevision = state.version;
             this.terminalJobs = new Set(state.finished);
-            for (const id of state.finished) this.jobWaiters.get(id)?.resolve();
+            for (const id of state.finished) this.jobWaiters.get(id)?.resolve("terminal");
             for (const id of state.missing)
               this.jobWaiters
                 .get(id)
@@ -935,10 +935,12 @@ export class DaemonConnection {
             if (contact !== undefined) this.options.contact?.(contact);
           }
         }
+        failures = 0;
         if (!state) await this.wait(100);
       } catch (error) {
-        for (const waiter of this.jobWaiters.values()) waiter.reject(error);
         if (this.closed) return;
+        if (++failures >= STATE_WAIT_FAILURE_LIMIT)
+          for (const waiter of this.jobWaiters.values()) waiter.resolve("poll");
         if (this.attached) this.reportError(error);
         try {
           await this.wait(100);

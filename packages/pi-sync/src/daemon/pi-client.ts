@@ -17,7 +17,6 @@ import {
   findDaemon,
   MAX_SETTINGS_BYTES,
   modelSignature,
-  requestDaemon,
   waitForDaemonExit,
 } from "@narumitw/pi-sync-daemon";
 import { type ConfigAuthority, configureEngineHost } from "@narumitw/pi-sync-daemon/engine/host";
@@ -41,6 +40,7 @@ import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
 import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
+import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
 
 const scope = new AsyncLocalStorage<{ client: PiDaemonClient; reload?: AbortController }>();
 const clients = new WeakMap<ExtensionContext["sessionManager"], PiDaemonClient>();
@@ -230,6 +230,7 @@ export class PiDaemonClient {
   private protectionOnly = false;
   private partialConnection?: DaemonConnection;
   private work = Promise.resolve();
+  private factsQueue = Promise.resolve();
   private closing = false;
   private paused = false;
   private pausing?: Promise<void>;
@@ -393,12 +394,14 @@ export class PiDaemonClient {
   }
   async finishReattachment() {
     this.validate();
-    if (this.connection) {
-      await recoverDetachedClients({ paths: this.connection.paths, identity: this.connection.identity });
-      this.validate();
-      await this.connection.attach(this.signal);
-      this.validate();
-    }
+    const connection = this.connection;
+    if (!connection) return;
+    await recoverDetachedClients(connection);
+    await this.queueFacts(async () => {
+      this.validateFactsScope(connection);
+      await connection.attach(this.signal);
+      this.validateFactsScope(connection);
+    });
   }
   async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
     const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
@@ -436,7 +439,7 @@ export class PiDaemonClient {
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
         const protectionOnly = daemon.needsUpgrade === true;
         const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
-          callback: (callback, signal) => this.callback(callback, signal, protectionOnly),
+          callback: (callback, signal) => this.callback(connection, callback, signal, protectionOnly),
           mergeReview:
             !protectionOnly && this.ctx.hasUI
               ? (callback, loadDetails, signal) => this.pagedMergeReview(connection, callback, loadDetails, signal)
@@ -564,71 +567,85 @@ export class PiDaemonClient {
     this.contactFactsUnpublished = false;
     this.clearConnectionStatus();
   }
-  private async resumeContact(connection: DaemonConnection) {
+  private queueFacts<T>(publish: () => Promise<T>): Promise<T> {
+    const result = this.factsQueue.then(publish);
+    this.factsQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+  private validateFactsScope(connection?: DaemonConnection, signal?: AbortSignal) {
     this.validate();
-    if (this.paused || this.connection !== connection) throw new Error("Pi Sync is paused for a session change.");
+    signal?.throwIfAborted();
+    if (this.paused) throw new Error("Pi Sync is paused for a session change.");
+    if (connection && connection !== (this.connection ?? this.partialConnection))
+      throw new Error("Synchronization session was replaced.");
+  }
+  private async resumeContact(connection: DaemonConnection) {
+    this.validateFactsScope(connection);
     if (this.contactRepair) return this.contactRepair.done;
-    if (connection.contactState === "active" && connection.contactResumeState !== "uncertain") return;
-    if (this.gate.size || connection.hasPendingWork || connection.contactResumeState === "uncertain") {
-      throw new Error(
-        "Pi Sync cannot reconnect while previous work is still running or uncertain. Check sync recovery before retrying.",
-      );
-    }
-    const earlier = this.contactAttempt;
-    if (connection.contactState !== "expired" || earlier) {
-      throw new Error("Pi Sync could not restore contact. Review pending work before using /reload.", {
-        cause: earlier?.error,
-      });
-    }
     const controller = new AbortController();
     const signal = AbortSignal.any([this.signal, controller.signal]);
-    const attempt: { error?: unknown } = {};
-    this.contactAttempt = attempt;
-    const done = Promise.resolve().then(async () => {
+    const done = this.queueFacts(async () => {
+      this.validateFactsScope(connection, signal);
+      if (connection.contactState === "active" && connection.contactResumeState !== "uncertain") return;
+      if (this.gate.size || connection.hasPendingWork || connection.contactResumeState === "uncertain") {
+        throw new Error(
+          "Pi Sync cannot reconnect while previous work is still running or uncertain. Check sync recovery before retrying.",
+        );
+      }
+      const earlier = this.contactAttempt;
+      if (connection.contactState !== "expired" || earlier) {
+        throw new Error("Pi Sync could not restore contact. Review pending work before using /reload.", {
+          cause: earlier?.error,
+        });
+      }
+      const attempt: { error?: unknown } = {};
+      this.contactAttempt = attempt;
       try {
-        this.validate();
-        signal.throwIfAborted();
         this.showContactStatus("sync reconnecting", "retry");
         // Admission can wait behind an apply. Do not advertise readiness using
         // facts sampled before that wait; publish current facts after the ack.
         await connection.resumeContact({ ...this.facts(), idle: false, ready: false }, signal);
-        this.validate();
-        signal.throwIfAborted();
+        this.validateFactsScope(connection, signal);
         this.contactFactsUnpublished = true;
         this.contactAttempt = undefined;
-        await connection.update(this.facts());
-        this.validate();
-        signal.throwIfAborted();
-        this.confirmContact(connection);
+        await this.publishCurrentFacts(connection, signal);
       } catch (error) {
         attempt.error = error;
-        if (this.ownsContactUI() && !signal.aborted)
+        if (this.ownsContactUI() && !signal.aborted) {
+          this.validateFactsScope(connection, signal);
           this.showContactStatus("sync reconnect blocked; check /sync daemon status", "blocked");
+        }
         throw error;
-      } finally {
-        if (this.contactRepair?.controller === controller) this.contactRepair = undefined;
       }
+    }).finally(() => {
+      if (this.contactRepair?.controller === controller) this.contactRepair = undefined;
     });
     this.contactRepair = { controller, done };
     return done;
   }
-  private async publishFacts(connection: DaemonConnection) {
-    if (this.contactRepair) await this.contactRepair.done;
-    this.validate();
-    if (this.paused) throw new Error("Pi Sync is paused for a session change.");
+  private async publishCurrentFacts(connection: DaemonConnection, signal?: AbortSignal) {
+    this.validateFactsScope(connection, signal);
     if (connection.contactResumeState === "uncertain")
       throw new Error("Pi Sync cannot verify the previous reconnect. Review pending work before using /reload.");
+    await connection.update(this.facts());
+    this.validateFactsScope(connection, signal);
+    this.confirmContact(connection);
+  }
+  private async publishFacts(connection: DaemonConnection, signal?: AbortSignal) {
+    if (this.contactRepair) await this.contactRepair.done;
+    const publish = () => this.queueFacts(() => this.publishCurrentFacts(connection, signal));
     try {
-      await connection.update(this.facts());
+      await publish();
     } catch (error) {
+      this.validateFactsScope(connection, signal);
       if (!connection.facts.hasUI || !remoteErrorNamed(error, "ClientContactExpiredError")) throw error;
       await this.resumeContact(connection);
-      this.validate();
       // A shared repair might have started before these facts changed.
-      await connection.update(this.facts());
+      await publish();
     }
-    this.validate();
-    this.confirmContact(connection);
   }
   private confirmContact(connection: DaemonConnection) {
     if (connection.contactState === "expired" || connection.contactState === "inactive")
@@ -638,7 +655,7 @@ export class PiDaemonClient {
   async verifyConnection(signal?: AbortSignal) {
     const connection = await this.connect(undefined, signal);
     signal?.throwIfAborted();
-    await this.publishFacts(connection);
+    await this.publishFacts(connection, signal);
     signal?.throwIfAborted();
     return connection;
   }
@@ -693,7 +710,7 @@ export class PiDaemonClient {
     signal?.throwIfAborted();
     if (this.paused)
       await connection.update(this.facts()); // Existing, explicitly attached shutdown path.
-    else await this.publishFacts(connection);
+    else await this.publishFacts(connection, signal);
     this.validate();
     signal?.throwIfAborted();
     this.uiContext = ctx;
@@ -760,42 +777,28 @@ export class PiDaemonClient {
   tryStartupBootstrap(document: LocalConfigDocument, debug: boolean, signal: AbortSignal) {
     const ownedSignal = AbortSignal.any([signal, this.signal]);
     const operation = this.work.then(async () => {
-      const verify = () => {
-        this.validate();
-        ownedSignal.throwIfAborted();
-        if (this.paused || this.pendingReload) throw new Error("Pi Sync is paused for a session change.");
+      const verify = (connection?: DaemonConnection) => {
+        this.validateFactsScope(connection, ownedSignal);
+        if (this.pendingReload) throw new Error("Pi Sync is paused for a session change.");
       };
       verify();
       const connection = await this.connect(undefined, ownedSignal);
-      verify();
-      let result: unknown;
-      try {
-        result = await requestDaemon(
-          connection.paths,
-          connection.identity,
-          "startup.bootstrap",
-          {
-            client: this.id,
-            generation: this.generation,
-            fingerprint: fingerprint(document),
-            debug,
+      return this.queueFacts(async () => {
+        verify(connection);
+        const ready = await requestStartupBootstrap(connection, fingerprint(document), debug, ownedSignal).catch(
+          (error: unknown) => {
+            verify(connection);
+            throw error;
           },
-          ownedSignal,
         );
-      } catch (error) {
-        verify();
-        if (remoteErrorNamed(error, "Error") && (error as DaemonError).message === "Unknown daemon method.")
-          return false;
-        throw error;
-      }
-      verify();
-      if (result === false) return false;
-      if (result !== true || connection !== this.connection) throw new Error("Invalid startup bootstrap response.");
-      this.confirmContact(connection);
-      this.startupDebug = debug;
-      this.initialized = true;
-      Object.assign(connection.facts, { ready: true, startupDebug: debug });
-      return true;
+        verify(connection);
+        if (!ready) return false;
+        this.confirmContact(connection);
+        this.startupDebug = debug;
+        this.initialized = true;
+        Object.assign(connection.facts, { ready: true, startupDebug: debug });
+        return true;
+      });
     });
     this.work = operation.then(
       () => {},
@@ -863,7 +866,12 @@ export class PiDaemonClient {
     this.validate();
     return result;
   }
-  private async callback(callback: Callback, signal: AbortSignal, protectionOnly: boolean) {
+  private async callback(
+    connection: DaemonConnection,
+    callback: Callback,
+    signal: AbortSignal,
+    protectionOnly: boolean,
+  ) {
     const payload = callback.payload as {
       reservation?: string;
       targets?: string[];
@@ -900,13 +908,19 @@ export class PiDaemonClient {
     const combined = AbortSignal.any([signal, this.signal]);
     if (callback.kind === "model-binding") {
       if (protectionOnly) return null;
-      const facts = this.facts();
-      const connection = this.connection ?? this.partialConnection;
-      if (connection && JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {
-        await connection.update(facts);
-        this.validate();
-      }
-      return payload.background && !facts.idle ? null : (facts.model ?? null);
+      return this.queueFacts(async () => {
+        this.validateFactsScope(connection, combined);
+        let facts = this.facts();
+        if (JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {
+          await connection.update(facts);
+          this.validateFactsScope(connection, combined);
+          facts = this.facts();
+        }
+        return (payload.background && !facts.idle) ||
+          JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)
+          ? null
+          : (facts.model ?? null);
+      });
     }
     if (callback.kind === "reload") {
       if (!this.reloadRequest) throw new Error("No active Pi command can reload resources.");
@@ -985,7 +999,7 @@ export class PiDaemonClient {
           if (confirmed) await gate.releaseAfterDrain();
           else quarantineClient(gate, connection.paths.root, connection.identity, connection.facts);
         }
-        await this.work;
+        await Promise.all([this.work, this.factsQueue]);
       }
     })();
     return this.disposing;

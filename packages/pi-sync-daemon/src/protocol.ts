@@ -100,6 +100,7 @@ export interface JobView {
   error?: RemoteError;
 }
 export type ClientContact = "active" | "expired" | "inactive";
+export const DAEMON_JOB_CAPACITY = 64;
 export const STATE_WAIT_HEARTBEAT_MS = 1_000;
 export interface StateWaitReply extends PollReply {
   stateRevision: string;

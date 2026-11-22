@@ -28,6 +28,7 @@ import {
   type ClientEvent,
   type ClientFacts,
   type ClientHandoff,
+  DAEMON_JOB_CAPACITY,
   DaemonStoppingError,
   type Execute,
   type Execution,
@@ -403,7 +404,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       throw new Error("Operation result expired; reconcile the existing journal before starting new work.");
     if (retired.size + jobs.size >= 4096)
       throw new Error("Daemon operation ledger is full; drain and restart explicitly.");
-    if (jobs.size >= 64) {
+    if (jobs.size >= DAEMON_JOB_CAPACITY) {
       for (const [key, job] of jobs)
         if (job.view.phase === "done" || job.view.phase === "failed") {
           retired.add(key);
@@ -412,7 +413,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           if (owner) waiters.get(owner)?.changed();
           break;
         }
-      if (jobs.size >= 64) throw new Error("Daemon job capacity reached.");
+      if (jobs.size >= DAEMON_JOB_CAPACITY) throw new Error("Daemon job capacity reached.");
     }
     const job: Job = {
       view: { id, phase: "queued" },
@@ -503,6 +504,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         job.view.phase === "running" &&
         !job.committed &&
         !job.controller.signal.aborted &&
+        job.participantGeneration === undefined &&
         review?.startupReviewLock &&
         review.callback.job === job.view.id &&
         review.target !== client
@@ -823,7 +825,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       if (
         params.generation !== generation ||
         !Array.isArray(requested) ||
-        requested.length > 64 ||
+        requested.length > DAEMON_JOB_CAPACITY ||
         !requested.every(validId)
       )
         throw new Error("Invalid state wait.");

@@ -5,12 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { test, vi } from "vitest";
 import { requestDaemon } from "../src/client.js";
-import type { ClientFacts } from "../src/protocol.js";
-import type { startServer } from "../src/server.js";
+import type { Callback, ClientFacts, Execute } from "../src/protocol.js";
+import type { ServerHooks, startServer } from "../src/server.js";
 import { withRpcServer } from "./rpc-server-fixture.js";
 
+type StartupHooks = NonNullable<ServerHooks["startup"]>;
 const injected = vi.hoisted(() => ({
-  probe: undefined as ((signal: AbortSignal) => Promise<() => boolean>) | undefined,
+  reviewLock: undefined as ReturnType<StartupHooks["captureReviewLock"]>,
+  probe: undefined as StartupHooks["probe"] | undefined,
 }));
 vi.mock("../src/server.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/server.js")>();
@@ -20,12 +22,88 @@ vi.mock("../src/server.js", async (importOriginal) => {
       actual.startServer(args[0], args[1], {
         ...args[2],
         startup: {
-          captureReviewLock: () => undefined,
-          probe: async (_fingerprint, signal) => injected.probe?.(signal),
+          captureReviewLock: () => injected.reviewLock,
+          probe: async (...args: Parameters<StartupHooks["probe"]>) => injected.probe?.(...args),
         },
       }),
   };
 });
+
+function startupFacts(root: string): ClientFacts {
+  return {
+    id: randomUUID(),
+    generation: randomUUID(),
+    pid: process.pid,
+    cwd: root,
+    ready: false,
+    mode: "rpc",
+    hasUI: true,
+    idle: true,
+  };
+}
+
+test.each(["startup-transfer", "shutdown", "daemon.authorize", "daemon.authorize-connected"])(
+  "startup defers to a held review fenced by participant generation (%s)",
+  async (operation) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-startup-ready-")));
+    const execute: Execute = async (_operation, _payload, execution) => {
+      const answer = await execution.request("confirm", {});
+      execution.validate();
+      return answer;
+    };
+    try {
+      await withRpcServer(root, execute, async ({ server, createConnection }) => {
+        const opened = Promise.withResolvers<Callback>();
+        const answer = Promise.withResolvers<boolean>();
+        const reviewer = await createConnection(
+          { ...startupFacts(root), ready: true },
+          {
+            callback: async (callback) => {
+              opened.resolve(callback);
+              return answer.promise;
+            },
+          },
+        ).attach();
+        const facts = startupFacts(root);
+        await createConnection(facts, { callback: async () => null }).attach();
+        const generation = server.participantGeneration();
+        const probe = vi.fn<StartupHooks["probe"]>(async (_fingerprint, _signal, lock) => lock);
+        injected.probe = probe;
+        injected.reviewLock = () => true;
+        const reviewed = reviewer.run(operation, {});
+        void reviewed.catch(() => {});
+        try {
+          const callback = await Promise.race([
+            opened.promise,
+            reviewed.then(() => {
+              throw new Error("Job finished before opening a review.");
+            }),
+          ]);
+          assert.equal(callback.kind, "confirm");
+          const ready = await requestDaemon(server.paths, server.identity, "startup.bootstrap", {
+            client: facts.id,
+            generation: facts.generation,
+            fingerprint: "0".repeat(64),
+            debug: true,
+          });
+          assert.equal(ready, false);
+          assert.equal(probe.mock.calls.length, 0);
+          assert.equal(server.participants().find((peer) => peer.id === facts.id)?.ready, false);
+          assert.equal(server.participantGeneration(), generation);
+          answer.resolve(true);
+          assert.equal(await reviewed, true);
+        } finally {
+          answer.resolve(false);
+          await reviewed.catch(() => {});
+          injected.probe = undefined;
+          injected.reviewLock = undefined;
+        }
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test.each(["recovery change", "owner facts changed", "request cancellation", "publication failure"] as const)(
   "startup never exposes readiness across %s during ledger staging",
@@ -36,16 +114,7 @@ test.each(["recovery change", "owner facts changed", "request cancellation", "pu
         root,
         async () => {},
         async ({ server, createConnection }) => {
-          const facts: ClientFacts = {
-            id: randomUUID(),
-            generation: randomUUID(),
-            pid: process.pid,
-            cwd: root,
-            ready: false,
-            mode: "rpc",
-            hasUI: true,
-            idle: true,
-          };
+          const facts = startupFacts(root);
           const connection = createConnection(facts, { callback: async () => null });
           await connection.attach();
           const peersFile = path.join(server.paths.directory, "clients.json");
@@ -55,7 +124,7 @@ test.each(["recovery change", "owner facts changed", "request cancellation", "pu
           const controller = new AbortController();
           let sound = true;
           let serverSignal: AbortSignal | undefined;
-          injected.probe = async (signal) => {
+          injected.probe = async (_fingerprint, signal) => {
             serverSignal = signal;
             return () => sound;
           };

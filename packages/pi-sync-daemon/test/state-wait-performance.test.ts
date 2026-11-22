@@ -8,7 +8,8 @@ import path from "node:path";
 import { onTestFinished, test, vi } from "vitest";
 import { requestDaemon } from "../src/client.js";
 import { runtimePaths } from "../src/identity.js";
-import type { ClientFacts, Request } from "../src/protocol.js";
+import { type ClientFacts, DAEMON_JOB_CAPACITY, type Request } from "../src/protocol.js";
+import { stateWaitJobs } from "../src/state-wait-jobs.js";
 import { withRpcServer } from "./rpc-server-fixture.js";
 
 async function temporaryFacts(): Promise<ClientFacts> {
@@ -55,6 +56,21 @@ function observeRequests(root: string) {
     },
   };
 }
+
+test("overflow waiters rotate into the bounded request even when new jobs arrive", () => {
+  const ids = Array.from({ length: DAEMON_JOB_CAPACITY + 1 }, (_, index) => `job-${index}`);
+  const waiters = new Map(ids.map((id) => [id, { id }]));
+  const initial = stateWaitJobs(waiters);
+  assert.deepEqual(initial, ids.slice(0, DAEMON_JOB_CAPACITY));
+  const extra = { id: "another-job" };
+  waiters.set(extra.id, extra);
+  for (const id of initial.slice(0, 2)) waiters.delete(id);
+  const second = stateWaitJobs(waiters);
+  assert.equal(second.length, DAEMON_JOB_CAPACITY);
+  assert.equal(second[0], ids.at(-1));
+  assert.ok(second.includes(extra.id));
+  assert.equal(waiters.get(extra.id), extra);
+});
 
 function jobPolls(requests: Request[]) {
   return requests.filter(({ method, params }) => method === "poll" && Boolean((params as { job?: string }).job));
