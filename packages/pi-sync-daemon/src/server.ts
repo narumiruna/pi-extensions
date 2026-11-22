@@ -273,9 +273,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   };
   const liveClientFacts = () =>
     [...participants.values()].filter((peer) => processExists(peer.facts.pid)).map((peer) => peer.facts);
+  const participates = (peer: Participant) => !peer.publishing && (peer.connected || peer.suspected);
   const participantFacts = () =>
     [...participants.values()]
-      .filter((peer) => !peer.publishing && (peer.connected || peer.suspected) && processExists(peer.facts.pid))
+      .filter((peer) => participates(peer) && processExists(peer.facts.pid))
       .map((peer) =>
         peer.closing || peer.suspected || Date.now() - peer.seen > 5_000
           ? { ...(peer.resumeFacts ?? peer.facts), idle: false }
@@ -873,15 +874,16 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   async function expire() {
     if (closed) return;
     let changed = false;
+    let participationChanged = false;
     for (const [id, peer] of participants) {
       const exited = !processExists(peer.facts.pid);
       if (!exited && (!peer.connected || Date.now() - peer.seen <= 5_000)) continue;
+      participationChanged ||= participates(peer);
       peer.connected = false;
       peer.suspected = !exited;
       if (exited) invalidateExpiry(peer);
       else if (!peer.closing && !peer.publishing) peer.expiry = new AbortController();
       changed = true;
-      participantsChanged();
       for (const job of [...jobs.values(), ...backgroundJobs])
         if (!job.committed && (job.client === id || job.peers.has(id)))
           job.controller.abort(new DOMException(exited ? "Client exited" : "Client contact expired", "AbortError"));
@@ -895,10 +897,9 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       }
       // Contact expiry alone retains the live session and its uncertain grants.
     }
-    if (changed) {
-      await savePeers();
-      await hooks.factsChanged?.();
-    }
+    if (participationChanged) participantsChanged();
+    if (changed) await savePeers();
+    if (participationChanged) await hooks.factsChanged?.();
   }
   const lifetime = async (): Promise<IdleExitPolicy> =>
     closed || compromised || peerWriteFailed ? "pause" : ((await hooks.lifetime?.()) ?? "pause");

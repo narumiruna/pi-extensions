@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { test, vi } from "vitest";
 import * as consent from "../src/consent.js";
 import * as config from "../src/engine/settings/config.js";
@@ -214,23 +215,32 @@ for (const change of ["cancelled", "replaced"] as const)
       assert.equal(continuous.start.mock.calls[1]?.[2], false);
     }));
 
-test("settings publication discards the retained retry without starting automatic work", () =>
-  fixture(async ({ monitor, continuous, peers, explicitSync, settings, save }) => {
-    const peer = peers[0];
-    assert.ok(peer);
-    explicitSync("home", peer);
-    settings.showStatus = false;
-    await save();
-    monitor.settingsCommitted(true);
-    monitor.schedule();
-    await monitor.factsChanged();
-    await monitor.pause();
-    assert.equal(continuous.start.mock.calls.length, 1);
-    monitor.reviewedPolicy(config.configFromSettings(settings));
-    monitor.schedule();
-    await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 2), { interval: 5 });
-    assert.equal(continuous.start.mock.calls[1]?.[2], false);
-  }));
+for (const recovery of ["review", "reload"] as const)
+  test(`settings publication blocks automatic work and drops the retry before ${recovery}`, () =>
+    fixture(async ({ monitor, continuous, peers, explicitSync, settings, save }) => {
+      const peer = peers[0];
+      assert.ok(peer);
+      explicitSync("home", peer);
+      settings.showStatus = false;
+      await save();
+      monitor.settingsCommitted(true);
+      const read = vi.spyOn(config, "loadConfigForCheck");
+      await monitor.factsChanged();
+      await setImmediate();
+      await monitor.pause();
+      assert.equal(read.mock.calls.length, 0, "blocked eligibility must not read settings");
+      assert.equal(continuous.start.mock.calls.length, 1);
+      if (recovery === "review") {
+        monitor.reviewedPolicy(config.configFromSettings(settings));
+        monitor.schedule();
+      } else {
+        assert.equal(await monitor.lifetime(), "exit", "there is no after-exit grant");
+        peers[0] = { ...peer, id: randomUUID(), generation: randomUUID() };
+        await monitor.factsChanged();
+      }
+      await vi.waitFor(() => assert.equal(continuous.start.mock.calls.length, 2), { interval: 5 });
+      assert.equal(continuous.start.mock.calls[1]?.[2], false);
+    }));
 
 test("credentials changed during resolver preparation are not used for the scheduled attempt", () =>
   fixture(async ({ monitor, continuous, peers, explicitSync, settings, save }) => {

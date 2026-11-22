@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import { readConsent } from "../src/consent.js";
 import { type DocumentView, documentFingerprint } from "../src/document.js";
 import { syncCheckConfigFingerprint } from "../src/engine/settings/config.js";
 import type { AnySyncConfig } from "../src/engine/settings/settings-types.js";
@@ -62,7 +63,11 @@ test("automatic permission requires a separate review and does not survive setti
     async function confirm({ kind, payload }: Callback) {
       assert.equal(kind, "confirm");
       const { title } = payload as { title: string };
-      if (title === "Adopt pi-sync-daemon as the synchronization owner?") return true;
+      if (
+        title === "Adopt pi-sync-daemon as the synchronization owner?" ||
+        title === "Allow continuous sync after all Pi clients exit?"
+      )
+        return true;
       assert.equal(title, "Allow the enabled automatic sync modes for this setup?");
       reviews++;
       if (changeAtReview) {
@@ -114,6 +119,17 @@ test("automatic permission requires a separate review and does not survive setti
         );
         const granted = await policy();
         assert.equal(granted.automatic, true);
+        const replacement = path.join(root, "replacement.rules");
+        await fs.writeFile(replacement, rules, { mode: 0o600 });
+        await fs.rename(replacement, rule);
+        assert.equal((await policy()).automatic, false);
+        await checkDenied("startup-transfer");
+        await checkDenied("shutdown");
+        const changedSource = await policy();
+        assert.notEqual(changedSource.fingerprint, granted.fingerprint);
+        assert.equal(await client.run("daemon.authorize-connected", { fingerprint: changedSource.fingerprint }), true);
+        assert.equal((await policy()).automatic, true);
+
         const document = (await client.run("settings.read", {})) as DocumentView;
         await client.run("settings.cas", {
           expected: documentFingerprint(document),
@@ -121,14 +137,35 @@ test("automatic permission requires a separate review and does not survive setti
         });
         assert.equal((await policy()).automatic, false);
         await assert.rejects(
-          client.run("daemon.authorize-connected", { fingerprint: granted.fingerprint }),
+          client.run("daemon.authorize-connected", { fingerprint: changedSource.fingerprint }),
           /Setup changed/u,
         );
         await checkDenied("startup-transfer");
         await checkDenied("shutdown");
-        assert.equal(reviews, 3);
+        assert.equal(reviews, 4);
         assert.deepEqual(backendCalls, []);
         assert.equal(await fs.readFile(rule, "utf8"), rules);
+
+        const unattended = (await client.run("settings.read", {})) as DocumentView;
+        const next = structuredClone(unattended.parsed) as typeof settings;
+        Object.assign(next.syncSetups.home.sync, { agentMode: true, continuous: true });
+        await client.run("settings.cas", { expected: documentFingerprint(unattended), next });
+        const before = await policy();
+        const open = fs.open;
+        const noReadAfterGrant = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          if (args[0] === rule && readConsent(root)?.setups.home?.afterExit)
+            throw new Error("Rule source is unavailable after consent publication");
+          return open(...args);
+        });
+        try {
+          assert.equal(
+            await client.run("daemon.authorize", { fingerprint: before.fingerprint, afterExit: true }),
+            true,
+          );
+          assert.equal(readConsent(root)?.setups.home?.afterExit, true);
+        } finally {
+          noReadAfterGrant.mockRestore();
+        }
       });
     } finally {
       await service.hooks.close();

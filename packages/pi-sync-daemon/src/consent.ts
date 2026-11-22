@@ -380,7 +380,7 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
     message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\nModel: ${safeTerminalText(facts?.model?.provider ?? "unavailable")}/${safeTerminalText(facts?.model?.id ?? "unavailable")}\n\n${payload.afterExit ? `The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission.${config.reservedIgnoreNames !== undefined ? " This also approves the enabled automatic modes for this setup while Pi clients are attached." : ""}` : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
   });
   execution.validate();
-  if (accepted !== true) return false;
+  if (accepted !== true) return undefined;
   const latest = await loadConfigForCheck(undefined, execution.signal);
   execution.validate();
   await config.validateIgnorePolicy?.();
@@ -413,5 +413,5 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
       },
     },
   } satisfies Consent);
-  return true;
+  return { config, afterExit: payload.afterExit };
 }

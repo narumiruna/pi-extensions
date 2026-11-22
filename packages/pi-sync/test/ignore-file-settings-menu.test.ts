@@ -174,6 +174,40 @@ test.each(["approved", "cancelled", "setup changed"] as const)(
     }),
 );
 
+test.each([
+  ["tui", "legacy", "ignore-file", true, true],
+  ["rpc", "legacy", "ignore-file", true, true],
+  ["tui", "legacy", "legacy", true, false],
+  ["tui", "ignore-file", "ignore-file", true, false],
+  ["tui", "legacy", "ignore-file", false, false],
+] as const)("%s setup removal (%s and %s, confirmed: %s)", (mode, policy, other, confirmed, needsRecovery) =>
+  withTempHome(async (root) => {
+    const { settingsPath, settings } = await writeSetup(root, policy, { other });
+    run.mockReset().mockResolvedValue({ available: true });
+    const select = vi
+      .fn<(title: string, rows: string[]) => Promise<string | undefined>>()
+      .mockResolvedValueOnce("Manage sync setups")
+      .mockResolvedValueOnce("other")
+      .mockResolvedValueOnce("Remove sync setup…")
+      .mockResolvedValue(undefined);
+    const confirm = vi.fn(async () => confirmed);
+    const runRoute = vi.fn(async () => undefined);
+    const { ctx, notifications } = createMockContext({ mode, select, confirm });
+    await showSyncSettings(ctx, runRoute);
+    expect(confirm).toHaveBeenCalledOnce();
+    const removed = notifications.find(({ message }) => message.includes("Removed sync setup"));
+    expect(Boolean(removed)).toBe(confirmed);
+    expect(removed?.message.includes("run /reload in an attached TUI session, or reopen one Pi client.") ?? false).toBe(
+      needsRecovery,
+    );
+    const saved = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    const expected = JSON.parse(settings);
+    if (confirmed) delete expected.syncSetups.other;
+    expect(saved).toEqual(expected);
+    expect(runRoute).not.toHaveBeenCalled();
+  }),
+);
+
 test.each([false, true])("RPC Settings keeps the legacy file unpromoted (canonical present: %s)", (canonical) =>
   withTempHome(async (root) => {
     const legacy = await writeSetup(root, "ignore-file", { filename: "pi-sync.local.json" });

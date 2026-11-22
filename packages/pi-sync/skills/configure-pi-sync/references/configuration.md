@@ -5,6 +5,7 @@ The user performs settings changes and reviewed operations; the configuration sk
 
 - [Complete version 3 example](#complete-version-3-example)
 - [Required backend shapes](#required-backend-shapes)
+- [Automatic sync controls](#automatic-sync-controls)
 - [Status display](#status-display)
 - [Secret scanning](#secret-scanning)
 - [Autonomous sync](#autonomous-sync)
@@ -61,12 +62,17 @@ Global settings apply to all setups on this device; they are not remote policy.
 | Directory exceptions | `sync.reinclude`, `sync.sessions` | Optional with directory scope. `reinclude` wins over `exclude`; sessions require `true`. |
 
 Do not downgrade the settings version when an option is turned off.
-The four automatic controls have separate effects:
+
+### Automatic sync controls
+
+The four controls select separate behaviors:
 
 - **Automatic sync** (`sync.automatic`) enables startup observation and selected-content shutdown pushes when sessions are included.
 - **Startup transfer** (`sync.automaticTransfer`) enables one eligible startup transfer.
-- **Autonomous sync** (`sync.agentMode`, unchanged) authorizes eligible startup and **Sync now** transfers without another transfer confirmation, plus model assistance and disclosure for supported conflicts.
+- **Autonomous sync** (`sync.agentMode`, unchanged) allows eligible startup and **Sync now** transfers without another transfer confirmation, plus model assistance and disclosure for supported conflicts.
 - **Continuous sync** (`sync.continuous`) adds recurring work only with Autonomous sync enabled.
+
+If any setup in the settings file uses an ignore file, enabling these modes alone does not authorize transfers. Enable the modes you want for the current setup, then use **Settings → Review automatic transfers** in TUI. This applies even when the current setup uses a legacy policy. Review again after settings or rule-file changes. Work after the last Pi exits still requires [separate permission](#daemon-lifetime-and-unattended-permission).
 
 None of these controls is enabled by invoking the configuration skill.
 
@@ -452,7 +458,7 @@ To return to an older client, stop automatic work, resolve pending recovery with
 ### Automatic startup transfer
 
 `sync.automaticTransfer` is optional and accepts only a boolean; absent means `false`.
-Set it through **/sync → Settings → Startup transfer**.
+Set it through **/sync → Settings → Startup transfer**. If any setup uses an ignore file, follow the [separate approval step](#automatic-sync-controls) after enabling it.
 It is separate from `sync.automatic`: the legacy setting retains observation and selected-content shutdown behavior.
 
 When explicitly enabled, one startup transfer waits for an idle boundary in TUI/RPC.
@@ -486,8 +492,7 @@ Unknown fields remain preserved and malformed/invalid files block saves, just as
 
 Autonomous sync uses the unchanged `sync.agentMode` key, an optional per-setup boolean, default `false`, in settings versions 3 through 8.
 Open **Settings → Autonomous sync** and review the setup, destination, content policy, transfer authorization, model disclosure, costs, and autonomous writes before enabling. For directory scope, the review shows session opt-in separately from path rules.
-RPC users can explicitly set the same field in the private settings file.
-Setting it to `true` is authorization, not just a display preference.
+In a legacy-only settings file, RPC users can authorize Autonomous sync by explicitly setting this field to `true`. If any setup uses an ignore file, follow the [separate approval step](#automatic-sync-controls) after enabling it.
 
 Autonomous sync authorizes one eligible merged sync at the next session startup and the same flow from **Sync now** or `/sync sync`, without another transfer confirmation.
 It can publish, replace, or delete selected local and remote content.
@@ -605,7 +610,7 @@ A failed consent write blocks automatic work in that service instance. Uncertain
 
 `sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3 through 8.
 Open **Settings → Continuous sync** after enabling Autonomous sync. For directory scope, the review shows session opt-in separately from path rules.
-RPC users can set the field explicitly in the private settings file.
+In a legacy-only settings file, RPC users can opt in by explicitly setting this field to `true`. If any setup uses an ignore file, follow the [separate approval step](#automatic-sync-controls) after enabling it.
 Existing Autonomous sync consent does not enable recurring requests.
 
 The separate review names the setup, storage connection, destination, included paths, recurring costs and automatic writes.
@@ -618,6 +623,7 @@ Reopen Settings to read the saved value.
 
 Monitoring starts at an eligible TUI/RPC session startup, after awaited local transaction recovery, or after a foreground `/sync` command or manager closes.
 It replaces the duplicate one-shot startup transfer, not the legacy shutdown policy.
+Removing the last ignore-file setup does not resume monitoring in the already attached sessions. To resume enabled Continuous sync, close `/sync` and run `/reload` in an attached TUI session, or close and reopen one Pi client. This does not grant after-exit permission.
 Turning Continuous sync off stops its work without disabling Autonomous sync.
 Turning Autonomous sync off also stops monitoring; a saved Continuous sync On value remains ineffective until Autonomous sync is enabled again.
 

@@ -438,6 +438,47 @@ test("expired contact cancels work but never treats a live client session as saf
     }
   }));
 
+test.each([false, true])("a process exit invalidates participants only while attached (retired: %s)", (retired) =>
+  fixture(async (root) => {
+    const peer = { ...facts(root), pid: process.pid + 100_000 };
+    const kill = process.kill;
+    let exited = false;
+    const probe = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid !== peer.pid || signal !== 0) return kill(pid, signal);
+      if (exited) throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+      return true;
+    });
+    try {
+      await withRpcServer(
+        root,
+        async () => null,
+        async ({ server }) => {
+          await requestDaemon(server.paths, server.identity, "attach", peer);
+          if (retired) await requestDaemon(server.paths, server.identity, "detach", { client: peer.id });
+          assert.equal(
+            server.participants().some(({ id }) => id === peer.id),
+            !retired,
+          );
+          assert.equal(
+            server.liveClients().some(({ id }) => id === peer.id),
+            true,
+          );
+          const generation = server.participantGeneration();
+          exited = true;
+          await server.expireClients();
+          assert.equal(server.participantGeneration(), generation + Number(!retired));
+          assert.equal(
+            server.liveClients().some(({ id }) => id === peer.id),
+            false,
+          );
+        },
+      );
+    } finally {
+      probe.mockRestore();
+    }
+  }),
+);
+
 test("a poll that beats the heartbeat sweep renews active contact without a resume", () =>
   fixture(async (root) => {
     const server = await startServer(root, async () => null);

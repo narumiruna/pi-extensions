@@ -243,6 +243,8 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
                   await verifyTarget(transaction.directory, entry, transaction.journal, options, deletedByThisCall);
                 }
               }
+              options.validateMutation?.();
+              options.signal?.throwIfAborted();
               await fs.rename(temp, item.target);
               await syncDirectory(path.dirname(item.target));
             } finally {
@@ -604,6 +606,8 @@ async function restoreQueuedTransaction(
     );
     if (entry.kind === "file") {
       try {
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
         await fs.mkdir(path.dirname(entry.target), { recursive: true });
         await fs.copyFile(path.join(directory, "before", entry.backupName), temporary);
         // Windows requires write access to flush an existing regular file.
@@ -651,6 +655,8 @@ async function restoreQueuedTransaction(
               await assertUnexcludedTargets(journal.root, [entry.target], options);
               await verifyTarget(directory, entry, journal, options, atRename === "missing");
             }
+            options.validateMutation?.();
+            options.signal?.throwIfAborted();
             await fs.rename(temporary, entry.target);
             await syncDirectory(path.dirname(entry.target));
           },
@@ -661,6 +667,8 @@ async function restoreQueuedTransaction(
       continue;
     }
     try {
+      options.validateMutation?.();
+      options.signal?.throwIfAborted();
       await fs.mkdir(path.dirname(entry.target), { recursive: true });
       await assertSafeParents(journal.root, journal.sessionRoot, entry.target);
       if (entry.kind === "directory") {
@@ -696,6 +704,8 @@ async function restoreQueuedTransaction(
           await assertUnexcludedTargets(journal.root, [entry.target], options);
           await verifyTarget(directory, entry, journal, options, atRename === "missing");
         }
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
         await fs.rename(temporary, entry.target);
         await syncDirectory(path.dirname(entry.target));
       });
@@ -876,6 +886,8 @@ async function removeOwnedTarget(
         await assertUnexcludedTargets(journal.root, [entry.target], options);
         await verifyTarget(directory, entry, journal, options);
       }
+      options.validateMutation?.();
+      options.signal?.throwIfAborted();
       await fs.rm(entry.target, { recursive: true, force: true });
     }
     await syncDirectory(path.dirname(entry.target));

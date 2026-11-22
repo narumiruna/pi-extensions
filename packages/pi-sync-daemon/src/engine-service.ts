@@ -100,11 +100,8 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
       }
       if (operation === "daemon.authorize") {
         const authorized = await authorizeAfterExit(execution, payload);
-        if (authorized && record(payload) && payload.afterExit === true) {
-          const { loadConfigForCheck } = await import("./engine/settings/config.js");
-          monitor.reviewedPolicy(await loadConfigForCheck(undefined, execution.signal));
-        }
-        return authorized;
+        if (authorized?.afterExit) monitor.reviewedPolicy(authorized.config);
+        return Boolean(authorized);
       }
       if (operation === "daemon.authorize-connected") {
         const facts = execution.facts();

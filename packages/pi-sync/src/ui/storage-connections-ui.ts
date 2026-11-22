@@ -110,22 +110,24 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         }
         return { kind: "stay" };
       },
-      remove: async ({ state }) => {
+      remove: async ({ state, signal: actionSignal }) => {
         if (state.recovery || !state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
         const name = state.selected.name;
         const confirmed = await ctx.ui.confirm(
           "Remove storage connection?",
           `Remove local storage connection “${safeTerminalText(name)}”? Remote data and history are not deleted.`,
-          { signal },
+          { signal: actionSignal },
         );
-        if (!confirmed || signal?.aborted) return { kind: "rejected" };
+        if (!confirmed || actionSignal.aborted || !isCurrent()) return { kind: "rejected" };
         try {
-          await removeStorageConnection(name, signal);
+          await removeStorageConnection(name, actionSignal);
+          if (actionSignal.aborted || !isCurrent()) return { kind: "close" };
           ctx.ui.notify(`Removed storage connection “${safeTerminalText(name)}”.`, "info");
           selectedName = undefined;
           return { kind: "back" };
         } catch (error) {
-          notifyConnectionError(ctx, name, error, signal);
+          if (actionSignal.aborted || !isCurrent()) return { kind: "close" };
+          notifyConnectionError(ctx, name, error, actionSignal);
           return { kind: "stay" };
         }
       },

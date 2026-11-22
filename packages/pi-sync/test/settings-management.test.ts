@@ -351,6 +351,34 @@ test.each([3, 4, 5])(
   },
 );
 
+test.each([false, true])("removing an unused connection rejects a stale confirmation (replaced: %s)", (replaced) =>
+  withTempHome(async (agentDir) => {
+    mkdirSync(agentDir, { recursive: true });
+    const settings = v3S3Settings();
+    const storageConnections = { ...settings.storageConnections, unused: settings.storageConnections.r2 };
+    writeSettings({ ...settings, storageConnections });
+    const choices = ["unused", "Remove storage connection…", undefined];
+    let currentSession = "before";
+    let confirmations = 0;
+    const { ctx } = createMockContext({
+      mode: "rpc",
+      hasUI: true,
+      sessionManager: { getSessionId: () => currentSession },
+      select: async () => choices.shift(),
+      confirm: async () => {
+        confirmations++;
+        if (replaced) currentSession = "replacement";
+        return true;
+      },
+    });
+    await showStorageConnections(ctx);
+    assert.equal(confirmations, 1);
+    const saved = await readLocalConfigObject();
+    assert.ok(saved);
+    assert.equal(Object.hasOwn(saved.storageConnections, "unused"), replaced);
+  }),
+);
+
 test("replacing stored S3 credentials drops the prior session token", async () => {
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
