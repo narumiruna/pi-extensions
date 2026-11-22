@@ -1,5 +1,16 @@
 # @narumitw/pi-sync-daemon
 
+## 0.10.0
+
+### Minor Changes
+
+- 316dde1: Append safe owner, timing, job, and Continuous sync diagnostics to the shared, local-only `pi-sync.log`. Use the agent directory's Debug mode setting at the next owner, job, or cycle boundary, including for already-authorized unattended work. Keep repeated unchanged polls quiet and leave the operational `lifecycle.log` unchanged.
+
+### Patch Changes
+
+- 6224417: Recover a blocked daemon from the Pi Sync menu or `/sync daemon recover`. Stop the reviewed owner without restarting it or replaying a transfer, and clean up the owned operation lock when a release failure blocks further writes.
+- bbcc9e9: Reduce sync work without changing transfer approvals or recovery formats. Pull and rollback avoid reinstalling identical files, inspection avoids building unused payloads, and local requests wait for state changes instead of repeatedly polling jobs. Reduce repeated setup reads, review downloads, and backend work while preserving fresh checks and existing peer compatibility.
+
 ## 0.9.1
 
 ### Patch Changes

@@ -1,5 +1,16 @@
 # @narumitw/pi-sync
 
+## 0.64.0
+
+### Minor Changes
+
+- 316dde1: Rename **Debug startup timings** to **Debug mode** and keep the same default-off setting. Append safe startup, connection, and request diagnostics to the private, local-only `pi-sync.log` shared with the daemon. Client changes take effect at the next session start; existing TUI timing entries and RPC notifications stay unchanged.
+
+### Patch Changes
+
+- 6224417: Recover a blocked daemon from the Pi Sync menu or `/sync daemon recover`. Stop the reviewed owner without restarting it or replaying a transfer, and clean up the owned operation lock when a release failure blocks further writes.
+- bbcc9e9: Reduce sync work without changing transfer approvals or recovery formats. Pull and rollback avoid reinstalling identical files, inspection avoids building unused payloads, and local requests wait for state changes instead of repeatedly polling jobs. Reduce repeated setup reads, review downloads, and backend work while preserving fresh checks and existing peer compatibility.
+
 ## 0.63.1
 
 ### Patch Changes
