@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 export const PROTOCOL_VERSION = 1;
+export const OWNERSHIP_CLEANUP_REQUIRED = "DAEMON_OWNERSHIP_CLEANUP";
 
 /** Authenticated idle shutdown after work is drained; callers may wait for this owner to exit. */
 export class DaemonStoppingError extends Error {

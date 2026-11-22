@@ -113,6 +113,29 @@ test("only the exact current operation lock can supply review evidence", () =>
     assert.equal(captureStartupBootstrap(root, fingerprint, signal), undefined);
   }));
 
+test("review evidence rejects a replaced state directory even if it contains the original lock entries", () =>
+  fixture(async (root) => {
+    const directory = path.join(root, "pi-sync");
+    const original = path.join(root, "original-state");
+    await withLock("pull", async () => {
+      const proof = captureStartupReviewLock();
+      assert.ok(proof?.());
+      await fs.rename(directory, original);
+      try {
+        await fs.mkdir(directory);
+        for (const name of ["lock", "lock.guard"])
+          await fs.rename(path.join(original, name), path.join(directory, name));
+        assert.equal(proof?.(), false);
+        assert.equal(captureStartupReviewLock(), undefined);
+      } finally {
+        for (const name of await fs.readdir(directory).catch(() => []))
+          await fs.rename(path.join(directory, name), path.join(original, name));
+        await fs.rm(directory, { recursive: true, force: true });
+        await fs.rename(original, directory);
+      }
+    });
+  }));
+
 test("an external process operation lease invalidates in-flight readiness", () =>
   fixture(async (root, _file, fingerprint) => {
     const signal = new AbortController().signal;

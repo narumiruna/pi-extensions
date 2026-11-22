@@ -444,7 +444,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
       factsChanged: monitor.factsChanged,
       idle: monitor.schedule,
       close: monitor.close,
-      lifetime: monitor.lifetime,
+      lifetime: () => (host.cleanupRequired() ? Promise.resolve("pause" as const) : monitor.lifetime()),
       quiesce: monitor.pause,
       failure: monitor.blockAutomatic,
     },

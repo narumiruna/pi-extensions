@@ -78,7 +78,7 @@ export async function privateDirectory(directory: string) {
 type OwnerRecord = Pick<Identity, "version" | "root" | "instance" | "pid">;
 type ProcessIdentity = { pid: number; birth?: string };
 /** The exit barrier records an authenticated owner without keeping its IPC token. */
-export type UpgradeOwner = OwnerRecord & ProcessIdentity;
+export type UpgradeOwner = OwnerRecord & ProcessIdentity & { purpose?: "cleanup" };
 const birthPattern =
   /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}:([1-9][0-9]{0,9})\.([1-9][0-9]{0,9}):(0|[1-9][0-9]{0,19})$/u;
 export function upgradeFile(paths: RuntimePaths) {
@@ -101,13 +101,20 @@ export async function upgradeRepairStarted(paths: RuntimePaths, owner: Pick<Upgr
 export async function readUpgradeOwner(paths: RuntimePaths): Promise<UpgradeOwner | undefined> {
   const value = await readPrivateRecord(upgradeFile(paths));
   if (value === undefined) return;
-  if (!validOwner(value, paths.root) || (value.birth !== undefined && !validBirth(value.birth)))
+  if (
+    !validOwner(value, paths.root) ||
+    (value.birth !== undefined && !validBirth(value.birth)) ||
+    (value.purpose !== undefined && value.purpose !== "cleanup")
+  )
     throw new Error("Invalid daemon upgrade record; state retained.");
-  const { version, root, instance, pid, birth } = value;
-  return birth === undefined ? { version, root, instance, pid } : { version, root, instance, pid, birth };
+  const { version, root, instance, pid, birth, purpose } = value;
+  return { version, root, instance, pid, ...(birth && { birth }), ...(purpose && { purpose }) };
 }
-export function recordUpgradeOwner(paths: RuntimePaths, { version, root, instance, pid, birth }: UpgradeOwner) {
-  return publishPrivateRecord(paths, upgradeFile(paths), { version, root, instance, pid, birth });
+export function recordUpgradeOwner(
+  paths: RuntimePaths,
+  { version, root, instance, pid, birth, purpose }: UpgradeOwner,
+) {
+  return publishPrivateRecord(paths, upgradeFile(paths), { version, root, instance, pid, birth, purpose });
 }
 export function clearUpgradeOwner(paths: RuntimePaths) {
   return fs.rm(upgradeFile(paths), { force: true });

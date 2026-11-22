@@ -1,3 +1,4 @@
+import { OWNERSHIP_CLEANUP_REQUIRED } from "../../protocol.js";
 import { errorMessage } from "./sync-errors.js";
 
 /** Add recovery advice without changing backend outcome semantics or printing error causes. */
@@ -7,7 +8,10 @@ export function syncErrorGuidance(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   const status = (error as { status?: number } | undefined)?.status;
   let next: string;
-  if (code === "ENOSPC") {
+  if (code === OWNERSHIP_CLEANUP_REQUIRED) {
+    next =
+      "Open /sync and choose Stop daemon for recovery, or run /sync daemon recover. Do not retry the transfer yet.";
+  } else if (code === "ENOSPC") {
     next = "Free disk space for the private pi-sync settings/state directory, then retry.";
   } else if (code && ["EACCES", "EPERM", "EROFS"].includes(code)) {
     next = "Check write access to the private pi-sync settings/state directory, then retry.";

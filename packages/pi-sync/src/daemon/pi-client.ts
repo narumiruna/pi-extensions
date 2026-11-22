@@ -11,12 +11,14 @@ import {
   type ContactState,
   DaemonConnection,
   DaemonError,
+  type DaemonRecoveryTarget,
   type DocumentView,
   documentFingerprint,
   ensureDaemon,
   findDaemon,
   MAX_SETTINGS_BYTES,
   modelSignature,
+  OWNERSHIP_CLEANUP_REQUIRED,
   waitForDaemonExit,
 } from "@narumitw/pi-sync-daemon";
 import { type ConfigAuthority, configureEngineHost } from "@narumitw/pi-sync-daemon/engine/host";
@@ -273,6 +275,8 @@ export class PiDaemonClient {
     return this.participantIdentity.generation;
   }
   readonly root: string;
+  private cleanupRequired = false;
+  private recoveredOwner?: DaemonRecoveryTarget;
   private readonly rawRoot: string;
   private readonly gate: PiApplyGate;
   private readonly manager: ExtensionContext["sessionManager"];
@@ -671,6 +675,25 @@ export class PiDaemonClient {
     }
     return decode(await this.run(repair ? "settings.repair-read" : "settings.read", {}));
   }
+  get ownershipCleanupRequired() {
+    return this.cleanupRequired;
+  }
+  confirmRecoveryExit(owner: DaemonRecoveryTarget) {
+    this.cleanupRequired = true;
+    this.recoveredOwner = owner;
+  }
+  recordOwnershipFailure(error: unknown) {
+    if (
+      (error instanceof DaemonError && error.remote.properties?.code === OWNERSHIP_CLEANUP_REQUIRED) ||
+      (error instanceof Error &&
+        (("code" in error && error.code === OWNERSHIP_CLEANUP_REQUIRED) ||
+          error.message === "Daemon ownership cleanup is uncertain; stop and reconcile before restarting." ||
+          error.message === "Daemon ownership cleanup is uncertain; stop and reconcile before retrying." ||
+          error.message ===
+            "File-queue release is uncertain; stop the daemon and keep grants quarantined until owner exit."))
+    )
+      this.cleanupRequired = true;
+  }
   run(
     operation: string,
     payload: unknown,
@@ -679,7 +702,12 @@ export class PiDaemonClient {
     onCommit?: () => void,
     reload?: AbortController,
   ) {
-    const result = this.work.then(() => this.runCurrent(operation, payload, signal, ctx, onCommit, reload));
+    const result = this.work
+      .then(() => this.runCurrent(operation, payload, signal, ctx, onCommit, reload))
+      .catch((error: unknown) => {
+        this.recordOwnershipFailure(error);
+        throw error;
+      });
     this.work = result.then(
       () => {},
       () => {},
@@ -1008,6 +1036,14 @@ export class PiDaemonClient {
       try {
         await connection?.dispose(handoff);
         confirmed = Boolean(connection);
+      } catch (error) {
+        if (
+          !connection ||
+          connection.identity.root !== this.recoveredOwner?.root ||
+          connection.identity.instance !== this.recoveredOwner.instance ||
+          connection.identity.pid !== this.recoveredOwner.pid
+        )
+          throw error;
       } finally {
         this.disposed = true;
         if (clients.get(this.manager) === this) clients.delete(this.manager);

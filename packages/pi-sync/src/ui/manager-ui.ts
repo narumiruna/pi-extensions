@@ -27,7 +27,7 @@ export async function showSyncManager(
   ctx: ExtensionCommandContext,
   runRoute: RunRoute,
   sessionSignal?: AbortSignal,
-  options: SyncManagerAttentionOptions = {},
+  options: SyncManagerAttentionOptions & { needsDaemonRecovery?: () => boolean } = {},
 ): Promise<void> {
   if (!ctx.hasUI) {
     await runRoute("help");
@@ -60,6 +60,7 @@ export async function showSyncManager(
     | "conflicts"
     | "doctor"
     | "recover"
+    | "daemon-recovery"
     | "refresh"
     | "help"
     | "init";
@@ -295,6 +296,10 @@ export async function showSyncManager(
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
+      "daemon-recovery": async ({ signal }) => {
+        await runRoute("daemon recover", signal);
+        return { kind: "stay" };
+      },
       recover: async ({ state, signal: actionSignal }) => {
         const result = await recoverSyncAccess(ctx, state.manager, runRoute, sessionSignal, actionSignal);
         return { kind: result === "close" ? "close" : "stay" };
@@ -377,13 +382,20 @@ export async function showSyncManager(
     },
   };
   let firstOpen = true;
+  const recovery: State["manager"] = {
+    title:
+      "Pi Sync recovery required\nDaemon cleanup could not be confirmed. Stop the daemon before retrying a transfer.",
+    actions: ["Stop daemon for recovery…", "Help"],
+  };
   const describe = async (signal: AbortSignal) => {
+    if (options.needsDaemonRecovery?.()) return recovery;
     const pendingAttention = options.getAttention?.();
     const observation = options.getObservation?.();
     const manager = await describeManagerState(signal, pendingAttention, undefined, observation, () =>
       ignoreFileSettingsAvailable(ctx, signal),
     );
     if (signal.aborted || !isCurrent()) return manager;
+    if (options.needsDaemonRecovery?.()) return recovery;
     // A busy operation suppresses baseline reads, not the stored check-time hint.
     if (
       observation &&
@@ -436,6 +448,7 @@ function syncMainMenuItem(
   | "conflicts"
   | "doctor"
   | "recover"
+  | "daemon-recovery"
   | "refresh"
   | "help"
   | "init"
@@ -453,6 +466,7 @@ function syncMainMenuItem(
     Diagnostics: "doctor",
     "Review unresolved conflicts": "conflicts",
     "Restore sync access… (recommended)": "recover",
+    "Stop daemon for recovery…": "daemon-recovery",
     "Refresh operation status": "refresh",
     "Sync setups…": "setups",
     "Storage connections…": "connections",
@@ -479,6 +493,7 @@ function syncMainMenuItem(
       switch: "Choose another sync setup.",
       conflicts: "Review unresolved file groups.",
       recover: "Review local lock recovery.",
+      "daemon-recovery": "Review and stop the current daemon without starting another.",
       refresh: "Recheck the operation lock.",
       setups: "Manage sync setups.",
       connections: "Manage storage connections.",

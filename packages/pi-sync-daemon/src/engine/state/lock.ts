@@ -1,13 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, type Stats } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import lockfile from "proper-lockfile";
+import { canonicalRootGuard } from "../../identity.js";
 import type { CommandOptions } from "../commands/command-types.js";
-import type { EngineContext as ExtensionCommandContext } from "../host.js";
+import { type EngineContext as ExtensionCommandContext, getEngineRoot } from "../host.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "./lock-policy.js";
 import { LOCKFILE_FS_ADAPTER } from "./lockfile-fs.js";
+import { stateDir } from "./state-directory.js";
 import type { LockFile } from "./state-types.js";
 import { ensureStateDir, lockPath } from "./sync-state-store.js";
 
@@ -71,6 +74,21 @@ export async function withLock<T>(
   options: { reclaimStale?: boolean } = {},
 ): Promise<T> {
   await ensureStateDir();
+  const configuredRoot = getEngineRoot();
+  const root = realpathSync(configuredRoot);
+  const assertRoot = canonicalRootGuard(root);
+  const directory = stateDir(root);
+  const file = path.join(directory, "lock");
+  const original = lstatSync(directory);
+  const assertLocation = () => {
+    assertRoot();
+    if (realpathSync(configuredRoot) !== root || stateDir(root) !== directory)
+      throw new Error("Pi Sync operation lock directory changed.");
+    const current = lstatSync(directory);
+    if (!current.isDirectory() || current.dev !== original.dev || current.ino !== original.ino)
+      throw new Error("Pi Sync operation lock directory changed.");
+  };
+  assertLocation();
   const lock: LockFile = {
     id: randomUUID(),
     pid: process.pid,
@@ -78,28 +96,33 @@ export async function withLock<T>(
     startedAt: new Date().toISOString(),
   };
   let guard: Guard | undefined;
+  let written = false;
   let result: T | undefined;
   let failed = false;
   let failure: unknown;
   try {
     try {
-      guard = await acquireGuard();
+      guard = await acquireGuard(file, assertLocation);
     } catch (error) {
       if (!isLockHeldError(error)) throw error;
-      throw await describeHeldLock();
+      assertLocation();
+      throw await describeHeldLock(file);
     }
 
-    let inspection = await inspectLock();
+    assertLocation();
+    let inspection = await inspectLockAt(file);
     if (inspection.status === "valid" && isStaleLock(inspection.lock)) {
       if (!options.reclaimStale) {
         throw new Error(`pi-sync lock is stale (pid ${inspection.lock.pid}). Run /sync unlock --stale, then retry.`);
       }
       guard.throwIfCompromised();
-      const rechecked = await inspectLock();
+      const rechecked = await inspectLockAt(file);
       if (rechecked.status !== "valid" || rechecked.lock.id !== inspection.lock.id || !isStaleLock(rechecked.lock)) {
         throw new Error("pi-sync lock changed while preparing transaction recovery; retry.");
       }
-      await fs.rm(lockPath(), { force: true });
+      assertLocation();
+      guard.throwIfCompromised();
+      await fs.rm(file, { force: true });
       inspection = { status: "missing" };
     }
     if (inspection.status === "valid") {
@@ -116,17 +139,25 @@ export async function withLock<T>(
       );
     }
 
-    const metadataPath = lockPath();
+    assertLocation();
+    guard.throwIfCompromised();
     const contents = Buffer.from(JSON.stringify(lock, null, "\t"));
-    await fs.writeFile(metadataPath, contents, { flag: "wx" });
+    await fs.writeFile(file, contents, { flag: "wx" });
+    written = true;
     guard.throwIfCompromised();
     const held = guard;
     let active = true;
+    const ownsLock = () => {
+      if (!active || held.isCompromised()) return false;
+      try {
+        assertLocation();
+        return true;
+      } catch {
+        return false;
+      }
+    };
     try {
-      result = await activeLock.run(
-        { path: metadataPath, contents, active: () => active && !held.isCompromised() },
-        fn,
-      );
+      result = await activeLock.run({ path: file, contents, active: ownsLock }, fn);
       guard.throwIfCompromised();
     } finally {
       active = false;
@@ -137,8 +168,16 @@ export async function withLock<T>(
   }
 
   try {
-    const current = await readLock();
-    if (current?.id === lock.id) await fs.rm(lockPath(), { force: true });
+    if (written && guard) {
+      assertLocation();
+      guard.throwIfCompromised();
+      const current = await inspectLockAt(file);
+      if (current.status === "valid" && current.lock.id === lock.id) {
+        assertLocation();
+        guard.throwIfCompromised();
+        await fs.rm(file, { force: true });
+      }
+    }
   } catch (error) {
     if (!failed) {
       failed = true;
@@ -157,8 +196,12 @@ export async function withLock<T>(
 }
 
 export async function inspectLock(): Promise<LockInspection> {
+  return inspectLockAt(lockPath());
+}
+
+async function inspectLockAt(file: string): Promise<LockInspection> {
   try {
-    const text = await fs.readFile(lockPath(), "utf8");
+    const text = await fs.readFile(file, "utf8");
     if (text.trim().length === 0) return { status: "unreadable" };
     const parsed = JSON.parse(text) as unknown;
     return isLockFile(parsed) ? { status: "valid", lock: parsed } : { status: "unreadable" };
@@ -289,11 +332,43 @@ async function releaseGuard(guard: Guard) {
   }
 }
 
-async function acquireGuard(): Promise<Guard> {
+function guardFilesystem(assertLocation: () => void) {
+  const { mkdir, rmdir, rmdirSync, stat, utimes } = LOCKFILE_FS_ADAPTER;
+  function check(callback: (error: NodeJS.ErrnoException) => void) {
+    try {
+      assertLocation();
+      return true;
+    } catch (error) {
+      callback(error as NodeJS.ErrnoException);
+      return false;
+    }
+  }
+  return {
+    ...LOCKFILE_FS_ADAPTER,
+    mkdir: (file: string, callback: (error: NodeJS.ErrnoException | null) => void) => {
+      if (check(callback)) mkdir(file, callback);
+    },
+    rmdir: (...args: Parameters<typeof rmdir>) => {
+      if (check(args[1])) rmdir(...args);
+    },
+    rmdirSync: (...args: Parameters<typeof rmdirSync>) => {
+      assertLocation();
+      return rmdirSync(...args);
+    },
+    stat: (file: string, callback: (error: NodeJS.ErrnoException | null, stats?: Stats) => void) => {
+      if (check(callback)) stat(file, callback);
+    },
+    utimes: (...args: Parameters<typeof utimes>) => {
+      if (check(args[3])) utimes(...args);
+    },
+  };
+}
+
+async function acquireGuard(file = lockPath(), assertLocation?: () => void): Promise<Guard> {
   let compromisedError: Error | undefined;
-  const release = await lockfile.lock(lockPath(), {
-    fs: LOCKFILE_FS_ADAPTER,
-    lockfilePath: `${lockPath()}.guard`,
+  const release = await lockfile.lock(file, {
+    fs: assertLocation ? guardFilesystem(assertLocation) : LOCKFILE_FS_ADAPTER,
+    lockfilePath: `${file}.guard`,
     realpath: false,
     stale: LOCK_GUARD_STALE_MS,
     update: LOCK_GUARD_UPDATE_MS,
@@ -310,8 +385,9 @@ async function acquireGuard(): Promise<Guard> {
   };
 }
 
-async function describeHeldLock() {
-  const current = await readLock();
+async function describeHeldLock(file = lockPath()) {
+  const inspection = await inspectLockAt(file);
+  const current = inspection.status === "valid" ? inspection.lock : undefined;
   if (current && isStaleLock(current)) {
     return new Error("pi-sync lock owner exited; retry shortly while the lock guard expires.");
   }

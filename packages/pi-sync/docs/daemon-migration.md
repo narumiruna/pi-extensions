@@ -103,13 +103,41 @@ If a write or file-queue release cannot be confirmed, preserve the journals and
 use the existing recovery path before retrying a transfer. Reconnect does not
 stop or restart the service, and it does not extend transfer or model permission.
 
+## Recover from uncertain daemon cleanup
+
+**Stop daemon for recovery…** in `/sync` remains available when daemon cleanup
+blocks Pi Sync initialization. In TUI or RPC, `/sync daemon recover` opens the same
+review without starting or upgrading the daemon. The review identifies the
+agent directory and PID before requesting permission to stop work for every
+Pi session attached to that daemon.
+
+1. Confirm only if the displayed owner is the one you want to stop. Wait for
+   Pi Sync to confirm that the daemon exited. Closing the prompt before approval
+   does not stop the daemon. After approval, cancellation can leave a stop in
+   progress. Reopen the review instead of assuming the daemon is still running
+   or has exited.
+2. After exit is confirmed, use `/reload` and open `/sync`. If an old operation
+   lock remains, follow **Restore sync access…** after verifying that no other
+   sync can be active. A replacement does not make an interrupted transfer
+   successful: inspect the sync state and reconcile any pending journal before
+   retrying a transfer.
+3. If the owner cannot be identified or drained, keep the locks, journals, and
+   backups. Use the [daemon CLI](#daemon-cli) and the exit checks in
+   [manual recovery](#ownership-and-upgrade). If retained unattended permission
+   blocks the stop, follow that guide; the in-Pi flow does not revoke permission.
+
+The recovery command does not remove an operation lock or change settings,
+consent, or remote data. It does not restart the daemon, reload Pi, or replay an
+interrupted operation. Normal startup policy applies again on a separate
+`/reload`.
+
 ## Diagnostics and rollback
 
 If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
 
 Use the [daemon CLI](#daemon-cli) `status` command without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers. If the initial consent check blocked the update before a pending record was created, follow step 1 of [manual recovery](#ownership-and-upgrade); `repair-upgrade` cannot help in that case.
 
-A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. This log is not transaction recovery evidence.
+A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. The original cleanup error can distinguish a Pi file-queue acknowledgement from a Pi settings-lock release failure; the generic recovery error means that later work is blocked, not that another release failed. This log is not transaction recovery evidence.
 
 Before rollback:
 
