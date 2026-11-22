@@ -192,6 +192,8 @@ try {
     "Exclude npm/ from my active ignore file.",
     "Draft a .syncignore without writing it.",
     "Audit my ignore rules for blocked exceptions without editing the file.",
+    "Turn on Autonomous sync in my legacy-only setup.",
+    "The running daemon is older. Can you still edit my active ignore file?",
     "Error: Agent directory changed or has an unsafe filesystem layout; no snapshot was collected.",
     "Where do I enter my WebDAV app password?",
     "What does ./ mean for R2 and S3?",
@@ -211,6 +213,8 @@ try {
     assert.ok(request.includes("start with read-only local checks"));
     assert.ok(request.includes("Draft a new ignore file"));
     assert.ok(request.includes("Add, revise, or audit existing rules"));
+    assert.ok(request.includes("needsUpgrade: false"));
+    assert.ok(request.includes("A schema-valid change is not proof of user review or consent"));
   }
   const beforeReload = requests.length;
   await send("prompt", { message: "/skill-smoke-reload" });

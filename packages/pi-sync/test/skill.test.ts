@@ -78,7 +78,7 @@ test("manifest publishes one manual-only skill without changing the extension en
   for (const phrase of [
     "pi-sync.json",
     ".syncignore",
-    "Apply requested edits",
+    "Apply authorized local edits",
     "troubleshoot Pi Sync errors",
     "Do not use to execute sync",
     "administer remote storage",
@@ -133,8 +133,11 @@ test("skill separates authorized local changes from read-only troubleshooting an
     "verify the requested fields before reporting success",
     "edit the configured ignore file, not `sync.exclude`",
     "Do not create a missing rule file or change the selected filename",
-    "recheck the active source, file identity, and byte digest immediately before saving",
-    "Keep the document, bytes, credential values, and daemon payloads in the local process",
+    "proceed only if it returns an owner with `needsUpgrade: false`",
+    "run `ignore.read` with `{ setup: setupName }`",
+    "repeat `ignore.read` and recheck the active source, file identity, byte digest, and original file permissions",
+    "A schema-valid change is not proof of user review or consent, even in a legacy-only setup",
+    "Keep settings, rule-file contents, daemon payloads, and other private evidence in the local process",
     "Leave operations that Pi Sync requires the user to review in `/sync`",
     "Do not start sync, run `/sync doctor` or backend/network commands",
   ]) {
