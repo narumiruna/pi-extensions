@@ -138,7 +138,7 @@ export class SyncRpc {
     await this.ready;
     return this.call({ type: "get_state" });
   }
-  async call(command: RpcCommand) {
+  async call(command: RpcCommand, { deadline: useDeadline = true } = {}) {
     await this.ready;
     this.signal?.throwIfAborted();
     if (this.closed || this.closing) throw new Error(`Pi is closed: ${this.stderr}`);
@@ -147,10 +147,12 @@ export class SyncRpc {
     const response = new Promise<RecordValue>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       // The child reports session startup before any request deadline begins.
-      deadline = setTimeout(
-        () => this.terminate(new Error(`RPC ${command.type} deadline exceeded: ${this.stderr}`)),
-        4_000,
-      );
+      if (useDeadline) {
+        deadline = setTimeout(
+          () => this.terminate(new Error(`RPC ${command.type} deadline exceeded: ${this.stderr}`)),
+          4_000,
+        );
+      }
     });
     void response.catch(() => {});
     try {
@@ -166,6 +168,10 @@ export class SyncRpc {
       clearTimeout(deadline);
       this.pending.delete(id);
     }
+  }
+  onRecord(listener: (record: RecordValue) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
   async command(message: string, confirm: (title: string) => boolean) {
     const listener = (record: RecordValue) => {

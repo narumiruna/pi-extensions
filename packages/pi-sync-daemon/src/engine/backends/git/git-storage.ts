@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { assertAgentDirectorySettingsSize, MAX_AGENT_DIRECTORY_BYTES } from "../../snapshot/snapshot-bounds.js";
+import { materializeSnapshotFilePayload } from "../../snapshot/snapshot-payload.js";
 import {
   IGNORE_SNAPSHOT_VERSION,
   isSupportedSnapshotVersion,
@@ -221,10 +221,7 @@ export function prepareGitSnapshot(snapshot: Snapshot, namespace: string) {
     ) {
       throw new Error("Invalid Git snapshot file.");
     }
-    const content = Buffer.from(file.contentBase64, "base64");
-    if (content.toString("base64") !== file.contentBase64 || sha256(content) !== file.sha256) {
-      throw new Error("Git snapshot file checksum mismatch.");
-    }
+    const content = materializeSnapshotFilePayload(file, "Git snapshot file checksum mismatch.");
     if (!isGitPayloadSizeAllowed(content.byteLength)) {
       throw new Error(
         `Git snapshot file exceeds GitHub's ${MAX_GIT_PAYLOAD_BYTES}-byte regular-Git limit: ${file.path}`,
@@ -315,10 +312,6 @@ function assertNoPathConflicts(paths: string[]) {
       throw new Error(`Git snapshot file path conflict: ${parent} and ${child}`);
     }
   }
-}
-
-function sha256(value: Buffer) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function hasControlCharacter(value: string) {

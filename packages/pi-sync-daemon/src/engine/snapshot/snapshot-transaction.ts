@@ -9,9 +9,9 @@ import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
 import { includeFromSelectionConfig, selectionForSnapshot } from "../sync/sync-policy.js";
 import { agentDir, configuredSessionDir } from "./session-paths.js";
-import { agentDirectoryConfiguredSessionDir } from "./snapshot.js";
+import { agentDirectoryConfiguredSessionDir, scanAgentDirectoryInventory } from "./snapshot.js";
 import { caseReplacementSpelling, coalesceCaseReplacements } from "./snapshot-case-replacement.js";
-import { recheckAgentDirectoryBudget } from "./snapshot-entry-projection.js";
+import { assertProjectedAgentDirectoryBudget, recheckAgentDirectoryBudget } from "./snapshot-entry-projection.js";
 import { assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { withMissingTargetQueues, withTargetQueues } from "./snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
@@ -27,12 +27,14 @@ import {
   ownedScopedPostTree,
   readTransactionJournal,
   recheckScopedImage,
+  recheckUnchangedFile,
   removeScopedImage,
   scopedDescendant,
   scopedIdentity,
   scopedPathIdentity,
   scopedTransactionImage,
   stableScopedIdentity,
+  verifyUnchangedFile,
 } from "./snapshot-transaction-images.js";
 import { indexTransactionPlan } from "./snapshot-transaction-plan.js";
 import {
@@ -72,7 +74,13 @@ import type { SnapshotApplyPlan } from "./snapshot-types.js";
 const JOURNAL_VERSION = 4;
 class ScopedRemovalError extends Error {}
 
-export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options: TransactionOptions = {}) {
+export type SkippedSnapshotWrite = SnapshotApplyPlan["writes"][number] & { preimage: string };
+
+export async function applySnapshotTransaction(
+  plan: SnapshotApplyPlan,
+  options: TransactionOptions = {},
+  skipped: readonly SkippedSnapshotWrite[] = [],
+) {
   options.validateMutation?.();
   const root = path.resolve(agentDir());
   if (options.scope === "agent-directory") {
@@ -138,7 +146,9 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         expectedPreimages.set(target, evidence.image);
       }
     }
+    const skippedPreimages = new Map(skipped.map(({ target, preimage }) => [target, preimage]));
     for (const [target, expected] of expectedPreimages) {
+      if (skippedPreimages.get(target) === expected) continue;
       if (scoped || options.reservedIgnoreNames?.length) await assertUnexcludedTargets(root, [target], options);
       const current = scoped ? (await scopedTransactionImage(target, options)).value : await legacyImage(target);
       options.validateMutation?.();
@@ -147,9 +157,33 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         throw new Error("Reviewed file preimage changed before apply; snapshot installation refused.");
     }
     if (validateIgnorePolicy) await validateIgnorePolicy();
+    const mutationTargets = skipped.length ? targets.filter((target) => !skippedPreimages.has(target)) : targets;
+    const writes = skipped.length ? plan.writes.filter(({ target }) => !skippedPreimages.has(target)) : plan.writes;
+    if (mutationTargets.length === 0) {
+      if (options.validateApplyReview) await options.validateApplyReview();
+      if (scoped) {
+        const pendingStateEntry = stateDir(root);
+        const inventory = await scanAgentDirectoryInventory(root, options, pendingStateEntry);
+        options.validateMutation?.();
+        options.signal?.throwIfAborted();
+        assertProjectedAgentDirectoryBudget(
+          inventory,
+          { deletes: [], writes: [{ target: pendingStateEntry }] },
+          options,
+        );
+      }
+      if (validateIgnorePolicy) await validateIgnorePolicy();
+      await verifySkippedWrites(root, skipped, heldKeys, options);
+      options.validateMutation?.();
+      options.signal?.throwIfAborted();
+      return;
+    }
+    const mutationPlan = skipped.length
+      ? { ...coalesced.plan, writes: coalesced.plan.writes.filter(({ target }) => !skippedPreimages.has(target)) }
+      : coalesced.plan;
     const transaction = await prepareTransaction(
-      coalesced.plan,
-      targets,
+      mutationPlan,
+      mutationTargets,
       { ...options, expectedPreimages },
       coalesced.replacements,
     );
@@ -196,7 +230,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
           );
           // Only this uninterrupted call knows which deleted writes have not attempted installation yet.
           const uninstalledWrites = new Set(transaction.deletedWrites);
-          for (const item of plan.writes) {
+          for (const item of writes) {
             options.signal?.throwIfAborted();
             const entry = entriesByTarget.get(item.target);
             if (!entry) throw new Error("Unowned transaction target.");
@@ -254,7 +288,7 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
           options.validateMutation?.();
           options.signal?.throwIfAborted();
           await syncMutationParents(
-            targets,
+            mutationTargets,
             [transaction.journal.root, ...(transaction.journal.sessionRoot ? [transaction.journal.sessionRoot] : [])],
             options,
           );
@@ -264,6 +298,9 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
         },
       );
       if (validateIgnorePolicy) await validateIgnorePolicy();
+      await verifySkippedWrites(root, skipped, heldKeys, options);
+      options.validateMutation?.();
+      options.signal?.throwIfAborted();
     } catch (error) {
       // Aborted owners cannot roll back files after another session has replaced them.
       if (options.signal?.aborted)
@@ -287,6 +324,30 @@ export async function applySnapshotTransaction(plan: SnapshotApplyPlan, options:
     // Files are durably installed. Cleanup cannot roll back once it starts deleting evidence.
     await completeTransaction(transaction.directory, transaction.journal);
   });
+}
+
+async function verifySkippedWrites(
+  root: string,
+  skipped: readonly SkippedSnapshotWrite[],
+  heldKeys: ReadonlySet<string>,
+  options: TransactionOptions,
+) {
+  if (!skipped.length) return;
+  await assertUnexcludedTargets(
+    root,
+    skipped.map(({ target }) => target),
+    options,
+    { recursive: false },
+  );
+  const sessionRoot = options.sessionDir ? sessionStorageRoot(root, options.sessionDir) : undefined;
+  const verified = [];
+  for (const { target, content } of skipped) {
+    if (!heldKeys.has(target) || touchesProtectedTarget(target, options.protectedTargets))
+      throw new Error("Skipped file lost its transaction queue or session protection changed; review is required.");
+    await assertSafeParents(root, sessionRoot, target);
+    verified.push({ target, stat: await verifyUnchangedFile(target, content, options) });
+  }
+  for (const { target, stat } of verified) await recheckUnchangedFile(target, stat, options);
 }
 
 export async function recoverSnapshotTransactionsOnStartup(options: TransactionOptions = {}) {

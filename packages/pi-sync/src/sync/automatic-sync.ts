@@ -27,29 +27,46 @@ export async function startSession(
     return { debug: false };
   }
   const timings = createStartupTimings(publish);
-  const document = await timings.measure("settings read", () => client.readSettings());
+  const { document, settings } = await timings.measure("settings read", () => client.readStartupSettings(signal));
+  client.validate();
   throwIfAborted(signal);
-  configureSyncStatus(ctx, (document?.parsed.showStatus as boolean | undefined) ?? true);
+  const debug = settings?.debug ?? false;
+  configureSyncStatus(ctx, settings?.showStatus ?? true);
   const { stateDirectoryMigrationNotice } = await import("../state/state-directory.js");
+  client.validate();
+  throwIfAborted(signal);
   const notice = stateDirectoryMigrationNotice();
-  const { pendingTransactionEntries } = await import("../snapshot/snapshot-transaction-directory.js");
-  const recoveryNeeded = (await pendingTransactionEntries()).some((entry) => entry.isDirectory());
-  throwIfAborted(signal);
-  if (!(await client.configured()) && !recoveryNeeded) {
-    if (notice) ctx.ui.notify(notice, "warning");
-    setSyncSetupCompletions([]);
-    const debug = document?.parsed.debug === true;
-    await client.markReady(debug);
-    timings.publish(ctx, debug, signal, "local initialization", "completed");
-    return { debug };
+  if (settings?.activeSyncSetup && document) {
+    const ready = !notice && (await client.tryStartupBootstrap(document, debug, signal));
+    client.validate();
+    throwIfAborted(signal);
+    if (ready) {
+      setSyncSetupCompletions(Object.keys(settings.syncSetups).sort((a, b) => a.localeCompare(b)));
+      timings.publish(ctx, debug, signal, "local initialization", "completed");
+      return { debug, config: configFromSettings(settings) };
+    }
+  } else {
+    const { pendingTransactionEntries } = await import("../snapshot/snapshot-transaction-directory.js");
+    const recoveryNeeded = (await pendingTransactionEntries()).length > 0;
+    client.validate();
+    throwIfAborted(signal);
+    if (!recoveryNeeded) {
+      if (notice) ctx.ui.notify(notice, "warning");
+      setSyncSetupCompletions([]);
+      await client.markReady(debug);
+      client.validate();
+      throwIfAborted(signal);
+      timings.publish(ctx, debug, signal, "local initialization", "completed");
+      return { debug };
+    }
   }
-  throwIfAborted(signal);
   const result = (await client.run("initialize", {}, signal)) as {
     debug: boolean;
     config?: AnySyncConfig;
     settings?: PiSyncSettingsV3;
     handoverRequired: boolean;
   };
+  client.validate();
   throwIfAborted(signal);
   configureSyncStatus(ctx, result.settings?.showStatus ?? true);
   setSyncSetupCompletions(Object.keys(result.settings?.syncSetups ?? {}).sort((a, b) => a.localeCompare(b)));

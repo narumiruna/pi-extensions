@@ -5,6 +5,7 @@ import path from "node:path";
 import { assertWithinRoot, isDeniedPath, isPathInside, parentPaths, safeJoin, toPosix } from "../paths.js";
 import { syncDirectory } from "../state/json-file.js";
 import { stateDir } from "../state/state-directory.js";
+import { collidingPaths } from "../sync/file-merge-planner.js";
 import {
   compileSyncPolicyExclude,
   requireLegacyTransferPolicy,
@@ -27,7 +28,11 @@ import { assertProjectedAgentDirectoryBudget } from "./snapshot-entry-projection
 import { agentDirectoryPhysicalSessionPath, assertUnexcludedTargets } from "./snapshot-exclude-safety.js";
 import { decodeBase64Strict } from "./snapshot-payload.js";
 import { reviewedSnapshotPreimages } from "./snapshot-reviewed-preimages.js";
-import { applySnapshotTransaction, recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
+import {
+  applySnapshotTransaction,
+  recoverPendingSnapshotTransactions,
+  type SkippedSnapshotWrite,
+} from "./snapshot-transaction.js";
 import { ignorePolicyValidator } from "./snapshot-transaction-policy.js";
 import {
   IGNORE_SNAPSHOT_VERSION,
@@ -139,6 +144,14 @@ export async function applySnapshot(
     snapshot,
     options,
   );
+  const currentHashes = new Map(current.files.map(({ path, sha256 }) => [path, sha256]));
+  const dependencies = collidingPaths([...plan.deletes, ...plan.writes.map(({ target }) => target)].map(toPosix));
+  const unchangedHashes = new Map<string, string>();
+  for (const file of snapshot.files) {
+    if (currentHashes.get(file.path) !== file.sha256) continue;
+    const target = snapshotTarget(root, file.path, sessionDir);
+    if (!dependencies.has(toPosix(target))) unchangedHashes.set(target, file.sha256);
+  }
   if (inventory) {
     assertProjectedAgentDirectoryBudget(
       inventory,
@@ -151,8 +164,10 @@ export async function applySnapshot(
       },
       options,
     );
-    await preflightSnapshotMutations(root, plan, sessionDir, options);
   }
+  const skipped = inventory
+    ? await preflightSnapshotMutations(root, plan, sessionDir, options, unchangedHashes)
+    : undefined;
   if (options.reviewedLocal || inventory) {
     const images = reviewedSnapshotPreimages(root, sessionDir, current.files, plan, inventory);
     const reviewed = options.reviewedLocal;
@@ -173,8 +188,11 @@ export async function applySnapshot(
       transactionOptions.expectedPreimages.set(target, image);
     }
   }
-  if (!inventory) await preflightSnapshotMutations(root, plan, sessionDir, options);
-  await applySnapshotTransaction(plan, transactionOptions);
+  await applySnapshotTransaction(
+    plan,
+    transactionOptions,
+    skipped ?? (await preflightSnapshotMutations(root, plan, sessionDir, options, unchangedHashes)),
+  );
   return appliedFileHashMap(snapshot, current, protectedRelativePaths);
 }
 
@@ -350,7 +368,9 @@ export async function preflightSnapshotMutations(
   plan: { deletes: string[]; writes: Array<{ target: string; content: Buffer }> },
   sessionDir?: string,
   options: MutationGuards = {},
-) {
+  unchangedHashes?: ReadonlyMap<string, string>,
+): Promise<SkippedSnapshotWrite[]> {
+  const skipped: SkippedSnapshotWrite[] = [];
   assertMutationCurrent(options);
   await assertUnexcludedTargets(root, [...plan.deletes, ...plan.writes.map((item) => item.target)], {
     ...options,
@@ -363,9 +383,21 @@ export async function preflightSnapshotMutations(
     assertMutationCurrent(options);
   }
   for (const item of plan.writes) {
-    await prepareSnapshotWrite(rootForTarget(root, item.target, sessionDir), item.target, deletePaths, options);
+    const stat = await prepareSnapshotWrite(
+      rootForTarget(root, item.target, sessionDir),
+      item.target,
+      deletePaths,
+      options,
+    );
     assertMutationCurrent(options);
+    const hash = unchangedHashes?.get(item.target);
+    if (hash !== undefined && stat?.isFile() && stat.nlink === 1) {
+      const canonical = await fs.realpath(item.target);
+      assertMutationCurrent(options);
+      if (canonical === item.target) skipped.push({ ...item, preimage: `file:${hash}` });
+    }
   }
+  return skipped;
 }
 
 function assertMutationCurrent(options: MutationGuards) {
@@ -403,6 +435,7 @@ async function prepareSnapshotWrite(root: string, target: string, deletePaths: S
   if (stat?.isDirectory() && !deletePaths.has(target)) {
     throw new Error(`Refusing to overwrite directory during snapshot apply: ${target}`);
   }
+  return stat;
 }
 
 async function ensureSafeDirectory(root: string, directory: string, deletePaths: Set<string>, options: MutationGuards) {

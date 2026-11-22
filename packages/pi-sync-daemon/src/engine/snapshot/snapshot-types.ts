@@ -1,7 +1,15 @@
-export interface SnapshotFile {
+export interface SnapshotFileHash {
   path: string;
-  contentBase64: string;
   sha256: string;
+}
+
+export interface SnapshotFile extends SnapshotFileHash {
+  contentBase64: string;
+}
+
+export interface SnapshotObservation {
+  scope: DirectoryScope["scope"];
+  files: Array<SnapshotFileHash & { settingsContent?: Buffer }>;
 }
 
 export interface EffectiveIgnorePolicy {

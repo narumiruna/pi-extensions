@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { configFromSettings, loadConfig } from "../settings/config.js";
+import { configFromSettings, type createSettingsConfigView } from "../settings/config.js";
+import type { AnySyncConfig } from "../settings/settings-types.js";
 import { ownRecord } from "../settings/settings-validation.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
@@ -10,21 +11,23 @@ import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
 import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery, loadSettingsCatalog } from "./settings-review.js";
 import { safeTerminalText } from "./terminal-text.js";
 
-export async function countValidSyncSetups(setups: Record<string, unknown> | undefined, signal?: AbortSignal) {
-  let count = 0;
-  for (const name of Object.keys(setups ?? {})) {
+export async function hasAnotherSwitchableSetup(
+  view: ReturnType<typeof createSettingsConfigView>,
+  signal?: AbortSignal,
+) {
+  for (const name of view.setupNames) {
+    if (name === view.activeSetupName) continue;
     throwIfAborted(signal);
-    let valid = false;
     try {
-      await loadConfig(name);
-      valid = true;
+      await view.observe(name, signal);
     } catch {
-      // Invalid setups stay visible in management but are not switchable.
+      throwIfAborted(signal);
+      continue;
     }
     throwIfAborted(signal);
-    if (valid) count += 1;
+    return true;
   }
-  return count;
+  return false;
 }
 
 type SyncSetupActions = {
@@ -270,7 +273,7 @@ function setupSummary(value: unknown) {
   );
 }
 
-function storageEndpoint(config: Awaited<ReturnType<typeof loadConfig>>) {
+function storageEndpoint(config: AnySyncConfig) {
   switch (config.backend.type) {
     case "s3":
       return safeTerminalText(config.backend.profile.endpoint);
@@ -281,7 +284,7 @@ function storageEndpoint(config: Awaited<ReturnType<typeof loadConfig>>) {
   }
 }
 
-function storageLocation(config: Awaited<ReturnType<typeof loadConfig>>) {
+function storageLocation(config: AnySyncConfig) {
   switch (config.backend.type) {
     case "s3":
       return safeTerminalText(`${config.backend.destination.bucket}/${config.storagePath}`);

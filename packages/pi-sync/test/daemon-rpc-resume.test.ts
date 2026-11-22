@@ -137,7 +137,7 @@ test("the first real Pi RPC daemon status repairs idle heartbeat expiry in the s
     const resume = wire.findIndex(({ method }) => method === "resume-contact");
     assert.ok(update >= 0 && resume > update, JSON.stringify(wire));
     assert.ok(
-      wire.every(({ method, contact }) => method !== "poll" || contact !== "expired"),
+      wire.every(({ method, contact }) => !["poll", "state-wait"].includes(method) || contact !== "expired"),
       "Background polling must not trigger this repair",
     );
   } finally {
@@ -195,8 +195,8 @@ test("real Pi RPC recovery does not replay a push interrupted by heartbeat expir
       const wire = (await daemon.inspect()).slice(before);
       assert.ok(wire.some(({ method, job }) => method === "poll" && job?.id === id && job?.phase === "failed"));
       assert.ok(
-        wire.some(({ method, contact }) => method === "poll" && contact === "expired"),
-        "No poll observed expiry",
+        wire.some(({ method, contact }) => ["poll", "state-wait"].includes(method) && contact === "expired"),
+        "No state observation reported expiry",
       );
       assert.ok(
         wire.some(({ method, error }) => method === "resume-contact" && !error),

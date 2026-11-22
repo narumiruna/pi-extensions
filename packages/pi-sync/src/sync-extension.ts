@@ -177,7 +177,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       } catch (error) {
         if (!signal.aborted && owner === client) {
           try {
-            client.validate();
+            ctx.isIdle();
             client.recordOwnershipFailure(error);
             if (ctx.hasUI) {
               const advice = client.ownershipCleanupRequired ? " Open /sync to recover the daemon." : "";

@@ -129,6 +129,8 @@ After quiescence, the authenticated final fence returns `RemoteError.name = "Dae
 
 A later command can reconnect after a cancelled or failed unpublished attach. First, Pi Sync confirms the old connection's detach and drain, then releases its local queue grants. It uses a fresh client ID and generation for the next connection. Daemon retirement records stay intact, so late requests cannot revive the old attempt. Failed cleanup blocks a new identity and operation; it does not release uncertain grants. A cancelled or submitted operation is never replayed by this recovery.
 
+Reattachment is ordered with facts updates. If reattachment fails, cancellation releases a model-binding callback that is still waiting for its turn. A callback that already started must finish its work and recheck ownership before returning a binding.
+
 ### Recovering expired contact
 
 A running daemon can expire a Pi session's heartbeat after a computer sleeps. A
@@ -149,6 +151,18 @@ publishes fresh facts after confirmation. The binding and consent checks still
 apply. A failed or uncertain repair does not start a replacement owner, release
 uncertain grants, or resubmit work.
 
+### Read-only configured startup
+
+An attached interactive client can become ready without joining the foreground job queue when the daemon can confirm that no recovery is needed. If another client is in a human review, the owner requires exact evidence of that job's live operation lock and the same pending uncommitted review. It queues initialization if ready publication would invalidate the review's participant generation. Active writes, open reservations, uncertain ownership, pending recovery, and unsupported settings/state layouts also use queued initialization. The owner rechecks settings, consent, recovery, and participant evidence after the ledger write and before exposing ready facts. Pi tries the fast path only with active contact and no pending or uncertain contact repair. Pi orders bootstrap with facts publication and samples facts when each update starts, so an older snapshot cannot overwrite confirmed readiness. If contact changes after the daemon accepts readiness, a current client with a confirmed reply keeps readiness without treating it as proof of active contact. If the reply is lost or its session is no longer current, Pi stops using that connection and drains and retires the original participant. Retirement stops it from authorizing work and keeps PID-based file protection. Unconfirmed cleanup retains recovery evidence; Pi does not retry the bootstrap or publish facts from the old session. Use the [daemon CLI recovery guide](../../pi-sync/docs/daemon-migration.md#recover-from-uncertain-daemon-cleanup) if the client has retired and cannot run `/sync daemon recover`. Attach admission still waits for an active file reservation. This is not an atomic guarantee against external filesystem changes; later transfers keep their fresh checks.
+
+### Local transport and ledger writes
+
+An owner that advertises `stateWait` in its attach reply supports one cancellable `state-wait` request per client. It returns events, the complete pending callback set, contact state, and terminal job IDs. The client fetches each terminal result once. A separate per-participant revision wakes the waiter on changes even if no event was emitted. Idle waits return at the heartbeat interval. If more jobs are still waiting locally than fit in a request, the client rotates through the IDs. A failed observation does not cancel a submitted job. After three consecutive failures, the client polls the original job ID for its result. Older peers use the existing polling routes. If either path cannot find the result of a submitted job, the client treats the outcome as uncertain before it requests cancellation. A cancellation acknowledgement does not prove that an absent job never ran. The client blocks new jobs and contact repair until it is disposed. It still drains queue-release callbacks, and the caller must reconcile the original outcome before retrying.
+
+A facts update skips a ledger rewrite only after the serialized writer confirms that the same ledger image was already published. A queued or failed attempt is not evidence of publication. The update still confirms contact, checks ownership, and runs the monitor hook. Changed facts, including busy state and live-session protection, retain the existing acknowledgment and persistence boundaries.
+
+A client with a paged review presenter can opt into on-demand exact details at attach. The client can cancel before fetching any page. For these paged reviews, approval requires the verified exact details for the same pending offer. The owner binds the offer to the client generation and callback/job, and consumes it once. Without support on both sides, the client receives the existing eager review.
+
 ## Repository lifetime smoke
 
 After the repository build, run the standalone real-clock smoke from the repository root. It loads the built package directory through real Pi RPC, tests no-client CLI exit and last-Pi exit, restarts through the next eligible Pi, and retains an explicitly reviewed grant beyond the grace period. It uses only owned loopback provider/storage fixtures and preserves recovery bytes. It takes about two minutes; it is not a Vitest case.
@@ -160,6 +174,12 @@ node node_modules/.cache/pi-extensions-test/packages/pi-sync/test/idle-exit-cli-
 ```
 
 Do not rebuild while a smoke-owned daemon is running. Linux containers need an init process to reap detached children. This smoke does not verify native Windows behavior, terminal logout, physical power loss, or real-data cutover.
+
+### Backend observations and publication
+
+Git can read the head and its snapshot from one fresh observation for scoped callers that retain later apply and publication checks. Independent reads of a snapshot still verify reachability from a fresh head. The cache reuses validated manifest and tree data for the exact commit, not the mutable branch revision. Snapshot validation reuses a verified checksum only for the same exact encoded payload and digest; path, selection, manifest, and pointer checks still run.
+
+S3 and WebDAV encode an owned publication image while checking remote conditional support. Neither stages or publishes the snapshot before the probe and cleanup succeed. Conditional checks still run on every publication; WebDAV tries the target collection first, then creates missing ancestors as needed.
 
 ## Package upgrades
 
@@ -212,6 +232,8 @@ Pi core's settings storage has separate existing-file and missing-file branches 
 These guarantees cover cooperating registered clients. Unregistered old Pi versions, external editors, shell commands, and arbitrary extensions remain independent writers. Preserve conservative preimage checks, recovery evidence, and explicit upgrade preconditions.
 
 ### Agent-directory recovery evidence
+
+Directional apply does not rewrite an independent regular file when its exact spelling and bytes already match. It keeps the same target queue and verifies the omitted file before accepting the result. An intervening edit blocks acceptance; rollback journals cover only actual mutations. These checks do not reserve the filesystem against unrelated writers.
 
 Version 10 journals use unique workspace slots. Scratch files get separate unique slots in private directories on the destination filesystem. Recovery reads only the names that the durable journal or scratch record identifies. A failed publication can leave unrecorded objects, but it cannot block a new slot or authorize deleting the old one. The synced path policy excludes these private objects. Older journals keep their exact paths and identity checks; an upgrade does not adopt unrecorded data.
 

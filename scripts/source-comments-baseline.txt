@@ -1799,11 +1799,9 @@
 "packages/pi-sync-daemon/src/client.ts"	0b3e05b6cc612bd8ba8508f9bf51674e8d4b325a8b1d654897e30e01cb8906e1
 "packages/pi-sync-daemon/src/client.ts"	0df5e3b6b109f9ee312d844f632904a08cd0a1a02cab09455588a153565c112b
 "packages/pi-sync-daemon/src/client.ts"	121ff8c3bbd283b0eacb4cd84c044a0dda8e6f82f7b675639b1c41c9e7738181
-"packages/pi-sync-daemon/src/client.ts"	23d6e8550e4972de36fe2a526197688f6b580ef99fba6f10c0e1bc32cfdc914f
 "packages/pi-sync-daemon/src/client.ts"	2e51ee88c3ce7920d8a87a3b6d72c46508285a44533ab22db8878812681d2094
 "packages/pi-sync-daemon/src/client.ts"	2fddc0cfac24839e5be7e8688561482054311df4786efe2422e8061ccd66adaf
 "packages/pi-sync-daemon/src/client.ts"	31fae12fee015620267981ed633849daafeaeed1390acbd5a7876ea6801766bf
-"packages/pi-sync-daemon/src/client.ts"	3aa9206dc4892927eac4d2aa9170b43b150c9485181534b14b8f3fd1f1bbc5f6
 "packages/pi-sync-daemon/src/client.ts"	3cf7db671f33ffbbe580271ffcc1c6f45a9d90320a549a4cf15f35cd9c3253fa
 "packages/pi-sync-daemon/src/client.ts"	48c2561452aa1afac6b62420a489274e3cb60c1c52e3207843c996a2bc0956ac
 "packages/pi-sync-daemon/src/client.ts"	5028d35125ea01cf7192fcc7eb8a3ac097855dd804daea672d907567fbd3210d
@@ -1831,7 +1829,6 @@
 "packages/pi-sync-daemon/src/client.ts"	daeaaba12c5b9277289f2caf6dac0c86903f2822057227eb221f0771e263e324
 "packages/pi-sync-daemon/src/client.ts"	dbf70cda969ec61367af632db42212bedb13da96a8aa3482c572d1b8f00c2fa4
 "packages/pi-sync-daemon/src/client.ts"	e8c201ee3af50202903cb9c8a2e8e6c748555a9215122a779a3b2a3a1a1b3669
-"packages/pi-sync-daemon/src/client.ts"	f347b21b51e6278cc3fbc142cfa71f7a9188de52a034d9f7800290a36d8efd5c
 "packages/pi-sync-daemon/src/client.ts"	fd2248976acd2ef2526ef9eb96b681f1e8885d5d4237fa49b5135abd4043c3ee
 "packages/pi-sync-daemon/src/client.ts"	fd5ac53ed33574f38d564f72c0a2d85a609e74d84ce3c6e2c6cf6576c9e0d3aa
 "packages/pi-sync-daemon/src/consent.ts"	01897717b3310253595a70f248764aaa25b67e628ba642e7c05c62f0f17b0462
@@ -2304,7 +2301,6 @@
 "packages/pi-sync/src/ui/merge-review.ts"	58b0953c5af40afbabda8059018430ae6f4a5f856a379fc2d0a3de6bc7397198
 "packages/pi-sync/src/ui/merge-review.ts"	a00de157ee200f53c463232da40727ff5f8e0a43d492a578685f9d065a87ca45
 "packages/pi-sync/src/ui/merge-review.ts"	df96d1c6e8e483dbbedae35cdd410e7c1572dfe1e08dc9c62402a487c768beff
-"packages/pi-sync/src/ui/merge-review.ts"	e0ef8cd5559d000a0f5dd7498975f7b276744878f3603beef2de3f600bfc8aa3
 "packages/pi-sync/src/ui/merged-sync-summary.ts"	7cc5f43aaa2ca7c95ed47d251dd156e4de3f198efde1ec25b964bc92a2c65fa7
 "packages/pi-sync/src/ui/operation-dialogs.ts"	01c9dc7e4fe7c2f2cb72985dd291a5f76861ebe4ccebb4968243609dec40eaed
 "packages/pi-sync/src/ui/operation-dialogs.ts"	1a037057ed97464dda63cefc7ec714807d408fd007a6b0f6be0c150ba03d1996
@@ -2347,7 +2343,6 @@
 "packages/pi-sync/src/ui/sync-confirmation.ts"	dada9c61297974dce23d48c59a3f118811800903991973a042d189b43a11c0c2
 "packages/pi-sync/src/ui/sync-confirmation.ts"	db2138acfc84e37ccb89472e6af3efba41ca9a30efeb7839e56a7adfc9c275a4
 "packages/pi-sync/src/ui/sync-confirmation.ts"	f3d8d0d700395ca4b376c8b0155e86984229ae6d7d60eadb9546a13533e9e5c9
-"packages/pi-sync/src/ui/sync-setups-ui.ts"	4eafba2db567fe50bc4b5258433e2c92e941cbb9dc2111ca2d4d0c73c2340b14
 "packages/pi-sync/src/ui/sync-status.ts"	08d06b2dceacc9934f6336b0abf789a894b682366424a762fa3edefdc12845e1
 "packages/pi-sync/src/ui/sync-status.ts"	295d4cc7be0c3e4b28c6103ab20286ccf15de4f921f8a65c3404e6212b0c492c
 "packages/pi-sync/src/ui/sync-status.ts"	4fecf0918959841f548e91f3f33e721f6943f503cee8e7bdbb538a208aeda75e

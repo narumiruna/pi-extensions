@@ -11,6 +11,7 @@ import {
 import { type DocumentView, documentFingerprint } from "./document.js";
 import type { CommandOptions } from "./engine/commands/command-types.js";
 import type { EngineContext } from "./engine/host.js";
+import { captureStartupReviewLock } from "./engine/state/lock.js";
 import { createMonitor } from "./monitor.js";
 import { type Execute, type Execution, MAX_SETTINGS_BYTES, record } from "./protocol.js";
 import { createServiceContext, installServiceHost } from "./service-host.js";
@@ -433,6 +434,13 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
     execute,
     bind: monitor.bind,
     hooks: {
+      startup: {
+        captureReviewLock: captureStartupReviewLock,
+        async probe(fingerprint: string, signal: AbortSignal, reviewLock?: () => boolean) {
+          const { captureStartupBootstrap } = await import("./engine/sync/startup-bootstrap.js");
+          return captureStartupBootstrap(root, fingerprint, signal, reviewLock);
+        },
+      },
       factsChanged: monitor.factsChanged,
       idle: monitor.schedule,
       close: monitor.close,
@@ -466,6 +474,17 @@ async function withJobTimings<T>(
   }
 }
 
+async function requireStartupRecoveryCleared(execution: Execution) {
+  const { pendingTransactionEntries } = await import("./engine/snapshot/snapshot-transaction-directory.js");
+  execution.validate();
+  const pending = await pendingTransactionEntries();
+  execution.validate();
+  if (pending.length)
+    throw new Error(
+      "Pi Sync startup cannot confirm recovery is clear. Preserve recovery files and check /sync doctor before retrying.",
+    );
+}
+
 async function initialize(ctx: EngineContext, execution: Execution, diagnostics = true) {
   const { pendingTransactionEntries } = await import("./engine/snapshot/snapshot-transaction-directory.js");
   const pending = await pendingTransactionEntries();
@@ -487,11 +506,15 @@ async function initialize(ctx: EngineContext, execution: Execution, diagnostics 
     execution.validate();
     const settings = document ? validateSettingsDocument(document.parsed) : undefined;
     const config = settings?.activeSyncSetup ? configFromSettings(settings) : undefined;
+    if (diagnostics) await requireStartupRecoveryCleared(execution);
     return { debug: settings?.debug ?? false, settings, config, handoverRequired: true };
   }
   const { initializeSync } = await import("./engine/sync/initialization.js");
   const initialized = await initializeSync(ctx, execution.signal, (_ctx, report) => {
     if (diagnostics) execution.emit("timings", { report });
   });
+  execution.validate();
+  if (diagnostics) await requireStartupRecoveryCleared(execution);
+  execution.validate();
   return { ...initialized, handoverRequired: !readConsent(execution.root) };
 }

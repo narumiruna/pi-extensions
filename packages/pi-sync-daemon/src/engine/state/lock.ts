@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { lstatSync, realpathSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -23,6 +24,49 @@ interface Guard {
 }
 
 export type LockInspection = { status: "missing" } | { status: "unreadable" } | { status: "valid"; lock: LockFile };
+
+const activeLock = new AsyncLocalStorage<{ path: string; contents: Buffer; active(): boolean }>();
+
+export function captureStartupReviewLock(): (() => boolean) | undefined {
+  const owner = activeLock.getStore();
+  if (!owner?.active()) return;
+  const guardPath = `${owner.path}.guard`;
+  const originalGuard = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false });
+  const originalLock = lstatSync(owner.path, { bigint: true, throwIfNoEntry: false });
+  if (!originalGuard?.isDirectory() || !originalLock?.isFile()) return;
+  const validate = () => {
+    if (!owner.active() || owner.path !== lockPath()) return false;
+    const guard = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false });
+    const candidate = lstatSync(owner.path, { bigint: true, throwIfNoEntry: false });
+    if (
+      !guard?.isDirectory() ||
+      guard.dev !== originalGuard.dev ||
+      guard.ino !== originalGuard.ino ||
+      Number(guard.mtimeMs) < Date.now() - LOCK_GUARD_STALE_MS ||
+      !candidate?.isFile() ||
+      candidate.dev !== originalLock.dev ||
+      candidate.ino !== originalLock.ino ||
+      candidate.size !== BigInt(owner.contents.length)
+    )
+      return false;
+    const fd = openSync(owner.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      const opened = fstatSync(fd, { bigint: true });
+      if (!opened.isFile() || opened.dev !== candidate.dev || opened.ino !== candidate.ino) return false;
+      const current = Buffer.alloc(owner.contents.length + 1);
+      let offset = 0;
+      while (offset < current.length) {
+        const count = readSync(fd, current, offset, current.length - offset, offset);
+        if (!count) break;
+        offset += count;
+      }
+      return current.subarray(0, offset).equals(owner.contents);
+    } finally {
+      closeSync(fd);
+    }
+  };
+  return validate() ? validate : undefined;
+}
 
 export async function withLock<T>(
   command: string,
@@ -97,11 +141,27 @@ export async function withLock<T>(
 
     assertLocation();
     guard.throwIfCompromised();
-    await fs.writeFile(file, JSON.stringify(lock, null, "\t"), { flag: "wx" });
+    const contents = Buffer.from(JSON.stringify(lock, null, "\t"));
+    await fs.writeFile(file, contents, { flag: "wx" });
     written = true;
     guard.throwIfCompromised();
-    result = await fn();
-    guard.throwIfCompromised();
+    const held = guard;
+    let active = true;
+    const ownsLock = () => {
+      if (!active || held.isCompromised()) return false;
+      try {
+        assertLocation();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      result = await activeLock.run({ path: file, contents, active: ownsLock }, fn);
+      guard.throwIfCompromised();
+    } finally {
+      active = false;
+    }
   } catch (error) {
     failed = true;
     failure = error;

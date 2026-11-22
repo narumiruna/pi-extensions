@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { decodeSnapshot, encodeSnapshot } from "../../snapshot/snapshot-codec.js";
+import { decodeSnapshot } from "../../snapshot/snapshot-codec.js";
+import { assertSnapshotFilePayload } from "../../snapshot/snapshot-payload.js";
 import type { Snapshot } from "../../snapshot/snapshot-types.js";
 import { validatePortableSnapshot } from "../../sync/local-fields.js";
 import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
 import { portableSnapshotSelection } from "../../sync/sync-policy.js";
 import type { LatestPointer, RemoteObject, ResolvedWebDavBackend } from "../backend-types.js";
+import { capturePublicationImage, encodeForPublication } from "../publication-encoding.js";
 import { createLatestPointer, remoteHistoryEntry } from "../snapshot-pointer.js";
 import {
   type BackendDiagnostic,
@@ -28,7 +30,6 @@ export class WebDavSyncBackend implements SyncBackend {
   readonly destination: string;
   private conditionalVerified = false;
   private readonly checksums = new Map<string, string>();
-  private capabilityCheck?: Promise<void>;
 
   constructor(
     private readonly config: ResolvedWebDavBackend,
@@ -79,17 +80,18 @@ export class WebDavSyncBackend implements SyncBackend {
     options: PublishSnapshotOptions = {},
   ): Promise<PublishSnapshotResult> {
     throwIfAborted(options.signal);
-    assertSnapshotIdentity(snapshot, this.config.destination.namespace);
+    const image = capturePublicationImage(snapshot);
+    assertSnapshotIdentity(image, this.config.destination.namespace);
     if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
-    await this.ensureAtomicConditions(options.signal);
-    throwIfAborted(options.signal);
     const client = new WebDavClient(this.config, options.signal);
-    await client.ensureCollection(snapshotsPath(this.config));
-    const encoded = await encodeSnapshot(snapshot);
+    const encoded = await encodeForPublication(image, async () => {
+      await this.runCapabilityProbe(options.signal);
+      await client.ensureCollection(snapshotsPath(this.config));
+    });
     throwIfAborted(options.signal);
-    const pointer = createLatestPointer(this.config.destination.namespace, snapshot, sha256(encoded));
-    const stagedPath = snapshotPath(this.config, snapshot.id);
+    const pointer = createLatestPointer(this.config.destination.namespace, image, sha256(encoded));
+    const stagedPath = snapshotPath(this.config, image.id);
     if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
     try {
@@ -98,9 +100,7 @@ export class WebDavSyncBackend implements SyncBackend {
       if (!(error instanceof WebDavPreconditionError)) throw error;
       const existing = await client.getBuffer(stagedPath);
       if (!existing.value || sha256(existing.value) !== pointer.sha256) {
-        throw new SyncBackendConflictError(
-          `Immutable snapshot id already exists with different content: ${snapshot.id}`,
-        );
+        throw new SyncBackendConflictError(`Immutable snapshot id already exists with different content: ${image.id}`);
       }
     }
     const currentObject = await client.getJson<LatestPointer>(latestPath(this.config));
@@ -217,7 +217,6 @@ export class WebDavSyncBackend implements SyncBackend {
         { key: "webdav-cleanup", level: "info", message: "webdav probe cleanup: ok" },
       );
     } catch (error) {
-      this.capabilityCheck = undefined;
       this.conditionalVerified = false;
       if (error instanceof Error && error.name === "AbortError") throw error;
       diagnostics.push({
@@ -244,17 +243,8 @@ export class WebDavSyncBackend implements SyncBackend {
     return diagnostics;
   }
 
-  private ensureAtomicConditions(signal?: AbortSignal) {
-    if (this.capabilityCheck) return this.capabilityCheck;
-    this.conditionalVerified = false;
-    const check = this.runCapabilityProbe(signal).finally(() => {
-      if (this.capabilityCheck === check) this.capabilityCheck = undefined;
-    });
-    this.capabilityCheck = check;
-    return check;
-  }
-
   private async runCapabilityProbe(signal?: AbortSignal) {
+    this.conditionalVerified = false;
     throwIfAborted(signal);
     const probeCollection = joinRemote(rootPath(this.config), ".pi-sync-probes", randomUUID());
     const probe = `${probeCollection}/conditional.txt`;
@@ -306,6 +296,7 @@ export class WebDavSyncBackend implements SyncBackend {
       }
     }
     if (operationError) throw operationError;
+    throwIfAborted(signal);
     this.conditionalVerified = true;
   }
 
@@ -509,10 +500,7 @@ function validateSnapshotBundle(snapshot: Snapshot) {
     ) {
       throw new Error("Remote snapshot bundle is malformed.");
     }
-    const content = Buffer.from(file.contentBase64, "base64");
-    if (content.toString("base64") !== file.contentBase64 || sha256(content) !== file.sha256) {
-      throw new Error("Remote snapshot bundle is malformed.");
-    }
+    assertSnapshotFilePayload(file, "Remote snapshot bundle is malformed.");
     paths.add(file.path);
   }
 }

@@ -1,14 +1,13 @@
-import { createHash } from "node:crypto";
 import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-factory.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import { createSnapshot } from "../snapshot/snapshot.js";
+import { observeSnapshot } from "../snapshot/snapshot.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { inspectHeadSelection } from "./remote-snapshot.js";
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
 import { syncSelectionHasContent } from "./sync-policy.js";
-import { fileHashMap, hasLocalChanges, remoteChangedSinceState } from "./sync-state.js";
+import { hasLocalChanges, rawSnapshotHashIdentity, remoteChangedSinceState } from "./sync-state.js";
 
 /** Advisory baseline-relative observation, never an authorization to transfer files. */
 export async function inspectSync(
@@ -22,7 +21,7 @@ export async function inspectSync(
   const backend = await timings.measure("backend initialization", () => factory(config));
   throwIfAborted(signal);
   const local = await timings.measure("local snapshot", () =>
-    createSnapshot(config.snapshotIdentity, { ...options, signal }),
+    observeSnapshot({ ...options, signal }, Boolean(config.localFields?.length)),
   );
   throwIfAborted(signal);
   const state = await timings.measure("sync state read", () => readStateForConfig(config));
@@ -32,9 +31,7 @@ export async function inspectSync(
   const selectionState = head ? await inspectHeadSelection(backend, config, head, signal) : undefined;
   throwIfAborted(signal);
   const freshness: { localIdentity?: string } = {
-    localIdentity: createHash("sha256")
-      .update(JSON.stringify(fileHashMap(local)))
-      .digest("hex"),
+    localIdentity: rawSnapshotHashIdentity(local),
   };
   return {
     ...freshness,

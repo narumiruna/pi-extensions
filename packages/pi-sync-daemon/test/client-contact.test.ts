@@ -659,6 +659,148 @@ test("an expired client keeps polling the original job and waits for its termina
   );
 });
 
+test.each([1, 3])("%s failed state observations do not cancel an accepted foreground job", async (failed) => {
+  let id: string | undefined;
+  let attempts = 0;
+  let jobPolls = 0;
+  await fixture(
+    ({ method, params }, response) => {
+      if (method === "attach") return poll("active", { stateWait: 1 });
+      if (method === "submit") {
+        assert.equal(id, undefined);
+        id = String(params.id);
+        return { result: { id, phase: "queued" } };
+      }
+      if (method === "state-wait") {
+        if (id && Array.isArray(params.jobs) && params.jobs.includes(id) && ++attempts <= failed) {
+          response.destroy();
+          return;
+        }
+        return {
+          result: {
+            ...poll("active").result,
+            stateRevision: "1",
+            finished: attempts > failed && id ? [id] : [],
+            missing: [],
+          },
+        };
+      }
+      if (method === "poll" && params.job) {
+        assert.ok(id);
+        assert.equal(params.job, id);
+        jobPolls++;
+        if (failed === 3 && jobPolls === 1) return poll("active", { job: { id, phase: "running" } });
+        return poll("active", { job: { id, phase: "done", result: "original" } });
+      }
+      return poll("active");
+    },
+    async (client, calls) => {
+      await client.attach();
+      assert.equal(await client.run("transfer", {}), "original");
+      assert.equal(jobPolls, failed === 1 ? 1 : 2);
+      assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
+      assert.equal(calls.filter(({ method }) => method === "cancel").length, 0);
+    },
+  );
+});
+
+test.each(["state wait", "job poll", "terminal poll"] as const)(
+  "a missing result from %s blocks new writes even when cancellation is acknowledged",
+  async (source) => {
+    const cancelling = Promise.withResolvers<void>();
+    const finishCancel = Promise.withResolvers<void>();
+    let id: string | undefined;
+    await fixture(
+      async ({ method, params }) => {
+        if (method === "attach") return poll("active", source === "job poll" ? {} : { stateWait: 1 });
+        if (method === "submit") {
+          assert.equal(id, undefined);
+          id = String(params.id);
+          return { result: { id, phase: "queued" } };
+        }
+        if (method === "state-wait") {
+          const watching = id && Array.isArray(params.jobs) && params.jobs.includes(id) ? [id] : [];
+          return {
+            result: {
+              ...poll("active").result,
+              stateRevision: "1",
+              finished: source === "terminal poll" ? watching : [],
+              missing: source === "state wait" ? watching : [],
+            },
+          };
+        }
+        if (method === "poll" && params.job && source === "job poll")
+          return {
+            error: {
+              name: "Error",
+              message: "Operation is unknown or its result expired; reconcile journals instead of replaying.",
+            },
+          };
+        if (method === "cancel") {
+          assert.equal(params.id, id);
+          cancelling.resolve();
+          await finishCancel.promise;
+          return { result: { cancelled: true } };
+        }
+        return poll("active");
+      },
+      async (client, calls) => {
+        await client.attach();
+        const result = assert.rejects(client.run("transfer", {}), /reconcile journals/u);
+        void result.catch(() => {});
+        await cancelling.promise;
+        try {
+          await assert.rejects(client.update(client.facts), /unavailable/u);
+          await assert.rejects(client.run("transfer", {}), /unavailable/u);
+        } finally {
+          finishCancel.resolve();
+          await result;
+        }
+        assert.equal(client.hasPendingWork, true);
+        await assert.rejects(client.run("transfer", {}), /unavailable/u);
+        await assert.rejects(client.resumeContact(client.facts), /unavailable/u);
+        await assert.rejects(client.attach(), /unavailable/u);
+        assert.deepEqual(
+          calls
+            .filter(({ method }) => ["submit", "cancel", "resume-contact", "update", "attach"].includes(method))
+            .map(({ method }) => method),
+          ["attach", "submit", "cancel"],
+        );
+      },
+    );
+  },
+);
+
+test("disposing with a state wait settles the original foreground job", async () => {
+  let id: string | undefined;
+  const waiting = Promise.withResolvers<void>();
+  await fixture(
+    async ({ method, params }, response) => {
+      if (method === "attach") return poll("active", { stateWait: 1 });
+      if (method === "submit") {
+        id = String(params.id);
+        return { result: { id, phase: "queued" } };
+      }
+      if (method === "state-wait") {
+        const watching = id && Array.isArray(params.jobs) && params.jobs.includes(id) ? id : undefined;
+        if (watching) waiting.resolve();
+        if (watching) await new Promise<void>((resolve) => response.once("close", resolve));
+        return { result: { ...poll("active").result, stateRevision: "1", finished: [], missing: [] } };
+      }
+      return poll("active");
+    },
+    async (client, calls) => {
+      await client.attach();
+      const result = assert.rejects(client.run("transfer", {}), /disposed|closed/u);
+      await waiting.promise;
+      await client.dispose();
+      await result;
+      assert.equal(client.hasPendingWork, false);
+      assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
+    },
+  );
+});
+
 test("caller cancellation rejects a repair queued behind update without sending it", async () => {
   const releaseUpdate = Promise.withResolvers<void>();
   const enteredUpdate = Promise.withResolvers<void>();

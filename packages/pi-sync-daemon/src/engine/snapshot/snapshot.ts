@@ -47,13 +47,14 @@ import {
   IGNORE_SNAPSHOT_VERSION,
   type Snapshot,
   type SnapshotFile,
+  type SnapshotObservation,
   type SnapshotOptions,
 } from "./snapshot-types.js";
 
 export { canonicalSnapshotPathForConfig, isConfiguredSnapshotPath } from "../sync/sync-policy.js";
 
 const VERSION = 1;
-const scanInventories = new WeakMap<Pick<Snapshot, "files">, AgentDirectoryInventory>();
+const scanInventories = new WeakMap<Pick<SnapshotObservation, "files">, AgentDirectoryInventory>();
 
 export function agentDirectoryInventory(snapshot: Pick<Snapshot, "files">) {
   return scanInventories.get(snapshot);
@@ -119,7 +120,17 @@ export function regenerateSnapshotIdentity(snapshot: Snapshot): Snapshot {
   };
 }
 
-export async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
+type MaterializeFile<T> = (filePath: string, content: Buffer) => T;
+const SCAN_FILE_BATCH_SIZE = 8;
+
+function materializeSnapshotFile(filePath: string, content: Buffer): SnapshotFile {
+  return { path: filePath, contentBase64: content.toString("base64"), sha256: sha256(content) };
+}
+
+async function collectSnapshotFiles<T extends { path: string }>(
+  options: SnapshotOptions,
+  materialize: MaterializeFile<T>,
+) {
   options.signal?.throwIfAborted();
   const include = effectiveInclude(options);
   const policy = { ...options, include };
@@ -133,8 +144,47 @@ export async function createSnapshot(profile: string, options: SnapshotOptions =
   options.signal?.throwIfAborted();
   const collectionOptions = { ...policy, sessionDir };
   const collected =
-    options.scope === "agent-directory" ? await collectAgentDirectory(agentDir(), collectionOptions) : undefined;
-  const files = collected?.files ?? (await collectFiles(agentDir(), collectionOptions, excluded));
+    options.scope === "agent-directory"
+      ? await collectAgentDirectory(agentDir(), collectionOptions, materialize)
+      : undefined;
+  const files = collected?.files ?? (await collectSelectedFiles(agentDir(), collectionOptions, excluded, materialize));
+  options.signal?.throwIfAborted();
+  return { files, inventory: collected?.inventory, include, syncSessions };
+}
+
+export async function observeSnapshot(
+  options: SnapshotOptions = {},
+  retainSettings = false,
+): Promise<SnapshotObservation> {
+  const { files, inventory } = await collectSnapshotFiles(options, (filePath, content) => ({
+    path: filePath,
+    sha256: sha256(content),
+    ...(retainSettings && filePath === "settings.json" ? { settingsContent: content } : {}),
+  }));
+  options.signal?.throwIfAborted();
+  const observation: SnapshotObservation = { files, scope: options.scope };
+  if (inventory) scanInventories.set(observation, inventory);
+  return observation;
+}
+
+export function snapshotWithObservedInventory(snapshot: Snapshot, observation: SnapshotObservation) {
+  if (
+    snapshot.selection?.scope !== observation.scope ||
+    snapshot.files.length !== observation.files.length ||
+    observation.files.some(
+      (file, index) => file.path !== snapshot.files[index]?.path || file.sha256 !== snapshot.files[index]?.sha256,
+    )
+  )
+    return undefined;
+  const inventory = scanInventories.get(observation);
+  if (!inventory) return observation.scope === undefined ? snapshot : undefined;
+  const refreshed = { ...snapshot };
+  scanInventories.set(refreshed, inventory);
+  return refreshed;
+}
+
+export async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
+  const { files, inventory, include, syncSessions } = await collectSnapshotFiles(options, materializeSnapshotFile);
   options.signal?.throwIfAborted();
   const selection = selectionForSnapshot(include, options.exclude, options);
   const snapshot: Snapshot = {
@@ -154,7 +204,7 @@ export async function createSnapshot(profile: string, options: SnapshotOptions =
     selection,
     files,
   };
-  if (collected) scanInventories.set(snapshot, collected.inventory);
+  if (inventory) scanInventories.set(snapshot, inventory);
   return snapshot;
 }
 
@@ -173,12 +223,22 @@ export async function collectFiles(
   options: SnapshotOptions = {},
   excluded = compileSyncPolicyExclude(options),
 ): Promise<SnapshotFile[]> {
-  if (options.scope === "agent-directory") return (await collectAgentDirectory(root, options)).files;
+  if (options.scope === "agent-directory")
+    return (await collectAgentDirectory(root, options, materializeSnapshotFile)).files;
+  return collectSelectedFiles(root, options, excluded, materializeSnapshotFile);
+}
+
+async function collectSelectedFiles<T extends { path: string }>(
+  root: string,
+  options: SnapshotOptions,
+  excluded: (relativePath: string) => boolean,
+  materialize: MaterializeFile<T>,
+) {
   const signal = options.signal;
   const guardReserved = reservedIgnoreTargetGuard(root, options);
-  const collection = { signal, excluded, guardReserved };
+  const collection = { signal, excluded, guardReserved, materialize };
   signal?.throwIfAborted();
-  const results: SnapshotFile[] = [];
+  const results: T[] = [];
   const entries = await fs.readdir(root, { withFileTypes: true });
   signal?.throwIfAborted();
   const selection = syncIncludeSelection(effectiveInclude(options));
@@ -248,6 +308,21 @@ async function identify(absolute: string, canonical: string, signal?: AbortSigna
 
 async function recheck({ absolute, canonical, stat }: ScannedPath, signal?: AbortSignal) {
   if (!sameScannedPath((await identify(absolute, canonical, signal)).stat, stat)) changedScan();
+}
+
+async function forEachScannedFile<T>(
+  files: readonly T[],
+  signal: AbortSignal | undefined,
+  run: (file: T, index: number) => Promise<void>,
+) {
+  for (let offset = 0; offset < files.length; offset += SCAN_FILE_BATCH_SIZE) {
+    signal?.throwIfAborted();
+    const settled = await Promise.allSettled(
+      files.slice(offset, offset + SCAN_FILE_BATCH_SIZE).map((file, index) => run(file, index + offset)),
+    );
+    signal?.throwIfAborted();
+    for (const result of settled) if (result.status === "rejected") throw result.reason;
+  }
 }
 
 async function readScannedFile(candidate: ScannedPath, signal?: AbortSignal) {
@@ -324,13 +399,13 @@ export async function scanAgentDirectoryInventory(
   options: AgentDirectoryScanOptions,
   pendingStateEntry?: string,
 ) {
-  return (await collectAgentDirectory(root, options, false, pendingStateEntry)).inventory;
+  return (await collectAgentDirectory(root, options, undefined, pendingStateEntry)).inventory;
 }
 
-async function collectAgentDirectory(
+async function collectAgentDirectory<T extends { path: string }>(
   root: string,
   options: AgentDirectoryScanOptions,
-  readContents = true,
+  materialize?: MaterializeFile<T>,
   pendingStateEntry?: string,
 ) {
   const signal = options.signal;
@@ -420,16 +495,12 @@ async function collectAgentDirectory(
   if (selectedSessions && sessionDirectory) await walk(sessionDirectory, "sessions", true);
 
   assertAgentDirectoryPathLayout(candidates.map((candidate) => candidate.snapshotPath));
-  const results: SnapshotFile[] = [];
-  if (readContents) {
-    for (const candidate of candidates) {
+  const results: T[] = [];
+  if (materialize) {
+    await forEachScannedFile(candidates, signal, async (candidate, index) => {
       const content = await readScannedFile(candidate, signal);
-      results.push({
-        path: candidate.snapshotPath,
-        contentBase64: content.toString("base64"),
-        sha256: sha256(content),
-      });
-    }
+      results[index] = materialize(candidate.snapshotPath, content);
+    });
   }
   for (const directory of directories) await recheck(directory, signal);
   if (
@@ -446,7 +517,7 @@ async function collectAgentDirectory(
         sessionDirectory.stat.ino !== currentSessionDirectory.stat.ino))
   )
     changedScan();
-  for (const candidate of candidates) await recheck(candidate, signal);
+  await forEachScannedFile(candidates, signal, (candidate) => recheck(candidate, signal));
   signal?.throwIfAborted();
   return {
     files: results.sort((left, right) => left.path.localeCompare(right.path)),
@@ -462,7 +533,8 @@ async function collectAgentDirectory(
   };
 }
 
-type LegacyCollectionOptions = {
+type LegacyCollectionOptions<T> = {
+  materialize: MaterializeFile<T>;
   sessionsOnly?: boolean;
   virtualPrefix?: string;
   signal?: AbortSignal;
@@ -470,11 +542,11 @@ type LegacyCollectionOptions = {
   guardReserved: ReturnType<typeof reservedIgnoreTargetGuard>;
 };
 
-async function collectIncludedPath(
-  results: SnapshotFile[],
+async function collectIncludedPath<T>(
+  results: T[],
   root: string,
   relativePath: string,
-  options: LegacyCollectionOptions,
+  options: LegacyCollectionOptions<T>,
 ) {
   const { signal } = options;
   signal?.throwIfAborted();
@@ -495,11 +567,11 @@ async function collectIncludedPath(
   }
 }
 
-async function collectDirectory(
-  results: SnapshotFile[],
+async function collectDirectory<T>(
+  results: T[],
   root: string,
   relativeDirectory: string,
-  options: LegacyCollectionOptions,
+  options: LegacyCollectionOptions<T>,
 ) {
   options.signal?.throwIfAborted();
   const absoluteDirectory = path.join(root, relativeDirectory);
@@ -531,23 +603,19 @@ export async function readLegacySnapshotSource(
   return readScannedFile(candidate, signal);
 }
 
-async function addFile(
-  results: SnapshotFile[],
+async function addFile<T>(
+  results: T[],
   root: string,
   relativePath: string,
   snapshotPath: string,
-  { signal, guardReserved }: LegacyCollectionOptions,
+  { signal, guardReserved, materialize }: LegacyCollectionOptions<T>,
 ) {
   signal?.throwIfAborted();
   if (!isSafeSnapshotPath(snapshotPath)) return;
   const absolutePath = safeJoin(root, relativePath);
   const content = await readLegacySnapshotSource(absolutePath, guardReserved, signal);
   signal?.throwIfAborted();
-  results.push({
-    path: snapshotPath,
-    contentBase64: content.toString("base64"),
-    sha256: sha256(content),
-  });
+  results.push(materialize(snapshotPath, content));
 }
 
 export function isSessionPath(relativePath: string) {

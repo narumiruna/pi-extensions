@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { request as httpRequest } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
-import { lt, valid } from "semver";
-import { DAEMON_BUILD_VERSION } from "./build-version.js";
+import { DaemonError, hello, requestDaemon } from "./client-transport.js";
 import {
   canonicalRootGuard,
   clearUpgradeOwner,
@@ -15,7 +13,6 @@ import {
   processExited,
   type RuntimePaths,
   readIdentity,
-  readJsonBody,
   readProcessBirth,
   readUpgradeOwner,
   recordUpgradeOwner,
@@ -24,6 +21,7 @@ import {
   upgradeRepairStarted,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
+import { type MergeReviewPresenter, presentPagedReview, reviewScope } from "./paged-review.js";
 import {
   type Callback,
   type ClientEvent,
@@ -32,87 +30,16 @@ import {
   type ClientContact as ContactState,
   type Identity,
   type JobView,
-  MAX_MESSAGE_BYTES,
   MAX_REVIEW_BYTES,
   OWNERSHIP_CLEANUP_REQUIRED,
   operationPrefix,
   REVIEW_PAGE_CHARS,
-  type RemoteError,
   record,
+  UNKNOWN_JOB_RESULT,
 } from "./protocol.js";
+import { STATE_WAIT_FAILURE_LIMIT, stateWaitJobs, stateWaitResult } from "./state-wait-jobs.js";
 
-export class DaemonError extends Error {
-  readonly remote: RemoteError;
-  constructor(remote: RemoteError) {
-    super(remote.message);
-    this.name = remote.name;
-    this.remote = remote;
-  }
-}
-export async function requestDaemon(
-  paths: RuntimePaths,
-  identity: Identity,
-  method: string,
-  params: unknown,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  signal?.throwIfAborted();
-  const body = JSON.stringify({
-    version: 1,
-    root: paths.root,
-    instance: identity.instance,
-    token: identity.token,
-    method,
-    params,
-  });
-  if (Buffer.byteLength(body) > MAX_MESSAGE_BYTES) throw new Error("Daemon request exceeds its byte limit.");
-  return new Promise((resolve, reject) => {
-    const request = httpRequest(
-      {
-        socketPath: daemonPaths(paths, identity.instance).endpoint,
-        path: "/v1",
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
-      },
-      (response) => {
-        void readJsonBody(response)
-          .then((value) => {
-            if (!record(value)) throw new Error("Invalid daemon response.");
-            if (record(value.error) && typeof value.error.message === "string")
-              throw new DaemonError(value.error as unknown as RemoteError);
-            if (response.statusCode !== 200 || !Object.hasOwn(value, "result"))
-              throw new Error("Invalid daemon response.");
-            resolve(value.result);
-          })
-          .catch(reject);
-      },
-    );
-    // Admission can wait behind a complete apply. The request owner's signal
-    // cancels that wait; an idle timeout must not let admission escape the fence.
-    request.setTimeout(method === "attach" || method === "resume-contact" ? 0 : 30_000, () =>
-      request.destroy(new Error("Daemon request timed out.")),
-    );
-    request.once("error", reject);
-    request.end(body);
-  });
-}
-export async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSignal) {
-  const value = await requestDaemon(paths, identity, "hello", {}, signal);
-  if (
-    !record(value) ||
-    value.version !== 1 ||
-    value.root !== paths.root ||
-    value.instance !== identity.instance ||
-    value.pid !== identity.pid
-  )
-    throw new Error("Daemon handshake mismatch.");
-  const version = value.buildVersion;
-  if (Object.hasOwn(value, "buildVersion") && (typeof version !== "string" || valid(version) !== version))
-    throw new Error("Invalid daemon build version.");
-  // The old @narumitw/sync-daemon used the same wire protocol without a build version.
-  return { needsUpgrade: typeof version !== "string" || lt(version, DAEMON_BUILD_VERSION) };
-}
+export { DaemonError, hello, requestDaemon } from "./client-transport.js";
 
 export async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
   const { readConsent } = await import("./consent.js");
@@ -403,6 +330,7 @@ const TRANSIENT_RELEASE_ERRORS = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE",
 
 export interface ConnectionOptions {
   callback(callback: Callback, signal: AbortSignal): Promise<unknown>;
+  mergeReview?: MergeReviewPresenter;
   event?(event: ClientEvent): void;
   error?(error: unknown): void;
   /** Each current background observation after admission, including repeated states. */
@@ -425,6 +353,10 @@ export class DaemonConnection {
   private resuming: AbortController | undefined;
   private resumeUncertain = false;
   private pendingJobs = new Set<string>();
+  private observesState = false;
+  private stateRevision?: string;
+  private terminalJobs = new Set<string>();
+  private jobWaiters = new Map<string, PromiseWithResolvers<"terminal" | "poll">>();
   private uncertain = false;
   private reportedError = false;
   private commits = new Map<string, { notify(): void; signal?: AbortSignal }>();
@@ -474,6 +406,7 @@ export class DaemonConnection {
       "attach",
       this.facts,
       signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
+      this.options.mergeReview ? { reviewDetails: 1 } : undefined,
     );
     // Poll during attach: stopping a previous controller may need release answers
     // from this reattached participant before the attach response can complete.
@@ -483,6 +416,9 @@ export class DaemonConnection {
       const result = await request;
       admitted = true;
       this.publishContact(this.consume(result));
+      this.observesState = record(result) && result.stateWait === 1;
+      this.stateRevision = undefined;
+      this.terminalJobs.clear();
       this.attached = true;
       return this;
     } catch (error) {
@@ -635,6 +571,18 @@ export class DaemonConnection {
           { id, client: this.facts.id, operation, payload },
           this.controller.signal,
         );
+        let terminalObserved = this.observesState;
+        if (terminalObserved && !this.terminalJobs.has(id)) {
+          const completion = Promise.withResolvers<"terminal" | "poll">();
+          this.jobWaiters.set(id, completion);
+          const keepAlive = setInterval(() => {}, 30_000);
+          try {
+            terminalObserved = (await completion.promise) === "terminal";
+          } finally {
+            this.jobWaiters.delete(id);
+            clearInterval(keepAlive);
+          }
+        }
         while (!this.closed) {
           const reply = await requestDaemon(
             this.paths,
@@ -642,9 +590,15 @@ export class DaemonConnection {
             "poll",
             { client: this.facts.id, cursor: this.cursor, job: id },
             this.controller.signal,
-          );
-          this.consume(reply);
+          ).catch((error: unknown) => {
+            if (error instanceof DaemonError && error.message === UNKNOWN_JOB_RESULT) this.markWorkUncertain();
+            throw error;
+          });
           const job = record(reply) ? (reply.job as JobView | undefined) : undefined;
+          const missing = terminalObserved && (job?.id !== id || (job.phase !== "done" && job.phase !== "failed"));
+          if (missing) this.markWorkUncertain();
+          this.consume(reply);
+          if (missing) throw new Error(UNKNOWN_JOB_RESULT);
           if (job?.id === id && job.phase === "failed") {
             terminal = true;
             throw new DaemonError(job.error ?? { name: "Error", message: "Daemon operation failed." });
@@ -667,9 +621,7 @@ export class DaemonConnection {
           try {
             await requestDaemon(this.paths, this.identity, "cancel", { id, client: this.facts.id });
           } catch (error) {
-            this.uncertain = true;
-            for (const callback of this.callbacks.values())
-              if (callback.kind !== "queue-release") callback.controller.abort();
+            this.markWorkUncertain();
             throw new Error(
               "Operation outcome is uncertain; reload to reconnect and reconcile, never replay the write.",
               { cause: error },
@@ -677,7 +629,13 @@ export class DaemonConnection {
           }
         }
       },
-    ).finally(() => this.pendingJobs.delete(id));
+    ).finally(() => {
+      this.pendingJobs.delete(id);
+    });
+  }
+  private markWorkUncertain() {
+    this.uncertain = true;
+    for (const callback of this.callbacks.values()) if (callback.kind !== "queue-release") callback.controller.abort();
   }
   private publishContact(contact: ContactState | undefined) {
     this.contactRevision++;
@@ -730,6 +688,7 @@ export class DaemonConnection {
       if (this.completedCallbacks.size + this.callbacks.size >= MAX_COMPLETED_CALLBACKS) this.uncertain = true;
       const controller = new AbortController();
       const foreground = this.pendingJobs.has(callback.job);
+      const reviewGeneration = callback.review?.offer !== undefined ? this.facts.generation : undefined;
       this.callbacks.set(callback.id, {
         controller,
         kind: callback.kind,
@@ -761,7 +720,10 @@ export class DaemonConnection {
             {
               client: this.facts.id,
               id: callback.id,
-              ...(failed ? { error: "Client callback cancelled or failed." } : { value }),
+              ...(reviewGeneration !== undefined ? { generation: reviewGeneration } : {}),
+              ...(failed || (reviewGeneration !== undefined && controller.signal.aborted)
+                ? { error: "Client callback cancelled or failed." }
+                : { value }),
             },
             this.callbackIO.signal,
           );
@@ -844,6 +806,16 @@ export class DaemonConnection {
   private async performCallback(callback: Callback, signal: AbortSignal) {
     const reference = callback.review;
     if (!reference) return this.options.callback(callback, signal);
+    if (reference.offer !== undefined) {
+      if (!this.options.mergeReview) throw new Error("Exact review offer requires an opted-in presenter.");
+      return presentPagedReview(
+        reviewScope(this.identity, this.facts, callback),
+        callback,
+        AbortSignal.any([signal, this.callbackIO.signal]),
+        this.options.mergeReview,
+        (params, owned) => requestDaemon(this.paths, this.identity, "review-page", params, owned),
+      );
+    }
     if (
       callback.kind !== "merge-review" ||
       !record(callback.payload) ||
@@ -914,20 +886,58 @@ export class DaemonConnection {
       /* Error presentation must not own a task. */
     }
   }
+  private async observeState() {
+    const jobs = stateWaitJobs(this.jobWaiters);
+    const reply = await requestDaemon(
+      this.paths,
+      this.identity,
+      "state-wait",
+      {
+        client: this.facts.id,
+        generation: this.facts.generation,
+        cursor: this.cursor,
+        revision: this.stateRevision,
+        jobs,
+      },
+      this.controller.signal,
+      { onSocket: (socket) => socket.unref() },
+    );
+    return stateWaitResult(reply);
+  }
   private async poll() {
+    await withCleanup(
+      () => this.pollUntilClosed(),
+      async () => {
+        for (const waiter of this.jobWaiters.values())
+          waiter.reject(this.controller.signal.reason ?? new Error("Daemon client closed."));
+      },
+    );
+  }
+  private async pollUntilClosed() {
+    let failures = 0;
     while (!this.closed) {
       try {
         const revision = this.contactRevision;
-        const reply = await requestDaemon(
-          this.paths,
-          this.identity,
-          "poll",
-          { client: this.facts.id, cursor: this.cursor },
-          this.controller.signal,
-        );
+        const state = this.observesState && !this.admitting ? await this.observeState() : undefined;
+        const reply =
+          state?.reply ??
+          (await requestDaemon(
+            this.paths,
+            this.identity,
+            "poll",
+            { client: this.facts.id, cursor: this.cursor },
+            this.controller.signal,
+          ));
         // An older poll must not undo typed update expiry or a successful resume.
         if (revision === this.contactRevision) {
+          if (state?.missing.some((id) => this.jobWaiters.has(id))) this.markWorkUncertain();
           const contact = this.consume(reply);
+          if (state) {
+            this.stateRevision = state.version;
+            this.terminalJobs = new Set(state.finished);
+            for (const id of state.missing) this.jobWaiters.get(id)?.reject(new Error(UNKNOWN_JOB_RESULT));
+            for (const id of state.finished) this.jobWaiters.get(id)?.resolve("terminal");
+          }
           this.reportedError = false;
           if (
             revision === this.contactRevision &&
@@ -942,9 +952,12 @@ export class DaemonConnection {
             if (contact !== undefined) this.options.contact?.(contact);
           }
         }
-        await this.wait(100);
+        failures = 0;
+        if (!state) await this.wait(100);
       } catch (error) {
         if (this.closed) return;
+        if (++failures >= STATE_WAIT_FAILURE_LIMIT)
+          for (const waiter of this.jobWaiters.values()) waiter.resolve("poll");
         if (this.attached) this.reportError(error);
         try {
           await this.wait(100);

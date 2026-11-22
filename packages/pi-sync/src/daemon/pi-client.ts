@@ -42,6 +42,7 @@ import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
 import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
+import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
 
 const scope = new AsyncLocalStorage<{ client: PiDaemonClient; reload?: AbortController }>();
 const clients = new WeakMap<ExtensionContext["sessionManager"], PiDaemonClient>();
@@ -231,6 +232,7 @@ export class PiDaemonClient {
   private protectionOnly = false;
   private partialConnection?: DaemonConnection;
   private work = Promise.resolve();
+  private factsQueue = Promise.resolve();
   private closing = false;
   private paused = false;
   private pausing?: Promise<void>;
@@ -360,6 +362,7 @@ export class PiDaemonClient {
   }
   async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
+    if (!allowUpgrade && !this.paused && this.connection?.contactState === "active") return !this.protectionOnly;
     const address = await findDaemon(this.root);
     this.validate();
     if (!address) return false;
@@ -395,12 +398,14 @@ export class PiDaemonClient {
   }
   async finishReattachment() {
     this.validate();
-    if (this.connection) {
-      await recoverDetachedClients({ paths: this.connection.paths, identity: this.connection.identity });
-      this.validate();
-      await this.connection.attach(this.signal);
-      this.validate();
-    }
+    const connection = this.connection;
+    if (!connection) return;
+    await recoverDetachedClients(connection);
+    await this.queueFacts(async () => {
+      this.validateFactsScope(connection);
+      await connection.attach(this.signal);
+      this.validateFactsScope(connection);
+    });
   }
   async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
     const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
@@ -438,7 +443,11 @@ export class PiDaemonClient {
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
         const protectionOnly = daemon.needsUpgrade === true;
         const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
-          callback: (callback, signal) => this.callback(callback, signal, protectionOnly),
+          callback: (callback, signal) => this.callback(connection, callback, signal, protectionOnly),
+          mergeReview:
+            !protectionOnly && this.ctx.hasUI
+              ? (callback, loadDetails, signal) => this.pagedMergeReview(connection, callback, loadDetails, signal)
+              : undefined,
           event: (event) => {
             if (event.kind === "commit") return;
             if (this.signal.aborted || this.disposed || this.closing || clients.get(this.manager) !== this) return;
@@ -562,71 +571,97 @@ export class PiDaemonClient {
     this.contactFactsUnpublished = false;
     this.clearConnectionStatus();
   }
-  private async resumeContact(connection: DaemonConnection) {
+  private queueFacts<T>(publish: () => Promise<T>): Promise<T> {
+    const result = this.factsQueue.then(publish);
+    this.factsQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+  private async queueFactsWithAbortableWait<T>(signal: AbortSignal, publish: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const cancelled = Promise.withResolvers<never>();
+    const abort = () => cancelled.reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    const queued = this.queueFacts(() => {
+      signal.removeEventListener("abort", abort);
+      signal.throwIfAborted();
+      return publish();
+    });
+    return Promise.race([queued, cancelled.promise]);
+  }
+  private validateFactsScope(connection?: DaemonConnection, signal?: AbortSignal) {
     this.validate();
-    if (this.paused || this.connection !== connection) throw new Error("Pi Sync is paused for a session change.");
+    signal?.throwIfAborted();
+    if (this.paused) throw new Error("Pi Sync is paused for a session change.");
+    if (connection && connection !== (this.connection ?? this.partialConnection))
+      throw new Error("Synchronization session was replaced.");
+  }
+  private async resumeContact(connection: DaemonConnection) {
+    this.validateFactsScope(connection);
     if (this.contactRepair) return this.contactRepair.done;
-    if (connection.contactState === "active" && connection.contactResumeState !== "uncertain") return;
-    if (this.gate.size || connection.hasPendingWork || connection.contactResumeState === "uncertain") {
-      throw new Error(
-        "Pi Sync cannot reconnect while previous work is still running or uncertain. Check sync recovery before retrying.",
-      );
-    }
-    const earlier = this.contactAttempt;
-    if (connection.contactState !== "expired" || earlier) {
-      throw new Error("Pi Sync could not restore contact. Review pending work before using /reload.", {
-        cause: earlier?.error,
-      });
-    }
     const controller = new AbortController();
     const signal = AbortSignal.any([this.signal, controller.signal]);
-    const attempt: { error?: unknown } = {};
-    this.contactAttempt = attempt;
-    const done = Promise.resolve().then(async () => {
+    const done = this.queueFacts(async () => {
+      this.validateFactsScope(connection, signal);
+      if (connection.contactState === "active" && connection.contactResumeState !== "uncertain") return;
+      if (this.gate.size || connection.hasPendingWork || connection.contactResumeState === "uncertain") {
+        throw new Error(
+          "Pi Sync cannot reconnect while previous work is still running or uncertain. Check sync recovery before retrying.",
+        );
+      }
+      const earlier = this.contactAttempt;
+      if (connection.contactState !== "expired" || earlier) {
+        throw new Error("Pi Sync could not restore contact. Review pending work before using /reload.", {
+          cause: earlier?.error,
+        });
+      }
+      const attempt: { error?: unknown } = {};
+      this.contactAttempt = attempt;
       try {
-        this.validate();
-        signal.throwIfAborted();
         this.showContactStatus("sync reconnecting", "retry");
         // Admission can wait behind an apply. Do not advertise readiness using
         // facts sampled before that wait; publish current facts after the ack.
         await connection.resumeContact({ ...this.facts(), idle: false, ready: false }, signal);
-        this.validate();
-        signal.throwIfAborted();
+        this.validateFactsScope(connection, signal);
         this.contactFactsUnpublished = true;
         this.contactAttempt = undefined;
-        await connection.update(this.facts());
-        this.validate();
-        signal.throwIfAborted();
-        this.confirmContact(connection);
+        await this.publishCurrentFacts(connection, signal);
       } catch (error) {
         attempt.error = error;
-        if (this.ownsContactUI() && !signal.aborted)
+        if (this.ownsContactUI() && !signal.aborted) {
+          this.validateFactsScope(connection, signal);
           this.showContactStatus("sync reconnect blocked; check /sync daemon status", "blocked");
+        }
         throw error;
-      } finally {
-        if (this.contactRepair?.controller === controller) this.contactRepair = undefined;
       }
+    }).finally(() => {
+      if (this.contactRepair?.controller === controller) this.contactRepair = undefined;
     });
     this.contactRepair = { controller, done };
     return done;
   }
-  private async publishFacts(connection: DaemonConnection) {
-    if (this.contactRepair) await this.contactRepair.done;
-    this.validate();
-    if (this.paused) throw new Error("Pi Sync is paused for a session change.");
+  private async publishCurrentFacts(connection: DaemonConnection, signal?: AbortSignal) {
+    this.validateFactsScope(connection, signal);
     if (connection.contactResumeState === "uncertain")
       throw new Error("Pi Sync cannot verify the previous reconnect. Review pending work before using /reload.");
+    await connection.update(this.facts());
+    this.validateFactsScope(connection, signal);
+    this.confirmContact(connection);
+  }
+  private async publishFacts(connection: DaemonConnection, signal?: AbortSignal) {
+    if (this.contactRepair) await this.contactRepair.done;
+    const publish = () => this.queueFacts(() => this.publishCurrentFacts(connection, signal));
     try {
-      await connection.update(this.facts());
+      await publish();
     } catch (error) {
+      this.validateFactsScope(connection, signal);
       if (!connection.facts.hasUI || !remoteErrorNamed(error, "ClientContactExpiredError")) throw error;
       await this.resumeContact(connection);
-      this.validate();
       // A shared repair might have started before these facts changed.
-      await connection.update(this.facts());
+      await publish();
     }
-    this.validate();
-    this.confirmContact(connection);
   }
   private confirmContact(connection: DaemonConnection) {
     if (connection.contactState === "expired" || connection.contactState === "inactive")
@@ -636,7 +671,7 @@ export class PiDaemonClient {
   async verifyConnection(signal?: AbortSignal) {
     const connection = await this.connect(undefined, signal);
     signal?.throwIfAborted();
-    await this.publishFacts(connection);
+    await this.publishFacts(connection, signal);
     signal?.throwIfAborted();
     return connection;
   }
@@ -715,7 +750,7 @@ export class PiDaemonClient {
     signal?.throwIfAborted();
     if (this.paused)
       await connection.update(this.facts()); // Existing, explicitly attached shutdown path.
-    else await this.publishFacts(connection);
+    else await this.publishFacts(connection, signal);
     this.validate();
     signal?.throwIfAborted();
     this.uiContext = ctx;
@@ -767,6 +802,68 @@ export class PiDaemonClient {
   releaseReload(owner: AbortController) {
     if (this.pendingReload === owner) this.pendingReload = undefined;
   }
+  async readStartupSettings(signal: AbortSignal) {
+    this.validate();
+    await settingsQueue;
+    this.validate();
+    signal.throwIfAborted();
+    const document = await peekLocalConfigDocument();
+    this.validate();
+    signal.throwIfAborted();
+    if (document && document.bytes.length > MAX_SETTINGS_BYTES)
+      throw new Error("Settings exceed the local API byte limit; the source document is unchanged.");
+    return { document, settings: document && validateSettingsDocument(document.parsed) };
+  }
+  tryStartupBootstrap(document: LocalConfigDocument, debug: boolean, signal: AbortSignal) {
+    const ownedSignal = AbortSignal.any([signal, this.signal]);
+    let retirement: Promise<void> | undefined;
+    const operation = this.work.then(async () => {
+      const verify = (connection?: DaemonConnection) => {
+        this.validateFactsScope(connection, ownedSignal);
+        if (this.pendingReload) throw new Error("Pi Sync is paused for a session change.");
+      };
+      verify();
+      const connection = await this.connect(undefined, ownedSignal);
+      return this.queueFacts(async () => {
+        verify(connection);
+        if (connection.contactState !== "active" || connection.contactResumeState !== "idle") return false;
+        const settingsFingerprint = fingerprint(document);
+        let mayHavePublished = true;
+        try {
+          const ready = await requestStartupBootstrap(connection, settingsFingerprint, debug, ownedSignal);
+          mayHavePublished = ready;
+          verify(connection);
+          if (!ready) return false;
+          if (connection.contactState === "active") this.confirmContact(connection);
+          this.startupDebug = debug;
+          this.initialized = true;
+          Object.assign(connection.facts, { ready: true, startupDebug: debug });
+          return true;
+        } catch (error) {
+          if (mayHavePublished) {
+            retirement = this.dispose();
+            void retirement.catch(() => {});
+          }
+          throw error;
+        }
+      });
+    });
+    this.work = operation.then(
+      () => {},
+      () => {},
+    );
+    return operation.catch(async (error: unknown) => {
+      try {
+        await retirement;
+      } catch (cause) {
+        throw new AggregateError(
+          [error, cause],
+          "Startup readiness is uncertain; reconcile the daemon before reconnecting.",
+        );
+      }
+      throw error;
+    });
+  }
   async markReady(debug: boolean) {
     this.validate();
     this.startupDebug = debug;
@@ -788,7 +885,51 @@ export class PiDaemonClient {
     if (this.connection && !this.paused && !this.disposed && !this.signal.aborted)
       await this.publishFacts(this.connection);
   }
-  private async callback(callback: Callback, signal: AbortSignal, protectionOnly: boolean) {
+  private async pagedMergeReview(
+    connection: DaemonConnection,
+    callback: Callback,
+    loadDetails: (signal?: AbortSignal) => Promise<string>,
+    signal: AbortSignal,
+  ) {
+    const ctx = this.uiContext;
+    const generation = this.generation;
+    const combined = AbortSignal.any([signal, this.signal]);
+    const isCurrent = () =>
+      !combined.aborted &&
+      this.ownsContactUI() &&
+      this.uiContext === ctx &&
+      this.generation === generation &&
+      (this.connection ?? this.partialConnection) === connection;
+    if (!isCurrent()) return false;
+    this.validate();
+    if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) throw new Error("This client cannot present safety reviews.");
+    const { title, confirmationLabel, summaryLines } = callback.payload as {
+      title: string;
+      confirmationLabel?: string;
+      summaryLines: readonly string[];
+    };
+    const { confirmMergeReview } = await import("../ui/merge-review.js");
+    if (!isCurrent()) return false;
+    this.validate();
+    const result = await confirmMergeReview(
+      ctx,
+      title,
+      loadDetails,
+      combined,
+      isCurrent,
+      confirmationLabel,
+      summaryLines,
+    );
+    if (!isCurrent()) return false;
+    this.validate();
+    return result;
+  }
+  private async callback(
+    connection: DaemonConnection,
+    callback: Callback,
+    signal: AbortSignal,
+    protectionOnly: boolean,
+  ) {
     const payload = callback.payload as {
       reservation?: string;
       targets?: string[];
@@ -825,13 +966,19 @@ export class PiDaemonClient {
     const combined = AbortSignal.any([signal, this.signal]);
     if (callback.kind === "model-binding") {
       if (protectionOnly) return null;
-      const facts = this.facts();
-      const connection = this.connection ?? this.partialConnection;
-      if (connection && JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {
-        await connection.update(facts);
-        this.validate();
-      }
-      return payload.background && !facts.idle ? null : (facts.model ?? null);
+      return this.queueFactsWithAbortableWait(combined, async () => {
+        this.validateFactsScope(connection, combined);
+        let facts = this.facts();
+        if (JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)) {
+          await connection.update(facts);
+          this.validateFactsScope(connection, combined);
+          facts = this.facts();
+        }
+        return (payload.background && !facts.idle) ||
+          JSON.stringify(connection.facts.model) !== JSON.stringify(facts.model)
+          ? null
+          : (facts.model ?? null);
+      });
     }
     if (callback.kind === "reload") {
       if (!this.reloadRequest) throw new Error("No active Pi command can reload resources.");
@@ -918,7 +1065,7 @@ export class PiDaemonClient {
           if (confirmed) await gate.releaseAfterDrain();
           else quarantineClient(gate, connection.paths.root, connection.identity, connection.facts);
         }
-        await this.work;
+        await Promise.all([this.work, this.factsQueue]);
       }
     })();
     return this.disposing;

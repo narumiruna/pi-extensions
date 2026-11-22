@@ -131,6 +131,14 @@ export class WebDavClient {
 
   async ensureCollection(remotePath: string) {
     const segments = safeSegments(remotePath);
+    if (segments.length === 0) return;
+    try {
+      await this.makeCollection(segments.join("/"));
+      return;
+    } catch (error) {
+      if (segments.length < 2 || !(error instanceof WebDavHttpError) || (error.status !== 409 && error.status !== 404))
+        throw error;
+    }
     for (let index = 1; index <= segments.length; index += 1) {
       await this.makeCollection(segments.slice(0, index).join("/"));
     }

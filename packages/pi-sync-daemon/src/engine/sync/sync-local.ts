@@ -4,7 +4,7 @@ import type { EngineContext as ExtensionCommandContext, EngineContext as Extensi
 import { sessionDirFromContext } from "../snapshot/session-paths.js";
 import { createSnapshot, sessionSnapshotPathFromAbsolute } from "../snapshot/snapshot.js";
 import { encodeSnapshot } from "../snapshot/snapshot-codec.js";
-import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
+import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
 import { stateDir } from "../state/state-directory.js";
 import { throwIfAborted } from "./signals.js";
@@ -28,7 +28,10 @@ export { captureMutationOwner } from "./mutation-owner.js";
 
 export async function backupLocal(profile: string, options: SnapshotOptions = {}, signal?: AbortSignal) {
   throwIfAborted(signal);
-  const snapshot = await createSnapshot(profile, { ...options, signal });
+  return backupSnapshot(await createSnapshot(profile, { ...options, signal }), signal);
+}
+
+export async function backupSnapshot(snapshot: Snapshot, signal?: AbortSignal) {
   throwIfAborted(signal);
   const backupDirectory = path.join(stateDir(), "backups");
   await fs.mkdir(backupDirectory, { recursive: true, mode: 0o700 });
