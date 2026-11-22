@@ -7,7 +7,7 @@ import { confirmMergeReview } from "../src/ui/merge-review.js";
 
 initTheme("dark", false);
 
-const summary = ["3 local files change. Exact details required."];
+const summary = ["3 local files change."];
 const approve = "Yes, apply changes";
 
 for (const second of ["No, cancel", approve]) {
@@ -97,11 +97,20 @@ for (const exit of ["summary", "rpc replacement"] as const) {
   });
 }
 
-for (const exit of ["q", "\u0003", "dispose", "back"] as const) {
-  test(`TUI detail load drains and preserves safe approval on ${JSON.stringify(exit)}`, async () => {
+for (const [action, exit, screenCount] of [
+  ["details", "q", 2],
+  ["details", "\u0003", 2],
+  ["details", "dispose", 2],
+  ["details", "back", 4],
+  ["approve", "completed", 2],
+  ["approve", "q", 2],
+  ["approve", "error", 2],
+  ["cancel", "default", 1],
+] as const) {
+  test(`TUI paged review: ${action} then ${JSON.stringify(exit)}`, async () => {
     const started = Promise.withResolvers<void>();
     const pending = Promise.withResolvers<string>();
-    const screenCount = exit === "back" ? 4 : 2;
+    let loads = 0;
     let calls = 0;
     let aborted = false;
     let drained = false;
@@ -141,15 +150,18 @@ for (const exit of ["q", "\u0003", "dispose", "back"] as const) {
         try {
           frames.push(component.render(48));
           if (stage === 1) {
-            component.handleInput("j");
+            if (action !== "cancel") component.handleInput("j");
+            if (action === "details") component.handleInput("j");
             component.handleInput("l");
           } else if (stage === 2) {
             await started.promise;
             if (exit === "dispose") {
               component.dispose();
               harness.dispose();
-            } else if (exit === "back") {
+            } else if (exit === "back" || exit === "completed") {
               pending.resolve("  exact path  \nother path");
+            } else if (exit === "error") {
+              pending.reject(new Error("Page verification failed"));
             } else component.handleInput(exit);
           } else {
             component.handleInput(stage === 3 ? "q" : "l");
@@ -161,14 +173,16 @@ for (const exit of ["q", "\u0003", "dispose", "back"] as const) {
         }
       },
     });
-    const result = await confirmMergeReview(
+    const result = confirmMergeReview(
       ctx,
-      "Apply?",
+      "Pull pi settings?",
       async (signal) => {
+        loads++;
         if (!signal) throw new Error("No detail owner signal");
         signal.addEventListener(
           "abort",
           () => {
+            if (drained) return;
             aborted = true;
             pending.reject(signal.reason);
           },
@@ -186,15 +200,25 @@ for (const exit of ["q", "\u0003", "dispose", "back"] as const) {
       undefined,
       summary,
     );
-    assert.equal(result, false);
+    if (exit === "error") await assert.rejects(result, /Sync review failed; no transfer was performed/u);
+    else assert.equal(await result, exit === "completed");
     assert.equal(calls, screenCount);
     assert.equal(unexpected, undefined);
-    if (exit !== "back") assert.equal(aborted, true);
-    assert.equal(drained, true);
+    assert.equal(loads, action === "cancel" ? 0 : 1);
+    assert.equal(aborted, exit === "q" || exit === "\u0003" || exit === "dispose");
+    assert.equal(drained, action !== "cancel");
     assert.ok(frames.flat().every((row) => visibleWidth(row) <= 48));
-    assert.match(frames[0]?.join("\n") ?? "", /→ No, cancel/u);
-    assert.doesNotMatch(frames[0]?.join("\n") ?? "", /Yes,/u);
-    assert.match(frames[1]?.join("\n") ?? "", /Loading exact sync details/u);
+    const initialFrame = frames[0]?.join("\n") ?? "";
+    assert.match(initialFrame, /→ No, cancel/u);
+    assert.match(initialFrame, /Yes, apply changes/u);
+    assert.match(initialFrame, /View details/u);
+    assert.doesNotMatch(initialFrame, /Open View details before approving/u);
+    if (action !== "cancel")
+      assert.match(
+        frames[1]?.join("\n") ?? "",
+        action === "approve" ? /Verifying sync transfer/u : /Loading exact sync details/u,
+      );
+    if (action === "approve") assert.ok(frames.flat().every((line) => !line.includes("exact path")));
     if (exit === "back") {
       assert.match(frames[2]?.join("\n") ?? "", / {2}exact path {2}/u);
       assert.doesNotMatch(frames[2]?.join("\n") ?? "", /Yes,/u);

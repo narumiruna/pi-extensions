@@ -37,9 +37,7 @@ export async function confirmMergeReview(
       ? compactLegacyTransferSummary(summary)
       : summary;
   while (isCurrent() && !signal?.aborted) {
-    const allowApproval = content !== undefined;
-    const lines = allowApproval ? summary : [...summary, "Open View details before approving."];
-    const tuiLines = allowApproval ? tuiSummary : lines;
+    const allowApproval = ctx.mode === "tui" || content !== undefined;
     const choice: { value: "cancel" | "approve" | "details" } = { value: "cancel" };
     const menu = defineMenu<undefined, "confirm", "choose", ReviewContext>({
       start: "confirm",
@@ -47,7 +45,7 @@ export async function confirmMergeReview(
         confirm: () => ({
           kind: "choice",
           title,
-          lines,
+          lines: allowApproval ? summary : [...summary, "Open View details before approving."],
           initialItemId: "cancel",
           items: [
             { id: "cancel", label: "No, cancel" },
@@ -71,9 +69,8 @@ export async function confirmMergeReview(
             create: ({ tui, theme, keybindings, complete }) =>
               createSyncConfirmation({
                 title,
-                lines: tuiLines,
+                lines: tuiSummary,
                 confirmationLabel,
-                allowApproval,
                 tui,
                 theme,
                 keybindings,
@@ -91,11 +88,12 @@ export async function confirmMergeReview(
     if (result.kind === "completed") choice.value = result.value;
     else if (result.kind !== "closed") return false;
     // Keep authorization separate from UI termination in both adapters.
-    if (choice.value === "approve") return allowApproval;
-    if (choice.value !== "details") return false;
+    const approved = choice.value === "approve" && allowApproval;
+    if (!approved && choice.value !== "details") return false;
     if (content === undefined && typeof details === "function") {
       try {
-        const loaded = await runCancellableTask(ctx, "Loading exact sync details…", details, {
+        const message = approved ? "Verifying sync transfer…" : "Loading exact sync details…";
+        const loaded = await runCancellableTask(ctx, message, details, {
           signal,
           isCurrent,
           cancelledMessage: null,
@@ -108,6 +106,7 @@ export async function confirmMergeReview(
       }
     }
     if (content === undefined) return false;
+    if (approved) return true;
     const detail = await runDocumentReview(ctx, {
       title: "Sync change details",
       content,

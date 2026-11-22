@@ -14,17 +14,17 @@ export function createSyncConfirmation(options: {
   title: string;
   lines: readonly string[];
   confirmationLabel: string;
-  allowApproval?: boolean;
   tui: TUI;
   theme: Theme;
   keybindings: KeybindingsManager;
   complete(choice: SyncConfirmationChoice): void;
 }) {
-  const { tui, theme, keybindings, allowApproval = true } = options;
-  const actions: { value: SyncConfirmationChoice; label: string }[] = [{ value: "cancel", label: "No, cancel" }];
-  if (allowApproval)
-    actions.push({ value: "approve", label: `Yes, ${sanitizeTerminalText(options.confirmationLabel)}` });
-  actions.push({ value: "details", label: "View details" });
+  const { tui, theme, keybindings } = options;
+  const actions: { value: SyncConfirmationChoice; label: string }[] = [
+    { value: "cancel", label: "No, cancel" },
+    { value: "approve", label: `Yes, ${sanitizeTerminalText(options.confirmationLabel)}` },
+    { value: "details", label: "View details" },
+  ];
   const choices = actions.map((item) => item.value);
   const list = new SelectList(actions, actions.length, {
     selectedPrefix: (text) => theme.fg("accent", text),
@@ -105,7 +105,7 @@ export function createSyncConfirmation(options: {
       // aliased, or shadowed by an earlier cancellation/navigation binding.
       const status = theme.fg(
         "muted",
-        `Summary ${visible.length ? offset + 1 : 0}-${offset + visible.length}/${summary.length}${reviewed || !allowApproval ? "" : " — page before Yes"}`,
+        `Summary ${visible.length ? offset + 1 : 0}-${offset + visible.length}/${summary.length}${reviewed ? "" : " — page before Yes"}`,
       );
       const layout = renderBoundedFrameLayout({
         width: cells,
