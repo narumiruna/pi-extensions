@@ -56,6 +56,7 @@ import {
 } from "./mode-contract.js";
 import { createPlanActionController, type FreshImplementationTiming } from "./plan-action-controller.js";
 import { createPlanExportController } from "./plan-export-controller.js";
+import { createPlanPaneController } from "./plan-pane.js";
 import {
   clearPlanModeUi,
   planModeStatusText as formatPlanModeStatusText,
@@ -75,6 +76,7 @@ import {
   awaitPlanModeSettingsWrites,
   configuredImplementationPlanRetention,
   configuredPlanModeToggleShortcut,
+  configuredPlanPane,
   configuredThinkingLevel,
   type ImplementationPlanRetention,
   type PlanModeSettings,
@@ -172,6 +174,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let shutdownStarted = false;
   let shutdownTask: Promise<void> | undefined;
   let widgetState: EditorStatusWidgetState = { collapsed: false };
+  const planPane = createPlanPaneController();
   let interactiveUiPromise: Promise<InteractiveUi> | undefined;
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
@@ -207,6 +210,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let menuController = new AbortController();
   let settingsWatch: ReturnType<typeof watch> | undefined;
   let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
+  let settingsReadRevision = 0;
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
   const statePersistence = createPlanModeStatePersistence(STATE_ENTRY_TYPE, (snapshot) =>
@@ -462,15 +466,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     ctx: ExtensionContext | undefined,
     showWarnings: boolean,
   ) => {
+    const revision = ++settingsReadRevision;
     const loadedSettings = await readPlanModeRuntimeSettings();
-    if (generation !== menuGeneration || menuController.signal.aborted) {
+    if (revision !== settingsReadRevision || generation !== menuGeneration || menuController.signal.aborted) {
       return undefined;
     }
-    settings =
-      loadedSettings.kind === "loaded"
-        ? loadedSettings.settings
-        : ({ thinkingLevel: "inherit" } satisfies PlanModeSettings);
-    if (!ctx || !showWarnings) return loadedSettings;
+    if (!showWarnings && loadedSettings.kind === "invalid") return loadedSettings;
+    settings = loadedSettings.kind === "loaded" ? loadedSettings.settings : { thinkingLevel: "inherit" };
+    if (!ctx) return loadedSettings;
+    if (!showWarnings) {
+      updatePlanPane(ctx);
+      return loadedSettings;
+    }
     if (loadedSettings.kind === "invalid") {
       ctx.ui.notify(`pi-plan-mode settings ignored: ${loadedSettings.reason}`, "warning");
     }
@@ -490,6 +497,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   };
 
   const schedulePlanModeSettingsReload = (generation: number) => {
+    if (generation !== menuGeneration || menuController.signal.aborted) return;
+    settingsReadRevision += 1;
     if (settingsReloadTimer) {
       clearTimeout(settingsReloadTimer);
       settingsReloadTimer = undefined;
@@ -523,6 +532,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   };
 
   pi.on("session_start", async (event, ctx) => {
+    planPane.clear();
+    stopPlanModeSettingsWatch();
     interaction.disposeSession();
     invalidateReadyMenu();
     cancelDeferredFreshImplementation();
@@ -592,6 +603,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("session_tree", async (_event, ctx) => {
+    planPane.clear();
     cancelDeferredFreshImplementation();
     advanceWorkflowGeneration();
     menuGeneration += 1;
@@ -637,6 +649,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   async function shutdownPlanModeSession(ctx: ExtensionContext) {
     shutdownStarted = true;
+    planPane.clear();
+    stopPlanModeSettingsWatch();
     interaction.disposeSession();
     invalidateReadyMenu();
     cancelDeferredFreshImplementation();
@@ -688,7 +702,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       try {
         if (state.enabled) restoreThinkingLevel();
       } finally {
-        stopPlanModeSettingsWatch();
         clearUi(ctx);
         releaseWorkflowOwner();
         workflowMutex.unbindSession(ctx.sessionManager);
@@ -1547,7 +1560,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       startupToggleShortcut,
       onSaved: (saved) => {
         if (!isCurrent()) return;
+        settingsReadRevision += 1;
         settings = saved;
+        updatePlanPane(ctx);
+        if (settingsWatch) schedulePlanModeSettingsReload(menuGeneration);
       },
       ...(dependencies.readSettings
         ? { readSettings: async () => dependencies.readSettings?.() ?? { kind: "missing" } }
@@ -2144,6 +2160,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function updateUi(ctx: ExtensionContext) {
     updatePlanModeUi(ctx, state, formatToolSummary, interaction.shortcutLabel(ctx), widgetState);
+    updatePlanPane(ctx);
+  }
+
+  function updatePlanPane(ctx: ExtensionContext) {
+    if (shutdownStarted || currentSession !== ctx.sessionManager) return;
+    planPane.update(ctx, state.enabled ? configuredPlanPane(settings) : "off", state.latestPlan);
   }
 
   function clearUi(ctx: ExtensionContext) {

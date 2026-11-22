@@ -16,10 +16,13 @@ import {
   configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
+  configuredPlanPane,
   IMPLEMENTATION_PLAN_RETENTIONS,
   IMPLEMENTATION_THINKING_LEVELS,
   normalizeKeyId,
+  normalizePlanPanePlacement,
   PLAN_MODE_THINKING_LEVELS,
+  PLAN_PANE_PLACEMENTS,
   type PlanModeSettings,
   type PlanModeSettingsLoadResult,
   type PlanModeSettingsPatch,
@@ -65,7 +68,8 @@ type Action =
   | "open-export"
   | "set-export"
   | "open-shortcut"
-  | "set-shortcut";
+  | "set-shortcut"
+  | "set-pane";
 
 export async function showPlanModeSettings(
   ctx: ExtensionContext,
@@ -166,6 +170,18 @@ export async function showPlanModeSettings(
                   currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
                   action: "open-shortcut",
                 },
+                ...(ctx.mode === "tui"
+                  ? [
+                      {
+                        id: "planPane",
+                        label: "Plan pane",
+                        description: "Place the read-only plan on the right or left in fullscreen, or turn it off.",
+                        currentValue: configuredPlanPane(state.settings),
+                        values: PLAN_PANE_PLACEMENTS,
+                        action: "set-pane" as const,
+                      },
+                    ]
+                  : []),
               ],
             },
       tools: ({ state }) => ({
@@ -246,6 +262,11 @@ export async function showPlanModeSettings(
           signal,
           `Plan mode thinking level: ${value}. Applies to the next Plan workflow.`,
         );
+      },
+      "set-pane": async ({ ctx: actionCtx, value, signal }) => {
+        const planPane = normalizePlanPanePlacement(value);
+        if (!planPane) return { kind: "rejected" };
+        return savePatch(actionCtx, { planPane }, signal, `Plan pane: ${planPane}.`);
       },
       "open-tools": async () => ({ kind: "to", screen: "tools" }),
       "set-retention": async ({ ctx: actionCtx, value, signal }) => {

@@ -13,7 +13,7 @@
 
 ## ⚙️ Settings
 
-Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**.
+Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**. In the terminal UI, this screen also includes **Plan pane**.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
 `safeSubcommands` is JSON-only.
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
@@ -35,9 +35,16 @@ The shortcut is disabled when `toggleShortcut` is omitted.
     "kubectl": ["get", "apply"],
     "npm": ["run inspect-custom"]
   },
-  "toggleShortcut": "<your_key>"
+  "toggleShortcut": "<your_key>",
+  "planPane": "right"
 }
 ```
+
+### Plan pane
+
+`planPane` accepts `right` (default), `left`, or `off`. Saves from **Plan pane** take effect immediately, including during an active Plan workflow. Valid edits to the watched user file also take effect; an invalid update does not replace the active settings.
+
+The pane opens on a compatible Pi fullscreen layout without taking keyboard focus. It shows a waiting message before a plan is completed and while a revision is pending, then displays the new plan from the top. It closes when Plan mode ends, including when you save a plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
 
 ### Plan helper tools
 

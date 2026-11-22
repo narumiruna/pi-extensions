@@ -403,7 +403,8 @@ By default, Plan mode inherits thinking, allows active safe built-ins, uses the 
 The existing Plan-mode toggle shortcut (`toggleShortcut`) is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, that shortcut binding stays unchanged.
 This setting is unrelated to the conditional F2 questionnaire/discussion toggle and does not configure it.
-Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
+In the terminal UI, choose **Plan pane** to move the read-only fullscreen pane left or right, or turn it off. The default is right, and changes apply immediately.
+Workflow defaults apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
 Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
 
@@ -418,6 +419,9 @@ Invalid settings remain untouched and make Settings read-only; session-start fai
 Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, shortcut configuration, shell-override examples, and legacy-file migration.
 
 ## 🚧 Limitations
+
+The Plan pane shows the current branch's completed plan while Plan mode is active. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
+It hides below 80 columns or 12 rows and reappears when the terminal is large enough. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
 
 Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
 This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
