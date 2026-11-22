@@ -13,7 +13,7 @@ import {
   syncIncludeSelection,
 } from "../sync/sync-policy.js";
 import { showDirectoryScope } from "./excluded-paths-ui.js";
-import { manualIgnoreFileGuidance } from "./ignore-file-ui.js";
+import { manualIgnoreFileGuidance } from "./ignore-file-guidance.js";
 
 const BUILT_IN_PREFIX = "builtin:";
 const CUSTOM_PREFIX = "custom:";

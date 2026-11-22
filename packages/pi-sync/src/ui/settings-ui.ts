@@ -24,7 +24,8 @@ import {
 } from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js";
-import { ignoreFileSettingsAvailable, manualIgnoreFileGuidance, showIgnoreFileAction } from "./ignore-file-ui.js";
+import { manualIgnoreFileGuidance } from "./ignore-file-guidance.js";
+import { ignoreFileSettingsAvailable, showIgnoreFileAction } from "./ignore-file-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
 import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery } from "./settings-review.js";

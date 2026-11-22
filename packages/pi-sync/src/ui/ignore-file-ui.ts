@@ -1,5 +1,4 @@
-import { resolve } from "node:path";
-import { type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 import { piDaemonClient } from "../daemon/pi-client.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
@@ -19,10 +18,6 @@ export async function ignoreFileSettingsAvailable(ctx: ExtensionCommandContext, 
   } catch {
     return false;
   }
-}
-
-export function manualIgnoreFileGuidance(filename: string) {
-  return `Edit existing ignore rules manually: ${safeTerminalText(resolve(getAgentDir(), filename))}. Edits apply to every setup using this local file on its next sync; they do not rewrite remote history.`;
 }
 
 export async function showIgnoreFileAction(

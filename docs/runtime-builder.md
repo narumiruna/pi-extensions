@@ -36,7 +36,7 @@ env -u NODE_PATH node packages/pi-sync/test/installed-artifact-smoke.mjs \
   /path/to/installed/pi-sync /path/to/host/npm-root /path/to/installed/pi-sync-daemon
 ```
 
-The smoke uses Pi's Jiti loader, a temporary agent root, and real local IPC. It does not contact a storage backend or invoke a model.
+The smoke uses Pi's Jiti loader, a temporary agent root, and real local IPC. It does not contact a storage backend or invoke a model. The foreground command graph keeps Kit and the interactive ignore-file editor behind their first-use boundaries. Plain ignore-file guidance can be shown without importing that editor.
 
 ## Variation audit
 
