@@ -96,8 +96,9 @@ for (const mode of ["tui", "rpc"] as const) {
         assert.deepEqual(routes, []);
         assert.equal(confirmations, 0);
         assert.equal(frames.length, 2);
-        assert.match(frames[0] ?? "", /Current sync setup: home/u);
-        assert.match(frames[1] ?? "", /Current sync setup: work/u);
+        const setupLine = mode === "tui" ? "Manage sync · " : "Current sync setup: ";
+        assert.ok(frames[0]?.includes(`${setupLine}home\n`));
+        assert.ok(frames[1]?.includes(`${setupLine}work\n`));
         assert.match(context.notifications.at(-1)?.message ?? "", /Sync setup changed while the manager was open/u);
         assert.equal((await loadConfig()).setupName, "work");
       });

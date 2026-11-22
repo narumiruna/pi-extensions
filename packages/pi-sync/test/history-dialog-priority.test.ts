@@ -243,7 +243,7 @@ test("real manager command forwards History dialog ownership through command exe
       try {
         const result = tui.custom(factory);
         await tui.waitForOpen();
-        if (tui.render().join("\n").split("\n").includes("Manage sync")) {
+        if (tui.render().includes("Manage sync · home")) {
           mainVisits++;
           if (mainVisits === 1) {
             for (let index = 0; index < 6; index++) tui.press("tui.select.down");

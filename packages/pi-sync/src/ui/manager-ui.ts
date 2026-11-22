@@ -80,23 +80,29 @@ export async function showSyncManager(
   >({
     start: "main",
     screens: {
-      main: ({ state }) => ({
-        kind: "choice",
-        title: "Manage sync",
-        lines: state.manager.title.split("\n").slice(1),
-        items: menuItems(state.manager).map((item) => ({
-          id: item.id,
-          label: ctx.mode === "tui" && item.id === "sync" ? "Sync…" : item.label,
-          details: [item.description ?? "Review synced content."],
-          searchText: `${item.label} ${item.description ?? ""}`,
-          disabled: item.disabled,
-          disabledReason: item.disabledReason,
-        })),
-        action: "activate",
-        enableSearch: true,
-        viewportSize: 5,
-        hint: "close",
-      }),
+      main: ({ state: { manager } }) => {
+        const [title = "Manage sync", ...lines] = manager.title.split("\n");
+        const setupName = ctx.mode === "tui" ? manager.configReview?.setupName : undefined;
+        const setup = setupName === undefined ? undefined : safeTerminalText(setupName);
+        const setupInHeading = setup !== undefined && lines[0] === `Current sync setup: ${setup}`;
+        return {
+          kind: "choice",
+          title: setupInHeading ? `${title} · ${setup}` : title,
+          lines: setupInHeading ? lines.slice(1) : lines,
+          items: menuItems(manager).map((item) => ({
+            id: item.id,
+            label: ctx.mode === "tui" && item.id === "sync" ? "Sync…" : item.label,
+            details: [item.description ?? "Review synced content."],
+            searchText: `${item.label} ${item.description ?? ""}`,
+            disabled: item.disabled,
+            disabledReason: item.disabledReason,
+          })),
+          action: "activate",
+          enableSearch: true,
+          viewportSize: 5,
+          hint: "close",
+        };
+      },
     },
     actions: {
       activate: async (invocation) => {

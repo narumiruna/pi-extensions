@@ -74,11 +74,11 @@ WebDAV and R2/S3 store `latest.json`, `history.json`, and `snapshots/` directly 
 
 ## 🧭 Manager, conflicts, and recovery
 
-The `/sync` manager opens a searchable action palette in TUI mode, with up to five visible choices and help for only the selected action. Its compact summary uses local state without contacting remote storage:
+The `/sync` manager opens a searchable action palette in TUI mode, with up to five visible choices and help for only the selected action. The heading identifies the active setup without relying on the summary, which can be hidden in a short terminal. The summary uses local state without contacting remote storage and shows the configured storage path:
 
 ```text
-Current sync setup: home
-Storage: Cloudflare R2 · r2 · personal-pi
+Manage sync · home
+Storage: Cloudflare R2 · r2 · personal-pi · pi-sync/home
 Remote status: Not checked
 Last applied: Never synced
 ```

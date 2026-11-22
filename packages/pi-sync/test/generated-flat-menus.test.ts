@@ -113,7 +113,7 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
         await tui.waitForOpen();
         const frame = tui.render().join("\n");
         frames.push(frame);
-        if (frame.split("\n").includes("Manage sync")) {
+        if (frame.split("\n").includes("Manage sync · home")) {
           const selected = choices.shift();
           if (!selected) tui.press("ctrl+c");
           else {

@@ -291,7 +291,7 @@ for (const mode of ["tui", "rpc"] as const) {
           JSON.stringify({ titles, notifications: context.notifications }),
         );
         assert.equal(
-          titles.filter((title) => title.split("\n").includes("Manage sync")).length,
+          titles.filter((title) => title.startsWith(mode === "tui" ? "Manage sync · home" : "Manage sync\n")).length,
           1,
           JSON.stringify({ titles, notifications: context.notifications }),
         );

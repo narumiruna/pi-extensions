@@ -328,6 +328,30 @@ for (const remapped of [false, true]) {
   });
 }
 
+test("short palette keeps the active setup visible while navigating, searching and closing", async () => {
+  await withPalette(async ({ tui, running, routes }) => {
+    let frame = tui.resize({ width: 36, rows: 16 });
+    assert.ok(frame.includes("Manage sync · home"), frame.join("\n"));
+    assertSelectedDescription(frame, "Sync…");
+    tui.press("tui.select.down");
+    tui.press("tui.select.down");
+    frame = tui.render();
+    assert.ok(frame.includes("Manage sync · home"), frame.join("\n"));
+    assertSelectedDescription(frame, "Push to remote…");
+    assert.ok(frame.length <= 13);
+    assert.ok(frame.every((line) => visibleWidth(line) <= 36));
+    tui.type("no transferzz");
+    assert.match(tui.render().join("\n"), /No matching choices; edit search/u);
+    tui.send("\u007f");
+    tui.send("\u007f");
+    assertSelectedDescription(tui.render(), "View differences");
+    tui.press("tui.select.cancel");
+    await running;
+    assert.equal(tui.isOpen, false);
+    assert.deepEqual(routes, []);
+  });
+});
+
 test("palette retains its selected row across normal, narrow, short and zero-width rendering", async () => {
   await withPalette(async ({ tui, component, routes }) => {
     tui.press("end");
