@@ -1,13 +1,14 @@
 # Pi Sync settings reference
 
 This is the authoritative public settings reference for Pi Sync.
-The user performs settings changes and reviewed operations; the configuration skill can also make an explicitly requested edit to a known local rule file.
+The configuration skill applies explicitly requested local settings and ignore-rule edits and investigates Pi Sync errors. The user performs operations that require a separate review.
 
 - [Complete version 3 example](#complete-version-3-example)
 - [Required backend shapes](#required-backend-shapes)
 - [Automatic sync controls](#automatic-sync-controls)
 - [Status display](#status-display)
 - [Secret scanning](#secret-scanning)
+- [Local troubleshooting](#local-troubleshooting)
 - [Autonomous sync](#autonomous-sync)
 - [Continuous sync](#continuous-sync)
 - [Daemon lifetime and unattended permission](#daemon-lifetime-and-unattended-permission)
@@ -74,7 +75,7 @@ The four controls select separate behaviors:
 
 If any setup in the settings file uses an ignore file, enabling these modes alone does not authorize transfers. Enable the modes you want for the current setup, then use **Settings → Review automatic transfers** in TUI. This applies even when the current setup uses a legacy policy. Review again after settings or rule-file changes. Work after the last Pi exits still requires [separate permission](#daemon-lifetime-and-unattended-permission).
 
-None of these controls is enabled by invoking the configuration skill.
+Invoking the configuration skill does not enable these controls or grant any transfer authorization. Enable automatic behavior in the reviewed Settings flow.
 
 ### Editing in the manager
 
@@ -298,6 +299,19 @@ HTTP success does not validate snapshot contents or write access.
 Authentication and transport failures give credentials/permissions or address/network guidance.
 Git reads remote snapshots and checks its local cache; write access is not tested.
 WebDAV retains its isolated conditional-write/cleanup probe and repair of a missing active-snapshot history entry.
+
+### Local troubleshooting
+
+Use the first concrete error, not a generic recovery hint appended to it. Start with checks that do not contact storage or start the daemon.
+
+| Error or symptom | Local check and next action |
+| --- | --- |
+| **Autonomous sync requires a separate policy review** | The selected setup has Autonomous sync enabled, but its current policy has no matching automatic-transfer approval. This does not mean that `pi-sync.json` is malformed. Check which setup the operation used and whether settings or rules changed. The user can review **Settings → Review automatic transfers** for the current setup or choose a reviewed directional push or pull. |
+| **Agent directory changed or has an unsafe filesystem layout** | The local scan could not establish a stable filesystem view. Use file metadata to check the agent root, Pi's `settings.json`, the effective session directory (including any `--session-dir` override), and in-scope paths. Symlinks in the session directory path and hard-linked candidate files can trigger this error; ordinary symlinks encountered in the directory scan are skipped. Check whether another Pi process or editor is changing files during the scan. Do not change synchronization settings unless the evidence identifies a relevant setting; this error alone does not identify a path or field. |
+| **Malformed or unsupported settings** | Check the canonical path and documented version and field constraints. Preserve the original private bytes and follow [settings recovery](#unsupported-old-settings-and-recovery); do not replace the document with defaults. |
+| **Backend access or publication failure** | Use the reported error class to distinguish credentials, a missing location, transport, and publication safety. A 404 alone does not identify which remote resource is missing. If local checks are insufficient, explain the backend-specific effects of [Diagnostics](#diagnostics) and leave that action to the user. |
+
+A local check does not verify remote connectivity or permissions. Diagnostics can stop at the same local scan error before backend checks run.
 
 ### Ignore-file policy
 

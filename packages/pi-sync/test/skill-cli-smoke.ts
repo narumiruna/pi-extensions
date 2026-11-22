@@ -188,8 +188,9 @@ try {
     "manual-only metadata must not enter ordinary prompts",
   );
   const requestsToExpand = [
-    "Exclude npm/ from my active setup.",
-    "How do I set up Git without automatic sync?",
+    "Turn on debug logging in pi-sync.json.",
+    "Exclude npm/ from my active ignore file.",
+    "Error: Agent directory changed or has an unsafe filesystem layout; no snapshot was collected.",
     "Where do I enter my WebDAV app password?",
     "What does ./ mean for R2 and S3?",
     "How do the four automatic controls differ?",
@@ -203,8 +204,9 @@ try {
     const request = latestUserMessage();
     assert.match(request, /<skill name=\\"configure-pi-sync/u);
     assert.ok(request.includes(message));
-    assert.ok(request.includes("Apply the user's requested local Pi Sync settings changes"));
+    assert.ok(request.includes("Make and verify a clear, authorized local edit"));
     assert.ok(request.includes("expected: documentFingerprint(document), next"));
+    assert.ok(request.includes("start with read-only local checks"));
   }
   const beforeReload = requests.length;
   await send("prompt", { message: "/skill-smoke-reload" });
@@ -212,7 +214,7 @@ try {
   assert.match(JSON.stringify(afterReload), /skill:configure-pi-sync/u);
   assert.equal(requests.length, beforeReload, "reload must not contact the provider");
   await prompt("/skill:configure-pi-sync What changed after reload?");
-  assert.match(latestUserMessage(), /Apply the user's requested local Pi Sync settings changes/u);
+  assert.match(latestUserMessage(), /Make and verify a clear, authorized local edit/u);
   assert.match(latestUserMessage(), /What changed after reload\?/u);
   cli.stdin?.end();
   assert.equal(await exited, 0, stderr);

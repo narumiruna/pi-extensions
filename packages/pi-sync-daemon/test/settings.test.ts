@@ -123,6 +123,38 @@ test("passive settings clients cannot approve handover but can add an exclusion 
     assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), next);
   }));
 
+test("a passive editor can change a preference in an existing ignore-file setup without changing the rule source", () =>
+  fixture(async (root, connect) => {
+    const file = path.join(await fs.realpath(root), "pi-sync.json");
+    const rule = path.join(root, ".syncignore");
+    const rules = "/npm/\n";
+    const original = {
+      ...template,
+      version: 8,
+      activeSyncSetup: "home",
+      storageConnections: { git: { type: "git", remote: "git@example.invalid:owner/sync.git" } },
+      syncSetups: {
+        home: {
+          storage: { connection: "git", branch: "sync", path: "./" },
+          sync: { scope: "agent-directory", pathPolicy: "ignore-file", automatic: false },
+        },
+      },
+    };
+    await fs.writeFile(file, JSON.stringify(original), { mode: 0o600 });
+    await fs.writeFile(rule, rules);
+    const owner = await connect();
+    await owner.run("daemon.handover", {});
+    const editor = await connect(true);
+    const source = (await editor.run("settings.repair-read", {})) as DocumentView;
+    assert.equal(source.path, file);
+    const next = { ...source.parsed, debug: true };
+    await editor.run("settings.cas", { expected: documentFingerprint(source), next });
+    const saved = (await editor.run("settings.repair-read", {})) as DocumentView;
+    assert.equal(saved.path, file);
+    assert.deepEqual(saved.parsed, { ...original, debug: true });
+    assert.equal(await fs.readFile(rule, "utf8"), rules);
+  }));
+
 test("repeated canonical saves round-trip exact bytes without temporary files", () =>
   fixture(async (root, connect) => {
     const client = await connect();

@@ -1,6 +1,6 @@
 # Configuration skill verification
 
-The skill is loaded on explicit invocation. It applies authorized local settings edits through the existing daemon; questions do not authorize edits.
+The skill is loaded on explicit invocation. It applies authorized local settings edits through the existing daemon and edits an existing active ignore file directly. Questions and error reports do not authorize edits.
 The authoritative configuration text is the [bundled settings reference](../skills/configure-pi-sync/references/configuration.md).
 
 ## Representative question review
@@ -11,7 +11,10 @@ No user settings were read or changed and no backend command was run for these r
 
 | Question | Required answer and user handoff | Implementation evidence |
 | --- | --- | --- |
-| Exclude `npm/` and `sessions/` from my active setup. | Use the daemon to update `sync.exclude`, keep existing rules and unrelated settings, check for directory re-inclusions, re-read the saved rules, and stop without starting a transfer. If the daemon requires handover, leave that decision to the user. | `packages/pi-sync-daemon/test/settings.test.ts` exercises passive attachment, handover refusal, exclusion saves, and stale-source rejection against the daemon. |
+| Turn on debug logging in `pi-sync.json`. | Verify the canonical file, submit only the `debug` change through the passive settings client, re-read it, and do not run a sync. | `packages/pi-sync-daemon/test/settings.test.ts` covers a passive save for an existing ignore-file setup without changing its rules, as well as stale-source rejection. |
+| Exclude `npm/` from the active ignore file. | Verify the active filename and existing rules, add the exclusion without changing unrelated rules or JSON, and recheck the requested path. If this is a legacy setup instead, use the versioned exclusion field and account for re-inclusions. | `packages/pi-sync-daemon/src/engine/ignore/ignore-source.ts`, `packages/pi-sync-daemon/test/effective-ignore-policy.test.ts`, and `packages/pi-sync-daemon/test/settings.test.ts`. |
+| Agent directory changed or has an unsafe filesystem layout. | Investigate local metadata and concurrent writes; the error does not identify a settings field. Do not reset settings, change rules without a supported fix, or run backend diagnostics. | `packages/pi-sync-daemon/src/engine/snapshot/snapshot.ts` and `test/agent-directory-files.test.ts`. |
+| Autonomous sync requires a separate policy review. | Distinguish transfer approval from a settings parse failure; point to **Review automatic transfers** and do not grant consent on the user's behalf. | `packages/pi-sync-daemon/src/consent.ts` and `packages/pi-sync-daemon/test/ignore-automatic-permission.test.ts`. |
 | How do I use Git without automatic sync? | Use an existing credential-free SSH/HTTPS remote and a dedicated owned branch; choose the exact path, Minimal content, and automatic Off in `/sync` → Set up sync, then review before saving and separately review the first transfer. | `src/backends/git/git-config.ts`, `src/ui/setup/setup-wizard.ts`, `src/ui/setup/setup-review.ts` |
 | Where do I enter a WebDAV password? | Enter it in the existing masked TUI, not chat or a URL; use HTTPS and review the collection and relative path, without assuming saving tests connectivity. | `src/backends/webdav/webdav-config.ts`, `src/ui/secret-input.ts`, `src/ui/setup/webdav-ui.ts` |
 | What does `./` mean for R2/S3? | It is the selected existing bucket root, not a literal object prefix; R2 persists as type `s3`, and independent setups need separate prefixes. | `src/settings/settings-validation.ts`, `src/backends/s3/s3-backend.ts`, `src/ui/setup/s3-ui.ts` |
@@ -40,8 +43,8 @@ Its negative cases cover unsupported versions, missing required policy fields, i
 
 `test/skill-cli-smoke.ts` reads the installed Pi package's `bin.pi` entry and starts it with `process.execPath`, without a global `pi` or npm's PATH changes.
 It starts the real `pi -e <package-directory>` process in RPC mode with a temporary HOME, workspace, agent directory, and loopback-only canned provider.
-It verifies one ordinary request without manual-only skill metadata, nine explicit expansions (including an edit request), and an additional expansion after public `ctx.reload()` through a temporary test-only extension command.
-The smoke makes eleven local fixture requests and zero external provider requests, with tools disabled.
+It verifies one ordinary request without manual-only skill metadata, explicit expansions for JSON edits, rule edits, troubleshooting, and configuration questions, and a further expansion after public `ctx.reload()` through a temporary test-only extension command.
+The smoke uses only a loopback fixture and has tools disabled.
 It verifies that no private Pi Sync settings, sync state, or workspace content was created.
 It closes the child, drains its exit, closes the HTTP fixture, clears timers, and removes its temporary files on success and failure.
 Failure-injection runs replaced `spawn` through a temporary Node preload with an immediately exiting child and a missing executable.
@@ -52,4 +55,4 @@ The canned provider verifies transport and instruction loading, not whether a li
 The source-grounded review above is separate evidence and does not establish a model success rate.
 Native TUI `/reload` and masked credential input are not exercised by this non-interactive smoke; loader reload and real public command-context reload are exercised instead.
 Live provider behavior, production backend access, and operating systems other than the verification host remain unverified.
-The skill uses the existing settings writer; it does not change the runtime lifecycle, schema, or `/sync` command behavior.
+The skill uses the existing settings writer; it does not change the runtime lifecycle, schema, or `/sync` command behavior. The smoke does not execute an agent-driven edit; the daemon tests verify the underlying writer separately.
