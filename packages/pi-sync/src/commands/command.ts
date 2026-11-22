@@ -255,7 +255,8 @@ export function usage() {
   return [
     "Usage: /sync <command>",
     `Commands: ${commands}`,
-    "Daemon cleanup: /sync daemon recover reviews and stops the existing daemon. It does not start a replacement or retry a transfer.",
+    "In the /sync manager, Push to remote and Pull from remote use the chosen source and preserve a restore point without a second confirmation. Direct commands retain their existing review and flags.",
+    "Daemon diagnostics: /sync daemon recover reviews and stops the existing daemon. It does not start a replacement or retry a transfer.",
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",

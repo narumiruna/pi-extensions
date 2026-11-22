@@ -5,6 +5,7 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 import { readConsent } from "./consent.js";
 import { configureEngineHost, type EngineContext } from "./engine/host.js";
+import type { ForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import { canonicalRootGuard, processExists } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
 import { type ClientFacts, type Execution, OWNERSHIP_CLEANUP_REQUIRED } from "./protocol.js";
@@ -13,16 +14,23 @@ class OwnershipCleanupError extends Error {
   readonly code = OWNERSHIP_CLEANUP_REQUIRED;
 }
 
+interface ForegroundQueueState {
+  entered: boolean;
+  deferred: boolean;
+  beforeMutation?: OwnershipCleanupError;
+}
+
 interface Scope {
   execution: Execution;
   held: ReadonlySet<string>;
   peers?: readonly ClientFacts[];
+  foreground?: ForegroundQueueState;
 }
 const scope = new AsyncLocalStorage<Scope>();
 
 /** One service process owns one root; tests must use a separate process per root. */
 export function installServiceHost(root: string, ignoreFileOperationsAvailable?: boolean) {
-  let poisoned = false;
+  let poisoned: "queue" | "other" | undefined;
   const assertRoot = canonicalRootGuard(root);
   function current() {
     const value = scope.getStore();
@@ -49,21 +57,32 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
     for (const target of missing) protectedTarget(target, owner.execution);
     const peers = owner.peers.toSorted((a, b) => a.id.localeCompare(b.id));
     const requested: { client: string; reservation: string }[] = [];
+    const foreground = owner.foreground;
+    let acquireFailed = false;
+    let completed = false;
     return withCleanup(
       async () => {
         for (const peer of peers) {
           owner.execution.validate();
           const reservation = randomUUID();
           requested.push({ client: peer.id, reservation });
-          await owner.execution.request(
-            "queue-acquire",
-            { reservation, targets: missing, generation: peer.generation, background: !owner.execution.clientId },
-            peer.id,
-          );
+          try {
+            await owner.execution.request(
+              "queue-acquire",
+              { reservation, targets: missing, generation: peer.generation, background: !owner.execution.clientId },
+              peer.id,
+            );
+          } catch (error) {
+            acquireFailed = true;
+            throw error;
+          }
           owner.execution.validate();
         }
         for (const target of missing) protectedTarget(target, owner.execution);
-        return await scope.run({ ...owner, held: new Set([...owner.held, ...missing]) }, action);
+        if (foreground) foreground.entered = true;
+        const result = await scope.run({ ...owner, held: new Set([...owner.held, ...missing]) }, action);
+        completed = true;
+        return result;
       },
       async () => {
         // Release by request identity even when a grant response was lost. A cancelled
@@ -78,11 +97,20 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
         );
         const failure = results.find((result) => result.status === "rejected");
         if (failure?.status === "rejected") {
-          poisoned = true;
-          throw new OwnershipCleanupError(
+          poisoned ??= "queue";
+          const error = new OwnershipCleanupError(
             "File-queue release is uncertain; stop the daemon and keep grants quarantined until owner exit.",
             { cause: failure.reason },
           );
+          if (foreground && poisoned === "queue") {
+            if (completed) {
+              foreground.deferred = true;
+              return;
+            }
+            if (acquireFailed && !foreground.entered && !owner.execution.signal.aborted)
+              foreground.beforeMutation = error;
+          }
+          throw error;
         }
       },
     );
@@ -92,7 +120,7 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
     allowConfigMigration: () => Boolean(readConsent(root)),
     root: () => {
       assertRoot();
-      if (poisoned)
+      if (poisoned && !(poisoned === "queue" && scope.getStore()?.foreground?.deferred))
         throw new OwnershipCleanupError("Daemon ownership cleanup is uncertain; stop and reconcile before restarting.");
       return root;
     },
@@ -127,7 +155,7 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
               try {
                 await release?.();
               } catch (error) {
-                poisoned = true;
+                poisoned = "other";
                 throw new OwnershipCleanupError(
                   "Pi settings lock release failed; stop and reconcile before restarting.",
                   {
@@ -147,7 +175,33 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
     status: (_ctx, value, presentation) => current().execution.emit("status", { value, presentation }),
   });
   return {
-    cleanupRequired: () => poisoned,
+    cleanupRequired: () => poisoned !== undefined,
+    async runForeground<T>(execution: Execution, action: () => Promise<T>): Promise<T | ForegroundQueueOutcome> {
+      const owner = current();
+      if (owner.execution !== execution || !execution.clientId || owner.held.size || owner.foreground)
+        throw new Error("Foreground queue recovery requires one attached directional job.");
+      const foreground: ForegroundQueueState = { entered: false, deferred: false };
+      return scope.run({ ...owner, foreground }, async () => {
+        try {
+          const result = await action();
+          if (foreground.deferred && poisoned === "queue") return { foregroundQueueCleanup: "verified-result", result };
+          return result;
+        } catch (error) {
+          if (
+            foreground.beforeMutation &&
+            !execution.signal.aborted &&
+            error instanceof AggregateError &&
+            error.errors.includes(foreground.beforeMutation)
+          )
+            return { foregroundQueueCleanup: "before-mutation" };
+          if (foreground.deferred && !(error instanceof OwnershipCleanupError)) {
+            const detail = error instanceof Error ? ` ${error.message}` : "";
+            throw new OwnershipCleanupError(`File-queue release was not confirmed.${detail}`, { cause: error });
+          }
+          throw error;
+        }
+      });
+    },
     run<T>(execution: Execution, action: () => Promise<T>): Promise<T> {
       return scope.run({ execution, held: new Set() }, async () => {
         try {

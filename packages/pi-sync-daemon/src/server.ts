@@ -5,10 +5,12 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import lockfile from "proper-lockfile";
 import { DAEMON_BUILD_VERSION } from "./build-version.js";
+import { ConsentPublicationError, readConsent } from "./consent.js";
 import type { DaemonDiagnosticSink } from "./daemon-debug.js";
 import { endpointOwner } from "./endpoint.js";
 import { debugOperation } from "./engine/debug-log.js";
 import { SyncDecisionRequiredError } from "./engine/sync/sync-errors.js";
+import { isForegroundDirection, isForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import {
   canonicalRootGuard,
   daemonPaths,
@@ -41,6 +43,7 @@ import {
   type JobView,
   MAX_MESSAGE_BYTES,
   MAX_REVIEW_BYTES,
+  OWNERSHIP_CLEANUP_REQUIRED,
   operationPrefix,
   type PollReply,
   PROTOCOL_VERSION,
@@ -103,6 +106,7 @@ export interface ServerHooks {
   close?(): Promise<void>;
   lifetime?(): Promise<IdleExitPolicy>;
   quiesce?(): Promise<void>;
+  foregroundRecoveryAllowed?(): boolean;
   stopped?(): void;
   failure?(): void;
   diagnostic?: DaemonDiagnosticSink;
@@ -171,6 +175,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   let participantGeneration = 0;
   let closed = false;
   let stopRequested = false;
+  let foregroundRecoveryJob: Job | undefined;
+  let consentPublicationFailed = false;
   let automaticClosing = false;
   let idleExit: ReturnType<typeof createIdleExit> | undefined;
   let expiring: Promise<void> | undefined;
@@ -429,6 +435,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         throw new Error("Operation ID was reused with different input.");
       return duplicate;
     }
+    if (foregroundRecoveryJob)
+      throw Object.assign(new Error("File-queue cleanup is pending; no new daemon work can start."), {
+        code: OWNERSHIP_CLEANUP_REQUIRED,
+      });
     if (retired.has(id))
       throw new Error("Operation result expired; reconcile the existing journal before starting new work.");
     if (retired.size + jobs.size >= 4096)
@@ -477,11 +487,19 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         const result = await execute(operation, payload, execution);
         if (Buffer.byteLength(JSON.stringify(result ?? null)) > MAX_MESSAGE_BYTES / 2)
           throw new Error("Operation result exceeds its byte limit; use bounded inspection.");
+        if (isForegroundDirection(operation) && isForegroundQueueOutcome(result)) {
+          if (result.foregroundQueueCleanup === "before-mutation" && job.committed)
+            throw Object.assign(new Error("File-queue release and transfer outcome could not be verified."), {
+              code: OWNERSHIP_CLEANUP_REQUIRED,
+            });
+          foregroundRecoveryJob ??= job;
+        }
         job.view.result = result;
         job.view.phase = "done";
         note(result === "cancelled" ? "cancelled" : (job.debugOutcome ?? "completed"));
       })
       .catch((error) => {
+        if (error instanceof ConsentPublicationError) consentPublicationFailed = true;
         job.view.phase = "failed";
         job.view.error = remoteError(error);
         note(
@@ -687,6 +705,62 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     hooks.idle?.();
     return result;
   }
+  function stop() {
+    stopRequested = true;
+    for (const peer of participants.values()) waiters.get(peer)?.changed();
+    setImmediate(() => {
+      void close().catch(() => {});
+    });
+    return { stopping: true };
+  }
+  async function stopForeground(params: Record<string, unknown>, signal?: AbortSignal) {
+    if (params.check !== undefined && params.check !== true) throw new Error("Invalid foreground stop request.");
+    const barrier = await readUpgradeOwner(paths);
+    signal?.throwIfAborted();
+    assertOwner();
+    if (
+      params.check === true
+        ? barrier !== undefined
+        : barrier?.purpose !== "cleanup" || barrier.instance !== identity.instance || barrier.pid !== identity.pid
+    )
+      return { blocked: "A daemon upgrade or recovery is already pending." };
+    if (!published || !matchesPublishedIdentity(paths, identity))
+      return { blocked: "Daemon owner changed during queue cleanup." };
+    const job = foregroundRecoveryJob;
+    const requester = validId(params.client) ? participants.get(params.client) : undefined;
+    if (
+      job?.view.phase !== "done" ||
+      job.view.id !== params.job ||
+      !requester ||
+      requester.facts.id !== job.client ||
+      requester.facts.generation !== params.generation ||
+      requester.facts.generation !== job.generation ||
+      contactState(requester) !== "active"
+    )
+      return { blocked: "The completed transfer is not owned by the current Pi session." };
+    if (
+      ledger.failed ||
+      consentPublicationFailed ||
+      hooks.foregroundRecoveryAllowed?.() !== true ||
+      Object.values(readConsent(paths.root)?.setups ?? {}).some((setup) => setup.afterExit)
+    )
+      return { blocked: "Daemon authorization or ownership evidence needs repair before a restart." };
+    if (
+      peerOperations.size ||
+      expiring ||
+      backgroundJobs.size ||
+      pending.size ||
+      [...jobs.values()].some(({ view }) => view.phase === "queued" || view.phase === "running")
+    )
+      return { blocked: "Another daemon operation may still be running; no restart was attempted." };
+    if (
+      [...participants.values()].some(
+        (peer) => peer !== requester && participates(peer) && processExists(peer.facts.pid),
+      )
+    )
+      return { blocked: "Another live Pi session still uses this daemon; no restart was attempted." };
+    return params.check === true ? { eligible: true } : stop();
+  }
   async function handle(
     method: string,
     params: unknown,
@@ -779,6 +853,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       return resumeContact(params, signal);
     }
     if (method === "startup.bootstrap" && hooks.startup) {
+      if (foregroundRecoveryJob) throw new Error("File-queue cleanup is pending; startup work did not begin.");
       if (
         !record(params) ||
         Object.keys(params).length !== 4 ||
@@ -949,14 +1024,8 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       await job.promise;
       return job.view;
     }
-    if (method === "stop") {
-      stopRequested = true;
-      for (const peer of participants.values()) waiters.get(peer)?.changed();
-      setImmediate(() => {
-        void close().catch(() => {});
-      });
-      return { stopping: true };
-    }
+    if (method === "foreground-stop") return stopForeground(params, signal);
+    if (method === "stop") return stop();
     throw new Error("Unknown daemon method.");
   }
   const respond = (response: ServerResponse, status: number, value: unknown) => {
@@ -990,7 +1059,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         respond(response, 403, { error: { name: "Error", message: "Invalid daemon identity or protocol." } });
         return;
       }
-      if (["attach", "resume-contact", "startup.bootstrap", "state-wait"].includes(body.method)) {
+      if (["attach", "resume-contact", "startup.bootstrap", "state-wait", "foreground-stop"].includes(body.method)) {
         admissionController = new AbortController();
         response.once("close", disconnect);
         if (response.destroyed) disconnect();
@@ -1213,6 +1282,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     isIdle: () =>
       !closed &&
       !stopRequested &&
+      !foregroundRecoveryJob &&
       [...jobs.values()].every((job) => job.view.phase !== "queued" && job.view.phase !== "running"),
     get closed() {
       return closed;

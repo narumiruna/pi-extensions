@@ -2,7 +2,7 @@ import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext } from "../host.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
+import { effectiveSessionRoot, resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
 import { StaleIgnorePolicyError } from "../snapshot/snapshot-transaction-policy.js";
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
@@ -47,6 +47,7 @@ export async function validateDirectionalPublication(
   expectedHashes: Record<string, string>,
   validatePolicy: () => Promise<void>,
   direction: "push" | "rollback",
+  effectiveRoot = false,
 ) {
   const current = await createSnapshot(config.snapshotIdentity, options);
   if (!sameHashes(fileHashMap(current), expectedHashes))
@@ -55,7 +56,10 @@ export async function validateDirectionalPublication(
     throw new Error(`Baseline changed at the ${direction} publication boundary.`);
   if (
     (config.scope === "agent-directory" || direction === "push") &&
-    options.sessionDir !== (await resolvedSnapshotOptionsForContext(ctx, config, options.signal)).sessionDir
+    options.sessionDir !==
+      (effectiveRoot
+        ? await effectiveSessionRoot(ctx, config, options.signal)
+        : (await resolvedSnapshotOptionsForContext(ctx, config, options.signal)).sessionDir)
   )
     throw new Error(`Pi session storage changed at the ${direction} publication boundary.`);
   await validatePolicy();
@@ -79,6 +83,7 @@ export function directionalApplyGuards({
   validateMutation,
   validateIgnorePolicy,
   onCommit,
+  effectiveRoot = false,
 }: {
   ctx: EngineContext;
   config: AnySyncConfig;
@@ -91,6 +96,7 @@ export function directionalApplyGuards({
   validateMutation: () => void;
   validateIgnorePolicy?: () => Promise<void>;
   onCommit?: () => void;
+  effectiveRoot?: boolean;
 }) {
   if (!validateIgnorePolicy) return { validateMutation };
   const validateOwner = () => {
@@ -105,7 +111,12 @@ export function directionalApplyGuards({
         throw new StaleIgnorePolicyError("Remote changed before local apply; reopen the review.");
       if (syncStateFingerprint(await readStateForConfig(config)) !== syncStateFingerprint(state))
         throw new StaleIgnorePolicyError("Baseline changed before local apply; reopen the review.");
-      if (sessionDir !== (await resolvedSnapshotOptionsForContext(ctx, config, signal)).sessionDir)
+      if (
+        sessionDir !==
+        (effectiveRoot
+          ? await effectiveSessionRoot(ctx, config, signal)
+          : (await resolvedSnapshotOptionsForContext(ctx, config, signal)).sessionDir)
+      )
         throw new StaleIgnorePolicyError("Pi session storage changed before local apply; reopen the review.");
       await validateIgnorePolicy();
       validateOwner();

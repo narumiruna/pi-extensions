@@ -305,6 +305,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     schedule,
     lifetime,
     blockAutomatic,
+    foregroundRecoveryAllowed: () => !authorizationFailed,
     explicitSync(config: AnySyncConfig, execution: Execution) {
       const peer = execution.facts();
       if (closed || !peer) return;

@@ -39,6 +39,7 @@ export async function handleCommand(
     target?: string,
     onDialog?: (active: boolean) => void,
     retryRefusal = false,
+    directionalFingerprint?: string,
   ) => {
     const [command, ...args] = splitArgs(route);
     if (command === "sync" && !retryRefusal) {
@@ -59,6 +60,7 @@ export async function handleCommand(
       target,
       onDialog,
       retryRefusal,
+      directionalFingerprint,
     );
   };
   if (!rawArgs.trim()) {

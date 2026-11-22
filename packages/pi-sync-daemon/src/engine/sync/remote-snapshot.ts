@@ -157,13 +157,18 @@ export async function readRemoteSnapshot(
   backend: SyncBackend,
   config: AnySyncConfig,
   signal?: AbortSignal,
-  options: { allowSelectionDifference?: boolean; sessionDir?: string } = {},
+  options: {
+    allowSelectionDifference?: boolean;
+    sessionDir?: string;
+    validateSelection?: (rawSnapshot: Snapshot) => void;
+  } = {},
 ) {
   const observed = await readCurrentSnapshot(backend, config.scope === "agent-directory", signal);
   if (!observed) return { head: undefined, snapshot: undefined, selectionState: undefined };
   const { head, snapshot: rawSnapshot } = observed;
   const selectionState = inspectRemoteSelection(config.include, rawSnapshot, config.exclude, config);
-  if (!options.allowSelectionDifference && selectionState.kind === "different")
+  if (options.validateSelection) options.validateSelection(rawSnapshot);
+  else if (!options.allowSelectionDifference && selectionState.kind === "different")
     throw selectionMismatch(config, selectionState);
   const snapshot =
     selectionState.ignorePolicyComparison === "local-legacy-remote-ignore"

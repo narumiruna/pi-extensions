@@ -19,6 +19,7 @@ import {
   type SyncBackend,
   SyncBackendConflictError,
   SyncBackendPublicationOutcomeUnknownError,
+  verifyPreviousHeadInHistory,
 } from "../sync-backend.js";
 import {
   normalizeGitBranch,
@@ -218,6 +219,17 @@ export class GitSyncBackend implements SyncBackend {
       throw this.redactedError(error);
     }
     throwIfAborted(options.signal);
+    if (options.preservePreviousHead && observed) {
+      try {
+        await verifyPreviousHeadInHistory(this, await this.headForSha(observed, options.signal), options.signal);
+      } catch (error) {
+        throwIfAborted(options.signal);
+        throw new Error(
+          `Cannot verify the previous Git publication ${observed} in History; remote head was not updated.`,
+          { cause: error },
+        );
+      }
+    }
     if (options.validateIgnorePolicy) {
       await options.validateIgnorePolicy();
       throwIfAborted(options.signal);

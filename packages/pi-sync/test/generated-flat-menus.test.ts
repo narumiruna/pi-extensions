@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -9,34 +8,59 @@ import {
   initTheme,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { stopDaemon } from "@narumitw/pi-sync-daemon";
+import { findDaemon, stopDaemon } from "@narumitw/pi-sync-daemon";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { beforeEach, describe, test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import { v3S3Settings } from "./helpers.js";
+import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
+import { loadConfig } from "../src/settings/config.js";
+import { snapshot, v3WebDavSettings } from "./helpers.js";
+import { MockWebDavServer } from "./mock-webdav-server.js";
 
 initTheme("dark", false);
 
 const cases = [
-  { name: "TUI Settings", choice: "Settings", mode: "tui" },
-  { name: "TUI cancelled Pull", choice: "Pull from remote…", mode: "tui" },
-  { name: "TUI cancelled Push", choice: "Push to remote…", mode: "tui" },
-  { name: "RPC History", choice: "History", mode: "rpc" },
+  { name: "TUI Settings", mode: "tui", action: "settings" },
+  { name: "TUI cancelled Pull", mode: "tui", action: "cancel", direction: "pull" },
+  { name: "TUI cancelled Push", mode: "tui", action: "cancel", direction: "push" },
+  { name: "TUI applied Push", mode: "tui", action: "apply", direction: "push" },
+  { name: "RPC applied Pull", mode: "rpc", action: "apply", direction: "pull" },
+  { name: "TUI cancelled direct /sync push review", mode: "tui", action: "review-push" },
+  { name: "RPC History", mode: "rpc", action: "history" },
 ] as const;
 
-describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
+const localText = "local fixture version\n";
+const remoteText = "remote fixture version\n";
+
+describe.each(cases)("package-directory Jiti $name", (scenario) => {
   let run: () => Promise<void>;
 
   beforeEach(async ({ onTestFinished }) => {
+    const { action, mode } = scenario;
+    const direction = "direction" in scenario ? scenario.direction : undefined;
     const root = await mkdtemp(join(tmpdir(), "pi-sync-flat-smoke-"));
     const agentDir = join(root, "agent");
     const previous = process.env.PI_CODING_AGENT_DIR;
-    const requests: string[] = [];
-    const server = createServer((request, response) => {
-      requests.push(request.method ?? "GET");
-      response.writeHead(404, { "Content-Type": "application/xml" });
-      response.end("<Error><Code>NoSuchKey</Code></Error>");
+    const readingHead = Promise.withResolvers<void>();
+    const releaseRead = Promise.withResolvers<void>();
+    let holdHead = false;
+    let reachedHead = false;
+    const server = new MockWebDavServer({
+      async beforeRequest(request, signal) {
+        if (!holdHead || request.method !== "GET" || !request.path.endsWith("/latest.json")) return;
+        reachedHead = true;
+        readingHead.resolve();
+        const closed = Promise.withResolvers<void>();
+        const onClose = () => closed.resolve();
+        signal.addEventListener("abort", onClose, { once: true });
+        try {
+          if (!signal.aborted) await Promise.race([releaseRead.promise, closed.promise]);
+        } finally {
+          signal.removeEventListener("abort", onClose);
+        }
+      },
     });
+    let serverStarted = false;
     let loaded: ReturnType<DefaultResourceLoader["getExtensions"]> | undefined;
     let activeContext: ExtensionCommandContext | undefined;
     let commandTask: Promise<void> | undefined;
@@ -44,37 +68,40 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
     onTestFinished(async () => {
       try {
         for (const host of hosts) host.press("ctrl+c");
+        readingHead.resolve();
+        releaseRead.resolve();
         try {
           if (activeContext)
             for (const handler of loaded?.extensions[0]?.handlers.get("session_shutdown") ?? [])
-              await handler({ type: "session_shutdown", reason: "reload" }, activeContext);
+              await handler({ type: "session_shutdown", reason: "quit" }, activeContext);
         } finally {
           await commandTask?.catch(() => {});
         }
       } finally {
         try {
           await stopDaemon(agentDir);
+          assert.equal(await findDaemon(agentDir), undefined);
         } finally {
           for (const host of hosts) host.dispose();
           loaded?.runtime.invalidate("flat menu package-directory smoke complete");
           if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
           else process.env.PI_CODING_AGENT_DIR = previous;
           try {
-            if (server.listening)
-              await new Promise<void>((done, reject) => server.close((error) => (error ? reject(error) : done())));
+            if (serverStarted) await server.close();
           } finally {
             await rm(root, { recursive: true, force: true });
           }
         }
       }
     });
-    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    const address = server.address();
-    assert.ok(address && typeof address !== "string");
+    await server.start();
+    serverStarted = true;
     await mkdir(agentDir);
-    const pushPreview = choice === "Push to remote…";
-    const settings = v3S3Settings(pushPreview ? { include: ["managed"], skipSecretScan: true } : undefined);
-    if (pushPreview) {
+    const settings = {
+      ...v3WebDavSettings({ include: action === "review-push" ? ["managed"] : ["AGENTS.md"] }),
+      skipSecretScan: action === "review-push",
+    };
+    if (action === "review-push") {
       const thumbnails = join(agentDir, "managed", "docs", "screenshots", "thumbs");
       await mkdir(thumbnails, { recursive: true });
       await Promise.all(
@@ -83,10 +110,22 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
         ),
       );
     }
-    settings.storageConnections.r2.endpoint = `http://127.0.0.1:${address.port}`;
+    const localPath = join(agentDir, "AGENTS.md");
+    if (direction) await writeFile(localPath, localText);
+    settings.storageConnections.dav.url = server.url;
     const bytes = JSON.stringify(settings);
-    await writeFile(join(agentDir, "pi-sync.json"), bytes, { mode: 0o600 });
+    const settingsPath = join(agentDir, "pi-sync.json");
+    await writeFile(settingsPath, bytes, { mode: 0o600 });
     process.env.PI_CODING_AGENT_DIR = agentDir;
+    const config = await loadConfig();
+    assert.equal(config.backend.type, "webdav");
+    const backend = new WebDavSyncBackend(config.backend);
+    const remote = {
+      ...snapshot([{ path: "AGENTS.md", content: Buffer.from(remoteText) }]),
+      profile: config.snapshotIdentity,
+      selection: { version: 1 as const, include: ["AGENTS.md"] },
+    };
+    if (direction) await backend.publishSnapshot(remote, { kind: "missing" });
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,
@@ -100,9 +139,38 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
     assert.ok(extension);
     const command = extension.commands.get("sync");
     assert.ok(command);
+    const selectedAction =
+      direction === "push"
+        ? "Push to remote"
+        : direction === "pull"
+          ? "Pull from remote"
+          : action === "settings"
+            ? "Settings"
+            : "History";
+    const progress = direction === "push" ? "Pushing to remote…" : "Pulling from remote…";
     const frames: string[] = [];
-    const choices: (string | undefined)[] = [choice, undefined];
-    const context = createMockContext({ hasUI: true, mode: "tui" });
+    const menus: string[] = [];
+    const confirmations: string[] = [];
+    let allowHandover = false;
+    let selected = false;
+    let menuCountAtActivation = 0;
+    const activate = () => {
+      selected = true;
+      menuCountAtActivation = menus.length;
+    };
+    const context = createMockContext({
+      mode,
+      confirm: async (title: string) => {
+        confirmations.push(title);
+        return allowHandover && title === "Adopt pi-sync-daemon as the synchronization owner?";
+      },
+      select: async (title: string, options: string[]) => {
+        menus.push(title);
+        if (selected || !options.includes(selectedAction)) return undefined;
+        activate();
+        return selectedAction;
+      },
+    });
     activeContext = context.ctx as ExtensionCommandContext;
     activeContext.ui.custom = (async (factory) => {
       // Separate hosts support nested manager/edit flows without probing a factory twice.
@@ -114,33 +182,38 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
         const frame = tui.render().join("\n");
         frames.push(frame);
         if (frame.split("\n").includes("Manage sync · home")) {
-          const selected = choices.shift();
-          if (!selected) tui.press("ctrl+c");
+          if (selected) tui.press("ctrl+c");
           else {
             for (let index = 0; index < 20; index++) {
-              if (tui.render().some((line) => line.includes(`→ ${selected}`))) break;
+              if (tui.render().some((line) => line === `→ ${selectedAction}`)) {
+                activate();
+                tui.press("tui.select.confirm");
+                break;
+              }
               tui.press("tui.select.down");
             }
-            tui.press("tui.select.confirm");
+            if (!selected) tui.press("ctrl+c");
           }
         } else if (frame.split("\n").includes("Pi Sync Settings")) {
           tui.send("\u001b[200~Show sync status\u001b[201~");
           frames.push(tui.render().join("\n"));
           tui.press("ctrl+c");
-        } else if (frame.includes("Push pi settings?")) {
+        } else if (action === "review-push" && frame.includes("Push pi settings?")) {
           tui.press("tui.select.down");
           frames.push(tui.render().join("\n"));
           tui.press("tui.select.down");
           tui.press("tui.select.confirm");
-        } else if (frame.includes("Sync change details")) {
+        } else if (action === "review-push" && frame.includes("Sync change details")) {
           tui.press("end");
           frames.push(tui.render().join("\n"));
           tui.press("ctrl+c");
-        } else if (frame.includes("Preparing push preview")) {
-          // Let the loader reach the generated directional-review boundary; its
-          // separate custom host below cancels before publication.
+        } else if (direction && frame.includes(progress)) {
+          if (action === "cancel") {
+            // Cancel a dispatched operation while the disposable server holds the first head read.
+            await Promise.race([readingHead.promise, result]);
+            tui.press("ctrl+c");
+          }
         } else {
-          // Cancel Pull preparation or the actual Push review; traffic is loopback.
           tui.press("ctrl+c");
         }
         return await result;
@@ -149,22 +222,32 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
         hosts.delete(tui);
       }
     }) as ExtensionCommandContext["ui"]["custom"];
-    // Cold Jiti loading and session/daemon readiness belong to this fixture, not
-    // to the operation's 5,000 ms test budget.
+    // Cold Jiti loading, daemon startup, and initial owner adoption belong to fixture setup.
     for (const handler of extension.handlers.get("session_start") ?? [])
-      await handler({ type: "session_start", reason: "startup" }, context.ctx);
-    const rpc = createMockContext({ mode: "rpc", select: async () => choices.shift() });
-    if (mode === "rpc") {
-      activeContext = rpc.ctx as ExtensionCommandContext;
-      for (const handler of extension.handlers.get("session_start") ?? [])
-        await handler({ type: "session_start", reason: "new" }, rpc.ctx);
+      await handler({ type: "session_start", reason: "startup" }, activeContext);
+    if (direction || action === "review-push") {
+      allowHandover = true;
+      await command.handler("daemon handover", activeContext);
+      allowHandover = false;
+      assert.deepEqual(confirmations.splice(0), ["Adopt pi-sync-daemon as the synchronization owner?"]);
     }
     const operationContext = activeContext;
+    const before = new Map(server.resources);
+    const requestStart = server.requests.length;
+    const noticeStart = context.notifications.length;
     run = async () => {
-      commandTask = command.handler("", operationContext);
+      holdHead = action === "cancel";
+      commandTask = command.handler(action === "review-push" ? "push" : "", operationContext);
       await commandTask;
-      assert.equal(choices.length, 0);
-      if (choice === "Settings") {
+      holdHead = false;
+      releaseRead.resolve();
+      assert.equal(selected, action !== "review-push", frames.join("\n\n"));
+      assert.deepEqual(confirmations, []);
+      if (direction) assert.deepEqual(menus.slice(menuCountAtActivation), []);
+      const notices = context.notifications.slice(noticeStart);
+      const requests = server.requests.slice(requestStart);
+      assert.ok(!notices.some(({ level }) => level === "error"), JSON.stringify(notices));
+      if (action === "settings") {
         const settingsFrames = frames.filter((frame) => frame.split("\n").includes("Pi Sync Settings"));
         assert.equal(settingsFrames.length, 2);
         assert.match(settingsFrames[0] ?? "", /Included paths/u);
@@ -175,41 +258,66 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
             /Sync content|Sync behavior|Storage & setups|Advanced|All settings|Pi Sync Settings ·/u,
           );
         assert.ok(frames.some((frame) => frame.includes("Show sync status") && !frame.includes("Included paths")));
-      } else if (choice === "Pull from remote…") {
-        assert.ok(
-          frames.some((frame) => frame.includes("Checking remote changes")),
-          frames.join("\n\n") + JSON.stringify(context.notifications),
+      } else if (action === "cancel") {
+        assert.equal(reachedHead, true);
+        assert.equal(frames.length, 3, frames.join("\n\n"));
+        assert.ok(frames[1]?.includes(progress), frames.join("\n\n"));
+        assert.equal(notices.filter(({ message }) => /cancellation requested/u.test(message)).length, 1);
+        assert.equal(await readFile(localPath, "utf8"), localText);
+      } else if (action === "apply") {
+        if (mode === "tui") {
+          assert.equal(frames.length, 2, frames.join("\n\n"));
+          assert.ok(frames[1]?.includes(progress), frames.join("\n\n"));
+        } else {
+          assert.equal(menus.length, 1, menus.join("\n\n"));
+          assert.match(menus[0] ?? "", /^Manage sync\n/u);
+          assert.deepEqual(frames, []);
+        }
+        const successes = notices.filter(({ message }) => /^(Pushed|Pulled)\b/u.test(message));
+        assert.equal(successes.length, 1, JSON.stringify(notices));
+        assert.match(successes[0]?.message ?? "", direction === "push" ? /history/iu : /backup/iu);
+        assert.equal(await readFile(localPath, "utf8"), direction === "pull" ? remoteText : localText);
+        const head = await backend.readHead();
+        assert.ok(head);
+        assert.equal(
+          requests.filter(({ method, path }) => method === "PUT" && path.endsWith("/latest.json")).length,
+          direction === "push" ? 1 : 0,
         );
-      } else if (choice === "Push to remote…") {
-        assert.ok(frames.some((frame) => frame.includes("Preparing push preview")));
-        const [initial, selected] = frames.filter((frame) => frame.includes("Push pi settings?"));
+        if (direction === "push") {
+          assert.notEqual(head.snapshotId, remote.id);
+          const pushed = await backend.readSnapshot(head.snapshotId);
+          assert.equal(Buffer.from(pushed.files[0]?.contentBase64 ?? "", "base64").toString(), localText);
+          assert.ok((await backend.listHistory()).some(({ snapshotId }) => snapshotId === remote.id));
+        } else assert.equal(head.snapshotId, remote.id);
+      } else if (action === "review-push") {
+        const [initial, moved] = frames.filter((frame) => frame.includes("Push pi settings?"));
         assert.match(initial ?? "", /→ No, cancel/u);
         assert.match(initial ?? "", /829 add · 0 update · 0 remove/u);
         assert.match(initial ?? "", /possible-secret scanning is disabled/u);
         assert.doesNotMatch(initial ?? "", /Add remotely:|page before Yes/u);
-        assert.match(selected ?? "", /→ Yes, apply reviewed transfer/u);
+        assert.match(moved ?? "", /→ Yes, apply reviewed transfer/u);
         const details = frames.filter((frame) => frame.includes("Sync change details"));
         assert.ok(details.some((frame) => frame.includes("example-000.webp")));
         assert.ok(details.some((frame) => frame.includes("example-828.webp")));
       } else {
         assert.ok(
-          rpc.notifications.some((entry) => entry.message.includes("No remote pi-sync history")),
-          JSON.stringify(rpc.notifications),
+          notices.some(({ message }) => message.includes("No remote pi-sync history")),
+          JSON.stringify(notices),
         );
         assert.ok(requests.length > 0);
-        for (const handler of extension.handlers.get("session_shutdown") ?? [])
-          await handler({ type: "session_shutdown", reason: "quit" }, rpc.ctx);
       }
-      assert.equal(await readFile(join(agentDir, "pi-sync.json"), "utf8"), bytes);
-      assert.equal(
-        requests.some((method) => method !== "GET"),
-        false,
-        JSON.stringify(requests),
-      );
+      assert.equal(await readFile(settingsPath, "utf8"), bytes);
+      if (action !== "apply" || direction === "pull") {
+        assert.deepEqual(server.resources, before);
+        assert.ok(
+          requests.every(({ method }) => method === "GET" || method === "PROPFIND"),
+          JSON.stringify(requests),
+        );
+      }
     };
   });
 
-  test("preserves flat navigation, cancellation, and read-only state", async () => {
+  test("preserves flat navigation and requires no second action for a manager transfer", async () => {
     await run();
   });
 });

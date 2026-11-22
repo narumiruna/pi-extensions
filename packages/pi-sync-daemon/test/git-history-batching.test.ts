@@ -7,7 +7,7 @@ import { beforeEach, test, vi } from "vitest";
 import { GitSyncBackend } from "../src/engine/backends/git/git-backend.js";
 import { runGit } from "../src/engine/backends/git/git-runner.js";
 import { GIT_MANIFEST_VERSION, MAX_GIT_MANIFEST_BYTES } from "../src/engine/backends/git/git-storage.js";
-import type { RemoteHistoryEntry } from "../src/engine/backends/sync-backend.js";
+import { expectedRemoteHead, type RemoteHistoryEntry } from "../src/engine/backends/sync-backend.js";
 
 vi.mock(import("../src/engine/backends/git/git-runner.js"), async (importOriginal) => {
   const original = await importOriginal();
@@ -113,6 +113,27 @@ async function withHistory(
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test("a verified Push retains the actual previous Git publication as the first parent History entry", () =>
+  withHistory(0, {}, async (backend) => {
+    const old = {
+      version: 3,
+      id: "old",
+      createdAt: "2026-01-01T00:00:00Z",
+      profile: "test",
+      machine: "fixture",
+      files: [],
+    };
+    const { head } = await backend.publishSnapshot(old, { kind: "missing" });
+    const previous = await backend.listHistory();
+    const next = await backend.publishSnapshot({ ...old, id: "new" }, expectedRemoteHead(head), {
+      preservePreviousHead: true,
+    });
+    const history = await backend.listHistory();
+    assert.deepEqual(history.slice(0, -1), previous);
+    assert.equal(history.at(-1)?.snapshotRef, next.head.snapshotRef);
+    assert.deepEqual(await backend.readSnapshot(head.snapshotRef), old);
+  }));
 
 function validationCalls() {
   return recordedGit.mock.calls.filter(([args]) => ["cat-file", "ls-tree", "show"].includes(args[0] ?? ""));

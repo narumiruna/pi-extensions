@@ -21,6 +21,7 @@ import {
   type SyncBackend,
   SyncBackendConflictError,
   SyncBackendPublicationOutcomeUnknownError,
+  verifyPreviousHeadInHistory,
 } from "../sync-backend.js";
 import { S3Client, S3HttpError, S3ObjectAlreadyExistsError } from "./s3-client.js";
 import { requireS3Etag, verifyS3Conditions } from "./s3-conditions.js";
@@ -127,22 +128,29 @@ export class S3SyncBackend implements SyncBackend {
     }
     const currentObject = await cancellableClient.getJson<LatestPointer>(latestKey(this.config));
     throwIfAborted(options.signal);
-    let current: RemoteHead | undefined;
-    if (!currentObject.missing) {
-      const currentPointer = requirePointer(
-        currentObject.value,
-        "Remote latest pointer is malformed.",
-        this.config.destination.namespace,
-      );
-      this.registerChecksum(currentPointer.snapshot, currentPointer.sha256);
-      current = remoteHead(currentPointer, this.identity, currentObject.etag);
-    }
+    const currentPointer = currentObject.missing
+      ? undefined
+      : requirePointer(currentObject.value, "Remote latest pointer is malformed.", this.config.destination.namespace);
+    if (currentPointer) this.registerChecksum(currentPointer.snapshot, currentPointer.sha256);
+    const current = currentPointer && remoteHead(currentPointer, this.identity, currentObject.etag);
     if (!matchesExpected(current, expected)) {
       throw new SyncBackendConflictError("Remote changed while pushing. Run /sync pull first, then retry.", {
         currentHead: current,
       });
     }
     const condition = currentObject.missing ? { ifAbsent: true } : { ifMatch: requireS3Etag(currentObject.etag) };
+    if (options.preservePreviousHead && current && currentPointer) {
+      try {
+        await this.updateHistory(cancellableClient, currentPointer, true);
+        await verifyPreviousHeadInHistory(this, current, options.signal);
+      } catch (error) {
+        throwIfAborted(options.signal);
+        throw new Error(
+          `Cannot verify the previous remote snapshot ${current.snapshotId} in History; remote head was not updated.`,
+          { cause: error },
+        );
+      }
+    }
     if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
     options.onCommit?.();
@@ -292,15 +300,15 @@ export class S3SyncBackend implements SyncBackend {
     }
   }
 
-  private async updateHistory(client: S3Client, pointer: LatestPointer) {
+  private async updateHistory(client: S3Client, pointer: LatestPointer, keepRecent = false) {
     const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(historyKey(this.config));
     const snapshots = object.missing ? [] : requireHistory(object.value, this.config.destination.namespace);
     const existing = snapshots.find((snapshot) => snapshot.snapshot === pointer.snapshot);
     if (existing) {
       if (!samePointer(existing, pointer)) throw new Error("Remote history rebound an immutable snapshot reference.");
-      return;
+      if (!keepRecent || snapshots.at(-1) === existing) return;
     }
-    const next = [...snapshots, pointer].slice(-100);
+    const next = [...snapshots.filter((snapshot) => snapshot !== existing), pointer].slice(-100);
     const condition = object.missing ? { ifAbsent: true } : { ifMatch: requireS3Etag(object.etag) };
     await client.putJson(historyKey(this.config), { version: VERSION, snapshots: next }, condition);
   }

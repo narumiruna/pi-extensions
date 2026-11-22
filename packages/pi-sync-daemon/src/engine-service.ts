@@ -265,6 +265,10 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           ),
         );
       }
+      if (operation === "push.foreground" || operation === "pull.foreground") {
+        const direction = operation === "push.foreground" ? "push" : "pull";
+        return runForegroundDirectional(host, execution, ctx, direction, payload);
+      }
       const supported = [
         "status",
         "diff",
@@ -465,9 +469,87 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
       lifetime: () => (host.cleanupRequired() ? Promise.resolve("pause" as const) : monitor.lifetime()),
       quiesce: monitor.pause,
       failure: monitor.blockAutomatic,
+      foregroundRecoveryAllowed: monitor.foregroundRecoveryAllowed,
     },
   };
 }
+async function runForegroundDirectional(
+  host: ReturnType<typeof installServiceHost>,
+  execution: Execution,
+  ctx: EngineContext,
+  direction: "push" | "pull",
+  payload: unknown,
+) {
+  const fingerprintPattern = /^[a-f0-9]{64}$/u;
+  if (
+    !execution.clientId ||
+    !ctx.hasUI ||
+    !["tui", "rpc"].includes(ctx.mode) ||
+    !record(payload) ||
+    Object.keys(payload).some((key) => !["setup", "fingerprint", "retryCheckpoint"].includes(key)) ||
+    typeof payload.setup !== "string" ||
+    !payload.setup ||
+    payload.setup.length > 512 ||
+    typeof payload.fingerprint !== "string" ||
+    !fingerprintPattern.test(payload.fingerprint) ||
+    (payload.retryCheckpoint !== undefined &&
+      (typeof payload.retryCheckpoint !== "string" || !fingerprintPattern.test(payload.retryCheckpoint)))
+  ) {
+    throw new Error("Invalid foreground directional request.");
+  }
+  const { setup, fingerprint, retryCheckpoint } = payload;
+  const { withStateDirectoryAccess } = await import("./engine/state/state-directory.js");
+  const { withLock } = await import("./engine/state/lock.js");
+  const { loadConfigForCheck, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
+  const operations = await import("./engine/sync/sync-operations.js");
+  const validate = (config: Awaited<ReturnType<typeof loadConfigForCheck>>) => {
+    execution.validate();
+    if (config.setupName !== setup || syncCheckConfigFingerprint(config) !== fingerprint)
+      throw new Error(
+        "The sync setup changed after the action was selected. No transfer was started for the changed setup.",
+      );
+  };
+  execution.validate();
+  return withStateDirectoryAccess(async () => {
+    validate(await loadConfigForCheck(undefined, execution.signal));
+    if (retryCheckpoint === undefined) {
+      await requireHandover(execution);
+      validate(await loadConfigForCheck(undefined, execution.signal));
+      await initialize(ctx, execution, false);
+    } else {
+      if (!readConsent(execution.root))
+        throw new Error("Daemon handover is no longer valid; the transfer was not replayed.");
+      await requireStartupRecoveryCleared(execution);
+    }
+    return host.runForeground(execution, () =>
+      withLock(direction, async () => {
+        validate(await loadConfigForCheck(undefined, execution.signal));
+        let message: string | undefined;
+        const outcome = await operations[direction](ctx, {
+          ...optionsFrom({ setup, args: [] }, execution, false),
+          directionalAction: {
+            validate,
+            async checkpoint(current) {
+              execution.validate();
+              if (retryCheckpoint !== undefined && retryCheckpoint !== current)
+                throw new Error(
+                  "The transfer source or destination changed during recovery. The transfer was not replayed.",
+                );
+              if ((await execution.request("directional-checkpoint", { fingerprint: current })) !== true)
+                throw new Error("The original transfer could not be retained for recovery. No transfer was started.");
+              execution.validate();
+            },
+            notifySuccess(value) {
+              message = value;
+            },
+          },
+        });
+        return { outcome, ...(message === undefined ? {} : { message }) };
+      }),
+    );
+  });
+}
+
 async function withJobTimings<T>(
   ctx: EngineContext,
   execution: Execution,

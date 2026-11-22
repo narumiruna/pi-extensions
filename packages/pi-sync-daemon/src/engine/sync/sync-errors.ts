@@ -1,4 +1,32 @@
+import type { RemoteHead } from "../backends/sync-backend.js";
 import type { SyncDecision } from "./sync-decision.js";
+
+export class PublicationStatePersistenceError extends Error {
+  readonly head: RemoteHead;
+  readonly backupPath?: string;
+
+  constructor(head: RemoteHead, cause: unknown, backupPath?: string) {
+    super(
+      `Remote publication ${head.snapshotId} is active, but local sync state could not be saved${backupPath ? `; local backup: ${backupPath}` : ""}: ${errorMessage(cause)}`,
+      { cause },
+    );
+    this.name = "PublicationStatePersistenceError";
+    this.head = head;
+    this.backupPath = backupPath;
+  }
+}
+
+export class RollbackPublicationError extends Error {
+  readonly backupPath: string;
+
+  constructor(backupPath: string, cause: unknown) {
+    super(`Rollback applied locally with backup ${backupPath}, but remote publication failed: ${errorMessage(cause)}`, {
+      cause,
+    });
+    this.name = "RollbackPublicationError";
+    this.backupPath = backupPath;
+  }
+}
 
 export class SetupPullRequiresUiError extends Error {}
 

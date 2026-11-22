@@ -67,6 +67,29 @@ export async function showSyncManager(
   interface State {
     manager: Awaited<ReturnType<typeof describeManagerState>>;
   }
+  const directionalAction = async (direction: "push" | "pull", state: State, signal: AbortSignal) => {
+    const review = state.manager.configReview;
+    if (!review) return { kind: "stay" as const };
+    const result = await runCancellableOperation(
+      ctx,
+      direction === "push" ? "Pushing to remote…" : "Pulling from remote…",
+      direction,
+      runRoute,
+      {
+        commitAware: true,
+        cancelledMessage: direction === "push" ? "Push cancellation requested." : "Pull cancellation requested.",
+        target: review.setupName,
+        directionalFingerprint: review.fingerprint,
+        signal,
+        isCurrent,
+      },
+    );
+    const done =
+      result.kind === "closed" ||
+      (result.kind === "completed" && result.outcome === "applied") ||
+      (result.kind === "failed" && options.needsDaemonRecovery?.());
+    return done ? { kind: "close" as const } : { kind: "stay" as const };
+  };
   const menuItems = (manager: State["manager"]) => {
     const attentionItems = attentionMainMenuItems(manager);
     const managerItems = manager.actions.map((label) => blockedSyncMenuItem(label, manager) ?? syncMainMenuItem(label));
@@ -195,26 +218,8 @@ export async function showSyncManager(
         const result = await showSyncSettings(ctx, runRoute, signal, review?.setupName);
         return { kind: result === "exit" ? "close" : "stay" };
       },
-      pull: async ({ state }) => {
-        const result = await runCancellableOperation(ctx, "Checking remote changes…", "pull", runRoute, {
-          commitAware: true,
-          cancelledMessage: "Pull check cancelled; no local files were changed.",
-          target: state.manager.configReview?.setupName,
-          signal: sessionSignal,
-        });
-        const disposition = await dispatchManagerResult(ctx, result, "pull", runRoute, sessionSignal);
-        return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
-      },
-      push: async ({ state }) => {
-        const result = await runCancellableOperation(ctx, "Preparing push preview…", "push", runRoute, {
-          commitAware: true,
-          cancelledMessage: "Push preparation cancelled; no remote files were changed.",
-          target: state.manager.configReview?.setupName,
-          signal: sessionSignal,
-        });
-        const disposition = await dispatchManagerResult(ctx, result, "push", runRoute, sessionSignal);
-        return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
-      },
+      pull: ({ state, signal }) => directionalAction("pull", state, signal),
+      push: ({ state, signal }) => directionalAction("push", state, signal),
       setups: async () => {
         const result = await showSyncSetupManager(ctx, runRoute, sessionSignal);
         return result === "exit" ? { kind: "close" } : { kind: "stay" };
@@ -456,8 +461,8 @@ function syncMainMenuItem(
   const actions = {
     "Sync now": "sync",
     "Retry refused model result…": "retry-refusal",
-    "Pull from remote…": "pull",
-    "Push to remote…": "push",
+    "Pull from remote": "pull",
+    "Push to remote": "push",
     "View differences": "diff",
     "Check remote status": "status",
     "Switch sync setup": "switch",
@@ -483,8 +488,8 @@ function syncMainMenuItem(
     description: {
       sync: "Merge changes on both sides.",
       "retry-refusal": "Retry model; may incur costs.",
-      pull: "Remote → this device.",
-      push: "This device → remote snapshot.",
+      pull: "Remote → this device; replaces conflicting local files.",
+      push: "This device → remote; replaces conflicting remote files.",
       diff: "Inspect changes; no transfer.",
       status: "Check remote; no transfer.",
       settings: "Change sync settings.",

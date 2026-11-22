@@ -6,7 +6,7 @@ import { localConfigTemplate, readLocalConfigObject } from "../settings/settings
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
-import { isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
+import { errorMessage, isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
 import type { SyncLoaders } from "../sync/sync-loaders.js";
 import { RemoteSelectionMismatchError, syncSessionsSelected } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
@@ -74,12 +74,18 @@ export async function executeCommand(
   setup?: string,
   onDialog?: (active: boolean) => void,
   retryRefusal = false,
+  directionalFingerprint?: string,
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
   try {
     const command = await resolveSyncCommand(rawArgs, ctx);
     if (signal?.aborted || !command) return { kind: "completed" };
     const { subcommand, rest } = command;
+    if (directionalFingerprint !== undefined) {
+      if ((subcommand !== "push" && subcommand !== "pull") || rest.length || !setup || retryRefusal)
+        throw new Error("Invalid directional action.");
+      return await runDirectionalAction(ctx, subcommand, setup, directionalFingerprint, signal, onCommit);
+    }
     const options = parseOptions(rest);
     if (setup !== undefined) options.setup = setup;
     if (signal) options.signal = signal;
@@ -219,6 +225,10 @@ export async function executeCommand(
   } catch (error) {
     if (signal?.aborted) return { kind: "failed" };
     setSyncStatus(ctx, undefined);
+    if (directionalFingerprint !== undefined) {
+      ctx.ui.notify(safeTerminalText(errorMessage(error)).slice(0, 1200), "error");
+      return { kind: "failed" };
+    }
     if (error instanceof SetupPullRequiresUiError) throw error;
     if (error instanceof RemoteSelectionMismatchError) {
       return { kind: "remote-selection-required", decision: error.decision };
@@ -229,6 +239,31 @@ export async function executeCommand(
     ctx.ui.notify(syncErrorGuidance(error), "error");
     return { kind: "failed" };
   }
+}
+
+async function runDirectionalAction(
+  ctx: ExtensionCommandContext,
+  direction: "push" | "pull",
+  setup: string,
+  fingerprint: string,
+  signal: AbortSignal | undefined,
+  onCommit: (() => void) | undefined,
+): Promise<RunRouteResult> {
+  const client = piDaemonClient(ctx);
+  const result = (await client.run(`${direction}.foreground`, { setup, fingerprint }, signal, ctx, onCommit)) as
+    | { outcome?: "applied" | "cancelled"; message?: string }
+    | undefined;
+  client.validate();
+  throwIfAborted(signal);
+  if (
+    !result ||
+    (result.outcome !== "applied" && result.outcome !== "cancelled") ||
+    (result.message !== undefined && typeof result.message !== "string")
+  ) {
+    throw new Error("Invalid result from directional synchronization.");
+  }
+  if (result.message) ctx.ui.notify(safeTerminalText(result.message), "info");
+  return { kind: "completed", outcome: result.outcome };
 }
 
 async function migrateStateDirectory(ctx: ExtensionCommandContext, options: CommandOptions) {

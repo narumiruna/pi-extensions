@@ -22,6 +22,11 @@ export interface CommandOptions {
   background?: { validate(config?: AnySyncConfig): void; reserve?(key: string, signal?: AbortSignal): Promise<void> };
   /** Manager-only, separately confirmed retry; never parsed from command arguments. */
   agentRetryRefusal?: boolean;
+  directionalAction?: {
+    validate(config: AnySyncConfig): void;
+    checkpoint?(fingerprint: string): Promise<void>;
+    notifySuccess?(message: string): void;
+  };
   args: string[];
 }
 

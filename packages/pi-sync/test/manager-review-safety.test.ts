@@ -6,7 +6,7 @@ import { syncBoth } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { executeCommand } from "../src/commands/command-execution.js";
-import { loadConfig } from "../src/settings/config.js";
+import { loadConfig, syncCheckConfigFingerprint } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
 import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
@@ -20,8 +20,8 @@ initTheme("dark", false);
 
 const setupActions = [
   ["Sync now", "sync"],
-  ["Pull from remote…", "pull"],
-  ["Push to remote…", "push"],
+  ["Pull from remote", "pull"],
+  ["Push to remote", "push"],
   ["View differences", "diff"],
   ["Check remote status", "status"],
   ["History", "history"],
@@ -113,12 +113,20 @@ for (const [label, route] of setupActions) {
       await exposeAction(label);
       const choices: Array<string | undefined> = [label, undefined];
       const context = createMockContext({ mode: "rpc", select: async () => choices.shift() });
-      const calls: Array<{ route: string; setup?: string; retry?: boolean }> = [];
-      await showSyncManager(context.ctx, async (actualRoute, _signal, _commit, setup, _dialog, retry) => {
-        calls.push({ route: actualRoute, setup, ...(retry ? { retry } : {}) });
+      const fingerprint = syncCheckConfigFingerprint(await loadConfig("home"));
+      const calls: Array<{ route: string; setup?: string; retry?: boolean; fingerprint?: string }> = [];
+      await showSyncManager(context.ctx, async (actualRoute, _signal, _commit, setup, _dialog, retry, fingerprint) => {
+        calls.push({ route: actualRoute, setup, retry, fingerprint });
         return { kind: "completed", outcome: "cancelled" };
       });
-      assert.deepEqual(calls, [{ route, setup: "home", ...(label.startsWith("Retry") ? { retry: true } : {}) }]);
+      assert.deepEqual(calls, [
+        {
+          route,
+          setup: "home",
+          retry: label.startsWith("Retry") ? true : undefined,
+          fingerprint: route === "push" || route === "pull" ? fingerprint : undefined,
+        },
+      ]);
     });
   });
 }
