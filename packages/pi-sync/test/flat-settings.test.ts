@@ -249,9 +249,9 @@ test("Settings opens all original rows in order and one Back returns directly to
     await showSyncManager(context.ctx, async () => undefined);
     assert.equal(choices.length, 0);
     assert.equal(frames.length, 3);
-    assert.ok(frames[0]?.split("\n").includes("Manage sync"));
+    assert.ok(frames[0]?.split("\n").includes("Manage sync · home"));
     assert.ok(frames[1]?.split("\n").includes("Pi Sync Settings"));
-    assert.ok(frames[2]?.split("\n").includes("Manage sync"));
+    assert.ok(frames[2]?.split("\n").includes("Manage sync · home"));
     assert.deepEqual(rows, [settingLabels]);
     assert.doesNotMatch(`${rows.flat().join("\n")}\n${frames[1] ?? ""}`, /experimental|agent[ -]mode/i);
     assert.doesNotMatch(

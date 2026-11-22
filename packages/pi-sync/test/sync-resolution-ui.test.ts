@@ -618,7 +618,7 @@ test("attention for a non-current setup stays reviewable without blocking curren
 
     await tui.waitForOpen();
     const frame = tui.render().join("\n");
-    assert.match(frame, /Current sync setup: home/u);
+    assert.match(frame, /Manage sync · home/u);
     assert.match(frame, /Review needed for setup work/u);
     assert.match(frame, /Review synced content \(recommended\)/u);
     assert.match(frame, /Sync…/u);

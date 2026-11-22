@@ -313,11 +313,14 @@ export function backendStorageDescription(config: AnySyncConfig) {
         config.backend.profile.kind === "r2" || isCloudflareR2Endpoint(config.backend.profile.endpoint)
           ? "Cloudflare R2"
           : "S3-compatible";
-      return `${type} · ${connection} · ${safeTerminalText(config.backend.destination.bucket)}`;
+      const { bucket, prefix } = config.backend.destination;
+      return `${type} · ${connection} · ${safeTerminalText(bucket)} · ${safeTerminalText(prefix)}`;
     }
     case "webdav":
       return `WebDAV · ${connection} · ${safeTerminalText(config.backend.destination.path)}`;
-    case "git":
-      return `Git · ${connection} · ${safeTerminalText(config.backend.destination.branch)}`;
+    case "git": {
+      const { branch, directory } = config.backend.destination;
+      return `Git · ${connection} · ${safeTerminalText(branch)} · ${safeTerminalText(directory)}`;
+    }
   }
 }

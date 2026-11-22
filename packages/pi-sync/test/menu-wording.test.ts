@@ -26,7 +26,7 @@ function settings() {
         sync: { include: ["settings.json", "AGENTS.md"], automatic: true },
       },
       work: {
-        storage: { connection: "git", branch: "pi-sync/work", path: "pi-sync/work" },
+        storage: { connection: "git", branch: "snapshots", path: "pi-sync/work" },
         sync: { include: ["settings.json"], automatic: false },
       },
     },
@@ -54,14 +54,39 @@ test("main menu uses only storage connection and sync setup resource wording", a
     });
     await showSyncManager(ctx, async () => undefined);
     const rendered = titles.join("\n");
-    assert.match(rendered, /Manage sync/u);
-    assert.match(rendered, /Current sync setup: home/u);
-    assert.match(rendered, /Storage: Cloudflare R2 · r2 · home-bucket/u);
+    assert.match(rendered, /^Manage sync · home$/mu);
+    assert.match(rendered, /Storage: Cloudflare R2 · r2 · home-bucket · pi-sync\/home/u);
+    assert.doesNotMatch(rendered, /Current sync setup:|\baccess\b|\bsecret\b/u);
     assert.match(rendered, /Remote status: Not checked/u);
     assert.doesNotMatch(rendered, /CURRENT STATE|Scheduler|Accounting/u);
     assert.doesNotMatch(rendered, /storage profile|sync target|saved connection|remote destination/iu);
   });
 });
+
+for (const [setup, path, storage] of [
+  ["home", "./", "Cloudflare R2 · r2 · home-bucket · ./"],
+  ["work", "pi-sync/work", "Git · git · snapshots · pi-sync/work"],
+  ["work", "./", "Git · git · snapshots · ./"],
+] as const) {
+  test(`RPC main menu shows the ${setup} setup and its storage location at ${path}`, async () => {
+    const value = settings();
+    value.activeSyncSetup = setup;
+    value.syncSetups[setup].storage.path = path;
+    await withSettings(async () => {
+      let frame = "";
+      const { ctx } = createMockContext({
+        mode: "rpc",
+        select: async (title: string) => {
+          frame = title;
+          return undefined;
+        },
+      });
+      await showSyncManager(ctx, async () => undefined);
+      assert.ok(frame.startsWith(`Manage sync\nCurrent sync setup: ${setup}\nStorage: ${storage}\n`), frame);
+      assert.doesNotMatch(frame, /git@github|\baccess\b|\bsecret\b/u);
+    }, value);
+  });
+}
 
 test("Sync setups list and detail expose current marker, Make current, edit, remove, and Back", async () => {
   await withSettings(async () => {
