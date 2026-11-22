@@ -253,6 +253,33 @@ test.each([
   }
 });
 
+test("pane visibility requires a mounted layout and an exact, displayable completed plan", async () => {
+  const f = setup();
+  try {
+    const plan = "# Current plan";
+    const shows = () => f.pane.showsCompletedPlan(f.ctx.sessionManager, plan);
+    f.pane.update(f.ctx, "right", { kind: "draft", text: plan });
+    await Promise.resolve();
+    assert.equal(shows(), false);
+    f.pane.update(f.ctx, "left", plan);
+    assert.equal(shows(), false, "mount is still pending");
+    await Promise.resolve();
+    assert.equal(shows(), true);
+    const other: ExtensionContext = createMockContext({ mode: "tui" }).ctx;
+    assert.equal(f.pane.showsCompletedPlan(other.sessionManager, plan), false);
+    f.resize(100, 11);
+    assert.equal(shows(), false, "the check uses the new size before repainting");
+    f.resize(100, 12);
+    assert.equal(shows(), true);
+    f.pane.update(f.ctx, "left", "\u202e");
+    assert.equal(f.pane.showsCompletedPlan(f.ctx.sessionManager, "\u202e"), false);
+    f.pane.clear();
+    assert.equal(shows(), false);
+  } finally {
+    f.stop();
+  }
+});
+
 test("pane sanitizes Markdown without changing the passed plan and invalidates themed rows", async () => {
   const f = setup();
   try {

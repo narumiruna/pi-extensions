@@ -212,6 +212,7 @@ If an extension overrides a built-in tool with the same name, Pi exposes the eff
 A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions.
 In an eligible workflow, the agent maintains the Markdown draft with Pi's native `write`, `edit`, and `read`, then calls `plan_mode_complete({})` alone. The tool validates the file and stores its full contents as a session snapshot. `/plan show`, save, export, and implementation use that snapshot, not the live draft. See [managed Markdown drafts](./docs/command-workflows.md#managed-markdown-drafts) for eligibility, storage, and limits.
 Read-only workflows still call `plan_mode_complete({ plan })` with the complete Markdown. Neither workflow accepts empty or whitespace-only plans or plans longer than 50,000 JavaScript characters.
+When the fullscreen Plan pane shows the completed plan, the live tool result shows a short confirmation instead of repeating the Markdown. If the pane is hidden or unavailable, the full result appears in the conversation. `/plan show`, exports, and non-interactive tool results still include the full plan.
 
 `plan_mode_complete` uses Pi's `terminate: true` hint.
 Managed-draft workflows reject nested or batched completion. In read-only workflows, termination is best effort for parallel batches, so the prompt still requires the call to be standalone and last.

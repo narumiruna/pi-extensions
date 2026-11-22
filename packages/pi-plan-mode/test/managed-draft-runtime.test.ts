@@ -11,13 +11,19 @@ import {
 import {
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionContext,
+  initTheme,
   ModelRegistry,
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { DRAFT_CONTRACT_TYPE } from "../src/draft-contract.js";
+import { createPlanPaneHost } from "./plan-pane-support.js";
+import { createMockContext } from "./support.js";
 
 const fauxSpecifier = "@earendil-works/pi-ai/providers/faux";
 
@@ -38,11 +44,14 @@ function providerInput(context: TranscriptContext) {
   };
 }
 
-test("real Pi admits only the native draft path, snapshots it, and preserves the provider prefix", async () => {
+const modes = ["print", "tui"] as const;
+
+test.each(modes)("real Pi in %s snapshots the draft and preserves the provider prefix", async (mode) => {
   const root = await mkdtemp(join(tmpdir(), "pi-managed-draft-runtime-"));
   const agentDir = join(root, "agent");
   const previous = process.env.PI_CODING_AGENT_DIR;
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+  let terminal: ReturnType<typeof createPlanPaneHost> | undefined;
   try {
     await mkdir(agentDir);
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -124,11 +133,34 @@ test("real Pi admits only the native draft path, snapshots it, and preserves the
       model,
       settingsManager,
       resourceLoader: loader,
-      sessionManager: SessionManager.inMemory(root),
+      sessionManager:
+        mode === "tui" ? SessionManager.create(root, join(root, "sessions")) : SessionManager.inMemory(root),
     });
     session = created.session;
     const errors: unknown[] = [];
-    await session.bindExtensions({ mode: "print", onError: (error) => errors.push(error) });
+    if (mode === "tui") {
+      initTheme("dark");
+      const host = createPlanPaneHost();
+      terminal = host;
+      const ctx: ExtensionContext = createMockContext({ mode }).ctx;
+      ctx.ui.setWidget = host.setWidget;
+      await session.bindExtensions({ mode, uiContext: ctx.ui, onError: (error) => errors.push(error) });
+      const tool = session.getToolDefinition("plan_mode_complete");
+      assert.ok(tool);
+      let row: ToolExecutionComponent | undefined;
+      session.subscribe((event) => {
+        if (!("toolCallId" in event) || event.toolCallId !== "complete") return;
+        if (event.type === "tool_execution_start") {
+          row = new ToolExecutionComponent(tool.name, event.toolCallId, event.args, {}, tool, host.host, root);
+          row.markExecutionStarted();
+          host.appendToTranscript(row);
+        } else if (event.type === "tool_execution_end") {
+          row?.updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs });
+        }
+      });
+    } else {
+      await session.bindExtensions({ mode, onError: (error) => errors.push(error) });
+    }
     const before = session.getActiveToolNames();
     const native = new Map(session.getAllTools().map((tool) => [tool.name, tool.sourceInfo]));
     for (const name of ["read", "write", "edit"]) assert.equal(native.get(name)?.path, `builtin:${name}`);
@@ -159,6 +191,24 @@ test("real Pi admits only the native draft path, snapshots it, and preserves the
     const completed = messages().find((message) => message.toolCallId === "complete");
     assert.equal(completed?.isError, false);
     assert.deepEqual(completed?.details, { version: 1, source: "plan_mode_complete", plan: draftTwo });
+    assert.deepEqual(completed?.content, [{ type: "text", text: `**Proposed Plan**\n\n${draftTwo}` }]);
+    if (terminal) {
+      const frame = terminal.render().map(stripTerminalSequences).join("\n");
+      assert.match(frame, /Plan complete\. See the Plan pane\./u);
+      assert.equal(frame.match(/定稿/gu)?.length, 1);
+      const html = await readFile(await session.exportToHtml(join(root, "session.html")), "utf8");
+      const base64 = /<script id="session-data" type="application\/json">([^<]+)<\/script>/u.exec(html)?.[1];
+      assert.ok(base64);
+      const data: { renderedTools: Record<string, { resultHtmlCollapsed?: string; resultHtmlExpanded: string }> } =
+        JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+      const rendered = data.renderedTools.complete;
+      for (const result of [rendered.resultHtmlExpanded, rendered.resultHtmlCollapsed ?? rendered.resultHtmlExpanded]) {
+        assert.match(result, /定稿/u);
+        assert.doesNotMatch(result, /See the Plan pane/u);
+      }
+      const jsonl = await readFile(session.exportToJsonl(join(root, "session.jsonl")), "utf8");
+      assert.ok(jsonl.includes(JSON.stringify(draftTwo)));
+    }
     assert.equal(faux.state.callCount, 5);
     assert.deepEqual(session.getActiveToolNames(), before);
     assert.equal(requests.length, 4);
@@ -181,6 +231,7 @@ test("real Pi admits only the native draft path, snapshots it, and preserves the
     assert.deepEqual(errors, []);
   } finally {
     await session?.dispose();
+    terminal?.stop();
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
     await rm(root, { recursive: true, force: true });

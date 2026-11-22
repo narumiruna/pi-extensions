@@ -10,13 +10,24 @@ const DIVIDER_COLUMNS = 1;
 
 export type PlanPaneSide = "left" | "right";
 
+type Viewport = { width: number; height: number };
+
+export interface MountedPlanLayout {
+  isVisible(): boolean;
+  restore(): void;
+}
+
+function canShowPane({ width, height }: Viewport) {
+  return width >= MIN_COLUMNS && height >= MIN_ROWS;
+}
+
 export function mountFullscreenPlanLayout(
   tui: TUI,
   rendererChildren: readonly Component[],
   side: PlanPaneSide,
   pane: Component,
   theme: Theme,
-): (() => void) | undefined {
+): MountedPlanLayout | undefined {
   if (
     tui.mode !== "fullscreen" ||
     tui.children !== rendererChildren ||
@@ -30,14 +41,9 @@ export function mountFullscreenPlanLayout(
   if (!isNativeFullscreenRoot(original, rendererChildren)) return;
 
   let active = true;
-  const wrapper = createPlanSplitLayout(
-    original,
-    pane,
-    side,
-    tui,
-    theme,
-    (): boolean => active && tui.mode === "fullscreen" && tui.children === rendererChildren && readRoot() === wrapper,
-  );
+  const ownsLayout = (): boolean =>
+    active && tui.mode === "fullscreen" && tui.children === rendererChildren && readRoot() === wrapper;
+  const wrapper = createPlanSplitLayout(original, pane, side, tui, theme, ownsLayout);
   const restore = () => {
     active = false;
     if (tui.mode === "fullscreen" && readRoot() === wrapper) {
@@ -46,7 +52,12 @@ export function mountFullscreenPlanLayout(
   };
   try {
     tui.setLayoutRoot(wrapper);
-    if (readRoot() === wrapper) return restore;
+    if (readRoot() === wrapper) {
+      return {
+        isVisible: () => ownsLayout() && canShowPane({ width: tui.terminal.columns, height: tui.terminal.rows }),
+        restore,
+      };
+    }
     active = false;
     return;
   } catch {
@@ -93,9 +104,8 @@ function createPlanSplitLayout(
   theme: Theme,
   ownsLayout: () => boolean,
 ) {
-  let viewport = { width: 0, height: 0 };
+  let viewport: Viewport = { width: 0, height: 0 };
   let preferredWidth: number | undefined;
-  const visible = ({ width, height }: typeof viewport) => width >= MIN_COLUMNS && height >= MIN_ROWS;
   const clampWidth = (width: number, requested: number) =>
     Math.min(width - DIVIDER_COLUMNS - MIN_CONVERSATION_COLUMNS, Math.max(MIN_PANE_COLUMNS, requested));
   const paneWidth = (width: number) => clampWidth(width, preferredWidth ?? Math.floor((width - DIVIDER_COLUMNS) / 3));
@@ -103,7 +113,7 @@ function createPlanSplitLayout(
     start === viewport &&
     start.width === tui.terminal.columns &&
     start.height === tui.terminal.rows &&
-    visible(start) &&
+    canShowPane(start) &&
     ownsLayout();
   const divider: Component = {
     render: (width) =>
@@ -154,7 +164,7 @@ function createPlanSplitLayout(
       const updateViewport = ({ width, height }: typeof viewport) => {
         const rows = Math.min(height, tui.terminal.rows);
         if (viewport.width !== width || viewport.height !== rows) viewport = { width, height: rows };
-        return visible(viewport);
+        return canShowPane(viewport);
       };
       paneSlot.visible = (size) => {
         if (!updateViewport(size)) return false;
