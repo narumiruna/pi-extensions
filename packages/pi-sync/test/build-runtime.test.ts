@@ -442,5 +442,23 @@ function assertSourceBoundaries(metadata: BuildMetadata) {
     active.delete(file);
     visited.add(file);
   }
+  const commandPath = "src/commands/command-handler.ts";
+  const foreground = new Set<string>();
+  function visitForeground(file: string) {
+    if (foreground.has(file)) return;
+    foreground.add(file);
+    for (const imported of inputs?.[file]?.imports ?? []) {
+      if (imported.kind === "dynamic-import") continue;
+      assert.equal(
+        imported.external === true &&
+          (imported.path === "@narumitw/pi-tui-kit" || imported.path.startsWith("@narumitw/pi-tui-kit/")),
+        false,
+        `Loading ${commandPath} must not load Kit through ${file}`,
+      );
+      if (!imported.external) visitForeground(imported.path);
+    }
+  }
   for (const file of Object.keys(inputs)) visit(file);
+  assert.ok(inputs[commandPath]);
+  visitForeground(commandPath);
 }

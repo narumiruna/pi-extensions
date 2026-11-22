@@ -168,6 +168,27 @@ test("absent prototype-like detector names stay absent and do not block child co
   expect(result.stdout).toBe("ok");
 });
 
+test("a layout without session modules does not read session data on direct redraws", async () => {
+  const h = await setup("format = '$time'\n");
+  const context = vi.spyOn(h.context.ctx as ExtensionContext, "getContextUsage");
+  h.footer.render(80);
+  h.footer.render(100);
+  expect(context).not.toHaveBeenCalled();
+  expect(h.entries).not.toHaveBeenCalled();
+  expect(h.branch).not.toHaveBeenCalled();
+});
+
+test("a visible context module reads the current context limit on each redraw", async () => {
+  const h = await setup("format = '$context'\n[context]\ndisabled = false\nformat = '$percentage/$window'\n");
+  const context = vi.spyOn(h.context.ctx as ExtensionContext, "getContextUsage");
+  context.mockReturnValueOnce({ percent: 80, tokens: 800, contextWindow: 1000 });
+  context.mockReturnValueOnce({ percent: 40, tokens: 800, contextWindow: 2000 });
+  expect(h.footer.render(80)).not.toEqual(h.footer.render(80));
+  expect(context).toHaveBeenCalledTimes(2);
+  expect(h.entries).not.toHaveBeenCalled();
+  expect(h.branch).not.toHaveBeenCalled();
+});
+
 test("explicit second formats update at the existing periodic boundary without history scans", async () => {
   const h = await setup("format = '$time'\n[time]\ntime_format = '%S'\n");
   await vi.advanceTimersByTimeAsync(30_000);

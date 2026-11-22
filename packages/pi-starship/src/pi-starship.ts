@@ -29,12 +29,13 @@ import {
   type WorkspaceRefreshInput,
   workspaceSnapshotEqual,
 } from "./runtime/workspace.js";
-import { latestTokensPerSecond, summarizeFooterUsage } from "./usage.js";
+import { createFooterHistoryReader, summarizeFooterUsage } from "./usage.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const GITHUB_PR_REFRESH_INTERVAL_MS = 60_000;
 const EVENT_DEBOUNCE_MS = 250;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const EMPTY_TOKEN_TOTALS = summarizeFooterUsage([]);
 
 type StarshipCommands = typeof import("./commands.js");
 let starshipCommandsPromise: Promise<StarshipCommands> | undefined;
@@ -305,16 +306,30 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
     }
 
     ctx.ui.setFooter((tui, theme, footerData) => {
+      const history = createFooterHistoryReader(ctx.sessionManager);
+      let cachedConfig: StarshipConfig | undefined;
+      let requirements: ReturnType<typeof reachableModuleRequirements>;
+      const snapshotForLayout = (config: StarshipConfig) => {
+        if (cachedConfig !== config) {
+          requirements = reachableModuleRequirements(config);
+          cachedConfig = config;
+        }
+        return runtimeSnapshot(ctx, footerData, runtime, history, requirements);
+      };
       runtime.requestRender = () => tui.requestRender();
       runtime.renderPreview = (preview, width) => {
-        const snapshot = runtimeSnapshot(ctx, footerData, runtime);
+        const snapshot = snapshotForLayout(preview.config);
         return wrapFormattedStatusline(
           renderStatusline(preview.config, snapshot, width, getCapabilities().trueColor, theme.colors).ansi,
           width,
         );
       };
       runtime.inspect = (current) =>
-        inspectStatuslineModules(current.config, runtimeSnapshot(ctx, footerData, runtime), runtime.footerWidth ?? 80);
+        inspectStatuslineModules(
+          current.config,
+          runtimeSnapshot(ctx, footerData, runtime, history),
+          runtime.footerWidth ?? 80,
+        );
       const unsubscribe = footerData.onBranchChange(() => {
         if (!isActiveTarget(target)) return;
         if (!collect) {
@@ -379,6 +394,9 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
       const dispose = () => {
         if (disposed) return;
         disposed = true;
+        history.clear();
+        cachedConfig = undefined;
+        lastRender = undefined;
         unsubscribe();
         clearInterval(timer);
         if (isActiveTarget(target)) {
@@ -401,10 +419,11 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
         dispose,
         invalidate() {},
         render(width: number): string[] {
+          if (disposed || !isActiveTarget(target)) return [];
           runtime.footerWidth = width;
           const current = previewLoaded ?? loaded;
           if (!current) return [];
-          const snapshot = runtimeSnapshot(ctx, footerData, runtime);
+          const snapshot = snapshotForLayout(current.config);
           const lines = wrapFormattedStatusline(
             renderStatusline(current.config, snapshot, width, getCapabilities().trueColor, theme.colors).ansi,
             width,
@@ -710,22 +729,31 @@ function runtimeSnapshot(
   ctx: ExtensionContext,
   footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "getExtensionStatuses">,
   runtime: RuntimeState,
+  history = createFooterHistoryReader(ctx.sessionManager),
+  requirements?: ReturnType<typeof reachableModuleRequirements>,
 ): StarshipRuntimeSnapshot {
-  const branch = ctx.sessionManager.getBranch();
+  const branch =
+    !requirements || requirements.has("turn") || requirements.has("tokens_per_second")
+      ? history.branch()
+      : { turnCount: 0, tokensPerSecond: undefined };
+  const tokenTotals =
+    !requirements || requirements.has("tokens") || requirements.has("cache") || requirements.has("cost")
+      ? history.totals()
+      : EMPTY_TOKEN_TOTALS;
   return {
     cwd: ctx.cwd,
     homeDir: homedir(),
     gitRoot: runtime.git?.root,
     model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
     thinkingLevel: runtime.thinkingLevel,
-    turnCount: branch.filter((entry) => entry.type === "message" && entry.message.role === "user").length,
+    turnCount: branch.turnCount,
     activeTools: runtime.activeTools,
     isStreaming: runtime.isStreaming,
     uiPrompt: runtime.uiPrompt,
     lastCompletedTool: runtime.lastCompletedTool,
-    contextUsage: ctx.getContextUsage() ?? undefined,
-    tokenTotals: summarizeFooterUsage(ctx.sessionManager.getEntries()),
-    tokensPerSecond: latestTokensPerSecond(branch),
+    contextUsage: !requirements || requirements.has("context") ? (ctx.getContextUsage() ?? undefined) : undefined,
+    tokenTotals,
+    tokensPerSecond: branch.tokensPerSecond,
     usingSubscription: isSubscriptionBacked(ctx),
     gitBranch: runtime.git?.branch?.name ?? footerData.getGitBranch(),
     gitBranchDetails: runtime.git?.branch,

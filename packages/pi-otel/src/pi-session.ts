@@ -311,7 +311,7 @@ export function createPiLangfuseSessionController(
       const recorder = activeRecorder();
       if (!recorder) return;
       lastSnapshot = contextSnapshot(ctx);
-      ensureActiveRun(recorder, ctx, startRootTrace);
+      ensureActiveRun(recorder, ctx, startRootTrace, lastSnapshot);
       recorder.beginTurn(event.turnIndex);
     });
 
@@ -520,13 +520,14 @@ function ensureActiveRun(
   recorder: TraceRecorder,
   ctx: ExtensionContext,
   startRootTrace: (start: (nextRequestId: string | undefined) => void) => void,
+  observedSnapshot?: ContextSnapshot,
 ): void {
   if (!recorder.hasActiveTrace()) {
     startRootTrace((nextRequestId) => {
       recorder.beginAgent({
         prompt: "[automatic continuation]",
         model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api } : undefined,
-        snapshot: contextSnapshot(ctx),
+        snapshot: observedSnapshot ?? contextSnapshot(ctx),
         ...(nextRequestId ? { requestId: nextRequestId } : {}),
       });
     });

@@ -284,6 +284,81 @@ test("setRequestId applies only to the next trace and onTraceId failures do not 
   await runtime.shutdown();
 });
 
+test.each(["dispose", "replace", "settle"] as const)(
+  "an automatic turn reads its start snapshot once and preserves the end snapshot on %s",
+  async (close) => {
+    const backend = new FakeBackend();
+    const runtime = createLangfuseRuntimeFromBackend(backend);
+    const session = createPiLangfuseSession(runtime);
+    const mock = createMockPi();
+    session.extension(mock.pi);
+    let leaf = "before-turn";
+    let usage = { tokens: 100, contextWindow: 1_000, percent: 10 };
+    const getContextUsage = vi.fn(() => ({ ...usage }));
+    const { ctx } = createMockContext({
+      getContextUsage,
+      sessionManager: { getSessionId: () => "original", getLeafId: () => leaf },
+    });
+    await mock.events.get("session_start")?.[0]?.({}, ctx);
+    getContextUsage.mockClear();
+    await mock.events.get("turn_start")?.[0]?.({ turnIndex: 0 }, ctx);
+    assert.equal(getContextUsage.mock.calls.length, 1);
+
+    leaf = "unobserved-change";
+    usage = { tokens: 300, contextWindow: 2_000, percent: 15 };
+    if (close === "settle") await mock.events.get("agent_settled")?.[0]?.({}, ctx);
+    else if (close === "replace") await mock.events.get("session_start")?.[0]?.({}, createMockContext().ctx);
+    else await session.dispose();
+    assert.equal(getContextUsage.mock.calls.length, close === "settle" ? 2 : 1);
+
+    const agent = backend.observations.find(({ name }) => name === "pi.agent");
+    assert.ok(agent?.ended);
+    const metadata = agent.updates.at(-1)?.metadata;
+    assert.equal(metadata?.["pi.trace.start_leaf_id"], "before-turn");
+    assert.equal(metadata?.["pi.trace.start_context_tokens"], 100);
+    assert.equal(metadata?.["pi.trace.start_context_window"], 1_000);
+    assert.equal(metadata?.["pi.trace.start_context_percent"], 10);
+    assert.equal(metadata?.["pi.trace.end_leaf_id"], close === "settle" ? "unobserved-change" : "before-turn");
+    assert.equal(metadata?.["pi.trace.end_context_tokens"], close === "settle" ? 300 : 100);
+    assert.equal(metadata?.["pi.trace.end_context_window"], close === "settle" ? 2_000 : 1_000);
+    assert.equal(metadata?.["pi.trace.end_context_percent"], close === "settle" ? 15 : 10);
+
+    await session.dispose();
+    await runtime.shutdown();
+  },
+);
+
+test("a provider-triggered automatic root reads fresh start metadata without replacing its fallback", async () => {
+  const backend = new FakeBackend();
+  const runtime = createLangfuseRuntimeFromBackend(backend);
+  const session = createPiLangfuseSession(runtime);
+  const mock = createMockPi();
+  session.extension(mock.pi);
+  let leaf = "provider-request";
+  let tokens = 100;
+  const getContextUsage = vi.fn(() => ({ tokens, contextWindow: 1_000, percent: tokens / 10 }));
+  const { ctx } = createMockContext({
+    getContextUsage,
+    sessionManager: { getSessionId: () => "original", getLeafId: () => leaf },
+  });
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  getContextUsage.mockClear();
+  await mock.events.get("before_provider_request")?.[0]?.({ payload: {} }, ctx);
+  leaf = "assistant-start";
+  tokens = 150;
+  await mock.events.get("message_start")?.[0]?.({ message: { role: "assistant" } }, ctx);
+  await session.dispose();
+  assert.equal(getContextUsage.mock.calls.length, 2);
+  assert.equal(backend.observations.filter(({ name }) => name === "pi.llm").length, 1);
+  const metadata = backend.observations.find(({ name }) => name === "pi.agent")?.updates.at(-1)?.metadata;
+  assert.equal(metadata?.["pi.trace.start_leaf_id"], "assistant-start");
+  assert.equal(metadata?.["pi.trace.start_context_tokens"], 150);
+  assert.equal(metadata?.["pi.trace.end_leaf_id"], "provider-request");
+  assert.equal(metadata?.["pi.trace.end_context_tokens"], 100);
+
+  await runtime.shutdown();
+});
+
 test("setRequestId preserves a reentrant value for the following trace", async () => {
   const backend = new FakeBackend();
   const runtime = createLangfuseRuntimeFromBackend(backend);

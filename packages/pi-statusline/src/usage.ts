@@ -1,4 +1,4 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 
 interface UsageLike {
   input?: number;
@@ -16,6 +16,26 @@ export interface FooterUsageSummary {
   cost: number;
   costTotalFromProvider: boolean;
   latestCacheHitRate?: number;
+}
+
+export function createFooterUsageReader(
+  manager: ExtensionContext["sessionManager"] & Partial<Pick<SessionManager, "getEntryCount">>,
+): () => FooterUsageSummary {
+  let cached:
+    | { header: NonNullable<ReturnType<SessionManager["getHeader"]>>; count: number; totals: FooterUsageSummary }
+    | undefined;
+  return () => {
+    const count = manager.getEntryCount?.();
+    const header = count === undefined ? null : manager.getHeader?.();
+    if (!header || count === undefined) {
+      cached = undefined;
+      return summarizeFooterUsage(manager.getEntries());
+    }
+    if (cached?.header === header && cached.count === count) return cached.totals;
+    const totals = summarizeFooterUsage(manager.getEntries());
+    cached = { header, count, totals };
+    return totals;
+  };
 }
 
 export function summarizeFooterUsage(entries: readonly SessionEntry[]): FooterUsageSummary {

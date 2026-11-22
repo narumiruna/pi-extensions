@@ -4,7 +4,8 @@ import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { beforeEach, expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import { manualIgnoreFileGuidance, showIgnoreFileAction } from "../src/ui/ignore-file-ui.js";
+import { manualIgnoreFileGuidance } from "../src/ui/ignore-file-guidance.js";
+import { showIgnoreFileAction } from "../src/ui/ignore-file-ui.js";
 import { installEngineFixtureHost } from "./engine-host.js";
 
 const { run, validate } = vi.hoisted(() => ({ run: vi.fn(), validate: vi.fn() }));

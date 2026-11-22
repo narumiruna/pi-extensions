@@ -20,6 +20,7 @@ import {
   settingsFilePath,
 } from "./settings.js";
 import type { PalettePreset } from "./types.js";
+import { createFooterUsageReader } from "./usage.js";
 
 const STATUSLINE_KEY = "statusline";
 const GIT_STATUS_REFRESH_INTERVAL_MS = 30_000;
@@ -165,6 +166,7 @@ export default function statusline(pi: ExtensionAPI) {
       }
       disposeFooter?.();
       activeGitStatusTarget = { cwd, generation };
+      let readUsage: ReturnType<typeof createFooterUsageReader> | undefined = createFooterUsageReader(sessionManager);
       let disposed = false;
       let branchUnsubscribe: (() => void) | undefined;
       let clock: ReturnType<typeof setInterval> | undefined;
@@ -174,6 +176,7 @@ export default function statusline(pi: ExtensionAPI) {
       const dispose = () => {
         if (disposed) return;
         disposed = true;
+        readUsage = undefined;
         try {
           metadata?.dispose();
         } finally {
@@ -242,7 +245,7 @@ export default function statusline(pi: ExtensionAPI) {
             ? { ...loaded.config, palettePreset: previewPalettePreset }
             : loaded.config;
           const trueColor = getCapabilities().trueColor;
-          const mainLine = renderStatusline(width, ctx, footerData, theme, config, runtime, trueColor);
+          const mainLine = renderStatusline(width, ctx, footerData, theme, config, runtime, trueColor, readUsage);
           const lines = mainLine ? mainLine.split("\n") : [];
           lines.push(...renderExtensionStatusline(width, footerData, theme, config, runtime, mainLine, trueColor));
           return lines;

@@ -44,11 +44,16 @@ export function renderStatusline(
   config: StatuslineConfig,
   runtime: RuntimeState,
   trueColor = true,
+  readUsage = () => summarizeFooterUsage(ctx.sessionManager.getEntries()),
 ): string {
   if (width <= 0) return "";
 
   const inlineStatuses = legacyInlineStatuses(footerData.getExtensionStatuses(), runtime);
-  const usageSummary = summarizeFooterUsage(ctx.sessionManager.getEntries());
+  const usageSummary = config.segments.some(
+    (segment) => segment === "tokens" || segment === "cache" || segment === "cost",
+  )
+    ? readUsage()
+    : undefined;
   const rows: Array<{ configuredSegments: number; segments: RenderSegment[] }> = [
     { configuredSegments: 0, segments: [] },
   ];
@@ -114,7 +119,7 @@ function buildSegment(
   footerData: ReadonlyFooterDataProvider,
   config: StatuslineConfig,
   runtime: RuntimeState,
-  usageSummary: FooterUsageSummary,
+  usageSummary: FooterUsageSummary | undefined,
   inlineStatuses: ReadonlyMap<string, string>,
 ): RenderSegment | undefined {
   switch (name) {
@@ -164,6 +169,7 @@ function buildSegment(
       );
     }
     case "tokens": {
+      if (!usageSummary) return undefined;
       const value =
         usageSummary.input === 0 && usageSummary.output === 0
           ? "tok 0"
@@ -171,6 +177,7 @@ function buildSegment(
       return segment(name, value, config, "accent", "runtime");
     }
     case "cache": {
+      if (!usageSummary) return undefined;
       if (usageSummary.cacheRead === 0 && usageSummary.cacheWrite === 0) return undefined;
       const values: string[] = [];
       if (usageSummary.cacheRead > 0) values.push(`R${formatCount(usageSummary.cacheRead)}`);
@@ -181,6 +188,7 @@ function buildSegment(
       return segment(name, values.join(" "), config, "accent", "runtime");
     }
     case "cost": {
+      if (!usageSummary) return undefined;
       const subscription = isSubscriptionBacked(ctx) ? " (sub)" : "";
       return segment(
         name,
