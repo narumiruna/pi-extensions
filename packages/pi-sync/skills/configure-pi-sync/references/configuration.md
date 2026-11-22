@@ -1,7 +1,7 @@
 # Pi Sync settings reference
 
 This is the authoritative public settings reference for Pi Sync.
-The configuration skill provides guidance only; the user performs settings changes and reviewed operations.
+The user performs settings changes and reviewed operations; the configuration skill can also make an explicitly requested edit to a known local rule file.
 
 - [Complete version 3 example](#complete-version-3-example)
 - [Required backend shapes](#required-backend-shapes)
@@ -10,6 +10,7 @@ The configuration skill provides guidance only; the user performs settings chang
 - [Autonomous sync](#autonomous-sync)
 - [Continuous sync](#continuous-sync)
 - [Daemon lifetime and unattended permission](#daemon-lifetime-and-unattended-permission)
+- [Ignore-file policy](#ignore-file-policy)
 - [Included content](#included-content)
 - [Excluded paths](#excluded-paths)
 - [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
@@ -48,10 +49,11 @@ Global settings apply to all setups on this device; they are not remote policy.
 
 | Scope | Fields | Required values and defaults |
 | --- | --- | --- |
-| Document | `version`, `onSwitch`, `storageConnections`, `syncSetups` | All are required in a manually written document; versions 3 through 7 are supported. |
+| Document | `version`, `onSwitch`, `storageConnections`, `syncSetups` | All are required in a manually written document; versions 3 through 8 are supported. |
 | Current setup | `activeSyncSetup` | Required when setups exist; absent when the setup catalog is empty. |
 | Global preferences | `skipSecretScan`, `showStatus`, `debug` | Optional booleans; defaults are false, true, and false. |
-| Setup selection | `sync.scope`, `sync.include`, `sync.automatic` | Directory scope requires version 7 and omits `include`; selected-path setups require `include`. Both require explicit `automatic`. |
+| Setup selection | `sync.scope`, `sync.include`, `sync.automatic` | Legacy directory scope requires version 7 or later and omits `include`; selected-path setups require `include`. Both require explicit `automatic`. |
+| Ignore-file selection | `sync.scope`, `sync.pathPolicy`, `sync.ignoreFile`, `sync.sessions` | Version 8, `scope: "agent-directory"`, `pathPolicy: "ignore-file"`. `ignoreFile` defaults to `.syncignore`; sessions require `true` and the rules must allow them. Use reviewed setup or migration, not manual JSON edits. |
 | Setup behavior | `sync.automaticTransfer`, `sync.agentMode`, `sync.continuous`, `sync.mergeSettings`, `sync.mergeContent`, `sync.partialSync` | Optional booleans; all default to false. |
 | Portable policy | `sync.localFields` | Optional array; any explicit array, including `[]`, requires version 4 or later. |
 | Content/partial policy | `sync.mergeContent`, `sync.partialSync` | Enabling either requires version 5 or later. |
@@ -71,7 +73,7 @@ None of these controls is enabled by invoking the configuration skill.
 ### Editing in the manager
 
 Open `/sync` → **Settings** to go directly to **Pi Sync Settings**.
-The screen uses a searchable flat list without category navigation. Compare content rules separately from file contents; directory scope also exposes its re-inclusion and session settings.
+The screen uses a searchable flat list without category navigation. Compare content rules separately from file contents. Legacy setups retain their path controls. Ignore-file setups show the local path for manual editing and offer a reviewed switch to another existing file.
 **Storage location** edits the current setup's coordinates, while **Manage sync setups** and **Manage storage connections** retain the catalog and affected-setup reviews.
 Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
 
@@ -186,7 +188,7 @@ An occupied destination requires an explicit different path; Git requires a diff
 This check does not contact the server or discover setups configured only on other machines.
 
 Every setup requires explicit `sync.automatic`. Set `sync.scope` for directory scope, or set `sync.include` for selected paths.
-Setup offers automatic sync with Off first. **Join an existing remote** instead saves with automatic sync and sessions off, then reviews the remote policy without transferring files. Existing values are not rewritten.
+Legacy setup offers automatic sync with Off first. New ignore-file setups save with automatic sync off; use Settings to review and enable automatic behavior separately. **Join an existing remote** instead saves with automatic sync and sessions off, then reviews the remote policy without transferring files. Existing values are not rewritten.
 When enabled, the current setup receives one background startup check in TUI/RPC, including reload/new/resume/fork.
 Automatic sync alone does not perform startup transfers or open dialogs; review changes through `/sync`.
 Print/JSON skip startup checks.
@@ -200,10 +202,10 @@ The check deadline is 30 seconds plus bounded cleanup, with manual retry through
 Continuous sync is a separate opt-in.
 See [Background startup checks](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/README.md#background-startup-checks) for recovery and Git cache exceptions.
 
-New setups default to directory scope. For selected paths, Recommended includes the nine non-session Pi roots listed below and Minimal includes `settings.json` and `AGENTS.md`.
-The save review shows the scope, path rules or selected paths, and the full backend destination.
+New TUI setups use the [ignore-file policy](#ignore-file-policy) when the daemon supports it. The legacy wizard defaults to directory scope; its selected-path choices are Recommended (the nine non-session Pi roots listed below) and Minimal (`settings.json` and `AGENTS.md`).
+The setup review shows the scope and exact backend destination.
 R2/S3 requires an explicitly entered existing bucket and never creates one.
-Saving setup or connection settings does not contact remote storage.
+Saving setup or connection settings does not transfer files.
 
 Invalid fields retry without discarding earlier answers.
 Retryable local I/O failures retain the exact draft for another Save.
@@ -291,9 +293,41 @@ Authentication and transport failures give credentials/permissions or address/ne
 Git reads remote snapshots and checks its local cache; write access is not tested.
 WebDAV retains its isolated conditional-write/cleanup probe and repair of a missing active-snapshot history entry.
 
+### Ignore-file policy
+
+New TUI setups use `.syncignore` when the daemon advertises support. Existing setups, including legacy directory setups, keep their current policy and can coexist with ignore-file setups in a version 8 document. To migrate a legacy setup, choose **Review migration now** when offered on first opening the TUI manager or **Settings → Migrate to ignore file…** later. **Not now** defers the offer for that setup on this device; closing the offer without a choice does not persist a deferral. Review added and removed local and remote paths, and consider files that could be added later. Legacy selected paths and `reinclude` rules do not always translate directly.
+
+For reference, the `sync` object of a version 8 setup using the default rule file can look like this. This fragment is not a complete document or a substitute for review:
+
+```json
+{
+  "scope": "agent-directory",
+  "pathPolicy": "ignore-file",
+  "sessions": false,
+  "automatic": false
+}
+```
+
+On confirmation the daemon can create a missing default file on Linux when safe directory-anchored creation is available. On macOS, Windows, or when that Linux path is unavailable, use the exact path and starter text shown by Pi Sync. Create a regular UTF-8 file there without overwriting an existing file, then reopen the setup or migration and confirm the review. The starter rules are:
+
+```gitignore
+/npm/
+/sessions/
+/auth.json
+/truth.json
+```
+
+A leading `/` anchors a rule to the agent directory; a trailing `/` matches a directory. Rules are case-sensitive on every device. Blank lines, comments, wildcards, and ordered `!` exceptions follow Git ignore patterns for a single root file. An exception cannot restore a child under an excluded parent. Use `/` as the path separator; escaped `/` is not supported. There are no nested or project rules. A valid existing file, even an empty one, is reused as-is. Another rule file must already exist: choose a single safe filename directly in the agent directory, not a path, symlink, or linked alias. Missing or unsafe rules block transfers; an absent default can inform preview but cannot authorize transfer.
+
+Use **Settings → Ignore file** to find the source or review a switch. Edit the existing file manually, with no sync or recovery running, and recheck `/sync files` before approving a transfer. All setups sharing the file see the edit. There is no in-app rule save. Sessions require separate opt-in and must be allowed by the rules: the starter `/sessions/` still excludes them. Match sessions by logical `sessions/` paths even when stored elsewhere. Pi credentials and trust (`auth.json` and `trust.json`), Pi Sync private settings and state, and `.syncignore` and configured alternatives stay local independently of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Loaded sessions stay protected during apply. Ignored files are not replaced or removed by transfer. Retained snapshots and backups are not erased.
+
+Setup, migration, switching the rule file, and editing rules do not start a transfer or grant permission for one. Upgrade all peers before publishing a version 6 snapshot. It carries a portable policy fingerprint, not the filename or rule text. Configure matching rules in the same order and matching session opt-in on peers; do not copy rules from the remote. A legacy or mismatched head requires separately reviewed directional policy publication, not `--yes` or automatic work. Use `/sync diff` to inspect the scope and `/sync` to review the direction. A pull cannot apply a foreign policy; rollback requires compatible history. If rules, setup, or head change during review, reopen the review rather than relying on stale approval.
+
+For blocked or interrupted creation or transfer, stop new work and preserve the rule file, creation marker, journals, backups, and consent records. Use the compatible daemon to review recovery with the originating setup and exact source. If source or remote evidence differs, keep it rather than forcing replay or deleting a marker. Before settings commit the old policy remains authoritative; a verified starter or settings backup can remain after a failed save. After any v6 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers; keep the retained history intact.
+
 ### Agent-directory scope
 
-In a version 7 document, a new sync setup can use:
+A legacy directory setup in a version 7 or later settings document can use:
 
 ```json
 {
@@ -450,7 +484,7 @@ Unknown fields remain preserved and malformed/invalid files block saves, just as
 
 ### Autonomous sync
 
-Autonomous sync uses the unchanged `sync.agentMode` key, an optional per-setup boolean, default `false`, in settings versions 3 through 7.
+Autonomous sync uses the unchanged `sync.agentMode` key, an optional per-setup boolean, default `false`, in settings versions 3 through 8.
 Open **Settings → Autonomous sync** and review the setup, destination, content policy, transfer authorization, model disclosure, costs, and autonomous writes before enabling. For directory scope, the review shows session opt-in separately from path rules.
 RPC users can explicitly set the same field in the private settings file.
 Setting it to `true` is authorization, not just a display preference.
@@ -569,7 +603,7 @@ A failed consent write blocks automatic work in that service instance. Uncertain
 
 ### Continuous sync
 
-`sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3 through 7.
+`sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3 through 8.
 Open **Settings → Continuous sync** after enabling Autonomous sync. For directory scope, the review shows session opt-in separately from path rules.
 RPC users can set the field explicitly in the private settings file.
 Existing Autonomous sync consent does not enable recurring requests.
@@ -705,7 +739,7 @@ Coupled fields must be excluded together.
 Selected-path setups with nonempty rules must include `settings.json` in `sync.include`. Directory-scope setups must omit `sync.include` and can configure local fields without it. Path rules still govern whether `settings.json` syncs, and nonempty field rules require that exact file spelling if it is synced. Absent or explicitly empty rules remain valid for either scope.
 Settings asks for confirmation before saving changes to these rules. An explicit array requires settings version 4 or later, and editing the rules does not downgrade an existing settings version.
 Absent rules keep a setup nonportable, including unrelated setups in a version-4 document.
-An explicit array opts that setup into at least snapshot version 2; exclusion-enabled selected-path setups retain version 4, and directory scope retains version 5.
+An explicit array opts that setup into at least snapshot version 2; exclusion-enabled selected-path setups retain version 4, legacy directory scope retains version 5, and ignore-file setups use version 6.
 `[]` after rule removal retains this reviewed opt-in and differs from absence.
 Older clients must refuse portable data rather than replace local-only values.
 
@@ -744,8 +778,8 @@ Never reinterpret portable snapshots with an old binary.
 
 `sync.mergeContent` and `sync.partialSync` are independent opt-in booleans, both default `false`.
 The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit upgrade to at least settings version 5.
-Manual configuration must use a supported settings version of at least 5 (version 7 for directory scope).
-Partial publications retain snapshot version 4 for exclusion-enabled selected paths and version 5 for directory scope.
+Use a supported settings version of at least 5 (at least 7 for legacy directory scope and 8 for ignore-file policy).
+Partial publications retain snapshot version 4 for exclusion-enabled selected paths, version 5 for legacy directory scope, and version 6 for ignore-file policy.
 Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration.
 Disabling options retains the schema and recovery evidence.
 

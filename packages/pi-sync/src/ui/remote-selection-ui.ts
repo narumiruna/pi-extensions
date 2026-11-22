@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-factory.js";
 import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
-import { loadConfig, syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
+import { loadConfig, syncConfigReviewFingerprint, syncSettingsConfigFingerprint } from "../settings/config.js";
 import { SyncSetupReviewChangedError, updateSyncSetup } from "../settings/settings-management.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { sameSyncExclude } from "../sync/exclude-policy.js";
@@ -14,6 +14,7 @@ import {
   compareSyncInclude,
   inspectRemoteSelection,
   type RemoteSelectionDecision,
+  RemoteSelectionMismatchError,
   type RemoteSelectionState,
   sameSyncInclude,
   syncDirectoryPolicyKey,
@@ -33,6 +34,7 @@ export interface RemoteSelectionReviewOptions {
   decision?: RemoteSelectionDecision;
   origin?: RemoteSelectionOrigin;
   runRoute?: RunRoute;
+  readOnly?: boolean;
   cancelLabel?: string;
   /** The explicit mismatch is resolved or superseded; this does not imply file equality. */
   onSelectionResolved?: () => void;
@@ -72,26 +74,33 @@ export async function showRemoteSelectionReview(
       if (!inspected) return { kind: "stale" };
       // A successful fresh read can supersede an old explicit mismatch without
       // changing local settings. This is not user cancellation or proof of file equality.
-      if (inspected.kind === "empty" || inspected.state.kind !== "different") {
+      if (inspected.kind === "empty" || (inspected.kind === "selection" && inspected.state.kind !== "different")) {
         options.onSelectionResolved?.();
       }
       if (inspected.kind === "empty") {
         ctx.ui.notify("Remote storage has no snapshot or synced-content list yet.", "info");
         return { kind: "back" };
       }
-      if (inspected.state.kind === "same") {
-        ctx.ui.notify("Remote synced content already matches this sync setup.", "info");
+      if (inspected.kind === "decision") {
+        decision = inspected.decision;
+      } else if (inspected.state.kind === "same") {
+        ctx.ui.notify(
+          inspected.state.ignorePolicyComparison === "match"
+            ? "Remote ignore-file policy matches this device."
+            : "Remote synced content already matches this sync setup.",
+          "info",
+        );
         return { kind: "back" };
-      }
-      if (inspected.state.kind === "legacy") {
+      } else if (inspected.state.kind === "legacy") {
         if (ctx.mode !== "tui") {
           ctx.ui.notify(formatLegacySummary(inspected.config, inspected.state.discovered), "info");
           return { kind: "back" };
         }
         await showLegacyDiscovery(ctx, inspected.config, inspected.state.discovered, signal);
         return signal?.aborted ? { kind: "stale" } : { kind: "back" };
+      } else {
+        decision = decisionFromState(inspected.config, inspected.state);
       }
-      decision = decisionFromState(inspected.config, inspected.state);
     }
 
     if (ctx.mode !== "tui") {
@@ -132,6 +141,10 @@ export async function showRemoteSelectionReview(
         ctx.ui.notify("Remote storage no longer has a snapshot or synced-content list.", "warning");
         return { kind: "back" };
       }
+      if (refreshed.kind === "decision") {
+        currentDecision = refreshed.decision;
+        continue;
+      }
       if (refreshed.state.kind !== "different") {
         ctx.ui.notify(
           refreshed.state.kind === "same"
@@ -162,7 +175,7 @@ async function showSelectionDifference(
   runRoute: RunRoute | undefined,
   sessionSignal: AbortSignal | undefined,
   factory: SyncBackendFactory,
-  options: Pick<RemoteSelectionReviewOptions, "cancelLabel" | "onSelectionResolved" | "withStateAccess">,
+  options: Pick<RemoteSelectionReviewOptions, "readOnly" | "cancelLabel" | "onSelectionResolved" | "withStateAccess">,
   validateOwner: () => void,
 ): Promise<DifferenceFlowResult> {
   type Screen = "choice" | "review" | "saved";
@@ -195,7 +208,7 @@ async function showSelectionDifference(
               : "Compare exact remote-only, device-only, and ordered lists.",
             to: "review",
           },
-          ...(adoptionUnavailable(state.decision)
+          ...(options.readOnly || adoptionUnavailable(state.decision)
             ? []
             : [
                 {
@@ -205,7 +218,7 @@ async function showSelectionDifference(
                   action: "adopt" as const,
                 },
               ]),
-          ...(!canPublishLocalPolicy(state.decision)
+          ...(options.readOnly || !canPublishLocalPolicy(state.decision)
             ? []
             : [
                 {
@@ -255,6 +268,7 @@ async function showSelectionDifference(
     },
     actions: {
       adopt: async ({ state, signal: actionSignal }) => {
+        if (options.readOnly) return { kind: "rejected" };
         const signal = combineSignals(sessionSignal, actionSignal);
         try {
           const adoption = await runCancellableTask(
@@ -323,7 +337,7 @@ async function showSelectionDifference(
           if (adoption.kind === "cancelled" || !adoption.value) return { kind: "stay" as const };
           validateOwner();
           options.onSelectionResolved?.();
-          continuationFingerprint = syncCheckConfigFingerprint({
+          continuationFingerprint = syncSettingsConfigFingerprint({
             ...adoption.value.config,
             include: [...state.decision.remoteInclude],
             exclude: adoptedExclude(state.decision),
@@ -345,6 +359,7 @@ async function showSelectionDifference(
         }
       },
       keep: async ({ state, signal: actionSignal }) => {
+        if (options.readOnly) return { kind: "rejected" };
         if (!canPublishLocalPolicy(state.decision)) return { kind: "stay" as const };
         if (!runRoute) {
           ctx.ui.notify("The reviewed update-remote route is unavailable.", "error");
@@ -383,13 +398,14 @@ async function showSelectionDifference(
         }
       },
       continue: async ({ state, signal: actionSignal }) => {
+        if (options.readOnly) return { kind: "rejected" };
         if (!runRoute || !continuationFingerprint) return { kind: "stay" as const };
         const signal = combineSignals(sessionSignal, actionSignal);
         try {
           const latest = await loadConfig(state.decision.setupName);
           if (signal.aborted) return { kind: "close" as const };
           validateOwner();
-          if (syncCheckConfigFingerprint(latest) !== continuationFingerprint) {
+          if (syncSettingsConfigFingerprint(latest) !== continuationFingerprint) {
             throw new StaleRemoteSelectionReviewError(
               `Sync setup “${safeTerminalText(state.decision.setupName)}” changed after the remote content list was saved.`,
             );
@@ -546,7 +562,7 @@ async function revalidateAndAdopt(
       };
     },
     {
-      expectedConfigFingerprint: syncCheckConfigFingerprint(review.config),
+      expectedConfigFingerprint: syncSettingsConfigFingerprint(review.config),
       expectedInclude: decision.localInclude,
       upgradeExclude: adoptedExclude(decision) !== undefined,
       signal,
@@ -563,6 +579,7 @@ async function inspectConfiguredRemoteSelection(
 ): Promise<
   | { kind: "empty"; config: AnySyncConfig }
   | { kind: "selection"; config: AnySyncConfig; state: RemoteSelectionState }
+  | { kind: "decision"; decision: RemoteSelectionDecision }
   | undefined
 > {
   const config = await loadConfig(setupName);
@@ -576,14 +593,21 @@ async function inspectConfiguredRemoteSelection(
   if (signal?.aborted) return undefined;
   validateOwner();
   if (!head) return { kind: "empty", config };
-  const snapshot = await readSnapshotForHead(backend, head, signal);
-  if (signal?.aborted) return undefined;
-  validateOwner();
-  return {
-    kind: "selection",
-    config,
-    state: inspectRemoteSelection(config.include, snapshot, config.exclude, config),
-  };
+  try {
+    const snapshot = await readSnapshotForHead(backend, head, signal, config);
+    if (signal?.aborted) return undefined;
+    validateOwner();
+    return {
+      kind: "selection",
+      config,
+      state: inspectRemoteSelection(config.include, snapshot, config.exclude, config),
+    };
+  } catch (error) {
+    if (signal?.aborted) return undefined;
+    validateOwner();
+    if (error instanceof RemoteSelectionMismatchError) return { kind: "decision", decision: error.decision };
+    throw error;
+  }
 }
 
 async function showLegacyDiscovery(
@@ -699,9 +723,12 @@ function selectionSummaryLines(decision: RemoteSelectionDecision) {
     return [
       `Sync setup: ${safeTerminalText(decision.setupName)}`,
       adoptionUnavailable(decision) ?? "Nothing changed.",
-      decision.ignorePolicyComparison === "local-legacy-remote-ignore"
-        ? "The remote uses an ignore policy. Migrate and review your local setup before transferring."
-        : "Review a fresh push before publishing this device's policy. No files or settings have changed.",
+      ...(decision.ignorePolicyComparison === "local-legacy-remote-ignore"
+        ? ["The remote uses an ignore-file policy; this device uses a legacy policy."]
+        : decision.ignorePolicyComparison === "local-ignore-remote-legacy"
+          ? ["This device uses an ignore-file policy; the remote uses a legacy policy."]
+          : ["The ordered rules or session opt-in differ."]),
+      "No files or settings have changed.",
     ];
   }
   const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);

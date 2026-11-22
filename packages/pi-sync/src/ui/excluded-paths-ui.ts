@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
+import { loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { localConfigPath } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
@@ -29,7 +29,7 @@ export async function showExcludedPaths(ctx: ExtensionCommandContext, setupName:
     }
   };
   validate();
-  const config = await loadConfig(setupName);
+  const config = await loadSettingsConfig(setupName);
   validate();
   if (config.scope === "agent-directory") return showDirectoryScope(ctx, config, signal);
   if (ctx.mode !== "tui") {

@@ -62,6 +62,82 @@ function expiredError(error: unknown) {
   return error instanceof DaemonError && error.remote.name === "ClientContactExpiredError";
 }
 
+test("queued automatic jobs cannot reuse a participant generation after an idle transition", () =>
+  fixture(async (root) => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const execute = vi.fn<Execute>(async (operation) => {
+      if (operation === "hold") {
+        entered.resolve();
+        await release.promise;
+      }
+    });
+    await withRpcServer(root, execute, async ({ server, createConnection }) => {
+      const owner = await createConnection(facts(root), { callback: async () => true }).attach();
+      const peer = await createConnection(facts(root), { callback: async () => true }).attach();
+      const hold = owner.run("hold", {});
+      try {
+        await entered.promise;
+        const id = `${operationPrefix(server.identity)}${randomUUID()}`;
+        const submit = await requestDaemon(server.paths, server.identity, "submit", {
+          id,
+          client: owner.facts.id,
+          operation: "startup-transfer",
+          payload: {},
+        });
+        assert.equal((submit as JobView).phase, "queued");
+        const stable = { ...peer.facts };
+        await peer.update({ ...stable, idle: false });
+        await peer.update(stable);
+        release.resolve();
+        await hold;
+        const job = await terminal(server, owner.facts.id, id);
+        assert.equal(job.phase, "failed");
+        assert.match(job.error?.message ?? "", /participants changed/i);
+        assert.deepEqual(
+          execute.mock.calls.map(([operation]) => operation),
+          ["hold"],
+        );
+      } finally {
+        release.resolve();
+        await hold.catch(() => {});
+      }
+    });
+  }));
+
+for (const committed of [false, true]) {
+  test(`stop fences automatic work while draining an existing commit (${committed})`, () =>
+    fixture(async (root) => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let finished = false;
+      const execute: Execute = async (_operation, _payload, execution) => {
+        if (committed) execution.committed();
+        entered.resolve();
+        await release.promise;
+        execution.validate();
+        finished = true;
+      };
+      await withRpcServer(root, execute, async ({ server }) => {
+        const peer = facts(root);
+        const request = (method: string, params: unknown) =>
+          requestDaemon(server.paths, server.identity, method, params);
+        const id = `${operationPrefix(server.identity)}${randomUUID()}`;
+        await request("attach", peer);
+        await request("submit", { id, client: peer.id, operation: "shutdown", payload: {} });
+        try {
+          await entered.promise;
+          assert.deepEqual(await request("stop", {}), { stopping: true });
+          assert.equal(server.isIdle(), false);
+        } finally {
+          release.resolve();
+          await server.close();
+        }
+        assert.equal(finished, committed);
+      });
+    }));
+}
+
 test("root-bound local handshake rejects a second live daemon and authenticates calls", () =>
   fixture(async (root) => {
     const server = await startServer(root, async () => "ok");

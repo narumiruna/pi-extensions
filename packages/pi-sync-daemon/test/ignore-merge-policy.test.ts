@@ -218,7 +218,8 @@ test("v6 merge records local policy evidence separately and publishes only manag
       observed = await readMergeJournal(config);
     });
     assert.equal(await mergeSync(ctx, options, remote.factory), "applied");
-    assert.equal(observed?.version, 2);
+    assert.equal(observed?.version, 3);
+    assert.match(observed.localPolicyKey, /^[0-9a-f]{64}$/u);
     assert.deepEqual(observed?.ignoreSource, {
       version: 1,
       filename,
@@ -236,7 +237,7 @@ test("v6 merge records local policy evidence separately and publishes only manag
     assert.equal(await fs.readFile(path.join(root, "auth.json"), "utf8"), "local only");
     assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, published.id);
     assert.equal(await readMergeJournal(config), undefined);
-    assert.equal(remote.readHead.mock.calls.length, 4);
+    assert.equal(remote.readHead.mock.calls.length, 5);
     assert.equal(remote.readSnapshot.mock.calls.length, 2);
   }));
 
@@ -281,7 +282,7 @@ test("recovering an uncertain v6 commit applies its verified snapshot without re
     });
     await assert.rejects(mergeSync(ctx, options, remote.factory), /journal and backup retained/i);
     const journal = await readMergeJournal(config);
-    assert.ok(journal?.version === 2);
+    assert.ok(journal?.version === 3);
     assert.equal(journal.committedHead, undefined);
     assert.deepEqual(await readStateForConfig(config), state);
     assert.equal(await mergeSync(ctx, options, remote.factory), "applied");
@@ -368,7 +369,7 @@ async function interruptBeforeCommit(root: string, config: AnySyncConfig, ctx: E
   remote.publishHook.mockRejectedValueOnce(new Error("Connection lost before commit"));
   await assert.rejects(mergeSync(ctx, options, remote.factory), /journal and backup retained/i);
   const pending = await readMergeJournal(config);
-  assert.ok(pending?.version === 2 && !pending.committedHead);
+  assert.ok(pending?.version === 3 && !pending.committedHead);
   const journalPath = mergeJournalPath(config);
   const journalBytes = await fs.readFile(journalPath);
   const backupBytes = await fs.readFile(pending.backup);
@@ -495,7 +496,7 @@ test.each([
   ["uncommitted", "local edit", "archived"],
   ["uncommitted", "remote advance", /Remote head changed during merge recovery/],
   ["apply-only", "local edit", /Apply-only remote head advanced after local changes/],
-] as const)("%s v2 recovery checks fresh evidence before retiring the journal (%s)", (operation, change, result) =>
+] as const)("%s recovery checks fresh evidence before retiring the journal (%s)", (operation, change, result) =>
   fixture(async ({ root, config, ctx }) => {
     const { state, target, remote, pending, journalPath, backupBytes } = await interruptBeforeCommit(root, config, ctx);
     if (operation === "apply-only") {
@@ -633,9 +634,15 @@ test("a pending v1 journal still resolves to its original path but cannot author
     assert.equal((await readMergeJournal(config))?.version, 1);
     const journalPath = mergeJournalPath(config);
     const journalBytes = await fs.readFile(journalPath);
-    await assert.rejects(mergeSync(ctx, options, remote.factory), /lacks ignore-file policy evidence/i);
-    await assert.rejects(requireNoMergeJournal(config, { force: true }), /lacks ignore-file policy evidence/i);
-    await assert.rejects(retireMergeJournal(config), /lacks ignore-file policy evidence/i);
+    await assert.rejects(
+      mergeSync(ctx, options, remote.factory),
+      /lacks matching setup or ignore-file policy evidence/i,
+    );
+    await assert.rejects(
+      requireNoMergeJournal(config, { force: true }),
+      /lacks matching setup or ignore-file policy evidence/i,
+    );
+    await assert.rejects(retireMergeJournal(config), /lacks matching setup or ignore-file policy evidence/i);
     assert.equal(remote.factory.mock.calls.length, 0);
     assert.deepEqual(await fs.readFile(journalPath), journalBytes);
     assert.deepEqual(await readStateForConfig(config), state);
@@ -689,9 +696,9 @@ test("continuous inspection of a v6 policy mismatch never enters operations", ()
   }));
 
 test("an ignore source edit invalidates an unattended consent review before it can publish", () =>
-  fixture(async ({ root, config, ignoreFile, load }) => {
+  fixture(async ({ root, config, ignoreFile }) => {
     const continuous = { ...config, continuous: true };
-    load.mockResolvedValue(continuous);
+    vi.spyOn(settings, "loadConfigForCheck").mockResolvedValue(continuous);
     const signal = new AbortController().signal;
     const execution: Execution = {
       root,

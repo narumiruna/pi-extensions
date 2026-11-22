@@ -1,6 +1,6 @@
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext } from "../host.js";
-import { loadConfig } from "../settings/config.js";
+import { loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
 import { withLock } from "../state/lock.js";
@@ -18,21 +18,35 @@ export async function pushSessionsOnShutdown(
   loaders: Pick<SyncLoaders, "operations"> = { operations: () => import("./sync-operations.js") },
 ) {
   const validate = captureMutationOwner(ctx, options.signal);
-  const config = await loadConfig(options.setup);
+  const config = await loadConfigForCheck(undefined, options.signal);
   validate();
+  options.background?.validate(config);
+  if (options.setup !== undefined && options.setup !== config.setupName)
+    throw new Error("An automatic session push requires the current active sync setup.");
+  const fingerprint = syncCheckConfigFingerprint(config);
+  const refresh = async () => {
+    validate();
+    options.background?.validate();
+    const latest = await loadConfigForCheck(undefined, options.signal);
+    validate();
+    options.background?.validate(latest);
+    if (fingerprint !== syncCheckConfigFingerprint(latest))
+      throw new Error("Settings changed before automatic session push.");
+  };
   if (!config.automatic || !syncSessionsSelected(config)) return;
   await withStateDirectoryAccess(() =>
     withLock("auto-session-push", async () => {
+      await refresh();
       const state = await readStateForConfig(config);
-      validate();
+      await refresh();
       if ((config.scope || state.scope) && (!state.lastAppliedSnapshot || syncPolicyChanged(state, config))) return;
       const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
-      validate();
+      await refresh();
       const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
-      validate();
+      await refresh();
       if (!hasLocalChanges(local, state, config)) return;
       const operations = await loaders.operations();
-      validate();
+      await refresh();
       await operations.push(
         ctx,
         { ...options, auto: true, yes: true, silent: true, reload: false },

@@ -67,6 +67,9 @@ export async function applySnapshot(
     | "reinclude"
     | "ignorePolicy"
     | "reservedIgnoreNames"
+    | "setupName"
+    | "recoverySetupKey"
+    | "ignoreSourceIdentity"
     | "sessionDir"
     | "syncFiles"
     | "syncSessions"
@@ -74,6 +77,7 @@ export async function applySnapshot(
     | "signal"
     | "validateMutation"
     | "validateIgnorePolicy"
+    | "validateApplyReview"
     | "expectedFileHashes"
   > & { reviewedLocal?: Pick<Snapshot, "files"> } = {},
 ) {

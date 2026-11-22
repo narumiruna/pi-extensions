@@ -4,7 +4,9 @@ import { configFromSettings, loadConfig } from "../settings/config.js";
 import { ownRecord } from "../settings/settings-validation.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
+import { captureMutationOwner } from "../sync/sync-local.js";
 import { syncIncludeSelection, syncSessionsSelected } from "../sync/sync-policy.js";
+import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
 import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery, loadSettingsCatalog } from "./settings-review.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -49,6 +51,15 @@ export async function showSyncSetups(
   actions: SyncSetupActions,
   signal?: AbortSignal,
 ): Promise<"exit" | undefined> {
+  const validateOwner = captureMutationOwner(ctx, signal);
+  const isCurrent = () => {
+    try {
+      validateOwner();
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let selectedName: string | undefined;
   let exit = false;
   const nameById = new Map<string, string>();
@@ -165,21 +176,27 @@ export async function showSyncSetups(
     },
   });
   await runMenu(ctx, menu, {
-    getState: async () => loadSetupMenuState(selectedName, signal),
+    getState: async ({ signal: loadSignal }) => loadSetupMenuState(ctx, selectedName, loadSignal),
     signal,
-    isCurrent: () => !signal?.aborted,
+    isCurrent,
   });
   return exit ? "exit" : undefined;
 }
 
-async function loadSetupMenuState(selectedName: string | undefined, signal?: AbortSignal): Promise<SetupMenuState> {
+async function loadSetupMenuState(
+  ctx: ExtensionCommandContext,
+  selectedName: string | undefined,
+  signal: AbortSignal,
+): Promise<SetupMenuState> {
   const catalog = await loadSettingsCatalog();
   throwIfAborted(signal);
   if (!catalog) return { setups: {} };
   const { syncSetups: setups, activeSyncSetup: active } = catalog.settings;
-  const recovery = catalog.ignoreSetups.length
-    ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(catalog.path)]
-    : undefined;
+  const recovery =
+    catalog.ignoreSetups.length && !(await ignoreFileSettingsAvailable(ctx, signal))
+      ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(catalog.path)]
+      : undefined;
+  throwIfAborted(signal);
   if (!selectedName || !Object.hasOwn(setups, selectedName)) return { setups, active, recovery };
   const setupCount = Object.keys(setups).length;
   const isCurrent = selectedName === active;
@@ -221,7 +238,7 @@ async function loadSetupMenuState(selectedName: string | undefined, signal?: Abo
   }
   const removeNeedsSwitch = isCurrent && setupCount > 1;
   const ignoreSetupsRemain = catalog.ignoreSetups.some((name) => name !== selectedName);
-  const removeUnavailable = removeNeedsSwitch || ignoreSetupsRemain;
+  const removeUnavailable = removeNeedsSwitch || Boolean(recovery && ignoreSetupsRemain);
   if (recovery) {
     if (removeUnavailable) detail.unshift("Remove unavailable here; use manual recovery.");
     detail.unshift(...recovery);

@@ -125,17 +125,20 @@ test("invalid versions, ambiguous policies and unsafe filenames are rejected", (
   }
 });
 
-test("configuration reads do not create rules, and legacy operation loaders refuse unfenced ignore setups", () =>
+test("operations require a present rule source while mixed legacy setups and previews remain readable", () =>
   fixture(async (root, save) => {
     const document = settings();
     document.syncSetups.legacy = setup("legacy", { automatic: false, include: ["Current.rules"] });
     document.syncSetups.peer = setup("peer", { ...ignoreSync, ignoreFile: "Current.rules" });
     await save(document);
     assert.deepEqual(configFromSettings(document, "legacy").reservedIgnoreNames, [".syncignore", "current.rules"]);
-    await assert.rejects(loadConfig(), /does not yet support/u);
-    await assert.rejects(loadConfigForCheck(), /does not yet support/u);
-    await assert.rejects(loadConfig("legacy"), /does not yet support/u);
-    await assert.rejects(resolveIgnoreConfig(document, "legacy"), /does not yet support/u);
+    await assert.rejects(loadConfig(), /Ignore file is missing: .*\.syncignore/u);
+    await assert.rejects(loadConfigForCheck(), /Ignore file is missing: .*\.syncignore/u);
+    const legacy = await loadConfig("legacy");
+    assert.equal(legacy.ignorePolicy, undefined);
+    assert.deepEqual(legacy.reservedIgnoreNames, [".syncignore", "current.rules"]);
+    assert.ok(legacy.validateIgnorePolicy);
+    await legacy.validateIgnorePolicy();
     await assert.rejects(resolveIgnoreConfig(document, "peer"), /Current.rules.*does not exist/u);
     assert.equal((await loadPartialConfig()).ignoreFile, ".syncignore");
     const absent = await resolveIgnoreConfig(document);
@@ -157,7 +160,16 @@ test("configuration reads do not create rules, and legacy operation loaders refu
     await assert.rejects(absent.validateIgnorePolicy(), /reopen the review/u);
     assert.ok(initialized.validateIgnorePolicy);
     await initialized.validateIgnorePolicy();
-    await fs.rm(path.join(root, ".syncignore"));
+    const operational = await loadConfig();
+    assert.ok(operational.validateIgnorePolicy);
+    assert.equal(operational.ignorePolicy?.fingerprint, initialized.ignorePolicy?.fingerprint);
+    const original = path.join(root, ".syncignore");
+    const replacement = path.join(root, "temporary-rules");
+    await fs.writeFile(replacement, DEFAULT_IGNORE_RULES);
+    await fs.rename(replacement, original);
+    assert.notEqual(syncCheckConfigFingerprint(await loadConfig()), syncCheckConfigFingerprint(operational));
+    await assert.rejects(operational.validateIgnorePolicy(), /ignore policy changed/u);
+    await fs.rm(original);
     await assert.rejects(initialized.validateIgnorePolicy(), /reopen the review/u);
   }));
 

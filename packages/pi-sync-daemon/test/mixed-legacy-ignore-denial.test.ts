@@ -22,6 +22,7 @@ import {
 } from "../src/engine/snapshot/snapshot-transaction.js";
 import { transactionRoot } from "../src/engine/snapshot/snapshot-transaction-directory.js";
 import type { Snapshot, SnapshotOptions } from "../src/engine/snapshot/snapshot-types.js";
+import { acceptedSelection, syncPolicyChanged } from "../src/engine/sync/sync-state.js";
 
 const reserved = { reservedIgnoreNames: [".syncignore", "alternate.rules", "work.rules"] } as const;
 const rules = [".SYNCIGNORE", "Alternate.Rules", "WORK.Rules"] as const;
@@ -89,7 +90,8 @@ test.each(scopes.map((options, idx) => ({ options, version: [1, 4, 5][idx] })))(
       assert.deepEqual(paths(preserved), paths(local));
       assert.deepEqual(preserved.selection, legacy.selection);
 
-      const applied = await applySnapshot(incoming, new Set(), mixed);
+      await assert.rejects(applySnapshot(incoming, new Set(), mixed), /freshness check/);
+      const applied = await applySnapshot(incoming, new Set(), { ...mixed, validateIgnorePolicy: async () => {} });
       assert.deepEqual(Object.keys(applied), ["notes/alternate.rules"]);
       for (const file of rules) assert.equal(await fs.readFile(path.join(root, file), "utf8"), file);
       assert.equal(await fs.readFile(path.join(root, "notes/alternate.rules"), "utf8"), "remote:notes/alternate.rules");
@@ -123,6 +125,31 @@ test("reserved names are local snapshot options derived from all setups in a mix
   assert.deepEqual(options.reservedIgnoreNames, reserved.reservedIgnoreNames);
   assert.deepEqual(options.include, ["WORK.Rules"]);
   assert.equal(options.ignorePolicy, undefined);
+});
+
+test("mixed legacy baselines bind the setup and normalized reservations without changing wire selection", () => {
+  const config = { setupName: "legacy", include: ["notes"], ...reserved };
+  const accepted = {
+    version: 1,
+    profile: "legacy",
+    lastAppliedSnapshot: "accepted",
+    lastFileHashes: {},
+    ...acceptedSelection(config),
+  };
+  assert.equal(syncPolicyChanged(accepted, config), false);
+  assert.equal(
+    syncPolicyChanged(accepted, {
+      ...config,
+      reservedIgnoreNames: [...reserved.reservedIgnoreNames].reverse().map((name) => name.toUpperCase()),
+    }),
+    false,
+  );
+  for (const changed of [
+    { ...config, setupName: "other" },
+    { ...config, reservedIgnoreNames: [...reserved.reservedIgnoreNames, "another.rules"] },
+    { ...config, reservedIgnoreNames: undefined },
+  ])
+    assert.equal(syncPolicyChanged(accepted, changed), true);
 });
 
 test("mixed safety preflight refuses rule paths and ancestor replacements even without glob rules", () =>
@@ -230,7 +257,66 @@ test("mixed recovery retains a legacy journal that would restore over a newly re
     assert.equal(await fs.readFile(file, "utf8"), "after");
     const pending = await fs.readdir(transactionRoot());
     assert.equal(pending.length, 1);
-    await assert.rejects(recoverPendingSnapshotTransactions(reserved), protectedPath);
+    await assert.rejects(recoverPendingSnapshotTransactions(reserved), /different setup or ignore policy evidence/);
     assert.deepEqual(await fs.readdir(transactionRoot()), pending);
     assert.equal(await fs.readFile(file, "utf8"), "after");
+  }));
+
+test("mixed legacy recovery rejects changed or removed reservations and restores only with the original binding", () =>
+  fixture(async (root) => {
+    const target = await put(root, "notes.md", "before");
+    const original = { ...reserved, include: ["notes.md"], setupName: "legacy", validateIgnorePolicy: async () => {} };
+    const cancellation = new AbortController();
+    const rename = fs.rename.bind(fs);
+    const patch = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === target) cancellation.abort();
+    });
+    try {
+      await assert.rejects(
+        applySnapshotTransaction(
+          { deletes: [], writes: [{ target, content: Buffer.from("after") }] },
+          {
+            ...original,
+            signal: cancellation.signal,
+          },
+        ),
+        /transaction evidence retained/,
+      );
+    } finally {
+      patch.mockRestore();
+    }
+    const pending = await fs.readdir(transactionRoot());
+    assert.equal(pending.length, 1);
+    for (const candidate of [
+      { ...original, reservedIgnoreNames: undefined },
+      { ...original, reservedIgnoreNames: [...reserved.reservedIgnoreNames, "notes.md"] },
+      { ...original, setupName: "other" },
+    ]) {
+      await assert.rejects(recoverPendingSnapshotTransactions(candidate), /different setup or ignore policy evidence/);
+      assert.deepEqual(await fs.readdir(transactionRoot()), pending);
+      assert.equal(await fs.readFile(target, "utf8"), "after");
+    }
+    const interruptedRecovery = new AbortController();
+    const stagePatch = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (
+        typeof to === "string" &&
+        path.basename(to) === "journal.json" &&
+        (await fs.readFile(to, "utf8")).includes('"recoveryStaged": true')
+      )
+        interruptedRecovery.abort();
+    });
+    try {
+      await assert.rejects(recoverPendingSnapshotTransactions({ ...original, signal: interruptedRecovery.signal }), {
+        name: "AbortError",
+      });
+      assert.ok(interruptedRecovery.signal.aborted);
+      assert.equal(await fs.readFile(target, "utf8"), "after");
+    } finally {
+      stagePatch.mockRestore();
+    }
+    await recoverPendingSnapshotTransactions(original);
+    assert.equal(await fs.readFile(target, "utf8"), "before");
+    assert.deepEqual(await fs.readdir(transactionRoot()), []);
   }));

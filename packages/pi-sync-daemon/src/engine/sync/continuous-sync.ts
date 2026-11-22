@@ -45,6 +45,8 @@ const LOCAL_CHECK_MS = 5_000;
 const POLL_MS = 60_000;
 const DEBOUNCE_MS = 1_000;
 
+type ContinuousTransfer = <T>(run: (committed: () => void) => Promise<T>) => Promise<T>;
+
 interface ContinuousStartup {
   signal: AbortSignal;
   debug: boolean;
@@ -64,7 +66,13 @@ export function createContinuousSync(
     | undefined;
   return {
     // A setup name binds retry to the configuration loaded after asynchronous eligibility checks.
-    start(ctx: ExtensionContext, sessionSignal: AbortSignal, explicitRetry: boolean | string = false, debug = false) {
+    start(
+      ctx: ExtensionContext,
+      sessionSignal: AbortSignal,
+      explicitRetry: boolean | string = false,
+      debug = false,
+      transfer?: ContinuousTransfer,
+    ) {
       if (
         (!ctx.backgroundAuthorized?.() && (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc"))) ||
         sessionSignal.aborted ||
@@ -97,7 +105,7 @@ export function createContinuousSync(
         let explicit = explicitRetry;
         while (!signal.aborted) {
           try {
-            await run(ctx, signal, explicit, startup);
+            await run(ctx, signal, explicit, startup, transfer);
             return;
           } catch {
             if (signal.aborted) return;
@@ -145,12 +153,13 @@ export function createContinuousSync(
     signal: AbortSignal,
     explicitRetry: boolean | string,
     startup: ContinuousStartup,
+    transfer?: ContinuousTransfer,
   ) {
     const validateOwner = captureMutationOwner(ctx, signal);
     try {
       while (!signal.aborted) {
         validateOwner();
-        const config = await loadConfigForCheck();
+        const config = await loadConfigForCheck(undefined, signal);
         validateOwner();
         if (!continuousEnabled(config) || (ctx.backgroundAuthorized && !ctx.backgroundAuthorized(config))) return;
         try {
@@ -167,7 +176,7 @@ export function createContinuousSync(
               });
               if (lease) {
                 const retry = typeof explicitRetry === "string" ? explicitRetry === config.setupName : explicitRetry;
-                await monitor(ctx, config, binding, lease, signal, retry, startup);
+                await monitor(ctx, config, binding, lease, signal, retry, startup, transfer);
                 explicitRetry = false;
               } else setSyncStatus(ctx, "sync waiting: another local owner", { activity: "idle" });
             } finally {
@@ -184,7 +193,7 @@ export function createContinuousSync(
           });
         }
         validateOwner();
-        const current = await loadConfigForCheck();
+        const current = await loadConfigForCheck(undefined, signal);
         if (!continuousEnabled(current) || (ctx.backgroundAuthorized && !ctx.backgroundAuthorized(current))) return;
         validateOwner();
         await wait(clock, LOCAL_CHECK_MS, signal);
@@ -210,6 +219,7 @@ export function createContinuousSync(
     parent: AbortSignal,
     explicitRetry: boolean,
     startup: ContinuousStartup,
+    transfer?: ContinuousTransfer,
   ) {
     const signal = AbortSignal.any([parent, lease.signal]);
     const validateOwner = captureMutationOwner(ctx, signal);
@@ -249,7 +259,7 @@ export function createContinuousSync(
       validate();
       while (!signal.aborted && ctx.isIdle()) {
         validate();
-        const latest = await loadConfigForCheck();
+        const latest = await loadConfigForCheck(undefined, signal);
         validate();
         if (
           !continuousEnabled(latest) ||
@@ -259,6 +269,8 @@ export function createContinuousSync(
           return;
         validate();
         if (syncCheckConfigFingerprint(latest) !== syncCheckConfigFingerprint(config)) {
+          if (config.reservedIgnoreNames !== undefined || latest.reservedIgnoreNames !== undefined) return;
+          explicitRetry = false;
           closeWatch();
           config = latest;
           closeWatch = await openWatch();
@@ -323,7 +335,7 @@ export function createContinuousSync(
               if (guardSignal.aborted) return;
               try {
                 validate();
-                const latest = await loadConfigForCheck();
+                const latest = await loadConfigForCheck(undefined, guardSignal);
                 if (guardSignal.aborted) return;
                 validateCycle(latest);
               } catch {
@@ -342,6 +354,7 @@ export function createContinuousSync(
               configuration,
               force,
               timings,
+              transfer,
             );
             outcome = "completed";
           } catch (error) {
@@ -427,10 +440,15 @@ export function createContinuousSync(
     configuration: string,
     force: boolean,
     timings: StartupTimings,
+    transfer?: ContinuousTransfer,
   ) {
     const validate = (latest?: AnySyncConfig) => {
       signal.throwIfAborted();
       validateOwner(latest);
+    };
+    const refresh = async () => {
+      validate();
+      validate(await loadConfigForCheck(undefined, signal));
     };
     validate();
     const current = await readContinuousRecord(binding);
@@ -456,8 +474,9 @@ export function createContinuousSync(
         validate();
         const validateIgnore = ignorePolicyValidator({ ...snapshotOptions, validateMutation: validate });
         if (validateIgnore) await validateIgnore();
+        await refresh();
         const inspection = await inspectionModule.inspectSync(config, snapshotOptions, signal, undefined, timings);
-        validate();
+        await refresh();
         let localIdentity = inspection.localIdentity;
         if (!localIdentity) {
           const snapshotModule = await loaders.snapshot();
@@ -513,7 +532,7 @@ export function createContinuousSync(
       const operations = await timings.measure("operations import", () => loaders.operations());
       validate();
       setSyncStatus(ctx, "sync syncing", { activity: "working" });
-      const result = await timings.measure("automatic transfer", () =>
+      const runTransfer = (onCommit?: () => void) =>
         withStateDirectoryAccess(() =>
           withAgentSyncLock(
             ctx,
@@ -527,15 +546,24 @@ export function createContinuousSync(
               auto: true,
               signal,
               startupTimings: timings,
+              onCommit,
               background: {
                 validate,
-                reserve: (key, requestSignal) =>
-                  reserveContinuousRequest(binding, lease, key, () => clock.now(), requestSignal),
+                reserve: async (key, requestSignal) => {
+                  await refresh();
+                  await reserveContinuousRequest(binding, lease, key, () => clock.now(), requestSignal);
+                  await refresh();
+                },
               },
             },
-            (options) => operations.syncBoth(ctx, options),
+            async (options) => {
+              await refresh();
+              return operations.syncBoth(ctx, options);
+            },
           ),
-        ),
+        );
+      const result = await timings.measure("automatic transfer", () =>
+        transfer ? transfer(runTransfer) : runTransfer(),
       );
       validate();
       transferred = result === "applied";

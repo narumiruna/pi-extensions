@@ -1,10 +1,5 @@
 import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-factory.js";
-import {
-  expectedRemoteHead,
-  type RemoteHead,
-  type SyncBackend,
-  SyncBackendConflictError,
-} from "../backends/sync-backend.js";
+import { expectedRemoteHead, type SyncBackend, SyncBackendConflictError } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
@@ -22,19 +17,8 @@ import {
   scanSnapshot,
 } from "../snapshot/snapshot.js";
 import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
-import type { Snapshot } from "../snapshot/snapshot-types.js";
-import {
-  hasCurrentMergeBaseline,
-  pruneMergeBaselines,
-  readMergeAncestors,
-  stageMergeBaseline,
-} from "../state/merge-baseline-store.js";
-import {
-  readStateForConfig,
-  statePathForConfig,
-  syncStateFingerprint,
-  writeStateForConfig,
-} from "../state/sync-state-store.js";
+import { hasCurrentMergeBaseline, pruneMergeBaselines, readMergeAncestors } from "../state/merge-baseline-store.js";
+import { readStateForConfig, statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { confirmMergeReview } from "../ui/merge-review.js";
 import { mergedSyncSummary } from "../ui/merged-sync-summary.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -52,6 +36,7 @@ import { resolveContentConflicts } from "./content-conflicts.js";
 import { ContinuousError } from "./continuous-errors.js";
 import { planFileMerge } from "./file-merge-planner.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields } from "./local-fields.js";
+import { acceptedState, matchesAcceptedState, writeAcceptedState } from "./merge-acceptance.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "./merge-apply.js";
 import {
   assertMergeJournalPolicy,
@@ -65,7 +50,7 @@ import {
   writeMergeJournal,
 } from "./merge-journal.js";
 import { mergeTransferError } from "./merge-transfer-error.js";
-import { acceptedMergeFiles, type PartialProgress, progressState } from "./partial-progress.js";
+import { acceptedMergeFiles, type PartialProgress } from "./partial-progress.js";
 import {
   formatRemoteSelectionStatus,
   readSnapshotForHead,
@@ -76,15 +61,9 @@ import { createStartupTimings, type StartupTimings } from "./startup-timings.js"
 import { createSyncDecision } from "./sync-decision.js";
 import { backupLocal, captureMutationOwner, protectedSessionPaths } from "./sync-local.js";
 import { configuredSnapshotPathMatcher, inspectRemoteSelection, syncSessionsSelected } from "./sync-policy.js";
-import {
-  acceptedSelection,
-  fileHashMap,
-  hasLocalChanges,
-  hasRemoteChanges,
-  sameHashes,
-  syncPolicyChanged,
-} from "./sync-state.js";
+import { fileHashMap, hasLocalChanges, hasRemoteChanges, sameHashes, syncPolicyChanged } from "./sync-state.js";
 import { TEXT_MERGE_WORK_LIMIT } from "./text-merge.js";
+import { checkLiveProtection, validateMergeApplyReview, validateMergedPublication } from "./transfer-freshness.js";
 
 const MAX_ATTEMPTS = 3;
 
@@ -624,7 +603,7 @@ export async function mergeSync(
       await validate();
       const refreshedHead = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
       await validate();
-      if (!refreshedHead || !backend.sameRevision(refreshedHead.revision, head.revision))
+      if (!sameMergeRecoveryHead(backend, refreshedHead, head))
         throw new ContinuousError("stale", "Remote changed during review; no merged transfer was performed.");
       await options.agentAcceptance?.commitCandidate?.();
       await validate();
@@ -686,7 +665,20 @@ export async function mergeSync(
             backend.publishSnapshot(upload, expectedRemoteHead(head), {
               signal: options.signal,
               onCommit: options.onCommit,
-              ...(validateIgnore ? { validateIgnorePolicy: validateFresh } : {}),
+              ...(validateIgnore
+                ? {
+                    validateIgnorePolicy: () =>
+                      validateMergedPublication(
+                        ctx,
+                        config,
+                        snapshotOptions,
+                        localRaw,
+                        after,
+                        journal.stateIdentity,
+                        validateFresh,
+                      ),
+                  }
+                : {}),
             }),
           );
           journal.committedHead = result.head;
@@ -765,6 +757,7 @@ async function completeJournal(
     throw new Error(
       "Merge journal belongs to a different setup, selection or local-field policy; preserve it for reviewed recovery.",
     );
+  assertMergeJournalPolicy(journal, config);
   await validateFresh();
   const sessionRoot =
     config.scope === "agent-directory" || syncSessionsSelected(config)
@@ -790,6 +783,7 @@ async function completeJournal(
     validateMutation();
     if (!sameMergeRecoveryHead(backend, head, latest))
       throw new Error("Remote head changed during merge recovery; journal and backup retained.");
+    await validateFresh();
     return {
       sameBaseline: syncStateFingerprint(state) === journal.stateIdentity,
       sameLocal: sameHashes(fileHashMap(local), fileHashMap(journal.before)),
@@ -808,7 +802,7 @@ async function completeJournal(
     if (
       matchesAcceptedState(state, config, journal.committedHead, journal.accepted ?? journal.after, journal.progress)
     ) {
-      if (config.ignorePolicy) await validateFresh();
+      if (journal.localPolicyKey) await validateFresh();
       await clearMergeJournal(config);
       await validate();
       await pruneMergeBaselines(config, state, captureMutationOwner(ctx, signal));
@@ -818,7 +812,7 @@ async function completeJournal(
   }
   if (
     head &&
-    (journal.version === 2 || head.selection?.version === 4) &&
+    (journal.ignoreSource || head.selection?.version === 4) &&
     inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config).kind !==
       "same"
   )
@@ -830,7 +824,7 @@ async function completeJournal(
       backend.matchesUncommittedRecoveryHead?.(head, journal.expectedHead))
   ) {
     if (
-      journal.version === 2 &&
+      journal.ignoreSource &&
       (head.snapshotId !== journal.expectedHead.snapshotId ||
         head.snapshotRef !== journal.expectedHead.snapshotRef ||
         head.snapshotId === journal.upload.id)
@@ -839,7 +833,7 @@ async function completeJournal(
     const { sameBaseline, sameLocal } = await readRetirementEvidence();
     validateMutation();
     if (!sameBaseline || !sameLocal) {
-      if (journal.version === 2) {
+      if (journal.ignoreSource) {
         if (!sameBaseline)
           throw new Error(
             "Sync baseline changed after uncertain publication; preserve the journal and backup for review.",
@@ -897,13 +891,21 @@ async function completeJournal(
       "Pending merge has unavailable remote selection metadata; preserve its journal and backup for review.",
     );
   if (sessionRoot !== undefined) requireStableMergeSessionRoot(journal.before, journal.after, config.scope);
-  await validate();
+  await validateFresh();
+  const protectedPaths = protectedSessionPaths(ctx, sessionRoot);
+  const validateApply = () => {
+    validateMutation();
+    if (journal.localPolicyKey) checkLiveProtection(ctx, sessionRoot, protectedPaths);
+  };
+  const validateApplyReview = journal.localPolicyKey
+    ? () => validateMergeApplyReview(backend, config, head, journal.stateIdentity, validateFresh, signal)
+    : undefined;
   await timings.measure("transfer local apply", () =>
     applyMergedSnapshot(
       journal.before,
       journal.after,
-      protectedSessionPaths(ctx, sessionRoot),
-      { ...snapshotOptions, validateMutation },
+      protectedPaths,
+      { ...snapshotOptions, validateMutation: validateApply, validateApplyReview },
       validate,
       ctx.sessionManager.getSessionFile?.(),
     ),
@@ -911,7 +913,7 @@ async function completeJournal(
   await validate();
   const headAtAcceptance = await timings.measure("transfer remote head", () => backend.readHead(signal));
   await validate();
-  if (!headAtAcceptance || !backend.sameRevision(headAtAcceptance.revision, head.revision))
+  if (!sameMergeRecoveryHead(backend, headAtAcceptance, head))
     throw new Error("Remote changed during merged apply; journal and backup retained for review.");
   await timings.measure("transfer baseline write", () =>
     writeAcceptedState(config, head, journal.accepted ?? journal.after, validateFresh, journal.progress),
@@ -939,52 +941,4 @@ async function completeJournal(
   );
   await validate();
   return true;
-}
-
-// Older valid journals may have accepted noncanonical JSON before projection normalization.
-function matchesAcceptedState(
-  state: Awaited<ReturnType<typeof readStateForConfig>>,
-  config: AnySyncConfig,
-  head: RemoteHead,
-  snapshot: Snapshot,
-  progress?: PartialProgress,
-) {
-  return [true, false].some(
-    (canonical) =>
-      syncStateFingerprint(state) === syncStateFingerprint(acceptedState(config, head, snapshot, progress, canonical)),
-  );
-}
-
-function acceptedState(
-  config: AnySyncConfig,
-  head: RemoteHead,
-  snapshot: Snapshot,
-  progress?: PartialProgress,
-  canonical = true,
-) {
-  if (progress) return progressState(config, head, snapshot, progress);
-  return {
-    version: 1,
-    profile: config.snapshotIdentity,
-    lastAppliedSnapshot: head.snapshotId,
-    lastRemoteRevision: head.revision,
-    lastFileHashes: fileHashMap(canonical ? portableSnapshot(snapshot, config.localFields) : snapshot),
-    ...acceptedSelection(config),
-    ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
-  };
-}
-
-async function writeAcceptedState(
-  config: AnySyncConfig,
-  head: RemoteHead,
-  snapshot: Snapshot,
-  validate: () => Promise<void>,
-  progress?: PartialProgress,
-) {
-  const accepted = portableSnapshot(snapshot, config.localFields);
-  const state = acceptedState(config, head, accepted, progress);
-  await stageMergeBaseline(config, accepted, state, progress?.previous);
-  await validate();
-  await writeStateForConfig(config, state);
-  await validate();
 }

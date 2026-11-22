@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { ConsentPublicationError, consentFingerprint, readConsent, revokeChangedBindings } from "./consent.js";
+import {
+  automaticPolicyAuthorized,
+  ConsentPublicationError,
+  consentFingerprint,
+  participantBinding,
+  readConsent,
+  revokeChangedBindings,
+} from "./consent.js";
 import type { EngineContext, EngineSession } from "./engine/host.js";
-import { loadConfigForCheck } from "./engine/settings/config.js";
+import { loadConfigForCheck, syncCheckConfigFingerprint } from "./engine/settings/config.js";
 import type { AnySyncConfig } from "./engine/settings/settings-types.js";
 import type { createContinuousSync } from "./engine/sync/continuous-sync.js";
 import { createEngineLoaders } from "./engine/sync/sync-loaders.js";
@@ -21,8 +28,20 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
   let closed = false;
   let authorizationFailed = false;
   let scheduled = false;
-  // Keep each client's last validated route, not its Pi context or completed execution.
-  const retries = new Map<string, { setup: string; generation: string; signal: AbortSignal }>();
+  let settingsGeneration = 0;
+  let blockedParticipants: string | undefined;
+  const participatingSessions = () =>
+    JSON.stringify(
+      server
+        ?.participants()
+        .map(({ id, generation }) => `${id}:${generation}`)
+        .sort() ?? [],
+    );
+  const policyNeedsReview = () => blockedParticipants === participatingSessions();
+  let monitoredPolicy: string | undefined;
+  const retries = new Map<string, { fingerprint: string; owner: string; signal: AbortSignal }>();
+  const retryOwner = (peer: ClientFacts) =>
+    JSON.stringify([peer.generation, peer.cwd, peer.sessionId, peer.sessionFile, peer.sessionDir, peer.model]);
   let epoch:
     | {
         key: string;
@@ -34,7 +53,6 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     | undefined;
   const timingOwners = new WeakMap<EngineContext, Execution>();
   const loaders = createEngineLoaders();
-  const operations = loaders.operations;
   let continuous: ReturnType<typeof createContinuousSync> | undefined;
   function schedule() {
     if (closed || scheduled || !server) return;
@@ -58,7 +76,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     await current.promise;
   }
   function unattendedGrant(config: AnySyncConfig) {
-    if (!config.continuous || !config.agentMode) return undefined;
+    if (!config.continuous || !config.agentMode || !automaticPolicyAuthorized(root, config)) return undefined;
     const saved = readConsent(root)?.setups[config.setupName];
     return saved?.afterExit && saved.fingerprint === consentFingerprint(root, config) ? saved : undefined;
   }
@@ -69,7 +87,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       if (!consent || !Object.values(consent.setups).some((saved) => saved.afterExit)) return "exit";
       const config = await loadConfigForCheck();
       if (closed || authorizationFailed) return "pause";
-      return unattendedGrant(config) ? "keep" : "exit";
+      return !policyNeedsReview() && unattendedGrant(config) ? "keep" : "exit";
     } catch {
       // Invalid evidence is not an implicit revocation or permission to discard a safety barrier.
       return "pause";
@@ -78,12 +96,24 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
   async function start() {
     const service = server;
     if (!service) return;
-    const available = () => !closed && !authorizationFailed && !task && server === service && service.isIdle();
-    if (!available()) return;
-    const consent = readConsent(root);
-    if (!consent) return;
+    if (closed || authorizationFailed || policyNeedsReview() || task || !service.isIdle()) return;
+    const generation = settingsGeneration;
+    const participants = service.participantGeneration?.();
+    const participantsToken = participantBinding(service);
+    const consentToken = JSON.stringify(readConsent(root));
+    const sameAuthorization = () =>
+      !closed &&
+      !authorizationFailed &&
+      !policyNeedsReview() &&
+      server === service &&
+      generation === settingsGeneration &&
+      participants === service.participantGeneration?.() &&
+      participantsToken === participantBinding(service) &&
+      consentToken === JSON.stringify(readConsent(root));
+    const available = () => !task && service.isIdle() && sameAuthorization();
+    if (!consentToken || !available()) return;
     const config = await loadConfigForCheck();
-    if (!available()) return;
+    if (!available() || !automaticPolicyAuthorized(root, config)) return;
     if (!config.continuous || !config.agentMode) {
       retries.clear();
       return;
@@ -92,6 +122,9 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     if ((await pendingTransactionEntries()).some((entry) => entry.isDirectory()) || !available()) return;
     const peers = service.participants();
     if (peers.some((peer) => !peer.idle || peer.ready !== true)) return;
+    const fingerprint = syncCheckConfigFingerprint(config);
+    if (config.reservedIgnoreNames !== undefined && monitoredPolicy !== undefined && monitoredPolicy !== fingerprint)
+      return;
     const authorized = unattendedGrant(config);
     const selected = peers.toSorted((a, b) => a.id.localeCompare(b.id))[0];
     if (!selected && !authorized) return;
@@ -141,7 +174,11 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     };
     const execution: Execution = { ...original, facts: () => stableFacts };
     const allowed = (currentConfig = config) => {
-      if (closed || authorizationFailed || server !== service || controller.signal.aborted || !readConsent(root))
+      if (
+        controller.signal.aborted ||
+        !sameAuthorization() ||
+        syncCheckConfigFingerprint(currentConfig) !== fingerprint
+      )
         return false;
       const current = service.participants();
       if (current.length)
@@ -170,13 +207,11 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     timingOwners.set(ctx, execution);
     ctx.backgroundAuthorized = allowed;
     ctx.isIdle = () => Boolean(service.isIdle() && allowed());
-    loaders.operations = async () => {
-      const loaded = await operations();
-      return {
-        ...loaded,
-        syncBoth: (context, options, ...rest) =>
-          loaded.syncBoth(context, { ...options, onCommit: execution.committed }, ...rest),
-      };
+    const refresh = async () => {
+      execution.validate();
+      if (!allowed(await loadConfigForCheck(undefined, controller.signal)))
+        throw new Error("Daemon automatic authorization changed.");
+      execution.validate();
     };
     const sessionSignal = epoch.controller.signal;
     const debug = epoch.debug;
@@ -189,27 +224,44 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     void host
       .run(execution, async () => {
         const { prepareResolverHost } = await import("./resolver-host.js");
+        await refresh();
         const resolver = await prepareResolverHost(root, binding, controller.signal);
         try {
-          if (!allowed()) return;
+          await refresh();
+          if (config.reservedIgnoreNames !== undefined) monitoredPolicy = fingerprint;
           ctx.model = resolver.model;
           ctx.modelUnavailableReason = resolver.unavailable;
-          ctx.modelRegistry = resolver.registry;
+          ctx.modelRegistry = {
+            streamSimple: (model, context, options) => {
+              execution.validate();
+              if (!allowed()) throw new Error("Daemon authorization changed before model dispatch.");
+              return resolver.registry.streamSimple(model, context, options);
+            },
+          };
           ctx.validateModel = async () => {
-            if (!allowed()) throw new Error("Daemon authorization changed before model dispatch.");
-            for (const peer of service.participants()) {
+            await refresh();
+            for (const peer of peers) {
               const fresh = await execution.request("model-binding", { background: true }, peer.id);
               if (JSON.stringify(fresh ?? undefined) !== JSON.stringify(binding))
                 throw new Error("Participating model changed before dispatch.");
-              if (!allowed()) throw new Error("Daemon authorization changed during model validation.");
+              await refresh();
             }
           };
           const explicitRetry = service.participants().some((peer) => {
             const retry = retries.get(peer.id);
-            return retry?.setup === config.setupName && retry.generation === peer.generation && !retry.signal.aborted;
+            return retry?.fingerprint === fingerprint && retry.owner === retryOwner(peer) && !retry.signal.aborted;
           });
           retries.clear();
-          activeContinuous.start(ctx, sessionSignal, explicitRetry ? config.setupName : false, debug);
+          activeContinuous.start(ctx, sessionSignal, explicitRetry ? config.setupName : false, debug, async (run) => {
+            await refresh();
+            const attempt = new AbortController();
+            const owner = service.backgroundExecution(AbortSignal.any([attempt.signal, controller.signal]));
+            try {
+              return await host.run({ ...owner, facts: execution.facts }, () => run(owner.committed));
+            } finally {
+              attempt.abort();
+            }
+          });
           await new Promise<void>((resolve) => {
             if (controller.signal.aborted) resolve();
             else controller.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -234,9 +286,21 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     schedule,
     lifetime,
     blockAutomatic,
-    explicitSync(setup: string, execution: Execution) {
+    explicitSync(config: AnySyncConfig, execution: Execution) {
       const peer = execution.facts();
-      if (!closed && peer) retries.set(peer.id, { setup, generation: peer.generation, signal: execution.signal });
+      if (closed || !peer) return;
+      const fingerprint = syncCheckConfigFingerprint(config);
+      retries.set(peer.id, { fingerprint, owner: retryOwner(peer), signal: execution.signal });
+    },
+    reviewedPolicy(config: AnySyncConfig) {
+      blockedParticipants = undefined;
+      monitoredPolicy = config.reservedIgnoreNames === undefined ? undefined : syncCheckConfigFingerprint(config);
+    },
+    settingsCommitted(blockNewPolicy: boolean) {
+      settingsGeneration++;
+      retries.clear();
+      if (blockNewPolicy) blockedParticipants = participatingSessions();
+      task?.controller.abort(new DOMException("Sync settings committed", "AbortError"));
     },
     async pause() {
       transition = transition.then(stop);
@@ -248,7 +312,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
         if (server) {
           const peers = server.participants();
           for (const [id, retry] of retries)
-            if (retry.signal.aborted || !peers.some((peer) => peer.id === id && peer.generation === retry.generation))
+            if (retry.signal.aborted || !peers.some((peer) => peer.id === id && retryOwner(peer) === retry.owner))
               retries.delete(id);
           revokeChangedBindings(root, peers);
         }

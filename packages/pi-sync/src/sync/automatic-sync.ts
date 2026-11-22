@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { setSyncSetupCompletions } from "../commands/command.js";
 import { piDaemonClient } from "../daemon/pi-client.js";
+import { configFromSettings, loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import type { AnySyncConfig, PiSyncSettingsV3 } from "../settings/settings-types.js";
 import { configureSyncStatus } from "../ui/sync-status.js";
@@ -9,6 +10,7 @@ import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimingPublisher } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
+import { syncSessionsSelected } from "./sync-policy.js";
 
 export async function startSession(
   ctx: ExtensionContext,
@@ -65,11 +67,16 @@ export async function startSession(
 export async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal, _loaders: SyncLoaders) {
   try {
     const client = piDaemonClient(ctx);
-    if (!(await client.configured())) return;
+    const eligible = (config: AnySyncConfig) => config.automatic && syncSessionsSelected(config);
+    if (!(await client.configured((settings) => eligible(configFromSettings(settings))))) return;
     throwIfAborted(signal);
+    const config = await loadConfigForCheck(undefined, signal);
+    throwIfAborted(signal);
+    if (!eligible(config)) return;
+    const automaticFingerprint = syncCheckConfigFingerprint(config);
     await client.run(
       "shutdown",
-      { args: [], yes: true, force: false, stale: false, silent: true, reload: false },
+      { args: [], yes: true, force: false, stale: false, silent: true, reload: false, automaticFingerprint },
       signal,
     );
   } catch (error) {

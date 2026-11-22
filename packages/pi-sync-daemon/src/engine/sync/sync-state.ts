@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { RemoteHead } from "../backends/sync-backend.js";
 import { toPosix } from "../paths.js";
 import { canonicalSnapshotPathForConfig, filterSnapshotForConfigPolicy, isSessionPath } from "../snapshot/snapshot.js";
@@ -11,17 +10,18 @@ import {
   configuredSnapshotPathMatcher,
   customIncludePathsByLower,
   includeFromSelectionConfig,
+  localIgnorePolicyKey,
   normalizeSyncInclude,
   type SyncSelectionConfig,
   syncDirectoryPolicyKey,
   syncSessionsSelected,
 } from "./sync-policy.js";
 
-type SyncPolicyConfig = SyncSelectionConfig & { localFields?: string[] };
-function ignorePolicyKey(config: SyncPolicyConfig) {
-  const key = config.ignorePolicy && syncDirectoryPolicyKey(config);
-  return key === undefined ? undefined : createHash("sha256").update(key).digest("hex");
-}
+type SyncPolicyConfig = SyncSelectionConfig & {
+  localFields?: string[];
+  setupName?: string;
+  ignoreSourceIdentity?: string;
+};
 
 export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncPolicyConfig) {
   return (
@@ -141,7 +141,7 @@ export function shouldRefreshSyncedState(
 export function acceptedSelection(
   config: SyncPolicyConfig & { include: string[]; exclude?: string[]; reinclude?: string[] },
 ) {
-  const key = ignorePolicyKey(config);
+  const key = localIgnorePolicyKey(config);
   return {
     include: config.ignorePolicy ? includeFromSelectionConfig(config) : [...config.include],
     ...(key === undefined ? {} : { ignorePolicyKey: key }),
@@ -152,7 +152,7 @@ export function acceptedSelection(
 }
 
 function sameSelectionRules(state: SyncState, config: SyncPolicyConfig) {
-  const key = ignorePolicyKey(config);
+  const key = localIgnorePolicyKey(config);
   if (key !== undefined || state.ignorePolicyKey !== undefined) return key === state.ignorePolicyKey;
   return config.scope === "agent-directory" && state.scope === config.scope
     ? syncDirectoryPolicyKey(state) === syncDirectoryPolicyKey(config)

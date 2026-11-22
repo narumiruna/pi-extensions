@@ -7,7 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, vi } from "vitest";
-import { initializeDefaultIgnoreSource } from "../src/engine/ignore/ignore-initialization.js";
+import {
+  AutomaticIgnoreCreationUnavailable,
+  checkAutomaticIgnoreCreation,
+  initializeDefaultIgnoreSource,
+} from "../src/engine/ignore/ignore-initialization.js";
 import {
   DEFAULT_IGNORE_CREATION_RECORD,
   DEFAULT_IGNORE_FILENAME,
@@ -114,8 +118,10 @@ test("a marker appearing during a normal read invalidates both an absent and a p
     await assert.rejects(readIgnoreSource(root), unfinished);
   }));
 
-test.runIf(process.platform === "win32").each(["missing", "pending", "partial"] as const)(
-  "Windows initialization refuses %s creation without changing recovery evidence",
+test
+  .runIf(process.platform === "win32" || process.platform === "darwin")
+  .each(["missing", "pending", "partial"] as const)(
+  "initialization on a platform without creation support refuses %s creation without changing recovery evidence",
   (state) =>
     fixture(async (root, target, markerPath) => {
       if (state !== "missing") await fs.writeFile(markerPath, record, { mode: 0o600 });
@@ -451,7 +457,13 @@ posixCreation.each(["exclusive open", "file flush", "directory flush", "handle c
 posixCreation("fails without writing if directory-relative lookup or directory fsync is unavailable", () =>
   fixture(async (root) => {
     const stat = vi.spyOn(fs, "stat").mockRejectedValue(Object.assign(new Error("no anchor"), { code: "ENOTDIR" }));
-    await assert.rejects(initializeDefaultIgnoreSource(root), /directory-relative creation is unavailable/u);
+    const signal = new AbortController().signal;
+    const noAnchor = {
+      constructor: AutomaticIgnoreCreationUnavailable,
+      message: "directory-relative creation is unavailable",
+    };
+    await assert.rejects(checkAutomaticIgnoreCreation(root, signal), noAnchor);
+    await assert.rejects(initializeDefaultIgnoreSource(root), noAnchor);
     stat.mockRestore();
     assert.deepEqual(await fs.readdir(root), []);
     const open = fs.open;
@@ -464,7 +476,9 @@ posixCreation("fails without writing if directory-relative lookup or directory f
       }
       return handle;
     });
-    await assert.rejects(initializeDefaultIgnoreSource(root), /could not safely create or flush/u);
+    const noFlush = { constructor: AutomaticIgnoreCreationUnavailable, message: /does not support flushing/u };
+    await assert.rejects(checkAutomaticIgnoreCreation(root, signal), noFlush);
+    await assert.rejects(initializeDefaultIgnoreSource(root), noFlush);
     assert.deepEqual(await fs.readdir(root), []);
   }),
 );

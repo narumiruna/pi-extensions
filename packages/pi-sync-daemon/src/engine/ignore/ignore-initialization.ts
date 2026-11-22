@@ -18,6 +18,26 @@ const noFollow = (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 const openRead = constants.O_RDONLY | noFollow;
 const openExclusive = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | noFollow;
 
+export class AutomaticIgnoreCreationUnavailable extends Error {}
+
+export async function checkAutomaticIgnoreCreation(root: string, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  assertAutomaticCreationPlatform();
+  root = path.resolve(root);
+  const expected = await fs.lstat(root, { bigint: true });
+  signal.throwIfAborted();
+  assertRoot(root, expected);
+  const { directory } = await openAnchoredDirectory(root, expected);
+  try {
+    signal.throwIfAborted();
+    await syncCreationDirectory(directory);
+    assertRoot(root, expected);
+  } finally {
+    await directory.close();
+    signal.throwIfAborted();
+  }
+}
+
 export async function initializeDefaultIgnoreSource(root: string, signal?: AbortSignal): Promise<IgnoreSource> {
   return (await prepareDefaultIgnoreSource(root, signal)).source;
 }
@@ -30,15 +50,10 @@ export async function prepareDefaultIgnoreSource(
   root = path.resolve(root);
   try {
     const initialRoot = await fs.lstat(root, { bigint: true });
-    const assertRoot = () => {
-      const current = lstatSync(root, { bigint: true });
-      if (!current.isDirectory() || !sameIdentity(initialRoot, current) || realpathSync(root) !== root) {
-        throw new Error("the Pi agent directory is not canonical or changed during initialization");
-      }
-    };
+    const verifyRoot = () => assertRoot(root, initialRoot);
     const checkRoot = () => {
       signal?.throwIfAborted();
-      assertRoot();
+      verifyRoot();
     };
     checkRoot();
     const priorRecord = statAt(path.join(root, DEFAULT_IGNORE_CREATION_RECORD));
@@ -47,17 +62,10 @@ export async function prepareDefaultIgnoreSource(
       checkRoot();
       if (source.present) return { source, created: false };
     }
-    if (!constants.O_DIRECTORY || !constants.O_NOFOLLOW || !constants.O_NONBLOCK || process.platform === "win32") {
-      throw new Error(
-        "this platform does not support durable directory-relative creation; use an existing ignore file",
-      );
-    }
-    const directory = await fs.open(root, openRead | constants.O_DIRECTORY);
+    const { directory, anchor } = await openAnchoredDirectory(root, initialRoot);
     try {
-      if (!sameIdentity(initialRoot, await directory.stat({ bigint: true }))) changed("Pi agent directory");
-      const anchor = await directoryAnchor(directory, initialRoot);
       checkRoot();
-      await directory.sync();
+      await syncCreationDirectory(directory);
       checkRoot();
       const markerPath = path.join(anchor, DEFAULT_IGNORE_CREATION_RECORD);
       const target = path.join(anchor, DEFAULT_IGNORE_FILENAME);
@@ -70,7 +78,7 @@ export async function prepareDefaultIgnoreSource(
           markerPath,
           path.join(root, DEFAULT_IGNORE_CREATION_RECORD),
           record,
-          priorRecord ? checkRoot : assertRoot,
+          priorRecord ? checkRoot : verifyRoot,
           priorRecord,
           true,
         );
@@ -81,7 +89,7 @@ export async function prepareDefaultIgnoreSource(
         if (priorFile) assertOwned(priorFile, DEFAULT_IGNORE_FILENAME, false);
         const file = await fs.open(target, priorFile ? openRead : openExclusive, 0o600).catch(async (cause) => {
           if (!priorRecord && (cause as NodeJS.ErrnoException).code === "EEXIST") {
-            assertRoot();
+            verifyRoot();
             assertCurrent(markerPath, markerStat);
             unlinkSync(markerPath);
             await directory.sync();
@@ -89,7 +97,7 @@ export async function prepareDefaultIgnoreSource(
           throw cause;
         });
         try {
-          const checkTargetRoot = priorFile ? checkRoot : assertRoot;
+          const checkTargetRoot = priorFile ? checkRoot : verifyRoot;
           const fileStat = await flushAndVerify(
             file,
             target,
@@ -126,6 +134,7 @@ export async function prepareDefaultIgnoreSource(
     }
   } catch (cause) {
     signal?.throwIfAborted();
+    if (cause instanceof AutomaticIgnoreCreationUnavailable) throw cause;
     const code = (cause as NodeJS.ErrnoException).code;
     const detail =
       code === "EEXIST"
@@ -134,6 +143,42 @@ export async function prepareDefaultIgnoreSource(
           ? "could not safely create or flush the file"
           : (cause as Error).message;
     throw new Error(`Ignore file "${DEFAULT_IGNORE_FILENAME}" initialization: ${detail}.`, { cause });
+  }
+}
+
+function assertAutomaticCreationPlatform() {
+  if (process.platform !== "linux" || !constants.O_DIRECTORY || !constants.O_NOFOLLOW || !constants.O_NONBLOCK) {
+    throw new AutomaticIgnoreCreationUnavailable("this platform does not support durable directory-relative creation");
+  }
+}
+
+function assertRoot(root: string, expected: BigIntStats) {
+  const current = lstatSync(root, { bigint: true });
+  if (!current.isDirectory() || !sameIdentity(expected, current) || realpathSync(root) !== root) {
+    throw new Error("the Pi agent directory is not canonical or changed during initialization");
+  }
+}
+
+async function openAnchoredDirectory(root: string, expected: BigIntStats) {
+  assertAutomaticCreationPlatform();
+  const directory = await fs.open(root, openRead | constants.O_DIRECTORY);
+  try {
+    if (!sameIdentity(expected, await directory.stat({ bigint: true }))) changed("Pi agent directory");
+    return { directory, anchor: await directoryAnchor(directory, expected) };
+  } catch (error) {
+    await directory.close();
+    throw error;
+  }
+}
+
+async function syncCreationDirectory(directory: FileHandle) {
+  try {
+    await directory.sync();
+  } catch (error) {
+    if (["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      throw new AutomaticIgnoreCreationUnavailable("the filesystem does not support flushing the Pi agent directory");
+    }
+    throw error;
   }
 }
 
@@ -146,7 +191,7 @@ async function directoryAnchor(directory: FileHandle, expected: BigIntStats) {
     });
     if (observed?.isDirectory() && sameIdentity(expected, observed)) return candidate;
   }
-  throw new Error("directory-relative creation is unavailable; use an existing ignore file");
+  throw new AutomaticIgnoreCreationUnavailable("directory-relative creation is unavailable");
 }
 
 function statAt(target: string) {

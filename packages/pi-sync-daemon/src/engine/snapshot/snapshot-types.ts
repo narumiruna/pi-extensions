@@ -74,10 +74,14 @@ export interface AgentDirectoryInventory {
 }
 
 export interface SnapshotOptions extends DirectoryScope {
+  setupName?: string;
+  recoverySetupKey?: string;
+  ignoreSourceIdentity?: string;
   signal?: AbortSignal;
   /** Caller-owned session/generation guard, rechecked at file-mutation boundaries. */
   validateMutation?: () => void;
   validateIgnorePolicy?: () => Promise<void>;
+  validateApplyReview?: () => Promise<void>;
   /** Reviewed regular-file preimages; null means the path was absent. Checked under mutation queues. */
   expectedFileHashes?: Readonly<Record<string, string | null>>;
   include?: string[];

@@ -156,6 +156,8 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   reservedIgnoreNames?: readonly string[];
   ignorePolicy?: EffectiveIgnorePolicy;
   validateIgnorePolicy?: SnapshotOptions["validateIgnorePolicy"];
+  ignoreSourceIdentity?: string;
+  configDocumentFingerprint?: string;
   exclude?: string[];
   reinclude?: string[];
   automatic: boolean;

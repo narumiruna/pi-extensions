@@ -1,4 +1,13 @@
-import { authorizeAfterExit, consentFingerprint, readConsent, requireHandover } from "./consent.js";
+import {
+  authorizeAfterExit,
+  automaticPolicyAuthorized,
+  captureAutomaticAuthorization,
+  consentFingerprint,
+  readConsent,
+  requireHandover,
+  reviewAutomaticPolicy,
+  revokeAfterExitGrants,
+} from "./consent.js";
 import { type DocumentView, documentFingerprint } from "./document.js";
 import type { CommandOptions } from "./engine/commands/command-types.js";
 import type { EngineContext } from "./engine/host.js";
@@ -6,9 +15,14 @@ import { createMonitor } from "./monitor.js";
 import { type Execute, type Execution, MAX_SETTINGS_BYTES, record } from "./protocol.js";
 import { createServiceContext, installServiceHost } from "./service-host.js";
 
-function optionsFrom(value: unknown, execution: Execution): CommandOptions {
+function optionsFrom(
+  value: unknown,
+  execution: Execution,
+  automatic: boolean,
+): CommandOptions & { automaticFingerprint?: string } {
   if (!record(value)) throw new Error("Invalid operation options.");
   const allowed = new Set(["yes", "force", "stale", "silent", "reload", "setup", "args", "agentRetryRefusal"]);
+  if (automatic) allowed.add("automaticFingerprint");
   if (
     Object.keys(value).some((key) => !allowed.has(key)) ||
     ["yes", "force", "stale", "silent", "reload", "agentRetryRefusal"].some(
@@ -17,7 +31,16 @@ function optionsFrom(value: unknown, execution: Execution): CommandOptions {
     (value.setup !== undefined && (typeof value.setup !== "string" || value.setup.length > 512)) ||
     !Array.isArray(value.args) ||
     value.args.length > 16 ||
-    value.args.some((arg) => typeof arg !== "string" || arg.length > 4096)
+    value.args.some((arg) => typeof arg !== "string" || arg.length > 4096) ||
+    (value.automaticFingerprint !== undefined &&
+      (typeof value.automaticFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(value.automaticFingerprint))) ||
+    (automatic &&
+      (value.setup !== undefined ||
+        value.force ||
+        value.stale ||
+        value.reload ||
+        value.agentRetryRefusal ||
+        value.args.length !== 0))
   )
     throw new Error("Invalid operation options.");
   return {
@@ -29,13 +52,14 @@ function optionsFrom(value: unknown, execution: Execution): CommandOptions {
     auto: false,
     ...value,
     args: value.args as string[],
+    ...(typeof value.automaticFingerprint === "string" ? { automaticFingerprint: value.automaticFingerprint } : {}),
     signal: execution.signal,
     onCommit: execution.committed,
   };
 }
 /** Engine dispatch is loaded only by the service, never by the public IPC client. */
 export function createEngineService(root: string, ignoreFileSettingsAvailable = false) {
-  const host = installServiceHost(root);
+  const host = installServiceHost(root, ignoreFileSettingsAvailable);
   const monitor = createMonitor(root, host);
   const execute: Execute = (operation, payload, execution) =>
     host.run(execution, async () => {
@@ -66,22 +90,53 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
       if (ignoreFileChange) {
         const { runIgnorePolicyChange } = await import("./engine/ignore/ignore-settings.js");
         execution.validate();
-        return runIgnorePolicyChange(operation, payload, execution);
+        return runIgnorePolicyChange(operation, payload, {
+          ...execution,
+          committed() {
+            execution.committed();
+            monitor.settingsCommitted(true);
+          },
+        });
       }
-      if (operation === "daemon.authorize") return authorizeAfterExit(execution, payload);
+      if (operation === "daemon.authorize") {
+        const authorized = await authorizeAfterExit(execution, payload);
+        if (authorized && record(payload) && payload.afterExit === true) {
+          const { loadConfigForCheck } = await import("./engine/settings/config.js");
+          monitor.reviewedPolicy(await loadConfigForCheck(undefined, execution.signal));
+        }
+        return authorized;
+      }
+      if (operation === "daemon.authorize-connected") {
+        const facts = execution.facts();
+        if (
+          !record(payload) ||
+          typeof payload.fingerprint !== "string" ||
+          !facts?.hasUI ||
+          !["tui", "rpc"].includes(facts.mode)
+        )
+          throw new Error("Automatic policy authorization requires an interactive review.");
+        const { loadConfigForCheck } = await import("./engine/settings/config.js");
+        const config = await loadConfigForCheck(undefined, execution.signal);
+        execution.validate();
+        const approved = await reviewAutomaticPolicy(execution, config, payload.fingerprint);
+        if (approved) monitor.reviewedPolicy(config);
+        return approved;
+      }
       if (operation === "daemon.handover") {
         await requireHandover(execution);
         return true;
       }
       if (operation === "daemon.policy") {
-        const { loadConfig } = await import("./engine/settings/config.js");
-        const config = await loadConfig();
+        const { loadConfigForCheck } = await import("./engine/settings/config.js");
+        const config = await loadConfigForCheck(undefined, execution.signal);
+        execution.validate();
         const fingerprint = consentFingerprint(root, config);
         const saved = readConsent(root)?.setups[config.setupName];
         const facts = execution.facts();
         return {
           setup: config.setupName,
           fingerprint,
+          automatic: automaticPolicyAuthorized(root, config),
           afterExit: Boolean(
             saved?.afterExit &&
               saved.fingerprint === fingerprint &&
@@ -119,11 +174,14 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           !record(payload.next)
         )
           throw new Error("Invalid settings mutation.");
-        const { updateLocalConfigDocument, peekLocalConfigDocument } = await import("./engine/settings/config-file.js");
+        const { localConfigPath, updateLocalConfigDocument, peekLocalConfigDocument } = await import(
+          "./engine/settings/config-file.js"
+        );
         const { localConfigTemplate } = await import("./engine/settings/settings-store.js");
         const { validateSettingsDocument } = await import("./engine/settings/settings-validation.js");
         const next = validateSettingsDocument(payload.next);
-        if (Object.values(next.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file")) {
+        const nextMixed = Object.values(next.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file");
+        if (!ignoreFileSettingsAvailable && nextMixed) {
           throw new Error("Ignore-file setup activation is not available in this Daemon build.");
         }
         if (Buffer.byteLength(JSON.stringify(next)) > MAX_SETTINGS_BYTES)
@@ -134,10 +192,39 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           if (documentFingerprint(view) !== payload.expected)
             throw new Error("Settings changed; reopen the review before saving.");
         };
-        validateSource(await peekLocalConfigDocument());
+        const original = await peekLocalConfigDocument();
+        validateSource(original);
+        const before = original && validateSettingsDocument(original.parsed);
+        const wasMixed =
+          before && Object.values(before.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file");
+        let prepareSource: (() => Promise<void>) | undefined;
+        if (ignoreFileSettingsAvailable && (nextMixed || wasMixed)) {
+          if (original && original.path !== localConfigPath())
+            throw new Error(
+              "This settings change requires pi-sync.json. No settings were saved; use the canonical filename and reopen the review.",
+            );
+          const { newIgnoreFilename, reviewNewIgnoreSource, prepareReviewedIgnoreSource } = await import(
+            "./engine/ignore/ignore-settings.js"
+          );
+          execution.validate();
+          const filename = newIgnoreFilename(before, next);
+          if (filename) {
+            const reviewed = await reviewNewIgnoreSource(root, filename, execution);
+            validateSource(await peekLocalConfigDocument());
+            prepareSource = async () => {
+              await prepareReviewedIgnoreSource(root, reviewed, execution);
+              execution.validate();
+            };
+          } else if (wasMixed && !nextMixed) {
+            prepareSource = async () => {
+              execution.validate();
+              revokeAfterExitGrants(root);
+            };
+          }
+        }
         await requireHandover(execution);
         execution.validate();
-        return updateLocalConfigDocument(
+        const saved = await updateLocalConfigDocument(
           localConfigTemplate(),
           () => {
             execution.validate();
@@ -147,7 +234,13 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           validateSettingsDocument,
           execution.signal,
           validateSource,
+          prepareSource,
         );
+        if (!original || JSON.stringify(original.parsed) !== JSON.stringify(saved)) {
+          monitor.settingsCommitted(Boolean(wasMixed || nextMixed));
+          execution.committed();
+        }
+        return saved;
       }
       const ctx = createServiceContext(execution);
       if (operation === "initialize") return initialize(ctx, execution);
@@ -159,8 +252,8 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         return withJobTimings(ctx, execution, "daemon inspection", (timings) =>
           withStateDirectoryAccess(() =>
             withLock("startup-check", async () => {
-              const { loadConfig, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
-              const config = await loadConfig(payload.setup as string | undefined);
+              const { loadConfigForCheck, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
+              const config = await loadConfigForCheck(payload.setup as string | undefined, execution.signal);
               execution.validate();
               if (payload.fingerprint !== syncCheckConfigFingerprint(config))
                 throw new Error("Settings changed before inspection.");
@@ -188,12 +281,13 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         "migrate-state",
       ];
       if (!supported.includes(operation)) throw new Error("Unsupported engine operation.");
-      const options = optionsFrom(payload, execution);
+      const isAutomatic = operation === "startup-transfer" || operation === "shutdown";
+      const options = optionsFrom(payload, execution, isAutomatic);
       if (!options.reload) ctx.reload = undefined;
       if (operation === "shutdown") {
         const { loadConfigForCheck } = await import("./engine/settings/config.js");
         const { syncSessionsSelected } = await import("./engine/sync/sync-policy.js");
-        const config = await loadConfigForCheck();
+        const config = await loadConfigForCheck(undefined, execution.signal);
         execution.validate();
         if (!config.automatic || !syncSessionsSelected(config)) return;
       }
@@ -219,11 +313,15 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         return result;
       }
       return withStateDirectoryAccess(async () => {
-        if (["startup-transfer", "shutdown"].includes(operation) && !readConsent(root))
-          throw new Error("Automatic work requires reviewed daemon handover first.");
+        const automatic = isAutomatic
+          ? await captureAutomaticAuthorization(execution, options.automaticFingerprint)
+          : undefined;
+        if (automatic) options.background = { validate: automatic.validate };
         if (["push", "pull", "sync", "startup-transfer", "shutdown", "conflicts", "rollback"].includes(operation)) {
           await requireHandover(execution);
+          await automatic?.refresh();
           await initialize(ctx, execution, false);
+          await automatic?.refresh();
         }
         const { withLock, unlock } = await import("./engine/state/lock.js");
         if (operation === "unlock") return unlock(ctx, options);
@@ -237,9 +335,8 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           return pushSessionsOnShutdown(ctx, options, { operations: async () => operations });
         }
         if (operation === "startup-transfer") {
-          const { loadConfig } = await import("./engine/settings/config.js");
           const { startupTransferEnabled } = await import("./engine/sync/agent-policy.js");
-          if (!startupTransferEnabled(await loadConfig(options.setup)) || !ctx.isIdle())
+          if (!automatic || !startupTransferEnabled(automatic.config) || !ctx.isIdle())
             throw new Error("Startup transfer is no longer authorized or idle.");
           options.auto = true;
           options.yes = true;
@@ -250,9 +347,16 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           const run = async () => {
             const { prepareResolverHost } = await import("./resolver-host.js");
             const { loadConfig } = await import("./engine/settings/config.js");
-            const config = await loadConfig(options.setup);
+            const config = await loadConfig(options.setup, execution.signal);
+            await automatic?.refresh();
+            automatic?.validate(config);
             execution.validate();
-            if (operation === "sync" && !options.agentRetryRefusal) monitor.explicitSync(config.setupName, execution);
+            if (config.agentMode && !automaticPolicyAuthorized(root, config)) {
+              throw new Error(
+                "Autonomous sync requires a separate policy review. Use Settings → Review automatic transfers, or choose a reviewed push or pull.",
+              );
+            }
+            if (operation === "sync" && !options.agentRetryRefusal) monitor.explicitSync(config, execution);
             const binding = JSON.stringify(execution.facts()?.model);
             const resolver = await prepareResolverHost(
               root,
@@ -260,18 +364,21 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
               execution.signal,
             );
             try {
+              await automatic?.refresh();
               ctx.modelUnavailableReason = resolver.unavailable;
               Object.defineProperty(ctx, "model", {
                 get: () => (JSON.stringify(execution.facts()?.model) === binding ? resolver.model : undefined),
               });
               ctx.validateModel = async () => {
                 const fresh = await execution.request("model-binding", {});
+                await automatic?.refresh();
                 execution.validate();
                 if (JSON.stringify(fresh ?? undefined) !== binding)
                   throw new Error("Selected provider/model capability changed before dispatch.");
               };
               ctx.modelRegistry = {
                 streamSimple: (model, context, options) => {
+                  automatic?.validate();
                   execution.validate();
                   if (JSON.stringify(execution.facts()?.model) !== binding)
                     throw new Error("Selected model changed before dispatch.");
@@ -282,13 +389,16 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
               const { withAgentSyncLock } = await import("./engine/sync/agent-sync.js");
               return await withAgentSyncLock(ctx, options, async (current) => {
                 if (operation === "startup-transfer") {
-                  const { loadConfig } = await import("./engine/settings/config.js");
                   const { startupTransferEnabled } = await import("./engine/sync/agent-policy.js");
-                  const config = await loadConfig(current.setup);
+                  if (!automatic) throw new Error("Missing startup transfer authorization.");
+                  await automatic.refresh();
+                  const config = automatic.config;
                   execution.validate();
                   const { inspectSync } = await import("./engine/sync/sync-inspection.js");
                   const { snapshotOptionsForContext } = await import("./engine/snapshot/session-paths.js");
+                  await automatic.refresh();
                   const inspection = await inspectSync(config, snapshotOptionsForContext(ctx, config), current.signal);
+                  await automatic.refresh();
                   execution.validate();
                   if (
                     !startupTransferEnabled(config) ||

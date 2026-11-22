@@ -3,7 +3,6 @@ import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import { loadConfig } from "../src/settings/config.js";
 import { describeManagerState } from "../src/ui/manager-state.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { showSyncSettings } from "../src/ui/settings-ui.js";
@@ -63,20 +62,22 @@ const policyRows = [
 
 for (const [policy, other, available, visible] of [
   ["legacy", undefined, undefined, ["Included paths", "Excluded paths", "Compare included paths"]],
-  ["legacy", undefined, true, ["Migrate to ignore file…", "Compare sync policies"]],
+  ["legacy", undefined, true, ["Included paths", "Excluded paths", "Migrate to ignore file…", "Compare sync policies"]],
   ["directory", undefined, false, ["Agent directory scope", "Compare sync policies"]],
-  ["ignore-file", undefined, true, ["Ignore file", "Edit ignore rules…"]],
+  ["ignore-file", undefined, true, ["Ignore file", "Compare sync policies"]],
   ["ignore-file", undefined, false, []],
   ["ignore-file", "legacy", false, []],
-  ["legacy", "ignore-file", true, ["Migrate to ignore file…"]],
+  [
+    "legacy",
+    "ignore-file",
+    true,
+    ["Included paths", "Excluded paths", "Migrate to ignore file…", "Compare sync policies"],
+  ],
   ["legacy", "ignore-file", false, []],
 ] as const) {
   test(`Settings paths for ${policy}, other setup ${other}, daemon capability ${available}`, () =>
     withTempHome(async (root) => {
       await writeSetup(root, policy, { other });
-      const compares = visible.some((label) => label.startsWith("Compare"));
-      if (compares) await expect(loadConfig("work")).resolves.toMatchObject({ setupName: "work" });
-      else await expect(loadConfig("work")).rejects.toThrow(/does not yet support/u);
       run.mockReset();
       if (available === undefined) run.mockRejectedValue(new Error("Unsupported daemon operation"));
       else run.mockResolvedValue({ available });
@@ -99,7 +100,6 @@ test.each(["tui", "rpc"] as const)("%s can open Settings from /sync while transf
     const rulePath = path.join(root, ruleFile);
     const rules = "# PRIVATE RULE CONTENT\n/sessions/\n";
     await fs.writeFile(rulePath, rules);
-    await expect(loadConfig()).rejects.toThrow(/does not yet support/u);
     run.mockReset().mockResolvedValue({ available: false });
     const select = vi
       .fn<(title: string, rows: string[]) => Promise<string | undefined>>()
@@ -119,7 +119,9 @@ test.each(["tui", "rpc"] as const)("%s can open Settings from /sync while transf
       expect(presentation).toContain(`Edit existing ignore rules manually: ${rulePath}`);
       if (mode === "tui") expect(presentation).toContain("Setup preferences are read-only");
       expect(presentation).not.toMatch(/PRIVATE RULE CONTENT|Excluded paths:/u);
-      expect(run.mock.calls.map(([operation]) => operation)).toEqual(mode === "tui" ? ["ignore.capabilities"] : []);
+      const operations = run.mock.calls.map(([operation]) => operation);
+      expect(operations.length).toBeGreaterThan(1);
+      expect(new Set(operations)).toEqual(new Set(["ignore.capabilities"]));
       expect(runRoute).not.toHaveBeenCalled();
       expect(open.mock.calls.some(([file]) => file === rulePath)).toBe(false);
       expect(await fs.readFile(settingsPath, "utf8")).toBe(settings);
@@ -129,6 +131,47 @@ test.each(["tui", "rpc"] as const)("%s can open Settings from /sync while transf
       open.mockRestore();
     }
   }),
+);
+
+test.each(["approved", "cancelled", "setup changed"] as const)(
+  "automatic approval uses a separate Settings route: %s",
+  (outcome) =>
+    withTempHome(async (root) => {
+      const { settingsPath, settings } = await writeSetup(root, "ignore-file");
+      const value = JSON.parse(settings);
+      value.syncSetups.work.sync.automaticTransfer = true;
+      const before = JSON.stringify(value);
+      await fs.writeFile(settingsPath, before);
+      run.mockReset().mockImplementation(async (operation) => {
+        if (operation === "ignore.capabilities") return { available: true };
+        if (operation === "daemon.policy")
+          return {
+            setup: outcome === "setup changed" ? "other" : "work",
+            automatic: false,
+            fingerprint: "a".repeat(64),
+          };
+        if (operation === "daemon.authorize-connected") return outcome === "approved";
+        throw new Error(`Unexpected route ${operation}`);
+      });
+      const select = vi
+        .fn<(title: string, rows: string[]) => Promise<string | undefined>>()
+        .mockResolvedValueOnce("Review automatic transfers")
+        .mockResolvedValue(undefined);
+      const { ctx, notifications } = createMockContext({ mode: "tui", select });
+      const runRoute = vi.fn(async () => undefined);
+      await showSyncSettings(ctx, runRoute);
+      expect(select.mock.calls[0]?.[1]).toContain("Review automatic transfers");
+      expect(run.mock.calls.map(([operation]) => operation)).toEqual([
+        "ignore.capabilities",
+        "daemon.policy",
+        ...(outcome === "setup changed" ? [] : ["daemon.authorize-connected"]),
+      ]);
+      expect(runRoute).not.toHaveBeenCalled();
+      expect(notifications.some(({ message }) => message.includes("Automatic work approved"))).toBe(
+        outcome === "approved",
+      );
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(before);
+    }),
 );
 
 test.each([false, true])("RPC Settings keeps the legacy file unpromoted (canonical present: %s)", (canonical) =>

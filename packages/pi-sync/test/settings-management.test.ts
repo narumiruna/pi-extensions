@@ -411,9 +411,9 @@ test.each([3, 4, 5])(
       const { ctx } = createMockContext({
         hasUI: true,
         mode: "tui",
-        select: async (title: string) => {
+        select: async (title: string, rows: string[]) => {
           rendered.push(title);
-          return choices.shift();
+          return rows.includes("Not now") ? "Not now" : choices.shift();
         },
         input: async () => inputs.shift(),
       });

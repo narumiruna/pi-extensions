@@ -61,6 +61,7 @@ export interface ConfigAuthority {
   ): Promise<void>;
 }
 export interface EngineHost {
+  ignoreFileOperationsAvailable?: boolean;
   root(): string;
   config?: ConfigAuthority;
   allowConfigMigration?(): boolean;

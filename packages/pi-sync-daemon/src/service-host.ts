@@ -17,7 +17,7 @@ interface Scope {
 const scope = new AsyncLocalStorage<Scope>();
 
 /** One service process owns one root; tests must use a separate process per root. */
-export function installServiceHost(root: string) {
+export function installServiceHost(root: string, ignoreFileOperationsAvailable?: boolean) {
   let poisoned = false;
   const assertRoot = canonicalRootGuard(root);
   function current() {
@@ -83,6 +83,7 @@ export function installServiceHost(root: string) {
     );
   }
   configureEngineHost({
+    ignoreFileOperationsAvailable,
     allowConfigMigration: () => Boolean(readConsent(root)),
     root: () => {
       assertRoot();

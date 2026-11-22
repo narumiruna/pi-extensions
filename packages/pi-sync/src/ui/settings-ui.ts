@@ -1,10 +1,12 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type MenuSettingItem, runMenu } from "@narumitw/pi-tui-kit";
-import { configFromSettings, loadConfig, loadSettingsConfig } from "../settings/config.js";
+import { piDaemonClient } from "../daemon/pi-client.js";
+import { configFromSettings, loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { updateLocalConfig } from "../settings/settings-store.js";
 import { validateSettingsDocument } from "../settings/settings-validation.js";
+import { startupTransferEnabled } from "../sync/agent-policy.js";
 import { normalizeLocalFields, sameLocalFields } from "../sync/local-fields.js";
 import {
   SETUP_SWITCH_ACTION_OPTIONS,
@@ -13,6 +15,7 @@ import {
   setupSwitchActionLabel,
 } from "../sync/setup-switch.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
+import { syncSessionsSelected } from "../sync/sync-policy.js";
 import {
   AGENT_MODE_DESCRIPTION,
   CONTINUOUS_DESCRIPTION,
@@ -65,13 +68,16 @@ export async function showSyncSettings(
     } catch {
       config = undefined;
     }
+    const limited = config?.reservedIgnoreNames !== undefined && !(await ignoreFileSettingsAvailable(ctx, signal));
+    if (!isCurrent()) return disposition;
     ctx.ui.notify(
       [
         document === null
           ? "Could not read the active pi-sync settings file. Check file access or repair the JSON before reopening /sync."
           : `Edit pi-sync settings manually: ${safeTerminalText(settingsPath)}`,
-        ...(config?.reservedIgnoreNames !== undefined
-          ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(settingsPath)]
+        ...(limited ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(settingsPath)] : []),
+        ...(!limited && config?.reservedIgnoreNames !== undefined
+          ? ["Use TUI Settings → Review automatic transfers to approve the current setup separately."]
           : []),
         ...(config?.pathPolicy === "ignore-file"
           ? [manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
@@ -119,6 +125,7 @@ export async function showSyncSettings(
     | "automatic-transfer"
     | "agent-mode"
     | "continuous"
+    | "authorize-automatic"
     | "merge-settings"
     | "local-fields"
     | "content-policy"
@@ -129,7 +136,6 @@ export async function showSyncSettings(
     | "include"
     | "exclude"
     | "ignore-switch"
-    | "ignore-edit"
     | "ignore-migrate"
     | "remote-include"
     | "storage-location"
@@ -146,14 +152,10 @@ export async function showSyncSettings(
         title: "Pi Sync Settings",
         lines: [
           `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
-          ...(state.reservedIgnoreNames !== undefined
-            ? [
-                "Setup preferences are read-only; adding, editing, and switching setups are unavailable.",
-                state.pathPolicy === "ignore-file" && !ignoreAvailable
-                  ? manualIgnoreFileGuidance(state.ignoreFile ?? ".syncignore")
-                  : "Open Manage sync setups for manual recovery.",
-              ]
+          ...(state.reservedIgnoreNames !== undefined && !ignoreAvailable
+            ? ["Setup preferences are read-only; adding, editing, and switching setups are unavailable."]
             : [saveStatus]),
+          ...(state.pathPolicy === "ignore-file" ? [manualIgnoreFileGuidance(state.ignoreFile ?? ".syncignore")] : []),
         ],
         items: (
           [
@@ -163,62 +165,55 @@ export async function showSyncSettings(
                     {
                       id: "ignoreFile",
                       label: "Ignore file",
-                      description: "Select another existing file in the Pi agent directory. No transfer starts.",
+                      description: `Select another existing local file. Sessions: ${state.include.includes("sessions") ? "opted in (rules still apply)" : "off"}. No transfer starts.`,
                       currentValue: safeTerminalText(state.ignoreFile ?? ".syncignore"),
                       action: "ignore-switch" as const,
                     },
-                    {
-                      id: "ignoreRules",
-                      label: "Edit ignore rules…",
-                      description: `Edit the existing local rules, then confirm separately. Sessions: ${state.include.includes("sessions") ? "opted in (ignore rules still apply)" : "off"}.`,
-                      currentValue: "Edit",
-                      action: "ignore-edit" as const,
-                    },
                   ]
                 : []
-              : ignoreAvailable
-                ? [
-                    {
-                      id: "migrateIgnoreFile",
-                      label: "Migrate to ignore file…",
-                      description:
-                        "Review the scope change for this legacy setup. Migration does not start a transfer.",
-                      currentValue: "Review",
-                      action: "ignore-migrate" as const,
-                    },
-                  ]
-                : state.reservedIgnoreNames !== undefined
-                  ? []
-                  : state.scope === "agent-directory"
-                    ? [
-                        {
-                          id: "include",
-                          label: "Agent directory scope",
-                          description:
-                            "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
-                          currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
-                          action: "include" as const,
-                        },
-                      ]
-                    : [
-                        {
-                          id: "include",
-                          label: "Included paths",
-                          description:
-                            "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
-                          currentValue: `${state.include.length} paths · Edit`,
-                          action: "include" as const,
-                        },
-                        {
-                          id: "exclude",
-                          label: "Excluded paths",
-                          description:
-                            "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
-                          currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
-                          action: "exclude" as const,
-                        },
-                      ]),
-            ...(state.reservedIgnoreNames !== undefined
+              : state.reservedIgnoreNames !== undefined && !ignoreAvailable
+                ? []
+                : state.scope === "agent-directory"
+                  ? [
+                      {
+                        id: "include",
+                        label: "Agent directory scope",
+                        description:
+                          "Edit exclusions, re-inclusions, and session opt-in in one reviewed draft. No transfer starts.",
+                        currentValue: `${state.exclude?.length ?? 0} excluded · ${state.reinclude?.length ?? 0} re-included · Sessions ${state.include.includes("sessions") ? "opted in" : "off"}`,
+                        action: "include" as const,
+                      },
+                    ]
+                  : [
+                      {
+                        id: "include",
+                        label: "Included paths",
+                        description:
+                          "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
+                        currentValue: `${state.include.length} paths · Edit`,
+                        action: "include" as const,
+                      },
+                      {
+                        id: "exclude",
+                        label: "Excluded paths",
+                        description:
+                          "This setup: draft relative paths or *, ?, ** patterns, then review Save/Discard. No transfer starts; old history is retained.",
+                        currentValue: `${state.exclude?.length ?? 0} rules · Edit`,
+                        action: "exclude" as const,
+                      },
+                    ]),
+            ...(ignoreAvailable && state.pathPolicy !== "ignore-file"
+              ? [
+                  {
+                    id: "migrateIgnoreFile",
+                    label: "Migrate to ignore file…",
+                    description: "Review the scope change for this legacy setup. Migration does not start a transfer.",
+                    currentValue: "Review",
+                    action: "ignore-migrate" as const,
+                  },
+                ]
+              : []),
+            ...(state.reservedIgnoreNames !== undefined && !ignoreAvailable
               ? []
               : [
                   {
@@ -228,7 +223,9 @@ export async function showSyncSettings(
                         ? "Compare sync policies"
                         : "Compare included paths",
                     description:
-                      "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
+                      state.pathPolicy === "ignore-file"
+                        ? "Read-only comparison of local and remote policy, not file contents."
+                        : "Compare what sync manages on this device and the remote, not file contents. No files transfer unless you explicitly Continue.",
                     currentValue: "Review",
                     action: "remote-include" as const,
                   },
@@ -257,7 +254,7 @@ export async function showSyncSettings(
               id: "setups",
               label: "Manage sync setups",
               description:
-                state.reservedIgnoreNames !== undefined
+                state.reservedIgnoreNames !== undefined && !ignoreAvailable
                   ? "Review configured setups and recovery options. Adding, editing, and switching are unavailable."
                   : "This device: add, switch, edit, or remove sync setups. Each edit identifies its owner before saving.",
               currentValue: "Open",
@@ -267,7 +264,7 @@ export async function showSyncSettings(
               id: "connections",
               label: "Manage storage connections",
               description:
-                state.reservedIgnoreNames !== undefined
+                state.reservedIgnoreNames !== undefined && !ignoreAvailable
                   ? "Review shared connections. Connection changes are unavailable while ignore-file setups are configured."
                   : "Shared connections on this device: review affected setups before saving server or credential changes.",
               currentValue: "Open",
@@ -305,11 +302,27 @@ export async function showSyncSettings(
               values: ["On", "Off"],
               action: "continuous",
             },
+            ...(ignoreAvailable &&
+            state.reservedIgnoreNames !== undefined &&
+            (startupTransferEnabled(state) || (state.automatic && syncSessionsSelected(state)))
+              ? [
+                  {
+                    id: "authorizeAutomatic",
+                    label: "Review automatic transfers",
+                    description:
+                      "Separate approval for the enabled modes and exact current policy. Saving settings alone does not grant permission.",
+                    currentValue: "Review",
+                    action: "authorize-automatic" as const,
+                  },
+                ]
+              : []),
             {
               id: "onSwitch",
               label: "On setup switch",
               description:
-                "All setups on this device: ask before a pull review, open it automatically, or switch without pulling. Applies to subsequent switches.",
+                state.reservedIgnoreNames === undefined
+                  ? "All setups on this device: ask before a pull review, open it automatically, or switch without pulling. Applies to subsequent switches."
+                  : "While ignore-file setups exist, switching saves only the active setup. Run a reviewed pull separately.",
               currentValue: setupSwitchActionLabel(state.onSwitch),
               values: SETUP_SWITCH_ACTION_OPTIONS.map(({ label }) => label),
               action: "on-switch",
@@ -366,8 +379,7 @@ export async function showSyncSettings(
             },
           ] satisfies MenuSettingItem<Action>[]
         ).map((item) =>
-          state.reservedIgnoreNames !== undefined &&
-          !["setups", "connections", "ignoreFile", "ignoreRules", "migrateIgnoreFile"].includes(item.id)
+          state.reservedIgnoreNames !== undefined && !ignoreAvailable && !["setups", "connections"].includes(item.id)
             ? { ...item, disabled: true }
             : item,
         ),
@@ -393,14 +405,14 @@ export async function showSyncSettings(
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         const validate = captureMutationOwner(ctx, mutationSignal);
         try {
-          const previous = await loadConfig(setupName);
+          const previous = await loadSettingsConfig(setupName);
           validate();
           const mergeContent = value === "Merge only" || value === "Merge + partial";
           const partialSync = value === "Partial only" || value === "Merge + partial";
           if (
             !(await ctx.ui.confirm(
               "Save content policy?",
-              `${previous.scope === "agent-directory" ? "Agent directory scope keeps settings version 7 and snapshot version 5; older clients must refuse them." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
+              `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and snapshot version 6; older clients must refuse them." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5; older clients must refuse it." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
               { signal: mutationSignal },
             ))
           )
@@ -457,7 +469,7 @@ export async function showSyncSettings(
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         const validate = captureMutationOwner(ctx, mutationSignal);
         try {
-          const previous = await loadConfig(setupName);
+          const previous = await loadSettingsConfig(setupName);
           validate();
           const input = await ctx.ui.input(
             "Machine-local settings.json root fields (JSON string array)",
@@ -475,7 +487,7 @@ export async function showSyncSettings(
           if (sameLocalFields(previous.localFields, fields)) return { kind: "stay" };
           const confirmed = await ctx.ui.confirm(
             "Save portable field policy?",
-            `${previous.scope === "agent-directory" ? "Agent directory scope keeps settings version 7 and snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
+            `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and snapshot version 6." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
             { signal: mutationSignal },
           );
           validate();
@@ -513,7 +525,7 @@ export async function showSyncSettings(
         const automatic = value === "On";
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         try {
-          const latest = await loadConfig(setupName);
+          const latest = await loadSettingsConfig(setupName);
           if (mutationSignal.aborted) return { kind: "rejected" };
           if (latest.automatic === automatic) return { kind: "stay" };
           await updateSyncSetup(setupName, (setup) => ({ ...setup, sync: { ...setup.sync, automatic } }), {
@@ -607,7 +619,7 @@ export async function showSyncSettings(
         const skipSecretScan = value === "On";
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         try {
-          const latest = await loadConfig(setupName);
+          const latest = await loadSettingsConfig(setupName);
           if (mutationSignal.aborted) return { kind: "rejected" };
           if (latest.skipSecretScan === skipSecretScan) return { kind: "stay" };
           await updateLocalConfig((settings) => ({ ...settings, skipSecretScan }), mutationSignal);
@@ -623,7 +635,7 @@ export async function showSyncSettings(
         const showStatus = value === "On";
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         try {
-          const latest = await loadConfig(setupName);
+          const latest = await loadSettingsConfig(setupName);
           if (mutationSignal.aborted) return { kind: "rejected" };
           if (latest.showStatus === showStatus) return { kind: "stay" };
           await updateLocalConfig((settings) => ({ ...settings, showStatus }), mutationSignal);
@@ -653,7 +665,7 @@ export async function showSyncSettings(
         if (!action) return { kind: "rejected" };
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         try {
-          const latest = await loadConfig(setupName);
+          const latest = await loadSettingsConfig(setupName);
           if (mutationSignal.aborted) return { kind: "rejected" };
           if (latest.onSwitch === action) return { kind: "stay" };
           await saveOnSwitch(action, mutationSignal);
@@ -675,17 +687,47 @@ export async function showSyncSettings(
         await showExcludedPaths(ctx, setupName, editorSignal);
         return resumeSettings(editorSignal);
       },
+      "authorize-automatic": async ({ state, signal: actionSignal }) => {
+        const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, reviewSignal);
+        const client = piDaemonClient(ctx);
+        try {
+          validate();
+          const policy = (await client.run("daemon.policy", {}, reviewSignal)) as {
+            setup: string;
+            fingerprint: string;
+            automatic: boolean;
+          };
+          validate();
+          if (policy.setup !== state.setupName) return exitSettings();
+          if (policy.automatic) {
+            ctx.ui.notify("Automatic work is already approved for this setup and policy.", "info");
+            return { kind: "stay" };
+          }
+          const accepted = await client.run(
+            "daemon.authorize-connected",
+            { fingerprint: policy.fingerprint },
+            reviewSignal,
+          );
+          validate();
+          if (accepted === true) ctx.ui.notify("Automatic work approved for this setup and policy.", "info");
+          return { kind: "stay" };
+        } catch (error) {
+          if (reviewSignal.aborted || !isCurrent()) return exitSettings();
+          notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
       "ignore-switch": ignoreAction("switch"),
-      "ignore-edit": ignoreAction("edit"),
       "ignore-migrate": ignoreAction("migrate"),
       "remote-include": async ({ state, signal: actionSignal }) => {
-        if (state.reservedIgnoreNames !== undefined) return { kind: "rejected" };
+        if (state.reservedIgnoreNames !== undefined && !ignoreAvailable) return { kind: "rejected" };
         const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
         if (reviewSignal.aborted) return { kind: "rejected" };
         const review = await showRemoteSelectionReview(ctx, setupName, reviewSignal, undefined, {
           origin: "settings",
-          runRoute,
+          ...(state.pathPolicy === "ignore-file" ? { readOnly: true } : { runRoute }),
         });
         if (reviewSignal.aborted) return { kind: "rejected" };
         if (review.kind === "route-result") {
@@ -717,7 +759,9 @@ export async function showSyncSettings(
         result?.kind === "rejected"
           ? "Save failed or rejected. Previous value retained; retry is available."
           : id === "automatic-transfer" || id === "automatic" || id === "debug"
-            ? "Saved. Enabling startup work applies next session start; completed transfers are not undone."
+            ? action.state.reservedIgnoreNames !== undefined
+              ? "Saved. Review automatic transfers separately before enabling automatic work for this policy."
+              : "Saved. Enabling startup work applies next session start; completed transfers are not undone."
             : "Saved. Applies to subsequent operations; status visibility applies immediately.";
       ctx.ui.notify(saveStatus, result?.kind === "rejected" ? "warning" : "info");
       return result;
@@ -728,6 +772,12 @@ export async function showSyncSettings(
       if (!ignoreAvailable || (state.pathPolicy === "ignore-file") === (action === "migrate"))
         return { kind: "rejected" as const };
       const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+      const latest = await loadSettingsConfig();
+      if (editorSignal.aborted || !isCurrent()) return { kind: "close" as const };
+      if (syncCheckConfigFingerprint(latest) !== syncCheckConfigFingerprint(state)) {
+        ctx.ui.notify("Sync setup changed while Settings was open; reopen it before changing the policy.", "warning");
+        return { kind: "close" as const };
+      }
       await showIgnoreFileAction(ctx, setupName, action, state.ignoreFile ?? ".syncignore", editorSignal);
       return resumeSettings(editorSignal);
     };

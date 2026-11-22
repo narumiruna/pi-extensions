@@ -14,6 +14,7 @@ import {
   requireGitManifest,
   validateGitSnapshot,
 } from "../src/engine/backends/git/git-storage.js";
+import { expectedRemoteHead } from "../src/engine/backends/sync-backend.js";
 import { applySnapshot } from "../src/engine/snapshot/snapshot-apply.js";
 import { MAX_AGENT_DIRECTORY_BYTES } from "../src/engine/snapshot/snapshot-bounds.js";
 import { decodeSnapshot, encodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
@@ -257,7 +258,19 @@ test("local bare Git round-trips v6 while legacy read and apply refuse the same 
       { cacheRoot: path.join(root, "cache"), allowLocalRemotes: true },
     );
     const image = snapshot([file("notes.md")]);
-    const { head } = await backend.publishSnapshot(image, { kind: "missing" });
+    const legacy = { ...image, id: "legacy-before-activation", version: 1, selection: undefined };
+    const first = await backend.publishSnapshot(legacy, { kind: "missing" });
+    await assert.rejects(
+      backend.publishSnapshot(image, expectedRemoteHead(first.head), {
+        validateIgnorePolicy: async () => {
+          throw new Error("reviewed rules changed");
+        },
+      }),
+      /reviewed rules changed/u,
+    );
+    assert.deepEqual(await backend.readHead(), first.head);
+    const { head } = await backend.publishSnapshot(image, expectedRemoteHead(first.head));
+    assert.equal((await backend.readSnapshot(first.head.snapshotRef)).id, legacy.id);
     const { stdout } = await runGit(["show", `refs/heads/${branch}:pi-sync/manifest.json`], { gitDir: remote });
     assert.deepEqual(JSON.parse(stdout.toString("utf8")), manifest(image));
     assert.deepEqual(head.selection, image.selection);

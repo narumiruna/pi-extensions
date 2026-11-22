@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeniedPath, toPosix } from "../paths.js";
 import {
@@ -334,6 +335,27 @@ export function syncDirectoryPolicyKey(config: SyncSelectionConfig) {
   ]);
 }
 
+export function localIgnorePolicyKey(
+  config: SyncSelectionConfig & { setupName?: string; ignoreSourceIdentity?: string; recoverySetupKey?: string },
+) {
+  if (!config.ignorePolicy && config.reservedIgnoreNames === undefined) return undefined;
+  const reserved = reservedIgnoreSnapshotNames(config);
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        config.setupName,
+        config.recoverySetupKey,
+        syncDirectoryPolicyKey(config) ?? [
+          includeFromSelectionConfig(config),
+          normalizeSyncExclude(config.exclude).map((rule) => rule.toLowerCase()),
+        ],
+        config.ignoreSourceIdentity,
+        [...(reserved ?? [])].sort(),
+      ]),
+    )
+    .digest("hex");
+}
+
 export function inspectRemoteSelection(
   localInclude: unknown,
   snapshot: Pick<Snapshot, "selection" | "files">,
@@ -645,15 +667,21 @@ function isIgnoreSnapshotSelection(config: SyncSelectionConfig) {
   return config.version === 4 && config.fingerprint !== undefined;
 }
 
-function compileIgnoreControlPath(config: SyncSelectionConfig) {
+function reservedIgnoreSnapshotNames(config: SyncSelectionConfig) {
   const local = config.ignorePolicy;
   if (!local && !config.reservedIgnoreNames && !isIgnoreSnapshotSelection(config)) return undefined;
-  const names = new Set(
-    [...(local ? [local.filename, ...local.reservedNames] : []), ...(config.reservedIgnoreNames ?? [])].map((name) =>
-      name.toLowerCase(),
-    ),
+  return new Set(
+    [
+      ".syncignore",
+      ...(local ? [local.filename, ...local.reservedNames] : []),
+      ...(config.reservedIgnoreNames ?? []),
+    ].map((name) => name.toLowerCase()),
   );
-  return (relativePath: string) => isIgnoreControlPath(relativePath, names);
+}
+
+function compileIgnoreControlPath(config: SyncSelectionConfig) {
+  const names = reservedIgnoreSnapshotNames(config);
+  return names ? (relativePath: string) => isIgnoreControlPath(relativePath, names) : undefined;
 }
 
 function compileDirectoryPolicy(config: SyncSelectionConfig) {

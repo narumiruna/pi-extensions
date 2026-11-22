@@ -1,8 +1,8 @@
 import type { RemoteHead, SyncBackend } from "../backends/sync-backend.js";
 import { syncConfigReviewFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import { filterSnapshotForConfigPolicy } from "../snapshot/snapshot.js";
-import type { Snapshot } from "../snapshot/snapshot-types.js";
+import { filterSnapshotForConfigPolicy, mergeRemotePreservedFiles } from "../snapshot/snapshot.js";
+import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import type { SyncState } from "../state/state-types.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
@@ -69,9 +69,35 @@ export async function readRemoteSnapshotForUpload(
   return undefined;
 }
 
+export async function snapshotForUpload(
+  backend: SyncBackend,
+  config: AnySyncConfig,
+  local: Snapshot,
+  head: RemoteHead | undefined,
+  remote: Snapshot | undefined,
+  options: SnapshotOptions,
+) {
+  if (config.ignorePolicy) return filterSnapshotForConfigPolicy(local, config, { ...options, regenerateId: true });
+  if (!head)
+    return config.reservedIgnoreNames === undefined ? local : filterSnapshotForConfigPolicy(local, config, options);
+  const snapshot = remote ?? (await readSnapshotForHead(backend, head, options.signal, config));
+  const remoteScoped = snapshot.selection?.version === 3;
+  if (remoteScoped !== (config.scope === "agent-directory")) {
+    throw new Error(
+      "Converting an existing remote between included paths and agent-directory scope is not supported. Use a separate storage location.",
+    );
+  }
+  return mergeRemotePreservedFiles(local, snapshot, config, options);
+}
+
 export function sameRemoteHead(backend: SyncBackend, left: RemoteHead | undefined, right: RemoteHead | undefined) {
   if (!left || !right) return left === right;
-  return left.snapshotId === right.snapshotId && backend.sameRevision(left.revision, right.revision);
+  return (
+    left.snapshotId === right.snapshotId &&
+    left.snapshotRef === right.snapshotRef &&
+    backend.sameRevision(left.revision, right.revision) &&
+    sameSnapshotSelection(left.selection, right.selection)
+  );
 }
 
 export function requireCompatibleRemoteSelection(config: AnySyncConfig, snapshot: Snapshot) {

@@ -8,6 +8,8 @@ import {
 } from "../settings/settings-management.js";
 import { isCloudflareR2Endpoint, normalizeS3Endpoint, ownRecord } from "../settings/settings-validation.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
+import { captureMutationOwner } from "../sync/sync-local.js";
+import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
 import { ignoreSetupRecovery, loadSettingsCatalog } from "./settings-review.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./setup/git-ui.js";
 import { applyS3CredentialUpdate, chooseS3Credentials, chooseS3CredentialUpdate } from "./setup/s3-credentials-ui.js";
@@ -18,6 +20,15 @@ import { showAddWebDavStorageProfile, showEditWebDavStorageProfile } from "./set
 import { safeTerminalText } from "./terminal-text.js";
 
 export async function showStorageConnections(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+  const validateOwner = captureMutationOwner(ctx, signal);
+  const isCurrent = () => {
+    try {
+      validateOwner();
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let selectedName: string | undefined;
   const nameById = new Map<string, string>();
   type Screen = "list" | "detail";
@@ -125,20 +136,29 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
     },
   });
   await runMenu(ctx, menu, {
-    getState: () => loadStorageMenuState(selectedName, signal),
+    getState: ({ signal: loadSignal }) => loadStorageMenuState(ctx, selectedName, loadSignal),
     signal,
-    isCurrent: () => !signal?.aborted,
+    isCurrent,
   });
 }
 
-async function loadStorageMenuState(selectedName: string | undefined, signal?: AbortSignal) {
+async function loadStorageMenuState(
+  ctx: ExtensionCommandContext,
+  selectedName: string | undefined,
+  signal: AbortSignal,
+) {
   const catalog = await loadSettingsCatalog();
   signal?.throwIfAborted();
   const raw = catalog?.settings;
   const profiles = raw?.storageConnections ?? {};
-  const recovery = catalog?.ignoreSetups.length
-    ? ["Connection changes are unavailable while any setup uses an ignore file.", ...ignoreSetupRecovery(catalog.path)]
-    : undefined;
+  const recovery =
+    catalog?.ignoreSetups.length && !(await ignoreFileSettingsAvailable(ctx, signal))
+      ? [
+          "Connection changes are unavailable while any setup uses an ignore file.",
+          ...ignoreSetupRecovery(catalog.path),
+        ]
+      : undefined;
+  signal.throwIfAborted();
   const profile = selectedName ? ownRecord(profiles[selectedName]) : undefined;
   if (!selectedName || !profile) {
     return {

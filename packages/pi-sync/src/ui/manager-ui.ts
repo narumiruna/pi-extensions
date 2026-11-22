@@ -5,6 +5,7 @@ import { loadConfig, loadSettingsConfig, syncCheckConfigFingerprint } from "../s
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
+import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
 import { showIgnoreMigrationPrompt } from "./ignore-migration-prompt.js";
 import {
   attentionMainMenuItems,
@@ -373,7 +374,9 @@ export async function showSyncManager(
   const describe = async (signal: AbortSignal) => {
     const pendingAttention = options.getAttention?.();
     const observation = options.getObservation?.();
-    const manager = await describeManagerState(signal, pendingAttention, undefined, observation);
+    const manager = await describeManagerState(signal, pendingAttention, undefined, observation, () =>
+      ignoreFileSettingsAvailable(ctx, signal),
+    );
     if (signal.aborted || !isCurrent()) return manager;
     // A busy operation suppresses baseline reads, not the stored check-time hint.
     if (

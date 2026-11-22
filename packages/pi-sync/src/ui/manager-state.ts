@@ -51,6 +51,7 @@ export async function describeManagerState(
   attention?: SyncAttentionState,
   inspectOperation: () => Promise<OperationAvailability> = inspectOperationAvailability,
   observation?: StartupObservation,
+  canUseIgnoreSettings?: () => Promise<boolean>,
 ): Promise<ManagerDescription> {
   let raw: PiSyncSettingsV3 | undefined;
   try {
@@ -92,23 +93,15 @@ export async function describeManagerState(
       actions: ["Sync setups…", "Storage connections…", "Help"],
     };
   }
+  let settingsConfig: AnySyncConfig | undefined;
   try {
-    const settingsConfig = configFromSettings(raw);
-    if (settingsConfig.reservedIgnoreNames !== undefined) {
-      return {
-        title: [
-          "Manage sync",
-          `Current sync setup: ${safeTerminalText(settingsConfig.setupName)}`,
-          "Transfers are unavailable while ignore-file setups are configured.",
-        ].join("\n"),
-        actions: ["Settings", "Sync setups…", "Storage connections…", "Help"],
-        settingsReview: {
-          setupName: settingsConfig.setupName,
-          fingerprint: syncCheckConfigFingerprint(settingsConfig),
-        },
-      };
+    settingsConfig = configFromSettings(raw);
+    if (settingsConfig.reservedIgnoreNames && canUseIgnoreSettings && !(await canUseIgnoreSettings())) {
+      throw new Error("the connected daemon does not support ignore-file setups");
     }
+    signal?.throwIfAborted();
     const config = await loadConfig();
+    signal?.throwIfAborted();
     const operation = await inspectOperation();
     const changesBlocked = operationBlocksChanges(operation);
     let currentAttention: SyncAttentionState | undefined;
@@ -157,7 +150,11 @@ export async function describeManagerState(
       "Manage sync",
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
       `Storage: ${backendStorageDescription(config)}`,
-      ...(config.scope ? ["Sync scope: Pi agent directory, with exclusions"] : []),
+      ...(config.pathPolicy === "ignore-file"
+        ? [`Sync scope: Pi agent directory · ignore file: ${safeTerminalText(config.ignoreFile ?? ".syncignore")}`]
+        : config.scope
+          ? ["Sync scope: Pi agent directory, with exclusions"]
+          : []),
       ...(syncState?.unresolved?.length
         ? [`Unresolved: ${syncState.unresolved.length} dependency groups · review needed`]
         : []),
@@ -192,6 +189,7 @@ export async function describeManagerState(
       title: (changesBlocked ? ["Manage sync", ...operationStatusLines(operation)] : ordinaryTitle).join("\n"),
       actions: operationActions(operation, noSyncedContent, canSwitch, mainActions),
       configReview: { setupName: config.setupName, fingerprint: syncCheckConfigFingerprint(config) },
+      settingsReview: { setupName: settingsConfig.setupName, fingerprint: syncCheckConfigFingerprint(settingsConfig) },
       operation,
       ...(currentObservation ? { observation: currentObservation } : {}),
       ...(currentAttention
@@ -204,6 +202,20 @@ export async function describeManagerState(
     };
   } catch (error) {
     if (signal?.aborted) throw error;
+    if (settingsConfig?.reservedIgnoreNames !== undefined) {
+      return {
+        title: [
+          "Manage sync",
+          `Current sync setup: ${safeTerminalText(settingsConfig.setupName)}`,
+          `Transfers are unavailable: ${safeTerminalText(errorMessage(error))}`,
+        ].join("\n"),
+        actions: ["Settings", "Sync setups…", "Storage connections…", "Help"],
+        settingsReview: {
+          setupName: settingsConfig.setupName,
+          fingerprint: syncCheckConfigFingerprint(settingsConfig),
+        },
+      };
+    }
     return {
       title: [
         "Manage sync",

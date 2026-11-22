@@ -75,6 +75,7 @@ export async function withAgentSyncLock<T>(
           if (!(await confirmAgentRefusalRetry(ctx, options.setup, request.evidence, validate, options.signal)))
             return "cancelled" as const;
         }
+        const reserve = background?.reserve;
         const raw =
           cached === undefined || retry
             ? await runAgentResolver(
@@ -82,7 +83,7 @@ export async function withAgentSyncLock<T>(
                 request.evidence,
                 validate,
                 options.signal,
-                background ? (signal) => background.reserve(request.key, signal) : undefined,
+                reserve ? (signal) => reserve(request.key, signal) : undefined,
               )
             : JSON.stringify(cached);
         let candidate: ReturnType<typeof parseAgentCandidate>;
@@ -99,6 +100,12 @@ export async function withAgentSyncLock<T>(
           await withLock("agent-cache-save", async () => {
             await assertOwner();
             options.signal?.throwIfAborted();
+            if (background) {
+              background.validate();
+              await request.validate(options.signal);
+              options.signal?.throwIfAborted();
+              background.validate();
+            }
             await saveAgentCandidate(request.key, candidate);
           });
         let retryCacheCommitted = false;
