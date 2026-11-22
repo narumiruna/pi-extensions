@@ -306,10 +306,9 @@ Read the [settings reference](./skills/configure-pi-sync/references/configuratio
 
 ## 🧠 Skills
 
-Run `/skill:configure-pi-sync` for configuration guidance. To request a rule edit, name the existing local file shown in **Settings → Ignore file** and the exact change. The [configuration skill](./skills/configure-pi-sync/SKILL.md) loads only on request and does not read or write private Pi Sync settings.
-Use `/sync` for initial setup, masked credential entry, and changes or transfers that require a separate review. The skill does not run diagnostics, check remote connectivity, or start a transfer.
-The skill's instructions are not a permission sandbox for the agent's other tools.
-Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) directly when no agent assistance is needed.
+Run `/skill:configure-pi-sync` with the edit you want or the error you saw. For example, use `/skill:configure-pi-sync turn on debug logging` or `/skill:configure-pi-sync exclude npm/ from my active ignore file`. The [configuration skill](./skills/configure-pi-sync/SKILL.md) loads only on request. It applies authorized edits to `pi-sync.json` through the running local daemon or edits the existing active ignore file, normally `.syncignore`. For an error, it checks the local cause before proposing a change.
+
+Use `/sync` for initial setup, masked credential entry, and operations that require a separate review. The skill does not run backend diagnostics, check remote connectivity, or start transfers. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for manual configuration and troubleshooting.
 
 ## 💬 Commands
 
@@ -435,7 +434,7 @@ packages/pi-sync/
 ├── dist/                              # Published Jiti runtime and separate daemon files
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Operational audits and settings link compatibility
-├── skills/configure-pi-sync/           # Local rule edits and authoritative settings reference
+├── skills/configure-pi-sync/           # Local configuration edits and troubleshooting
 └── test/                              # Behavior and lifecycle coverage
 ```
 
