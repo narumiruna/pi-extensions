@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,7 +11,7 @@ import {
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { DRAFT_CONTRACT_TYPE, type DraftAuthorization, reconcileDraftContract } from "../src/draft-contract.js";
 import type { PlanModeSettings } from "../src/settings.js";
 import type { PlanModeState } from "../src/state.js";
@@ -254,6 +255,72 @@ test.each([
     await f.close();
   }
 });
+
+test("draft admission retries with the same workflow ID after state persistence fails", async () => {
+  const f = await fixture({ mode: "rpc" });
+  const append = f.mock.rawPi.appendEntry;
+  let failuresRemaining = 2;
+  vi.spyOn(f.mock.rawPi, "appendEntry").mockImplementation((type, data) => {
+    if (type === "plan-mode-state" && (data as PlanModeState).draft?.status === "active" && failuresRemaining > 0) {
+      failuresRemaining -= 1;
+      throw new Error("Cannot save draft admission");
+    }
+    append(type, data);
+  });
+  try {
+    const path = f.draftPath();
+    const workflowId = f.currentState().draft?.workflowId;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(f.applyContext(), /Cannot save draft admission/u);
+      assert.equal(f.currentState().draft?.status, "pending");
+      assert.equal(((await f.call("write", path)) as { block?: boolean })?.block, true);
+      assert.ok(!f.mock.entries.some(({ customType }) => customType === DRAFT_CONTRACT_TYPE));
+      await assert.rejects(lstat(dirname(path)), { code: "ENOENT" });
+    }
+    const messages = await f.applyContext();
+    assert.equal(f.currentState().draft?.status, "active");
+    assert.equal(f.currentState().draft?.workflowId, workflowId);
+    assert.equal(f.draftPath(), path);
+    assert.equal(messages.filter(customDraftMessage).length, 1);
+    assert.equal(await f.call("write", path, "retry"), undefined);
+    await createWriteTool(f.dir).execute("retry", { path, content: "# Recovered draft" });
+    await f.end("write", "retry");
+    assert.equal((await f.complete()).details.plan, "# Recovered draft");
+  } finally {
+    await f.close();
+  }
+});
+
+test.each(["not empty", "replaced"] as const)(
+  "admission rollback leaves a workflow directory intact when it is %s",
+  async (change) => {
+    const f = await fixture({ mode: "rpc" });
+    const path = f.draftPath();
+    const directory = dirname(path);
+    const append = f.mock.rawPi.appendEntry;
+    vi.spyOn(f.mock.rawPi, "appendEntry").mockImplementation((type, data) => {
+      if (type === "plan-mode-state" && (data as PlanModeState).draft?.status === "active") {
+        if (change === "not empty") writeFileSync(path, "Retain this file");
+        else {
+          renameSync(directory, `${directory}-moved`);
+          mkdirSync(directory, { mode: 0o700 });
+        }
+        throw new Error("Cannot save draft admission");
+      }
+      append(type, data);
+    });
+    try {
+      await assert.rejects(f.applyContext(), /Cannot save draft admission/u);
+      assert.ok((await lstat(directory)).isDirectory());
+      if (change === "not empty") assert.equal(await readFile(path, "utf8"), "Retain this file");
+      assert.ok(!(await f.applyContext()).some(customDraftMessage));
+      assert.equal(f.currentState().draft, undefined);
+      assert.equal(((await f.call("write", path)) as { block?: boolean })?.block, true);
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 test("first-request storage failure is read-only; a fork cannot write the source session's draft", async () => {
   const f = await fixture({ mode: "rpc" });

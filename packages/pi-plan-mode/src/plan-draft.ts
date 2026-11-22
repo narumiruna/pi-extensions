@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, rmdirSync } from "node:fs";
 import { isAbsolute, join, parse } from "node:path";
 import {
   createReadTool,
@@ -26,6 +26,7 @@ interface DraftFile {
   root: string;
   workflowId: string;
   path: string;
+  createdDirectory?: { dev: bigint; ino: bigint };
 }
 
 export function normalizePlanDraftIdentity(value: unknown): PlanDraftIdentity | undefined {
@@ -72,15 +73,16 @@ function draftDirectories(root: string, workflowId: string) {
 }
 
 function checkDirectory(path: string) {
-  const stat = lstatSync(path);
+  const stat = lstatSync(path, { bigint: true });
   if (
     !stat.isDirectory() ||
     stat.isSymbolicLink() ||
     realpathSync(path) !== path ||
-    (process.platform !== "win32" && (stat.mode & 0o077) !== 0)
+    (process.platform !== "win32" && (stat.mode & 0o077n) !== 0n)
   ) {
     throw new Error("Draft directory is not a private, canonical directory.");
   }
+  return stat;
 }
 
 function checkFile(file: DraftFile) {
@@ -98,6 +100,7 @@ function bindFile(identity: PlanDraftIdentity): DraftFile {
   const directories = draftDirectories(root, identity.workflowId);
   const path = join(directories[2], "plan.md");
   if (!isNativeDraftPath(path)) throw new Error("Pi cannot safely resolve the draft path.");
+  const file: DraftFile = { root, workflowId: identity.workflowId, path };
   if (identity.status === "pending") {
     for (const directory of directories) {
       try {
@@ -105,10 +108,10 @@ function bindFile(identity: PlanDraftIdentity): DraftFile {
       } catch (error) {
         if (directory === directories[2] || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
-      checkDirectory(directory);
+      const { dev, ino } = checkDirectory(directory);
+      if (directory === directories[2]) file.createdDirectory = { dev, ino };
     }
   }
-  const file = { root, workflowId: identity.workflowId, path };
   checkFile(file);
   return file;
 }
@@ -150,6 +153,21 @@ export function createPlanDraftController() {
 
   return {
     reset,
+    rollbackAdmission() {
+      const previous = file;
+      reset();
+      if (!previous?.createdDirectory) return;
+      try {
+        if (realpathSync(previous.root) !== previous.root) return;
+        const [packageDir, draftsDir, workflowDir] = draftDirectories(previous.root, previous.workflowId);
+        checkDirectory(packageDir);
+        checkDirectory(draftsDir);
+        const { dev, ino } = checkDirectory(workflowDir);
+        if (dev === previous.createdDirectory.dev && ino === previous.createdDirectory.ino) rmdirSync(workflowDir);
+      } catch {
+        return;
+      }
+    },
     bind(identity: PlanDraftIdentity) {
       reset();
       try {

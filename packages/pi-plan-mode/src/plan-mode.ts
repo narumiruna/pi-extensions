@@ -1768,8 +1768,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     try {
       persistState();
     } catch (error) {
-      draft.reset();
       state = previousState;
+      draft.rollbackAdmission();
       throw error;
     }
     updateUi(ctx);
