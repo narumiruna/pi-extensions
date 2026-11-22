@@ -15,8 +15,8 @@ const cliRequire = createRequire(cli);
 const { getPackages } = await import(cliRequire.resolve("@manypkg/get-packages"));
 const { getDependentsGraph } = await import(cliRequire.resolve("@changesets/get-dependents-graph"));
 const digest = (bytes, algorithm) => createHash(algorithm).update(bytes).digest("base64");
-const readinessTimeout = 30_000;
-const availabilityDelay = 2_000;
+const publishReadiness = { timeout: 30_000, retryDelay: 2_000 };
+const gateReadiness = { timeout: 300_000, retryDelay: 5_000 };
 const networkCodes = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -55,26 +55,41 @@ function networkFailure(message, error) {
 }
 
 function parseArgs(args) {
-  let packDir;
+  const owned = new Map([
+    ["fromPackDir", "--from-pack-dir"],
+    ["stage", "--stage"],
+  ]);
+  const values = new Map();
   const forwarded = [];
+  let afterSeparator = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--from-pack-dir" || arg.startsWith("--from-pack-dir=")) {
-      if (packDir !== undefined) throw new Error("Duplicate --from-pack-dir");
-      packDir = arg === "--from-pack-dir" ? args[++i] : arg.slice("--from-pack-dir=".length);
-      if (!packDir || packDir.startsWith("-")) throw new Error("Missing --from-pack-dir value");
-    } else {
-      // CAC camel-cases the first dotted key and accepts negation before normalization.
-      // Reject all equivalent overrides, even after --, rather than forwarding them.
-      const key = arg.replace(/^-+/, "").replace(/^no-/, "").split(/[=.]/u)[0];
-      if (arg.startsWith("-") && key.replace(/([a-z])-([a-z])/g, (_, a, b) => a + b.toUpperCase()) === "fromPackDir") {
-        throw new Error("Only one canonical --from-pack-dir is allowed");
-      }
+    if (arg === "--") afterSeparator = true;
+    // Reject CAC-equivalent overrides, including dotted and negated keys.
+    const key = arg.replace(/^-+/, "").replace(/^no-/, "").split(/[=.]/u)[0];
+    const flag = arg.startsWith("-") && owned.get(key.replace(/([a-z])-([a-z])/g, (_, a, b) => a + b.toUpperCase()));
+    if (!flag) {
       forwarded.push(arg);
+      continue;
     }
+    if (afterSeparator || (arg !== flag && !arg.startsWith(`${flag}=`))) {
+      throw new Error(`Only one canonical ${flag} is allowed, before --`);
+    }
+    if (values.has(flag)) throw new Error(`Duplicate ${flag}`);
+    const value = arg === flag ? args[++i] : arg.slice(flag.length + 1);
+    if (!value || value.startsWith("-")) throw new Error(`Missing ${flag} value`);
+    values.set(flag, value);
   }
+  const packDir = values.get("--from-pack-dir");
+  const stage = values.get("--stage");
   if (!packDir) throw new Error("--from-pack-dir is required");
-  return { packDir, forwarded };
+  if (stage !== undefined && !["prerequisites", "verify-registry", "remaining"].includes(stage)) {
+    throw new Error("Invalid --stage: expected prerequisites, verify-registry, or remaining");
+  }
+  if (stage === "verify-registry" && forwarded.length > 0) {
+    throw new Error("--stage verify-registry does not accept native publish arguments");
+  }
+  return { packDir, stage, forwarded };
 }
 
 function safeTarballPath(relative) {
@@ -91,29 +106,25 @@ function safeTarballPath(relative) {
   return relative;
 }
 
-function verifyRegistryIntegrity(bytes, integrity) {
-  if (typeof integrity !== "string") throw new Error("Missing registry integrity");
+function parseRegistryIntegrity(integrity, exact) {
   const tokens = integrity.trim().split(/\s+/u);
-  const supported = ["sha512", "sha384", "sha256", "sha1"];
+  const supported = { sha512: 64, sha384: 48, sha256: 32, sha1: 20 };
   // SRI selects the strongest supported algorithm, not a weaker matching alternative.
-  const algorithm = supported.find((name) => tokens.some((token) => token.startsWith(`${name}-`)));
-  if (!algorithm || !tokens.includes(`${algorithm}-${digest(bytes, algorithm)}`)) {
-    throw new Error("Registry artifact integrity mismatch");
+  const algorithm = Object.keys(supported).find((name) => tokens.some((token) => token.startsWith(`${name}-`)));
+  if (algorithm) {
+    const candidates = tokens
+      .filter((token) => token.startsWith(`${algorithm}-`))
+      .map((token) => token.slice(algorithm.length + 1));
+    const hashes = candidates.filter((candidate) => {
+      const bytes = Buffer.from(candidate, "base64");
+      return bytes.length === supported[algorithm] && bytes.toString("base64") === candidate;
+    });
+    if (hashes.length) return { algorithm, hashes };
   }
+  throw new Error(`Invalid registry metadata: ${exact} (integrity)`);
 }
 
-export async function publishPackedPackages(
-  args,
-  {
-    cwd = process.cwd(),
-    run = runChild,
-    fetch: fetchArtifact = globalThis.fetch,
-    wait = delay,
-    log = console.error,
-    now = () => performance.now(),
-  } = {},
-) {
-  const { packDir, forwarded } = parseArgs(args);
+async function loadPackedPlan(cwd, packDir) {
   const artifactDir = await realpath(path.resolve(cwd, packDir));
   const document = JSON.parse(await readFile(path.join(artifactDir, "publish-plan.json"), "utf8"));
   if (
@@ -186,6 +197,59 @@ export async function publishPackedPackages(
     chunks.push(chunk);
     for (const release of chunk) remaining.delete(release.name);
   }
+  return { manifests, releases, artifacts, dependencies, chunks };
+}
+
+function selectChunks(chunks, dependencies, stage) {
+  if (stage === undefined) return chunks;
+  const prerequisites = new Set([...dependencies.values()].flatMap((names) => [...names]));
+  if (stage === "prerequisites") {
+    return chunks.map((chunk) => chunk.filter(({ name }) => prerequisites.has(name))).filter((chunk) => chunk.length);
+  }
+  // No remaining entry depends on another remaining entry. Check all their dependencies before any writes.
+  const remaining = chunks.flat().filter(({ name }) => !prerequisites.has(name));
+  return remaining.length ? [remaining] : [];
+}
+
+async function publishChunks({ chunks, artifacts, cwd, run, forwarded, verifyChunk }) {
+  const staging = await mkdtemp(path.join(os.tmpdir(), "changeset-guard-"));
+  try {
+    for (const [index, chunk] of chunks.entries()) {
+      await verifyChunk(chunk);
+      const directory = path.join(staging, String(index));
+      await mkdir(directory);
+      for (const release of chunk) {
+        if (!artifacts.has(release.name)) continue;
+        const target = path.join(directory, release.tarball.path);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, artifacts.get(release.name));
+      }
+      await writeFile(path.join(directory, "publish-plan.json"), JSON.stringify({ version: 1, plan: [chunk] }));
+      // Native CLI retains npm provenance, git-tag creation, and append-only CHANGESETS_OUTPUT events.
+      const result = await run(process.execPath, [cli, "publish", "--from-pack-dir", directory, ...forwarded], { cwd });
+      if (result.code !== 0) throw new Error(`Native Changesets publish failed (${result.code})`);
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+export async function publishPackedPackages(
+  args,
+  {
+    cwd = process.cwd(),
+    run = runChild,
+    fetch: fetchArtifact = globalThis.fetch,
+    wait = delay,
+    log = console.error,
+    now = () => performance.now(),
+  } = {},
+) {
+  const { packDir, stage, forwarded } = parseArgs(args);
+  const { manifests, releases, artifacts, dependencies, chunks } = await loadPackedPlan(cwd, packDir);
+  const selected = selectChunks(chunks, dependencies, stage);
+  const { timeout, retryDelay } = stage === "verify-registry" ? gateReadiness : publishReadiness;
+
   async function verifyArtifact(name, readiness) {
     const manifest = manifests.get(name);
     const exact = `${name}@${manifest.version}`;
@@ -224,17 +288,20 @@ export async function publishPackedPackages(
       metadata?.name !== name ||
       metadata.version !== manifest.version ||
       typeof metadata.dist?.tarball !== "string" ||
-      !metadata.dist.integrity
+      typeof metadata.dist.integrity !== "string"
     ) {
       throw new Error(`Invalid registry metadata: ${exact}`);
     }
     let url;
     try {
       url = new URL(metadata.dist.tarball);
-      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Invalid protocol");
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+        throw new Error("Invalid artifact URL");
+      }
     } catch {
       throw new Error(`Invalid registry artifact URL: ${exact}`);
     }
+    const { algorithm, hashes } = parseRegistryIntegrity(metadata.dist.integrity, exact);
     let response;
     try {
       readiness.operation = "download tarball";
@@ -259,7 +326,7 @@ export async function publishPackedPackages(
         throw networkFailure(`Registry artifact unavailable: ${exact}`, error);
       }
       check();
-      verifyRegistryIntegrity(bytes, metadata.dist.integrity);
+      if (!hashes.includes(digest(bytes, algorithm))) throw new Error("Registry artifact integrity mismatch");
       const release = releases.get(name);
       if (artifacts.has(name) && release.tarball.integrity !== `sha256-${digest(bytes, "sha256")}`) {
         throw new Error(`Registry artifact differs from packed artifact: ${exact}`);
@@ -274,7 +341,7 @@ export async function publishPackedPackages(
     const started = now();
     const controller = new AbortController();
     const timeoutReason = new DOMException("Registry readiness deadline exceeded", "TimeoutError");
-    const timer = setTimeout(() => controller.abort(timeoutReason), readinessTimeout);
+    const timer = setTimeout(() => controller.abort(timeoutReason), timeout);
     let attempt = 0;
     let lastFailure;
     let shutdownSignal;
@@ -284,7 +351,7 @@ export async function publishPackedPackages(
     };
     const onInterrupt = () => interrupt("SIGINT");
     const onTerminate = () => interrupt("SIGTERM");
-    const remaining = () => Math.max(0, readinessTimeout - (now() - started));
+    const remaining = () => Math.max(0, timeout - (now() - started));
     const context = () =>
       `operation ${readiness.operation}; attempt ${attempt}; elapsed ${Math.ceil(now() - started)} ms; remaining ${Math.ceil(remaining())} ms`;
     const readiness = {
@@ -321,7 +388,7 @@ export async function publishPackedPackages(
           if (!(error instanceof RegistryUnavailableError)) throw error;
           const message = `${error.message}; ${context()}`;
           if (!error.retryable) throw new Error(message);
-          const ms = Math.min(availabilityDelay, remaining());
+          const ms = Math.min(retryDelay, remaining());
           log(`[registry] ${message}; retrying in ${Math.ceil(ms)} ms`);
           readiness.operation = "retry wait";
           readiness.check();
@@ -341,27 +408,19 @@ export async function publishPackedPackages(
       controller.abort();
     }
   }
-  const staging = await mkdtemp(path.join(os.tmpdir(), "changeset-guard-"));
-  try {
-    for (const [index, chunk] of chunks.entries()) {
-      const required = new Set(chunk.flatMap((release) => [...dependencies.get(release.name)]));
-      for (const name of required) await verifyAvailable(name);
-      const directory = path.join(staging, String(index));
-      await mkdir(directory);
-      for (const release of chunk) {
-        if (!artifacts.has(release.name)) continue;
-        const target = path.join(directory, release.tarball.path);
-        await mkdir(path.dirname(target), { recursive: true });
-        await writeFile(target, artifacts.get(release.name));
-      }
-      await writeFile(path.join(directory, "publish-plan.json"), JSON.stringify({ version: 1, plan: [chunk] }));
-      // Native CLI retains npm provenance, git-tag creation, and append-only CHANGESETS_OUTPUT events.
-      // Put packed mode before forwarded arguments so a trailing -- cannot hide the guard's path.
-      const result = await run(process.execPath, [cli, "publish", "--from-pack-dir", directory, ...forwarded], { cwd });
-      if (result.code !== 0) throw new Error(`Native Changesets publish failed (${result.code})`);
-    }
-  } finally {
-    await rm(staging, { recursive: true, force: true });
+  async function verifyChunk(chunk) {
+    const required = new Set(chunk.flatMap(({ name }) => [...dependencies.get(name)]));
+    for (const name of required) await verifyAvailable(name);
+  }
+  if (stage === "verify-registry") {
+    for (const chunk of selected) await verifyChunk(chunk);
+  } else if (selected.length) {
+    await publishChunks({ chunks: selected, artifacts, cwd, run, forwarded, verifyChunk });
+  } else if (stage !== undefined && process.env.CHANGESETS_OUTPUT) {
+    // Match native empty-plan reporting so the Action does not warn about a missing event file.
+    const output = path.resolve(cwd, process.env.CHANGESETS_OUTPUT);
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, "", { flag: "a" });
   }
 }
 

@@ -41,9 +41,10 @@ async function fixture() {
     path.join(cwd, ".changeset/config.json"),
     JSON.stringify({ bumpVersionsWithWorkspaceProtocolOnly: false }),
   );
-  const bytes = [Buffer.from("native core exact packed bytes"), Buffer.from("native consumer exact packed bytes")];
+  const names = ["@test/core", "@test/consumer", "@test/independent"];
+  const bytes = names.map((name) => Buffer.from(`native ${name} exact packed bytes`));
   const releases: Release[] = [];
-  for (const [index, name] of ["@test/core", "@test/consumer"].entries()) {
+  for (const [index, name] of names.entries()) {
     const dir = path.join(cwd, "packages", String(index));
     await mkdir(dir, { recursive: true });
     await writeFile(
@@ -51,26 +52,26 @@ async function fixture() {
       JSON.stringify({
         name,
         version: "2.0.0",
-        ...(index ? { dependencies: { "@test/core": "workspace:./packages/0" } } : {}),
+        ...(index === 1 ? { dependencies: { "@test/core": "workspace:./packages/0" } } : {}),
       }),
     );
     const tarball = { path: `${index}.tgz`, integrity: integrity(bytes[index]) };
     await writeFile(path.join(pack, tarball.path), bytes[index]);
     releases.push({ name, version: "2.0.0", kind: "publish", access: "public", tag: "latest", tarball });
   }
-  const save = (mode = "full") =>
-    writeFile(
-      path.join(pack, "publish-plan.json"),
-      JSON.stringify({
-        version: 1,
-        plan:
-          mode === "omitted"
-            ? [[releases[1]]]
-            : mode === "tag-only"
-              ? [[{ name: "@test/core", version: "2.0.0", kind: "tag-only" }], [releases[1]]]
-              : [[releases[1], releases[0]]],
-      }),
-    );
+  const planFile = path.join(pack, "publish-plan.json");
+  const save = (mode = "full") => {
+    const [core, consumer, independent] = releases;
+    const plan = {
+      full: [[consumer, core]],
+      omitted: [[consumer]],
+      "tag-only": [[{ name: core.name, version: core.version, kind: "tag-only" }], [consumer]],
+      "with-independent": [[consumer, independent, core]],
+      "core-only": [[core]],
+    }[mode];
+    assert.ok(plan);
+    return writeFile(planFile, JSON.stringify({ version: 1, plan }));
+  };
   await save();
   let available = false;
   let unavailableRequests = Number.POSITIVE_INFINITY;
@@ -111,7 +112,7 @@ const root = ${JSON.stringify(cwd)};
 const tool = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const log = (entry) => fs.appendFileSync(path.join(root, 'calls.ndjson'), JSON.stringify({ tool, args, ...entry }) + '\\n');
-const names = ['@test/core', '@test/consumer'];
+const names = ${JSON.stringify(names)};
 const tags = names.map(name => name + '@2.0.0');
 try {
   if (tool === 'npm' && args[0] === 'view') {
@@ -132,7 +133,7 @@ try {
       console.log(JSON.stringify(${JSON.stringify(metadata)}));
     }
   } else if (tool === 'npm' && args[0] === 'publish') {
-    const index = ['0', '1'].indexOf(path.basename(process.cwd()));
+    const index = names.findIndex((_, index) => String(index) === path.basename(process.cwd()));
     assert.notEqual(index, -1);
     assert.equal(process.cwd(), path.join(root, 'packages', String(index)));
     assert.deepEqual(args.slice(2), ['--json', '--access', 'public', '--tag', 'latest']);
@@ -143,8 +144,12 @@ try {
     assert.equal(integrity, ${JSON.stringify(bytes.map((value) => integrity(value)))}[index]);
     const marker = path.join(root, 'published-' + index);
     const already = fs.existsSync(marker);
-    log({ name: names[index], result: already ? 'already-published' : 'published', integrity, staging: path.dirname(path.resolve(process.cwd(), args[1])) });
-    if (already) {
+    const denied = index === 2 && fs.existsSync(path.join(root, 'deny-independent'));
+    log({ name: names[index], result: denied ? 'publish-forbidden' : already ? 'already-published' : 'published', integrity, staging: path.dirname(path.resolve(process.cwd(), args[1])) });
+    if (denied) {
+      console.log(JSON.stringify({ error: { code: 'E403', summary: 'fixture publish failure' } }));
+      process.exitCode = 1;
+    } else if (already) {
       console.log(JSON.stringify({ error: { code: 'EPUBLISHCONFLICT', summary: 'cannot publish over the previously published versions' } }));
       process.exitCode = 1;
     } else {
@@ -170,7 +175,7 @@ try {
     await writeFile(path.join(bin, tool), shim);
     await chmod(path.join(bin, tool), 0o755);
   }
-  const report = path.join(cwd, "report.ndjson");
+  const report = (stage?: string) => path.join(cwd, `${stage ?? "unsplit"}-report.ndjson`);
   await writeFile(path.join(cwd, "calls.ndjson"), "");
   const calls = async (): Promise<Call[]> =>
     (await readFile(path.join(cwd, "calls.ndjson"), "utf8"))
@@ -178,13 +183,23 @@ try {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-  const events = async () =>
-    (await readFile(report, "utf8"))
+  const events = async (stage?: string) =>
+    (await readFile(report(stage), "utf8"))
       .trim()
       .split("\n")
+      .filter(Boolean)
       .map((line) => JSON.parse(line));
-  const execute = async (shutdownSignal?: "SIGINT" | "SIGTERM") => {
+  const execute = async ({
+    stage,
+    shutdownSignal,
+    minimumRetryElapsed = 0,
+  }: {
+    stage?: "prerequisites" | "verify-registry" | "remaining";
+    shutdownSignal?: "SIGINT" | "SIGTERM";
+    minimumRetryElapsed?: number;
+  } = {}) => {
     if (shutdownSignal) await writeFile(path.join(cwd, "metadata-stall"), "stall");
+    const args = JSON.stringify(["--from-pack-dir", pack, ...(stage ? ["--stage", stage] : [])]);
     const child = spawn(
       process.execPath,
       [
@@ -195,12 +210,12 @@ try {
       await new Promise(resolve => process.once('message', resolve));
       process.disconnect();
       if (${Boolean(shutdownSignal)}) {
-        process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(guard))}, ...${JSON.stringify(["--from-pack-dir", pack])}];
+        process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(guard))}, ...${args}];
         await import(${JSON.stringify(guard)});
       } else {
         const { publishPackedPackages } = await import(${JSON.stringify(guard)});
         let clock = 0;
-        try { await publishPackedPackages(${JSON.stringify(["--from-pack-dir", pack])}, { now: () => clock, wait: async (ms) => { clock += ms; } }); }
+        try { await publishPackedPackages(${args}, { now: () => clock, wait: async (ms) => { clock += Math.max(ms, ${minimumRetryElapsed}); } }); }
         catch (error) { console.error(error.message); process.exitCode = 1; }
       }
     `,
@@ -209,7 +224,7 @@ try {
         cwd,
         detached: true,
         // Installed publish accepts its official report environment API, not --output.
-        env: { PATH: bin, HOME: cwd, CI: "true", NO_COLOR: "1", CHANGESETS_OUTPUT: report },
+        env: { PATH: bin, HOME: cwd, CI: "true", NO_COLOR: "1", CHANGESETS_OUTPUT: report(stage) },
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
     );
@@ -258,8 +273,11 @@ try {
             }),
           ]);
           interruptedStage = (await calls()).find((call) => call.staging)?.staging;
-          assert.ok(interruptedStage);
-          await readFile(path.join(interruptedStage, "publish-plan.json"));
+          if (stage === "verify-registry") assert.equal(interruptedStage, undefined);
+          else {
+            assert.ok(interruptedStage);
+            await readFile(path.join(interruptedStage, "publish-plan.json"));
+          }
           assert.ok(child.pid);
           process.kill(-child.pid, shutdownSignal);
           await ready.closed;
@@ -282,8 +300,10 @@ try {
   };
   return {
     cwd,
+    planFile,
     bytes,
     save,
+    report,
     execute,
     calls,
     events,
@@ -292,8 +312,8 @@ try {
     availableAfterRequests: (count: number) => {
       unavailableRequests = count;
     },
-    available: () => {
-      available = true;
+    available: (value = true) => {
+      available = value;
     },
     close: async () => {
       const closed = new Promise<void>((resolve, reject) =>
@@ -311,7 +331,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     async () => {
       const f = await fixture();
       try {
-        const result = await f.execute(signal);
+        const result = await f.execute({ shutdownSignal: signal });
         assert.equal(result.code, null, result.output);
         assert.match(result.output, /Registry readiness cancelled/u);
         assert.ok(!result.output.includes("Registry readiness deadline exceeded"));
@@ -331,6 +351,155 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     },
   );
 }
+
+test.skipIf(process.platform === "win32")(
+  "read-only CLI SIGTERM closes npm without any report or publish call",
+  async () => {
+    const f = await fixture();
+    try {
+      const result = await f.execute({ stage: "verify-registry", shutdownSignal: "SIGTERM" });
+      assert.equal(result.code, null, result.output);
+      assert.match(result.output, /Registry readiness cancelled/u);
+      assert.deepEqual(
+        (await f.calls()).map(({ tool, result }) => [tool, result]),
+        [["npm", "metadata-term"]],
+      );
+      await assert.rejects(readFile(f.report("verify-registry")), { code: "ENOENT" });
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+const publishCalls = (calls: Call[]) => calls.filter(({ tool, args }) => tool === "npm" && args[0] === "publish");
+
+test("a failed registry job can retry the original packed inputs without re-running prerequisite publication", async () => {
+  const f = await fixture();
+  try {
+    const packedPlan = await readFile(f.planFile);
+    const first = await f.execute({ stage: "prerequisites" });
+    assert.equal(first.code, 0, first.output);
+    assert.deepEqual(
+      (await f.events("prerequisites")).map(({ packageName }) => packageName),
+      ["@test/core"],
+    );
+    const callsBeforeGate = await f.calls();
+
+    await f.delayMetadata(1);
+    const failedGate = await f.execute({ stage: "verify-registry", minimumRetryElapsed: 300_000 });
+    assert.equal(failedGate.code, 1, failedGate.output);
+    assert.match(failedGate.output, /deadline exceeded.*E404/u);
+    f.available();
+    const ready = await f.execute({ stage: "verify-registry" });
+    assert.equal(ready.code, 0, ready.output);
+    assert.deepEqual(
+      (await f.calls()).slice(callsBeforeGate.length).map(({ tool, args, result }) => [tool, args[0], result]),
+      [
+        ["npm", "view", "metadata-pending"],
+        ["npm", "view", "metadata"],
+      ],
+    );
+    await assert.rejects(readFile(f.report("verify-registry")), { code: "ENOENT" });
+
+    const last = await f.execute({ stage: "remaining" });
+    assert.equal(last.code, 0, last.output);
+    assert.deepEqual(
+      (await f.events("remaining")).map(({ packageName }) => packageName),
+      ["@test/consumer"],
+    );
+
+    f.available(false);
+    const beforeReplay = (await f.calls()).length;
+    const replay = await f.execute({ stage: "remaining", minimumRetryElapsed: 30_000 });
+    assert.equal(replay.code, 1, replay.output);
+    assert.match(replay.output, /elapsed 30000 ms.*Registry artifact unavailable/u);
+    assert.deepEqual(
+      (await f.calls()).slice(beforeReplay).map(({ tool, args }) => [tool, args[0]]),
+      [["npm", "view"]],
+    );
+    assert.deepEqual(f.requests, Array(3).fill("/core.tgz"));
+    assert.deepEqual(await readFile(f.planFile), packedPlan);
+    assert.deepEqual(
+      publishCalls(await f.calls()).map(({ name, result, integrity: hash }) => [name, result, hash]),
+      [
+        ["@test/core", "published", integrity(f.bytes[0])],
+        ["@test/consumer", "published", integrity(f.bytes[1])],
+      ],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a native failure keeps partial events and replay submits already-published bytes without repairing tags", async () => {
+  const f = await fixture();
+  try {
+    await f.save("with-independent");
+    const first = await f.execute({ stage: "prerequisites" });
+    assert.equal(first.code, 0, first.output);
+    f.available();
+    const gate = await f.execute({ stage: "verify-registry" });
+    assert.equal(gate.code, 0, gate.output);
+    const deny = path.join(f.cwd, "deny-independent");
+    await writeFile(deny, "deny");
+    const failed = await f.execute({ stage: "remaining" });
+    assert.equal(failed.code, 1, failed.output);
+    assert.match(failed.output, /Native Changesets publish failed/u);
+    assert.deepEqual(
+      (await f.events("remaining")).map(({ packageName }) => packageName),
+      ["@test/consumer"],
+    );
+
+    // Simulate a fresh runner report and a tag not saved to GitHub on the previous attempt.
+    await Promise.all([deny, f.report("remaining"), path.join(f.cwd, "tag-1")].map((file) => rm(file)));
+    const replay = await f.execute({ stage: "remaining" });
+    assert.equal(replay.code, 0, replay.output);
+    assert.deepEqual(
+      (await f.events("remaining")).map(({ packageName }) => packageName),
+      ["@test/independent"],
+    );
+    await assert.rejects(readFile(path.join(f.cwd, "tag-1")), { code: "ENOENT" });
+    const calls = await f.calls();
+    assert.deepEqual(
+      publishCalls(calls)
+        .map(({ name, result }) => `${name} ${result}`)
+        .sort(),
+      [
+        "@test/consumer already-published",
+        "@test/consumer published",
+        "@test/core published",
+        "@test/independent publish-forbidden",
+        "@test/independent published",
+      ],
+    );
+    assert.equal(calls.filter(({ result }) => result === "tag-acknowledged").length, 3);
+  } finally {
+    await f.close();
+  }
+});
+
+test("empty publishing stage creates only an empty Action report and a core-only plan needs no registry gate", async () => {
+  const f = await fixture();
+  try {
+    await f.save("core-only");
+    const first = await f.execute({ stage: "prerequisites" });
+    assert.equal(first.code, 0, first.output);
+    assert.deepEqual(await f.events("prerequisites"), []);
+    const gate = await f.execute({ stage: "verify-registry" });
+    assert.equal(gate.code, 0, gate.output);
+    assert.deepEqual(await f.calls(), []);
+    await assert.rejects(readFile(f.report("verify-registry")), { code: "ENOENT" });
+    const last = await f.execute({ stage: "remaining" });
+    assert.equal(last.code, 0, last.output);
+    assert.deepEqual(
+      publishCalls(await f.calls()).map(({ name }) => name),
+      ["@test/core"],
+    );
+    assert.deepEqual(f.requests, []);
+  } finally {
+    await f.close();
+  }
+});
 
 test("actual native publish reports core, blocks on missing bytes, and retries the same plan", async () => {
   const f = await fixture();
