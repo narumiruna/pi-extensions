@@ -1,33 +1,45 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { defineMenu, runCustomInteraction, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
+import { runCancellableTask } from "./cancellable-operation.js";
 import { createSyncConfirmation, type SyncConfirmationChoice } from "./sync-confirmation.js";
 import { safeTerminalText } from "./terminal-text.js";
 
 type ReviewContext = ExtensionCommandContext | ExtensionContext;
+type ReviewDetails = string | ((signal?: AbortSignal) => Promise<string>);
 
-/** One approval screen; full details are optional and never authorize a transfer. */
 export async function confirmMergeReview(
   ctx: ReviewContext,
   title: string,
-  content: string,
+  details: ReviewDetails,
   signal: AbortSignal | undefined,
   isCurrent: () => boolean,
   confirmationLabel = "apply changes",
   summaryLines?: readonly string[],
 ) {
-  const lines = summaryLines ?? [
-    ...content
-      .split("\n")
-      .slice(0, 6)
-      .map((line) => truncateToWidth(safeTerminalText(line), 100)),
-    "View details for the complete review.",
-  ];
-  const tuiLines =
-    ctx.mode === "tui" && confirmationLabel === "apply reviewed transfer" && summaryLines?.join("\n") === content
-      ? compactLegacyTransferSummary(lines)
-      : lines;
+  let content = typeof details === "string" ? details : undefined;
+  const summary =
+    summaryLines ??
+    (typeof details === "string"
+      ? [
+          ...details
+            .split("\n")
+            .slice(0, 6)
+            .map((line) => truncateToWidth(safeTerminalText(line), 100)),
+          "View details for the complete review.",
+        ]
+      : []);
+  const tuiSummary =
+    ctx.mode === "tui" &&
+    typeof details === "string" &&
+    confirmationLabel === "apply reviewed transfer" &&
+    summaryLines?.join("\n") === details
+      ? compactLegacyTransferSummary(summary)
+      : summary;
   while (isCurrent() && !signal?.aborted) {
+    const allowApproval = content !== undefined;
+    const lines = allowApproval ? summary : [...summary, "Open View details before approving."];
+    const tuiLines = allowApproval ? tuiSummary : lines;
     const choice: { value: "cancel" | "approve" | "details" } = { value: "cancel" };
     const menu = defineMenu<undefined, "confirm", "choose", ReviewContext>({
       start: "confirm",
@@ -39,7 +51,7 @@ export async function confirmMergeReview(
           initialItemId: "cancel",
           items: [
             { id: "cancel", label: "No, cancel" },
-            { id: "approve", label: `Yes, ${confirmationLabel}` },
+            ...(allowApproval ? [{ id: "approve", label: `Yes, ${confirmationLabel}` }] : []),
             { id: "details", label: "View details" },
           ],
           action: "choose",
@@ -57,7 +69,16 @@ export async function confirmMergeReview(
       ctx.mode === "tui" && ctx.hasUI
         ? await runCustomInteraction<SyncConfirmationChoice, ReviewContext>(ctx, {
             create: ({ tui, theme, keybindings, complete }) =>
-              createSyncConfirmation({ title, lines: tuiLines, confirmationLabel, tui, theme, keybindings, complete }),
+              createSyncConfirmation({
+                title,
+                lines: tuiLines,
+                confirmationLabel,
+                allowApproval,
+                tui,
+                theme,
+                keybindings,
+                complete,
+              }),
             signal,
             isCurrent,
             onError: () => {},
@@ -70,8 +91,23 @@ export async function confirmMergeReview(
     if (result.kind === "completed") choice.value = result.value;
     else if (result.kind !== "closed") return false;
     // Keep authorization separate from UI termination in both adapters.
-    if (choice.value === "approve") return true;
+    if (choice.value === "approve") return allowApproval;
     if (choice.value !== "details") return false;
+    if (content === undefined && typeof details === "function") {
+      try {
+        const loaded = await runCancellableTask(ctx, "Loading exact sync details…", details, {
+          signal,
+          isCurrent,
+          cancelledMessage: null,
+        });
+        if (!isCurrent() || signal?.aborted || loaded.kind !== "completed") return false;
+        content = loaded.value;
+      } catch {
+        if (!isCurrent() || signal?.aborted) return false;
+        throw new Error("Sync review failed; no transfer was performed.");
+      }
+    }
+    if (content === undefined) return false;
     const detail = await runDocumentReview(ctx, {
       title: "Sync change details",
       content,

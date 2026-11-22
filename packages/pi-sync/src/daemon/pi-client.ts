@@ -17,6 +17,7 @@ import {
   findDaemon,
   MAX_SETTINGS_BYTES,
   modelSignature,
+  requestDaemon,
   waitForDaemonExit,
 } from "@narumitw/pi-sync-daemon";
 import { type ConfigAuthority, configureEngineHost } from "@narumitw/pi-sync-daemon/engine/host";
@@ -356,6 +357,7 @@ export class PiDaemonClient {
   }
   async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
+    if (!allowUpgrade && !this.paused && this.connection?.contactState === "active") return !this.protectionOnly;
     const address = await findDaemon(this.root);
     this.validate();
     if (!address) return false;
@@ -435,6 +437,10 @@ export class PiDaemonClient {
         const protectionOnly = daemon.needsUpgrade === true;
         const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
           callback: (callback, signal) => this.callback(callback, signal, protectionOnly),
+          mergeReview:
+            !protectionOnly && this.ctx.hasUI
+              ? (callback, loadDetails, signal) => this.pagedMergeReview(connection, callback, loadDetails, signal)
+              : undefined,
           event: (event) => {
             if (event.kind === "commit") return;
             if (this.signal.aborted || this.disposed || this.closing || clients.get(this.manager) !== this) return;
@@ -739,6 +745,64 @@ export class PiDaemonClient {
   releaseReload(owner: AbortController) {
     if (this.pendingReload === owner) this.pendingReload = undefined;
   }
+  async readStartupSettings(signal: AbortSignal) {
+    this.validate();
+    await settingsQueue;
+    this.validate();
+    signal.throwIfAborted();
+    const document = await peekLocalConfigDocument();
+    this.validate();
+    signal.throwIfAborted();
+    if (document && document.bytes.length > MAX_SETTINGS_BYTES)
+      throw new Error("Settings exceed the local API byte limit; the source document is unchanged.");
+    return { document, settings: document && validateSettingsDocument(document.parsed) };
+  }
+  tryStartupBootstrap(document: LocalConfigDocument, debug: boolean, signal: AbortSignal) {
+    const ownedSignal = AbortSignal.any([signal, this.signal]);
+    const operation = this.work.then(async () => {
+      const verify = () => {
+        this.validate();
+        ownedSignal.throwIfAborted();
+        if (this.paused || this.pendingReload) throw new Error("Pi Sync is paused for a session change.");
+      };
+      verify();
+      const connection = await this.connect(undefined, ownedSignal);
+      verify();
+      let result: unknown;
+      try {
+        result = await requestDaemon(
+          connection.paths,
+          connection.identity,
+          "startup.bootstrap",
+          {
+            client: this.id,
+            generation: this.generation,
+            fingerprint: fingerprint(document),
+            debug,
+          },
+          ownedSignal,
+        );
+      } catch (error) {
+        verify();
+        if (remoteErrorNamed(error, "Error") && (error as DaemonError).message === "Unknown daemon method.")
+          return false;
+        throw error;
+      }
+      verify();
+      if (result === false) return false;
+      if (result !== true || connection !== this.connection) throw new Error("Invalid startup bootstrap response.");
+      this.confirmContact(connection);
+      this.startupDebug = debug;
+      this.initialized = true;
+      Object.assign(connection.facts, { ready: true, startupDebug: debug });
+      return true;
+    });
+    this.work = operation.then(
+      () => {},
+      () => {},
+    );
+    return operation;
+  }
   async markReady(debug: boolean) {
     this.validate();
     this.startupDebug = debug;
@@ -759,6 +823,45 @@ export class PiDaemonClient {
   async update() {
     if (this.connection && !this.paused && !this.disposed && !this.signal.aborted)
       await this.publishFacts(this.connection);
+  }
+  private async pagedMergeReview(
+    connection: DaemonConnection,
+    callback: Callback,
+    loadDetails: (signal?: AbortSignal) => Promise<string>,
+    signal: AbortSignal,
+  ) {
+    const ctx = this.uiContext;
+    const generation = this.generation;
+    const combined = AbortSignal.any([signal, this.signal]);
+    const isCurrent = () =>
+      !combined.aborted &&
+      this.ownsContactUI() &&
+      this.uiContext === ctx &&
+      this.generation === generation &&
+      (this.connection ?? this.partialConnection) === connection;
+    if (!isCurrent()) return false;
+    this.validate();
+    if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) throw new Error("This client cannot present safety reviews.");
+    const { title, confirmationLabel, summaryLines } = callback.payload as {
+      title: string;
+      confirmationLabel?: string;
+      summaryLines: readonly string[];
+    };
+    const { confirmMergeReview } = await import("../ui/merge-review.js");
+    if (!isCurrent()) return false;
+    this.validate();
+    const result = await confirmMergeReview(
+      ctx,
+      title,
+      loadDetails,
+      combined,
+      isCurrent,
+      confirmationLabel,
+      summaryLines,
+    );
+    if (!isCurrent()) return false;
+    this.validate();
+    return result;
   }
   private async callback(callback: Callback, signal: AbortSignal, protectionOnly: boolean) {
     const payload = callback.payload as {

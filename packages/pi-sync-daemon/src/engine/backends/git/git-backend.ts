@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { posixJoin } from "../../paths.js";
+import { snapshotFileFromBlob } from "../../snapshot/snapshot-payload.js";
 import { IGNORE_SNAPSHOT_VERSION, type Snapshot, type SnapshotFile } from "../../snapshot/snapshot-types.js";
 import { stateDir } from "../../state/state-directory.js";
 import { throwIfAborted } from "../../sync/signals.js";
@@ -30,6 +31,7 @@ import { GitCommandError, parseGitBlobBatch, readGitBlobs, runGit } from "./git-
 import {
   GIT_MANIFEST_VERSION,
   type GitManifest,
+  type GitTreeEntry,
   MAX_GIT_MANIFEST_BYTES,
   MAX_GIT_TREE_OUTPUT_BYTES,
   type PreparedGitFile,
@@ -45,6 +47,11 @@ const POST_COMMIT_TIMEOUT_MS = 45_000;
 const HISTORY_MANIFEST_BATCH_SIZE = 8;
 const MANIFEST_BATCH_FRAME_BYTES = 96;
 const gitCacheMutationQueues = new Map<string, Promise<void>>();
+
+interface GitPublication {
+  manifest: GitManifest;
+  payloadEntries: GitTreeEntry[];
+}
 
 export interface GitBackendOptions {
   cacheRoot?: string;
@@ -70,12 +77,14 @@ export class GitSyncBackend implements SyncBackend {
   private readonly afterLsRemoteForTest?: () => void | Promise<void>;
   private readonly afterPayloadWriteForTest?: () => void | Promise<void>;
   private cacheReady?: Promise<void>;
+  private cachedPublication?: { commit: string; publication: GitPublication };
 
   constructor(
     private readonly config: ResolvedGitBackend,
     options: GitBackendOptions = {},
   ) {
     assertGitDestination(config);
+    this.config = { ...config, profile: { ...config.profile }, destination: { ...config.destination } };
     this.allowLocalRemotes = options.allowLocalRemotes === true;
     if (!this.allowLocalRemotes) assertProductionRemote(config.profile.remote);
     this.identity = gitBackendIdentity(config);
@@ -96,21 +105,40 @@ export class GitSyncBackend implements SyncBackend {
   async readHead(signal?: AbortSignal): Promise<RemoteHead | undefined> {
     const sha = await this.fetchRemoteHead(signal);
     if (!sha) return undefined;
-    const { manifest } = await this.readPublication(sha, signal);
-    return remoteHead(sha, manifest, this.identity);
+    return this.headForSha(sha, signal);
+  }
+
+  async readHeadAndSnapshot(signal?: AbortSignal) {
+    const commit = await this.fetchRemoteHead(signal);
+    if (!commit) return undefined;
+    const publication = await this.readCachedPublication(commit, signal);
+    await this.requireReachablePublication(commit, commit, undefined, signal);
+    const snapshot = await this.readPublicationSnapshot(publication, signal);
+    return { head: remoteHead(commit, publication.manifest, this.identity), snapshot };
   }
 
   async readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot> {
     const head = await this.fetchRemoteHead(signal);
     if (!head) throw new Error(`Git snapshot publication was not found: ${reference}`);
     const commit = await this.resolveSnapshotReference(reference, head, signal);
+    await this.requireReachablePublication(reference, commit, head, signal);
+    return this.readPublicationSnapshot(await this.readCachedPublication(commit, signal), signal);
+  }
+
+  private async requireReachablePublication(reference: string, commit: string, head?: string, signal?: AbortSignal) {
     try {
       await this.git(["cat-file", "-e", `${commit}^{commit}`], { signal });
-      await this.git(["merge-base", "--is-ancestor", commit, head], { signal });
+      if (head !== undefined) await this.git(["merge-base", "--is-ancestor", commit, head], { signal });
     } catch (error) {
+      throwIfAborted(signal);
       throw new Error(`Git snapshot publication was not found: ${reference}`, { cause: error });
     }
-    const { manifest, payloadEntries } = await this.readPublication(commit, signal);
+  }
+
+  private async readPublicationSnapshot(
+    { manifest, payloadEntries }: GitPublication,
+    signal?: AbortSignal,
+  ): Promise<Snapshot> {
     let blobs: Buffer[];
     try {
       blobs = await readGitBlobs(
@@ -132,10 +160,9 @@ export class GitSyncBackend implements SyncBackend {
     throwIfAborted(signal);
     const files: SnapshotFile[] = manifest.files.map((file, index) => {
       const content = blobs[index];
-      if (!content || content.byteLength !== file.size || sha256(content) !== file.sha256) {
-        throw new Error(`Git snapshot file checksum or size mismatch: ${file.path}`);
-      }
-      return { path: file.path, contentBase64: content.toString("base64"), sha256: file.sha256 };
+      const mismatch = `Git snapshot file checksum or size mismatch: ${file.path}`;
+      if (!content || content.byteLength !== file.size) throw new Error(mismatch);
+      return snapshotFileFromBlob(file.path, content, file.sha256, mismatch);
     });
     const snapshot: Snapshot = {
       version: manifest.snapshotVersion,
@@ -144,8 +171,8 @@ export class GitSyncBackend implements SyncBackend {
       machine: manifest.machine,
       profile: manifest.profile,
       ...(manifest.snapshotSyncSessions === undefined ? {} : { syncSessions: manifest.snapshotSyncSessions }),
-      ...(manifest.selection === undefined ? {} : { selection: manifest.selection }),
-      ...(manifest.localFields === undefined ? {} : { localFields: manifest.localFields }),
+      ...(manifest.selection === undefined ? {} : { selection: structuredClone(manifest.selection) }),
+      ...(manifest.localFields === undefined ? {} : { localFields: [...manifest.localFields] }),
       files,
     };
     validateGitSnapshot(snapshot, manifest, this.config.destination.namespace);
@@ -350,8 +377,17 @@ export class GitSyncBackend implements SyncBackend {
   }
 
   private async headForSha(sha: string, signal?: AbortSignal) {
-    const { manifest } = await this.readPublication(sha, signal);
+    const { manifest } = await this.readCachedPublication(sha, signal);
     return remoteHead(sha, manifest, this.identity);
+  }
+
+  private async readCachedPublication(commit: string, signal?: AbortSignal) {
+    throwIfAborted(signal);
+    if (this.cachedPublication?.commit === commit) return this.cachedPublication.publication;
+    const publication = await this.readPublication(commit, signal);
+    throwIfAborted(signal);
+    this.cachedPublication = { commit, publication };
+    return publication;
   }
 
   private async fetchRemoteHead(signal?: AbortSignal) {
@@ -598,7 +634,7 @@ export class GitSyncBackend implements SyncBackend {
     return posixJoin(this.publicationPath(), "files", filePath);
   }
 
-  private async readPublication(commit: string, signal?: AbortSignal, manifestBytes?: Buffer) {
+  private async readPublication(commit: string, signal?: AbortSignal, manifestBytes?: Buffer): Promise<GitPublication> {
     requireCommitSha(commit);
     const bytes =
       manifestBytes ??
@@ -695,7 +731,7 @@ function remoteHead(sha: string, manifest: GitManifest, identity: string): Remot
     createdAt: manifest.createdAt,
     machine: manifest.machine,
     syncSessions: manifest.syncSessions,
-    ...(manifest.selection === undefined ? {} : { selection: manifest.selection }),
+    ...(manifest.selection === undefined ? {} : { selection: structuredClone(manifest.selection) }),
   };
 }
 

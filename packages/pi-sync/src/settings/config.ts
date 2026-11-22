@@ -1,6 +1,7 @@
 export type * from "@narumitw/pi-sync-daemon/engine/settings/config";
 export {
   configFromSettings,
+  createSettingsConfigView,
   isEnabled,
   isExplicitlyEnabled,
   loadConfig,

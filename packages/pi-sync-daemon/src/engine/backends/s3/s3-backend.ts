@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { encodeKey, posixJoin } from "../../paths.js";
 import { sessionTokenWarnings } from "../../settings/config.js";
-import { decodeSnapshot, encodeSnapshot } from "../../snapshot/snapshot-codec.js";
+import { decodeSnapshot } from "../../snapshot/snapshot-codec.js";
+import { assertSnapshotFilePayload } from "../../snapshot/snapshot-payload.js";
 import type { Snapshot } from "../../snapshot/snapshot-types.js";
 import { validatePortableSnapshot } from "../../sync/local-fields.js";
 import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
 import { portableSnapshotSelection } from "../../sync/sync-policy.js";
 import type { LatestPointer, RemoteObject, ResolvedS3Backend } from "../backend-types.js";
+import { capturePublicationImage, encodeForPublication } from "../publication-encoding.js";
 import { createLatestPointer, remoteHistoryEntry } from "../snapshot-pointer.js";
 import {
   type BackendDiagnostic,
@@ -101,15 +103,14 @@ export class S3SyncBackend implements SyncBackend {
     options: PublishSnapshotOptions = {},
   ): Promise<PublishSnapshotResult> {
     throwIfAborted(options.signal);
-    assertSnapshotIdentity(snapshot, this.config.destination.namespace);
+    const image = capturePublicationImage(snapshot);
+    assertSnapshotIdentity(image, this.config.destination.namespace);
     if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
-    await verifyS3Conditions(this.config, options.signal);
+    const encoded = await encodeForPublication(image, () => verifyS3Conditions(this.config, options.signal));
     throwIfAborted(options.signal);
-    const stagedKey = snapshotKey(this.config, snapshot.id);
-    const encoded = await encodeSnapshot(snapshot);
-    throwIfAborted(options.signal);
-    const pointer = pointerFor(this.config, snapshot, sha256(encoded));
+    const stagedKey = snapshotKey(this.config, image.id);
+    const pointer = pointerFor(this.config, image, sha256(encoded));
     const cancellableClient = new S3Client(this.config, options.signal);
     if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
@@ -121,9 +122,7 @@ export class S3SyncBackend implements SyncBackend {
       if (!(error instanceof S3ObjectAlreadyExistsError)) throw error;
       const existing = await cancellableClient.getBuffer(stagedKey);
       if (!existing.value || sha256(existing.value) !== pointer.sha256) {
-        throw new SyncBackendConflictError(
-          `Immutable snapshot id already exists with different content: ${snapshot.id}`,
-        );
+        throw new SyncBackendConflictError(`Immutable snapshot id already exists with different content: ${image.id}`);
       }
     }
     const currentObject = await cancellableClient.getJson<LatestPointer>(latestKey(this.config));
@@ -462,10 +461,7 @@ function validateSnapshotBundle(snapshot: Snapshot) {
     ) {
       throw new Error("Remote snapshot bundle is malformed.");
     }
-    const content = Buffer.from(file.contentBase64, "base64");
-    if (content.toString("base64") !== file.contentBase64 || sha256(content) !== file.sha256) {
-      throw new Error("Remote snapshot file checksum mismatch.");
-    }
+    assertSnapshotFilePayload(file, "Remote snapshot file checksum mismatch.");
     paths.add(file.path);
   }
 }

@@ -22,7 +22,7 @@ import { assertMergeJournalPolicy, readMergeJournal } from "./merge-journal.js";
 import { createStartupTimings, type StartupTimingPublisher, type StartupTimings } from "./startup-timings.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 import { captureMutationOwner } from "./sync-local.js";
-import { fileHashMap } from "./sync-state.js";
+import { rawSnapshotHashIdentity } from "./sync-state.js";
 
 export function continuousEnabled(config: Pick<AnySyncConfig, "continuous" | "agentMode">) {
   return Boolean(config.continuous && config.agentMode);
@@ -479,11 +479,11 @@ export function createContinuousSync(
         await refresh();
         let localIdentity = inspection.localIdentity;
         if (!localIdentity) {
-          const snapshotModule = await loaders.snapshot();
+          const { observeSnapshot } = await import("../snapshot/snapshot.js");
           validate();
-          const local = await snapshotModule.createSnapshot(config.snapshotIdentity, snapshotOptions);
+          const local = await observeSnapshot(snapshotOptions);
           validate();
-          localIdentity = hashContinuous(fileHashMap(local));
+          localIdentity = rawSnapshotHashIdentity(local);
         }
         const journal = await readMergeJournal(config);
         validate();

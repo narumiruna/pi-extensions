@@ -74,13 +74,14 @@ export interface Request {
   token: string;
   method: string;
   params: unknown;
+  reviewDetails?: 1;
 }
 export interface Callback {
   id: string;
   job: string;
   kind: string;
   payload: unknown;
-  review?: { pages: number; bytes: number; sha256: string };
+  review?: { pages: number; bytes: number; sha256: string; offer?: string };
 }
 export interface ClientEvent {
   id: number;
@@ -99,6 +100,12 @@ export interface JobView {
   error?: RemoteError;
 }
 export type ClientContact = "active" | "expired" | "inactive";
+export const STATE_WAIT_HEARTBEAT_MS = 1_000;
+export interface StateWaitReply extends PollReply {
+  stateRevision: string;
+  finished: string[];
+  missing: string[];
+}
 export interface PollReply {
   cursor: number;
   callbacks: Callback[];
@@ -106,6 +113,7 @@ export interface PollReply {
   job?: JobView;
   /** Absent on owners without protocol-v1 contact resume support. */
   contact?: ClientContact;
+  stateWait?: 1;
 }
 export interface Execution {
   readonly root: string;

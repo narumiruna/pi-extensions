@@ -52,7 +52,12 @@ export async function runGit(args: string[], options: GitRunOptions = {}): Promi
     "protocol.ssh.allow=always",
   ];
   if (options.allowFileProtocol) protocolArgs.push("-c", "protocol.file.allow=always");
-  const commandArgs = [...(options.gitDir ? [`--git-dir=${options.gitDir}`] : []), ...protocolArgs, ...args];
+  const commandArgs = [
+    "--no-replace-objects",
+    ...(options.gitDir ? [`--git-dir=${options.gitDir}`] : []),
+    ...protocolArgs,
+    ...args,
+  ];
   const inheritedEnvironment = Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) =>

@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { request as httpRequest } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
-import { lt, valid } from "semver";
-import { DAEMON_BUILD_VERSION } from "./build-version.js";
+import { DaemonError, hello, requestDaemon } from "./client-transport.js";
 import {
   canonicalRootGuard,
   clearUpgradeOwner,
@@ -15,7 +13,6 @@ import {
   processExited,
   type RuntimePaths,
   readIdentity,
-  readJsonBody,
   readProcessBirth,
   readUpgradeOwner,
   recordUpgradeOwner,
@@ -24,6 +21,7 @@ import {
   upgradeRepairStarted,
 } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
+import { type MergeReviewPresenter, presentPagedReview, reviewScope } from "./paged-review.js";
 import {
   type Callback,
   type ClientEvent,
@@ -32,86 +30,14 @@ import {
   type ClientContact as ContactState,
   type Identity,
   type JobView,
-  MAX_MESSAGE_BYTES,
   MAX_REVIEW_BYTES,
   operationPrefix,
   REVIEW_PAGE_CHARS,
-  type RemoteError,
   record,
+  validId,
 } from "./protocol.js";
 
-export class DaemonError extends Error {
-  readonly remote: RemoteError;
-  constructor(remote: RemoteError) {
-    super(remote.message);
-    this.name = remote.name;
-    this.remote = remote;
-  }
-}
-export async function requestDaemon(
-  paths: RuntimePaths,
-  identity: Identity,
-  method: string,
-  params: unknown,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  signal?.throwIfAborted();
-  const body = JSON.stringify({
-    version: 1,
-    root: paths.root,
-    instance: identity.instance,
-    token: identity.token,
-    method,
-    params,
-  });
-  if (Buffer.byteLength(body) > MAX_MESSAGE_BYTES) throw new Error("Daemon request exceeds its byte limit.");
-  return new Promise((resolve, reject) => {
-    const request = httpRequest(
-      {
-        socketPath: daemonPaths(paths, identity.instance).endpoint,
-        path: "/v1",
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
-      },
-      (response) => {
-        void readJsonBody(response)
-          .then((value) => {
-            if (!record(value)) throw new Error("Invalid daemon response.");
-            if (record(value.error) && typeof value.error.message === "string")
-              throw new DaemonError(value.error as unknown as RemoteError);
-            if (response.statusCode !== 200 || !Object.hasOwn(value, "result"))
-              throw new Error("Invalid daemon response.");
-            resolve(value.result);
-          })
-          .catch(reject);
-      },
-    );
-    // Admission can wait behind a complete apply. The request owner's signal
-    // cancels that wait; an idle timeout must not let admission escape the fence.
-    request.setTimeout(method === "attach" || method === "resume-contact" ? 0 : 30_000, () =>
-      request.destroy(new Error("Daemon request timed out.")),
-    );
-    request.once("error", reject);
-    request.end(body);
-  });
-}
-async function hello(paths: RuntimePaths, identity: Identity, signal?: AbortSignal) {
-  const value = await requestDaemon(paths, identity, "hello", {}, signal);
-  if (
-    !record(value) ||
-    value.version !== 1 ||
-    value.root !== paths.root ||
-    value.instance !== identity.instance ||
-    value.pid !== identity.pid
-  )
-    throw new Error("Daemon handshake mismatch.");
-  const version = value.buildVersion;
-  if (Object.hasOwn(value, "buildVersion") && (typeof version !== "string" || valid(version) !== version))
-    throw new Error("Invalid daemon build version.");
-  // The old @narumitw/sync-daemon used the same wire protocol without a build version.
-  return { needsUpgrade: typeof version !== "string" || lt(version, DAEMON_BUILD_VERSION) };
-}
+export { DaemonError, requestDaemon } from "./client-transport.js";
 
 async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
   const { readConsent } = await import("./consent.js");
@@ -390,6 +316,7 @@ const TRANSIENT_RELEASE_ERRORS = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE",
 
 export interface ConnectionOptions {
   callback(callback: Callback, signal: AbortSignal): Promise<unknown>;
+  mergeReview?: MergeReviewPresenter;
   event?(event: ClientEvent): void;
   error?(error: unknown): void;
   /** Each current background observation after admission, including repeated states. */
@@ -412,6 +339,10 @@ export class DaemonConnection {
   private resuming: AbortController | undefined;
   private resumeUncertain = false;
   private pendingJobs = new Set<string>();
+  private observesState = false;
+  private stateRevision?: string;
+  private terminalJobs = new Set<string>();
+  private jobWaiters = new Map<string, PromiseWithResolvers<void>>();
   private uncertain = false;
   private reportedError = false;
   private commits = new Map<string, { notify(): void; signal?: AbortSignal }>();
@@ -461,6 +392,7 @@ export class DaemonConnection {
       "attach",
       this.facts,
       signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
+      this.options.mergeReview ? { reviewDetails: 1 } : undefined,
     );
     // Poll during attach: stopping a previous controller may need release answers
     // from this reattached participant before the attach response can complete.
@@ -470,6 +402,9 @@ export class DaemonConnection {
       const result = await request;
       admitted = true;
       this.publishContact(this.consume(result));
+      this.observesState = record(result) && result.stateWait === 1;
+      this.stateRevision = undefined;
+      this.terminalJobs.clear();
       this.attached = true;
       return this;
     } catch (error) {
@@ -622,6 +557,17 @@ export class DaemonConnection {
           { id, client: this.facts.id, operation, payload },
           this.controller.signal,
         );
+        const negotiated = this.observesState;
+        if (negotiated && !this.terminalJobs.has(id)) {
+          const completion = Promise.withResolvers<void>();
+          this.jobWaiters.set(id, completion);
+          const keepAlive = setInterval(() => {}, 30_000);
+          try {
+            await completion.promise;
+          } finally {
+            clearInterval(keepAlive);
+          }
+        }
         while (!this.closed) {
           const reply = await requestDaemon(
             this.paths,
@@ -641,6 +587,7 @@ export class DaemonConnection {
             signal?.throwIfAborted();
             return job.result;
           }
+          if (negotiated) throw new Error("Daemon did not return a terminal operation result.");
           await this.wait(25, true);
         }
         throw new Error("Daemon client closed before operation completed.");
@@ -664,7 +611,10 @@ export class DaemonConnection {
           }
         }
       },
-    ).finally(() => this.pendingJobs.delete(id));
+    ).finally(() => {
+      this.jobWaiters.delete(id);
+      this.pendingJobs.delete(id);
+    });
   }
   private publishContact(contact: ContactState | undefined) {
     this.contactRevision++;
@@ -717,6 +667,7 @@ export class DaemonConnection {
       if (this.completedCallbacks.size + this.callbacks.size >= MAX_COMPLETED_CALLBACKS) this.uncertain = true;
       const controller = new AbortController();
       const foreground = this.pendingJobs.has(callback.job);
+      const reviewGeneration = callback.review?.offer !== undefined ? this.facts.generation : undefined;
       this.callbacks.set(callback.id, {
         controller,
         kind: callback.kind,
@@ -748,7 +699,10 @@ export class DaemonConnection {
             {
               client: this.facts.id,
               id: callback.id,
-              ...(failed ? { error: "Client callback cancelled or failed." } : { value }),
+              ...(reviewGeneration !== undefined ? { generation: reviewGeneration } : {}),
+              ...(failed || (reviewGeneration !== undefined && controller.signal.aborted)
+                ? { error: "Client callback cancelled or failed." }
+                : { value }),
             },
             this.callbackIO.signal,
           );
@@ -831,6 +785,16 @@ export class DaemonConnection {
   private async performCallback(callback: Callback, signal: AbortSignal) {
     const reference = callback.review;
     if (!reference) return this.options.callback(callback, signal);
+    if (reference.offer !== undefined) {
+      if (!this.options.mergeReview) throw new Error("Exact review offer requires an opted-in presenter.");
+      return presentPagedReview(
+        reviewScope(this.identity, this.facts, callback),
+        callback,
+        AbortSignal.any([signal, this.callbackIO.signal]),
+        this.options.mergeReview,
+        (params, owned) => requestDaemon(this.paths, this.identity, "review-page", params, owned),
+      );
+    }
     if (
       callback.kind !== "merge-review" ||
       !record(callback.payload) ||
@@ -901,20 +865,62 @@ export class DaemonConnection {
       /* Error presentation must not own a task. */
     }
   }
+  private async observeState() {
+    const jobs = [...this.jobWaiters.keys()];
+    const reply = await requestDaemon(
+      this.paths,
+      this.identity,
+      "state-wait",
+      {
+        client: this.facts.id,
+        generation: this.facts.generation,
+        cursor: this.cursor,
+        revision: this.stateRevision,
+        jobs,
+      },
+      this.controller.signal,
+      { onSocket: (socket) => socket.unref() },
+    );
+    if (
+      !record(reply) ||
+      typeof reply.stateRevision !== "string" ||
+      !/^[0-9]{1,40}$/u.test(reply.stateRevision) ||
+      !Array.isArray(reply.finished) ||
+      !Array.isArray(reply.missing) ||
+      !reply.finished.every(validId) ||
+      !reply.missing.every(validId)
+    )
+      throw new Error("Invalid daemon state-wait response.");
+    return { reply, version: reply.stateRevision, finished: reply.finished, missing: reply.missing };
+  }
   private async poll() {
     while (!this.closed) {
       try {
         const revision = this.contactRevision;
-        const reply = await requestDaemon(
-          this.paths,
-          this.identity,
-          "poll",
-          { client: this.facts.id, cursor: this.cursor },
-          this.controller.signal,
-        );
+        const state = this.observesState && !this.admitting ? await this.observeState() : undefined;
+        const reply =
+          state?.reply ??
+          (await requestDaemon(
+            this.paths,
+            this.identity,
+            "poll",
+            { client: this.facts.id, cursor: this.cursor },
+            this.controller.signal,
+          ));
         // An older poll must not undo typed update expiry or a successful resume.
         if (revision === this.contactRevision) {
           const contact = this.consume(reply);
+          if (state) {
+            this.stateRevision = state.version;
+            this.terminalJobs = new Set(state.finished);
+            for (const id of state.finished) this.jobWaiters.get(id)?.resolve();
+            for (const id of state.missing)
+              this.jobWaiters
+                .get(id)
+                ?.reject(
+                  new Error("Operation is unknown or its result expired; reconcile journals instead of replaying."),
+                );
+          }
           this.reportedError = false;
           if (
             revision === this.contactRevision &&
@@ -929,8 +935,9 @@ export class DaemonConnection {
             if (contact !== undefined) this.options.contact?.(contact);
           }
         }
-        await this.wait(100);
+        if (!state) await this.wait(100);
       } catch (error) {
+        for (const waiter of this.jobWaiters.values()) waiter.reject(error);
         if (this.closed) return;
         if (this.attached) this.reportError(error);
         try {

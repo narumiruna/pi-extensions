@@ -20,6 +20,10 @@ import { syncPolicyChanged } from "./sync-state.js";
 async function readValidatedSnapshotForHead(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {
   const snapshot = await backend.readSnapshot(head.snapshotRef, signal);
   throwIfAborted(signal);
+  return validateSnapshotForHead(snapshot, head);
+}
+
+function validateSnapshotForHead(snapshot: Snapshot, head: RemoteHead) {
   validatePortableSnapshot(snapshot);
   if (snapshot.id !== head.snapshotId) {
     throw new Error(`Remote head ${head.snapshotId} resolved to unexpected snapshot ${snapshot.id}.`);
@@ -155,9 +159,9 @@ export async function readRemoteSnapshot(
   signal?: AbortSignal,
   options: { allowSelectionDifference?: boolean; sessionDir?: string } = {},
 ) {
-  const head = await backend.readHead(signal);
-  if (!head) return { head: undefined, snapshot: undefined, selectionState: undefined };
-  const rawSnapshot = await readValidatedSnapshotForHead(backend, head, signal);
+  const observed = await readCurrentSnapshot(backend, config.scope === "agent-directory", signal);
+  if (!observed) return { head: undefined, snapshot: undefined, selectionState: undefined };
+  const { head, snapshot: rawSnapshot } = observed;
   const selectionState = inspectRemoteSelection(config.include, rawSnapshot, config.exclude, config);
   if (!options.allowSelectionDifference && selectionState.kind === "different")
     throw selectionMismatch(config, selectionState);
@@ -166,4 +170,16 @@ export async function readRemoteSnapshot(
       ? undefined
       : filterSnapshotForConfigPolicy(rawSnapshot, config, { sessionDir: options.sessionDir });
   return { head, snapshot, selectionState };
+}
+
+async function readCurrentSnapshot(backend: SyncBackend, singleObservation: boolean, signal?: AbortSignal) {
+  if (singleObservation && backend.readHeadAndSnapshot) {
+    const observed = await backend.readHeadAndSnapshot(signal);
+    throwIfAborted(signal);
+    if (observed) validateSnapshotForHead(observed.snapshot, observed.head);
+    return observed;
+  }
+  const head = await backend.readHead(signal);
+  throwIfAborted(signal);
+  return head && { head, snapshot: await readValidatedSnapshotForHead(backend, head, signal) };
 }

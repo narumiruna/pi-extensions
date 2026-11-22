@@ -146,6 +146,37 @@ async function readStableFile(
   await recheck(target, original, guards);
 }
 
+export async function verifyUnchangedFile(target: string, content: Buffer, guards: Guards) {
+  const stat = await lstat(target, guards);
+  if (!stat?.isFile() || stat.nlink !== 1n || stat.size !== BigInt(content.length)) skippedPreimageChanged();
+  await recheckUnchangedFile(target, stat, guards);
+  await readStableFile(target, stat, guards, (chunk, offset) => {
+    if (!chunk.equals(content.subarray(offset, offset + chunk.length))) skippedPreimageChanged();
+  });
+  return stat;
+}
+
+export async function recheckUnchangedFile(target: string, stat: BigIntStats, guards: Guards) {
+  validate(guards);
+  let canonical: string;
+  try {
+    canonical = await fs.realpath(target);
+  } catch (error) {
+    validate(guards);
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") skippedPreimageChanged();
+    throw error;
+  }
+  validate(guards);
+  if (canonical !== target) skippedPreimageChanged();
+  const current = await lstat(target, guards);
+  if (!current || !sameObservation(stat, current)) skippedPreimageChanged();
+}
+
+function skippedPreimageChanged(): never {
+  throw new Error("Skipped file preimage changed before apply; snapshot installation refused.");
+}
+
 export async function readTransactionJournal(file: string, guards: Guards, maxBytes = MAX_TRANSACTION_JOURNAL_BYTES) {
   const stat = await lstat(file, guards);
   if (!stat) return undefined;

@@ -87,8 +87,8 @@ http.createServer = (listener) =>
           if (callback.kind === "queue-release") releases.set(callback.id, callback);
         end.call(this, body, ...args);
       };
-      // Hold idle poll replies only, so foreground preflight can see expiry first.
-      if (holdPolls && method === "poll" && params.job === undefined) {
+      // Hold background observations only, so foreground preflight can see expiry first.
+      if (holdPolls && (method === "state-wait" || (method === "poll" && params.job === undefined))) {
         heldPolls.add(send);
         response.once("close", () => heldPolls.delete(send));
       } else send();

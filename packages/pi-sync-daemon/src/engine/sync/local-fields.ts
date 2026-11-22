@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { regenerateSnapshotIdentity } from "../snapshot/snapshot.js";
 import { assertAgentDirectorySnapshotBound } from "../snapshot/snapshot-bounds.js";
+import { assertSnapshotFilePayload } from "../snapshot/snapshot-payload.js";
 import {
   IGNORE_SNAPSHOT_VERSION,
   type IgnoreSnapshotSelection,
   isSupportedSnapshotVersion,
   type Snapshot,
   type SnapshotFile,
+  type SnapshotObservation,
 } from "../snapshot/snapshot-types.js";
 import {
   type JsonDocument,
@@ -100,12 +102,7 @@ function validateIgnoreSnapshotFiles(files: SnapshotFile[]) {
       file.sha256.length !== 64
     )
       throw new Error("Invalid ignore snapshot file.");
-    const content = Buffer.from(file.contentBase64, "base64");
-    if (
-      content.toString("base64") !== file.contentBase64 ||
-      createHash("sha256").update(content).digest("hex") !== file.sha256
-    )
-      throw new Error("Ignore snapshot file checksum or encoding mismatch.");
+    assertSnapshotFilePayload(file, "Ignore snapshot file checksum or encoding mismatch.");
   }
 }
 
@@ -150,13 +147,49 @@ function file(content: Buffer): SnapshotFile {
   };
 }
 function requireCanonicalFieldSettingsPath(snapshot: Snapshot) {
-  if (
-    snapshot.selection?.scope &&
-    snapshot.files.some(({ path }) => path !== "settings.json" && path.toLowerCase() === "settings.json")
-  )
+  assertCanonicalFieldSettingsPath(snapshot.files, snapshot.selection?.scope);
+}
+
+function assertCanonicalFieldSettingsPath(files: SnapshotObservation["files"], scope: SnapshotObservation["scope"]) {
+  if (scope && files.some(({ path }) => path !== "settings.json" && path.toLowerCase() === "settings.json"))
     throw new Error(
       "Directory scope requires the exact settings.json spelling when machine-local fields are configured.",
     );
+}
+
+function portableSettingsContent(content: Buffer, excluded: ReadonlySet<string>) {
+  const document = parseSettingsDocument(content);
+  const object = Object.create(null);
+  for (const key of [...document.root.members.keys()].sort())
+    if (!excluded.has(key)) object[key] = document.root.members.get(key)?.node.value;
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+              .map(([key, child]) => [key, canonical(child)]),
+          )
+        : value;
+  return Buffer.from(`${JSON.stringify(canonical(object))}\n`);
+}
+
+export function portableObservation(observation: SnapshotObservation, fields: string[] | undefined) {
+  if (fields === undefined) return observation;
+  const excluded = new Set(normalizeLocalFields(fields));
+  if (excluded.size === 0) return observation;
+  assertCanonicalFieldSettingsPath(observation.files, observation.scope);
+  return {
+    files: observation.files.map((entry) => {
+      if (entry.path !== "settings.json") return entry;
+      if (entry.settingsContent === undefined) throw new Error("Missing settings bytes for portable observation.");
+      return {
+        path: entry.path,
+        sha256: createHash("sha256").update(portableSettingsContent(entry.settingsContent, excluded)).digest("hex"),
+      };
+    }),
+  };
 }
 
 export function portableSnapshot(snapshot: Snapshot, fields: string[] | undefined): Snapshot {
@@ -165,21 +198,7 @@ export function portableSnapshot(snapshot: Snapshot, fields: string[] | undefine
   if (excluded.size > 0) requireCanonicalFieldSettingsPath(snapshot);
   const files = snapshot.files.map((entry) => {
     if (entry.path !== "settings.json" || excluded.size === 0) return entry;
-    const document = parseSettingsDocument(Buffer.from(entry.contentBase64, "base64"));
-    const object = Object.create(null);
-    for (const key of [...document.root.members.keys()].sort())
-      if (!excluded.has(key)) object[key] = document.root.members.get(key)?.node.value;
-    const canonical = (value: unknown): unknown =>
-      Array.isArray(value)
-        ? value.map(canonical)
-        : value && typeof value === "object"
-          ? Object.fromEntries(
-              Object.entries(value)
-                .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-                .map(([key, child]) => [key, canonical(child)]),
-            )
-          : value;
-    return file(Buffer.from(`${JSON.stringify(canonical(object))}\n`));
+    return file(portableSettingsContent(Buffer.from(entry.contentBase64, "base64"), excluded));
   });
   return regenerateSnapshotIdentity({
     ...snapshot,

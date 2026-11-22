@@ -13,8 +13,10 @@ import {
   createSnapshot,
   filterSnapshotForConfigPolicy,
   mergeRemotePreservedFiles,
+  observeSnapshot,
   regenerateSnapshotIdentity,
   scanSnapshot,
+  snapshotWithObservedInventory,
 } from "../snapshot/snapshot.js";
 import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
 import { hasCurrentMergeBaseline, pruneMergeBaselines, readMergeAncestors } from "../state/merge-baseline-store.js";
@@ -59,7 +61,7 @@ import {
 import { resolveSettingsConflicts } from "./settings-conflicts.js";
 import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
 import { createSyncDecision } from "./sync-decision.js";
-import { backupLocal, captureMutationOwner, protectedSessionPaths } from "./sync-local.js";
+import { backupSnapshot, captureMutationOwner, protectedSessionPaths } from "./sync-local.js";
 import { configuredSnapshotPathMatcher, inspectRemoteSelection, syncSessionsSelected } from "./sync-policy.js";
 import { fileHashMap, hasLocalChanges, hasRemoteChanges, sameHashes, syncPolicyChanged } from "./sync-state.js";
 import { TEXT_MERGE_WORK_LIMIT } from "./text-merge.js";
@@ -224,9 +226,7 @@ export async function mergeSync(
         const unchanged = await timings.measure("transfer unchanged verification", async () => {
           if (!(await hasCurrentMergeBaseline(config, local, state))) return false;
           await validate();
-          const currentLocal = await timings.measure("transfer local snapshot", () =>
-            createSnapshot(config.snapshotIdentity, snapshotOptions),
-          );
+          const currentLocal = await timings.measure("transfer local snapshot", () => observeSnapshot(snapshotOptions));
           await validate();
           const currentState = await timings.measure("transfer state read", () => readStateForConfig(config));
           await validate();
@@ -496,9 +496,7 @@ export async function mergeSync(
           );
         progress = await persistProgress();
         await validate();
-        const currentLocal = await timings.measure("transfer local snapshot", () =>
-          createSnapshot(config.snapshotIdentity, snapshotOptions),
-        );
+        const currentLocal = await timings.measure("transfer local snapshot", () => observeSnapshot(snapshotOptions));
         await validate();
         if (
           !sameHashes(fileHashMap(currentLocal), fileHashMap(localRaw)) ||
@@ -590,10 +588,12 @@ export async function mergeSync(
           return "cancelled" as const;
       }
       await validate();
-      const refreshed = await timings.measure("transfer local snapshot", () =>
-        createSnapshot(config.snapshotIdentity, snapshotOptions),
+      const refreshObservation = await timings.measure("transfer local snapshot", () =>
+        observeSnapshot(snapshotOptions),
       );
-      if (!sameHashes(fileHashMap(refreshed), fileHashMap(localRaw)))
+      validateOwner();
+      const refreshed = snapshotWithObservedInventory(localRaw, refreshObservation);
+      if (!refreshed)
         throw new ContinuousError("stale", "Local content changed during review; no merged transfer was performed.");
       if (
         syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
@@ -610,7 +610,7 @@ export async function mergeSync(
       progress = await persistProgress();
       await validate();
       const backup = await timings.measure("transfer backup", () =>
-        backupLocal(config.snapshotIdentity, snapshotOptions, options.signal),
+        backupSnapshot(regenerateSnapshotIdentity(refreshed), options.signal),
       );
       await validateFresh();
       const journal: MergeJournal = {
@@ -633,11 +633,12 @@ export async function mergeSync(
         await timings.measure("transfer state read", () => readStateForConfig(config)),
       );
       await validate();
-      const atCommit = await timings.measure("transfer local snapshot", () =>
-        createSnapshot(config.snapshotIdentity, snapshotOptions),
+      const commitObservation = await timings.measure("transfer local snapshot", () =>
+        observeSnapshot(snapshotOptions),
       );
       await validate();
-      if (!sameHashes(fileHashMap(atCommit), fileHashMap(localRaw)) || atCommitState !== journal.stateIdentity) {
+      const atCommit = snapshotWithObservedInventory(refreshed, commitObservation);
+      if (!atCommit || atCommitState !== journal.stateIdentity) {
         await validateFresh();
         await clearMergeJournal(config);
         throw new ContinuousError(
@@ -775,9 +776,7 @@ async function completeJournal(
   const readRetirementEvidence = async () => {
     const state = await timings.measure("transfer state read", () => readStateForConfig(config));
     await validateFresh();
-    const local = await timings.measure("transfer local snapshot", () =>
-      createSnapshot(config.snapshotIdentity, snapshotOptions),
-    );
+    const local = await timings.measure("transfer local snapshot", () => observeSnapshot(snapshotOptions));
     validateMutation();
     const latest = await timings.measure("transfer remote head", () => backend.readHead(signal));
     validateMutation();
