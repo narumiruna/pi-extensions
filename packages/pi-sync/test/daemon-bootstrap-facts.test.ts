@@ -67,7 +67,7 @@ async function fixture(testContext: TestContext) {
   const connection = {
     ...address,
     facts: {} as ClientFacts,
-    contactState: "active" as ContactState,
+    contactState: "active" as ContactState | undefined,
     contactResumeState: "idle",
     hasPendingWork: false,
     attach: async () => {
@@ -160,6 +160,38 @@ async function fixture(testContext: TestContext) {
     },
   };
 }
+
+test.for([
+  { contact: "expired", resume: "idle" },
+  { contact: "inactive", resume: "idle" },
+  { contact: undefined, resume: "idle" },
+  { contact: "active", resume: "running" },
+  { contact: "active", resume: "uncertain" },
+] as const)(
+  "bootstrap declines contact=$contact resume=$resume without publishing",
+  async ({ contact, resume }, context) => {
+    const f = await fixture(context);
+    f.connection.contactState = contact;
+    f.connection.contactResumeState = resume;
+    assert.equal(await f.bootstrap(), false);
+    assert.deepEqual(f.wire, []);
+    assert.equal(f.stored.ready, false);
+    assert.equal(f.connection.facts.ready, false);
+  },
+);
+
+test("an accepted bootstrap preserves readiness when contact expires before the reply arrives", async (context) => {
+  const f = await fixture(context);
+  const bootstrap = f.hold(f.onBootstrap, true);
+  const startup = f.bootstrap();
+  await bootstrap.entered;
+  f.connection.contactState = "expired";
+  bootstrap.release();
+  assert.equal(await startup, true);
+  assert.equal(f.connection.contactState, "expired");
+  assert.equal(f.connection.facts.ready, true);
+  assert.equal(f.stored.ready, true);
+});
 
 test("bootstrap waits for a pre-bootstrap busy publication to settle", async (context) => {
   const f = await fixture(context);

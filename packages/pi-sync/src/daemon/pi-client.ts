@@ -785,6 +785,7 @@ export class PiDaemonClient {
       const connection = await this.connect(undefined, ownedSignal);
       return this.queueFacts(async () => {
         verify(connection);
+        if (connection.contactState !== "active" || connection.contactResumeState !== "idle") return false;
         const ready = await requestStartupBootstrap(connection, fingerprint(document), debug, ownedSignal).catch(
           (error: unknown) => {
             verify(connection);
@@ -793,10 +794,10 @@ export class PiDaemonClient {
         );
         verify(connection);
         if (!ready) return false;
-        this.confirmContact(connection);
         this.startupDebug = debug;
         this.initialized = true;
         Object.assign(connection.facts, { ready: true, startupDebug: debug });
+        if (connection.contactState === "active") this.confirmContact(connection);
         return true;
       });
     });

@@ -2,18 +2,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setImmediate } from "node:timers/promises";
 import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadConfig, loadConfigForCheck, syncCheckConfigFingerprint } from "../src/settings/config.js";
-import { localConfigPath } from "../src/settings/config-file.js";
+import { legacyLocalConfigPath, localConfigPath } from "../src/settings/config-file.js";
 import { localConfigTemplate, updateLocalConfig } from "../src/settings/settings-store.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { createStartupTimings } from "../src/sync/startup-timings.js";
 import { STARTUP_TIMING_ENTRY, type StartupTimingEntry } from "../src/ui/startup-timings-entry.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
-import { contextUi, deferred, inspectionFixture } from "./startup-check-helpers.js";
+import { contextUi, deferred, inspectionFixture, observeCheckCompletion } from "./startup-check-helpers.js";
 
 function reports(context: ReturnType<typeof createMockContext>, mock?: ReturnType<typeof createMockPi>) {
   return [
@@ -24,12 +25,23 @@ function reports(context: ReturnType<typeof createMockContext>, mock?: ReturnTyp
   ];
 }
 
-async function configured(debug: boolean | undefined, run: () => Promise<void>, transfer = false) {
+function assertCompletedTimingReport(report: string | undefined, scope: string, stages: string[]) {
+  assert.deepEqual(
+    report?.split("\n").map((line) => line.replace(/(?<=: )\d+\.\d ms$/u, "<duration>")),
+    [`pi-sync debug: ${scope} (completed)`, ...[...stages, "total"].map((stage) => `${stage}: <duration>`)],
+  );
+}
+
+async function configured(
+  debug: boolean | undefined,
+  run: () => Promise<void>,
+  { transfer = false, legacy = false } = {},
+) {
   await withTempHome(async (root) => {
     await fs.mkdir(root, { recursive: true });
     const settings = { ...v3S3Settings({ automatic: true }), debug };
     Object.assign(settings.syncSetups.home.sync, { automaticTransfer: transfer });
-    await fs.writeFile(localConfigPath(), JSON.stringify(settings));
+    await fs.writeFile(legacy ? legacyLocalConfigPath() : localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
     await fs.writeFile(path.join(root, "settings.json"), "{}\n");
     await adoptFixtureRoot(root);
     await run();
@@ -113,36 +125,75 @@ test("repeated transfer stages aggregate durations and counts without losing int
 for (const debug of [undefined, false, true]) {
   for (const mode of ["tui", "rpc", "print", "json"] as const) {
     test(`startup debug=${debug} in ${mode} only reports through supported UI`, async () => {
-      await configured(debug, async () => {
-        const { default: sync } = await import("../src/sync-extension.js");
-        const mock = createMockPi();
-        const context = createMockContext({ mode });
-        sync(mock.pi, { loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }) });
-        await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-        const enabled = debug === true && (mode === "tui" || mode === "rpc");
-        if (enabled) await vi.waitFor(() => assert.equal(reports(context, mock).length, 2), { interval: 5 });
-        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
-        assert.equal(reports(context, mock).length, enabled ? 2 : 0);
-        assert.equal(mock.entries.length, enabled && mode === "tui" ? 2 : 0);
-        if (enabled) {
-          assert.match(
-            reports(context, mock)[0]?.message ?? "",
-            /transaction recovery:.*settings read:.*config resolution:/su,
-          );
-          assert.match(
-            reports(context, mock)[1]?.message ?? "",
-            /inspection import:.*inspection and guards:.*total:/su,
-          );
-          assert.doesNotMatch(
-            reports(context, mock)
-              .map((entry) => entry.message)
-              .join("\n"),
-            /access-key|secret-key|example\.r2|settings\.json/u,
-          );
-        }
-      });
+      await configured(
+        debug,
+        async () => {
+          const { default: sync } = await import("../src/sync-extension.js");
+          const mock = createMockPi();
+          const context = createMockContext({ mode });
+          const { completed } = observeCheckCompletion(context.ctx);
+          let finished = false;
+          void completed.then(async () => {
+            // Let the final report continuation run after the completion status is set.
+            await setImmediate();
+            finished = true;
+          });
+          sync(mock.pi, { loadSyncInspection: async () => ({ inspectSync: (config) => inspectionFixture(config) }) });
+          const interactive = mode === "tui" || mode === "rpc";
+          try {
+            await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+            if (interactive)
+              await vi.waitFor(() => assert.ok(finished, "startup check did not finish"), { timeout: 3_000 });
+            const enabled = debug === true && interactive;
+            const output = reports(context, mock);
+            assert.equal(output.length, enabled ? 2 : 0);
+            assert.equal(mock.entries.length, enabled && mode === "tui" ? 2 : 0);
+            if (enabled) {
+              assertCompletedTimingReport(output[0]?.message, "local initialization", [
+                "transaction recovery",
+                "settings read",
+                "config resolution",
+              ]);
+              assertCompletedTimingReport(output[1]?.message, "background startup", [
+                "inspection import",
+                "inspection and guards",
+              ]);
+            }
+          } finally {
+            await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+          }
+        },
+        // The daemon cannot bootstrap a legacy document: it must queue initialization to migrate it.
+        { legacy: true },
+      );
     });
   }
+}
+
+for (const mode of ["tui", "rpc"] as const) {
+  test(`accepted startup bootstrap reports only settings read and total in ${mode}`, async () => {
+    await withTempHome(async (root) => {
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(localConfigPath(), JSON.stringify({ ...v3S3Settings(), debug: true }), { mode: 0o600 });
+      const { PiDaemonClient } = await import("../src/daemon/pi-client.js");
+      const { default: sync } = await import("../src/sync-extension.js");
+      const bootstrap = vi.spyOn(PiDaemonClient.prototype, "tryStartupBootstrap").mockResolvedValue(true);
+      const mock = createMockPi();
+      const context = createMockContext({ mode });
+      try {
+        sync(mock.pi);
+        await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+        assert.equal(bootstrap.mock.calls.length, 1);
+        const output = reports(context, mock);
+        assert.equal(output.length, 1);
+        assert.equal(mock.entries.length, mode === "tui" ? 1 : 0);
+        assertCompletedTimingReport(output[0]?.message, "local initialization", ["settings read"]);
+      } finally {
+        bootstrap.mockRestore();
+        await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+      }
+    });
+  });
 }
 
 test("inspection measures backend, snapshot, state, and remote head separately without writing files", async () => {
@@ -236,7 +287,7 @@ for (const fail of [false, true]) {
         assert.equal(report.includes("(interrupted)"), fail);
         await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
       },
-      true,
+      { transfer: true },
     );
   });
 }
