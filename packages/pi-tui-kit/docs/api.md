@@ -163,7 +163,7 @@ function routeSettingsMouse(list: SettingsList) {
 }
 ```
 
-`handleMouse()` ignores unmapped rows and out-of-width events. It preserves the input event except for the translated `y`, `width`, and `height`, then returns the native result unchanged. A left click with no handled press in the current gesture first sends a left press at the clicked row so the native list cannot activate a stale pressed item. Publishing a layout after a redraw does not end a gesture. Call `clear()` when input, invalidation, a submenu transition, or disposal makes the painted geometry obsolete. The wrapper still owns redraw requests, focus, terminal reservations, and any session or save guards.
+`handleMouse()` ignores unmapped rows and out-of-width events. It preserves the input event except for the translated `y`, `width`, and `height`, then returns the native result unchanged. As in Pi, a press is handled if its result sets `handled`, `focus`, or `capture` to true. A left click without a handled press first sends a left press at the clicked row so the list cannot activate a stale pressed item. If that press calls `clear()`, the router does not forward the click. Publishing a layout after a redraw does not end a gesture. Call `clear()` when input, invalidation, a submenu transition, or disposal makes the painted geometry obsolete. The wrapper still owns redraw requests, focus, terminal reservations, and any session or save guards.
 
 ## Configured keys
 

@@ -18,6 +18,7 @@ export function createFramedSettingsMouseRouter(
 ): FramedSettingsMouseRouter {
   let layout: { width: number; nativeHeight: number; nativeRows: Map<number, number> } | undefined;
   let pressed = false;
+  let generation = 0;
   return {
     setLayout({ width, nativeHeight, rows }) {
       layout = {
@@ -40,13 +41,21 @@ export function createFramedSettingsMouseRouter(
         return undefined;
       }
       const nativeEvent = { ...event, y, width: layout.width, height: layout.nativeHeight };
-      if (leftClick && !pressed) dispatch({ ...nativeEvent, type: "press" });
+      const currentGeneration = generation;
+      const recoverPress = leftClick && !pressed;
+      if (leftPress || event.type === "click" || event.type === "wheel") pressed = false;
+      if (recoverPress) {
+        dispatch({ ...nativeEvent, type: "press" });
+        if (generation !== currentGeneration) return undefined;
+      }
       const result = dispatch(nativeEvent);
-      if (leftPress) pressed = result?.handled === true;
-      if (event.type === "click" || event.type === "wheel") pressed = false;
+      if (leftPress && generation === currentGeneration) {
+        pressed = result?.handled === true || result?.focus === true || result?.capture === true;
+      }
       return result;
     },
     clear() {
+      generation++;
       layout = undefined;
       pressed = false;
     },

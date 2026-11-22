@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { type SettingItem, SettingsList, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type SettingItem, SettingsList, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { renderBoundedFrameLayout } from "../src/bounded-frame.js";
 import { runCustomInteraction } from "../src/custom-interaction.js";
@@ -188,6 +188,92 @@ test("leaves native submenu activation and mouse delegation intact", () => {
     ],
   );
 });
+
+test.each([{ focus: true }, { capture: true, handled: false }] satisfies TuiMouseEventResult[])(
+  "does not repeat a handled native submenu press with %j",
+  (pressResult) => {
+    const types: string[] = [];
+    const { paint, router, changes } = createList([
+      {
+        id: "limit",
+        label: "Limit",
+        currentValue: "none",
+        submenu: (_current, done) => ({
+          render: () => ["Choose a limit"],
+          invalidate() {},
+          handleMouse(event) {
+            types.push(event.type);
+            if (event.type === "press") return pressResult;
+            if (event.type === "click") done("10");
+            return undefined;
+          },
+        }),
+      },
+    ]);
+    router.handleMouse(mouse("click", row(paint(), "Limit")));
+    assert.deepEqual(router.handleMouse(mouse("press", row(paint(), "Choose a limit"))), {
+      ...pressResult,
+      focus: true,
+    });
+    router.handleMouse(mouse("click", row(paint(), "Choose a limit")));
+    assert.deepEqual(types, ["press", "click"]);
+    assert.deepEqual(changes, [["limit", "10"]]);
+  },
+);
+
+test.each([undefined, {}, { handled: false }, { render: true }] satisfies (TuiMouseEventResult | undefined)[])(
+  "still sends a recovery press when the original result is %j",
+  (pressResult) => {
+    const types: string[] = [];
+    const router = createFramedSettingsMouseRouter((event) => {
+      types.push(event.type);
+      return event.type === "press" ? pressResult : undefined;
+    });
+    router.setLayout({ width: 32, nativeHeight: 1, rows: [{ frameIndex: 0, contentIndex: 0 }] });
+    assert.equal(router.handleMouse(mouse("press", 0)), pressResult);
+    router.handleMouse(mouse("click", 0));
+    assert.deepEqual(types, ["press", "press", "click"]);
+  },
+);
+
+test.each(["press", "click"] as const)("clear during a dispatched press takes effect for %s input", (type) => {
+  const types: string[] = [];
+  const layout = { width: 32, nativeHeight: 1, rows: [{ frameIndex: 0, contentIndex: 0 }] };
+  const router = createFramedSettingsMouseRouter((event) => {
+    types.push(event.type);
+    if (types.length === 1) {
+      router.clear();
+      router.setLayout(layout);
+    }
+    return { handled: true };
+  });
+  router.setLayout(layout);
+  router.handleMouse(mouse(type, 0));
+  assert.deepEqual(types, ["press"]);
+  router.handleMouse(mouse("click", 0));
+  assert.deepEqual(types, ["press", "press", "click"]);
+});
+
+test.each(["press", "click", "wheel"] as const)(
+  "a failed %s does not retain ownership from an earlier press",
+  (type) => {
+    const types: string[] = [];
+    const failure = new Error("mouse dispatch failed");
+    const router = createFramedSettingsMouseRouter((event) => {
+      types.push(event.type);
+      if (types.length === 2) throw failure;
+      return { handled: true };
+    });
+    router.setLayout({ width: 32, nativeHeight: 1, rows: [{ frameIndex: 0, contentIndex: 0 }] });
+    router.handleMouse(mouse("press", 0));
+    assert.throws(
+      () => router.handleMouse(mouse(type, 0)),
+      (error) => error === failure,
+    );
+    router.handleMouse(mouse("click", 0));
+    assert.deepEqual(types, ["press", type, "press", "click"]);
+  },
+);
 
 test("fullscreen renderer delivers press, redraw and synthesized click without an extra press", async (t) => {
   const fixture = createRendererHost("fullscreen", rendererTheme(), { rows: 30 });
