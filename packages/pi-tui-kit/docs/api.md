@@ -141,18 +141,42 @@ const nativeRows = new Map(frame.contentRows.map(({ frameIndex, contentIndex }) 
 
 Both indexes are zero-based. `contentIndex` always refers to the original `content` array, not a setting or selection item. `frameIndex` refers to the returned `lines`. Titles, rules, context, hints, and inserted separator rows have no mapping. Blank content rows are mapped in full layouts but omitted when compacting; duplicate text never merges row identities. A zero-width layout can retain row mappings while its lines are empty. A zero-height layout has neither lines nor mappings.
 
-Rebuild the map after each render or resize and clear stale geometry on invalidation or input changes. The caller still validates bounds, translates coordinates, preserves native press/click/drag semantics, and owns focus and terminal reservations. This API does not sanitize content or create a mouse router.
+Rebuild the map after each render or resize and clear stale geometry on invalidation or input changes. This layout API does not sanitize content or route mouse events.
+
+### Framed native settings mouse routing
+
+Use `createFramedSettingsMouseRouter(dispatch)` when a custom frame wraps a native `SettingsList`. Create one router per mounted list. `setLayout()` takes the painted width, the number of rows returned by the unframed native list, and the current row mapping. If the frame adds headings or removes native rows, omit the headings and remap `contentIndex` to the original native row before passing the mapping to the router.
+
+```ts
+import type { SettingsList } from "@earendil-works/pi-tui";
+import { createFramedSettingsMouseRouter, type BoundedFrameLayout } from "@narumitw/pi-tui-kit";
+
+function routeSettingsMouse(list: SettingsList) {
+  const router = createFramedSettingsMouseRouter((event) => list.handleMouse(event));
+  return {
+    publishLayout(frame: BoundedFrameLayout, width: number, nativeHeight: number) {
+      router.setLayout({ width, nativeHeight, rows: frame.contentRows });
+    },
+    handleMouse: router.handleMouse,
+    clear: router.clear,
+  };
+}
+```
+
+`handleMouse()` ignores unmapped rows and out-of-width events. It preserves the input event except for the translated `y`, `width`, and `height`, then returns the native result unchanged. As in Pi, a press is handled if its result sets `handled`, `focus`, or `capture` to true. A left click without a handled press first sends a left press at the clicked row so the list cannot activate a stale pressed item. If that press calls `clear()`, the router does not forward the click. Publishing a layout after a redraw does not end a gesture. Call `clear()` when input, invalidation, a submenu transition, or disposal makes the painted geometry obsolete. The wrapper still owns redraw requests, focus, terminal reservations, and any session or save guards.
 
 ## Configured keys
 
 Use `canonicalizeConfiguredKey(value)` to validate a configured key identifier and obtain a canonical `KeyId`, or `undefined` for an invalid value. It normalizes case to native `KeyId` spelling (including `pageUp` and `pageDown`), normalizes `esc`/`return` aliases, and orders modifiers while retaining literal `+` keys such as `ctrl++`. It rejects invalid or repeated modifiers and unsupported base/modifier combinations; it does not trim or repair input.
 
 ```ts
-import { canonicalizeConfiguredKey } from "@narumitw/pi-tui-kit";
+import { canonicalizeConfiguredKey } from "@narumitw/pi-tui-kit/key-syntax";
 
 const key = canonicalizeConfiguredKey("ALT+CTRL++"); // "ctrl+alt++"
 const invalid = canonicalizeConfiguredKey("ctrl+ctrl+x"); // undefined
 ```
+
+The `key-syntax` entrypoint exports the same function as the Kit root without loading any runtime dependencies. Use it in startup code that only needs syntax validation.
 
 This is configured-key syntax, not raw terminal-event decoding. Use Pi's `matchesKey()` or the injected keybinding manager for dispatch. Canonical equality does not establish input equivalence, conflict freedom, availability, or reachability. Native legacy aliases, logical/physical shifted symbols, keyboard layouts, terminal modes, and earlier listeners can give different names the same input.
 
@@ -1206,7 +1230,8 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
 - `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
 - `renderBoundedFrameLayout()`, `BoundedFrameLayout`, and `BoundedFrameContentRow` — provide the same frame with original content indexes for caller-owned coordinate mapping.
-- `canonicalizeConfiguredKey()` — validates and canonicalizes configured key syntax without predicting runtime input ownership.
+- `createFramedSettingsMouseRouter()`, `FramedSettingsMouseLayout`, and `FramedSettingsMouseRouter` — forward painted frame rows to a native settings list and recover stale presses without owning the screen.
+- `canonicalizeConfiguredKey()` — validates and canonicalizes configured key syntax without predicting runtime input ownership; `@narumitw/pi-tui-kit/key-syntax` also exports it.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending-work draining, and typed results for one custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.

@@ -49,6 +49,11 @@ export {
   type EditorStatusWidgetState,
 } from "./editor-status-widget.js";
 export {
+  createFramedSettingsMouseRouter,
+  type FramedSettingsMouseLayout,
+  type FramedSettingsMouseRouter,
+} from "./framed-settings-mouse.js";
+export {
   createFullscreenHandoff,
   type FullscreenHandoff,
   type FullscreenHandoffOptions,

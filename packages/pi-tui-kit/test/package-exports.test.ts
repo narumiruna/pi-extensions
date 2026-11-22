@@ -48,6 +48,30 @@ test("fullscreen handoff entry has no eager runtime dependencies", async () => {
   );
 });
 
+test("key syntax entry has no eager runtime dependencies", async () => {
+  const result = await build({
+    stdin: {
+      contents: 'export { canonicalizeConfiguredKey } from "@narumitw/pi-tui-kit/key-syntax";',
+      resolveDir: packageRoot,
+    },
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    write: false,
+    metafile: true,
+  });
+  assert.deepEqual(
+    Object.keys(result.metafile.inputs)
+      .map((input) => path.basename(input))
+      .sort(),
+    ["<stdin>", "key-matching.js"],
+  );
+  assert.deepEqual(
+    Object.values(result.metafile.outputs).flatMap((output) => output.imports),
+    [],
+  );
+});
+
 test("built package entrypoints resolve their documented exports", async (t) => {
   const productionSpecifier = "@narumitw/pi-tui-kit";
   const confirmationSpecifier = "@narumitw/pi-tui-kit/confirmation";
@@ -71,6 +95,8 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   const editorStatusWidget = await import(editorStatusWidgetSpecifier);
   const fullscreenHandoff = await import(fullscreenHandoffSpecifier);
   const interactionHints = await import(interactionHintsSpecifier);
+  const keySyntaxSpecifier = "@narumitw/pi-tui-kit/key-syntax";
+  const keySyntax = await import(keySyntaxSpecifier);
   const liveChoice = await import(liveChoiceSpecifier);
   const multiSelect = await import(multiSelectSpecifier);
   const questionnaire = await import(questionnaireSpecifier);
@@ -82,7 +108,10 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 23);
   assert.equal(typeof production.renderBoundedFrame, "function");
   assert.equal(typeof production.renderBoundedFrameLayout, "function");
+  assert.equal(typeof production.createFramedSettingsMouseRouter, "function");
   assert.equal(typeof production.canonicalizeConfiguredKey, "function");
+  assert.deepEqual(Object.keys(keySyntax), ["canonicalizeConfiguredKey"]);
+  assert.equal(keySyntax.canonicalizeConfiguredKey, production.canonicalizeConfiguredKey);
   assert.equal(production.canonicalizeConfiguredKey("ALT+CTRL++"), "ctrl+alt++");
   assert.equal(production.canonicalizeConfiguredKey("PAGEUP"), "pageUp");
   assert.equal("configuredKeysOverlap" in production, false);
@@ -167,7 +196,13 @@ test("built package entrypoints resolve their documented exports", async (t) => 
       `void (await import("@narumitw/pi-tui-kit")).renderBoundedFrame(frame);\n` +
       `const layout: import("@narumitw/pi-tui-kit").BoundedFrameLayout = (await import("@narumitw/pi-tui-kit")).renderBoundedFrameLayout(frame);\n` +
       `const mapping: import("@narumitw/pi-tui-kit").BoundedFrameContentRow | undefined = layout.contentRows[0];\n` +
-      `const canonicalKey: import("@earendil-works/pi-tui").KeyId | undefined = (await import("@narumitw/pi-tui-kit")).canonicalizeConfiguredKey("ctrl++");\n` +
+      `import { canonicalizeConfiguredKey } from "@narumitw/pi-tui-kit/key-syntax";\n` +
+      `import { createFramedSettingsMouseRouter, type FramedSettingsMouseLayout, type FramedSettingsMouseRouter } from "@narumitw/pi-tui-kit";\n` +
+      `const canonicalKey: import("@earendil-works/pi-tui").KeyId | undefined = canonicalizeConfiguredKey("ctrl++");\n` +
+      `declare const list: import("@earendil-works/pi-tui").SettingsList;\n` +
+      `const router: FramedSettingsMouseRouter = createFramedSettingsMouseRouter((event) => list.handleMouse(event));\n` +
+      `const geometry: FramedSettingsMouseLayout = { width: 20, nativeHeight: 1, rows: layout.contentRows };\n` +
+      `router.setLayout(geometry); router.clear();\n` +
       `void mapping; void canonicalKey;\n` +
       `const keybindings: InteractionKeybindings<"confirm"> = { getKeys: () => ["return"] };\n` +
       `const hints: InteractionHint<"confirm">[] = [{ bindings: ["confirm"], label: sanitizeTerminalText("apply") }];\n` +
