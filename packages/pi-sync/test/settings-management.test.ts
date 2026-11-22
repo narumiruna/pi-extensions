@@ -58,7 +58,6 @@ test.each([
       "Use an existing bucket at ./",
       "Store credentials privately",
       "Recommended Pi settings",
-      "Enable automatic sync",
       "Keep sessions off (recommended)",
       "Save sync setup",
       undefined,
@@ -90,6 +89,7 @@ test.each([
       credentials: { accessKeyId: "access-key", secretAccessKey: "secret-key" },
     });
     assert.equal(saved?.activeSyncSetup, name);
+    assert.equal(saved?.syncSetups[name].sync.automatic, false);
     assert.deepEqual(saved?.syncSetups[name].storage, {
       connection: name,
       bucket: "pi-sync",
@@ -122,7 +122,6 @@ test.each(
       "Use an existing bucket at ./",
       "Store credentials privately",
       "Minimal settings",
-      "Keep automatic sync off",
       "Keep sessions off (recommended)",
       "Save sync setup",
     ];
@@ -180,7 +179,6 @@ test("generic S3 setup reviews one complete custom storage path", async () => {
       "Customize remote location",
       "Store credentials privately",
       "Minimal settings",
-      "Keep automatic sync off",
       "Keep sessions off (recommended)",
       "Save sync setup",
       undefined,
@@ -222,7 +220,6 @@ test("session inclusion requires privacy acknowledgement before settings publica
       "Use an existing bucket at ./",
       "Store credentials privately",
       "Recommended Pi settings",
-      "Keep automatic sync off",
       "Include session conversations",
     ];
     const inputs = ["home", "https://account.r2.cloudflarestorage.com", "existing-bucket", "access-key"];
@@ -429,7 +426,6 @@ test.each([3, 4, 5])(
         "r2",
         "Same bucket as “home”",
         "Recommended Pi settings",
-        "Keep automatic sync off",
         "Add sync setup",
         undefined,
         undefined,

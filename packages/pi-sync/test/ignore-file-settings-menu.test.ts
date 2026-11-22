@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { loadSettingsConfig, syncSettingsConfigFingerprint } from "../src/settings/config.js";
 import { describeManagerState } from "../src/ui/manager-state.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { showSyncSettings } from "../src/ui/settings-ui.js";
@@ -14,12 +16,14 @@ vi.mock("../src/daemon/pi-client.js", () => ({ piDaemonClient: () => ({ run, val
 const ruleFile = ".work.syncignore";
 
 type Policy = "legacy" | "directory" | "ignore-file";
+type Automation = { automaticTransfer?: boolean; agentMode?: boolean; continuous?: boolean };
 
-function setup(policy: Policy, storagePath: string) {
+function setup(policy: Policy, storagePath: string, automation?: Automation) {
   return {
     storage: { connection: "work", branch: "main", path: storagePath },
     sync: {
       automatic: false,
+      ...automation,
       ...(policy === "ignore-file"
         ? { scope: "agent-directory", pathPolicy: policy, ignoreFile: ruleFile }
         : policy === "directory"
@@ -32,7 +36,7 @@ function setup(policy: Policy, storagePath: string) {
 async function writeSetup(
   root: string,
   policy: Policy,
-  { other, filename = "pi-sync.json" }: { other?: Policy; filename?: string } = {},
+  { other, filename = "pi-sync.json", automation }: { other?: Policy; filename?: string; automation?: Automation } = {},
 ) {
   await fs.mkdir(root, { recursive: true });
   const settings = JSON.stringify({
@@ -40,7 +44,7 @@ async function writeSetup(
     activeSyncSetup: "work",
     onSwitch: "switch-only",
     storageConnections: { work: { type: "git", remote: "git@example.invalid:owner/sync.git" } },
-    syncSetups: { work: setup(policy, "shared"), ...(other ? { other: setup(other, "other") } : {}) },
+    syncSetups: { work: setup(policy, "shared", automation), ...(other ? { other: setup(other, "other") } : {}) },
   });
   const settingsPath = path.join(root, filename);
   await fs.writeFile(settingsPath, settings, { mode: 0o600 });
@@ -133,44 +137,265 @@ test.each(["tui", "rpc"] as const)("%s can open Settings from /sync while transf
   }),
 );
 
+const policyFingerprint = "a".repeat(64);
+const reviewPolicy = "Review current policy…";
+
+function selectSyncMode(choice: string | undefined) {
+  return vi
+    .fn<(title: string, rows: string[]) => Promise<string | undefined>>()
+    .mockResolvedValueOnce("Sync mode")
+    .mockResolvedValueOnce(choice)
+    .mockResolvedValue(undefined);
+}
+
 test.each(["approved", "cancelled", "setup changed"] as const)(
-  "automatic approval uses a separate Settings route: %s",
+  "Sync mode can review Custom without rewriting flags: %s",
   (outcome) =>
     withTempHome(async (root) => {
-      const { settingsPath, settings } = await writeSetup(root, "ignore-file");
-      const value = JSON.parse(settings);
-      value.syncSetups.work.sync.automaticTransfer = true;
-      const before = JSON.stringify(value);
-      await fs.writeFile(settingsPath, before);
+      const { settingsPath, settings } = await writeSetup(root, "ignore-file", {
+        automation: { automaticTransfer: true },
+      });
+      let approved = false;
+      let reads = 0;
       run.mockReset().mockImplementation(async (operation) => {
         if (operation === "ignore.capabilities") return { available: true };
         if (operation === "daemon.policy")
           return {
-            setup: outcome === "setup changed" ? "other" : "work",
-            automatic: false,
-            fingerprint: "a".repeat(64),
+            setup: ++reads > 1 && outcome === "setup changed" ? "other" : "work",
+            automatic: approved,
+            fingerprint: policyFingerprint,
           };
-        if (operation === "daemon.authorize-connected") return outcome === "approved";
+        if (operation === "daemon.authorize-connected") {
+          approved = outcome === "approved";
+          return approved;
+        }
         throw new Error(`Unexpected route ${operation}`);
       });
-      const select = vi
-        .fn<(title: string, rows: string[]) => Promise<string | undefined>>()
-        .mockResolvedValueOnce("Review automatic transfers")
-        .mockResolvedValue(undefined);
+      const select = selectSyncMode(reviewPolicy);
       const { ctx, notifications } = createMockContext({ mode: "tui", select });
       const runRoute = vi.fn(async () => undefined);
       await showSyncSettings(ctx, runRoute);
-      expect(select.mock.calls[0]?.[1]).toContain("Review automatic transfers");
-      expect(run.mock.calls.map(([operation]) => operation)).toEqual([
-        "ignore.capabilities",
-        "daemon.policy",
-        ...(outcome === "setup changed" ? [] : ["daemon.authorize-connected"]),
+      expect(select.mock.calls[0]?.[1]).toContain("Sync mode");
+      expect(select.mock.calls[0]?.[1]).not.toContain("Review automatic transfers");
+      expect(select.mock.calls[1]).toEqual(["Sync mode", ["Manual", "Automatic", reviewPolicy], expect.any(Object)]);
+      expect(run.mock.calls.map(([operation, payload]) => [operation, payload])).toEqual([
+        ["ignore.capabilities", {}],
+        ["daemon.policy", {}],
+        ["daemon.policy", {}],
+        ...(outcome === "setup changed" ? [] : [["daemon.authorize-connected", { fingerprint: policyFingerprint }]]),
+        ["daemon.policy", {}],
       ]);
+      const resumed = select.mock.calls[2]?.[0] ?? "";
+      expect(resumed).toMatch(/Sync mode\s+Custom/u);
+      expect(resumed.includes("Review required")).toBe(outcome !== "approved");
       expect(runRoute).not.toHaveBeenCalled();
       expect(notifications.some(({ message }) => message.includes("Automatic work approved"))).toBe(
         outcome === "approved",
       );
-      expect(await fs.readFile(settingsPath, "utf8")).toBe(before);
+      if (outcome === "setup changed") expect(notifications[0]?.message).toMatch(/Could not read the active policy/u);
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(settings);
+    }),
+);
+
+test.each(["cancelled", "stale", "approval declined", "approval stale", "no approval token", "approved"] as const)(
+  "Settings refreshes Sync mode after a reviewed save: %s",
+  (outcome) =>
+    withTempHome(async (root) => {
+      const options = { other: "ignore-file" as const, automation: { automaticTransfer: true } };
+      const { settingsPath, settings } = await writeSetup(root, "legacy", options);
+      const expected = syncSettingsConfigFingerprint(await loadSettingsConfig());
+      let persisted = settings;
+      let approved = false;
+      run.mockReset().mockImplementation(async (operation) => {
+        if (operation === "ignore.capabilities") return { available: true };
+        if (operation === "daemon.policy")
+          return { setup: "work", automatic: approved, fingerprint: policyFingerprint };
+        if (operation === "settings.sync-mode") {
+          if (outcome === "cancelled") return { kind: "cancelled" };
+          if (outcome === "stale") throw new Error("Sync setup changed; reopen Settings before changing the mode.");
+          // Publish the daemon's durable result before the separate connected approval.
+          ({ settings: persisted } = await writeSetup(root, "legacy", {
+            ...options,
+            automation: { automaticTransfer: false, agentMode: true, continuous: true },
+          }));
+          return {
+            kind: "saved",
+            reviewRequired: true,
+            ...(outcome === "no approval token" ? {} : { fingerprint: policyFingerprint }),
+          };
+        }
+        if (operation === "daemon.authorize-connected") {
+          if (outcome === "approval stale") throw new Error("Sync policy changed during review.");
+          approved = outcome === "approved";
+          return approved;
+        }
+        throw new Error(`Unexpected route ${operation}`);
+      });
+      const select = selectSyncMode("Automatic");
+      const { ctx, notifications } = createMockContext({ mode: "tui", select });
+      const runRoute = vi.fn(async () => undefined);
+      await showSyncSettings(ctx, runRoute);
+      const saved = outcome !== "cancelled" && outcome !== "stale";
+      const authorizes = saved && outcome !== "no approval token";
+      expect(run.mock.calls.map(([operation, payload]) => [operation, payload])).toEqual([
+        ["ignore.capabilities", {}],
+        ["daemon.policy", {}],
+        ["daemon.policy", {}],
+        ["settings.sync-mode", { mode: "Automatic", expected }],
+        ...(authorizes ? [["daemon.authorize-connected", { fingerprint: policyFingerprint }]] : []),
+        ["daemon.policy", {}],
+      ]);
+      const resumed = select.mock.calls[2]?.[0] ?? "";
+      expect(resumed).toMatch(saved ? /Sync mode\s+Automatic/u : /Sync mode\s+Custom/u);
+      expect(resumed.includes("Review required")).toBe(outcome !== "approved");
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(persisted);
+      const messages = notifications.map(({ message }) => message);
+      if (outcome === "stale") expect(messages).toEqual([expect.stringMatching(/save failed.*setup changed/iu)]);
+      else if (outcome === "cancelled") expect(messages).toEqual([]);
+      else if (outcome === "approved") expect(messages).toEqual([expect.stringMatching(/saved and approved/u)]);
+      else expect(messages).toEqual([expect.stringMatching(/saved.*(?:review current policy|approval failed)/iu)]);
+      expect(runRoute).not.toHaveBeenCalled();
+    }),
+);
+
+test.each(["Ctrl+C", "replaced session"] as const)("Sync mode ignores a late choice after %s", (reason) =>
+  withTempHome(async (root) => {
+    const { settingsPath, settings } = await writeSetup(root, "ignore-file");
+    run.mockReset().mockResolvedValue({ available: true });
+    let sessionId = "before";
+    let intercept: Parameters<ExtensionCommandContext["ui"]["onTerminalInput"]>[0] | undefined;
+    let consumed: boolean | undefined;
+    let chooserAborted: boolean | undefined;
+    const unsubscribe = vi.fn(() => {
+      intercept = undefined;
+    });
+    const select = vi
+      .fn<ExtensionCommandContext["ui"]["select"]>()
+      .mockResolvedValueOnce("Sync mode")
+      .mockImplementationOnce(async (_title, _rows, options) => {
+        if (reason === "Ctrl+C") consumed = intercept?.("\u0003")?.consume;
+        else sessionId = "replacement";
+        chooserAborted = options?.signal?.aborted;
+        return "Automatic";
+      })
+      .mockResolvedValue(undefined);
+    const { ctx, notifications } = createMockContext({
+      mode: "tui",
+      select,
+      onTerminalInput: (listener: typeof intercept) => {
+        intercept = listener;
+        return unsubscribe;
+      },
+      sessionManager: { getSessionId: () => sessionId },
+    });
+    await showSyncSettings(ctx, async () => undefined);
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    if (reason === "Ctrl+C") {
+      expect(consumed).toBe(true);
+      expect(chooserAborted).toBe(true);
+    }
+    expect(run.mock.calls.map(([operation]) => operation)).toEqual(["ignore.capabilities"]);
+    expect(notifications).toEqual([]);
+    expect(await fs.readFile(settingsPath, "utf8")).toBe(settings);
+  }),
+);
+
+test("Sync mode is read-only for a legacy setup when a mixed catalog requires a compatible daemon", () =>
+  withTempHome(async (root) => {
+    const { settingsPath, settings } = await writeSetup(root, "legacy", {
+      other: "ignore-file",
+      automation: { agentMode: true, continuous: true },
+    });
+    run.mockReset().mockResolvedValue({ available: false });
+    const tui = createTuiHarness({ width: 100, rows: 16 });
+    const { ctx, notifications } = createMockContext({ mode: "tui", custom: tui.custom });
+    const select = vi.fn(async () => undefined);
+    (ctx as ExtensionCommandContext).ui.select = select;
+    const running = showSyncSettings(ctx, async () => undefined);
+    let frame = "";
+    try {
+      await tui.waitForOpen();
+      tui.send("\u001b[200~Sync mode\u001b[201~");
+      frame = tui.render().join("\n");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      tui.press("tui.select.cancel");
+    } finally {
+      tui.dispose();
+      await running;
+    }
+    expect(frame).toMatch(/Sync mode\s+\(unavailable\) Automatic/u);
+    expect(select).not.toHaveBeenCalled();
+    expect(run.mock.calls.map(([operation]) => operation)).toEqual(["ignore.capabilities"]);
+    expect(notifications).toEqual([]);
+    expect(await fs.readFile(settingsPath, "utf8")).toBe(settings);
+  }));
+
+test.each(["disposal", "session replacement", "shutdown"] as const)(
+  "Sync mode releases a pending daemon review on %s",
+  (reason) =>
+    withTempHome(async (root) => {
+      const { settingsPath, settings } = await writeSetup(root, "ignore-file");
+      const owner = new AbortController();
+      const entered = Promise.withResolvers<AbortSignal>();
+      let sessionId = "before";
+      run.mockReset().mockImplementation(async (operation, _payload, signal: AbortSignal) => {
+        if (operation === "ignore.capabilities") return { available: true };
+        if (operation === "settings.sync-mode") {
+          return new Promise((resolve) => {
+            signal.addEventListener("abort", () => resolve({ kind: "cancelled" }), { once: true });
+            entered.resolve(signal);
+          });
+        }
+        throw new Error(`Unexpected route ${operation}`);
+      });
+      const tui = createTuiHarness({
+        width: 60,
+        rows: 16,
+        keybindings: {
+          matches: (input, key) =>
+            key === "tui.select.cancel" ? input === "q" : key === "tui.select.confirm" && input === "x",
+          getKeys: (key) => (key === "tui.select.cancel" ? ["q"] : key === "tui.select.confirm" ? ["x"] : []),
+        },
+      });
+      const { ctx, notifications } = createMockContext({
+        mode: "tui",
+        custom: tui.custom,
+        sessionManager: { getSessionId: () => sessionId },
+      });
+      const select = vi.fn(async () => "Automatic");
+      // Leave Kit's custom screen on the real harness, not createMockContext's select adapter.
+      (ctx as ExtensionCommandContext).ui.select = select;
+      const runRoute = vi.fn(async () => undefined);
+      const running = showSyncSettings(ctx, runRoute, owner.signal);
+      try {
+        await tui.waitForOpen();
+        tui.send("\u001b[200~Sync mode\u001b[201~");
+        tui.send("x");
+        const signal = await Promise.race([
+          entered.promise,
+          running.then(() => {
+            throw new Error("Settings closed before entering the daemon review");
+          }),
+        ]);
+        if (reason === "disposal") tui.dispose();
+        else {
+          if (reason === "session replacement") sessionId = "replacement";
+          owner.abort();
+        }
+        await running;
+        expect(signal.aborted).toBe(true);
+        expect(select).toHaveBeenCalledOnce();
+        expect(run.mock.calls.map(([operation]) => operation)).toEqual(["ignore.capabilities", "settings.sync-mode"]);
+        expect(runRoute).not.toHaveBeenCalled();
+        expect(notifications).toEqual([]);
+        expect(await fs.readFile(settingsPath, "utf8")).toBe(settings);
+      } finally {
+        owner.abort();
+        tui.dispose();
+        await running;
+      }
     }),
 );
 
@@ -212,11 +437,13 @@ test.each([false, true])("RPC Settings keeps the legacy file unpromoted (canonic
   withTempHome(async (root) => {
     const legacy = await writeSetup(root, "ignore-file", { filename: "pi-sync.local.json" });
     const current = canonical ? await writeSetup(root, "directory") : legacy;
+    run.mockReset().mockResolvedValue({ available: true });
     const custom = vi.fn(async () => undefined);
     const { ctx, notifications } = createMockContext({ mode: "rpc", custom });
     await showSyncSettings(ctx, async () => undefined);
     expect(notifications[0]?.message.split("\n")[0]).toBe(`Edit pi-sync settings manually: ${current.settingsPath}`);
     expect(notifications[0]?.message.includes(ruleFile)).toBe(!canonical);
+    expect(notifications[0]?.message.includes("Settings → Sync mode → Review current policy…")).toBe(!canonical);
     expect(custom).not.toHaveBeenCalled();
     expect(await fs.readFile(legacy.settingsPath, "utf8")).toBe(legacy.settings);
     expect((await fs.readdir(root)).sort()).toEqual(

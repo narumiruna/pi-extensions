@@ -255,10 +255,10 @@ export function usage() {
   return [
     "Usage: /sync <command>",
     `Commands: ${commands}`,
-    `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
-    `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
-    "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
-    "Continuous sync is a separate default-Off opt-in in Settings. It requires Autonomous sync and can incur recurring network/model costs. After the last Pi exits, the service closes after a 30-second grace period unless a valid /sync daemon allow-after-exit grant applies. Zero-client work still requires that separate review. Safety blocks and durable automatic request limits remain.",
+    "Settings → Sync mode: Manual (default) runs on request. Automatic enables Continuous and Autonomous sync together and can incur recurring network/model costs. Safety blocks and durable automatic request limits remain.",
+    "After the last Pi exits, the daemon closes after a 30-second grace period unless a valid /sync daemon allow-after-exit grant applies. Zero-client work requires that separate review.",
+    `Advanced sync.automatic: ${AUTOMATIC_SYNC_DESCRIPTION}`,
+    `Advanced sync.automaticTransfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");
 }

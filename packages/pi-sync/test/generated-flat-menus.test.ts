@@ -102,7 +102,17 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
     assert.ok(command);
     const frames: string[] = [];
     const choices: (string | undefined)[] = [choice, undefined];
-    const context = createMockContext({ hasUI: true, mode: "tui" });
+    const modeChoices: Array<{ title: string; choices: string[] }> = [];
+    let settingsVisits = 0;
+    const context = createMockContext({
+      hasUI: true,
+      mode: "tui",
+      select: async (title: string, choices: string[]) => {
+        if (title !== "Sync mode") return undefined;
+        modeChoices.push({ title, choices });
+        return "Automatic";
+      },
+    });
     activeContext = context.ctx as ExtensionCommandContext;
     activeContext.ui.custom = (async (factory) => {
       // Separate hosts support nested manager/edit flows without probing a factory twice.
@@ -124,8 +134,15 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
             tui.press("tui.select.confirm");
           }
         } else if (frame.split("\n").includes("Pi Sync Settings")) {
-          tui.send("\u001b[200~Show sync status\u001b[201~");
-          frames.push(tui.render().join("\n"));
+          if (++settingsVisits === 1) {
+            tui.send("\u001b[200~Show sync status\u001b[201~");
+            frames.push(tui.render().join("\n"));
+            tui.send("\u0015");
+            tui.send("\u001b[200~Sync mode\u001b[201~");
+            frames.push(tui.render().join("\n"));
+            tui.press("tui.select.confirm");
+          } else tui.press("ctrl+c");
+        } else if (frame.includes("Use Automatic sync?")) {
           tui.press("ctrl+c");
         } else if (frame.includes("Push pi settings?")) {
           tui.press("tui.select.down");
@@ -166,9 +183,18 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
       assert.equal(choices.length, 0);
       if (choice === "Settings") {
         const settingsFrames = frames.filter((frame) => frame.split("\n").includes("Pi Sync Settings"));
-        assert.equal(settingsFrames.length, 2);
+        assert.equal(settingsVisits, 2);
+        assert.equal(settingsFrames.length, 4);
         assert.match(settingsFrames[0] ?? "", /Included paths/u);
         assert.match(settingsFrames[0] ?? "", /Type to search/u);
+        assert.match(settingsFrames[2] ?? "", /→ Sync mode\s+Manual/u);
+        assert.match(settingsFrames[3] ?? "", /→ Sync mode\s+Manual/u);
+        assert.deepEqual(modeChoices, [{ title: "Sync mode", choices: ["Manual", "Automatic"] }]);
+        const review = frames.find((frame) => frame.includes("Use Automatic sync?"))?.replace(/\s+/gu, " ") ?? "";
+        assert.match(review, /→ No, cancel/u);
+        assert.match(review, /replace or delete selected local and remote files/u);
+        assert.match(review, /selected model's provider and incur charges/u);
+        assert.match(review, /Work after the last Pi exits requires separate permission/u);
         for (const frame of settingsFrames)
           assert.doesNotMatch(
             frame,

@@ -58,7 +58,7 @@ test.each(["first", "add", "edit"])(
       ];
       const choices =
         flow === "first"
-          ? ["Minimal settings", "Keep automatic sync off", "Keep sessions off (recommended)", "Save setup"]
+          ? ["Minimal settings", "Keep sessions off (recommended)", "Save setup"]
           : flow === "add"
             ? ["Add storage connection"]
             : ["Keep current password", "Save storage connection"];
@@ -110,7 +110,7 @@ test.each(["first", "add", "edit"])(
 test("WebDAV additional setup accepts a bracket path and cancellation preserves settings", async () => {
   await withTempHome(async () => {
     seed(v3WebDavSettings());
-    const choices = ["Minimal settings", "Keep automatic sync off", "Add sync setup"];
+    const choices = ["Minimal settings", "Add sync setup"];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",

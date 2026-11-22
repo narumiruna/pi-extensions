@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -15,10 +16,15 @@ import { v3S3Settings, withTempHome } from "./helpers.js";
 import { createMockContext } from "./setup-test-context.js";
 
 for (const kind of ["git", "webdav", "s3", "r2"]) {
-  test.each([true, false, undefined])(`${kind} additional setup explicitly chooses automatic %s`, async (automatic) => {
+  test.each([
+    { mode: "tui", save: true },
+    { mode: "tui", save: false },
+    { mode: "rpc", save: true },
+  ] as const)(`${kind} additional setup is Manual in $mode (save=$save)`, async ({ mode, save }) => {
     await withTempHome(async (dir) => {
       mkdirSync(dir, { recursive: true });
-      const settings = v3S3Settings();
+      const settings = v3S3Settings({ automatic: true });
+      Object.assign(settings.syncSetups.home.sync, { automaticTransfer: true, agentMode: true, continuous: true });
       Object.assign(settings.storageConnections, {
         git: { type: "git", remote: "git@github.com:owner/private.git" },
         webdav: {
@@ -33,36 +39,43 @@ for (const kind of ["git", "webdav", "s3", "r2"]) {
       const choices = [
         ...(kind === "r2" ? ["Same bucket as “home”"] : kind === "s3" ? ["Use an existing bucket at ./"] : []),
         "Minimal settings",
-        automatic === undefined ? "Cancel" : automatic ? "Enable automatic sync" : "Keep automatic sync off",
-        "Add sync setup",
+        save ? "Add sync setup" : "Cancel",
       ];
       const inputs = kind === "s3" ? ["existing-bucket"] : ["", ""];
       const frames: string[] = [];
       const { ctx } = createMockContext({
         hasUI: true,
-        mode: "tui",
+        mode,
         input: async () => inputs.shift(),
-        select: async (title: string) => {
+        select: async (title: string, options: string[]) => {
           frames.push(title);
-          return choices.shift();
+          return mode === "rpc" && options.includes("Next") ? "Next" : choices.shift();
         },
       });
+      if (mode === "rpc") {
+        (ctx as ExtensionCommandContext).ui.custom = async () => {
+          throw new Error("RPC setup must not open custom UI");
+        };
+      }
       if (kind === "git") await showAddGitTarget(ctx, "work", kind);
       else if (kind === "webdav") await showAddWebDavTarget(ctx, "work", kind);
       else await showAddS3Target(ctx, settings, kind, "work");
-      if (automatic === undefined) {
+      const text = frames.join("\n");
+      assert.doesNotMatch(text, /Automatic sync for this setup/u);
+      assert.match(text, /Automatic sync: Off/u);
+      if (!save) {
         assert.equal(readFileSync(localConfigPath(), "utf8"), before);
         return;
       }
-      assert.equal((await loadConfig("work")).automatic, automatic);
-      assert.equal((await loadConfig()).setupName, "home");
-      assert.equal((await loadConfig("work")).include.includes("sessions"), false);
-      assert.match(
-        frames.join("\n"),
-        automatic
-          ? /Automatic sync: On \(startup check; shutdown pushes selected content if sessions included\)/u
-          : /Automatic sync: Off/u,
-      );
+      const config = await loadConfig("work");
+      assert.equal(config.automatic, false);
+      assert.equal(config.automaticTransfer, false);
+      assert.equal(config.agentMode, false);
+      assert.equal(config.continuous, false);
+      assert.equal(config.include.includes("sessions"), false);
+      const current = await readLocalConfigObject();
+      assert.equal(current?.activeSyncSetup, "home");
+      assert.deepEqual(current?.syncSetups.home, settings.syncSetups.home);
     });
   });
 }
@@ -130,7 +143,7 @@ test("additional setup rejects a connection changed during exact destination rev
     mkdirSync(dir, { recursive: true });
     const settings = v3S3Settings();
     writeFileSync(localConfigPath(), JSON.stringify(settings));
-    const choices = ["Same bucket as “home”", "Minimal settings", "Keep automatic sync off"];
+    const choices = ["Same bucket as “home”", "Minimal settings"];
     let reviewed = false;
     const { ctx } = createMockContext({
       hasUI: true,

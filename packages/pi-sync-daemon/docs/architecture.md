@@ -55,6 +55,12 @@ Version 8 settings can contain both ignore-file and legacy setups. Display proje
 
 A version 6 snapshot carries portable intent (a versioned fingerprint of ordered rules and session opt-in), never the local filename, rule text, or local source evidence. Legacy readers refuse unsupported snapshots; upgrade peers before first publication. An explicit directional review is required when publishing a new policy over an incompatible head. There is no remote rule adoption or `--yes` bypass. Authorize foreground and existing opt-in automatic work separately from settings changes; setup, migration, or rule-file switching neither starts work nor carries forward stale authorization. Recheck settings, local source, remote revision, and mutation ownership after review and at the final apply or publication boundary. On uncertain publication, reconcile the existing attempt instead of starting a new one.
 
+### Sync mode and connected approval
+
+`settings.sync-mode` is an attached TUI operation. It reviews the active setup and model, then replaces only the four automation flags in the canonical `pi-sync.json` through the ordered settings writer. It invalidates the affected setup's existing connected and after-exit grants before committing; another setup's grant is not changed. A failed save does not restore a grant already revoked. The operation never starts a transfer.
+
+With any ignore-file setup in the catalog, a saved Automatic mode still needs connected approval for the exact current policy. A private per-setup pending record blocks automatic work if that approval's publication is interrupted, even if a new digest reached disk. Reopen **Settings → Sync mode → Review current policy…** to retry after resolving the failure. Do not delete pending evidence or start an older daemon to bypass it. Connected review never restores unattended permission; only a successful explicit after-exit review can grant it.
+
 ## Context inventory
 
 | Former Pi dependency | Engine host boundary | Source |

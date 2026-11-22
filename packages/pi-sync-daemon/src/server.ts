@@ -445,6 +445,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         "shutdown",
         "daemon.authorize",
         "daemon.authorize-connected",
+        "settings.sync-mode",
       ].includes(operation)
         ? participantGeneration
         : undefined,

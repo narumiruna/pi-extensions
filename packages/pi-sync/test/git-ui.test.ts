@@ -44,7 +44,7 @@ test("first Git setup writes the exact version 3 connection and setup shapes", a
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
     const inputs = ["git@github.com:user/pi-sync.git", "pi-sync/home", "pi-sync/home"];
-    const choices = ["Recommended Pi settings", "Enable automatic sync", "Save setup"];
+    const choices = ["Recommended Pi settings", "Save setup"];
     const { ctx, notifications } = createMockContext({
       hasUI: true,
       mode: "tui",
@@ -62,7 +62,7 @@ test("first Git setup writes the exact version 3 connection and setup shapes", a
       branch: "pi-sync/home",
       path: "pi-sync/home",
     });
-    assert.equal(raw?.syncSetups.home.sync.automatic, true);
+    assert.equal(raw?.syncSetups.home.sync.automatic, false);
     assert.doesNotMatch(JSON.stringify(raw), /password|secretAccessKey/u);
     assert.match(notifications.at(-1)?.message ?? "", /Saved Git sync setup/u);
   });
@@ -78,7 +78,7 @@ test("Git field correction keeps earlier remote and branch answers", async () =>
       "../escape",
       "backups/settings",
     ];
-    const choices = ["Minimal settings", "Keep automatic sync off", "Save setup"];
+    const choices = ["Minimal settings", "Save setup"];
     const titles: string[] = [];
     const { ctx, notifications } = createMockContext({
       hasUI: true,
@@ -116,7 +116,7 @@ test("Git connection reuse adds an independent setup with a reviewed path", asyn
     assert.equal(await showAddGitStorageProfile(connectionCtx.ctx), true);
 
     const setupInputs = ["pi-sync/work", "pi-sync/work"];
-    const choices = ["Minimal settings", "Keep automatic sync off", "Add sync setup"];
+    const choices = ["Minimal settings", "Add sync setup"];
     const setupCtx = createMockContext({
       hasUI: true,
       mode: "tui",
@@ -246,7 +246,7 @@ test("Git setup preserves unknown empty-catalog settings and edit defaults retai
       { mode: 0o600 },
     );
     const inputs = ["git@github.com:user/pi-sync.git", "archives", "backups/home"];
-    const choices = ["Recommended Pi settings", "Keep automatic sync off", "Save setup"];
+    const choices = ["Recommended Pi settings", "Save setup"];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",

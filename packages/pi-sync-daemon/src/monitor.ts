@@ -292,6 +292,13 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       const fingerprint = syncCheckConfigFingerprint(config);
       retries.set(peer.id, { fingerprint, owner: retryOwner(peer), signal: execution.signal });
     },
+    requiresReview(config: AnySyncConfig) {
+      return (
+        config.reservedIgnoreNames !== undefined &&
+        (policyNeedsReview() ||
+          (monitoredPolicy !== undefined && monitoredPolicy !== syncCheckConfigFingerprint(config)))
+      );
+    },
     reviewedPolicy(config: AnySyncConfig) {
       blockedParticipants = undefined;
       monitoredPolicy = config.reservedIgnoreNames === undefined ? undefined : syncCheckConfigFingerprint(config);

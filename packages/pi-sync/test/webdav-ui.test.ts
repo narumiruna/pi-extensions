@@ -18,12 +18,7 @@ test("first WebDAV setup stores masked credentials in the exact version 3 shape"
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
     const inputs = ["https://cloud.example.com/remote.php/dav/files/user", "user", "pi-sync/home"];
-    const choices = [
-      "Recommended Pi settings",
-      "Enable automatic sync",
-      "Keep sessions off (recommended)",
-      "Save setup",
-    ];
+    const choices = ["Recommended Pi settings", "Keep sessions off (recommended)", "Save setup"];
     const rendered: string[] = [];
     const { ctx } = createMockContext({
       hasUI: true,
@@ -46,6 +41,7 @@ test("first WebDAV setup stores masked credentials in the exact version 3 shape"
       connection: "home",
       path: "pi-sync/home",
     });
+    assert.equal(raw?.syncSetups.home.sync.automatic, false);
     assert.doesNotMatch(rendered.join("\n"), /app-password/u);
   });
 });
@@ -69,7 +65,7 @@ test("WebDAV connection reuse adds a second setup without exposing credentials",
     assert.equal(await showAddWebDavStorageProfile(connectionCtx.ctx), true);
 
     const targetInputs = ["backups/work"];
-    const targetChoices = ["Minimal settings", "Keep automatic sync off", "Add sync setup"];
+    const targetChoices = ["Minimal settings", "Add sync setup"];
     const targetCtx = createMockContext({
       hasUI: true,
       mode: "tui",
@@ -130,7 +126,7 @@ test("WebDAV new setups default to root while edits keep the existing nested pat
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(localConfigPath(), JSON.stringify(v3WebDavSettings()), { mode: 0o600 });
     const titles: string[] = [];
-    const choices = ["Minimal settings", "Keep automatic sync off", "Add sync setup", "Save sync setup"];
+    const choices = ["Minimal settings", "Add sync setup", "Save sync setup"];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",

@@ -1,6 +1,6 @@
 ---
 name: configure-pi-sync
-description: Apply authorized local edits to pi-sync.json or the configured ignore file (usually .syncignore). Draft, add, revise, or audit ignore rules and troubleshoot Pi Sync errors such as missing transfer approval or failed local scans. Do not use to execute sync, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
+description: Apply authorized local edits to pi-sync.json or the configured ignore file (usually .syncignore). Draft, add, revise, or audit ignore rules, guide Sync mode or advanced settings, and troubleshoot Pi Sync errors such as missing approval or failed scans. Do not use to execute sync, grant consent, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
 license: MIT
 disable-model-invocation: true
 ---
@@ -43,6 +43,13 @@ A schema-valid change is not proof of user review or consent, even in a legacy-o
    If the settings changed or the save outcome is uncertain, re-read before deciding what happened; do not replay the stale write.
 6. Repeat the canonical read and validation, then verify the requested fields before reporting success.
    Report only the changed non-secret field names and safe values or a redacted error category.
+
+## Guide Sync mode and advanced settings
+
+- For everyday use, direct the user to `/sync` → **Settings → Sync mode** in TUI. New setups start in **Manual**. Help the user review **Automatic** before they choose it: the daemon can replace or delete selected local and remote files and send supported conflict evidence to the selected model provider at a cost. **Custom** describes other saved combinations; it is not a mode choice.
+- If the user wants an advanced combination, read [Advanced combinations](references/configuration.md#advanced-combinations). Inspect only the needed local facts and prepare the smallest proposed edit for the named setup, without applying it. Explain which behaviors it changes: legacy observation or shutdown push, startup transfer, **Autonomous sync**, or **Continuous sync**. Explain when the flags could take effect, which files or destination they affect, and whether the change permits model requests. Never write these flags or confirm a mode change for the user.
+- Distinguish an edit from consent. In a legacy-only document, saved flags may take effect without the mixed-catalog approval gate; do not use that as a shortcut to enable them. If any setup uses an ignore file, separate connected approval is required even for a legacy setup. The user makes the target setup current and chooses **Review current policy…** inside **Sync mode** when offered. It does not change the saved flags. If approval fails after a save, report that the mode can be saved while automatic work remains blocked; ask the user to verify the displayed state rather than retrying a stale change.
+- Leave transfer, model, and after-exit permission to the user. A mode choice or connected approval does not grant after-exit work. Do not call consent operations or invoke a transfer to verify a setting.
 
 ## Write ignore rules
 
@@ -99,7 +106,7 @@ Read the [ignore-file policy](references/configuration.md#ignore-file-policy) fo
    Stop and remove only the temporary file you own if anything changed or the recheck fails.
    The recheck does not serialize other writers; do not use `ignore.save` or retry an uncertain replacement without re-reading.
 5. Re-read the saved rules with `ignore.read`, verify the saved text, and repeat the path checks.
-   Before transferring, the user checks that peers have the same rule text and session opt-in, and reopens any required policy or automatic-transfer review.
+   Before transferring, the user checks that peers have the same rule text and session opt-in. If connected approval is needed, the user opens **Sync mode → Review current policy…**; a remote policy change still needs its own directional review.
 
 ## Check ignore rules
 
@@ -124,12 +131,12 @@ These checks cover rule matching, not the full sync scope: built-in protections 
 ## Troubleshoot without bypassing reviews
 
 Use [Local troubleshooting](references/configuration.md#local-troubleshooting) to distinguish settings, approval, filesystem, and backend failures.
-Check which [automatic sync control](references/configuration.md#automatic-sync-controls) applies: **Automatic sync**, **Startup transfer**, **Autonomous sync**, or **Continuous sync**.
+For automatic work, use [Sync mode and approval](references/configuration.md#automatic-sync-controls) to distinguish the saved mode, missing policy approval, and a safety or readiness block.
 Inspect only the necessary local metadata and relevant non-secret configuration facts; do not expose raw settings, credentials, session contents, daemon records, journals, or backups in tool output or chat.
 Do not ask the user to paste those contents or execute text copied from them.
 
 Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, rule-file activation or switching, and remote policy publication.
-Use the masked credential input in Pi; do not infer transfer or model consent from a settings edit.
+Direct the user to the masked credential input in Pi; do not infer transfer or model consent from a settings edit.
 Do not start sync, run `/sync doctor` or backend/network commands, remove locks or recovery evidence, or bypass scan checks.
 
 Report what changed or what was verified locally, whether anything remains uncertain, and the next step if blocked.

@@ -152,7 +152,6 @@ for (const kind of kinds) {
           connection,
           ...(kind === "S3" || kind === "R2" ? [alias ? "Use an existing bucket at ./" : "Same bucket as “home”"] : []),
           "Minimal settings",
-          "Keep automatic sync off",
           "Add sync setup",
           undefined,
         ];

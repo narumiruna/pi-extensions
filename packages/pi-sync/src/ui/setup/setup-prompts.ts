@@ -6,7 +6,6 @@ import { validateConfigName } from "../../settings/settings-validation.js";
 import { captureMutationOwner } from "../../sync/sync-local.js";
 import { DEFAULT_SYNC_INCLUDE } from "../../sync/sync-policy.js";
 import { ignoreFileSettingsAvailable } from "../ignore-file-ui.js";
-import { AUTOMATIC_SYNC_DESCRIPTION } from "../sync-behavior.js";
 import { safeTerminalText } from "../terminal-text.js";
 import {
   acknowledgeSessions,
@@ -15,8 +14,6 @@ import {
   starterDirectoryRules,
 } from "./directory-rules.js";
 import { promptTextInput } from "./text-input.js";
-
-export { AUTOMATIC_SYNC_DESCRIPTION } from "../sync-behavior.js";
 
 export async function readSetupConnection(name: string, signal?: AbortSignal) {
   const connection = (await readLocalConfigObject())?.storageConnections[name];
@@ -111,9 +108,6 @@ export async function chooseSetupPolicy(
     validate();
     draft.reinclude = reinclude;
   }
-  const automatic = join ? false : await chooseAutomaticSync(ctx, signal);
-  if (signal?.aborted || automatic === undefined) return undefined;
-  validate();
   const sessions = join || (legacy && !legacySessions) ? false : await chooseSessions(ctx, signal);
   if (signal?.aborted || sessions === undefined) return undefined;
   validate();
@@ -123,7 +117,7 @@ export async function chooseSetupPolicy(
   if (legacy) {
     const include = choice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_INCLUDE];
     return {
-      sync: { include: [...include, ...(sessions ? ["sessions"] : [])], automatic },
+      sync: { include: [...include, ...(sessions ? ["sessions"] : [])], automatic: false },
       lines: [...includedContentLines(include, sessions), remoteWarning],
       join,
     };
@@ -136,7 +130,7 @@ export async function chooseSetupPolicy(
       exclude: draft.exclude,
       ...(draft.reinclude.length ? { reinclude: draft.reinclude } : {}),
       sessions: draft.sessions,
-      automatic,
+      automatic: false,
     },
     lines: [...directoryScopeLines(draft), remoteWarning],
     join,
@@ -159,16 +153,6 @@ export async function finishSetup(
     origin: "settings",
     ...(join === "read-only" ? { readOnly: true } : {}),
   });
-}
-
-export async function chooseAutomaticSync(ctx: ExtensionCommandContext, signal?: AbortSignal) {
-  const choice = await ctx.ui.select(
-    `Automatic sync for this setup\n\n${AUTOMATIC_SYNC_DESCRIPTION}`,
-    ["Keep automatic sync off", "Enable automatic sync", "Cancel"],
-    { signal },
-  );
-  signal?.throwIfAborted();
-  return !choice || choice === "Cancel" ? undefined : choice === "Enable automatic sync";
 }
 
 async function chooseSessions(ctx: ExtensionCommandContext, signal?: AbortSignal) {

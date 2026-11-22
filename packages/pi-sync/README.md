@@ -15,7 +15,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Keeps snapshot selection portable and free of credentials.
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
-- Offers default-off Autonomous sync for eligible startup and Sync now transfers without another transfer confirmation, with model-assisted conflict resolution and a separate Continuous sync opt-in.
+- Starts new setups in Manual mode and offers reviewed Automatic sync with model assistance for supported conflicts.
 - Shares one detached synchronization service across Pi clients, with a generated split UI client runtime.
 - Bundles an on-demand skill for configuration questions and scoped edits to a known local ignore file.
 
@@ -61,8 +61,8 @@ All new setups default to storage path `./`: the Git repository root, the WebDAV
 Git also suggests branch `main`.
 Use different folders or prefixes for independent setups sharing a WebDAV collection or bucket; existing settings and paths are unchanged.
 If another configured setup already uses the chosen location, setup asks for a different path before the content selection and review; Git requires a different branch, even when the directory differs.
-With ignore-file support available, new TUI setups start with eligible files in the Pi agent directory and use `.syncignore` to exclude paths. Sessions require separate opt-in and must also be allowed by the rules. Automatic sync starts off. Choose **Join an existing remote** to save with sessions and automatic sync off, then review the remote policy. Existing setups keep their policy unless you migrate them.
-Before saving, review the exact destination, scope and rules, automatic-sync choice, and hidden-credential summary. R2/S3 always asks for an existing bucket; an example bucket name is not a default.
+With ignore-file support available, new TUI setups start with eligible files in the Pi agent directory and use `.syncignore` to exclude paths. Sessions require separate opt-in and must also be allowed by the rules. Both legacy and ignore-file setups start in **Manual** mode. **Join an existing remote** also starts in Manual, with sessions off, then reviews the remote policy. Existing setups keep their policy unless you migrate them.
+Before saving, review the exact destination, scope and rules, and hidden-credential summary. R2/S3 always asks for an existing bucket; an example bucket name is not a default.
 
 Invalid fields ask for a correction without restarting setup. A temporary local save failure keeps the review for another Save; changed settings require reopening and reviewing the current values. Saving writes local settings and may create a starter rule file. It does not start a transfer or grant permission for one. A connection saved through **Add a new storage connection…** remains saved if you later cancel the setup.
 
@@ -156,7 +156,7 @@ Cancelling a preparation or confirmation returns to conflict resolution with no 
 Back returns to the sync manager, and Ctrl+C closes the complete flow.
 
 Startup checks never open a dialog. While checking, TUI and RPC status show **sync ...**. With a sync baseline and no content-list mismatch, they use **sync ⇡** for local changes to push and **sync ⇣** for remote changes to pull. Review conditions use **sync ⇕**; in TUI, a compact widget shows **Sync · Needs review** and one line directing you to `/sync` for the named setup. The manager retains the reason: both sides changed, first sync with an existing remote snapshot, a differing content list (including order-only differences), or a missing remote snapshot despite an existing baseline. Both sides changing is a reason to review, not a confirmed file conflict.
-No selected content and first sync with an empty remote stay quiet outside `/sync`, which provides setup or initialization guidance. Legacy remote metadata without an authoritative content list does not independently trigger a widget for observation-only checks. With **Startup transfer** enabled, an established legacy remote instead shows review attention and requires an explicit direction to adopt the content policy; no automatic transfer runs. An included-content mismatch puts **Review synced content (recommended)** in the manager, where a fresh review verifies the remote snapshot before offering changes.
+No selected content and first sync with an empty remote stay quiet outside `/sync`, which provides setup or initialization guidance. Legacy remote metadata without an authoritative content list does not independently trigger a widget for observation-only checks. With the advanced `sync.automaticTransfer` flag enabled, an established legacy remote instead shows review attention and requires an explicit direction to adopt the content policy; no automatic transfer runs. An included-content mismatch puts **Review synced content (recommended)** in the manager, where a fresh review verifies the remote snapshot before offering changes.
 Check results are advisory observations against the last sync baseline, not proof of a file conflict or current equality. Opening the manager uses local information and shows when the check completed; it does not contact remote storage. Transfer actions recheck current content.
 In fullscreen TUI mode, click anywhere in **Sync** to collapse or expand the widget without moving keyboard focus. Attention updates keep the collapse state. Open and close `/sync` to restore the body with the keyboard; a new session resets the state.
 
@@ -176,6 +176,16 @@ Missing settings stay unconfigured without creating files or locks. Legacy and i
 
 Legacy directory scope selects all eligible files, applies `exclude`, then restores matches from `reinclude`. Pi login credentials, project trust, and Pi Sync's own state stay local regardless of those rules. Folder-wide sync may include private files that the secret scan cannot identify. Review the content before transferring to a trusted destination. Existing setups keep their selected paths and are not migrated automatically. See [Agent-directory scope](./skills/configure-pi-sync/references/configuration.md#agent-directory-scope) for formats, precedence, and recovery.
 
+### Sync mode
+
+Open `/sync` → **Settings** → **Sync mode** for the current setup. Choose **Manual** to stop new background sync and model requests without changing the review rules for transfers you start. Choose **Automatic** to let the daemon check and sync when Pi is idle and the policy is eligible. No model request is needed for clean changes; only supported conflicts use the selected Pi model. **Sync…** also retains [Autonomous sync](#autonomous-sync) behavior. Automatic does not run a separate startup transfer or the legacy shutdown push.
+
+**Before enabling Automatic:** it can replace or delete selected files on this device and in remote storage without another transfer prompt. It can send conflict evidence to the selected model's provider and incur costs. Review the setup, exact destination and content policy (including session opt-in and any ignore rules), and model before saving. Neither saving nor reviewing starts a transfer from Settings or permits work after the last Pi exits. [After-exit permission](./skills/configure-pi-sync/references/configuration.md#daemon-lifetime-and-unattended-permission) is separate and is not restored by switching modes or reviewing again.
+
+If any setup uses an ignore file, even a legacy setup needs separate approval of its current policy before automatic transfers. If the mode was saved but required approval was declined, interrupted, or failed, the mode stays saved and automatic work stays blocked. When **Review required** appears, open **Sync mode** and choose **Review current policy…** when offered. This reviews the current policy without changing the flags. This does not remove other blocks, such as a first sync, a changed remote policy, or an unavailable model.
+
+**Custom** describes existing flag combinations that do not match either preset; it is not a selectable mode. Opening Settings or upgrading does not rewrite those values. Choosing a preset replaces the four automation flags together; review which Custom behavior will be lost before saving. For manual settings edits, timing, and examples, see [Automatic sync controls](./skills/configure-pi-sync/references/configuration.md#automatic-sync-controls).
+
 ### Debug startup timings
 
 Set the top-level `"debug": true` in `pi-sync.json`, or enable **Settings → Debug startup timings**, then restart Pi or use `/reload`.
@@ -186,19 +196,19 @@ See [Debug startup timings](./skills/configure-pi-sync/references/configuration.
 
 Startup loads command and transfer implementations only when needed. When no transaction directory is pending, a local directory check skips loading the file-recovery implementation. Pending transactions still complete recovery before Pi accepts user edits; this safety barrier is not deferred.
 
-With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
+With the advanced `sync.automatic` flag enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
 
 Checks run once per session start, including `/reload`, new, resumed, and forked sessions, in TUI and RPC only. Print/JSON skip startup checks. This one-shot policy has no polling or automatic retry loop; separately enabled Continuous sync owns recurring work. The overall deadline is 30 seconds, followed by underlying cleanup where needed; Git process termination and temporary-ref cleanup can take additional time. Git checks can still fetch objects and update the extension's private bare cache, but never push, apply managed files, update the sync baseline, or reload Pi.
 
-**Compatibility change:** the existing `sync.automatic` boolean and Off default are unchanged, but On no longer performs startup push/pull. Startup is not guaranteed to use the latest remote content. Local transaction recovery remains an awaited safety barrier and can restore interrupted file changes before use; existing legacy settings-file initialization is also retained.
+The legacy `sync.automatic` flag does not transfer at startup. Startup is not guaranteed to use the latest remote content. Local transaction recovery remains an awaited safety barrier and can restore interrupted file changes before use; existing legacy settings-file initialization is also retained.
 
-Shutdown behavior is unchanged: when **Automatic sync** is On and sessions are included, pi-sync can automatically push the selected content, not only session files. This also applies to headless modes; shutdown never opens a dialog, and `/reload` skips this push. Turning the setting Off disables its startup checks and shutdown pushes; separate Startup transfer and Autonomous sync preferences retain their own authorization.
+When `sync.automatic` is `true` and sessions are included, Pi Sync can push all selected content on shutdown, not just session files. In headless modes this requires an already running, reviewed service. Shutdown never opens a dialog, and `/reload` skips this push. Setting the flag to `false` disables its startup checks and shutdown pushes; it does not change other advanced flags.
 
 <a id="experimental-agent-mode"></a>
 
 ### Autonomous sync
 
-**Settings → Autonomous sync** controls the unchanged per-setup `sync.agentMode` key, default **Off**. Enabling requires a one-time review. It authorizes one eligible merged sync at the next session startup and **Sync now** / `/sync sync` without another transfer confirmation, independently of Automatic sync and Startup transfer. It also uses the selected Pi model to resolve supported text and settings conflicts. Saving does not start a transfer from Settings. TUI/RPC only; Autonomous sync alone adds no polling, daemon, shutdown inference, or Pi core modification. Continuous sync is a separate opt-in.
+Autonomous sync is the behavior of `sync.agentMode`, enabled by the Automatic preset. When authorized, it lets **Sync…** (**Sync now** in RPC) and `/sync sync` merge eligible changes without another transfer confirmation, using the selected Pi model for supported conflicts. With `sync.continuous` off, it also permits one eligible startup transfer but no recurring work. It does not run model requests at shutdown or in print/JSON.
 
 **Warning:** selected local and remote content can be replaced or deleted without another transfer prompt. Eligible conflict text is sent to the selected Pi model's provider and can incur costs. The resolver has no tools or parent conversation, and validates candidate ownership and current versions before using the existing publication/backup/journal flow. Validation is not a guarantee of semantic correctness or lossless editing against other local processes.
 
@@ -212,11 +222,9 @@ Ordinary **Sync now** reuses a cached refusal. Use **Retry refused model result�
 
 ### Continuous sync
 
-When any setup in the document uses an ignore file, first enable the automatic modes you want, then use **Settings → Review automatic transfers** to authorize those modes for the current policy. Saving or switching a setup does not grant permission or start a transfer. Settings and rule-file changes require a new review; work after the last Pi exits still requires its own authorization.
+Continuous sync is the recurring behavior of `sync.continuous` with `sync.agentMode` enabled. The Automatic preset enables both. Upgrade all Pi processes sharing the agent directory before enabling it. Monitoring can start after the `/sync` command or manager closes and prerequisites pass, or at an eligible session start. It replaces the one-shot startup transfer.
 
 Removing the last ignore-file setup does not resume Continuous sync in the already attached sessions. To resume it if enabled, close `/sync` and run `/reload` in an attached TUI session, or close and reopen one Pi client.
-
-**Settings → Continuous sync** controls separate per-setup `sync.continuous`, default **Off**. Autonomous sync must also be enabled. A separate review authorizes recurring network access, model costs and automatic transfers while Pi is open. Upgrade all Pi processes sharing the agent directory before enabling it. Monitoring starts after the `/sync` command or manager closes, and replaces the duplicate one-shot startup transfer.
 
 Selected-file hints are coalesced after one quiet second. A 60–66 second remote/local check covers missed events. Temporary failures and proven pre-publication edit races use bounded backoff. Removing flagged secret content or repairing unsupported conflicts permits a fresh inspection; unchanged blocks do not repeatedly call the model. One daemon owns monitoring for each shared canonical agent directory; each computer remains a separate replica. Busy sessions and foreground commands release ownership after draining work. After the last registered live client PID for the canonical agent directory exits, the service starts a fixed 30-second grace period unless a valid active-setup after-exit grant keeps it running, then drains work before safe exit. Live passive, disconnected, publishing, and orderly retired PIDs still count; `/reload`, `/new`, fork, and resume do not end shared ownership while their Pi process is alive. A client arriving before shutdown becomes final cancels automatic exit. A valid explicit after-exit grant for the active setup keeps the service running without expanding existing transfer or model permissions; see [Daemon lifetime and unattended permission](./skills/configure-pi-sync/references/configuration.md#daemon-lifetime-and-unattended-permission). Resources never reload automatically.
 
@@ -226,13 +234,13 @@ Selected-file hints are coalesced after one quiet second. A 60–66 second remot
 
 ### Opt-in automatic transfer
 
-**Settings → Startup transfer** controls the separate per-setup `sync.automaticTransfer` boolean, which defaults to `false`. It authorizes one conflict-free startup transfer at a validated idle boundary in TUI/RPC, including session replacement and `/reload`. Busy startup waits for `agent_settled`; foreground commands, a new agent run, replacement, and shutdown cancel and drain owned work. Changing the setting affects authorization immediately; enabling it schedules the next attempt on the next session start. There is no watcher or polling loop.
+The advanced `sync.automaticTransfer` flag enables one eligible conflict-free startup transfer at an idle boundary in TUI/RPC, including session replacement and `/reload`. Both presets leave it off. Busy startup waits for `agent_settled`; foreground commands, a new agent run, replacement, and shutdown cancel and drain owned work. Enabling the flag schedules the next attempt for the next session start. There is no watcher or polling loop.
 
-A baseline and matching authoritative content list are required. First-source choice, changed selection, missing established remote, secrets, and real conflicts remain review barriers. Automatic transfer requires conditional or lease-protected publication: Git, verified WebDAV, and R2/S3 with verified conditional writes are supported. The existing **Automatic sync** setting and shutdown policy are unchanged when this new opt-in is absent.
+A baseline and matching authoritative content list are required. First-source choice, changed selection, missing established remote, secrets, and real conflicts remain review barriers. Automatic transfer requires conditional or lease-protected publication: Git, verified WebDAV, and R2/S3 with verified conditional writes are supported.
 
 Unchanged automatic transfers use a read-only fast path after a fresh head read and verified baseline/cache checks, avoiding snapshot downloads and baseline rewrites. Recovery, partial-sync, legacy, and uncertain cases keep the full path. See [unchanged transfer conditions](./skills/configure-pi-sync/references/configuration.md#unchanged-transfer-fast-path).
 
-Successful transfers show one summary. They do not reload resources, activate extension code, or rewrite model context. After local resources change, reload or restart when ready; newly pulled conversations still require explicit resume. Headless print/JSON skip this new startup feature. Reviewed directional settings/session-root transitions record both roots and verified settings evidence so interrupted apply can recover before or after settings installation. Older pending journals without transition evidence retain their original root-ownership checks and may require reviewed recovery; preserve their backups rather than downgrading. See [merge safety and recovery](./docs/merge-implementation-audit.md) for journal boundaries, external-writer limits, and downgrade guidance.
+Successful transfers show one summary. They do not reload resources, activate extension code, or rewrite model context. After local resources change, reload or restart when ready; newly pulled conversations still require explicit resume. Headless print/JSON skip startup transfers. Reviewed directional settings/session-root transitions record both roots and verified settings evidence so interrupted apply can recover before or after settings installation. Older pending journals without transition evidence retain their original root-ownership checks and may require reviewed recovery; preserve their backups rather than downgrading. See [merge safety and recovery](./docs/merge-implementation-audit.md) for journal boundaries, external-writer limits, and downgrade guidance.
 
 **Settings → Merge settings fields** controls the per-setup `sync.mergeSettings` opt-in, default **Off**. It combines independent global `settings.json` fields, not arbitrary JSON or keybindings. Missing/corrupt ancestors, unsupported syntax, and incompatible fields retain whole-transfer review. Sensitive accepted content is cached privately under the denied state root; disabling does not delete evidence.
 
@@ -249,7 +257,7 @@ With a footer that supports the [public semantic status protocol](https://github
 **Settings → Skip secret scan** defaults to **Off**; enable it only after reviewing the destination and selected content because it disables push scanning for every setup.
 See [Secret scanning](./skills/configure-pi-sync/references/configuration.md#secret-scanning) for the setting and diagnostic behavior.
 
-A minimal Git setup uses an existing private remote and keeps automatic sync off:
+A minimal Git setup uses an existing private remote and stays in Manual:
 
 ```json
 {
@@ -312,7 +320,7 @@ Read the [settings reference](./skills/configure-pi-sync/references/configuratio
 
 Run `/skill:configure-pi-sync` with the edit you want, the rule draft or audit you need, or the error you saw. For example, use `/skill:configure-pi-sync exclude npm/ from the ignore file for my home setup` or `/skill:configure-pi-sync draft a .syncignore without writing it`. The [configuration skill](./skills/configure-pi-sync/SKILL.md) loads only on request. It applies authorized edits to `pi-sync.json` through the running local daemon for routine preferences, or verifies the ignore file for a setup you name through the daemon before editing it. For an error, it checks the local cause before proposing a change.
 
-Use `/sync` for initial setup, masked credential entry, and operations that require a separate review. The skill does not run backend diagnostics, check remote connectivity, or start transfers. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for manual configuration and troubleshooting.
+Use `/sync` for initial setup, masked credential entry, and reviewed mode changes. The skill can prepare an advanced edit for you to review and apply, but it cannot enable reviewed behavior or grant transfer, model, or after-exit permission on your behalf. It does not run backend diagnostics, check remote connectivity, or start transfers. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for guidance.
 
 ## 💬 Commands
 

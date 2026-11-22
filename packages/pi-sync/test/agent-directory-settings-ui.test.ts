@@ -112,7 +112,7 @@ for (const mode of [
             : "Agent directory (recommended)",
         ...(joining
           ? [mode === "join legacy" ? "Selected paths (legacy)" : "Pi agent directory"]
-          : ["Keep automatic sync off", optIn ? "Include session conversations" : "Keep sessions off (recommended)"]),
+          : [optIn ? "Include session conversations" : "Keep sessions off (recommended)"]),
         mode === "discard" ? "Cancel" : "Save setup",
       ];
       let firstOption: string | undefined;
@@ -137,6 +137,7 @@ for (const mode of [
       });
       const saved = mode !== "discard" && mode !== "decline sessions";
       assert.equal(await showSetupWizard(ctx), saved);
+      assert.doesNotMatch(seen.join("\n"), /Automatic sync for this setup/u);
       assert.equal(firstOption, "Agent directory (recommended)");
       assert.equal(acknowledgements, optIn ? 1 : 0);
       assert.equal(reviewRemote.mock.calls.length, joining ? 1 : 0);
@@ -146,12 +147,12 @@ for (const mode of [
       }
       const document = await readLocalConfigObject();
       const policy = document?.syncSetups.home.sync;
+      assert.equal(policy?.automatic, false);
       if (joining) {
         assert.equal(joinedVersion, document?.version);
         const call = reviewRemote.mock.calls[0];
         assert.equal(call[1], "home");
         assert.deepEqual(call[4], { origin: "settings" });
-        assert.equal(policy?.automatic, false);
         assert.match(seen.join("\n"), /No policy is adopted without your review/u);
       }
       if (mode === "join legacy") {

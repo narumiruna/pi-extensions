@@ -74,7 +74,7 @@ for (const agentMode of [false, true])
       assert.match(config, new RegExp(`^autonomous sync: ${agentMode ? "On" : "Off"}$`, "m"));
       assert.match(config, /^settings field merge: On$/m);
       assert.ok(config.includes(`continuous sync: ${agentMode ? "On" : "paused; Autonomous sync is Off"}`));
-      assert.match(help, /Continuous sync is a separate default-Off opt-in in Settings\. It requires Autonomous sync/);
+      assert.match(help, /Automatic enables Continuous and Autonomous sync together/);
       assert.match(help, /recurring network\/model costs/);
       assert.match(help, /Safety blocks and durable automatic request limits remain/);
       assert.doesNotMatch(

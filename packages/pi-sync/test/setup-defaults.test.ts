@@ -18,7 +18,7 @@ const fixtures = [
   {
     preset: "Git",
     inputs: ["", "git@github.com:owner/private-pi-sync.git", "", ""],
-    choices: ["Recommended Pi settings", "Keep automatic sync off", "Save setup"],
+    choices: ["Recommended Pi settings", "Save setup"],
     path: "./",
     hints: [
       "git@github.com:owner/private-pi-sync.git (SSH)",
@@ -32,7 +32,7 @@ const fixtures = [
   {
     preset: "WebDAV",
     inputs: ["", "https://cloud.example.com/dav", "user", ""],
-    choices: ["Minimal settings", "Keep automatic sync off", "Keep sessions off (recommended)", "Save setup"],
+    choices: ["Minimal settings", "Keep sessions off (recommended)", "Save setup"],
     path: "./",
     hints: [
       "Example: https://cloud.example.com/remote.php/dav/files/user",
@@ -55,7 +55,6 @@ const fixtures = [
       "Customize remote location",
       "Store credentials privately",
       "Minimal settings",
-      "Keep automatic sync off",
       "Keep sessions off (recommended)",
       "Save sync setup",
     ],
@@ -73,7 +72,7 @@ const fixtures = [
 ];
 
 for (const fixture of fixtures) {
-  test.each([true, false, undefined])(`${fixture.preset} explicitly chooses automatic sync %s`, async (automatic) => {
+  test(`${fixture.preset} saves Manual without an automation question`, async () => {
     await withTempHome(async () => {
       const choices = [fixture.preset, ...fixture.choices];
       const inputs = [...fixture.inputs];
@@ -85,30 +84,19 @@ for (const fixture of fixtures) {
         input: async () => inputs.shift(),
         select: async (title: string) => {
           frames.push(title);
-          const choice = choices.shift();
-          return choice === "Keep automatic sync off"
-            ? automatic === undefined
-              ? "Cancel"
-              : automatic
-                ? "Enable automatic sync"
-                : choice
-            : choice;
+          return choices.shift();
         },
       });
-      assert.equal(await showSetupWizard(ctx), automatic !== undefined);
-      if (automatic === undefined) {
-        assert.equal(existsSync(localConfigPath()), false);
-        return;
-      }
+      assert.equal(await showSetupWizard(ctx), true);
       const config = await loadConfig();
-      assert.equal(config.automatic, automatic);
+      assert.equal(config.automatic, false);
+      assert.equal(config.automaticTransfer, false);
+      assert.equal(config.agentMode, false);
+      assert.equal(config.continuous, false);
       assert.equal(config.include.includes("sessions"), false);
-      assert.match(
-        frames.join("\n"),
-        automatic
-          ? /Automatic sync: On \(startup check; shutdown pushes selected content if sessions included\)/u
-          : /Automatic sync: Off/u,
-      );
+      const text = frames.join("\n");
+      assert.doesNotMatch(text, /Automatic sync for this setup/u);
+      assert.match(text, /Automatic sync: Off/u);
       const expected =
         fixture.preset === "Git"
           ? [
@@ -124,7 +112,7 @@ for (const fixture of fixtures) {
             ]
           : ["settings.json", "AGENTS.md"];
       assert.deepEqual(config.include, expected);
-      for (const path of expected) assert.ok(frames.join("\n").includes(path));
+      for (const path of expected) assert.ok(text.includes(path));
     });
   });
   test(`${fixture.preset} setup renders examples and accepts defaults with one name`, async () => {

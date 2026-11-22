@@ -1,12 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type MenuSettingItem, runMenu } from "@narumitw/pi-tui-kit";
-import { piDaemonClient } from "../daemon/pi-client.js";
 import { configFromSettings, loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { localConfigPath, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
 import { updateLocalConfig } from "../settings/settings-store.js";
 import { validateSettingsDocument } from "../settings/settings-validation.js";
-import { startupTransferEnabled } from "../sync/agent-policy.js";
 import { normalizeLocalFields, sameLocalFields } from "../sync/local-fields.js";
 import {
   SETUP_SWITCH_ACTION_OPTIONS,
@@ -15,13 +13,6 @@ import {
   setupSwitchActionLabel,
 } from "../sync/setup-switch.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
-import { syncSessionsSelected } from "../sync/sync-policy.js";
-import {
-  AGENT_MODE_DESCRIPTION,
-  CONTINUOUS_DESCRIPTION,
-  saveAgentMode,
-  saveContinuousMode,
-} from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js";
 import { manualIgnoreFileGuidance } from "./ignore-file-guidance.js";
@@ -31,7 +22,7 @@ import { boundedSettingsUI } from "./settings-frame.js";
 import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery } from "./settings-review.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
 import { showStorageConnections } from "./storage-connections-ui.js";
-import { AUTOMATIC_SYNC_DESCRIPTION, STARTUP_TRANSFER_DESCRIPTION, startupTransferSummary } from "./sync-behavior.js";
+import { describeSyncMode, readSyncModePolicy, showSyncModeSetting } from "./sync-mode-setting.js";
 import { configureSyncStatus } from "./sync-status.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -78,7 +69,7 @@ export async function showSyncSettings(
           : `Edit pi-sync settings manually: ${safeTerminalText(settingsPath)}`,
         ...(limited ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(settingsPath)] : []),
         ...(!limited && config?.reservedIgnoreNames !== undefined
-          ? ["Use TUI Settings → Review automatic transfers to approve the current setup separately."]
+          ? ["Use TUI Settings → Sync mode → Review current policy… when automatic work requires approval."]
           : []),
         ...(config?.pathPolicy === "ignore-file"
           ? [manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
@@ -120,13 +111,11 @@ export async function showSyncSettings(
   const ignoreAvailable = await ignoreFileSettingsAvailable(ctx, signal);
   if (!isCurrent()) return disposition;
   const setupName = initial.setupName;
-  type SettingsState = Awaited<ReturnType<typeof loadSettingsConfig>>;
+  type SettingsState = Awaited<ReturnType<typeof loadSettingsConfig>> & {
+    modePolicy?: Awaited<ReturnType<typeof readSyncModePolicy>>;
+  };
   type Action =
-    | "automatic"
-    | "automatic-transfer"
-    | "agent-mode"
-    | "continuous"
-    | "authorize-automatic"
+    | "sync-mode"
     | "merge-settings"
     | "local-fields"
     | "content-policy"
@@ -271,52 +260,7 @@ export async function showSyncSettings(
               currentValue: "Open",
               action: "connections",
             },
-            {
-              id: "automatic",
-              label: "Automatic sync",
-              description: AUTOMATIC_SYNC_DESCRIPTION,
-              currentValue: state.automatic ? "On" : "Off",
-              values: ["On", "Off"],
-              action: "automatic",
-            },
-            {
-              id: "automaticTransfer",
-              label: "Startup transfer",
-              description: `${STARTUP_TRANSFER_DESCRIPTION} Saved preference and requirements: ${startupTransferSummary(state)}.`,
-              currentValue: state.automaticTransfer ? "On" : "Off",
-              values: ["On", "Off"],
-              action: "automatic-transfer",
-            },
-            {
-              id: "agentMode",
-              label: "Autonomous sync",
-              description: AGENT_MODE_DESCRIPTION,
-              currentValue: state.agentMode ? "On" : "Off",
-              values: ["On", "Off"],
-              action: "agent-mode",
-            },
-            {
-              id: "continuous",
-              label: "Continuous sync",
-              description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Autonomous sync is enabled." : ""}`,
-              currentValue: state.continuous ? "On" : "Off",
-              values: ["On", "Off"],
-              action: "continuous",
-            },
-            ...(ignoreAvailable &&
-            state.reservedIgnoreNames !== undefined &&
-            (startupTransferEnabled(state) || (state.automatic && syncSessionsSelected(state)))
-              ? [
-                  {
-                    id: "authorizeAutomatic",
-                    label: "Review automatic transfers",
-                    description:
-                      "Separate approval for the enabled modes and exact current policy. Saving settings alone does not grant permission.",
-                    currentValue: "Review",
-                    action: "authorize-automatic" as const,
-                  },
-                ]
-              : []),
+            { id: "syncMode", ...describeSyncMode(state, ignoreAvailable, state.modePolicy), action: "sync-mode" },
             {
               id: "onSwitch",
               label: "On setup switch",
@@ -522,99 +466,15 @@ export async function showSyncSettings(
           return { kind: "rejected" };
         }
       },
-      automatic: async ({ value, signal: actionSignal }) => {
-        const automatic = value === "On";
-        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+      "sync-mode": async ({ state: { modePolicy: _modePolicy, ...config }, signal: actionSignal }) => {
+        const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         try {
-          const latest = await loadSettingsConfig(setupName);
-          if (mutationSignal.aborted) return { kind: "rejected" };
-          if (latest.automatic === automatic) return { kind: "stay" };
-          await updateSyncSetup(setupName, (setup) => ({ ...setup, sync: { ...setup.sync, automatic } }), {
-            signal: mutationSignal,
-          });
-          if (mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(
-            `Automatic sync ${automatic ? "enabled" : "disabled"} for “${safeTerminalText(setupName)}”.`,
-            "info",
-          );
-          return { kind: "stay" };
+          if ((await showSyncModeSetting(ctx, config, reviewSignal)) === "close") return exitSettings();
         } catch (error) {
-          if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
-        }
-      },
-      "agent-mode": async ({ value, signal: actionSignal }) => {
-        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, mutationSignal);
-        try {
-          const saved = await saveAgentMode(ctx, setupName, value === "On", mutationSignal);
-          if (!saved) return { kind: "rejected" };
-          try {
-            validate();
-            ctx.ui.notify(
-              "Autonomous sync saved. Applies to subsequent sync and the next session start; no transfer started.",
-              "info",
-            );
-          } catch {
-            // The save committed. A closed or replaced UI must not report a failed save.
-            // The next Settings read shows the persisted value.
-          }
-          return { kind: "stay" };
-        } catch (error) {
-          try {
-            validate();
-          } catch {
-            return { kind: "rejected" };
-          }
+          if (reviewSignal.aborted || !isCurrent()) return { kind: "close" };
           notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
         }
-      },
-      continuous: async ({ value, signal: actionSignal }) => {
-        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, mutationSignal);
-        try {
-          const saved = await saveContinuousMode(ctx, setupName, value === "On", mutationSignal);
-          if (!saved) return { kind: "rejected" };
-          try {
-            validate();
-            ctx.ui.notify(
-              value === "On"
-                ? "Continuous sync enabled. Monitoring starts after the /sync command or manager closes; completed work is not undone."
-                : "Continuous sync disabled. Completed work is not undone.",
-              "info",
-            );
-          } catch {
-            /* committed save; do not use stale UI */
-          }
-          return { kind: "stay" };
-        } catch (error) {
-          try {
-            validate();
-          } catch {
-            return { kind: "rejected" };
-          }
-          notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
-        }
-      },
-      "automatic-transfer": async ({ value, signal: actionSignal }) => {
-        const automaticTransfer = value === "On";
-        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        try {
-          await updateSyncSetup(setupName, (setup) => ({ ...setup, sync: { ...setup.sync, automaticTransfer } }), {
-            signal: mutationSignal,
-          });
-          if (mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(
-            `Automatic startup transfer ${automaticTransfer ? "enabled for the next session start" : "disabled"}. Completed transfers are not undone.`,
-            "info",
-          );
-          return { kind: "stay" };
-        } catch (error) {
-          if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
-        }
+        return resumeSettings(reviewSignal);
       },
       "skip-secret-scan": async ({ value, signal: actionSignal }) => {
         const skipSecretScan = value === "On";
@@ -688,37 +548,6 @@ export async function showSyncSettings(
         await showExcludedPaths(ctx, setupName, editorSignal);
         return resumeSettings(editorSignal);
       },
-      "authorize-automatic": async ({ state, signal: actionSignal }) => {
-        const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, reviewSignal);
-        const client = piDaemonClient(ctx);
-        try {
-          validate();
-          const policy = (await client.run("daemon.policy", {}, reviewSignal)) as {
-            setup: string;
-            fingerprint: string;
-            automatic: boolean;
-          };
-          validate();
-          if (policy.setup !== state.setupName) return exitSettings();
-          if (policy.automatic) {
-            ctx.ui.notify("Automatic work is already approved for this setup and policy.", "info");
-            return { kind: "stay" };
-          }
-          const accepted = await client.run(
-            "daemon.authorize-connected",
-            { fingerprint: policy.fingerprint },
-            reviewSignal,
-          );
-          validate();
-          if (accepted === true) ctx.ui.notify("Automatic work approved for this setup and policy.", "info");
-          return { kind: "stay" };
-        } catch (error) {
-          if (reviewSignal.aborted || !isCurrent()) return exitSettings();
-          notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
-        }
-      },
       "ignore-switch": ignoreAction("switch"),
       "ignore-migrate": ignoreAction("migrate"),
       "remote-include": async ({ state, signal: actionSignal }) => {
@@ -739,15 +568,7 @@ export async function showSyncSettings(
       },
     },
   });
-  for (const id of [
-    "automatic",
-    "automatic-transfer",
-    "merge-settings",
-    "skip-secret-scan",
-    "show-status",
-    "debug",
-    "on-switch",
-  ] as const) {
+  for (const id of ["merge-settings", "skip-secret-scan", "show-status", "debug", "on-switch"] as const) {
     const save = menu.actions[id];
     menu.actions[id] = async (action) => {
       const validate = captureMutationOwner(ctx, action.signal);
@@ -759,10 +580,8 @@ export async function showSyncSettings(
       saveStatus =
         result?.kind === "rejected"
           ? "Save failed or rejected. Previous value retained; retry is available."
-          : id === "automatic-transfer" || id === "automatic" || id === "debug"
-            ? action.state.reservedIgnoreNames !== undefined
-              ? "Saved. Review automatic transfers separately before enabling automatic work for this policy."
-              : "Saved. Enabling startup work applies next session start; completed transfers are not undone."
+          : id === "debug"
+            ? "Saved. Applies next session start."
             : "Saved. Applies to subsequent operations; status visibility applies immediately.";
       ctx.ui.notify(saveStatus, result?.kind === "rejected" ? "warning" : "info");
       return result;
@@ -795,7 +614,12 @@ export async function showSyncSettings(
     }
   }
   await runMenu({ ...ctx, ui: boundedSettingsUI(ctx) }, menu, {
-    getState: () => loadSettingsConfig(setupName),
+    getState: async () => {
+      const config = await loadSettingsConfig(setupName);
+      if (!isCurrent() || !ignoreAvailable) return config;
+      const modePolicy = await readSyncModePolicy(ctx, config, signal).catch(() => undefined);
+      return { ...config, modePolicy };
+    },
     signal,
     isCurrent,
   });

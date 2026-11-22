@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   closeSync,
   fstatSync,
@@ -135,6 +135,23 @@ export function revokeRetainedGrants(root: string) {
   return revoked;
 }
 
+export function revokeSyncModeGrants(root: string, setup: string) {
+  const consent = readConsent(root);
+  if (!consent) throw new Error("Review daemon handover first.");
+  const saved = Object.hasOwn(consent.setups, setup) ? consent.setups[setup] : undefined;
+  if (!saved || (!saved.afterExit && !saved.automaticFingerprint)) {
+    try {
+      syncConsentDirectory(file(root));
+    } catch (error) {
+      throw new ConsentPublicationError("Daemon consent revocation could not be verified.", { cause: error });
+    }
+    return;
+  }
+  saved.afterExit = false;
+  delete saved.automaticFingerprint;
+  publishConsent(consent);
+}
+
 export function readConsent(root: string): Consent | undefined {
   const target = file(root);
   let handle: number | undefined;
@@ -206,16 +223,68 @@ export function consentFingerprint(root: string, config: AnySyncConfig) {
     .update(syncCheckConfigFingerprint(config))
     .digest("hex");
 }
+function connectedReviewMarker(root: string, setup: string) {
+  const key = createHash("sha256").update(setup).digest("hex");
+  return path.join(path.dirname(file(root)), `daemon-connected-${key}.pending`);
+}
+
+function pendingConnectedReview(marker: string) {
+  try {
+    return lstatSync(marker);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function retainConnectedReview(marker: string) {
+  const pending = pendingConnectedReview(marker);
+  if (!pending) {
+    const fd = openSync(marker, "wx", 0o600);
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } else if (!pending.isFile() || pending.nlink !== 1 || pending.size !== 0) {
+    throw new Error("Automatic approval has unsafe pending evidence; preserve it and repair the daemon state.");
+  }
+  syncConsentDirectory(marker);
+}
+
+function publishConnectedConsent(value: Consent, setup: string) {
+  const marker = connectedReviewMarker(value.root, setup);
+  retainConnectedReview(marker);
+  publishConsent(value);
+  rmSync(marker);
+  try {
+    syncConsentDirectory(marker);
+  } catch (error) {
+    retainConnectedReview(marker);
+    throw new ConsentPublicationError("Automatic approval publication is uncertain; review the current policy again.", {
+      cause: error,
+    });
+  }
+}
+
 export function automaticPolicyAuthorized(root: string, config: AnySyncConfig) {
   if (config.reservedIgnoreNames === undefined) return true;
+  if (pendingConnectedReview(connectedReviewMarker(root, config.setupName))) return false;
   const saved = readConsent(root)?.setups[config.setupName];
   return saved?.automaticFingerprint !== undefined && saved.automaticFingerprint === consentFingerprint(root, config);
 }
 
-export async function reviewAutomaticPolicy(execution: Execution, config: AnySyncConfig, expectedFingerprint: string) {
+export async function reviewAutomaticPolicy(
+  execution: Execution,
+  config: AnySyncConfig,
+  expectedFingerprint: string,
+  needsFreshReview = false,
+) {
   if (consentFingerprint(execution.root, config) !== expectedFingerprint)
     throw new Error("Setup changed; reopen the automatic transfer review.");
-  if (config.reservedIgnoreNames === undefined || automaticPolicyAuthorized(execution.root, config)) return false;
+  if (config.reservedIgnoreNames === undefined) return false;
+  const approvedBefore = automaticPolicyAuthorized(execution.root, config);
+  if (approvedBefore && !needsFreshReview) return false;
   const consent = readConsent(execution.root);
   if (!consent) return false;
   const consentToken = JSON.stringify(consent);
@@ -236,29 +305,53 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
   const current = await loadConfigForCheck(undefined, execution.signal);
   validate();
   if (syncCheckConfigFingerprint(current) !== fingerprint) return false;
+  const continuous = config.continuous && config.agentMode;
   const modes = [
-    startupTransferEnabled(config) && "Automatic transfer at startup",
+    !continuous && startupTransferEnabled(config) && "Automatic transfer at startup",
     config.automatic &&
       syncSessionsSelected(config) &&
       "Push selected files on shutdown (including sessions when selected)",
-    config.continuous && config.agentMode && "Continuous sync and Autonomous model requests",
+    continuous && "Continuous sync (including the initial check) and Autonomous model requests",
   ].filter(Boolean);
   if (modes.length === 0) throw new Error("No automatic transfer mode is enabled under the current local rules.");
-  const accepted = await execution.request("confirm", {
-    title: "Allow the enabled automatic sync modes for this setup?",
-    message: [
-      `Setup: ${safeTerminalText(config.setupName)}`,
-      `Destination: ${safeTerminalText(config.connectionName)} · ${safeTerminalText(config.storagePath)}`,
-      ...(config.ignorePolicy
+  if (approvedBefore) retainConnectedReview(connectedReviewMarker(execution.root, config.setupName));
+  const title = "Allow the enabled automatic sync modes for this setup?";
+  const destination = config.backend.destination;
+  const lines = [
+    `Setup: ${safeTerminalText(config.setupName)}`,
+    `Destination: ${safeTerminalText(config.connectionName)} · ${safeTerminalText(config.storagePath)}`,
+    ...("bucket" in destination ? [`Bucket: ${safeTerminalText(destination.bucket)}`] : []),
+    ...("branch" in destination ? [`Branch: ${safeTerminalText(destination.branch)}`] : []),
+    ...(config.ignorePolicy
+      ? [
+          `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
+          "Review this file before you approve its scope.",
+        ]
+      : config.scope === "agent-directory"
         ? [
-            `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
-            "Review this file before you approve its scope.",
+            "Scope: eligible files in the Pi agent directory.",
+            `Excluded: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}.`,
+            `Re-included: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}.`,
           ]
-        : []),
-      `Enabled modes: ${modes.join("; ")}`,
-      "Their usual baseline, remote selection, and ownership checks still apply. This does not allow work after the last Pi exits. A settings or rule-file change requires a new review.",
-    ].join("\n"),
-  });
+        : [`Included paths: ${config.include.map(safeTerminalText).join(", ") || "none"}.`]),
+    `Sessions: ${config.include.includes("sessions") ? "opted in (path rules still apply)" : "Off"}.`,
+    `Enabled modes: ${modes.join("; ")}`,
+    ...(config.agentMode
+      ? [
+          `Selected model: ${safeTerminalText(execution.facts()?.model?.provider ?? "unavailable")}/${safeTerminalText(execution.facts()?.model?.id ?? "unavailable")}.`,
+          "Supported conflicts may be sent to the selected model's provider and incur charges.",
+        ]
+      : []),
+    "The daemon may replace or delete selected local and remote files. Baseline, remote selection, and ownership checks still apply. This does not allow work after the last Pi exits. A settings or rule-file change requires a new review.",
+  ];
+  const accepted = await (execution.facts()?.mode === "tui"
+    ? execution.request("merge-review", {
+        title,
+        content: lines.join("\n\n"),
+        confirmationLabel: "Allow automatic transfers",
+        summaryLines: lines,
+      })
+    : execution.request("confirm", { title, message: lines.join("\n") }));
   validate();
   if (accepted !== true) return false;
   const latest = await loadConfigForCheck(undefined, execution.signal);
@@ -268,22 +361,29 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
     throw new Error("Setup changed during automatic transfer review.");
   const saved = consent.setups[config.setupName];
   const automaticFingerprint = consentFingerprint(execution.root, config);
-  publishConsent({
-    ...consent,
-    setups: {
-      ...consent.setups,
-      [config.setupName]: {
-        ...saved,
-        fingerprint: saved?.fingerprint ?? automaticFingerprint,
-        afterExit: saved?.afterExit ?? false,
-        automaticFingerprint,
+  publishConnectedConsent(
+    {
+      ...consent,
+      setups: {
+        ...consent.setups,
+        [config.setupName]: {
+          ...saved,
+          fingerprint: saved?.fingerprint ?? automaticFingerprint,
+          afterExit: false,
+          automaticFingerprint,
+        },
       },
     },
-  });
+    config.setupName,
+  );
   return true;
 }
 
-export async function captureAutomaticAuthorization(execution: Execution, expectedFingerprint?: string) {
+export async function captureAutomaticAuthorization(
+  execution: Execution,
+  expectedFingerprint?: string,
+  requiresReview?: (config: AnySyncConfig) => boolean,
+) {
   const consent = readConsent(execution.root);
   if (!consent) throw new Error("Automatic work requires reviewed daemon handover first.");
   const consentToken = JSON.stringify(consent);
@@ -302,14 +402,16 @@ export async function captureAutomaticAuthorization(execution: Execution, expect
     expectedFingerprint !== undefined ? fingerprint !== expectedFingerprint : config.reservedIgnoreNames !== undefined
   )
     throw new Error("Settings changed before automatic work; use the reviewed foreground command.");
-  if (!automaticPolicyAuthorized(execution.root, config))
+  if (requiresReview?.(config) || !automaticPolicyAuthorized(execution.root, config))
     throw new Error(
       "Automatic transfer requires separate approval for the current setup and policy. Run reviewed /sync first.",
     );
   const validate = (current?: AnySyncConfig) => {
     validateParticipants();
-    if (current && syncCheckConfigFingerprint(current) !== fingerprint)
-      throw new Error("Settings changed before automatic work completed.");
+    if (current && (syncCheckConfigFingerprint(current) !== fingerprint || requiresReview?.(current)))
+      throw new Error("Settings changed or require review before automatic work completed.");
+    if (!automaticPolicyAuthorized(execution.root, current ?? config))
+      throw new Error("Automatic approval changed before work completed.");
   };
   const refresh = async () => {
     validate();
@@ -398,7 +500,8 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   const consent = readConsent(execution.root);
   if (!consent || JSON.stringify(consent) !== policyGeneration)
     throw new Error("Daemon authorization changed; reopen its review.");
-  publishConsent({
+  const alsoApproveConnected = payload.afterExit && config.reservedIgnoreNames !== undefined;
+  const next = {
     ...consent,
     setups: {
       ...consent.setups,
@@ -409,9 +512,11 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
         sessionDir: facts?.sessionDir,
         cwd: facts?.cwd,
         afterExit: payload.afterExit,
-        ...(payload.afterExit && config.reservedIgnoreNames !== undefined ? { automaticFingerprint: fingerprint } : {}),
+        ...(alsoApproveConnected ? { automaticFingerprint: fingerprint } : {}),
       },
     },
-  } satisfies Consent);
+  } satisfies Consent;
+  if (alsoApproveConnected) publishConnectedConsent(next, config.setupName);
+  else publishConsent(next);
   return { config, afterExit: payload.afterExit };
 }

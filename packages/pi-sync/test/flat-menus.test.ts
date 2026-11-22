@@ -4,6 +4,7 @@ import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-codi
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { bindPiDaemonClient } from "../src/daemon/pi-client.js";
 import { loadConfig, syncConfigReviewIdentity } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { removeSyncSetup } from "../src/settings/settings-management.js";
@@ -13,7 +14,7 @@ import { readStateForConfig, writeStateForConfig } from "../src/state/sync-state
 import { describeManagerState, MAIN_MENU_ACTIONS } from "../src/ui/manager-state.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { showSyncSettings } from "../src/ui/settings-ui.js";
-import { v3S3Settings, withTempHome } from "./helpers.js";
+import { registerFixtureCleanup, v3S3Settings, withTempHome } from "./helpers.js";
 
 initTheme("dark", false);
 
@@ -306,14 +307,20 @@ for (const mode of ["tui", "rpc"] as const) {
   }
 }
 
-for (const row of ["Storage location", "Manage sync setups", "Manage storage connections"]) {
+for (const row of ["Storage location", "Manage sync setups", "Manage storage connections", "Sync mode"]) {
   test(`repeated ${row} returns retain search and require only one remapped Back`, async () => {
     await configured(async () => {
+      const before = readFileSync(localConfigPath());
       const frames: string[] = [];
+      const modeChoices: Array<{ title: string; choices: string[] }> = [];
       let visits = 0;
       let inputs = 0;
       const context = createMockContext({
         mode: "tui",
+        select: async (title: string, choices: string[]) => {
+          modeChoices.push({ title, choices });
+          return undefined;
+        },
         input: async () => {
           inputs++;
           await updateLocalConfig((settings) => {
@@ -371,6 +378,10 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
           tui.dispose();
         }
       }) as ExtensionCommandContext["ui"]["custom"];
+      if (row === "Sync mode") {
+        const client = bindPiDaemonClient(context.ctx, new AbortController().signal);
+        registerFixtureCleanup(() => client.dispose());
+      }
       assert.equal(await showSyncSettings(context.ctx, async () => undefined), "back");
       assert.equal(visits, 3);
       for (const frame of frames) {
@@ -380,6 +391,14 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
       if (row === "Storage location") {
         assert.equal(inputs, 2);
         assert.match(frames[1] ?? "", /refreshed/u);
+      }
+      if (row === "Sync mode") {
+        assert.deepEqual(modeChoices, [
+          { title: "Sync mode", choices: ["Manual", "Automatic"] },
+          { title: "Sync mode", choices: ["Manual", "Automatic"] },
+        ]);
+        for (const frame of frames) assert.match(frame, /→ Sync mode\s+Manual/u);
+        assert.deepEqual(readFileSync(localConfigPath()), before);
       }
       assert.deepEqual(context.notifications, []);
     });

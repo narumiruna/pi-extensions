@@ -1,6 +1,7 @@
 import {
   authorizeAfterExit,
   automaticPolicyAuthorized,
+  ConsentPublicationError,
   captureAutomaticAuthorization,
   consentFingerprint,
   readConsent,
@@ -98,6 +99,19 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           },
         });
       }
+      if (operation === "settings.sync-mode") {
+        const { saveSyncMode } = await import("./sync-mode-settings.js");
+        execution.validate();
+        try {
+          return await saveSyncMode(execution, payload, ignoreFileSettingsAvailable, (mixed) => {
+            monitor.settingsCommitted(mixed);
+            execution.committed();
+          });
+        } catch (error) {
+          if (error instanceof ConsentPublicationError) monitor.blockAutomatic();
+          throw error;
+        }
+      }
       if (operation === "daemon.authorize") {
         const authorized = await authorizeAfterExit(execution, payload);
         if (authorized?.afterExit) monitor.reviewedPolicy(authorized.config);
@@ -115,7 +129,12 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         const { loadConfigForCheck } = await import("./engine/settings/config.js");
         const config = await loadConfigForCheck(undefined, execution.signal);
         execution.validate();
-        const approved = await reviewAutomaticPolicy(execution, config, payload.fingerprint);
+        const approved = await reviewAutomaticPolicy(
+          execution,
+          config,
+          payload.fingerprint,
+          monitor.requiresReview(config),
+        );
         if (approved) monitor.reviewedPolicy(config);
         return approved;
       }
@@ -130,12 +149,14 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         const fingerprint = consentFingerprint(root, config);
         const saved = readConsent(root)?.setups[config.setupName];
         const facts = execution.facts();
+        const automatic = automaticPolicyAuthorized(root, config) && !monitor.requiresReview(config);
         return {
           setup: config.setupName,
           fingerprint,
-          automatic: automaticPolicyAuthorized(root, config),
+          automatic,
           afterExit: Boolean(
-            saved?.afterExit &&
+            automatic &&
+              saved?.afterExit &&
               saved.fingerprint === fingerprint &&
               JSON.stringify(saved.model) === JSON.stringify(facts?.model) &&
               saved.sessionDir === facts?.sessionDir &&
@@ -311,7 +332,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
       }
       return withStateDirectoryAccess(async () => {
         const automatic = isAutomatic
-          ? await captureAutomaticAuthorization(execution, options.automaticFingerprint)
+          ? await captureAutomaticAuthorization(execution, options.automaticFingerprint, monitor.requiresReview)
           : undefined;
         if (automatic) options.background = { validate: automatic.validate };
         if (["push", "pull", "sync", "startup-transfer", "shutdown", "conflicts", "rollback"].includes(operation)) {
@@ -348,9 +369,9 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
             await automatic?.refresh();
             automatic?.validate(config);
             execution.validate();
-            if (config.agentMode && !automaticPolicyAuthorized(root, config)) {
+            if (config.agentMode && (monitor.requiresReview(config) || !automaticPolicyAuthorized(root, config))) {
               throw new Error(
-                "Autonomous sync requires a separate policy review. Use Settings → Review automatic transfers, or choose a reviewed push or pull.",
+                "Autonomous sync requires a separate policy review. Open Settings → Sync mode and choose Review current policy…, or choose a reviewed push or pull.",
               );
             }
             if (operation === "sync" && !options.agentRetryRefusal) monitor.explicitSync(config, execution);

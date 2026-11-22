@@ -1,6 +1,6 @@
 # Sync TUI behavior contract
 
-This reference records the setting and transfer contracts used by the TUI. It does not add a settings format or change transfer authorization.
+This reference records the Settings and transfer contracts used by the TUI. The **Sync mode** row uses the existing settings format; the daemon still owns transfer authorization.
 
 ## Action palette
 
@@ -16,17 +16,14 @@ Verification follows `docs/extension-conventions.md`, `docs/extension-settings.m
 
 ## Settings
 
-All settings are private to this device. There are no project overrides. Defaults and validation are defined in `src/settings/settings-validation.ts` and `src/settings/config.ts`; mutation is owned by `settings-management.ts` and `settings-store.ts`.
+All settings are private to this device. There are no project overrides. `src/settings/` uses the daemon's settings contracts; the daemon owns settings writes and permission. Pi owns the Settings presentation and interactive review flow.
 
 | Row | Persisted fields and default | Scope | Save and effective time |
 | --- | --- | --- | --- |
 | Included paths | `sync.include`, explicit array | Current setup | Draft, then exact Save/Discard review; subsequent operations |
 | Compare included paths | `sync.include` | Current setup | Review remote policy and fresh head before save; does not transfer files without explicit Continue |
 | Machine-local fields | `sync.localFields`, absent | Current setup | Input and compatibility review; subsequent snapshots exclude whole settings.json root fields; directional migration required |
-| Automatic sync | `sync.automatic`, explicit boolean; setup proposes Off | Current setup | Immediate save; next session start checks once; subsequent shutdown pushes all selected content only if sessions included; reload skips shutdown push |
-| Startup transfer | `sync.automaticTransfer`, false | Current setup | Immediate save; enabling schedules next session start; independent of Automatic sync |
-| Autonomous sync | `sync.agentMode`, false | Current setup | Reviewed opt-in; eligible next-startup and Sync now transfers without another transfer confirmation, plus selected-model assistance for supported conflicts; no transfer from Settings or automatic reload |
-| Continuous sync | `sync.continuous`, false | Current setup | Separate reviewed opt-in; requires Autonomous sync; recurring work starts at eligible startup or after the command/manager closes |
+| Sync mode | `sync.automatic`, `sync.automaticTransfer`, `sync.agentMode`, `sync.continuous`; new setups default to Manual | Current setup | Reviewed preset save for the four flags together; this does not itself grant required connected approval or start work |
 | On setup switch | `onSwitch`, `ask-before-pull` | All setups | Immediate save; subsequent switches |
 | Storage location | `storage.bucket`, `branch`, `path` as applicable | Current setup | Reviewed save; changes future destination without moving remote history |
 | Manage sync setups | `syncSetups`, `activeSyncSetup` | This device | Existing reviewed catalog flows; replacing/removing the current setup closes its old settings owner |
@@ -37,19 +34,33 @@ All settings are private to this device. There are no project overrides. Default
 | Show sync status | `showStatus`, true | All setups | Immediate save and immediate status visibility change; notifications/widgets remain |
 | Debug startup timings | `debug`, false | All setups | Immediate save; fixed-label duration notifications from the next session start; TUI/RPC only |
 
-Opening foreground Settings cancels and drains startup work. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
+Opening foreground Settings cancels and drains startup work. Back does not undo successful saves; cancelling a draft or compatibility review before commit leaves that change unsaved. If the settings write fails before commit, retain the last valid document and refresh the displayed value. Completed transfers are never undone by changing a preference.
 
 Writers queue the complete read-modify-write operation, hold the cross-process lock through validation and same-directory atomic replacement, preserve unknown fields and private permissions, and refuse invalid existing files. UI changes do not replace those writers.
 
+### Sync mode and policy approval
+
+The only selectable modes are **Manual** (all four flags `false`) and **Automatic** (`agentMode` and `continuous` `true`; `automatic` and `automaticTransfer` `false`). Omitted optional flags count as `false`. Any other combination displays **Custom** with its saved behavior; Custom is not selectable. Legacy, ignore-file, and join setup flows start in Manual without a mode prompt. Opening Settings does not rewrite settings. Selecting a preset shows which Custom behavior it will replace before saving.
+
+Automatic uses the existing daemon monitor when eligible and idle after the foreground flow closes or on eligible startup. It does not add a duplicate startup transfer or a legacy shutdown push. Clean changes require no model request. Only supported conflicts use the selected Pi model; existing safety, partial progress, and resource-reload rules still apply. **Sync…** retains Autonomous sync behavior. Manual prevents new background sync and model requests, not existing committed work or user-invoked reviewed routes.
+
+The Automatic review names the active setup, destination, scope and session opt-in, rule source when applicable, proposed mode, and selected model. It discloses possible local and remote replacement/deletion, provider disclosure of conflict evidence, and charges. The daemon checks that the review still matches before committing. A stale review, cancellation before save, or missing capability must not enable the mode.
+
+If any setup uses an ignore-file policy, the daemon also needs connected approval for the exact effective policy, even for a legacy active setup. **Review current policy…** is a contextual action inside **Sync mode**, not a third mode or a separate Settings row. It also works for an eligible Custom policy and does not write the automation flags. **Review required** is distinct from operational blocks such as first sync, a changed remote policy, or an unavailable model.
+
+A preset changes all four settings flags in one write, but publication of connected consent is separate. When approval follows a save, check that the saved mode, policy, and reviewed model binding still match before requesting it. If the required approval is declined, interrupted, or fails after the save, keep the saved mode visible and block automatic work pending review. Refresh authoritative state after an uncertain outcome; do not retry a stale commit or imply that Back or Ctrl+C rolls back a completed write. Settings never triggers a transfer. Changing modes or reviewing connected work never grants after-exit permission or revives a stale grant. `/sync daemon allow-after-exit` and `/sync daemon revoke-after-exit` remain separate.
+
+RPC provides the manual settings path and points to the TUI for applicable approval. It does not open the mode picker or policy review. Catalog management stays available as before; print/JSON do not support `/sync`.
+
 ## Presentation decisions
 
-Selecting **Settings** in `/sync` opens **Pi Sync Settings** directly as one searchable flat list, with 17 rows and no category navigation or headings. Included paths, Excluded paths, and Compare included paths keep both content policies together. Excluded paths has a transactional JSON-array draft and reviewed Save/Discard/Continue flow; other rows retain their existing actions and save behavior. Typing searches the list. Back returns directly to the manager; hard Ctrl+C closes the flow. No `/ Search` hint is added because slash is ordinary search text.
+Selecting **Settings** in `/sync` opens **Pi Sync Settings** directly as one searchable flat list, with no category navigation or headings. Included paths, Excluded paths, and Compare included paths keep the legacy content policy together. Excluded paths has a transactional JSON-array draft and reviewed Save/Discard/Continue flow. Typing searches the list. Back from the mode picker returns to Settings; Back from the Settings list returns to the manager. Hard Ctrl+C closes the owning flow. No `/ Search` hint is added because slash is ordinary search text.
 
-The existing public Kit settings adapter is retained rather than adding a second selector or accessing private Pi fields. Installed `SettingsList` provides `updateValue()` and `selectItem()`, but has no injected keybinding or awaited-save/rejection contract and does not expose search focus. Kit already owns ordered pending changes, rollback, retained search/selection, IME focus, bounded frames, and clipped mouse coordinates. This is an intentional existing deviation from the literal native-component convention. No new Kit API, dependency floor, or release is required. A package-owned public rendering boundary returns no lines at zero width and retains the selected row (or search when nothing matches) below five content rows; compact mouse events map back to the original rendered row. It does not access private component state or add key handlers. Search placeholder and position-footer relocation remain unsupported by that public API; the existing native-style hints and position indicator are retained rather than patched through private fields.
+The flat Settings list retains the public Kit adapter rather than reimplementing that list or accessing private Pi fields. Installed `SettingsList` provides `updateValue()` and `selectItem()`, but has no injected keybinding or awaited-save/rejection contract and does not expose search focus. Kit already owns ordered pending changes, rollback, retained search/selection, IME focus, bounded frames, and clipped mouse coordinates. This is an intentional existing deviation from the literal native-component convention. No new Kit API, dependency floor, or release is required. A package-owned public rendering boundary returns no lines at zero width and retains the selected row (or search when nothing matches) below five content rows; compact mouse events map back to the original rendered row. It does not access private component state or add key handlers. Search placeholder and position-footer relocation remain unsupported by that public API; the existing native-style hints and position indicator are retained rather than patched through private fields.
 
 Last applied shows a compact opaque snapshot ID and explicitly states that application time is unavailable. History retains the full recorded ID even when the remote history no longer lists that snapshot. Snapshot `createdAt` is not a local application time; opening the manager performs no remote timestamp fetch.
 
-Startup transfer summaries report the preference and prerequisites, not a claim that a transfer is eligible now. Runtime evidence in `merged-sync.ts` and `s3/s3-backend.ts` permits Git, conditional WebDAV, and R2/S3 with verified conditional writes. `read-check-write-verify` publication is refused for automatic operations. Baseline, matching authoritative include policy, idle ownership, and conflict/secret checks remain mandatory. This corrects the earlier settings reference's manual-only R2/S3 statement without expanding backend authorization.
+Mode summaries report the saved behavior and relevant approval, not a claim that a transfer is eligible now. Runtime evidence in `merged-sync.ts` and `s3/s3-backend.ts` permits Git, conditional WebDAV, and R2/S3 with verified conditional writes. `read-check-write-verify` publication is refused for automatic operations. Baseline, matching authoritative include policy, idle ownership, and conflict/secret checks remain mandatory. This corrects the earlier settings reference's manual-only R2/S3 statement without expanding backend authorization.
 
 ## Transfer review matrix
 
@@ -78,7 +89,7 @@ RPC and the TUI harness verify this ordering. The native Fedora/tmux flow from [
 
 ## Review boundaries
 
-This change does not touch model prompts, tool exposure, shared-terminal handoff, settings formats, credentials, or default sync policies. Existing startup/session signals and Kit/custom-interaction disposal own new UI calls. Any awaited review is followed by owner validation, and each mutating operation revalidates its mutable inputs before its existing commit boundary. Status and differences actions use existing routes; manager opening/refresh remains observational and does not contact the remote. Diagnostics discloses its WebDAV write/repair behavior before execution.
+The mode flow does not change model prompts, tool exposure, shared-terminal handoff, settings formats, or credentials. The owning session and Kit/custom-interaction disposal cancel pending UI work. Revalidate ownership after awaited reviews and mutable inputs at settings and approval commit boundaries. Status and differences actions use existing routes; manager opening/refresh remains observational and does not contact the remote. Diagnostics discloses its WebDAV write/repair behavior before execution.
 
 ## Quiet footer presentation
 
@@ -119,7 +130,7 @@ Physical-terminal font appearance, live model quality, production backends, a fr
 
 ## Settings wording verification
 
-The 2026-11-08 wording update uses **Autonomous sync**, removes Settings maturity markers at the user's request, and keeps `sync.agentMode`, saved consent, defaults, opt-ins, and risk warnings unchanged. A semantic diff audit checked all 16 changed runtime files against the base plus approved prose substitutions; authorization, settings storage, resolver prompts, cancellation, disposal, session replacement, and shutdown logic are unchanged. Review followed `docs/extension-conventions.md`, `docs/extension-settings.md`, and `docs/readme-conventions.md`, plus the skill editing rules. An independent complete-diff review found no issues.
+This evidence covers the earlier four-row Settings screen, not the Sync mode flow. The 2026-11-08 wording update uses **Autonomous sync**, removes Settings maturity markers at the user's request, and keeps `sync.agentMode`, saved consent, defaults, opt-ins, and risk warnings unchanged. A semantic diff audit checked all 16 changed runtime files against the base plus approved prose substitutions; authorization, settings storage, resolver prompts, cancellation, disposal, session replacement, and shutdown logic are unchanged. Review followed `docs/extension-conventions.md`, `docs/extension-settings.md`, and `docs/readme-conventions.md`, plus the skill editing rules. An independent complete-diff review found no issues.
 
 Verification evidence:
 
