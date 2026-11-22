@@ -17,11 +17,13 @@ Keep settings, rule-file contents, daemon payloads, and other private evidence i
 
 - Read only the relevant sections of the [settings reference](references/configuration.md).
 - Use the exact agent directory the user identifies or resolve it with the running Pi installation's `getAgentDir()`; do not guess or use a project override.
-- Use the current setup unless the user names another one.
+- You may use the current setup for read-only work if the user does not name one.
+- Ask the user to name the exact setup before editing an ignore file; never write based only on `activeSyncSetup`.
+  If the edit must apply only while the setup remains current, explain that the local workflow cannot guarantee that condition and do not write.
 - For a settings change, follow [Edit `pi-sync.json`](#edit-pi-syncjson) for the existing canonical file.
 - For exclusions in an ignore-file setup, edit the configured ignore file, not `sync.exclude`.
   `.syncignore` is the default only for that policy.
-  Use the filename from the validated setup when configuration inspection is in scope, or use the exact active path shown in `/sync` → **Settings → Ignore file**.
+  Use the filename from the validated setup when configuration inspection is in scope, or use the exact path shown for that setup in `/sync` → **Settings → Ignore file**.
 - For a legacy setup, use the documented `include`, `exclude`, and `reinclude` fields and version requirements to explain the applicable `/sync` path-selection review.
 
 ## Edit `pi-sync.json`
@@ -92,8 +94,7 @@ Read the [ignore-file policy](references/configuration.md#ignore-file-policy) fo
    If local evidence is insufficient, ask the user to confirm that no review, transfer, recovery, or other edit is in progress and automatic work will not run during the edit.
    Leave the file unchanged if you cannot establish these conditions.
    Create a private temporary file exclusively in the same directory and stage the validated replacement there.
-   If you defaulted to the current setup, recheck `activeSyncSetup` with a validated non-migrating settings read; `ignore.read` checks the named setup, not whether it is still current.
-   Immediately before atomic replacement, repeat `ignore.read` and recheck the active source, file identity, byte digest, and original file permissions.
+   Immediately before atomic replacement, repeat `ignore.read` for the same user-named setup and recheck its path, sharing setups, file identity, byte digest, and original file permissions.
    Preserve the original permissions on the replacement.
    Stop and remove only the temporary file you own if anything changed or the recheck fails.
    The recheck does not serialize other writers; do not use `ignore.save` or retry an uncertain replacement without re-reading.

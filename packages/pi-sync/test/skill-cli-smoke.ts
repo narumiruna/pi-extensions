@@ -169,6 +169,7 @@ try {
   }, 30_000);
   assert.match(JSON.stringify(ready), /skill:configure-pi-sync/u);
   assert.match(JSON.stringify(ready), /"name":"sync"/u);
+  await send("set_auto_compaction", { enabled: false });
   async function prompt(message: string) {
     const settled = waitFor((record) => record.type === "agent_settled");
     await Promise.all([send("prompt", { message }), settled]);
@@ -189,7 +190,8 @@ try {
   );
   const requestsToExpand = [
     "Turn on debug logging in pi-sync.json.",
-    "Exclude npm/ from my active ignore file.",
+    "Exclude npm/ from the ignore file for my home setup.",
+    "Exclude npm/ from my active ignore file only if this setup remains current.",
     "Draft a .syncignore without writing it.",
     "Audit my ignore rules for blocked exceptions without editing the file.",
     "Turn on Autonomous sync in my legacy-only setup.",
@@ -213,6 +215,7 @@ try {
     assert.ok(request.includes("start with read-only local checks"));
     assert.ok(request.includes("Draft a new ignore file"));
     assert.ok(request.includes("Add, revise, or audit existing rules"));
+    assert.ok(request.includes("never write based only on `activeSyncSetup`"));
     assert.ok(request.includes("needsUpgrade: false"));
     assert.ok(request.includes("A schema-valid change is not proof of user review or consent"));
   }
