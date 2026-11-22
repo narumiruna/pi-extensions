@@ -21,6 +21,7 @@ import {
   OWNERSHIP_CLEANUP_REQUIRED,
   waitForDaemonExit,
 } from "@narumitw/pi-sync-daemon";
+import { appendDebugEvent, type DebugEvent } from "@narumitw/pi-sync-daemon/engine/debug-log";
 import { type ConfigAuthority, configureEngineHost } from "@narumitw/pi-sync-daemon/engine/host";
 import {
   type LocalConfigDocument,
@@ -40,6 +41,7 @@ import {
 } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
+import { observeDebugJob } from "./client-debug.js";
 import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
@@ -267,6 +269,7 @@ export class PiDaemonClient {
   private readonly busy = new Set<string>();
   private initialized = false;
   private startupDebug = false;
+  private debug = false;
   private participantIdentity = { id: randomUUID(), generation: randomUUID() };
   get id() {
     return this.participantIdentity.id;
@@ -302,6 +305,19 @@ export class PiDaemonClient {
     this.ctx.isIdle();
     if (getAgentDir() !== this.rawRoot || canonicalPath(path.resolve(this.rawRoot)) !== this.root)
       throw new Error("Agent directory changed; reload before synchronization.");
+  }
+  get debugEnabled() {
+    return this.debug;
+  }
+  setDebugPreference(debug: boolean) {
+    this.debug = debug && this.ctx.hasUI && (this.ctx.mode === "tui" || this.ctx.mode === "rpc");
+  }
+  recordDebug(event: DebugEvent) {
+    if (!this.debug || this.protectionOnly || this.pendingReload || !this.ownsContactUI()) return;
+    try {
+      this.validate();
+      appendDebugEvent(this.root, "pi-sync", event);
+    } catch {}
   }
   private modelBinding(): ClientFacts["model"] {
     const model = this.ctx.model;
@@ -363,9 +379,15 @@ export class PiDaemonClient {
   async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
     if (!allowUpgrade && !this.paused && this.connection?.contactState === "active") return !this.protectionOnly;
-    const address = await findDaemon(this.root);
+    const address = await findDaemon(this.root).catch((error: unknown) => {
+      this.recordDebug({ event: "connection", outcome: "failed" });
+      throw error;
+    });
     this.validate();
-    if (!address) return false;
+    if (!address) {
+      this.recordDebug({ event: "connection", outcome: "skipped" });
+      return false;
+    }
     const upgrade = allowUpgrade && address.needsUpgrade && this.ctx.hasUI && ["tui", "rpc"].includes(this.ctx.mode);
     let upgradeFailure: string | undefined;
     if (upgrade) {
@@ -504,10 +526,22 @@ export class PiDaemonClient {
         this.partialConnection = undefined;
         return connection;
       }
-    })().catch((error) => {
-      this.connecting = undefined;
-      throw error;
-    });
+    })().then(
+      (connection) => {
+        this.recordDebug({ event: "connection", outcome: startupSignal.aborted ? "cancelled" : "completed" });
+        return connection;
+      },
+      (error: unknown) => {
+        this.connecting = undefined;
+        const outcome = startupSignal.aborted
+          ? "cancelled"
+          : existing && remoteErrorNamed(error, "DaemonStoppingError")
+            ? "skipped"
+            : "failed";
+        this.recordDebug({ event: "connection", outcome });
+        throw error;
+      },
+    );
     const connection = await this.connecting;
     validateStartup();
     if (!existing && this.protectionOnly)
@@ -628,7 +662,9 @@ export class PiDaemonClient {
         this.contactFactsUnpublished = true;
         this.contactAttempt = undefined;
         await this.publishCurrentFacts(connection, signal);
+        this.recordDebug({ event: "connection", outcome: "completed" });
       } catch (error) {
+        this.recordDebug({ event: "connection", outcome: signal.aborted ? "cancelled" : "failed" });
         attempt.error = error;
         if (this.ownsContactUI() && !signal.aborted) {
           this.validateFactsScope(connection, signal);
@@ -714,9 +750,11 @@ export class PiDaemonClient {
     onCommit?: () => void,
     reload?: AbortController,
   ) {
+    const diagnostics = this.debug ? observeDebugJob(operation, (event) => this.recordDebug(event)) : undefined;
     const result = this.work
-      .then(() => this.runCurrent(operation, payload, signal, ctx, onCommit, reload))
+      .then(() => this.runCurrent(operation, payload, signal, ctx, onCommit, reload, diagnostics))
       .catch((error: unknown) => {
+        diagnostics?.rejected(error, Boolean(signal?.aborted || reload?.signal.aborted));
         this.recordOwnershipFailure(error);
         throw error;
       });
@@ -733,6 +771,7 @@ export class PiDaemonClient {
     ctx = this.ctx,
     onCommit?: () => void,
     reload?: AbortController,
+    diagnostics?: ReturnType<typeof observeDebugJob>,
   ) {
     this.validate();
     signal?.throwIfAborted();
@@ -762,7 +801,9 @@ export class PiDaemonClient {
     const clearForeground = () => this.releaseUI.finishForeground(Boolean(this.releaseContext()));
     runSignal.addEventListener("abort", clearForeground, { once: true });
     try {
-      const result = await connection.run(operation, payload, runSignal, onCommit);
+      const result = await connection.run(operation, payload, runSignal, onCommit, diagnostics?.onSubmit);
+      if (runSignal.aborted || reload?.signal.aborted) diagnostics?.rejected(undefined, true);
+      else diagnostics?.returned(result);
       if (request?.received && reload && !this.paused && !reload.signal.aborted && !signal?.aborted) {
         this.validate();
         this.pendingReload = reload;
@@ -867,6 +908,7 @@ export class PiDaemonClient {
   async markReady(debug: boolean) {
     this.validate();
     this.startupDebug = debug;
+    this.setDebugPreference(debug);
     this.initialized = true;
     await this.update();
     this.validate();

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { DaemonDiagnosticSink } from "./daemon-debug.js";
 
 export const PROTOCOL_VERSION = 1;
 export const OWNERSHIP_CLEANUP_REQUIRED = "DAEMON_OWNERSHIP_CLEANUP";
@@ -132,6 +133,8 @@ export interface Execution {
   validate(): void;
   request(kind: string, payload: unknown, clientId?: string, signal?: AbortSignal): Promise<unknown>;
   emit(kind: ClientEvent["kind"], payload: unknown, clientId?: string): void;
+  debug?: DaemonDiagnosticSink;
+  noteDebugOutcome?(outcome: "blocked" | "cancelled" | "skipped"): void;
   committed(): void;
 }
 export type Execute = (operation: string, payload: unknown, execution: Execution) => Promise<unknown>;

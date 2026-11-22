@@ -104,6 +104,28 @@ test("excluded content produces no hints, but ancestor and settings changes stil
     assert.ok(native.watchers.every((item) => item.closed));
   }));
 
+test("debug log writes and renames do not schedule a directory-scope sync", async () =>
+  withTempHome(async (agentDir) => {
+    native.watchers.length = 0;
+    native.fail = false;
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(localConfigPath(), JSON.stringify(v3S3Settings({ include: ["AGENTS.md"] })));
+    const config = { ...(await loadConfig()), scope: "agent-directory" as const, reinclude: ["**"] };
+    const hints: boolean[] = [];
+    const close = await watchContinuous(config, (settings) => hints.push(settings));
+    try {
+      const root = native.watchers.find((item) => item.root === agentDir);
+      assert.ok(root);
+      root.change("change", "pi-sync.log");
+      root.change("rename", "PI-SYNC.LOG");
+      assert.deepEqual(hints, []);
+      root.change("change", "AGENTS.md");
+      assert.deepEqual(hints, [false]);
+    } finally {
+      close();
+    }
+  }));
+
 test("unsupported watching and missing roots leave periodic fallback available", async () =>
   withTempHome(async (agentDir) => {
     native.watchers.length = 0;

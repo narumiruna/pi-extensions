@@ -15,6 +15,8 @@ import {
 } from "../../sync/local-fields.js";
 import {
   assertAgentDirectoryPathLayout,
+  assertSnapshotExcludesDebugLog,
+  assertSnapshotPathExcludesDebugLog,
   configuredSnapshotPathMatcher,
   portableSnapshotSelection,
   sameSnapshotSelection,
@@ -132,6 +134,7 @@ export function requireGitManifest(value: unknown): GitManifest {
       throw new Error("Git publication manifest file is malformed.");
     }
     const file = rawFile as Partial<GitManifestFile>;
+    assertSnapshotPathExcludesDebugLog(file.path);
     if (
       !hasExactKeys(file as Record<string, unknown>, ["path", "sha256", "size"]) ||
       !isSafeSnapshotPath(file.path) ||
@@ -188,6 +191,7 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
 }
 
 export function prepareGitSnapshot(snapshot: Snapshot, namespace: string) {
+  assertSnapshotExcludesDebugLog(snapshot);
   if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) snapshotSelectionInclude(snapshot);
   validatePortableSnapshot(snapshot);
   if (

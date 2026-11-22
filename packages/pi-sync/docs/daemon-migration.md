@@ -137,12 +137,12 @@ If saving consent fails, that service instance blocks automatic work. Uncertain 
 
 Use the [daemon CLI](#daemon-cli) `status` command without starting a missing service. `stop` drains compatible work. `restart` must not replace an incompatible, unavailable live, or uncertain owner silently. The Pi client must report failure rather than fall back to in-process transfers. If the initial consent check blocked the update before a pending record was created, follow step 1 of [manual recovery](#ownership-and-upgrade); `repair-upgrade` cannot help in that case.
 
-A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. The original cleanup error can distinguish a Pi file-queue acknowledgement from a Pi settings-lock release failure; the generic recovery error means that later work is blocked, not that another release failed. This log is not transaction recovery evidence.
+A successful CLI `status` handshake reports an owner-private, bounded lifecycle-log path. Only timestamps and lifecycle phases are retained; no request content, credentials, model output, or exception text is logged. The original cleanup error can distinguish a Pi file-queue acknowledgement from a Pi settings-lock release failure; the generic recovery error means that later work is blocked, not that another release failed. This log is not transaction recovery evidence. It is separate from the [Debug mode log](../skills/configure-pi-sync/references/configuration.md#shared-log) and remains available independently of that preference.
 
 Before rollback:
 
 1. Stop the daemon explicitly and verify owner exit.
-2. Close all upgraded clients and retain settings, state, journals, and backups.
+2. Close all upgraded clients and retain settings, state, journals, and backups. Archive `pi-sync.log` outside the agent directory before downgrading to a build that may not protect it from sync.
 3. Reconcile pending or uncertain publication through the supported engine recovery path.
 4. Check consent compatibility before rolling back. A repair can leave `daemon.json` larger than
    65,536 bytes because it keeps all other fields when revoking grants. Builds with the old

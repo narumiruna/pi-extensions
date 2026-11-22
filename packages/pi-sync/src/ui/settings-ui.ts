@@ -371,9 +371,9 @@ export async function showSyncSettings(
             },
             {
               id: "debug",
-              label: "Debug startup timings",
+              label: "Debug mode",
               description:
-                "All setups on this device: show startup durations in the TUI transcript or RPC notifications, including initial Continuous sync. Applies next session start; no credentials or file contents.",
+                "Write startup timings and sync events to the local pi-sync.log. Pi applies this at the next session start; the daemon applies it at its next settings check.",
               currentValue: state.debug ? "On" : "Off",
               values: ["On", "Off"],
               action: "debug",

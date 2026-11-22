@@ -12,6 +12,7 @@ import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
 import { withStateDirectoryAccess } from "../src/state/state-directory.js";
 import { lockPath, writeStateForConfig } from "../src/state/sync-state-store.js";
 import { setSyncStatus } from "../src/ui/sync-status.js";
+import { readClientDebug } from "./client-debug-records.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { installEngineFixtureHost } from "./engine-host.js";
 import { v3S3Settings, v3WebDavSettings, withTempHome } from "./helpers.js";
@@ -79,6 +80,70 @@ for (const reason of ["startup", "reload", "new", "resume", "fork"] as const) {
     });
   });
 }
+
+test.each(["completed", "reload"] as const)("background startup timing honors %s", (boundary) =>
+  configured(async (root) => {
+    await fs.writeFile(localConfigPath(), JSON.stringify({ ...v3S3Settings({ automatic: true }), debug: true }));
+    const { default: sync } = await import("../src/sync-extension.js");
+    const entered = deferred<AbortSignal>();
+    const release = deferred();
+    const publication = deferred<string>();
+    const mock = createMockPi();
+    const context = createMockContext({ mode: "rpc" });
+    const ui = contextUi(context.ctx);
+    const notify = ui.notify.bind(ui);
+    ui.notify = (message, level) => {
+      notify(message, level);
+      if (message.startsWith("pi-sync debug: background startup")) publication.resolve(message);
+    };
+    sync(mock.pi, {
+      loadSyncInspection: async () => ({
+        inspectSync: async (config, _options, signal) => {
+          assert.ok(signal);
+          entered.resolve(signal);
+          await release.promise;
+          return inspectionFixture(config);
+        },
+      }),
+    });
+    const shutdown = () => mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+    try {
+      await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+      const signal = await entered.promise;
+      if (boundary === "reload") {
+        const pendingShutdown = shutdown();
+        assert.equal(signal.aborted, true);
+        release.resolve();
+        await pendingShutdown;
+      } else {
+        release.resolve();
+        const report = await publication.promise;
+        const records = await readClientDebug(root);
+        assert.equal(
+          records.filter((record) => record.event === "startup-timings" && record.report === report).length,
+          1,
+        );
+      }
+    } finally {
+      release.resolve();
+      await shutdown();
+    }
+    if (boundary === "reload") {
+      const records = await readClientDebug(root);
+      assert.equal(
+        records.some(
+          (record) =>
+            record.event === "startup-timings" && record.report.startsWith("pi-sync debug: background startup"),
+        ),
+        false,
+      );
+      assert.equal(
+        context.notifications.some(({ message }) => message.startsWith("pi-sync debug: background startup")),
+        false,
+      );
+    }
+  }),
+);
 
 test("disabled status remains active when the session starts without a sync setup", async () => {
   await configured(async () => {

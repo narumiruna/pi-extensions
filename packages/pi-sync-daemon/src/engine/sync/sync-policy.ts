@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { isDeniedPath, toPosix } from "../paths.js";
+import { DEBUG_LOG_FILENAME, isDebugLogPath, isDeniedPath, toPosix } from "../paths.js";
 import {
   type DirectoryScope,
   IGNORE_SNAPSHOT_VERSION,
@@ -247,6 +247,17 @@ export function validateSnapshotSelection(snapshot: Pick<Snapshot, "version" | "
     throw new Error("Agent-directory policy requires snapshot version 5 and selection version 3.");
   if ((snapshot.version === IGNORE_SNAPSHOT_VERSION) !== (selection?.version === 4))
     throw new Error("Ignore-file policy requires snapshot version 6 and selection version 4.");
+}
+
+export function assertSnapshotPathExcludesDebugLog(filePath: unknown) {
+  if (typeof filePath === "string" && isDebugLogPath(filePath))
+    throw new Error(
+      `Snapshot contains the local-only ${DEBUG_LOG_FILENAME}. Review the old snapshot before retrying sync.`,
+    );
+}
+
+export function assertSnapshotExcludesDebugLog(snapshot: Pick<Snapshot, "files">) {
+  for (const file of snapshot.files) assertSnapshotPathExcludesDebugLog(file?.path);
 }
 
 export function requireLegacyTransferPolicy(snapshot: Partial<Pick<Snapshot, "version" | "selection">>) {

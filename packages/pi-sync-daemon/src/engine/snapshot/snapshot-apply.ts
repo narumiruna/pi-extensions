@@ -7,6 +7,7 @@ import { syncDirectory } from "../state/json-file.js";
 import { stateDir } from "../state/state-directory.js";
 import { collidingPaths } from "../sync/file-merge-planner.js";
 import {
+  assertSnapshotExcludesDebugLog,
   compileSyncPolicyExclude,
   requireLegacyTransferPolicy,
   sameSnapshotSelection,
@@ -50,6 +51,7 @@ function fileHashMap(snapshot: Snapshot) {
 }
 
 function assertSnapshotApplyPolicy(snapshot: Snapshot, options: SnapshotOptions) {
+  assertSnapshotExcludesDebugLog(snapshot);
   if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) {
     requireLegacyTransferPolicy(snapshot);
     if (options.ignorePolicy)

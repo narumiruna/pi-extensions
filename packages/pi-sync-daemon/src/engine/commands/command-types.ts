@@ -13,6 +13,7 @@ export interface CommandOptions {
   automaticFingerprint?: string;
   signal?: AbortSignal;
   onCommit?: () => void;
+  noteDebugOutcome?: (outcome: "blocked" | "cancelled" | "skipped") => void;
   /** In-memory startup diagnostics only; never persisted or sent to a backend. */
   startupTimings?: StartupTimings;
   /** Internal validated resolver result; never parsed from command arguments. */

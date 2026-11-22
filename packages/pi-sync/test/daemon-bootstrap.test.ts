@@ -5,6 +5,7 @@ import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding
 import { ensureDaemon, findDaemon } from "@narumitw/pi-sync-daemon";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { readClientDebug } from "./client-debug-records.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 const cases = [
@@ -99,7 +100,10 @@ for (const mode of ["print", "json"] as const)
   test(`a configured ${mode} lifecycle never starts a service`, () =>
     withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(path.join(agentDir, "pi-sync.json"), JSON.stringify(v3S3Settings({ automatic: true })));
+      await fs.writeFile(
+        path.join(agentDir, "pi-sync.json"),
+        JSON.stringify({ ...v3S3Settings({ automatic: true }), debug: true }),
+      );
       const { default: extension } = await import("../src/sync-extension.js");
       const mock = createMockPi();
       const context = createMockContext({ mode, hasUI: false });
@@ -111,13 +115,17 @@ for (const mode of ["print", "json"] as const)
         await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
       }
       assert.equal(await findDaemon(agentDir), undefined);
+      await assert.rejects(fs.stat(path.join(agentDir, "pi-sync.log")), { code: "ENOENT" });
     }));
 
 for (const mode of ["print", "json"] as const)
   test(`a ${mode} lifecycle passively protects its session in an existing service`, () =>
     withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(path.join(agentDir, "pi-sync.json"), JSON.stringify(v3S3Settings({ automatic: true })));
+      await fs.writeFile(
+        path.join(agentDir, "pi-sync.json"),
+        JSON.stringify({ ...v3S3Settings({ automatic: true }), debug: true }),
+      );
       const owner = await ensureDaemon(agentDir);
       const { default: extension } = await import("../src/sync-extension.js");
       const { piDaemonClient } = await import("../src/daemon/pi-client.js");
@@ -138,6 +146,7 @@ for (const mode of ["print", "json"] as const)
         await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
       }
       assert.equal((await findDaemon(agentDir))?.identity.instance, owner.identity.instance);
+      assert.deepEqual(await readClientDebug(agentDir), []);
     }));
 
 test("an agent-root change refuses reads instead of redirecting a live client", () =>

@@ -215,7 +215,7 @@ test("the authoritative settings reference retains original fragments and curren
     "Complete version 3 example",
     "Required backend shapes",
     "Status display",
-    "Debug startup timings",
+    "Debug mode",
     "Secret scanning",
     "Diagnostics",
     "Ignore-file policy",

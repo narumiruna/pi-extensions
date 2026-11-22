@@ -4,7 +4,11 @@ import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { createGunzip, gzip } from "node:zlib";
 import { throwIfAborted } from "../sync/signals.js";
-import { snapshotSelectionInclude, validateSnapshotSelection } from "../sync/sync-policy.js";
+import {
+  assertSnapshotExcludesDebugLog,
+  snapshotSelectionInclude,
+  validateSnapshotSelection,
+} from "../sync/sync-policy.js";
 import { IGNORE_SNAPSHOT_VERSION, isSupportedSnapshotVersion, type Snapshot } from "./snapshot-types.js";
 
 const VERSION = 1;
@@ -13,6 +17,7 @@ const gzipAsync = promisify(gzip);
 
 export async function encodeSnapshot(snapshot: Snapshot) {
   if (!isSupportedSnapshotVersion(snapshot?.version)) throw new Error("Unsupported snapshot format.");
+  assertSnapshotExcludesDebugLog(snapshot);
   if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) snapshotSelectionInclude(snapshot);
   validateSnapshotSelection(snapshot);
   if (snapshot.version === 4 || snapshot.version === 5 || snapshot.version === IGNORE_SNAPSHOT_VERSION) {
@@ -49,6 +54,7 @@ export async function decodeSnapshot(
     throw new Error("Unsupported snapshot format.");
   }
   if (parsed.version === IGNORE_SNAPSHOT_VERSION && !isUtf8(payload)) throw new Error("Invalid snapshot UTF-8.");
+  assertSnapshotExcludesDebugLog(parsed);
   validateSnapshotSelection(parsed);
   if (parsed.version !== VERSION) {
     const { normalizeLocalFields, validatePortableSnapshot } = await import("../sync/local-fields.js");

@@ -6,7 +6,7 @@ The configuration skill applies explicitly requested local settings and ignore-r
 - **Configure a setup:** [Required fields](#settings-ownership-and-required-fields), [Manager](#editing-in-the-manager), [Version 3 example](#complete-version-3-example), [Backends](#required-backend-shapes)
 - **Choose what syncs:** [Ignore-file policy](#ignore-file-policy), [Legacy directory scope](#agent-directory-scope), [Included content](#included-content), [Excluded paths](#excluded-paths), [Machine-local settings fields](#settings-field-merge-and-machine-local-fields)
 - **Manage automatic work:** [Controls and approval](#automatic-sync-controls), [Startup transfer](#automatic-startup-transfer), [Autonomous sync](#autonomous-sync), [Daemon lifetime](#daemon-lifetime-and-unattended-permission), [Continuous sync](#continuous-sync)
-- **Handle problems:** [Status](#status-display), [Startup timings](#debug-startup-timings), [Secret scanning](#secret-scanning), [Diagnostics](#diagnostics), [Local troubleshooting](#local-troubleshooting), [Merge and partial progress](#content-merge-and-partial-progress), [Old settings and recovery](#unsupported-old-settings-and-recovery)
+- **Handle problems:** [Status](#status-display), [Debug mode](#debug-mode), [Secret scanning](#secret-scanning), [Diagnostics](#diagnostics), [Local troubleshooting](#local-troubleshooting), [Merge and partial progress](#content-merge-and-partial-progress), [Old settings and recovery](#unsupported-old-settings-and-recovery)
 
 ## ⚙️ Settings
 
@@ -241,14 +241,27 @@ Settings or private-state repair uses `repair`.
 A request-window limit is not a currency budget; exhausted attempts for one candidate remain a model block, not a timer-based allowance reset.
 Use the existing manager and **Check remote status** guidance to inspect recovery requirements rather than treating a short marker as a complete diagnosis.
 
-### Debug startup timings
+<a id="debug-startup-timings"></a>
 
-The top-level user setting `debug` accepts only `true` or `false` and defaults to `false`.
-Edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`) or use **/sync → Settings → Debug startup timings**.
-UI changes save immediately through the existing ordered, atomic settings writer; both manual and UI changes take effect on the next session start, including `/reload`, new, resume, and fork.
-There is no project or environment override.
+### Debug mode
 
-With `debug: true`, reports show local initialization after recovery and settings resolution, then background work when it ends.
+The top-level user setting `debug` is an optional boolean and defaults to `false` for every setup. Use **/sync → Settings → Debug mode** or edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`). UI changes save immediately through the existing ordered, atomic settings writer. There is no project or environment override.
+
+Pi uses the saved value from session start, including `/reload`, new, resume, and fork, for client logging and timing display. The daemon uses the agent directory's validated setting for file logging, not a connected client's value. It applies changes at the next applicable owner, job, or Continuous sync cycle boundary without a restart. A missing or false `debug` value does not enable logging; the daemon can skip records when it cannot validate settings. Turning on Debug mode does not start a new check or transfer, or grant permission for work after Pi exits.
+
+#### Shared log
+
+Pi Sync and the daemon append directly to one private file, `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`). Each line is a JSON record. Filter the `source` field for `pi-sync` to see client initialization, connection and request outcomes, or `pi-sync-daemon` to see daemon owner, timing, job and Continuous sync outcomes. The daemon can record work that was already authorized to continue after Pi exits. Repeated successful unchanged polls do not add records. Print and JSON modes add no client log writes and do not launch a daemon to log.
+
+Records use fixed events and outcomes rather than error text. They can include timestamps, process IDs, durations, counts, and an opaque operation ID when available, but not credentials, local paths, remote addresses, synced content, subprocess output, or model data. Neither timestamps nor file order prove which action caused another. The file is private (`0600` on POSIX when created). Logging is best effort: an unsafe file or write failure can leave records missing without causing a sync failure. The daemon's bounded operational `lifecycle.log` is separate and not controlled by Debug mode. Neither file is a recovery journal.
+
+`pi-sync.log` at the agent root stays local regardless of the selection policy. Include and re-include rules cannot override this protection; the log cannot be used as an ignore file. If an older setup or remote snapshot included this name, preserve the local and remote data and review the reported settings or snapshot error. Do not force a pull or use the error as a reason to rewrite remote history. Protection does not erase previously retained snapshots.
+
+Set `debug` to `false` or remove it to stop new logging at the boundaries above. Existing bytes remain; the log is not rotated or deleted automatically. Stop all Pi Sync clients and the daemon for that agent directory before archiving or removing the file. Store archives outside the agent directory, especially before downgrading to a version that may not protect this path. Review the file before sharing it.
+
+#### Startup timing display
+
+With `debug: true` at Pi session start, reports show local initialization after recovery and settings resolution, then background work when it ends.
 The report shows one line per stage, followed by a total.
 TUI reports are stored as custom session entries, so they remain in the transcript after `/reload` and later notifications without entering model context.
 RPC reports remain notifications.
@@ -266,10 +279,7 @@ Interrupted stages are marked `interrupted`; cancelled or failed background work
 Session replacement and shutdown suppress late reports from the old session.
 Pausing Continuous sync cancels its active cycle and suppresses that cycle’s late report; it does not schedule another startup report on idle resume.
 Labels and durations contain no credentials, paths, file contents, remote addresses, or error text.
-No separate log file or model message is created; TUI reports remain in session history even after debugging is disabled.
-Print/JSON produce no timing reports.
-The setting does not enable automatic sync or transfer, change safety checks, or report manual/shutdown operations.
-Set `debug` to `false` or remove it, then start a new session to disable reports.
+TUI reports remain in session history even after debugging is disabled, without adding model messages. Print/JSON produce no timing reports. Manual and shutdown work do not produce these startup reports.
 
 ### Secret scanning
 
@@ -343,7 +353,7 @@ Use `/` as the separator; escaped `/` is not supported. A leading `/` anchors a 
 
 Session sync requires both a separate opt-in and rules that allow sessions. The starter `/sessions/` still excludes them. Match sessions by their logical `sessions/` paths even if stored elsewhere. Loaded sessions stay protected during apply.
 
-Pi credentials and trust (`auth.json` and `trust.json`), Pi Sync private settings and state, and `.syncignore` and configured alternatives stay local regardless of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Transfers do not replace or remove ignored local files, and exclusions do not erase retained snapshots or backups.
+Pi credentials and trust (`auth.json` and `trust.json`), private Pi Sync files (settings, state, and the [debug log](#shared-log)), and `.syncignore` or its configured alternatives stay local regardless of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Transfers do not replace or remove ignored local files, and exclusions do not erase retained snapshots or backups.
 
 #### Transfer review and recovery
 
@@ -370,7 +380,7 @@ A legacy directory setup in a version 7 or later settings document can use:
 
 The agent directory is Pi's active agent root, normally `~/.pi/agent/`. Every eligible file is selected unless excluded. A re-inclusion restores an excluded path and only the descendants its rule matches. Literal directories match their subtrees. Rules are relative to the agent root; `sessions/` and `sessions` are equivalent in this scope. The `*`, `?`, and `**` syntax below applies to both lists. List order does not affect matching. If both lists are omitted, all eligible files are selected; the setup wizard saves its starter exclusions explicitly instead of adding them on every read.
 
-Pi's `auth.json`, `trust.json`, their locks, and Pi Sync's settings and service state cannot be re-included. Pi's settings lock, dynamic model catalog cache and its lock, `crashes.json`, and `pi-debug.log` also stay local. Session paths remain local until explicitly enabled with `sync.sessions: true` (and not still excluded by a rule). The interactive flow requires a privacy acknowledgement. Symlinks are not followed. Agent-directory transfers do not move Pi's session storage root. Before moving a custom session store yourself, remove its old copy from the agent directory or exclude its old path explicitly. Pi Sync protects the current and default session locations, not unidentified old copies. Review what will transfer; the secret scan cannot identify every sensitive file.
+Pi's `auth.json`, `trust.json`, their locks, and Pi Sync's settings and service state cannot be re-included. Pi's settings lock, dynamic model catalog cache and its lock, `crashes.json`, `pi-debug.log`, and [Pi Sync's `pi-sync.log`](#shared-log) also stay local. Session paths remain local until explicitly enabled with `sync.sessions: true` (and not still excluded by a rule). The interactive flow requires a privacy acknowledgement. Symlinks are not followed. Agent-directory transfers do not move Pi's session storage root. Before moving a custom session store yourself, remove its old copy from the agent directory or exclude its old path explicitly. Pi Sync protects the current and default session locations, not unidentified old copies. Review what will transfer; the secret scan cannot identify every sensitive file.
 
 The agent-directory scan and projected transfer result are limited to 64 MiB of file content, 16,384 files, and 65,536 visited entries. The projected result counts retained protected sessions and entries such as empty directories that are not stored in a snapshot. Directional apply and merged apply rescan before planned deletions and again before writes. The projection uses current sizes for retained files, but it does not lock out unrelated writers. `settings.json` has a separate 1 MiB limit for session routing. If local files change after review, reopen the transfer preview. A directory replacement is refused if it would remove an unreviewed or excluded descendant.
 

@@ -204,7 +204,12 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
         (ready.automatic || startupTransferEnabled(ready))
       )
         await withPiDaemonClient(ctx, async () => {
-          check.start(ctx, signal, ready);
+          check.start(
+            ctx,
+            signal,
+            ready,
+            client.debugEnabled ? (report) => client.recordDebug({ event: "startup-timings", report }) : undefined,
+          );
         });
     } catch (error) {
       client.disableQueueReleaseUI();
@@ -271,6 +276,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       if (signal.aborted || owner !== client) return;
       if (reason !== "reload") {
         shutdownClient = bindPiDaemonClient(ctx, signal, publishTimings);
+        shutdownClient.setDebugPreference(client.debugEnabled);
         await shutdownClient.setBusy("shutdown", true);
         const attached = await shutdownClient.attachExisting();
         if (!signal.aborted && owner === client && attached)

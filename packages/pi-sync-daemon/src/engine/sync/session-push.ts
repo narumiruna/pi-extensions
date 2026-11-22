@@ -17,6 +17,7 @@ export async function pushSessionsOnShutdown(
   options: CommandOptions,
   loaders: Pick<SyncLoaders, "operations"> = { operations: () => import("./sync-operations.js") },
 ) {
+  const note = options.noteDebugOutcome;
   const validate = captureMutationOwner(ctx, options.signal);
   const config = await loadConfigForCheck(undefined, options.signal);
   validate();
@@ -33,26 +34,36 @@ export async function pushSessionsOnShutdown(
     if (fingerprint !== syncCheckConfigFingerprint(latest))
       throw new Error("Settings changed before automatic session push.");
   };
-  if (!config.automatic || !syncSessionsSelected(config)) return;
+  if (!config.automatic || !syncSessionsSelected(config)) {
+    note?.("skipped");
+    return;
+  }
   await withStateDirectoryAccess(() =>
     withLock("auto-session-push", async () => {
       await refresh();
       const state = await readStateForConfig(config);
       await refresh();
-      if ((config.scope || state.scope) && (!state.lastAppliedSnapshot || syncPolicyChanged(state, config))) return;
+      if ((config.scope || state.scope) && (!state.lastAppliedSnapshot || syncPolicyChanged(state, config))) {
+        note?.("blocked");
+        return;
+      }
       const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
       await refresh();
       const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
       await refresh();
-      if (!hasLocalChanges(local, state, config)) return;
+      if (!hasLocalChanges(local, state, config)) {
+        note?.("skipped");
+        return;
+      }
       const operations = await loaders.operations();
       await refresh();
-      await operations.push(
+      const result = await operations.push(
         ctx,
         { ...options, auto: true, yes: true, silent: true, reload: false },
         { config, state, local },
       );
       validate();
+      if (result === "cancelled") note?.("cancelled");
     }),
   );
 }

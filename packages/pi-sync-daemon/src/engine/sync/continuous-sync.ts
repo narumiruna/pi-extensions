@@ -8,7 +8,7 @@ import { withStateDirectoryAccess } from "../state/state-directory.js";
 import { readStateForConfig } from "../state/sync-state-store.js";
 import { setSyncStatus, syncStatusFailureReason } from "../ui/sync-status.js";
 import { withAgentSyncLock } from "./agent-sync.js";
-import { ContinuousError, continuousFailure } from "./continuous-errors.js";
+import { ContinuousError, type ContinuousErrorKind, continuousFailure } from "./continuous-errors.js";
 import { acquireContinuousLease, type ContinuousLease } from "./continuous-lease.js";
 import {
   normalizeContinuousClock,
@@ -47,6 +47,15 @@ const DEBOUNCE_MS = 1_000;
 
 type ContinuousTransfer = <T>(run: (committed: () => void) => Promise<T>) => Promise<T>;
 
+type CycleOutcome = {
+  outcome: "completed" | "failed" | "cancelled" | "blocked" | "skipped";
+  reason?: ContinuousErrorKind;
+};
+interface ContinuousDiagnostics {
+  timing?(ctx: ExtensionContext, report: string): void;
+  cycle?(ctx: ExtensionContext, setup: string, outcome: CycleOutcome): void;
+}
+
 interface ContinuousStartup {
   signal: AbortSignal;
   debug: boolean;
@@ -58,6 +67,7 @@ export function createContinuousSync(
   loaders: SyncLoaders,
   clock: ContinuousClock = systemClock,
   publish?: StartupTimingPublisher,
+  diagnostics?: ContinuousDiagnostics,
 ) {
   const startups = new WeakMap<ExtensionContext["sessionManager"], ContinuousStartup>();
   const repairNotices = new WeakSet<ExtensionContext["sessionManager"]>();
@@ -178,7 +188,10 @@ export function createContinuousSync(
                 const retry = typeof explicitRetry === "string" ? explicitRetry === config.setupName : explicitRetry;
                 await monitor(ctx, config, binding, lease, signal, retry, startup, transfer);
                 explicitRetry = false;
-              } else setSyncStatus(ctx, "sync waiting: another local owner", { activity: "idle" });
+              } else {
+                observeCycle(ctx, config, { outcome: "skipped", reason: "contention" });
+                setSyncStatus(ctx, "sync waiting: another local owner", { activity: "idle" });
+              }
             } finally {
               await lease?.release();
             }
@@ -186,6 +199,7 @@ export function createContinuousSync(
         } catch (error) {
           if (signal.aborted) return;
           const failure = continuousFailure(error);
+          observeCycle(ctx, config, { outcome: failure.retry ? "failed" : "blocked", reason: failure.kind });
           if (!failure.retry && !(error instanceof Error && error.name === "AbortError")) throw error;
           setSyncStatus(ctx, `sync retry scheduled: ${failure.kind}`, {
             activity: "retry",
@@ -302,8 +316,10 @@ export function createContinuousSync(
         if (now >= due) {
           const timings = createStartupTimings(publish);
           const report = !startup.reported && startup.debug;
+          const timing = !startup.reported && latest.debug ? diagnostics?.timing : undefined;
           startup.reported = true;
           let outcome: "completed" | "stopped" = "stopped";
+          let cycleOutcome: CycleOutcome | undefined;
           const force = explicitRetry || controlChanged;
           explicitRetry = false;
           const expectedModel = hashContinuous(ctx.model);
@@ -344,7 +360,7 @@ export function createContinuousSync(
             }
           })().catch(() => {});
           try {
-            await performCycle(
+            cycleOutcome = await performCycle(
               ctx,
               config,
               binding,
@@ -358,13 +374,18 @@ export function createContinuousSync(
             );
             outcome = "completed";
           } catch (error) {
-            if (signal.aborted || !ctx.isIdle()) return;
+            if (signal.aborted || !ctx.isIdle()) {
+              cycleOutcome = { outcome: "cancelled" };
+              return;
+            }
             // A settings hint interrupts the old authorization; load it afresh, not as a failed transfer.
             if (cycle.signal.aborted && cycle.signal.reason?.name !== "TimeoutError") {
+              cycleOutcome = { outcome: "cancelled" };
               pollDue = 0;
               continue;
             }
             const failure = continuousFailure(error);
+            cycleOutcome = { outcome: failure.retry ? "failed" : "blocked", reason: failure.kind };
             let announce = false;
             await updateContinuousRecord(binding, lease, (current) => {
               const now = clock.now();
@@ -392,7 +413,15 @@ export function createContinuousSync(
             guard.abort();
             await guardTask;
             cycle = undefined;
-            timings.publish(ctx, report, signal, "continuous startup", outcome);
+            if (cycleOutcome) observeCycle(ctx, latest, cycleOutcome);
+            timings.publish(
+              ctx,
+              report,
+              signal,
+              "continuous startup",
+              outcome,
+              timing && ((report) => timing(ctx, report)),
+            );
           }
           pollDue = clock.now() + POLL_MS + Math.floor(clock.random() * 6_000);
           closeWatch();
@@ -441,7 +470,7 @@ export function createContinuousSync(
     force: boolean,
     timings: StartupTimings,
     transfer?: ContinuousTransfer,
-  ) {
+  ): Promise<CycleOutcome | undefined> {
     const validate = (latest?: AnySyncConfig) => {
       signal.throwIfAborted();
       validateOwner(latest);
@@ -463,7 +492,7 @@ export function createContinuousSync(
       current.phase === "blocked" &&
       ["authentication", "storage", "unknown"].includes(current.error ?? "")
     )
-      return;
+      return { outcome: "blocked", reason: current.error };
     setSyncStatus(ctx, "sync checking", { activity: "checking" });
     const inspectionModule = await timings.measure("inspection import", () => loaders.inspection());
     validate();
@@ -519,7 +548,7 @@ export function createContinuousSync(
       }
     });
     validate();
-    if (blocked) return;
+    if (blocked) return { outcome: "blocked", reason: current.error };
     if (
       !observed.journal &&
       (observed.inspection.firstSync ||
@@ -528,6 +557,7 @@ export function createContinuousSync(
     )
       throw new ContinuousError("unsafe", "Continuous sync needs an accepted baseline and matching remote selection.");
     let transferred = false;
+    let outcome: CycleOutcome | undefined;
     if (observed.journal || observed.inspection.localChanged || observed.inspection.remoteChanged) {
       const operations = await timings.measure("operations import", () => loaders.operations());
       validate();
@@ -567,6 +597,10 @@ export function createContinuousSync(
       );
       validate();
       transferred = result === "applied";
+      outcome = {
+        outcome:
+          result === "cancelled" ? "cancelled" : transferred && !timings.wasUnchanged() ? "completed" : "skipped",
+      };
     }
     const state = await guardedLock("continuous-result", () => readStateForConfig(config));
     validate();
@@ -594,6 +628,14 @@ export function createContinuousSync(
         "Continuous sync retained unresolved groups. Review /sync conflicts; independent partial progress was preserved.",
         "warning",
       );
+    return unresolved?.length ? { outcome: "blocked", reason: "unsafe" } : outcome;
+  }
+
+  function observeCycle(ctx: ExtensionContext, config: AnySyncConfig, outcome: CycleOutcome) {
+    if (!config.debug) return;
+    try {
+      diagnostics?.cycle?.(ctx, config.setupName, outcome);
+    } catch {}
   }
 }
 

@@ -215,9 +215,15 @@ export function automaticPolicyAuthorized(root: string, config: AnySyncConfig) {
 export async function reviewAutomaticPolicy(execution: Execution, config: AnySyncConfig, expectedFingerprint: string) {
   if (consentFingerprint(execution.root, config) !== expectedFingerprint)
     throw new Error("Setup changed; reopen the automatic transfer review.");
-  if (config.reservedIgnoreNames === undefined || automaticPolicyAuthorized(execution.root, config)) return false;
+  if (config.reservedIgnoreNames === undefined || automaticPolicyAuthorized(execution.root, config)) {
+    execution.noteDebugOutcome?.("skipped");
+    return false;
+  }
   const consent = readConsent(execution.root);
-  if (!consent) return false;
+  if (!consent) {
+    execution.noteDebugOutcome?.("blocked");
+    return false;
+  }
   const consentToken = JSON.stringify(consent);
   const peers = participantBinding(execution);
   const binding = JSON.stringify(execution.facts());
@@ -235,7 +241,10 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
   };
   const current = await loadConfigForCheck(undefined, execution.signal);
   validate();
-  if (syncCheckConfigFingerprint(current) !== fingerprint) return false;
+  if (syncCheckConfigFingerprint(current) !== fingerprint) {
+    execution.noteDebugOutcome?.("blocked");
+    return false;
+  }
   const modes = [
     startupTransferEnabled(config) && "Automatic transfer at startup",
     config.automatic &&
@@ -260,7 +269,10 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
     ].join("\n"),
   });
   validate();
-  if (accepted !== true) return false;
+  if (accepted !== true) {
+    execution.noteDebugOutcome?.("cancelled");
+    return false;
+  }
   const latest = await loadConfigForCheck(undefined, execution.signal);
   await config.validateIgnorePolicy?.();
   validate();
@@ -285,14 +297,19 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
 
 export async function captureAutomaticAuthorization(execution: Execution, expectedFingerprint?: string) {
   const consent = readConsent(execution.root);
-  if (!consent) throw new Error("Automatic work requires reviewed daemon handover first.");
+  if (!consent) {
+    execution.noteDebugOutcome?.("blocked");
+    throw new Error("Automatic work requires reviewed daemon handover first.");
+  }
   const consentToken = JSON.stringify(consent);
   const peers = participantBinding(execution);
   const { loadConfigForCheck } = await import("./engine/settings/config.js");
   const validateParticipants = () => {
     execution.validate();
-    if (participantBinding(execution) !== peers || JSON.stringify(readConsent(execution.root)) !== consentToken)
+    if (participantBinding(execution) !== peers || JSON.stringify(readConsent(execution.root)) !== consentToken) {
+      execution.noteDebugOutcome?.("blocked");
       throw new Error("Daemon participants or consent changed before automatic work completed.");
+    }
   };
   validateParticipants();
   const config = await loadConfigForCheck(undefined, execution.signal);
@@ -300,16 +317,22 @@ export async function captureAutomaticAuthorization(execution: Execution, expect
   const fingerprint = syncCheckConfigFingerprint(config);
   if (
     expectedFingerprint !== undefined ? fingerprint !== expectedFingerprint : config.reservedIgnoreNames !== undefined
-  )
+  ) {
+    execution.noteDebugOutcome?.("blocked");
     throw new Error("Settings changed before automatic work; use the reviewed foreground command.");
-  if (!automaticPolicyAuthorized(execution.root, config))
+  }
+  if (!automaticPolicyAuthorized(execution.root, config)) {
+    execution.noteDebugOutcome?.("blocked");
     throw new Error(
       "Automatic transfer requires separate approval for the current setup and policy. Run reviewed /sync first.",
     );
+  }
   const validate = (current?: AnySyncConfig) => {
     validateParticipants();
-    if (current && syncCheckConfigFingerprint(current) !== fingerprint)
+    if (current && syncCheckConfigFingerprint(current) !== fingerprint) {
+      execution.noteDebugOutcome?.("blocked");
       throw new Error("Settings changed before automatic work completed.");
+    }
   };
   const refresh = async () => {
     validate();
@@ -330,7 +353,10 @@ export async function requireHandover(execution: Execution) {
       "Close or upgrade every older Pi process before continuing. An idle older Pi cannot be detected from an absent sync lock. The daemon will own transfers; Pi keeps presentation and live file queues. Autonomous resolution uses independently available auth.json/models.json configuration and the environment captured when the service starts, not Pi runtime accounts or providers. Credential commands run non-interactively from the canonical agent root. Review this independent provider/account configuration; restart the service after changing its environment. This does not authorize transfers or model requests after the last Pi exits.",
   });
   execution.validate();
-  if (accepted !== true) throw new Error("Daemon handover was not approved; no transfer was started.");
+  if (accepted !== true) {
+    execution.noteDebugOutcome?.("cancelled");
+    throw new Error("Daemon handover was not approved; no transfer was started.");
+  }
   const { withLock } = await import("./engine/state/lock.js");
   await withLock("daemon-handover", async () => {
     execution.validate();
@@ -380,7 +406,10 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
     message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\nModel: ${safeTerminalText(facts?.model?.provider ?? "unavailable")}/${safeTerminalText(facts?.model?.id ?? "unavailable")}\n\n${payload.afterExit ? `The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission.${config.reservedIgnoreNames !== undefined ? " This also approves the enabled automatic modes for this setup while Pi clients are attached." : ""}` : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
   });
   execution.validate();
-  if (accepted !== true) return undefined;
+  if (accepted !== true) {
+    execution.noteDebugOutcome?.("cancelled");
+    return undefined;
+  }
   const latest = await loadConfigForCheck(undefined, execution.signal);
   execution.validate();
   await config.validateIgnorePolicy?.();
