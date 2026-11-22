@@ -1,6 +1,6 @@
 # Pi Subagents attachment behavior
 
-`subagent_spawn` accepts explicit local `skills` and `extensions` for one child job. Automatic resource discovery and inheritance from the parent session remain disabled. See [Tools](./tools.md) for argument shapes and [Security and privacy](../README.md#-security-and-privacy) before attaching executable code.
+`subagent_spawn` accepts explicit local `skills` and `extensions` for one child job. Automatic resource discovery and inheritance from the parent session remain disabled. File-configured MCP servers can be selected separately with [`mcpServers`](./tools.md#mcp-server-selection). See [Tools](./tools.md) for argument shapes and [Security and privacy](../README.md#-security-and-privacy) before attaching executable code.
 
 ## Skills
 
@@ -28,7 +28,7 @@ An attached extension executes trusted code with the child process's user permis
 
 Attachment paths may be absolute or relative to the child working directory. They must already refer to regular files or directories and are canonicalized before launch. npm, Git, URL, and other nonlocal sources are not accepted. Repeated extension paths merge their selected tools in first-use order.
 
-A job accepts at most 16 skill paths, 16 extension entries, and 64 selected core and extension tool names. Each path is limited to 4 KiB of UTF-8 text; each tool name is limited to 128 characters and must follow the [exact-name rules](./tools.md#subagent_spawn). The serialized child bootstrap, including selected and communication tool names plus the requested provider, model, and thinking level, must fit 16 KiB of UTF-8 JSON. On Windows, the child command line must fit the 32,767 UTF-16 code-unit process limit.
+A job accepts at most 16 skill paths, 16 extension entries, and 64 selected core and extension tool names. Each path is limited to 4 KiB of UTF-8 text; each tool name is limited to 128 characters and must follow the [exact-name rules](./tools.md#subagent_spawn). The serialized child bootstrap, including selected tools, communication tools, MCP server names, and the requested provider, model, and thinking level, must fit 16 KiB of UTF-8 JSON. On Windows, the child command line must fit the 32,767 UTF-16 code-unit process limit.
 
 When the project is untrusted, both lexical and symlink-resolved paths inside the child working directory are rejected for attachments and resources resolved from their extension packages. Explicit external paths remain available. Only attach code you trust: attachments are not permission boundaries.
 

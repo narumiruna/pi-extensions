@@ -8,6 +8,7 @@
 | `provider` | `string` | No | Exact provider ID; defaults to the main agent's effective provider at spawn time. |
 | `model` | `string` | No | Exact model ID within the selected provider; defaults independently to the main agent's effective model ID at spawn time. |
 | `tools` | `string[]` | No | Exact Pi core tool names or `codemode`; omission and `[]` both select no core work tools. |
+| `mcpServers` | `string[]` | No | Up to 32 exact names of configured Pi MCP servers; omission and `[]` both leave MCP off. |
 | `skills` | `string[]` | No | Up to 16 local skill files or directories; Pi uses progressive disclosure. |
 | `extensions` | `{ path: string; tools: string[] }[]` | No | Up to 16 trusted local extensions and their initially selected tools. |
 | `thinkingLevel` | `string` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to the main agent's level. |
@@ -28,6 +29,14 @@ Extension and MCP tools do not become core tools merely because the parent can u
 Skills do not add tools or inject their entire bodies. An extension's `tools` list selects its initial tools; use an empty list for provider or lifecycle behavior only. An attached extension runs trusted code with full child-process permissions, not in a sandbox.
 
 Attachments must be existing local paths. Every non-ignored declared skill must load successfully, each skill name must be unique, and each skill path must contain at least one loadable Pi skill. Missing or misattributed extension tools fail before the child model receives the task. See [Attachment behavior](./attachments.md) for validation, trust, limits, provider credentials, and startup failures.
+
+### MCP server selection
+
+Select exact, case-sensitive server names from Pi’s user `mcp.json` or a trusted project’s `.pi/mcp.json`. Each name may contain 1–128 letters, digits, underscores, or hyphens. The child reads the files at startup. A trusted project may replace a user server with the same name or override only its `enabled`, `exposure`, and `toolExposure` fields. The child does not inherit servers registered in the parent process or connect extra servers registered by attached extensions through Pi’s MCP API.
+
+A missing, disabled, malformed, or conflicting selection fails the job before any selected server connects or the task reaches a model. Inspect the job with `subagent_wait`, and use `pi mcp list` from the relevant project to check native Pi configuration. The child has no `/mcp` management command; configure and sign in with Pi before spawning. The child starts its selected connections at the first prompt and uses Pi’s standard connection and shutdown behavior. Reachability and authentication are checked by Pi when the connection opens, not by spawn validation.
+
+Direct tools are available to the model according to the configured exposure. Add `tools: ["codemode"]` to call tools with `codemode` or `deferred` exposure; selecting a server does not add codemode or `tool_search`. Hidden tools remain unavailable. Pi owns the model-visible changes when direct tool declarations or MCP server summaries change after connection or discovery.
 
 ### Model selection
 

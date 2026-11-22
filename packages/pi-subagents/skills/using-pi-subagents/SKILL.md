@@ -36,7 +36,7 @@ Add only the smallest sufficient tool set for the task.
 
 Select `codemode` explicitly when the child needs scripted tool calls, parallel calls, or output filtering.
 
-Select the tools that scripts need separately; codemode does not enable automatic extension or MCP discovery.
+Select the tools that scripts need separately. For MCP, use `mcpServers` with exact configured server names, and select `codemode` to call non-direct MCP tools. Omit `mcpServers` unless the task needs it; only select trusted servers authorized for the task. The child does not inherit the main session’s permission checks.
 
 Treat codemode classifier and image model calls as provider requests that can disclose data and incur costs.
 
@@ -56,7 +56,7 @@ Attaching a skill does not inject its complete body, add `read` or `bash`, or fo
 Attach `extensions` only from existing local files or directories that you trust as executable code with the child process's full user permissions.
 
 Name only the extension tools that must be active initially, and use an empty extension tool list only for required provider or lifecycle behavior.
-Keep tool names concise because the selected and communication tool names must fit the child's 16 KiB startup bootstrap.
+Keep names concise because selected tools, communication tools, MCP server names, and model selection share the child's 16 KiB startup bootstrap.
 
 Treat the extension tool list as a least-privilege initial loadout, not a sandbox, because trusted extension code can modify prompts, tool behavior, providers, and active tools.
 

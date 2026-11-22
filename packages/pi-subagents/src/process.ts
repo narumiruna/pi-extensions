@@ -33,6 +33,8 @@ const MAX_OUTPUT_BYTES = 32 * 1024;
 const MAX_ERROR_BYTES = 8 * 1024;
 const RPC_RESPONSE_TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 1_000;
+const MCP_KILL_GRACE_MS = 4_000;
+const MCP_TOOL_PATTERNS = ["mcp__*", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"];
 const MAX_WINDOWS_COMMAND_LINE_CODE_UNITS = 32_767;
 
 interface ProcessSettlement {
@@ -91,7 +93,10 @@ export async function runChild(request: ChildRequest): Promise<ChildResult> {
   }
 }
 
-type ChildCommandRequest = Pick<ChildRequest, "tools" | "skills" | "extensions" | "thinkingLevel" | "projectTrusted">;
+type ChildCommandRequest = Pick<
+  ChildRequest,
+  "tools" | "skills" | "extensions" | "mcpServers" | "thinkingLevel" | "projectTrusted"
+>;
 
 export function buildPiArgs(request: ChildCommandRequest): string[] {
   const args = [
@@ -110,7 +115,9 @@ export function buildPiArgs(request: ChildCommandRequest): string[] {
   for (const skill of request.skills) args.push("--skill", skill);
   // CLI model flags use pattern matching. The readiness probe binds the private exact selection.
   args.push("--thinking", request.thinkingLevel, request.projectTrusted ? "--approve" : "--no-approve");
-  args.push("--tools", selectedChildTools(request).join(","));
+  const tools = selectedChildTools(request);
+  if (request.mcpServers?.length) tools.push(...MCP_TOOL_PATTERNS);
+  args.push("--tools", tools.join(","));
   return args;
 }
 
@@ -170,7 +177,11 @@ async function executeProcess(
   const timeoutMs = resolveTimeoutMs(request.timeout);
   const expectedTools = selectedChildTools(request);
   const selection = { provider: request.provider, model: request.model, thinkingLevel: request.thinkingLevel };
-  assertChildBootstrapCapacity(expectedTools, selection);
+  const mcp = request.mcpServers?.length
+    ? { servers: request.mcpServers, projectTrusted: request.projectTrusted }
+    : undefined;
+  assertChildBootstrapCapacity(expectedTools, selection, mcp);
+  const killGrace = mcp ? MCP_KILL_GRACE_MS : KILL_GRACE_MS;
   let latestOutput = "";
   let terminalOutput: string | undefined;
   let terminalStopReason: "stop" | "length" | undefined;
@@ -375,7 +386,7 @@ async function executeProcess(
         termination = terminateWindowsProcessTree(process);
       } else {
         signalPosixProcess(process, "SIGTERM");
-        escalation = setTimeout(() => signalPosixProcess(process, "SIGKILL"), KILL_GRACE_MS);
+        escalation = setTimeout(() => signalPosixProcess(process, "SIGKILL"), killGrace);
         escalation.unref();
       }
       forceClose = setTimeout(() => {
@@ -385,7 +396,7 @@ async function executeProcess(
         process.stderr?.destroy();
         readinessPipe?.destroy();
         finish(code);
-      }, KILL_GRACE_MS * 2);
+      }, killGrace + KILL_GRACE_MS);
       forceClose.unref();
     };
     const onAbort = () => {
@@ -658,6 +669,7 @@ async function executeProcess(
             communication: request.communication,
             expectedTools,
             selection,
+            mcp,
           }),
         );
       } catch {

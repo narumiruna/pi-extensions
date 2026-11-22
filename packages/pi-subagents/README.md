@@ -237,9 +237,17 @@ See [Tools](./docs/tools.md#subagent_spawn) for argument validation, failure tim
 
 Add `"codemode"` explicitly to let the child run JavaScript that calls its selected tools and communication tools, including parallel calls and output filtering.
 For example, `tools: ["read", "grep", "codemode"]` enables scripted read and search operations without shell or file-mutation tools.
-The runtime loads Pi's built-in codemode extension and verifies tool readiness before sending the task; it does not enable automatic extension or MCP discovery.
+The runtime loads Pi's built-in codemode extension and verifies tool readiness before sending the task; codemode alone does not connect MCP servers.
 Codemode follows Pi's effective `codemode` settings and also provides Pi's `models` API for classifier and image calls using child-visible credentials.
 Those model calls can send data to providers and incur costs.
+
+Use `mcpServers` to let a job connect to named Pi MCP servers. For example, if `docs` is already configured:
+
+```ts
+{ task: "Find the retry policy in the docs.", mcpServers: ["docs"], tools: ["codemode"] }
+```
+
+MCP stays off by default. Select only trusted servers authorized for the task; their tools can send data or modify external systems, and the child does not inherit the main session's permission checks. See [MCP server selection](./docs/tools.md#mcp-server-selection) for trust, exposure, and failure behavior.
 
 The optional `skills` list attaches local Pi skills through progressive disclosure without injecting their full bodies or adding tools.
 Every attached skill path must contain at least one loadable skill, every non-ignored declared skill must load successfully, and skill names must be unique across attachments.
@@ -296,7 +304,7 @@ Selecting tools limits the initial loadout, not filesystem access: read tools ca
 Selecting `bash`, `powershell`, `edit`, or `write` permits workspace mutation with the Pi process environment and user permissions.
 
 Every child disables session persistence and automatic discovery of extensions, skills, and prompt templates.
-Only the communication bridge and explicitly attached resources are added back for that job.
+Communication tools are added automatically; other extensions, skills, and configured MCP servers require explicit selection.
 Provider selection supports Pi's child-visible built-in and configured providers plus providers registered by an attached extension.
 Credentials must be available independently to the child through Pi's stored credentials or inherited environment.
 
