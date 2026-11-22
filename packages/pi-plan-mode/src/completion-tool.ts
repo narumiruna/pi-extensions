@@ -1,5 +1,6 @@
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type ToolDefinition, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { type Component, Markdown } from "@earendil-works/pi-tui";
+import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 
 export const PLAN_MODE_COMPLETE_TOOL_NAME = "plan_mode_complete";
 export const PLAN_MODE_COMPLETE_VERSION = 1;
@@ -52,9 +53,13 @@ export function planFromCompletionDetails(value: unknown) {
   return normalized.ok ? normalized.plan : undefined;
 }
 
+function proposedPlanMarkdown(plan: string) {
+  return `**Proposed Plan**\n\n${plan}`;
+}
+
 export function planModeCompleted(plan: string) {
   return {
-    content: [{ type: "text" as const, text: `**Proposed Plan**\n\n${plan}` }],
+    content: [{ type: "text" as const, text: proposedPlanMarkdown(plan) }],
     details: {
       version: PLAN_MODE_COMPLETE_VERSION,
       source: PLAN_MODE_COMPLETE_TOOL_NAME,
@@ -63,6 +68,8 @@ export function planModeCompleted(plan: string) {
     terminate: true,
   };
 }
+
+type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 
 type PlanModeCompletionRenderResult = {
   content: Array<{ type: string; text?: string }>;
@@ -77,11 +84,47 @@ export function planModeCompletionMarkdown(result: PlanModeCompletionRenderResul
     .trim();
   if (content) return content;
   const plan = planFromCompletionDetails(result.details);
-  return plan ? `**Proposed Plan**\n\n${plan}` : "";
+  return plan ? proposedPlanMarkdown(plan) : "";
 }
 
-export function renderPlanModeCompletion(result: PlanModeCompletionRenderResult) {
-  return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
+export function renderPlanModeCompletion(
+  result: PlanModeCompletionRenderResult,
+  options: ToolRenderResultOptions,
+  context: ToolRenderContext | undefined,
+  paneShowsCompletion: (toolCallId: string, plan: string) => boolean,
+): Component {
+  const plan = planFromCompletionDetails(result.details);
+  const liveCompletion =
+    !options.isPartial &&
+    context?.executionStarted === true &&
+    context.isError === false &&
+    context.isPartial === false &&
+    typeof context.durationMs === "number" &&
+    plan !== undefined &&
+    result.content.length === 1 &&
+    result.content[0]?.type === "text" &&
+    result.content[0].text === proposedPlanMarkdown(plan);
+  const full = () =>
+    new Markdown(sanitizeTerminalDocument(planModeCompletionMarkdown(result)), 0, 0, getMarkdownTheme());
+  if (!liveCompletion) return full();
+
+  let fullResult: Markdown | undefined;
+  let confirmation: Markdown | undefined;
+  return {
+    render(width) {
+      if (width < 1) return [];
+      if (paneShowsCompletion(context.toolCallId, plan)) {
+        confirmation ??= new Markdown("Plan complete. See the Plan pane.", 0, 0, getMarkdownTheme());
+        return confirmation.render(width);
+      }
+      fullResult ??= full();
+      return fullResult.render(width);
+    },
+    invalidate() {
+      fullResult = undefined;
+      confirmation = undefined;
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

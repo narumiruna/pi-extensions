@@ -72,7 +72,8 @@ export function createPlanPaneHost(mode: TUI["mode"] = "fullscreen") {
   editor.setText("main draft");
   const editorContainer = new Container();
   editorContainer.addChild(editor);
-  const document = new Text(Array.from({ length: 100 }, (_, index) => `history ${index}`).join("\n"), 0, 0);
+  const document = new Container();
+  document.addChild(new Text(Array.from({ length: 100 }, (_, index) => `history ${index}`).join("\n"), 0, 0));
   const widgetsAbove = new Container();
   const mainComponents = [document, widgetsAbove, editorContainer];
   const transcript = new ScrollView(document, { primary: true, follow: "end" });
@@ -98,6 +99,10 @@ export function createPlanPaneHost(mode: TUI["mode"] = "fullscreen") {
     host.requestRender();
   };
   return {
+    appendToTranscript(component: Component) {
+      document.addChild(component);
+      host.requestRender();
+    },
     editor,
     transcript,
     root,

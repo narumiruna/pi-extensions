@@ -9,7 +9,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
-import { mountFullscreenPlanLayout, type PlanPaneSide } from "./fullscreen-plan-layout.js";
+import { type MountedPlanLayout, mountFullscreenPlanLayout, type PlanPaneSide } from "./fullscreen-plan-layout.js";
 import type { DraftPreview } from "./plan-draft.js";
 
 type PlanPaneContent = string | DraftPreview | undefined;
@@ -41,6 +41,9 @@ export function createPlanPaneController() {
 
   return {
     clear,
+    showsCompletedPlan(session: ExtensionContext["sessionManager"], plan: string) {
+      return binding?.session === session && binding.widget?.showsCompletedPlan(plan) === true;
+    },
     update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: PlanPaneContent) {
       if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off" || typeof tuiCore.ScrollView !== "function") {
         clear();
@@ -79,7 +82,8 @@ class PlanPaneWidget implements Component {
   private readonly scroll: ScrollView;
   private readonly attempted = new WeakSet<readonly Component[]>();
   private pending: readonly Component[] | undefined;
-  private restore: (() => void) | undefined;
+  private layout: MountedPlanLayout | undefined;
+  private hasDisplayablePlan = false;
 
   constructor(
     private readonly tui: TUI,
@@ -88,7 +92,7 @@ class PlanPaneWidget implements Component {
     private plan: PlanPaneContent,
   ) {
     this.body = new PlanPaneBody(theme);
-    this.body.setPlan(plan);
+    this.hasDisplayablePlan = this.body.setPlan(plan);
     this.scroll = createPaneScrollView(this.body, {
       overscroll: "contain",
       scrollbar: "always",
@@ -110,9 +114,13 @@ class PlanPaneWidget implements Component {
   setPlan(plan: PlanPaneContent) {
     if (this.disposed || plan === this.plan) return;
     this.plan = plan;
-    this.body.setPlan(plan);
+    this.hasDisplayablePlan = this.body.setPlan(plan);
     this.scroll.scrollToStart();
     if (this.tui?.mode === "fullscreen") this.tui.requestRender();
+  }
+
+  showsCompletedPlan(plan: string) {
+    return !this.disposed && this.plan === plan && this.hasDisplayablePlan && this.layout?.isVisible() === true;
   }
 
   dispose() {
@@ -134,7 +142,7 @@ class PlanPaneWidget implements Component {
       this.attempted.add(renderer);
       this.unmount();
       try {
-        this.restore = mountFullscreenPlanLayout(this.tui, renderer, this.side, this.scroll, this.theme);
+        this.layout = mountFullscreenPlanLayout(this.tui, renderer, this.side, this.scroll, this.theme);
       } catch {
         return;
       }
@@ -142,10 +150,10 @@ class PlanPaneWidget implements Component {
   }
 
   private unmount() {
-    const restore = this.restore;
-    this.restore = undefined;
+    const layout = this.layout;
+    this.layout = undefined;
     try {
-      restore?.();
+      layout?.restore();
     } catch {
       return;
     }
@@ -193,6 +201,7 @@ class PlanPaneBody implements Component {
           : "Waiting for the Markdown draft."
         : "No completed plan yet.";
     this.invalidate();
+    return Boolean(this.text?.trim());
   }
 
   invalidate() {

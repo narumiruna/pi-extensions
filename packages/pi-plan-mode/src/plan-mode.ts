@@ -187,6 +187,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let shutdownTask: Promise<void> | undefined;
   let widgetState: EditorStatusWidgetState = { collapsed: false };
   const planPane = createPlanPaneController();
+  let liveCompletion: { session: ExtensionContext["sessionManager"]; toolCallId: string; plan: string } | undefined;
   const draft = createPlanDraftController();
   let interactiveUiPromise: Promise<InteractiveUi> | undefined;
   const loadInteractiveUi = () => {
@@ -339,8 +340,23 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     description:
       "Submit a decision-ready plan only when the latest effective Plan contract explicitly says /plan mode is active, and call it alone as the final action. Tool visibility alone does not activate Plan mode. Never call for ordinary planning requests, the writing-plans skill, roadmaps, checklists, or plan-file work.",
     parameters: PLAN_MODE_COMPLETE_PARAMS,
-    renderResult: renderPlanModeCompletion,
-    async execute(_toolCallId, params: unknown, signal, _onUpdate, ctx) {
+    renderResult(result, options, _theme, context) {
+      return renderPlanModeCompletion(result, options, context, (toolCallId, plan) => {
+        const completion = liveCompletion;
+        return (
+          completion !== undefined &&
+          completion.session === currentSession &&
+          completion.toolCallId === toolCallId &&
+          completion.plan === plan &&
+          state.enabled &&
+          state.awaitingAction &&
+          state.latestPlan === plan &&
+          state.latestPlanSource === PLAN_MODE_COMPLETE_TOOL_NAME &&
+          planPane.showsCompletedPlan(completion.session, plan)
+        );
+      });
+    },
+    async execute(toolCallId, params: unknown, signal, _onUpdate, ctx) {
       if (
         !state.enabled ||
         currentSession !== ctx.sessionManager ||
@@ -349,23 +365,24 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       ) {
         throw new Error("plan_mode_complete is only available while Plan mode is active");
       }
+      let plan: string;
       if (managedDraft(ctx)) {
         const isCurrent = captureDraftOwner(ctx);
         const runSignal = signal ?? ctx.signal;
-        const plan = await draft.snapshot(ctx.cwd, isCurrent, runSignal).catch(async (error: unknown) => {
+        plan = await draft.snapshot(ctx.cwd, isCurrent, runSignal).catch(async (error: unknown) => {
           if (isCurrent() && !runSignal?.aborted && !draft.hasPendingMutations())
             await refreshDraftPreview(ctx, runSignal);
           throw error;
         });
         if (!isCurrent()) throw new Error("Plan workflow changed while completing the draft.");
-        acceptCompletedPlan(plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
-        return planModeCompleted(plan);
+      } else {
+        const parsed = normalizePlanModeCompletion(params);
+        if (!parsed.ok) throw new Error(parsed.error);
+        plan = parsed.plan;
       }
-      const parsed = normalizePlanModeCompletion(params);
-      if (!parsed.ok) throw new Error(parsed.error);
-
-      acceptCompletedPlan(parsed.plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
-      return planModeCompleted(parsed.plan);
+      acceptCompletedPlan(plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
+      if (ctx.mode === "tui" && ctx.hasUI) liveCompletion = { session: ctx.sessionManager, toolCallId, plan };
+      return planModeCompleted(plan);
     },
   });
 
@@ -563,6 +580,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   pi.on("session_start", async (event, ctx) => {
     draft.reset();
+    liveCompletion = undefined;
     planPane.clear();
     stopPlanModeSettingsWatch();
     interaction.disposeSession();
@@ -686,6 +704,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   async function shutdownPlanModeSession(ctx: ExtensionContext) {
     shutdownStarted = true;
     draft.reset();
+    liveCompletion = undefined;
     planPane.clear();
     stopPlanModeSettingsWatch();
     interaction.disposeSession();
@@ -963,6 +982,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     refreshStateForFirstPrompt(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
+      liveCompletion = undefined;
       invalidateReadyMenu();
       cancelDeferredFreshImplementation();
       readyPresentationIntent = undefined;
@@ -1212,6 +1232,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     ) {
       return;
     }
+    liveCompletion = undefined;
     invalidateReadyMenu();
     state = {
       ...state,
@@ -1671,6 +1692,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function advanceWorkflowGeneration() {
+    liveCompletion = undefined;
     draft.reset();
     interaction.reset();
     invalidateReadyMenu();
