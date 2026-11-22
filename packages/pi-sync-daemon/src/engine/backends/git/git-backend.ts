@@ -26,7 +26,7 @@ import {
   normalizeGitRemoteIdentity,
   validateGitNamespace,
 } from "./git-config.js";
-import { GitCommandError, readGitBlobs, runGit } from "./git-runner.js";
+import { GitCommandError, parseGitBlobBatch, readGitBlobs, runGit } from "./git-runner.js";
 import {
   GIT_MANIFEST_VERSION,
   type GitManifest,
@@ -42,6 +42,8 @@ import {
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const POST_COMMIT_TIMEOUT_MS = 45_000;
+const HISTORY_MANIFEST_BATCH_SIZE = 8;
+const MANIFEST_BATCH_FRAME_BYTES = 96;
 const gitCacheMutationQueues = new Map<string, Promise<void>>();
 
 export interface GitBackendOptions {
@@ -240,19 +242,27 @@ export class GitSyncBackend implements SyncBackend {
 
   async listHistory(signal?: AbortSignal): Promise<RemoteHistoryEntry[]> {
     const sha = await this.fetchRemoteHead(signal);
+    throwIfAborted(signal);
     if (!sha) return [];
     const result = await this.git(["rev-list", "--first-parent", "--reverse", "--max-count=100", sha], { signal });
     const commits = result.stdout.toString("utf8").trim().split("\n").filter(Boolean);
     const entries: RemoteHistoryEntry[] = [];
-    for (const commit of commits) {
-      const { manifest } = await this.readPublication(commit, signal);
-      entries.push({
-        snapshotRef: commit,
-        snapshotId: manifest.snapshotId,
-        createdAt: manifest.createdAt,
-        machine: manifest.machine,
-        syncSessions: manifest.syncSessions,
-      });
+    throwIfAborted(signal);
+    for (let offset = 0; offset < commits.length; offset += HISTORY_MANIFEST_BATCH_SIZE) {
+      const group = commits.slice(offset, offset + HISTORY_MANIFEST_BATCH_SIZE);
+      const manifests = await this.tryReadHistoryManifestBatch(group, signal);
+      for (const [index, commit] of group.entries()) {
+        throwIfAborted(signal);
+        const { manifest } = await this.readPublication(commit, signal, manifests?.[index]);
+        throwIfAborted(signal);
+        entries.push({
+          snapshotRef: commit,
+          snapshotId: manifest.snapshotId,
+          createdAt: manifest.createdAt,
+          machine: manifest.machine,
+          syncSessions: manifest.syncSessions,
+        });
+      }
     }
     return entries;
   }
@@ -377,29 +387,24 @@ export class GitSyncBackend implements SyncBackend {
     );
   }
 
-  private async readManifest(commit: string, signal?: AbortSignal): Promise<GitManifest> {
-    requireCommitSha(commit);
-    const bytes = await this.showFile(commit, this.manifestPath(), signal, MAX_GIT_MANIFEST_BYTES);
-    let parsed: unknown;
+  private async tryReadHistoryManifestBatch(commits: string[], signal?: AbortSignal) {
     try {
-      parsed = JSON.parse(bytes.toString("utf8"));
-    } catch (error) {
-      throw new Error("Git publication manifest is malformed.", { cause: error });
+      for (const commit of commits) requireCommitSha(commit);
+      const manifestPath = this.manifestPath();
+      const maxContentBytes = commits.length * MAX_GIT_MANIFEST_BYTES;
+      const result = await this.git(["cat-file", "--batch"], {
+        input: `${commits.map((commit) => `${commit}:${manifestPath}`).join("\n")}\n`,
+        maxOutputBytes: maxContentBytes + commits.length * MANIFEST_BATCH_FRAME_BYTES,
+        signal,
+      });
+      throwIfAborted(signal);
+      if (result.stderr.length > 0) return undefined;
+      const blobs = parseGitBlobBatch(result.stdout, commits.length, maxContentBytes);
+      return blobs.every((blob) => blob.length <= MAX_GIT_MANIFEST_BYTES) ? blobs : undefined;
+    } catch {
+      throwIfAborted(signal);
+      return undefined;
     }
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "snapshotVersion" in parsed &&
-      parsed.snapshotVersion === IGNORE_SNAPSHOT_VERSION &&
-      !isUtf8(bytes)
-    ) {
-      throw new Error("Git publication manifest is not valid UTF-8.");
-    }
-    return requireGitManifest(parsed);
-  }
-
-  private showFile(commit: string, filePath: string, signal?: AbortSignal, maxOutputBytes?: number) {
-    return this.git(["show", `${commit}:${filePath}`], { signal, maxOutputBytes }).then((result) => result.stdout);
   }
 
   private async createCommit(
@@ -593,8 +598,13 @@ export class GitSyncBackend implements SyncBackend {
     return posixJoin(this.publicationPath(), "files", filePath);
   }
 
-  private async readPublication(commit: string, signal?: AbortSignal) {
-    const manifest = await this.readManifest(commit, signal);
+  private async readPublication(commit: string, signal?: AbortSignal, manifestBytes?: Buffer) {
+    requireCommitSha(commit);
+    const bytes =
+      manifestBytes ??
+      (await this.git(["show", `${commit}:${this.manifestPath()}`], { signal, maxOutputBytes: MAX_GIT_MANIFEST_BYTES }))
+        .stdout;
+    const manifest = parseGitManifest(bytes);
     const entries = await this.readPublicationTree(
       commit,
       signal,
@@ -656,6 +666,25 @@ function gitDestination(config: ResolvedGitBackend) {
     if (match?.groups?.host) host = match.groups.host;
   }
   return `${host} · ${config.destination.branch}:${config.destination.directory}`;
+}
+
+function parseGitManifest(bytes: Buffer): GitManifest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error("Git publication manifest is malformed.", { cause: error });
+  }
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    "snapshotVersion" in parsed &&
+    parsed.snapshotVersion === IGNORE_SNAPSHOT_VERSION &&
+    !isUtf8(bytes)
+  ) {
+    throw new Error("Git publication manifest is not valid UTF-8.");
+  }
+  return requireGitManifest(parsed);
 }
 
 function remoteHead(sha: string, manifest: GitManifest, identity: string): RemoteHead {

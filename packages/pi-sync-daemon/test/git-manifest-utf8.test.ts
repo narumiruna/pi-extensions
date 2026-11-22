@@ -91,6 +91,7 @@ test("v6 Git refuses lossy decoding of raw tree paths", () =>
     async (backend, commit) => {
       await assert.rejects(backend.readHead(), /tree paths must be valid UTF-8/u);
       await assert.rejects(backend.readSnapshot(commit), /tree paths must be valid UTF-8/u);
+      await assert.rejects(backend.listHistory(), /tree paths must be valid UTF-8/u);
     },
     Buffer.from([0x61, 0xff, 0x62]),
   ));
@@ -100,10 +101,12 @@ test("v6 Git accepts actual UTF-8 for non-ASCII text and the replacement charact
   return withPublication(IGNORE_SNAPSHOT_VERSION, Buffer.from(machine), async (backend, commit) => {
     assert.equal((await backend.readHead())?.machine, machine);
     assert.equal((await backend.readSnapshot(commit)).machine, machine);
+    assert.equal((await backend.listHistory())[0]?.machine, machine);
   });
 });
 
 test("legacy Git manifests keep replacement decoding for invalid UTF-8", () =>
   withPublication(3, Buffer.from([0xff]), async (backend) => {
     assert.equal((await backend.readHead())?.machine, "�");
+    assert.equal((await backend.listHistory())[0]?.machine, "�");
   }));
