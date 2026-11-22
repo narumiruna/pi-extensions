@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { DRAFT_CONTRACT_TYPE } from "../src/draft-contract.js";
+import { DRAFT_CONTRACT_TYPE, type DraftAuthorization, reconcileDraftContract } from "../src/draft-contract.js";
 import type { PlanModeSettings } from "../src/settings.js";
 import type { PlanModeState } from "../src/state.js";
 import { createPlanPaneHost, PANE_KEY } from "./plan-pane-support.js";
@@ -374,11 +374,30 @@ test("serialized mutations publish the newest draft and same-session reload read
   }
 });
 
+test("replaying retained draft contracts preserves both the historical grant and its later override", () => {
+  const branch: unknown[] = [];
+  const replay = (messages: unknown[], expected: DraftAuthorization) =>
+    reconcileDraftContract(messages, branch, expected, (data) => {
+      branch.push({ type: "custom", customType: DRAFT_CONTRACT_TYPE, data });
+    });
+  const user = { role: "user", content: "Draft the plan" };
+  const fork = { role: "user", content: "Continue the plan in this fork" };
+  const original = replay([user], { kind: "unavailable" });
+  const overridden = replay([...original, fork], { kind: "read-only" });
+  assert.equal(branch.length, 2);
+  assert.equal(overridden.filter(customDraftMessage).length, 2);
+  for (const input of [[user, fork], [...original, fork], structuredClone(overridden)]) {
+    assert.deepEqual(replay(input, { kind: "read-only" }), overridden);
+    assert.equal(branch.length, 2);
+  }
+});
+
 test("compaction reanchors the grant at the tail exactly once and shutdown clears the pane", async () => {
   const f = await fixture();
   try {
     const messages = await f.applyContext();
     assert.equal(messages.filter(customDraftMessage).length, 1);
+    assert.deepEqual(await f.applyContext(structuredClone(messages)), messages);
     const firstBranch = f.currentMessages();
     const next = { role: "user", content: "next question", timestamp: 1 };
     const later = await f.applyContext([...firstBranch, next]);
@@ -389,6 +408,7 @@ test("compaction reanchors the grant at the tail exactly once and shutdown clear
     assert.ok(customDraftMessage(restored.at(-1)));
     const nextAfter = await f.applyContext([...compacted, next]);
     assert.deepEqual(nextAfter.slice(0, restored.length), restored);
+    assert.deepEqual(await f.applyContext(structuredClone(nextAfter)), nextAfter);
     assert.ok(f.mock.entries.filter(({ customType }) => customType === DRAFT_CONTRACT_TYPE).length === 2);
     await f.emit("session_shutdown", { reason: "reload" });
     assert.doesNotMatch(await f.frame(), /│/u);

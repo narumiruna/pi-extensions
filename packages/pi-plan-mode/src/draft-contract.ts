@@ -38,6 +38,16 @@ function customMessage(authorization: DraftAuthorization) {
   };
 }
 
+function isCanonicalDraftMessage(value: unknown, content: string) {
+  const message = value as Partial<ReturnType<typeof customMessage>> | undefined;
+  return (
+    message?.role === "custom" &&
+    message.customType === DRAFT_CONTRACT_TYPE &&
+    message.display === false &&
+    message.content === content
+  );
+}
+
 function contextHash(messages: readonly unknown[]) {
   return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
 }
@@ -72,18 +82,22 @@ export function reconcileDraftContract(
   persist: (entry: DraftContractEntry) => void,
 ) {
   let result = messages;
-  let last: { index: number; authorization: DraftAuthorization } | undefined;
+  let last: { index: number; content: string } | undefined;
   for (const entry of branch) {
     const recorded = parseEntry(entry);
     if (!recorded) continue;
     const { boundary, authorization } = recorded;
-    if (boundary.length > result.length || boundary.hash !== contextHash(result.slice(0, boundary.length))) continue;
-    result = [...result.slice(0, boundary.length), customMessage(authorization), ...result.slice(boundary.length)];
-    last = { index: boundary.length, authorization };
+    const index = boundary.length;
+    if (index > result.length || boundary.hash !== contextHash(result.slice(0, index))) continue;
+    const canonical = customMessage(authorization);
+    if (!isCanonicalDraftMessage(result[index], canonical.content)) {
+      result = [...result.slice(0, index), canonical, ...result.slice(index)];
+    }
+    if (!last || index >= last.index) last = { index, content: canonical.content };
   }
   if (!expected) return result;
   const mode = latestModeContract(result);
-  if (last && last.index > (mode?.index ?? -1) && contractText(last.authorization) === contractText(expected)) {
+  if (last && last.index > (mode?.index ?? -1) && last.content === contractText(expected)) {
     return result;
   }
   persist({ version: 1, authorization: expected, boundary: { length: result.length, hash: contextHash(result) } });
