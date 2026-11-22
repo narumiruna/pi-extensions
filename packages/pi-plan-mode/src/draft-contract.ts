@@ -75,6 +75,13 @@ function parseEntry(entry: unknown): DraftContractEntry | undefined {
   return { version: 1, boundary, authorization };
 }
 
+export function hasHistoricalDraftGrant(branch: readonly unknown[]) {
+  return branch.some((entry) => {
+    const recorded = parseEntry(entry);
+    return recorded !== undefined && recorded.authorization.kind !== "read-only";
+  });
+}
+
 export function reconcileDraftContract(
   messages: unknown[],
   branch: unknown[],

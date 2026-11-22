@@ -22,6 +22,7 @@ import {
 import {
   DRAFT_CONTRACT_TYPE,
   type DraftAuthorization,
+  hasHistoricalDraftGrant,
   hasStandaloneAssistantToolCall,
   reconcileDraftContract,
 } from "./draft-contract.js";
@@ -914,11 +915,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal")
         : result.messages;
     const interacted = interaction.transformContext(messages, ctx);
-    const withDraft = reconcileDraftContract(
-      interacted,
-      ctx.sessionManager.getBranch(),
-      draftAuthorization(ctx),
-      (entry) => pi.appendEntry(DRAFT_CONTRACT_TYPE, entry),
+    const branch = ctx.sessionManager.getBranch();
+    const withDraft = reconcileDraftContract(interacted, branch, draftAuthorization(ctx, branch), (entry) =>
+      pi.appendEntry(DRAFT_CONTRACT_TYPE, entry),
     );
     return { messages: withDraft as typeof event.messages };
   });
@@ -1776,16 +1775,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     updateUi(ctx);
   }
 
-  function draftAuthorization(ctx: ExtensionContext): DraftAuthorization | undefined {
-    if (
-      !state.enabled ||
-      !state.draft ||
-      currentSession !== ctx.sessionManager ||
-      !workflowMutex.isOwner(workflowOwner)
-    )
-      return;
-    if (state.draft.sessionId !== ctx.sessionManager.getSessionId?.()) return { kind: "read-only" };
-    if (!managedDraft(ctx)) return;
+  function draftAuthorization(ctx: ExtensionContext, branch: readonly unknown[]): DraftAuthorization | undefined {
+    if (!state.enabled || currentSession !== ctx.sessionManager || !workflowMutex.isOwner(workflowOwner)) return;
+    if (!managedDraft(ctx)) {
+      const forkedDraft = state.draft && state.draft.sessionId !== ctx.sessionManager.getSessionId?.();
+      return forkedDraft || hasHistoricalDraftGrant(branch) ? { kind: "read-only" } : undefined;
+    }
     const path = draft.path();
     return path ? { kind: "managed", path } : { kind: "unavailable" };
   }

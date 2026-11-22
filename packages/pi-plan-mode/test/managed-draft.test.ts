@@ -374,6 +374,33 @@ test("serialized mutations publish the newest draft and same-session reload read
   }
 });
 
+test("a read-only successor supersedes the prior workflow's writable draft grant", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.applyContext();
+    const path = f.draftPath();
+    assert.match(JSON.stringify(first.at(-1)), /exact absolute path/u);
+    await f.invoke("exit");
+    f.mock.rawPi.setActiveTools(f.mock.rawPi.getActiveTools().filter((name) => name !== "edit"));
+    await f.invoke("start");
+    const messages = f.currentMessages();
+    const next = await f.applyContext(messages);
+    assert.deepEqual(next.slice(0, first.length), first);
+    assert.equal(next.filter(customDraftMessage).length, 2);
+    assert.match(JSON.stringify(next.at(-1)), /No draft is writable in this session/u);
+    assert.deepEqual(await f.applyContext(structuredClone(next)), next);
+    assert.equal(((await f.call("write", path)) as { block?: boolean }).block, true);
+    await assert.rejects(f.complete(), /plan must be a string/u);
+    const compacted = [{ role: "compactionSummary", summary: "Earlier plan discussion", timestamp: 1 }];
+    const afterCompaction = await f.applyContext(compacted);
+    assert.equal(afterCompaction.filter(customDraftMessage).length, 1);
+    assert.match(JSON.stringify(afterCompaction.at(-1)), /No draft is writable in this session/u);
+    assert.equal((await f.complete({ plan: "# Read-only successor" })).details.plan, "# Read-only successor");
+  } finally {
+    await f.close();
+  }
+});
+
 test("replaying retained draft contracts preserves both the historical grant and its later override", () => {
   const branch: unknown[] = [];
   const replay = (messages: unknown[], expected: DraftAuthorization) =>
