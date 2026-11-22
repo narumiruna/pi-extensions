@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { isMcpServerSelection } from "./mcp-selection.js";
 import { type BrokerCredentials, SUBAGENT_THINKING_LEVELS, type SubagentThinkingLevel } from "./types.js";
 
 export const BROKER_CREDENTIAL_FD = 3;
@@ -18,16 +19,23 @@ export interface ChildSelection {
   thinkingLevel: SubagentThinkingLevel;
 }
 
+export interface ChildMcpSelection {
+  servers: string[];
+  projectTrusted: boolean;
+}
+
 export interface ChildBootstrap {
   communication: BrokerCredentials;
   expectedTools: string[];
   selection: ChildSelection;
+  mcp?: ChildMcpSelection;
 }
 
 interface CapturedReadiness {
   fd: number;
   expectedTools: string[];
   selection: ChildSelection;
+  mcp?: ChildMcpSelection;
 }
 
 export interface CapturedChildBootstrap extends ChildBootstrap {
@@ -45,15 +53,20 @@ export function serializeChildBootstrap(bootstrap: ChildBootstrap): string {
   return JSON.stringify(bootstrap);
 }
 
-export function assertChildBootstrapCapacity(expectedTools: string[], selection: ChildSelection): void {
+export function assertChildBootstrapCapacity(
+  expectedTools: string[],
+  selection: ChildSelection,
+  mcp?: ChildMcpSelection,
+): void {
   const serialized = serializeChildBootstrap({
     communication: { host: "127.0.0.1", port: 65_535, token: "f".repeat(64) },
     expectedTools,
     selection,
+    mcp,
   });
   if (Buffer.byteLength(serialized, "utf8") > MAX_BOOTSTRAP_BYTES) {
     throw new Error(
-      `Subagent tools and model selection exceed the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit.`,
+      `Subagent tools and model selection exceed the ${MAX_BOOTSTRAP_BYTES}-byte child bootstrap size limit${mcp ? " (including MCP server names)" : ""}.`,
     );
   }
 }
@@ -98,6 +111,7 @@ export function captureChildBootstrap(
       fd: CHILD_READINESS_FD,
       expectedTools: [...value.expectedTools],
       selection: { ...value.selection },
+      ...(value.mcp ? { mcp: { ...value.mcp, servers: [...value.mcp.servers] } } : {}),
     });
     return { ...value, selection: { ...value.selection }, readinessFd: CHILD_READINESS_FD };
   }
@@ -110,9 +124,7 @@ export function takeCapturedReadiness(): CapturedReadiness | undefined {
   const store = globalThis as unknown as Record<symbol, CapturedReadiness | undefined>;
   const readiness = store[READINESS_STATE_KEY];
   delete store[READINESS_STATE_KEY];
-  return readiness
-    ? { fd: readiness.fd, expectedTools: [...readiness.expectedTools], selection: { ...readiness.selection } }
-    : undefined;
+  return readiness;
 }
 
 function setCapturedReadiness(readiness: CapturedReadiness | undefined): void {
@@ -134,9 +146,21 @@ function readBootstrapPipe(): string {
 }
 
 function isChildBootstrap(value: unknown): value is ChildBootstrap {
-  if (!isRecord(value) || Object.keys(value).length !== 3) return false;
+  if (!isRecord(value) || Object.keys(value).length !== (Object.hasOwn(value, "mcp") ? 4 : 3)) return false;
   if (!isBrokerCredentials(value.communication) || !isChildSelection(value.selection)) return false;
   if (!Array.isArray(value.expectedTools) || value.expectedTools.length > MAX_EXPECTED_TOOLS) return false;
+  if (Object.hasOwn(value, "mcp")) {
+    const mcp = value.mcp;
+    if (
+      !isRecord(mcp) ||
+      Object.keys(mcp).length !== 2 ||
+      !isMcpServerSelection(mcp.servers) ||
+      mcp.servers.length === 0 ||
+      value.expectedTools.length === 0 ||
+      typeof mcp.projectTrusted !== "boolean"
+    )
+      return false;
+  }
   return value.expectedTools.every(
     (tool) =>
       typeof tool === "string" &&

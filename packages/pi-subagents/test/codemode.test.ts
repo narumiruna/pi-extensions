@@ -93,6 +93,7 @@ export default function(pi) {
         task: "Run the deterministic codemode script.",
         cwd: root,
         tools: ["read", "codemode"],
+        ...(mode === "only" ? { mcpServers: [] } : {}),
         skills: [],
         extensions: [{ path: providerPath, tools: ["fixture_selected"] }],
         toolSources: { fixture_selected: [toolSourceId(providerPath)] },

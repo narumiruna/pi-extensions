@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Static, Type } from "typebox";
 import { assertChildBootstrapCapacity, MAX_BOOTSTRAP_BYTES } from "./broker-credentials.js";
 import { CHILD_COMMUNICATION_TOOL_NAMES } from "./child-communication-tools.js";
+import { MAX_MCP_SERVER_NAME_LENGTH, MAX_MCP_SERVERS, resolveMcpServers } from "./mcp-selection.js";
 import {
   type BrokerInboundMessage,
   MAX_IDENTIFIER_LENGTH,
@@ -69,6 +70,13 @@ const SpawnParameters = Type.Object(
           maxItems: MAX_TOOLS,
         },
       ),
+    ),
+    mcpServers: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: MAX_MCP_SERVER_NAME_LENGTH, pattern: "^[A-Za-z0-9_-]+$" }), {
+        description:
+          "Exact names of configured MCP servers to connect for this job. Defaults to none. Select codemode in tools to call non-direct MCP tools. Only select servers authorized for the task.",
+        maxItems: MAX_MCP_SERVERS,
+      }),
     ),
     skills: Type.Optional(
       Type.Array(
@@ -206,7 +214,7 @@ export function registerSubagentTools(
     label: "Subagent · Spawn",
     ...subagentToolRenderers("spawn"),
     description:
-      "Use subagent_spawn to start one Pi subagent job and return its jobId immediately. The task defines the child's specialization; selected core tools and explicit trusted local skills or extensions define its initial capabilities. The job may ask the main agent questions and publishes one asynchronous completion when terminal.",
+      "Use subagent_spawn to start one Pi subagent job and return its jobId immediately. The task defines the child's specialization; selected tools, explicitly named MCP servers, and trusted local attachments define its capabilities. The job may ask the main agent questions and publishes one asynchronous completion when terminal.",
     promptSnippet: "Use subagent_spawn to start one Pi subagent job",
     parameters: SpawnParameters,
     prepareArguments: prepareSpawnArguments,
@@ -215,6 +223,7 @@ export function registerSubagentTools(
       assertNotNested();
       const task = validateTask(params.task, "subagent_spawn");
       const tools = resolveTools(params.tools);
+      const mcpServers = resolveMcpServers(params.mcpServers);
       const cwd = ctx.cwd;
       const projectTrusted = ctx.isProjectTrusted();
       const sessionGeneration = runtime.getSessionGeneration();
@@ -237,6 +246,7 @@ export function registerSubagentTools(
       assertChildCommandCapacity(
         {
           tools,
+          mcpServers,
           skills: attachments.skills,
           extensions: attachments.extensions,
           thinkingLevel,
@@ -244,16 +254,17 @@ export function registerSubagentTools(
         },
         dependencies.platform,
       );
-      assertChildBootstrapCapacity(selectedChildTools({ tools, extensions: attachments.extensions }), {
-        provider,
-        model,
-        thinkingLevel,
-      });
+      assertChildBootstrapCapacity(
+        selectedChildTools({ tools, extensions: attachments.extensions }),
+        { provider, model, thinkingLevel },
+        mcpServers.length ? { servers: mcpServers, projectTrusted } : undefined,
+      );
       throwIfAborted(signal, "Subagent spawn was cancelled");
       return toolResult(
         runtime.start({
           task,
           tools,
+          mcpServers,
           skills: attachments.skills,
           extensions: attachments.extensions,
           toolSources: attachments.toolSources,

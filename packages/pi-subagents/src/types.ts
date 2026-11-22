@@ -46,6 +46,7 @@ export interface ChildRequest {
   task: string;
   tools: string[];
   skills: string[];
+  mcpServers?: string[];
   extensions: ExtensionAttachment[];
   toolSources: Record<string, string[]>;
   provider: string;

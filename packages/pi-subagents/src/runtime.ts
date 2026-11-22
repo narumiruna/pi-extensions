@@ -70,6 +70,7 @@ export interface StartJobInput {
   task: string;
   tools: string[];
   skills: string[];
+  mcpServers?: string[];
   extensions: ExtensionAttachment[];
   toolSources: Record<string, string[]>;
   provider: string;
@@ -203,6 +204,7 @@ export class SubagentRuntime {
           task: input.task,
           tools: [...input.tools],
           skills: [...input.skills],
+          ...(input.mcpServers?.length ? { mcpServers: [...input.mcpServers] } : {}),
           extensions: input.extensions.map((extension) => ({
             path: extension.path,
             tools: [...extension.tools],

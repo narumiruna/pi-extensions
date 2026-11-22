@@ -12,7 +12,20 @@ export interface ChildReadinessState {
 
 const captured = takeCapturedReadiness();
 
-const childReadinessProbe: ExtensionFactory = captured ? createChildReadinessProbe(captured) : () => undefined;
+const childReadinessProbe: ExtensionFactory = captured
+  ? async (pi) => {
+      let getMcpError: (() => string | undefined) | undefined;
+      if (captured.mcp) {
+        try {
+          const { installChildMcp } = await import("./child-mcp.js");
+          getMcpError = installChildMcp(pi, captured.mcp);
+        } catch {
+          getMcpError = () => "Subagent could not load Pi's MCP support.";
+        }
+      }
+      createChildReadinessProbe(captured, writeReadinessFrame, closeDescriptor, getMcpError)(pi);
+    }
+  : () => undefined;
 
 export default childReadinessProbe;
 
@@ -22,6 +35,7 @@ export function createChildReadinessProbe(
   readiness: ChildReadinessState,
   writeFrame: (fd: number, frame: string) => void = writeReadinessFrame,
   close: (fd: number) => void = closeDescriptor,
+  getMcpError?: () => string | undefined,
 ): ExtensionFactory {
   return (pi) => {
     let settled = false;
@@ -66,6 +80,8 @@ export function createChildReadinessProbe(
       deadline = setTimeout(() => publish({ ok: false, error: "Subagent child model readiness timed out." }), 30_000);
       deadline.unref();
       try {
+        const mcpError = getMcpError?.();
+        if (mcpError) throw new ReadinessError(mcpError);
         const tools = toolState();
         const initialModel = ctx.model;
         const initialDefinition = JSON.stringify(initialModel);

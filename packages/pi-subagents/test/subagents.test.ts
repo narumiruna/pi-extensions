@@ -81,6 +81,7 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
     "provider",
     "model",
     "tools",
+    "mcpServers",
     "skills",
     "extensions",
     "thinkingLevel",
@@ -89,6 +90,9 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   assert.equal(Check(tools[0]?.parameters, { task: "No new arguments" }), true);
   assert.equal(tools[0]?.parameters.properties?.task?.maxLength, 50 * 1024);
   assert.equal(tools[0]?.parameters.properties?.tools?.maxItems, 64);
+  assert.equal(tools[0]?.parameters.properties?.mcpServers?.maxItems, 32);
+  assert.equal(Check(tools[0]?.parameters, { task: "Read docs", mcpServers: ["docs-api"] }), true);
+  assert.equal(Check(tools[0]?.parameters, { task: "Read docs", mcpServers: ["docs-*"] }), false);
   assert.equal(tools[0]?.parameters.properties?.skills?.maxItems, 16);
   assert.equal(tools[0]?.parameters.properties?.extensions?.maxItems, 16);
   const extensionItem = (
@@ -144,7 +148,7 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
       assert.equal(Check(candidate?.parameters, preparedMalformed), false);
     }
   }
-  assert.match(tools[0]?.description ?? "", /task defines.*skills or extensions define/is);
+  assert.match(tools[0]?.description ?? "", /task defines.*explicitly named MCP servers.*trusted local attachments/is);
   for (const candidate of tools) {
     assert.doesNotMatch(
       JSON.stringify({
@@ -272,6 +276,7 @@ test("spawns jobs with omitted and explicit tools and thinking levels", async ()
     {
       task: "Implement one thing",
       tools: ["read", "edit", "read", "write", "codemode", "codemode", "future_tool"],
+      mcpServers: ["docs-api", "notes", "docs-api"],
       skills: ["packages/pi-subagents/skills/using-pi-subagents"],
       extensions: [
         {
@@ -321,6 +326,8 @@ test("spawns jobs with omitted and explicit tools and thinking levels", async ()
       },
     ],
   );
+  assert.equal(requests[0]?.mcpServers, undefined);
+  assert.deepEqual(requests[1]?.mcpServers, ["docs-api", "notes"]);
   assert.deepEqual(requests[1]?.toolSources, {
     custom_review: [toolSourceId(path.resolve("packages/pi-subagents/src/index.ts"))],
   });
