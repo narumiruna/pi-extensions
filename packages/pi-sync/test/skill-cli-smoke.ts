@@ -190,6 +190,8 @@ try {
   const requestsToExpand = [
     "Turn on debug logging in pi-sync.json.",
     "Exclude npm/ from my active ignore file.",
+    "Draft a .syncignore without writing it.",
+    "Audit my ignore rules for blocked exceptions without editing the file.",
     "Error: Agent directory changed or has an unsafe filesystem layout; no snapshot was collected.",
     "Where do I enter my WebDAV app password?",
     "What does ./ mean for R2 and S3?",
@@ -207,6 +209,8 @@ try {
     assert.ok(request.includes("Make and verify a clear, authorized local edit"));
     assert.ok(request.includes("expected: documentFingerprint(document), next"));
     assert.ok(request.includes("start with read-only local checks"));
+    assert.ok(request.includes("Draft a new ignore file"));
+    assert.ok(request.includes("Add, revise, or audit existing rules"));
   }
   const beforeReload = requests.length;
   await send("prompt", { message: "/skill-smoke-reload" });
@@ -221,6 +225,7 @@ try {
   clearTimeout(deadline);
   await assert.rejects(fs.stat(path.join(agentDir, "pi-sync.json")), { code: "ENOENT" });
   await assert.rejects(fs.stat(path.join(agentDir, "pi-sync.local.json")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(agentDir, ".syncignore")), { code: "ENOENT" });
   await assert.rejects(fs.stat(path.join(agentDir, "pi-sync")), { code: "ENOENT" });
   assert.deepEqual(await fs.readdir(workspace), []);
   console.log(

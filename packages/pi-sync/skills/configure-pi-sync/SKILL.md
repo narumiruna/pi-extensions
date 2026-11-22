@@ -1,6 +1,6 @@
 ---
 name: configure-pi-sync
-description: Apply requested edits to local Pi Sync settings in pi-sync.json and the active .syncignore or other ignore file, and troubleshoot Pi Sync errors. Use for configuration changes, path exclusions, automatic-transfer approval, and local scan failures. Do not use to execute sync, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
+description: Apply requested edits to local Pi Sync settings in pi-sync.json or the active .syncignore or other ignore file, draft or audit ignore rules, and troubleshoot Pi Sync errors. Use for configuration changes, path exclusions, rule maintenance, automatic-transfer approval, and local scan failures. Do not use to execute sync, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
 license: MIT
 disable-model-invocation: true
 ---
@@ -41,19 +41,49 @@ Ask at most one focused question if the intended change or target remains unclea
 7. Re-read and validate the same canonical file, then verify the requested fields before reporting success.
    Keep the document, bytes, credential values, and daemon payloads in the local process; report only the changed non-secret field names and safe values or a redacted error category.
 
-## Edit the active ignore file
+## Write ignore rules
 
-1. Edit only the verified existing UTF-8 rule file directly under the agent directory; reject unsafe names, protected files, symlinks, hard links, and unfinished rule-file creation.
+Read the [ignore-file policy](references/configuration.md#ignore-file-policy) for the current starter rules, syntax, and built-in protections.
+
+- Keep portable files the user needs across machines, and exclude confirmed machine-local, sensitive, or regenerated paths such as package checkouts, caches, and logs.
+- Prefer narrow rules anchored to the agent directory, such as `/skills/private/`, over broad wildcards or copied project `.gitignore` files.
+- Use `/` separators and exact case, and add a trailing `/` only when the rule should match directories but not same-named files.
+- Put a narrow `!` exception after the rule it overrides, and keep its parent directories visible to the matcher.
+  For example, `/notes/*` followed by `!/notes/shared.md` excludes other contents of top-level `notes/` without hiding `notes/` itself; `!/notes/shared.md` after `/notes/` does not work.
+- Keep sessions excluded unless the user wants them and completes the separate session opt-in; match logical `sessions/` paths even if stored elsewhere.
+- Do not rely on the rules as a secret scanner or try to re-include built-in protected files.
+
+## Draft a new ignore file
+
+1. Start with the current starter rules shown by Pi Sync and ask what must stay local only if the request and safe local checks do not identify it.
+   Use only relevant names and file types under the intended agent directory, not file contents.
+2. Add only exclusions justified by those paths or the user's stated purpose, and test the draft as described below.
+   If replacing a legacy policy, do not copy `include`, `exclude`, or `reinclude` mechanically; the user must compare what enters or leaves scope in the migration review.
+3. Return a draft and its expected scope changes without writing the file or settings.
+   For a missing default `.syncignore`, leave creation to the confirmed `/sync` setup or migration flow when supported, and follow its manual creation guidance otherwise.
+   If Pi Sync creates the starter file, apply any authorized changes through the existing-file workflow and have the user review the new scope before transferring.
+   To switch an existing ignore-file setup to an alternate filename, the user creates a valid UTF-8 rule file directly under the agent directory without overwriting an existing file, then reviews the switch in **Settings → Ignore file**.
+
+## Add, revise, or audit existing rules
+
+1. Read only the verified UTF-8 rule file directly under the agent directory; reject unsafe names, protected files, symlinks, hard links, and unfinished rule-file creation.
+   Use the matching build's `readIgnoreSource` and `compileIgnoreRules` from `dist/daemon/dist/engine/ignore/ignore-source.js` (the daemon engine's `ignore-source` module in a source checkout); require `present: true` for an existing file.
    Do not create a missing rule file or change the selected filename.
-   Use the matching build's `readIgnoreSource` and `compileIgnoreRules` from `dist/daemon/dist/engine/ignore/ignore-source.js` (the daemon engine's `ignore-source` module in a source checkout) to check the source and proposed rules; require `present: true`.
-2. Warn that an edit affects every setup that shares the rule file.
-   Before expanding scope, explain that more existing and future files can be sent or overwritten; exclusions do not erase retained snapshots or backups.
-3. Stop if a sync review, transfer, or recovery is in progress.
-   Preserve existing rule order, change only the requested rules, and do not write if the intended behavior is already in effect.
-4. Compare the proposed rule matches for the requested paths, then recheck the active source, file identity, and byte digest immediately before saving; stop if they changed.
-   Replace atomically with a private temporary file in the same directory, keeping the original permissions on the replacement; the recheck does not serialize external editors.
-5. Re-read the saved rules and verify the requested path behavior against the documented matching rules.
-   Tell the user if the change requires fresh policy review before further transfers.
+2. For an addition or revision, make the smallest proposed change and preserve unrelated lines and rule order.
+   For maintenance, look for overbroad patterns, redundant rules, and exceptions blocked by an excluded parent; do not remove a rule just because no local file currently matches it.
+   Do not sort or reformat rules during cleanup; even comment or whitespace changes can change the policy fingerprint.
+3. Compile both the current and proposed text (or the starter and draft for a new file) and compare matches using canonical agent-relative paths; call `matches(path, true)` for directories.
+   Test a path that should change and a nearby path that should not, plus relevant parent directories, exceptions, and representative future paths for wildcard changes.
+   Treat these as rule checks, not a full sync preview; built-in protections and session opt-in still apply.
+4. Summarize what starts or stops being eligible, which setups share the file, and what was not checked.
+   Warn before widening scope that more existing and future files can be sent or overwritten, and that exclusions do not erase retained snapshots or backups.
+   Stop after the summary for a read-only audit or an unapproved scope change.
+   If the requested exclusion or exception is already effective, report it without rewriting the file.
+5. Save only an authorized change, and stop if a sync review, transfer, or recovery is in progress or you cannot verify that it is safe to edit.
+   Reconfirm the selected source and affected setups, then recheck the active source, file identity, and byte digest immediately before saving; stop if they changed.
+   Replace atomically with a private temporary file in the same directory, keeping the original permissions on the replacement; this does not serialize external editors.
+6. Re-read the saved rules and verify the same path checks.
+   Have the user check peer devices for matching rule text and session opt-in and reopen any needed policy or automatic-transfer review before transferring.
 
 ## Troubleshoot without bypassing reviews
 
