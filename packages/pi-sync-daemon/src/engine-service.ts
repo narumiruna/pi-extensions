@@ -34,14 +34,14 @@ function optionsFrom(value: unknown, execution: Execution): CommandOptions {
   };
 }
 /** Engine dispatch is loaded only by the service, never by the public IPC client. */
-export function createEngineService(root: string) {
+export function createEngineService(root: string, ignoreFileSettingsAvailable = false) {
   const host = installServiceHost(root);
   const monitor = createMonitor(root, host);
   const execute: Execute = (operation, payload, execution) =>
     host.run(execution, async () => {
       if (operation === "ignore.capabilities") {
         execution.validate();
-        return { available: false };
+        return { available: ignoreFileSettingsAvailable };
       }
       if (operation === "ignore.migration-offer" || operation === "ignore.migration-defer") {
         execution.validate();
@@ -56,8 +56,18 @@ export function createEngineService(root: string) {
         execution.validate();
         throw new Error("Daemon ignore-file saves are unavailable. Edit the existing rule file manually.");
       }
+      const ignoreFileChange = operation === "ignore.migrate" || operation === "ignore.switch";
+      if (ignoreFileChange && !ignoreFileSettingsAvailable) {
+        execution.validate();
+        throw new Error("Unsupported engine operation.");
+      }
       await monitor.pause();
       execution.validate();
+      if (ignoreFileChange) {
+        const { runIgnorePolicyChange } = await import("./engine/ignore/ignore-settings.js");
+        execution.validate();
+        return runIgnorePolicyChange(operation, payload, execution);
+      }
       if (operation === "daemon.authorize") return authorizeAfterExit(execution, payload);
       if (operation === "daemon.handover") {
         await requireHandover(execution);

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, vi } from "vitest";
 import { configureEngineHost, type ReviewRequest } from "../src/engine/host.js";
-import { readIgnoreMigrationOffer } from "../src/engine/ignore/ignore-migration-prompt.js";
+import { deferIgnoreMigrationOffer, readIgnoreMigrationOffer } from "../src/engine/ignore/ignore-migration-prompt.js";
 import { migrateIgnoreSetup, newIgnoreFilename, switchIgnoreFile } from "../src/engine/ignore/ignore-settings.js";
 import { DEFAULT_IGNORE_CREATION_RECORD, DEFAULT_IGNORE_RULES } from "../src/engine/ignore/ignore-source.js";
 import { withConfigPublicationReadyHookForTest } from "../src/engine/settings/config-file.js";
@@ -253,6 +253,23 @@ test("changing the active setup after an offer refuses migration before opening 
     assert.equal(headRead.mock.calls.length, 0);
     await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
     assert.deepEqual(await readSettings(root), next);
+  }));
+
+test("deferring an offer while its review is open prevents publication", () =>
+  fixture(async (root, execution, proposal) => {
+    const facts = execution.facts();
+    assert.ok(facts);
+    const tui = { ...execution, facts: () => ({ ...facts, mode: "tui" as const }) };
+    const offer = await readIgnoreMigrationOffer({ setup: "home" }, tui);
+    assert.ok(offer);
+    proposal(async () => {
+      await deferIgnoreMigrationOffer({ setup: "home", token: offer.token }, tui);
+      return true;
+    });
+    await assert.rejects(migrateIgnoreSetup(tui, "home", offer.token), /offer is stale/u);
+    assert.equal(await readIgnoreMigrationOffer({ setup: "home" }, tui), null);
+    await assert.rejects(fs.lstat(path.join(root, file)), { code: "ENOENT" });
+    assert.deepEqual(await readSettings(root), fixtureSettings);
   }));
 
 test("migration refuses scope or remote changes while the review is open", () =>
