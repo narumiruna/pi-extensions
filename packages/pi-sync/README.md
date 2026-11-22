@@ -290,7 +290,7 @@ Startup checks report included-content differences without changing anything. Tr
 
 ### Ignore-file policy
 
-These routes require ignore-file support in the running daemon. In TUI, eligible legacy setups can review migration the first time you open `/sync`. **Not now** keeps your existing policy and defers the prompt for that setup. To review it later, use **Settings → Migrate to ignore file…**. Check which local and remote paths enter or leave scope. Directory-wide rules can also include files created later. Use `/sync files` to check current local scope and review the transfer itself before approving it. An ignore file is not a secret scanner.
+These routes require ignore-file support in the running daemon. In TUI, eligible legacy setups can review migration the first time you open `/sync`. **Not now** keeps your existing policy and defers the prompt for that setup. To review it later, use **Settings → Migrate to ignore file…**. Check which local and remote paths enter or leave scope. Directory-wide rules can also include files created later. Review the transfer itself before approving it. An ignore file is not a secret scanner.
 
 An existing valid rule file is reused as-is. After confirmation, the daemon can create a missing default `.syncignore` on Linux, macOS, and Windows without overwriting an existing file. If automatic creation is unavailable on your filesystem, follow the displayed path and starter rules: create a regular UTF-8 file there without replacing an existing file, then reopen the setup or migration review. **Settings → Ignore file** shows the current path and lets you review a switch to another existing file. Edit the file manually; there is no in-app rule save. Edits affect every setup that uses that file. Setup, migration, switching the file, and editing rules do not authorize or trigger a transfer.
 
@@ -304,13 +304,13 @@ For selected-path setups, **Settings → Excluded paths** edits `sync.exclude` r
 
 ### Scan limits
 
-If the agent-directory scan exceeds 64 MiB, use `/sync config` to find the active ignore file. Exclude large files or folders you do not need to sync, then check `/sync files` again. For a legacy agent-directory setup, use **Settings → Agent directory scope** to edit exclusions instead. Storage diagnostics do not change the local scan limit.
+If the agent-directory scan exceeds 64 MiB, use `/sync config` to find the active ignore file. Exclude large files or folders you do not need to sync, verify the rules, and reopen the transfer review. For a legacy agent-directory setup, use **Settings → Agent directory scope** to edit exclusions instead. Storage diagnostics do not change the local scan limit.
 
 Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, content policy, legacy paths, and recovery steps.
 
 ## 🧠 Skills
 
-Run `/skill:configure-pi-sync` with the edit you want or the error you saw. For example, use `/skill:configure-pi-sync turn on debug logging` or `/skill:configure-pi-sync exclude npm/ from my active ignore file`. The [configuration skill](./skills/configure-pi-sync/SKILL.md) loads only on request. It applies authorized edits to `pi-sync.json` through the running local daemon or edits the existing active ignore file, normally `.syncignore`. For an error, it checks the local cause before proposing a change.
+Run `/skill:configure-pi-sync` with the edit you want, the rule draft or audit you need, or the error you saw. For example, use `/skill:configure-pi-sync exclude npm/ from my active ignore file` or `/skill:configure-pi-sync draft a .syncignore without writing it`. The [configuration skill](./skills/configure-pi-sync/SKILL.md) loads only on request. It applies authorized edits to `pi-sync.json` through the running local daemon or edits the existing active ignore file, normally `.syncignore`. For an error, it checks the local cause before proposing a change.
 
 Use `/sync` for initial setup, masked credential entry, and operations that require a separate review. The skill does not run backend diagnostics, check remote connectivity, or start transfers. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for manual configuration and troubleshooting.
 
@@ -324,7 +324,7 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
 | `/sync config` | Show resolved configuration. |
-| `/sync files` | List included local files. |
+| `/sync files` | Show the active rule-file path for ignore-file setups or open content selection for legacy setups in TUI. |
 | `/sync status` | Compare local and remote snapshot state. |
 | `/sync diff` | Show local and remote differences. |
 | `/sync conflicts` | Review private unresolved dependency groups and choose local or remote group versions after fresh validation. |
