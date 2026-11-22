@@ -31,6 +31,7 @@ import {
   AutomaticIgnoreCreationUnavailable,
   checkAutomaticIgnoreCreation,
   prepareDefaultIgnoreSource,
+  readPendingIgnoreCreation,
 } from "./ignore-initialization.js";
 import { assertCurrentIgnoreMigrationOffer } from "./ignore-migration-prompt.js";
 import {
@@ -130,16 +131,14 @@ async function readSetupSource(root: string, filename: string, signal: AbortSign
       !(error.cause instanceof IgnoreCreationPendingError)
     )
       throw error;
-    if ((await fs.realpath(root)) !== root) throw error;
-    const marker = await fs.lstat(path.join(root, DEFAULT_IGNORE_CREATION_RECORD), { bigint: true });
+    const { text, token } = await readPendingIgnoreCreation(root, signal);
     signal.throwIfAborted();
-    if (!marker.isFile() || marker.nlink !== 1n) throw error;
     return {
       filename,
       present: false,
-      text: DEFAULT_IGNORE_RULES,
-      sourceDigest: ignoreSourceDigest(filename, false, Buffer.from(DEFAULT_IGNORE_RULES)),
-      pendingCreation: `${marker.dev}:${marker.ino}:${marker.size}:${marker.ctimeNs}:${marker.mtimeNs}`,
+      text,
+      sourceDigest: ignoreSourceDigest(filename, false, Buffer.from(text)),
+      pendingCreation: token,
     };
   }
 }
@@ -222,10 +221,12 @@ export async function prepareReviewedIgnoreSource(root: string, reviewed: Review
   )
     stale();
   if (current.present) return { source: current, created: false };
-  const prepared = await prepareDefaultIgnoreSource(root, execution.signal).catch((error: unknown) => {
-    execution.validate();
-    throw creationFailure(root, current, error);
-  });
+  const prepared = await prepareDefaultIgnoreSource(root, execution.signal, current.pendingCreation ?? null).catch(
+    (error: unknown) => {
+      execution.validate();
+      throw creationFailure(root, current, error);
+    },
+  );
   execution.validate();
   if (
     !prepared.source.present ||
@@ -429,11 +430,11 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
 }
 
 function describeSource(source: ReviewedIgnoreSource) {
-  if (source.pendingCreation)
-    return "Verify or complete the interrupted creation of the starter rules. Incomplete content will not be used.";
-  return source.present
-    ? "Keep the existing rule file unchanged."
+  if (source.present) return "Keep the existing rule file unchanged.";
+  const action = source.pendingCreation
+    ? "Verify or complete the interrupted creation of the starter rules. Incomplete content will not be used."
     : "Create the default rule file with the starter rules.";
+  return `${action}\n${source.text.trimEnd()}`;
 }
 
 function describeChanges(label: string, before: string[], after: string[]) {
