@@ -27,7 +27,7 @@ import { getKeybindings, isKittyProtocolActive, setKeybindings, setKittyProtocol
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { Type } from "typebox";
 import { test } from "vitest";
-import { createMockContext } from "./support.js";
+import { createMockContext, planCompletionMessages } from "./support.js";
 
 const QUESTION = {
   questions: [
@@ -409,7 +409,7 @@ async function assertNextPlainTextTurn(f: Fixture) {
   assert.deepEqual(f.session.getActiveToolNames(), active);
   assert.deepEqual(f.requests.at(-1)?.tools, f.requests[0]?.tools);
   assert.equal(f.requests.at(-1)?.systemPrompt, f.requests[0]?.systemPrompt);
-  assert.match(JSON.stringify(f.requests.at(-1)?.messages), /PI PLAN MODE INTERACTION CONTRACT v1: DISCUSSION/);
+  assert.match(JSON.stringify(f.requests.at(-1)?.messages), /PI PLAN MODE INTERACTION CONTRACT v2: DISCUSSION/);
   assert.deepEqual(f.errors, []);
 }
 
@@ -437,7 +437,7 @@ test("real Pi restores a durably committed interaction when fire-and-forget publ
         await f.session.prompt(prompt);
         assert.equal(f.session.getLastAssistantText(), NEXT_TEXT);
         assert.equal(f.tui.openCount, 0);
-        assert.match(JSON.stringify(f.requests.at(-1)?.messages), /PI PLAN MODE INTERACTION CONTRACT v1: DISCUSSION/);
+        assert.match(JSON.stringify(f.requests.at(-1)?.messages), /PI PLAN MODE INTERACTION CONTRACT v2: DISCUSSION/);
       }
       assert.equal(f.requests.length, 2);
       const normalize = (messages: TranscriptContext["messages"]) =>
@@ -510,19 +510,66 @@ test("real Pi discussion rejects a fresh questionnaire and saves a ready plan wi
     assert.ok(paused);
     assert.equal((paused.result.details as { reason: string }).reason, "questions_paused");
     assert.equal(f.tui.openCount, 1);
-    f.faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("plan_mode_complete", { plan: PLAN })),
-      fauxAssistantMessage("The decision-ready plan is saved."),
-    ]);
+    f.faux.setResponses([...planCompletionMessages(PLAN), fauxAssistantMessage("The decision-ready plan is saved.")]);
+    const requestStart = f.requests.length;
     await f.session.prompt("Save the agreed plan.");
+    const completionRequests = f.requests.slice(requestStart);
+    assert.equal(completionRequests.length, 2, "saving the draft allows the model to make a separate completion call");
+    const [draftRequest, finishRequest] = completionRequests;
+    assert.ok(draftRequest && finishRequest);
+    assert.equal(finishRequest.systemPrompt, draftRequest.systemPrompt);
+    assert.deepEqual(finishRequest.tools, draftRequest.tools);
+    const normalize = (messages: TranscriptContext["messages"]) =>
+      messages.map(({ role, content }) => ({ role, content }));
+    assert.deepEqual(
+      normalize(finishRequest.messages).slice(0, draftRequest.messages.length),
+      normalize(draftRequest.messages),
+    );
+    assert.match(JSON.stringify(finishRequest.messages), /plan_mode_update/u);
     const state = f.session.sessionManager
       .getBranch()
       .findLast((entry) => entry.type === "custom" && entry.customType === "plan-mode-state");
     assert.ok(state?.type === "custom");
     assert.equal((state.data as { latestPlan: string }).latestPlan, PLAN);
     assert.equal((state.data as { awaitingAction: boolean }).awaitingAction, true);
+    assert.equal(f.faux.getPendingResponseCount(), 1, "completion stops the run after the draft update");
     assert.equal(f.tui.openCount, 1, "ready completion must not claim UI focus in discussion");
     assert.equal(f.dialogCount, 0);
     await assertNextPlainTextTurn(f);
+  });
+});
+
+test("real Pi blocks a batched completion but accepts a separate completion of the updated draft", async () => {
+  await withRuntime(async (f) => {
+    await f.toggleInteraction();
+    f.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("plan_mode_update", { plan: "# Previous draft" })),
+      fauxAssistantMessage([
+        fauxToolCall("plan_mode_update", { plan: PLAN }, { id: "replace-draft" }),
+        fauxToolCall("plan_mode_complete", {}, { id: "mixed-complete" }),
+      ]),
+      fauxAssistantMessage(fauxToolCall("plan_mode_complete", {}, { id: "standalone-complete" })),
+    ]);
+    await f.session.prompt("Save the agreed plan.");
+
+    assert.equal(f.requests.length, 3, "the mixed completion must not end the turn");
+    assert.equal(f.ends.find(({ toolCallId }) => toolCallId === "replace-draft")?.isError, false);
+    const rejected = f.ends.find(({ toolCallId }) => toolCallId === "mixed-complete");
+    assert.equal(rejected?.isError, true);
+    assert.match(JSON.stringify(rejected.result.content), /alone in a top-level assistant message/u);
+    const accepted = f.ends.find(({ toolCallId }) => toolCallId === "standalone-complete");
+    assert.equal(accepted?.isError, false);
+    assert.deepEqual(accepted.result.details, { version: 1, source: "plan_mode_complete", plan: PLAN });
+    const completions = f.session.sessionManager
+      .getBranch()
+      .filter(
+        (entry) =>
+          entry.type === "custom" &&
+          entry.customType === "plan-mode-state" &&
+          (entry.data as { awaitingAction?: boolean }).awaitingAction === true,
+      );
+    assert.equal(completions.length, 1);
+    assert.equal(f.tui.openCount, 0);
+    assert.deepEqual(f.errors, []);
   });
 });

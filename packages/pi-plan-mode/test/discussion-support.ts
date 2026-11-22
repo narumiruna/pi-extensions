@@ -16,7 +16,7 @@ import {
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { vi } from "vitest";
 import type { PlanModeState } from "../src/state.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createMockContext, createMockPi, updateThenCompletePlan } from "./support.js";
 
 export const DISCUSSION_QUESTIONS = [
   {
@@ -169,6 +169,8 @@ async function discussionFixture(
     branch,
     state,
     execute,
+    updateThenCompletePlan: (plan: string, callId?: string) =>
+      updateThenCompletePlan(mock, currentContext.ctx, plan, callId),
     command,
     emit,
     dispatch,

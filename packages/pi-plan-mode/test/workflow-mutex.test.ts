@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { AGENT_WORKFLOW_GROUP, WORKFLOW_MUTEX_CHANNEL, WorkflowMutex } from "../src/workflow-mutex.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createMockContext, createMockPi, updateThenCompletePlan } from "./support.js";
 
-const PLAN_HELPERS = ["plan_mode_question", "plan_mode_complete"];
+const PLAN_HELPERS = ["plan_mode_question", "plan_mode_update", "plan_mode_complete"];
 
 function attempt(session: object, group = AGENT_WORKFLOW_GROUP) {
   return { session, group, busy: false };
@@ -157,10 +157,7 @@ test("Plan holds the workflow mutex through planning, ready review, and revision
   mock.eventBus.emit(WORKFLOW_MUTEX_CHANNEL, planning);
   assert.equal(planning.busy, true);
 
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as (
-    ...args: unknown[]
-  ) => Promise<unknown>;
-  await complete("call", { plan: "# Ready plan" }, undefined, undefined, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, "# Ready plan", "call");
   const ready = attempt(sessionManager);
   mock.eventBus.emit(WORKFLOW_MUTEX_CHANNEL, ready);
   assert.equal(ready.busy, true);
@@ -368,10 +365,7 @@ test("Plan releases only after exit, save, export, implementation handoff, and s
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
       await mock.commands.get("plan")?.handler("start", context.ctx);
       if (action === "save" || action === "export" || action === "implement") {
-        const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as (
-          ...args: unknown[]
-        ) => Promise<unknown>;
-        await complete("call", { plan: `# ${action} plan` }, undefined, undefined, context.ctx);
+        await updateThenCompletePlan(mock, context.ctx, `# ${action} plan`, "call");
       }
 
       if (action === "shutdown") {
@@ -385,7 +379,13 @@ test("Plan releases only after exit, save, export, implementation handoff, and s
       const released = attempt(sessionManager);
       mock.eventBus.emit(WORKFLOW_MUTEX_CHANNEL, released);
       assert.equal(released.busy, false, `${action} should release after cleanup`);
-      assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "write", "plan_mode_question", "plan_mode_complete"]);
+      assert.deepEqual(mock.rawPi.getActiveTools(), [
+        "read",
+        "write",
+        "plan_mode_question",
+        "plan_mode_update",
+        "plan_mode_complete",
+      ]);
     }
   } finally {
     await rm(exportRoot, { recursive: true, force: true });
@@ -426,10 +426,7 @@ test("fresh-session cancellation and pre-shutdown success preserve the source ow
     });
     await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as (
-      ...args: unknown[]
-    ) => Promise<unknown>;
-    await complete("call", { plan: "# Ready plan" }, undefined, undefined, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, "# Ready plan", "call");
     await mock.commands.get("plan")?.handler("", context.ctx);
     assert.ok(implementFresh);
     await implementFresh({}, new AbortController().signal);

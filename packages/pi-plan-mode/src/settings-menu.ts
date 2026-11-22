@@ -1,6 +1,5 @@
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type RunMenuResult, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
-import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
 import {
   type AvailableImplementationModel,
   findAvailableImplementationModel,
@@ -9,7 +8,7 @@ import {
 } from "./implementation-models.js";
 import { retentionLabel } from "./implementation-retention.js";
 import { planExportDestination } from "./plan-export.js";
-import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
+import { isRequiredPlanModeTool } from "./required-tools.js";
 import {
   configuredImplementationModel,
   configuredImplementationPlanRetention,
@@ -79,9 +78,7 @@ export async function showPlanModeSettings(
   const readSettings = options.readSettings ?? readPlanModeSettings;
   const updateSettings = options.updateSettings ?? updatePlanModeSettings;
   const activeToolNames = new Set(options.activeToolNames ?? options.tools.map((tool) => tool.name));
-  const tools = options.tools.filter(
-    (tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME,
-  );
+  const tools = options.tools.filter((tool) => !isRequiredPlanModeTool(tool.name));
   const toolItemIds = new Map(tools.map((tool, index) => [tool.name, `plan-settings-tool:${index}`]));
   const toolsByItemId = new Map(tools.map((tool) => [toolItemIds.get(tool.name) as string, tool]));
   const implementationModels = snapshotAvailableImplementationModels(ctx);

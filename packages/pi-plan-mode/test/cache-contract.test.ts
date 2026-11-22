@@ -4,7 +4,7 @@ import { test } from "vitest";
 import { INTERACTION_CONTRACT_MESSAGE_TYPE } from "../src/interaction-contract.js";
 import { MODE_CONTRACT_MESSAGE_TYPE, modeContractContent } from "../src/mode-contract.js";
 import planMode from "../src/plan-mode.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createMockContext, createMockPi, extensionTool, updateThenCompletePlan } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 interface CapturedRequest {
@@ -84,14 +84,6 @@ function snapshotToolDefinition(name: string, tool: Record<string, unknown> | un
     parameters: tool?.parameters,
     constrainedSampling: tool?.constrainedSampling,
   });
-}
-
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown) {
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
-    | ((...args: unknown[]) => Promise<unknown>)
-    | undefined;
-  assert.ok(complete);
-  await complete("complete", { plan: "# Cache-stable plan" }, undefined, undefined, ctx);
 }
 
 test("captured tool definitions retain their values after nested schema changes", async () => {
@@ -247,7 +239,7 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     plan.providerPayload.messages,
   );
 
-  await completePlan(mock, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, "# Cache-stable plan");
   await mock.commands.get("plan")?.handler("implement", context.ctx);
   const transitions = sentCustomMessages(mock);
   assert.deepEqual(
@@ -287,7 +279,10 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     ["A", "B", "C", "Implement the plan."],
   );
   const helperMetadata = normal.activePromptMetadata.filter((tool) => tool.name.startsWith("plan_mode_"));
-  assert.equal(helperMetadata.length, 2);
+  assert.deepEqual(
+    helperMetadata.map(({ name }) => name),
+    ["plan_mode_question", "plan_mode_update", "plan_mode_complete"],
+  );
   assert.ok(helperMetadata.every((tool) => tool.promptSnippet === undefined && tool.promptGuidelines === undefined));
   const helperDefinitions = normal.providerPayload.tools.filter((tool) => tool.name.startsWith("plan_mode_"));
   assert.ok(
@@ -296,6 +291,14 @@ test("stable Plan helper schema keeps request fields and inactive metadata safe"
     ),
   );
   assert.ok(helperDefinitions.every((tool) => /writing-plans skill/i.test(String(tool.description))));
+  const updateDefinition = nextPlan.providerPayload.tools.find((tool) => tool.name === "plan_mode_update");
+  assert.partialDeepStrictEqual(updateDefinition?.parameters, {
+    properties: { plan: { type: "string" } },
+    required: ["plan"],
+  });
+  const completeDefinition = nextPlan.providerPayload.tools.find((tool) => tool.name === "plan_mode_complete");
+  assert.partialDeepStrictEqual(completeDefinition?.parameters, { properties: {}, additionalProperties: false });
+  assert.deepEqual((completeDefinition?.parameters as { properties: unknown })?.properties, {});
   const questionDefinition = nextPlan.providerPayload.tools.find((tool) => tool.name === "plan_mode_question");
   assert.partialDeepStrictEqual(questionDefinition?.parameters, {
     properties: {

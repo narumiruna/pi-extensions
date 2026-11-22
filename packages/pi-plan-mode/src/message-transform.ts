@@ -1,7 +1,9 @@
-import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import { PLAN_MODE_COMPLETE_TOOL_NAME, PLAN_MODE_UPDATE_TOOL_NAME } from "./completion-tool.js";
 import type { ActiveImplementationPlan } from "./state.js";
 
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
+export const MODEL_DRAFT_MESSAGE_TYPE = "plan-mode-draft";
+export const PLAN_DRAFT_PREVIEW_MESSAGE_TYPE = "plan-mode-draft-preview";
 export const PLAN_IMPLEMENTATION_CONTEXT_MESSAGE_TYPE = "plan-mode-implementation-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const PLAN_IMPLEMENTATION_HANDOFF_PREFIX =
@@ -86,6 +88,10 @@ export function messageContainsLegacyPlanModeContextArtifact(message: unknown) {
   return unwrapSessionMessage(message).customType === PLAN_CONTEXT_MESSAGE_TYPE;
 }
 
+export function messageContainsPlanDraftPreview(message: unknown) {
+  return unwrapSessionMessage(message).customType === PLAN_DRAFT_PREVIEW_MESSAGE_TYPE;
+}
+
 export function messageContainsPlanModeImplementationContextArtifact(message: unknown) {
   return unwrapSessionMessage(message).customType === PLAN_IMPLEMENTATION_CONTEXT_MESSAGE_TYPE;
 }
@@ -136,7 +142,16 @@ export function messageContainsInactivePlanModeArtifact(message: unknown) {
   const candidate = unwrapSessionMessage(message);
   return (
     candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
-    (candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME)
+    (candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME) ||
+    messageContainsPlanDraftArtifact(message)
+  );
+}
+
+export function messageContainsPlanDraftArtifact(message: unknown) {
+  const candidate = unwrapSessionMessage(message);
+  return (
+    candidate.customType === MODEL_DRAFT_MESSAGE_TYPE ||
+    (candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_UPDATE_TOOL_NAME)
   );
 }
 
@@ -169,6 +184,7 @@ function findHistoryImplementationArtifactBeforeKickoff(
     const candidate = unwrapSessionMessage(messages[index]);
     if (candidate.role === "user" || isSummaryMessage(messages[index])) return undefined;
     if (candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME) {
+      if (candidate.isError) continue;
       const toolCallId = candidate.toolCallId;
       const toolCallMessageIndex = toolCallId
         ? findPlanModeCompletionCallMessageIndex(messages, index, toolCallId)
@@ -235,15 +251,25 @@ export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
   return replaceAssistantContent(message, stripProposedPlanBlocksFromContent);
 }
 
-export function stripPlanModeCompletionCallsFromMessage<T>(message: T, preservedToolCallId?: string): T {
+export function stripInactivePlanModeCallsFromMessage<T>(message: T, preservedToolCallId?: string): T {
+  return stripPlanModeCalls(message, true, preservedToolCallId);
+}
+
+export function stripPlanDraftCallsFromMessage<T>(message: T): T {
+  return stripPlanModeCalls(message, false);
+}
+
+function stripPlanModeCalls<T>(message: T, stripCompletion: boolean, preservedToolCallId?: string): T {
   return replaceAssistantContent(message, (content) => {
     if (!Array.isArray(content)) return content;
     const nextContent = content.filter((block) => {
       const candidate = block as { type?: string; id?: string; name?: string };
-      return !(
-        candidate.type === "toolCall" &&
-        candidate.name === PLAN_MODE_COMPLETE_TOOL_NAME &&
-        (!preservedToolCallId || candidate.id !== preservedToolCallId)
+      if (candidate.type !== "toolCall") return true;
+      if (candidate.name === PLAN_MODE_UPDATE_TOOL_NAME) return false;
+      return (
+        !stripCompletion ||
+        candidate.name !== PLAN_MODE_COMPLETE_TOOL_NAME ||
+        (preservedToolCallId !== undefined && candidate.id === preservedToolCallId)
       );
     });
     return nextContent.length === content.length ? content : nextContent;
@@ -275,6 +301,7 @@ function unwrapSessionMessage(message: unknown) {
     customType?: string;
     toolName?: string;
     toolCallId?: string;
+    isError?: boolean;
     content?: unknown;
   };
 }

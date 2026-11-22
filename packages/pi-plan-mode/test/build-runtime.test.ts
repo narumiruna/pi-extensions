@@ -15,6 +15,7 @@ import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
 import { createPlanPaneHost } from "./plan-pane-support.js";
+import { updateThenCompletePlanInRunner } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
@@ -94,7 +95,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("session_shutdown"));
 
-    let activeTools = ["read", "write", "plan_mode_question", "plan_mode_complete"];
+    let activeTools = ["read", "write", "plan_mode_question", "plan_mode_update", "plan_mode_complete"];
     const sessionManager = {
       getSessionId: () => "generated-plan-mode",
       getSessionName: () => undefined,
@@ -117,6 +118,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
           builtinTool("write"),
           nativeTool("mcp__docs__read", "deferred"),
           extensionTool("plan_mode_question"),
+          extensionTool("plan_mode_update"),
           extensionTool("plan_mode_complete"),
         ],
         setActiveTools: (names: string[]) => {
@@ -175,16 +177,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     runner.setUIContext({ ...ui, setWidget: host.setWidget }, "tui");
     await command.handler("start", runner.createCommandContext());
     assert.match(host.render().map(stripTerminalSequences).join("\n"), /No completed plan yet\./u);
-    const complete = runner.getToolDefinition("plan_mode_complete");
-    assert.ok(complete);
-    const signal = new AbortController().signal;
-    await complete.execute(
-      "complete-generated-plan",
-      { plan: "# Plan\n\nGenerated-runtime fix." },
-      signal,
-      undefined,
-      runner.createToolContext("complete-generated-plan", signal),
-    );
+    await updateThenCompletePlanInRunner(runner, "# Plan\n\nGenerated-runtime fix.", "complete-generated-plan");
     await runner.emit({ type: "agent_settled", aborted: false });
     assert.match(host.render().map(stripTerminalSequences).join("\n"), /│.*Generated-runtime fix/u);
     assert.deepEqual(errors, []);

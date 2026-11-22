@@ -9,7 +9,7 @@ import {
 } from "../src/fresh-implementation.js";
 import { showReadyPlanMenu } from "../src/plan-action-menus.js";
 import planMode from "../src/plan-mode.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
+import { createCustomSelectorHarness, createMockContext, createMockPi, updateThenCompletePlan } from "./support.js";
 
 const PLAN = `# Fresh implementation plan
 
@@ -24,14 +24,6 @@ interface FreshSetupManager {
 
 function stateEntry(data: Record<string, unknown>) {
   return { type: "custom" as const, customType: STATE_ENTRY_TYPE, data };
-}
-
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown) {
-  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
-    | ((...args: unknown[]) => Promise<unknown>)
-    | undefined;
-  assert.ok(complete);
-  await complete("complete", { plan: PLAN }, undefined, undefined, ctx);
 }
 
 const IMPLEMENTATION_CHOICES = ["Implement here", "Start fresh and implement"];
@@ -62,7 +54,7 @@ test("automatic and manual ready menus present both implementation contexts in o
     });
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
     if (automatic) await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
     else await mock.commands.get("plan")?.handler("", context.ctx);
     assert.ok(observedMenu);
@@ -137,7 +129,7 @@ test("automatic completion presents the ready menu without a model turn exactly 
   });
   await mock.events.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  await completePlan(mock, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, PLAN);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
 
   assert.deepEqual(mock.sentUserMessages, []);
@@ -225,7 +217,7 @@ test("fresh implementation creates a linked destination and hands off only throu
 
   await mock.events.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  await completePlan(mock, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, PLAN);
   const sourceEntriesBefore = mock.entries.length;
   await mock.commands.get("plan")?.handler("", context.ctx);
 
@@ -399,7 +391,7 @@ test("fresh menu work stops after source session shutdown while waiting for idle
   });
   await mock.events.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  await completePlan(mock, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, PLAN);
   const pendingMenu = mock.commands.get("plan")?.handler("", context.ctx);
   await waiting;
   await mock.events.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
@@ -439,7 +431,7 @@ test("automatic fresh handoff is cancelled before its deferred turn becomes stal
       });
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
       await mock.commands.get("plan")?.handler("start", context.ctx);
-      await completePlan(mock, context.ctx);
+      await updateThenCompletePlan(mock, context.ctx, PLAN);
       await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
       assert.equal(newSessionCalls, 0, invalidation);
 
@@ -501,7 +493,7 @@ test("running automatic fresh preflight stops after source shutdown", async () =
     });
     await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
     await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
     await vi.runAllTimersAsync();
     await waiting;
@@ -540,7 +532,7 @@ test("unexpected deferred fresh failures are reported without terminal controls"
     });
     await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
     await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
     await vi.runAllTimersAsync();
     await Promise.resolve();
@@ -587,7 +579,13 @@ test("fresh destination adopts setup state before kickoff for guaranteed-plan po
     const handoff = `Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${PLAN}`;
     await mock.events.get("before_agent_start")?.[0]?.({ prompt: handoff, systemPrompt: "system" }, context.ctx);
     assert.equal(context.statuses.get("plan-mode"), "plan implementing");
-    assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
+    assert.deepEqual(mock.rawPi.getActiveTools(), [
+      "read",
+      "edit",
+      "plan_mode_question",
+      "plan_mode_update",
+      "plan_mode_complete",
+    ]);
 
     const firstContext = (await mock.events.get("context")?.[0]?.(
       { messages: [{ role: "user", content: handoff }] },

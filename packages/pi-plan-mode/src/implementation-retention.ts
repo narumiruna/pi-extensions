@@ -5,11 +5,15 @@ import {
   messageContainsExactPlanModeImplementationHandoff,
   messageContainsInactivePlanModeArtifact,
   messageContainsLegacyPlanModeContextArtifact,
+  messageContainsPlanDraftArtifact,
+  messageContainsPlanDraftPreview,
   messageContainsPlanModeImplementationContextArtifact,
   messageContainsPlanModeImplementationHandoff,
-  stripPlanModeCompletionCallsFromMessage,
+  stripInactivePlanModeCallsFromMessage,
+  stripPlanDraftCallsFromMessage,
   stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
+import { modeContractFromMessage } from "./mode-contract.js";
 import type { ImplementationPlanRetention } from "./settings.js";
 import type { ActiveImplementationPlan, PlanModeState } from "./state.js";
 
@@ -51,23 +55,32 @@ export function createImplementationRetentionCoordinator(): ImplementationRetent
         activeImplementation && activeImplementation.retention !== "keep" ? activeImplementation.id : undefined;
     },
     transformContext(messages, state) {
-      const messagesWithoutLegacyContext = messages.filter(
-        (message) => !messageContainsLegacyPlanModeContextArtifact(message),
+      const contextMessages = messages.filter(
+        (message) =>
+          !messageContainsLegacyPlanModeContextArtifact(message) && !messageContainsPlanDraftPreview(message),
       );
       if (state.enabled) {
-        return {
-          messages: messagesWithoutLegacyContext.filter(
-            (message) =>
-              !messageContainsPlanModeImplementationContextArtifact(message) &&
-              !messageContainsPlanModeImplementationHandoff(message),
-          ),
-        };
+        const withoutImplementation = contextMessages.filter(
+          (message) =>
+            !messageContainsPlanModeImplementationContextArtifact(message) &&
+            !messageContainsPlanModeImplementationHandoff(message),
+        );
+        const boundary = withoutImplementation.findLastIndex(
+          (message) => modeContractFromMessage(message) === "normal",
+        );
+        if (boundary === -1) return { messages: withoutImplementation };
+        const olderContext = withoutImplementation
+          .slice(0, boundary)
+          .filter((message) => !messageContainsPlanDraftArtifact(message))
+          .map(stripPlanDraftCallsFromMessage)
+          .filter((message) => !isEmptyAssistantMessage(message));
+        return { messages: [...olderContext, ...withoutImplementation.slice(boundary)] };
       }
 
       const activeImplementation = state.activeImplementation;
       const inactiveMessages = activeImplementation
-        ? messagesWithoutLegacyContext
-        : messagesWithoutLegacyContext.filter(
+        ? contextMessages
+        : contextMessages.filter(
             (message) =>
               !messageContainsPlanModeImplementationContextArtifact(message) &&
               !messageContainsPlanModeImplementationHandoff(message),
@@ -86,7 +99,7 @@ export function createImplementationRetentionCoordinator(): ImplementationRetent
             : stripProposedPlanBlocksFromMessage(message),
         )
         .map((message) =>
-          stripPlanModeCompletionCallsFromMessage(
+          stripInactivePlanModeCallsFromMessage(
             message,
             message === historyToolCallMessage ? historyArtifact?.toolCallId : undefined,
           ),

@@ -12,7 +12,7 @@ for (const resumeBeforeLoad of [false, true]) {
     await withDiscussion(
       async (f) => {
         await f.command("start");
-        await f.execute("plan_mode_complete", "complete", { plan: PLAN });
+        await f.updateThenCompletePlan(PLAN);
         const settling = f.emit("agent_settled");
         await started.promise;
         await f.dispatch(F2);

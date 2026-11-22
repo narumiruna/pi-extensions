@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode, { completePlanArguments } from "../src/plan-mode.js";
 import { restorePlanModeState } from "../src/state.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi, restoreMockPlanModeState } from "./support.js";
+import {
+  createCustomSelectorHarness,
+  createMockContext,
+  createMockPi,
+  restoreMockPlanModeState,
+  updateThenCompletePlan,
+} from "./support.js";
 import { renderMockWidget } from "./widget-support.js";
 
 const PLAN = `# Saved implementation plan
@@ -10,7 +16,7 @@ const PLAN = `# Saved implementation plan
 1. Preserve the plan in this session.
 2. Implement it later.`;
 const STATE_ENTRY_TYPE = "plan-mode-state";
-const STABLE_READ_EDIT_TOOLS = ["read", "edit", "plan_mode_question", "plan_mode_complete"];
+const STABLE_READ_EDIT_TOOLS = ["read", "edit", "plan_mode_question", "plan_mode_update", "plan_mode_complete"];
 const MODEL = { provider: "test-provider", id: "test-model" };
 const AVAILABLE_MODEL_REGISTRY = {
   getApiKeyAndHeaders: async () => ({ ok: true as const }),
@@ -29,14 +35,6 @@ function latestState(entries: readonly { data: unknown }[]) {
         activeImplementation?: { plan?: string };
       }
     | undefined;
-}
-
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: ReturnType<typeof createMockContext>["ctx"]) {
-  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
-    | ((...args: unknown[]) => Promise<unknown>)
-    | undefined;
-  assert.ok(complete);
-  await complete("complete", { plan: PLAN }, undefined, undefined, ctx);
 }
 
 test("saved Plan state restores from the active branch and rejects malformed values", () => {
@@ -98,7 +96,7 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
   await mock.events.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   assert.equal(mock.thinkingLevel, "medium");
-  await completePlan(mock, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, PLAN);
 
   await mock.commands.get("plan")?.handler("save", context.ctx);
 
@@ -106,7 +104,13 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
   const widget = renderMockWidget(context.widgets.get("plan-mode-plan"));
   assert.match(widget[0] ?? "", /▾ Plan mode · Saved/u);
   assert.deepEqual(widget.slice(1), ["Use /plan to show, implement, or clear it."]);
-  assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
+  assert.deepEqual(mock.rawPi.getActiveTools(), [
+    "read",
+    "edit",
+    "plan_mode_question",
+    "plan_mode_update",
+    "plan_mode_complete",
+  ]);
   assert.equal(mock.thinkingLevel, "low");
   assert.equal(mock.sentUserMessages.length, 0);
   assert.match(context.notifications.at(-1)?.message ?? "", /saved for later/i);
@@ -147,8 +151,8 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
     },
     context.ctx,
   )) as { messages: unknown[] };
-  assert.match(JSON.stringify(transformed.messages[0]), /CONTRACT v1: NORMAL/u);
-  assert.deepEqual(transformed.messages.slice(1), [{ role: "user", content: "Unrelated work" }]);
+  assert.deepEqual(transformed.messages.slice(0, -1), [{ role: "user", content: "Unrelated work" }]);
+  assert.match(JSON.stringify(transformed.messages.at(-1)), /CONTRACT v1: NORMAL/u);
 
   const entriesBeforeRepeat = mock.entries.length;
   await mock.commands.get("plan")?.handler("save", context.ctx);
@@ -170,7 +174,7 @@ test("automatic and manual ready menus expose Save for later", async () => {
       },
     });
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
     if (automatic) await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
     else await mock.commands.get("plan")?.handler("", context.ctx);
 
@@ -283,7 +287,7 @@ test("failed ready implementation restores a manual Plan thinking level", async 
   await mock.commands.get("plan")?.handler("start", context.ctx);
   mock.rawPi.setThinkingLevel("high");
   await mock.events.get("thinking_level_select")?.[0]?.({ level: "high", previousLevel: "medium" }, context.ctx);
-  await completePlan(mock, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, PLAN);
   mock.rawPi.sendUserMessage = () => {
     throw new Error("ready handoff failed");
   };
@@ -497,12 +501,18 @@ test("print and JSON modes can save and clear a ready plan", async () => {
     const context = createMockContext({ mode, hasUI: false });
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
 
     await mock.commands.get("plan")?.handler("save", context.ctx);
     assert.equal(context.statuses.get("plan-mode"), "plan saved");
     assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
-    assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
+    assert.deepEqual(mock.rawPi.getActiveTools(), [
+      "read",
+      "edit",
+      "plan_mode_question",
+      "plan_mode_update",
+      "plan_mode_complete",
+    ]);
 
     await assert.rejects(
       mock.commands.get("plan")?.handler("show", context.ctx) as Promise<unknown>,

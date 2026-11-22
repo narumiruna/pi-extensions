@@ -1337,8 +1337,6 @@
 "packages/pi-plan-mode/src/interaction-coordinator.ts"	aaa320e521d2e752fca249c8cef789847a09cb9c688857ed30bd2ed9657f639c
 "packages/pi-plan-mode/src/message-transform.ts"	1ea55ddda02bf44792e829842c3c83be910769978acf981f5875e8306cf41b3b
 "packages/pi-plan-mode/src/message-transform.ts"	2ce7c7412b822419aedc6c9f99de248c771272a08606249cc1059fe47dde247a
-"packages/pi-plan-mode/src/mode-contract.ts"	56429464ef44fc91d18117a79d5f07437dc4a739095c5982ad51a2db62e0bedc
-"packages/pi-plan-mode/src/mode-contract.ts"	860d892311adffb9a859bcd92a386878f788ec8cfd177c4b6a2436d94a2d8543
 "packages/pi-plan-mode/src/plan-mode.ts"	230e60491b8d2745bcbe599b8d7a1404f64546bab7ca136b591084e667334f2a
 "packages/pi-plan-mode/src/plan-mode.ts"	5a3f05cb0684989e6aff7ef4e24d3454981bb67cd021b9f9fffb73875fd18080
 "packages/pi-plan-mode/src/plan-mode.ts"	5e94f0180a053c7fa0f738c1011e585d5530f055447222f37b464defd311b623

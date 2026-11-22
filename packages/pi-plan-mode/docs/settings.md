@@ -2,6 +2,8 @@
 
 [Back to README](../README.md)
 
+- [Plan pane](#plan-pane)
+- [Plan helper tools](#plan-helper-tools)
 - [Default Plan policy tools](#default-plan-policy-tools)
 - [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)
 - [Plan reinjection](#plan-reinjection)
@@ -44,13 +46,15 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 
 `planPane` accepts `right` (default), `left`, or `off`. Saves from **Plan pane** take effect immediately, including during an active Plan workflow. Valid edits to the watched user file also take effect; an invalid update does not replace the active settings.
 
-The pane opens on a compatible Pi fullscreen layout without taking keyboard focus. It shows a waiting message before a plan is completed and while a revision is pending, then displays the new plan from the top. It closes when Plan mode ends, including when you save a plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
+The pane opens on a compatible Pi fullscreen layout without taking keyboard focus. It shows a waiting message until there is a plan to display.
+After a successful update, the current branch's draft appears immediately under **Draft**; completion shows the ready plan instead. Changes in the displayed plan or its draft status return the pane to the top.
+A follow-up returns the ready plan to draft state rather than blanking the pane. The pane closes when Plan mode ends, including when you save a plan for later or start implementation.
+Regular, RPC, print, and JSON modes do not display the pane; use `/plan show` in regular TUI or RPC.
 
 ### Plan helper tools
 
-Plan helper schemas are stable from extension registration onward, and Plan mode does not call `setActiveTools()`.
-Tool visibility alone is not Plan activation.
-Only the latest effective active Plan contract authorizes `plan_mode_question` or `plan_mode_complete`; ordinary planning and the `writing-plans` skill use their own workflow instead.
+`plan_mode_question`, `plan_mode_update`, and `plan_mode_complete` are registered at extension load and are all required to start or restore Plan mode. An optional tool selection cannot remove these requirements. Plan mode does not call `setActiveTools()`; if another policy makes a helper unavailable, change that policy before starting or restoring.
+Tool visibility alone is not Plan activation. The helpers operate only in the current Plan workflow. Ordinary planning and the `writing-plans` skill use their own workflow instead. See [drafting and completion](./command-workflows.md#drafting-and-completion) for the tool inputs.
 The retired `toolVisibility` key is ignored and preserved as unknown data when another setting is saved or a legacy settings file is migrated.
 
 ### Default Plan policy tools

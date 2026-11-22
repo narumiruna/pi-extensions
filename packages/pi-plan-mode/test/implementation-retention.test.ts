@@ -6,7 +6,7 @@ import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import type { ImplementationPlanRetention } from "../src/settings.js";
 import { restorePlanModeState } from "../src/state.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createMockContext, createMockPi, updateThenCompletePlan } from "./support.js";
 
 const PLAN = "# Retained plan\n\n1. Keep the complete handoff.";
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -39,11 +39,7 @@ async function beginImplementation(retention: ImplementationPlanRetention) {
   const context = createMockContext();
   await mock.events.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
-    | ((...args: unknown[]) => Promise<unknown>)
-    | undefined;
-  assert.ok(complete);
-  await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, PLAN);
   await mock.commands.get("plan")?.handler("implement", context.ctx);
   return { mock, context, handoff: mock.sentUserMessages.at(-1)?.text ?? "" };
 }
@@ -98,7 +94,7 @@ test("keep leaves the accepted plan active after context and settlement", async 
   assert.equal(context.statuses.get("plan-mode"), "plan implementing");
 });
 
-test("conversation-history implementation uses a short prompt without active-plan injection", async () => {
+test("conversation-history implementation keeps the completion but not the draft update", async () => {
   const { mock, context, handoff } = await beginImplementation("clear-on-start");
   const contextHook = mock.events.get("context")?.[0];
   assert.ok(contextHook);
@@ -118,7 +114,7 @@ test("conversation-history implementation uses a short prompt without active-pla
         type: "toolCall",
         id: "complete-plan",
         name: "plan_mode_complete",
-        arguments: { plan: PLAN },
+        arguments: {},
       },
     ],
   };
@@ -129,11 +125,24 @@ test("conversation-history implementation uses a short prompt without active-pla
     content: [{ type: "text", text: `**Proposed Plan**\n\n${PLAN}` }],
     details: { version: 1, source: "plan_mode_complete", plan: PLAN },
   };
-  const messages = [planCall, planResult, { role: "user", content: handoff }];
+  const updateMessages = [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "update-plan", name: "plan_mode_update", arguments: { plan: PLAN } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "update-plan",
+      toolName: "plan_mode_update",
+      content: [{ type: "text", text: "Draft updated." }],
+    },
+  ];
+  const completedHistory = [planCall, planResult, { role: "user", content: handoff }];
+  const messages = [...updateMessages, ...completedHistory];
   for (let call = 0; call < 2; call += 1) {
     const transformed = (await contextHook({ messages }, context.ctx)) as { messages: unknown[] };
-    assert.match(JSON.stringify(transformed.messages[0]), /CONTRACT v1: NORMAL/u);
-    assert.deepEqual(transformed.messages.slice(1), messages);
+    assert.deepEqual(transformed.messages.slice(0, -1), completedHistory);
+    assert.match(JSON.stringify(transformed.messages.at(-1)), /CONTRACT v1: NORMAL/u);
     assert.doesNotMatch(JSON.stringify(transformed.messages), /plan-mode-implementation-context/);
   }
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
@@ -290,11 +299,7 @@ test("an armed older implementation cannot clear a superseding implementation", 
   const firstId = latestState(mock).activeImplementation?.id;
 
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
-    | ((...args: unknown[]) => Promise<unknown>)
-    | undefined;
-  assert.ok(complete);
-  await complete("replacement", { plan: "# Replacement plan" }, undefined, undefined, context.ctx);
+  await updateThenCompletePlan(mock, context.ctx, "# Replacement plan", "replacement");
   await mock.commands.get("plan")?.handler("implement", context.ctx);
   const secondId = latestState(mock).activeImplementation?.id;
   assert.notEqual(secondId, firstId);
@@ -333,11 +338,7 @@ test("Implement menus preview each configured retention outcome before confirmat
     });
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
-      | ((...args: unknown[]) => Promise<unknown>)
-      | undefined;
-    assert.ok(complete);
-    await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
     await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
     assert.match(menuTitle, new RegExp(preview.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "i"));
   }
@@ -375,11 +376,7 @@ test("changing Settings does not retroactively change an active implementation",
     });
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
-      | ((...args: unknown[]) => Promise<unknown>)
-      | undefined;
-    assert.ok(complete);
-    await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
+    await updateThenCompletePlan(mock, context.ctx, PLAN);
     await mock.commands.get("plan")?.handler("implement", context.ctx);
     assert.equal(latestState(mock).activeImplementation?.retention, "keep");
 

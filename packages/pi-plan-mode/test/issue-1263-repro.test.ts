@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
+import { builtinTool, createMockContext, extensionTool, updateThenCompletePlanInRunner } from "./support.js";
 
 const EVENT_RECORDER = Symbol.for("pi-plan-mode.issue-1263-events");
 
@@ -80,7 +80,7 @@ export default function laterExtension(pi) {
       sourceSessionManager as never,
       modelRegistry as never,
     );
-    let activeTools = ["read", "write", "plan_mode_question", "plan_mode_complete"];
+    let activeTools = ["read", "write", "plan_mode_question", "plan_mode_update", "plan_mode_complete"];
     runner.bindCore(
       {
         sendMessage: () => undefined,
@@ -94,6 +94,7 @@ export default function laterExtension(pi) {
           builtinTool("read"),
           builtinTool("write"),
           extensionTool("plan_mode_question"),
+          extensionTool("plan_mode_update"),
           extensionTool("plan_mode_complete"),
         ],
         setActiveTools: (names: string[]) => {
@@ -167,16 +168,7 @@ export default function laterExtension(pi) {
     const command = runner.getCommand("plan");
     assert.ok(command);
     await command.handler("start", runner.createCommandContext());
-    const complete = runner.getToolDefinition("plan_mode_complete");
-    assert.ok(complete);
-    const signal = new AbortController().signal;
-    await complete.execute(
-      "complete",
-      { plan: "# Plan\n\nImplement it." },
-      signal,
-      undefined,
-      runner.createToolContext("complete", signal),
-    );
+    await updateThenCompletePlanInRunner(runner, "# Plan\n\nImplement it.");
     await runner.emit({ type: "agent_settled", aborted: false });
     await handoffFinished.promise;
     await Promise.resolve();

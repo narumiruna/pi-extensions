@@ -176,32 +176,32 @@ for (const reset of ["tree", "session", "workflow"] as const) {
   });
 }
 
-for (const source of ["structured", "legacy"] as const) {
-  test(`${source} completion in discussion persists a ready plan without an automatic menu; manual /plan retains actions`, async () => {
+for (const source of ["structured", "restored legacy"] as const) {
+  test(`${source} completion in discussion keeps a ready plan without an automatic menu; manual /plan retains actions`, async () => {
     await withDiscussion(async (f) => {
       await f.command("start");
       await f.dispatch(F2);
       if (source === "structured") {
-        await f.execute("plan_mode_complete", "ready", { plan: PLAN });
+        await f.updateThenCompletePlan(PLAN, "ready");
       } else {
-        await f.emit("agent_end", {
-          messages: [{ role: "assistant", content: `<proposed_plan>\n${PLAN}\n</proposed_plan>` }],
+        f.branch.push({
+          type: "custom",
+          customType: "plan-mode-state",
+          data: { ...f.state(), awaitingAction: true, latestPlan: PLAN, latestPlanSource: "legacy_proposed_plan" },
         });
+        await f.emit("session_tree");
       }
       await f.emit("agent_settled");
-      assert.equal(f.state().awaitingAction, true);
-      assert.equal(f.state().latestPlan, PLAN);
+      if (source === "structured") {
+        assert.equal(f.state().awaitingAction, true);
+        assert.equal(f.state().latestPlan, PLAN);
+      }
       assert.match(f.context.statuses.get("plan-mode") ?? "", /ready/u);
       assert.match(renderMockWidget(f.context.widgets.get("plan-mode-plan")).join("\n"), /discussion/u);
       assert.equal(f.tui.openCount, 0);
-      if (source === "legacy") {
-        assert.ok(
-          f.mock.sentMessages.some((entry) => {
-            const message = entry.message as { customType?: string; content?: string; display?: boolean };
-            return message.customType === "proposed-plan" && message.display && message.content?.includes(PLAN);
-          }),
-          "legacy plan must remain visible when the ready menu is suppressed",
-        );
+      if (source === "restored legacy") {
+        await f.command("show");
+        assert.match(JSON.stringify(f.mock.sentMessages.at(-1)?.message), /Discussion plan/u);
       }
       await f.dispatch(F2);
       await f.emit("agent_settled");
@@ -398,7 +398,7 @@ for (const reason of ["reload", "resume", "fork"] as const) {
     await withDiscussion(async (f) => {
       await f.command("start");
       await f.dispatch(F2);
-      await f.execute("plan_mode_complete", "ready", { plan: PLAN });
+      await f.updateThenCompletePlan(PLAN, "ready");
       f.branch.splice(0, f.branch.length, { type: "custom", customType: "plan-mode-state", data: f.state() });
       await f.emit("session_start", { reason });
       await f.emit("agent_settled");
@@ -540,7 +540,7 @@ test("saving a discussion plan clears its interaction mode and the next workflow
   await withDiscussion(async (f) => {
     await f.command("start");
     await f.dispatch(F2);
-    await f.execute("plan_mode_complete", "ready", { plan: PLAN });
+    await f.updateThenCompletePlan(PLAN, "ready");
     await f.command("save");
     assert.equal(f.state().enabled, false);
     assert.equal(f.state().interactionMode, undefined);

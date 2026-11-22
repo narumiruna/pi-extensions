@@ -14,7 +14,7 @@ import { builtinTool, createMockContext, createMockPi, extensionTool } from "./s
 
 const tools = ["read", "grep", "find", "ls", "edit", "write"].map(builtinTool) as ToolInfo[];
 tools.push(extensionTool("custom") as ToolInfo);
-const active = ["read", "edit", "plan_mode_question", "plan_mode_complete"];
+const active = ["read", "edit", "plan_mode_question", "plan_mode_update", "plan_mode_complete"];
 
 test("published activation examples separate full selection from Pi 0.99+ modifiers", async () => {
   const reference = await readFile(resolve("packages/pi-plan-mode/docs/settings.md"), "utf8");

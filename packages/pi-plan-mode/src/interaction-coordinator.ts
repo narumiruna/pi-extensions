@@ -1,12 +1,21 @@
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, TerminalInputHandler } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, isKeyRelease, isKeyRepeat, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { createDraftContextMessage, needsDraftContext, planFromDraftContextMessage } from "./draft-context.js";
 import {
   createInteractionContractMessage,
-  interactionContractFromMessage,
-  latestInteractionContract,
+  hasCurrentInteractionContract,
+  INTERACTION_CONTRACT_VERSION,
   type PlanInteractionMode,
+  readInteractionContract,
 } from "./interaction-contract.js";
+import {
+  createModeContractMessage,
+  hasCurrentModeContract,
+  modeContractVersion,
+  type PlanModeContract,
+  readModeContract,
+} from "./mode-contract.js";
 import { answerPlanModeQuestions, type PlanModeQuestion, planModeQuestionCancelled } from "./question-tool.js";
 import type { PlanInteractionRestoration, PlanModeState } from "./state.js";
 
@@ -33,12 +42,7 @@ interface QuestionInteraction {
   unsubscribe(): void;
 }
 
-interface ContextBoundary {
-  length: number;
-  hash: string;
-}
-
-type Contract = ReturnType<typeof createInteractionContractMessage>;
+type ContextBoundary = PlanInteractionRestoration["boundary"];
 
 /** Fixed F2 has no modifier aliases; probe every legacy and enhanced matcher branch. */
 export function interactionShortcutAvailable(bindings: Record<string, unknown>, otherShortcut?: string) {
@@ -290,36 +294,55 @@ export function createInteractionCoordinator(pi: ExtensionAPI, dependencies: Int
       pendingAborts.clear();
       ctx.abort();
     },
-    transformContext(messages: unknown[], ctx: ExtensionContext): unknown[] {
+    transformContext(messages: unknown[], ctx: ExtensionContext, expectedMode?: PlanModeContract): unknown[] {
       // Previously visible contracts remain part of the prefix after later mode
       // changes and exits, even when their fire-and-forget publication was lost.
-      const anchored = restoreInteractionHistory(messages, dependencies.getState().interactionRestorations ?? []);
-      if (!dependencies.getState().enabled) return anchored;
-      const expected = mode();
-      if (latestInteractionContract(anchored)?.mode === expected) return anchored;
-      const boundary = { length: anchored.length, hash: contextHash(anchored) };
-      const canonical = createInteractionContractMessage(expected, 0);
-      const message = { ...canonical, details: { ...canonical.details, contextBoundary: boundary } };
       const previousState = dependencies.getState();
+      const history = previousState.interactionRestorations ?? [];
+      const restored = restoreContractHistory(messages, history, previousState.enabled);
+      let anchored = restored.messages;
+      const added: PlanInteractionRestoration[] = [];
+      function currentBoundary(): ContextBoundary {
+        return { length: anchored.length, hash: contextHash(anchored) };
+      }
+      function append(restoration: PlanInteractionRestoration) {
+        added.push(restoration);
+        anchored = [...anchored, restoredMessage(restoration)];
+      }
+      if (expectedMode && !hasCurrentModeContract(anchored, expectedMode)) {
+        append({ version: modeContractVersion(expectedMode), mode: expectedMode, boundary: currentBoundary() });
+      }
+      if (previousState.enabled) {
+        const expected = mode();
+        if (!hasCurrentInteractionContract(anchored, expected)) {
+          append({ version: INTERACTION_CONTRACT_VERSION, mode: expected, boundary: currentBoundary() });
+        }
+        const plan = previousState.latestPlan === undefined ? previousState.draftPlan : undefined;
+        if (plan && needsDraftContext(anchored, plan)) {
+          append({ version: 1, mode: "draft", plan, boundary: currentBoundary() });
+        }
+      }
+      if (!added.length && history === restored.history) return anchored;
       try {
         // sendMessage is fire-and-forget: Pi reports asynchronous failures separately.
         // The synchronous state entry, not that void call, owns this required contract
         // and its first model-visible boundary, including after reload.
-        dependencies.setState({
-          ...previousState,
-          interactionRestorations: [
-            ...(previousState.interactionRestorations ?? []),
-            { version: 1, mode: expected, boundary },
-          ],
-        });
+        dependencies.setState({ ...previousState, interactionRestorations: [...restored.history, ...added] });
         dependencies.persistState();
-        const { role: _role, timestamp: _timestamp, ...persisted } = message;
-        pi.sendMessage(persisted, { triggerTurn: false });
       } catch {
         dependencies.setState(previousState);
         failClosed(ctx);
+        return restored.messages;
       }
-      return [...anchored, message];
+      try {
+        for (const restoration of added) {
+          const { role: _role, timestamp: _timestamp, ...persisted } = restoredMessage(restoration);
+          pi.sendMessage(persisted, { triggerTurn: false });
+        }
+      } catch {
+        failClosed(ctx);
+      }
+      return anchored;
     },
   };
 }
@@ -332,14 +355,22 @@ function boundaryMatches(messages: unknown[], boundary: ContextBoundary): boolea
   return boundary.length <= messages.length && contextHash(messages.slice(0, boundary.length)) === boundary.hash;
 }
 
-function insertAtBoundary(messages: unknown[], message: Contract, index: number) {
-  return [...messages.slice(0, index), message, ...messages.slice(index)];
+function restoredMessage(restoration: PlanInteractionRestoration) {
+  const { mode, version, boundary } = restoration;
+  const canonical =
+    mode === "draft"
+      ? createDraftContextMessage(restoration.plan, 0)
+      : mode === "plan" || mode === "normal"
+        ? createModeContractMessage(mode, 0)
+        : createInteractionContractMessage(mode, 0, version);
+  return { ...canonical, details: { ...canonical.details, contextBoundary: boundary } };
 }
 
 function restorationFromMessage(value: unknown): PlanInteractionRestoration | undefined {
-  const mode = interactionContractFromMessage(value);
-  if (!mode) return undefined;
-  const message = value as Contract & { details: { contextBoundary?: ContextBoundary } };
+  const message = value as
+    | { role?: string; details?: { version?: unknown; contextBoundary?: ContextBoundary } }
+    | undefined;
+  if (message?.role !== "custom") return undefined;
   const boundary = message.details?.contextBoundary;
   if (
     !boundary ||
@@ -349,31 +380,54 @@ function restorationFromMessage(value: unknown): PlanInteractionRestoration | un
     !/^[a-f0-9]{64}$/u.test(boundary.hash)
   )
     return undefined;
-  return { version: 1, mode, boundary };
+  const plan = planFromDraftContextMessage(value);
+  if (plan) return { version: 1, mode: "draft", plan, boundary };
+  const identity = readInteractionContract(value) ?? readModeContract(value);
+  if (!identity) return undefined;
+  const { mode, version } = identity;
+  if (version !== message.details?.version || (mode === "plan" && version !== modeContractVersion(mode)))
+    return undefined;
+  return { version, mode, boundary };
 }
 
 function restorationKey(value: PlanInteractionRestoration): string {
-  return `${value.mode}:${value.boundary.length}:${value.boundary.hash}`;
+  return `${value.version}:${value.mode}:${value.boundary.length}:${value.boundary.hash}`;
 }
 
-function restoreInteractionHistory(messages: unknown[], history: readonly PlanInteractionRestoration[]): unknown[] {
+function restoreContractHistory(
+  messages: unknown[],
+  history: readonly PlanInteractionRestoration[],
+  includeDrafts: boolean,
+) {
+  const compacted = messages.some(
+    (message) => (message as { role?: string } | undefined)?.role === "compactionSummary",
+  );
+  const obsoleteDrafts = new Set<string>();
   const restorations = new Map(history.map((value) => [restorationKey(value), value]));
   for (const message of messages) {
     const restored = restorationFromMessage(message);
-    if (restored) restorations.set(restorationKey(restored), restored);
+    if (!restored) continue;
+    const key = restorationKey(restored);
+    if (!restorations.has(key)) restorations.set(key, restored);
   }
   let result = messages;
   for (const [key, restored] of restorations) {
+    if (restored.mode === "draft" && !includeDrafts) continue;
     const remaining = result.filter((message) => {
       const candidate = restorationFromMessage(message);
       return !candidate || restorationKey(candidate) !== key;
     });
     // Compaction establishes a new prefix epoch. Do not recreate a historical
     // contract whose original retained boundary no longer exists.
-    if (!boundaryMatches(remaining, restored.boundary)) continue;
-    const canonical = createInteractionContractMessage(restored.mode, 0);
-    const message = { ...canonical, details: { ...canonical.details, contextBoundary: restored.boundary } };
-    result = insertAtBoundary(remaining, message, restored.boundary.length);
+    if (!boundaryMatches(remaining, restored.boundary)) {
+      if (compacted && restored.mode === "draft") obsoleteDrafts.add(key);
+      continue;
+    }
+    const index = restored.boundary.length;
+    result = [...remaining.slice(0, index), restoredMessage(restored), ...remaining.slice(index)];
   }
-  return result;
+  return {
+    messages: result,
+    history: obsoleteDrafts.size > 0 ? history.filter((value) => !obsoleteDrafts.has(restorationKey(value))) : history,
+  };
 }

@@ -8,7 +8,7 @@ import * as settingsModule from "../src/settings.js";
 import { waitForSettingsWatch } from "./settings-watch-support.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
-const HELPERS = ["plan_mode_question", "plan_mode_complete"];
+const HELPERS = ["plan_mode_question", "plan_mode_update", "plan_mode_complete"];
 
 async function start(mock: ReturnType<typeof createMockPi>, context = createMockContext()) {
   await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);

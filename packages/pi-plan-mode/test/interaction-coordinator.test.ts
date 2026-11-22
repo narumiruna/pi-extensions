@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { isKittyProtocolActive, setKittyProtocolActive } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { planFromDraftContextMessage } from "../src/draft-context.js";
 import { createInteractionContractMessage, INTERACTION_CONTRACT_MESSAGE_TYPE } from "../src/interaction-contract.js";
 import {
   createInteractionCoordinator,
   createInteractionInputGuard,
   interactionShortcutAvailable,
 } from "../src/interaction-coordinator.js";
-import { createModeContractMessage } from "../src/mode-contract.js";
+import { createModeContractMessage, MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
 import { type PlanModeState, restorePlanModeState } from "../src/state.js";
 import { createMockContext, createMockPi } from "./support.js";
 
@@ -199,6 +203,169 @@ for (const published of [true, false]) {
   });
 }
 
+const legacyPlan = {
+  ...createModeContractMessage("plan", 10),
+  content: readFileSync(new URL("./fixtures/legacy-plan-contract.txt", import.meta.url), "utf8"),
+  details: { version: 1, mode: "plan" },
+};
+
+function normalizedMessages(messages: unknown[]) {
+  return convertToLlm(messages as Parameters<typeof convertToLlm>[0]).map(
+    ({ timestamp: _timestamp, ...message }) => message,
+  );
+}
+
+for (const publication of ["immediate", "deferred", "lost"] as const) {
+  test(`upgrade appends both contracts once and retains their request boundary after reload (${publication})`, () => {
+    const f = fixture();
+    const user = { role: "user", content: "Continue planning", timestamp: 12 };
+    const legacyInteraction = createInteractionContractMessage("discussion", 11, 1);
+    const prefix = [legacyPlan, legacyInteraction, user];
+    const first = f.coordinator.transformContext(prefix, f.context.ctx, "plan");
+    const serialized = normalizedMessages(first);
+    assert.deepEqual(first.slice(0, prefix.length), prefix);
+    assert.deepEqual(serialized.slice(0, prefix.length), normalizedMessages(prefix));
+    assert.equal(f.writes(), 1);
+    assert.deepEqual(
+      f.mock.sentMessages.map(({ message, options }) => [(message as { customType: string }).customType, options]),
+      [
+        [MODE_CONTRACT_MESSAGE_TYPE, { triggerTurn: false }],
+        [INTERACTION_CONTRACT_MESSAGE_TYPE, { triggerTurn: false }],
+      ],
+    );
+    const physicalContracts = f.mock.sentMessages.map(({ message }, index) => ({
+      ...(message as object),
+      role: "custom",
+      timestamp: 32 + index,
+    }));
+    const answer = { role: "assistant", content: [{ type: "text", text: "The draft is ready to discuss." }] };
+    const nextUser = { role: "user", content: "Next request", timestamp: 40 };
+    const physical = [
+      ...prefix,
+      ...(publication === "immediate" ? physicalContracts : []),
+      ...(publication === "deferred" ? [nextUser, ...physicalContracts] : [nextUser]),
+    ];
+    const state = restorePlanModeState([{ type: "custom", customType: "state", data: f.state() }], "state");
+    const reloaded = fixture(state);
+    const next = reloaded.coordinator.transformContext(physical, reloaded.context.ctx, "plan");
+    assert.deepEqual(normalizedMessages(next).slice(0, first.length), serialized);
+    assert.deepEqual(next.at(-1), nextUser);
+    assert.equal(reloaded.mock.sentMessages.length, 0);
+    assert.equal(reloaded.writes(), 0);
+    assert.deepEqual(reloaded.coordinator.transformContext([...next, answer], reloaded.context.ctx, "plan"), [
+      ...next,
+      answer,
+    ]);
+  });
+}
+
+test("upgrade preserves a missing v1 interaction publication at its original model-visible boundary", () => {
+  const oldPrefix = [legacyPlan, { role: "user", content: "Open discussion" }];
+  const boundary = {
+    length: oldPrefix.length,
+    hash: createHash("sha256").update(JSON.stringify(oldPrefix)).digest("hex"),
+  };
+  const legacy = createInteractionContractMessage("discussion", 0, 1);
+  const assistant = { role: "assistant", content: "Earlier reply" };
+  const f = fixture({
+    enabled: true,
+    awaitingAction: false,
+    interactionMode: "discussion",
+    interactionRestorations: [{ version: 1, mode: "discussion", boundary }],
+  });
+  const first = f.coordinator.transformContext([...oldPrefix, assistant], f.context.ctx, "plan");
+  assert.deepEqual(first.slice(0, oldPrefix.length + 2), [
+    ...oldPrefix,
+    { ...legacy, details: { ...legacy.details, contextBoundary: boundary } },
+    assistant,
+  ]);
+  assert.equal(f.mock.sentMessages.length, 2);
+});
+
+test("compaction restores both required contracts once after all retained messages", () => {
+  const f = fixture();
+  const before = [legacyPlan, createInteractionContractMessage("discussion", 11, 1)];
+  f.coordinator.transformContext(before, f.context.ctx, "plan");
+  const retained = [
+    { role: "compactionSummary", summary: "Planning details" },
+    { role: "user", content: "Continue from the summary" },
+  ];
+  const after = f.coordinator.transformContext(retained, f.context.ctx, "plan");
+  assert.deepEqual(after.slice(0, retained.length), retained);
+  assert.equal(after.length, retained.length + 2);
+  assert.equal(f.mock.sentMessages.length, 4);
+  assert.deepEqual(f.coordinator.transformContext(retained, f.context.ctx, "plan"), after);
+  assert.equal(f.mock.sentMessages.length, 4);
+});
+
+test("draft snapshots survive deferred publication and ordinary updates, then obsolete anchors prune on compaction", () => {
+  const f = fixture({
+    enabled: true,
+    awaitingAction: false,
+    interactionMode: "discussion",
+    draftPlan: "# First draft",
+  });
+  const prefix = [
+    createModeContractMessage("plan", 0),
+    createInteractionContractMessage("discussion", 1),
+    { role: "user", content: "Restore the current draft." },
+  ];
+  const first = f.coordinator.transformContext(prefix, f.context.ctx, "plan");
+  assert.equal(f.mock.sentMessages.length, 1);
+  assert.equal(planFromDraftContextMessage(first.at(-1)), "# First draft");
+  const nextDraft = "# Changed draft";
+  f.state().draftPlan = nextDraft;
+  const deferred = [
+    ...prefix,
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "update", name: "plan_mode_update", arguments: { plan: nextDraft } }],
+    },
+    {
+      role: "toolResult",
+      toolName: "plan_mode_update",
+      toolCallId: "update",
+      isError: false,
+      details: { version: 1, source: "plan_mode_update" },
+    },
+    { ...(f.mock.sentMessages[0]?.message as object), role: "custom", timestamp: 3 },
+  ];
+  const afterUpdate = f.coordinator.transformContext(deferred, f.context.ctx, "plan");
+  assert.deepEqual(afterUpdate.slice(0, first.length), first);
+  assert.deepEqual(afterUpdate.slice(first.length), deferred.slice(prefix.length, -1));
+  assert.equal(f.mock.sentMessages.length, 1, "a retained successful update makes another snapshot unnecessary");
+
+  const compacted = [{ role: "compactionSummary", summary: "Plan update dropped" }];
+  const projected = f.coordinator.transformContext(compacted, f.context.ctx, "plan");
+  assert.equal(planFromDraftContextMessage(projected.at(-1)), nextDraft);
+  assert.deepEqual(
+    f
+      .state()
+      .interactionRestorations?.flatMap((restoration) => (restoration.mode === "draft" ? [restoration.plan] : [])),
+    [nextDraft],
+  );
+  const state = restorePlanModeState([{ type: "custom", customType: "state", data: f.state() }], "state");
+  const reloaded = fixture(state);
+  assert.deepEqual(reloaded.coordinator.transformContext(compacted, reloaded.context.ctx, "plan"), projected);
+  assert.equal(reloaded.mock.sentMessages.length, 0);
+
+  reloaded.state().enabled = false;
+  const normal = reloaded.coordinator.transformContext(compacted, reloaded.context.ctx, "normal");
+  assert.equal(normal.some(planFromDraftContextMessage), false);
+});
+
+test("a ready plan is not published as a draft", () => {
+  const f = fixture({
+    enabled: true,
+    awaitingAction: true,
+    interactionMode: "discussion",
+    latestPlan: "# Ready plan",
+  });
+  const messages = [createModeContractMessage("plan", 0), createInteractionContractMessage("discussion", 1)];
+  assert.equal(f.coordinator.transformContext(messages, f.context.ctx, "plan"), messages);
+  assert.equal(f.mock.sentMessages.length, 0);
+});
+
 test("inactive state does not inject an interaction contract", () => {
   const f = fixture({ enabled: false, awaitingAction: false });
   const messages = [{ role: "user", content: "Normal" }];
@@ -266,7 +433,9 @@ test("interaction history rejects malformed anchors and preserves valid records 
     undefined,
     null,
     {},
-    { ...valid, version: 2 },
+    { ...valid, version: 3 },
+    { ...valid, mode: "plan" },
+    { ...valid, version: 2, mode: "normal" },
     { ...valid, mode: "invalid" },
     { ...valid, boundary: { length: -1, hash: "a".repeat(64) } },
     { ...valid, boundary: { length: 0, hash: "invalid" } },

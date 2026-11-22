@@ -17,6 +17,7 @@ interface PaneBinding {
   ui: ExtensionContext["ui"];
   side: PlanPaneSide;
   plan: string | undefined;
+  isDraft: boolean;
   widget?: PlanPaneWidget;
 }
 
@@ -37,7 +38,7 @@ export function createPlanPaneController() {
 
   return {
     clear,
-    update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: string | undefined) {
+    update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: string | undefined, isDraft = false) {
       if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off") {
         clear();
         return;
@@ -49,17 +50,18 @@ export function createPlanPaneController() {
         !binding.widget?.disposed
       ) {
         binding.plan = plan;
-        binding.widget?.setPlan(plan);
+        binding.isDraft = isDraft;
+        binding.widget?.setPlan(plan, isDraft);
         return;
       }
       clear();
-      const owner: PaneBinding = { session: ctx.sessionManager, ui: ctx.ui, side: placement, plan };
+      const owner: PaneBinding = { session: ctx.sessionManager, ui: ctx.ui, side: placement, plan, isDraft };
       binding = owner;
       try {
         ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
           if (binding !== owner) return { render: () => [], invalidate() {} };
           owner.widget?.dispose();
-          owner.widget = new PlanPaneWidget(tui, theme, owner.side, owner.plan);
+          owner.widget = new PlanPaneWidget(tui, theme, owner.side, owner.plan, owner.isDraft);
           return owner.widget;
         });
       } catch {
@@ -82,9 +84,10 @@ class PlanPaneWidget implements Component {
     private readonly theme: Theme,
     private readonly side: PlanPaneSide,
     private plan: string | undefined,
+    private isDraft: boolean,
   ) {
     this.body = new PlanPaneBody(theme);
-    this.body.setPlan(plan);
+    this.body.setPlan(plan, isDraft);
     this.scroll = new PlanPaneScrollView(this.body, {
       overscroll: "contain",
       scrollbar: "always",
@@ -101,10 +104,11 @@ class PlanPaneWidget implements Component {
 
   invalidate(): void {}
 
-  setPlan(plan: string | undefined) {
-    if (this.disposed || plan === this.plan) return;
+  setPlan(plan: string | undefined, isDraft: boolean) {
+    if (this.disposed || (plan === this.plan && isDraft === this.isDraft)) return;
     this.plan = plan;
-    this.body.setPlan(plan);
+    this.isDraft = isDraft;
+    this.body.setPlan(plan, isDraft);
     this.scroll.scrollToStart();
     if (this.tui?.mode === "fullscreen") this.tui.requestRender();
   }
@@ -166,14 +170,16 @@ class PlanPaneScrollView extends ScrollView {
 
 class PlanPaneBody implements Component {
   private text: string | undefined;
+  private isDraft = false;
   private markdown: Markdown | undefined;
   private width: number | undefined;
   private lines: string[] = [];
 
   constructor(private readonly theme: Theme) {}
 
-  setPlan(plan: string | undefined) {
+  setPlan(plan: string | undefined, isDraft: boolean) {
     this.text = plan === undefined ? undefined : sanitizeTerminalDocument(plan);
+    this.isDraft = isDraft;
     this.invalidate();
   }
 
@@ -186,7 +192,7 @@ class PlanPaneBody implements Component {
   render(width: number): readonly string[] {
     if (width < 1) return [];
     if (this.width === width) return this.lines;
-    const title = this.theme.bold(this.theme.fg("accent", "Plan"));
+    const title = this.theme.bold(this.theme.fg("accent", this.isDraft ? "Draft" : "Plan"));
     if (this.text) this.markdown ??= new Markdown(this.text, 0, 0, getMarkdownTheme());
     const body = this.markdown?.render(width) ?? [this.theme.fg("muted", "No completed plan yet.")];
     this.width = width;

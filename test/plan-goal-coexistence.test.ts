@@ -11,6 +11,7 @@ import {
 import { afterAll, test } from "vitest";
 import goal from "../packages/pi-goal/src/goal.js";
 import planMode from "../packages/pi-plan-mode/src/plan-mode.js";
+import { updateThenCompletePlan } from "../packages/pi-plan-mode/test/support.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
 const WORKFLOW_MUTEX_CHANNEL = "workflow:mutex:v1";
@@ -112,6 +113,7 @@ function createFixture(
       "goal_blocked",
       "goal_wait",
       "plan_mode_question",
+      "plan_mode_update",
       "plan_mode_complete",
     ],
     allTools: [
@@ -122,6 +124,7 @@ function createFixture(
       extensionTool("goal_blocked"),
       extensionTool("goal_wait"),
       extensionTool("plan_mode_question"),
+      extensionTool("plan_mode_update"),
       extensionTool("plan_mode_complete"),
     ],
     thinkingLevel: "low",
@@ -249,10 +252,7 @@ test("Plan ready and revision states reject Goal without changing Plan tools", a
   const fixture = createFixture("plan-first");
   await startSession(fixture);
   await startPlan(fixture);
-  const complete = fixture.mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as (
-    ...args: unknown[]
-  ) => Promise<unknown>;
-  await complete("complete-plan", { plan: "# Integrated ready plan" }, undefined, undefined, fixture.context.ctx);
+  await updateThenCompletePlan(fixture.mock, fixture.context.ctx, "# Integrated ready plan", "complete-plan");
   const readyTools = fixture.mock.rawPi.getActiveTools();
   const writesBeforeReadyRejection = fixture.activeToolWrites.length;
   await startGoal(fixture, "Goal rejected during ready review");
@@ -390,6 +390,7 @@ for (const loadOrder of ["plan-first", "goal-first"] as const) {
         "goal_blocked",
         "goal_wait",
         "plan_mode_question",
+        "plan_mode_update",
         "plan_mode_complete",
       ]);
     } else {
@@ -404,6 +405,7 @@ for (const loadOrder of ["plan-first", "goal-first"] as const) {
         "goal_blocked",
         "goal_wait",
         "plan_mode_question",
+        "plan_mode_update",
         "plan_mode_complete",
       ]);
     }
@@ -427,7 +429,7 @@ test("each workflow can acquire only after the other finishes cleanup", async ()
 
 test("standalone Plan and Goal preserve representative lifecycle behavior", async () => {
   const planMock = createMockPi({
-    activeTools: ["read", "write", "plan_mode_question", "plan_mode_complete"],
+    activeTools: ["read", "write", "plan_mode_question", "plan_mode_update", "plan_mode_complete"],
   });
   planMode(planMock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
   const planContext = createMockContext({ mode: "tui", hasUI: true });
@@ -476,6 +478,7 @@ test("built generated entries share one Pi bus and stale invalidation removes bo
     assert.ok(loaded.extensions.some((extension) => extension.commands.has("plan")));
     assert.ok(loaded.extensions.some((extension) => extension.commands.has("goal")));
     assert.ok(loaded.extensions.some((extension) => extension.tools.has("plan_mode_complete")));
+    assert.ok(loaded.extensions.some((extension) => extension.tools.has("plan_mode_update")));
     assert.ok(loaded.extensions.some((extension) => extension.tools.has("goal_complete")));
 
     let activeTools = ["read", "write", "goal_complete", "goal_blocked", "goal_wait"];

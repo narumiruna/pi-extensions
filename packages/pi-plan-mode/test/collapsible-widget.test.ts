@@ -29,7 +29,7 @@ test("retains Plan mode disclosure across interaction and ready-plan updates, wi
       component = createMockWidget(f.context.widgets.get(KEY));
       assert.deepEqual(component.render(120), [divider("Free discussion", true)]);
       component.dispose?.();
-      await f.execute("plan_mode_complete", "ready", { plan: PLAN });
+      await f.updateThenCompletePlan(PLAN, "ready");
       await f.emit("agent_settled");
       component = createMockWidget(f.context.widgets.get(KEY));
       assert.deepEqual(component.render(120), [divider("Ready · Free discussion", true)]);

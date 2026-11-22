@@ -23,6 +23,7 @@ test("tool selection allows safe built-ins and non-built-ins only", () => {
   assert.deepEqual(withRequiredPlanModeTools(["read", "plan_mode_question", "read"]), [
     "read",
     "plan_mode_question",
+    "plan_mode_update",
     "plan_mode_complete",
   ]);
 });
@@ -476,11 +477,16 @@ test("active Plan mode blocks update_plan and blocked built-ins at the tool hook
   const context = createMockContext();
   await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   const hook = mock.events.get("tool_call")?.[0];
-  const inactiveHelper = await hook?.({ toolName: "plan_mode_complete", input: { plan: "# invalid" } }, context.ctx);
-  assert.deepEqual(inactiveHelper, {
-    block: true,
-    reason: "plan_mode_complete is only available while Plan mode is active.",
-  });
+  for (const [toolName, input] of [
+    ["plan_mode_complete", {}],
+    ["plan_mode_update", { plan: "# Draft" }],
+  ] as const) {
+    const inactiveHelper = await hook?.({ toolName, input }, context.ctx);
+    assert.deepEqual(inactiveHelper, {
+      block: true,
+      reason: `${toolName} is only available while Plan mode is active.`,
+    });
+  }
   await mock.commands.get("plan")?.handler("start", context.ctx);
   const blocked = await hook?.({ toolName: "update_plan", input: {} }, context.ctx);
   const blockedBuiltin = await hook?.({ toolName: "danger", input: {} }, context.ctx);

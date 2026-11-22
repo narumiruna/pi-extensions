@@ -203,7 +203,7 @@ test("restoration revalidates a frozen allowed name after late registration", as
   await runContext(fixture);
   const branch = fixture.mock.entries.map((entry) => ({ type: "custom", ...entry }));
   fixture.allTools.splice(1, 1);
-  fixture.mock.rawPi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
+  fixture.mock.rawPi.setActiveTools(["read", "plan_mode_question", "plan_mode_update", "plan_mode_complete"]);
   const replacement = createMockContext({
     sessionManager: {
       getBranch: () => branch,

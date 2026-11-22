@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { EditorStatusWidget, type EditorStatusWidgetState } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
+import { PLAN_DRAFT_PREVIEW_MESSAGE_TYPE } from "./message-transform.js";
 import type { PlanModeState } from "./state.js";
 
 const STATUS_KEY = "plan-mode";
@@ -105,6 +107,14 @@ export function clearPlanModeUi(ctx: ExtensionContext) {
 
 export function showStoredPlan(pi: ExtensionAPI, ctx: ExtensionContext, state: PlanModeState) {
   const readyPlan = state.enabled ? state.latestPlan?.trim() : undefined;
+  const draftPlan = state.enabled && !readyPlan ? state.draftPlan : undefined;
+  if (draftPlan) {
+    if (ctx.mode === "print" || ctx.mode === "json") {
+      throw new Error("Draft plan display is unavailable in print/JSON mode. Use TUI or RPC.");
+    }
+    showPlanModePlan(pi, ctx, "Draft Plan", sanitizeTerminalDocument(draftPlan), PLAN_DRAFT_PREVIEW_MESSAGE_TYPE);
+    return;
+  }
   const savedPlan = state.savedPlan?.plan.trim();
   if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
     throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
@@ -119,11 +129,17 @@ export function showStoredPlan(pi: ExtensionAPI, ctx: ExtensionContext, state: P
   showPlanModePlan(pi, ctx, title, plan);
 }
 
-export function showPlanModePlan(pi: ExtensionAPI, ctx: ExtensionContext, title: string, plan: string) {
+export function showPlanModePlan(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  title: string,
+  plan: string,
+  customType = "proposed-plan",
+) {
   try {
     pi.sendMessage(
       {
-        customType: "proposed-plan",
+        customType,
         content: `**${title}**\n\n${plan}`,
         display: true,
       },
@@ -131,7 +147,7 @@ export function showPlanModePlan(pi: ExtensionAPI, ctx: ExtensionContext, title:
     );
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
+    ctx.ui.notify(`Unable to show plan: ${detail}`, "error");
   }
 }
 

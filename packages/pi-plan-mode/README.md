@@ -9,8 +9,8 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 - Starts and manages Plan mode through `/plan`, `/plan start`, or `/plan <prompt>`.
 - Blocks mutations, inactive helpers, and unsafe shell forms while keeping helper schemas stable.
 - Switches between structured questionnaires and free discussion without leaving read-only planning.
-- Uses explicit completion for a decision-ready plan.
-- Reviews the complete plan before implementation, export, save, further planning, or discard.
+- Previews the latest draft as the agent works, without writing a project file.
+- Requires explicit completion before a plan can be saved for later, exported, or implemented.
 - Implements in the planning session or a fresh linked session with the approved plan.
 - Configures persistent or one-shot destination model and thinking choices for fresh implementation.
 - Restores Plan state and one saved plan across resume and compaction.
@@ -46,50 +46,25 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 
 Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
 Run `/plan <prompt>` when the first planning request is already known.
+Read the draft with `/plan show` in TUI or RPC. When the plan is ready, review it before choosing what to do next.
 
 ## 🧭 How it works
 
-Plan mode keeps exploration and implementation on opposite sides of an explicit review boundary:
+The agent can revise the draft as it explores and clarifies the task. Only a separate completion call marks the draft ready for review; it does not leave Plan mode or start implementation.
 
 ```mermaid
 flowchart LR
     start["Start: /plan or /plan with a prompt"]
-    start --> explore["Explore safely: inspect and clarify"]
-    explore --> complete["Complete the plan with plan_mode_complete"]
-    complete --> review["Review the ready plan: use /plan in discussion"]
-    review -->|Revise| explore
-    review -->|Implement here| current["Current session: planning context retained"]
-    review -->|Start fresh| fresh["Fresh session: approved plan transferred"]
-    review -->|Save| saved["Saved for later"]
-    review -->|Export| exported["Markdown file"]
+    start --> explore["Inspect and clarify"]
+    explore -->|New or changed plan| draft["Store a draft: plan_mode_update"]
+    draft -->|More work needed| explore
+    draft -->|Decision-ready| ready["Mark ready: plan_mode_complete"]
+    explore -->|Stored draft ready unchanged| ready
+    ready -->|Further user feedback| explore
+    ready -->|User chooses an action| action["Implement here or in a fresh session, save, or export"]
 ```
 
-During planning, the agent can inspect the project and ask material questions, but Plan mode blocks editing tools and unsafe shell forms. Implementation starts only after the plan is complete and you choose a handoff:
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant Pi
-    participant Plan as Plan mode
-    participant Work as Implementation
-
-    User->>Pi: Start planning
-    Pi->>Plan: Apply the configured Plan tool policy
-    Plan->>User: Ask material questions when needed
-    User-->>Plan: Answer or refine the request
-    Plan->>Pi: Submit the complete plan
-    alt Questionnaires enabled
-        Pi-->>User: Show the ready-plan action menu
-    else Free discussion
-        Pi-->>User: Display and store the ready plan without a menu
-        User->>Pi: Open /plan when ready
-    end
-    alt Implement here
-        Pi->>Work: Restore Normal mode in the current session
-    else Start fresh and implement
-        Pi->>Work: Create a fresh session with the approved plan
-    end
-```
+See [drafting and completion](./docs/command-workflows.md#drafting-and-completion) for when the agent updates or completes, and what happens during revision and recovery.
 
 ## 💬 Commands
 
@@ -99,13 +74,13 @@ sequenceDiagram
 | `/plan start` | Enter Plan mode without sending a model message. |
 | `/plan <prompt>` | Start planning with a prompt, or send a follow-up while already active. |
 | `/plan tools` | Choose a session-specific tool policy, then start; cancellation changes nothing. |
-| `/plan show` | Display the stored plan without starting a model turn. |
-| `/plan finalize` | Ask the active planner to finish or ask one remaining material question. |
+| `/plan show` | Display the latest draft or completed plan without starting a model turn. |
+| `/plan finalize` | Ask the active planner to complete the latest draft or ask one remaining material question. |
 | `/plan implement` | Implement a completed or saved plan in this session, without a selector. |
 | `/plan save` | Save a ready plan in this Pi session and leave Plan mode. |
 | `/plan settings` | Open the same Plan Settings screen available from the menus. |
 | `/plan export [path]` | Write a ready, saved, or active implementation plan to Markdown. |
-| `/plan exit` (alias: `off`) | Leave Plan mode and discard its ready plan, or clear a saved/active plan. |
+| `/plan exit` (alias: `off`) | Leave Plan mode and discard its draft or ready plan, or clear a saved/active plan. |
 
 All routes support TUI and RPC.
 Print and JSON modes reject the menu, `tools`, and `settings`; stored-plan display and implementation have [additional mode restrictions](#-planning-and-implementation).
@@ -113,7 +88,7 @@ Exact subcommand words select routes; other text is a planning prompt, so `/plan
 There is no startup flag.
 
 State-changing transitions require an idle run; tool selection is locked once planning starts.
-`show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
+`show` can display a draft, but `save`, `export`, and `implement` require an applicable completed plan; `finalize` requires active Plan mode.
 Export defaults to the configured destination (`PLAN.md` when unset), never overwrites an existing target, and ends Plan mode only when exporting a ready plan.
 See [command workflows](./docs/command-workflows.md) for tool selection, busy-state recovery, path handling, and export cancellation, and [Security and privacy](#-security-and-privacy) before allowing custom tools.
 
@@ -123,8 +98,8 @@ While Plan mode is active, the policy blocks built-in editing tools and instruct
 It should explore first and ask structured questions when a preference or tradeoff materially changes the plan, or ask in plain text during free discussion.
 Configure persistent defaults or a one-workflow tool override before activation; active and ready workflows lock those controls.
 
-Plan mode registers `plan_mode_question` and `plan_mode_complete` during extension load and never changes their active status itself.
-Another active-tool policy may hide them, in which case Plan start or restore fails without widening that policy.
+Plan mode registers all three [Plan helpers](#-tools) at extension load and never changes their active status.
+All three must be available to start or restore planning; Plan mode does not widen another active-tool policy.
 By default, the Plan policy allows active safe built-ins such as `read`, limited `bash`, limited `powershell`, `grep`, `find`, and `ls`.
 The optional native `powershell` tool must be active when an automatic Plan policy starts, for example through Pi's Windows `defaultTools` setting, unless its name was explicitly retained for first-request resolution.
 Tools named `edit`, `write`, or `update_plan` and deselected tools are blocked at execution time even though active schemas remain visible.
@@ -208,28 +183,13 @@ The allowlist freezes at that boundary and restores without admitting new names 
 A tool registered or first made available later waits for the next Plan workflow; an admitted callable tool later declared to the model keeps its existing admission.
 If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
 
-A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions.
-The agent must call `plan_mode_complete({ plan })` alone as its final action, passing the complete Markdown plan.
-The tool rejects empty or whitespace-only plans and plans longer than 50,000 JavaScript characters; it does not truncate.
-Its visible result contains the full plan, and versioned result details let the extension restore it safely from the active session branch.
-
-`plan_mode_complete` uses Pi's `terminate: true` hint.
-Termination is best effort: if a model puts it in a parallel tool batch, Pi terminates the batch early only when every finalized sibling tool also terminates.
-The prompt therefore requires the completion call to be standalone and last.
-The extension deliberately does not infer completion from phrases such as “I will present the plan,” and ordinary research or clarification turns never trigger automatic retries.
-`/plan finalize` and its exact canonical finalization prompt are explicit recovery requests.
-With questionnaires enabled, if one of those requests ends normally without a valid structured question or completed plan, Plan mode waits for `agent_settled` and retries once with stronger tool guidance.
-In free discussion, `/plan finalize` can finish the plan or ask a remaining material question in plain text; it does not start this structured-tool retry.
-A valid question, accepted completion, user cancellation, explicit exit, workflow supersession, reload, session replacement, or shutdown cancels the retry.
-A second prose-only failure leaves Plan mode active, warns in interactive modes, and requires another explicit `/plan finalize` request.
-
-Legacy sessions and models may still submit one non-empty `<proposed_plan>` block with tags on their own lines.
-That compatibility path remains accepted, but it is not the primary workflow.
-Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and produce a warning.
+Updates are stored on the current Pi session branch, not in a project file. Use the fullscreen Plan pane or `/plan show` to read the draft before it is ready.
+If you follow up after completion, Plan mode dismisses the ready actions and keeps the previous plan as a draft. The agent can revise it, or complete it again unchanged after a clarification.
+See [drafting and completion](./docs/command-workflows.md#drafting-and-completion) for tool inputs, branch recovery, `/plan finalize` retries, and compatibility with old sessions.
 
 After completion, `/plan` opens the ready actions when interactive UI is available.
 The same flat menu shows **Implement here** and **Start fresh and implement**, explains which conversation context each choice uses, and previews the selected **Plan reinjection** policy.
-**Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with its complete planning conversation and tool calls.
+**Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with the planning dialogue and the accepted plan.
 **Start fresh and implement** opens a settings page before replacement.
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
@@ -277,7 +237,7 @@ Text print and JSON modes cannot display the bare `/plan` menu and reject that r
 These modes can export any stored plan with `/plan export [path]`, save a ready plan with `/plan save`, and clear it with `/plan exit` or `/plan off`.
 Successful export is observable through the created file; exporting a ready plan also leaves Plan mode, while saved and active implementation state remains unchanged.
 An existing target or missing plan fails the command without changing state.
-These modes reject saved-plan display and implementation before changing state because Pi provides neither printable custom-message output nor acknowledged extension-triggered turns; resume the session in TUI or RPC to show or implement it.
+These modes reject draft and saved-plan display, as well as saved-plan implementation, before changing state. Pi provides neither printable custom-message output nor acknowledged extension-triggered turns; resume the session in TUI or RPC for those actions.
 
 Both implementation paths apply the current **Plan reinjection** policy in their destination.
 The default **Off — conversation history only** policy does not create active-plan state or inject a hidden plan context.
@@ -298,10 +258,7 @@ Starting a new Plan-mode workflow or implementing a replacement plan supersedes 
 The extension deliberately does not infer completion from assistant prose or agent settlement under **Until manually cleared**, so clear the active plan when it no longer applies.
 Under **Off — conversation history only**, implementation messages remain ordinary conversation history and there is no active plan for `/plan exit` to remove.
 Choosing Stay before implementation keeps the plan ready.
-Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives.
-With questionnaires enabled, for clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable.
-Free discussion can continue in plain text and uses the same revision flow when the user sends a follow-up.
-Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
+Before saving or implementation, exit/off discards the draft or ready plan. Later non-Plan model requests omit the discarded plan's tool results.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines.
 With `@narumitw/pi-statusline`, this appears in the extension status area:
@@ -313,7 +270,7 @@ With `@narumitw/pi-statusline`, this appears in the extension status area:
 - `plan implementing`: The exact accepted plan is guaranteed under **Through first implementation run** or **Until manually cleared**.
 
 You can also exit directly.
-Before implementation, direct exit discards the latest proposed plan; while a plan is saved, it clears that saved plan.
+While a plan is saved, direct exit clears that saved plan.
 During a guaranteed-plan implementation, it removes both the original implementation handoff and the extension's canonical active-plan block from later model calls; an earlier Pi-generated compaction summary may still describe prior work:
 
 ```text
@@ -322,25 +279,24 @@ During a guaranteed-plan implementation, it removes both the original implementa
 
 ## 🧱 Cache-stable mode transitions
 
-Plan and Normal requests share one append-only conversation.
+Plan and Normal requests share one stored conversation.
 The extension appends one hidden, model-visible, versioned Plan contract before the first Plan prompt and one Normal contract before the first post-Plan Normal or implementation prompt.
 Ordinary linear turns do not rewrite or duplicate these contracts.
 A separate versioned interaction contract is appended when a workflow starts or the user switches between questionnaires and discussion; existing Plan contracts and conversation history are not rewritten.
-The Plan contract explains native-tool opt-in and per-call nested enforcement; this wording changes future Plan transitions without rewriting existing transition messages.
-**Implement here** retains the Plan dialogue, structured questions, tool calls, completion evidence, and `Implement the plan.` kickoff in order.
+When an older in-progress workflow is restored after upgrade, Plan mode appends the new versioned tool instructions once before the next model request instead of rewriting its earlier instructions. The changed tool definitions establish a new request baseline; ordinary turns on the same version preserve the existing prefix.
+On leaving Plan mode, the model sees a Normal request with unfinished draft snapshots and draft tool messages omitted. **Implement here** retains the accepted completion, planning dialogue, and `Implement the plan.` kickoff in order.
 **Start fresh and implement** is the isolation path and transfers only the approved plan plus the Normal contract to a linked session.
 
 The `context` hook filters repeated legacy `plan-mode-context` artifacts but preserves current transition messages.
 If compaction removes the effective transition, the hook inserts one canonical fallback at a deterministic retained-history boundary.
 Repeated transforms leave that fallback in place instead of moving it to the newest turn.
 An inactive legacy state entry does not inject a Normal contract, so sessions that never entered Plan mode keep their ordinary context after resume or reload.
+If compaction removes the latest model-visible draft during active planning, Plan mode restores one copy at the conversation tail without rewriting retained messages.
 Manual `/tree` navigation restores branch-owned Plan state and chooses the matching contract without navigating or adding a branch summary.
 Pi lists hidden transition messages in `/tree`; Plan mode rejects those internal targets, so select an adjacent conversation entry.
 
-Plan mode registers `plan_mode_question` and `plan_mode_complete` once and keeps their names and definitions stable across Normal, Plan, ready, implementation, and restored workflows.
-Visible helpers do not mean `/plan` is active, and their descriptions exclude ordinary planning, the `writing-plans` skill, roadmaps, checklists, and plan-file work.
-Only the latest active Plan contract authorizes the helpers; inactive or stale calls fail without accepting a plan or opening question UI.
-Plan mode does not widen a restrictive active-tool policy; start or restore fails when a required helper is unavailable.
+The three Plan helpers keep their names and definitions stable across Normal, Plan, ready, implementation, and restored workflows within the same version.
+Visible helpers do not mean `/plan` is active. They are for the current Plan workflow, not ordinary planning, the `writing-plans` skill, roadmaps, checklists, or plan-file work.
 Stable schemas preserve a cache-eligible prefix but cannot guarantee a hit because provider serialization, cache lifetime, minimum prefix size, implementation details, and session affinity remain external.
 
 The default `thinkingLevel: "inherit"` avoids a Plan-specific reasoning-parameter change.
@@ -378,8 +334,9 @@ Guaranteed coexistence with Goal requires `@narumitw/pi-goal` `0.53.0` or newer 
 
 ## 🛠️ Tools
 
-- `plan_mode_question` asks up to three structured questions, supports optional answer notes, submits one answer directly, and reviews multiple answers before TUI submission.
-- `plan_mode_complete` records the complete approved Markdown plan and terminates the planning turn when called alone.
+- `plan_mode_question` asks up to three structured questions when questionnaires are enabled.
+- `plan_mode_update({ plan })` replaces the current draft with complete Markdown without ending the turn.
+- `plan_mode_complete({})` takes no arguments and marks the stored draft `plan ready`. It must be the only tool call in its assistant message and cannot run inside another tool.
 
 ## ⚙️ Settings
 
@@ -420,8 +377,8 @@ Read the [settings reference](./docs/settings.md) for all accepted values, tool-
 
 ## 🚧 Limitations
 
-The Plan pane shows the current branch's completed plan while Plan mode is active. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
-It hides below 80 columns or 12 rows and reappears when the terminal is large enough. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
+The fullscreen Plan pane shows the current branch's draft as soon as an update succeeds, labels it `Draft`, and shows the completed plan once it is ready. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
+The pane hides below 80 columns or 12 rows and reappears when the terminal is large enough. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the draft or completed plan in the conversation without a mouse or a pane.
 
 Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
 This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
@@ -435,7 +392,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - Plan mode is conversational collaboration, not TODO or progress tracking.
 - `/plan <prompt>` enters Plan mode before submitting the prompt.
 - With questionnaires enabled, the agent uses `plan_mode_question` for material preferences; free discussion permits plain-text questions.
-- The agent completes with a standalone `plan_mode_complete` call instead of prose detection.
+- The agent updates the draft independently of completion; prose cannot mark it ready.
 - `update_plan` is blocked until the explicit implementation boundary restores Normal mode.
 - The default `clear-on-start` policy uses conversation history; `clear-after-first-run` and `keep` add exact-plan guarantees.
 - Append-only Plan and Normal contracts keep helper schemas stable, but Pi's tool policy is risk reduction rather than Codex sandbox enforcement.

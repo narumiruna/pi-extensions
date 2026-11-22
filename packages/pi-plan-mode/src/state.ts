@@ -49,11 +49,12 @@ export interface PlanModeWorkflowToolPolicy {
   resolved: boolean;
 }
 
-export interface PlanInteractionRestoration {
-  version: 1;
-  mode: PlanInteractionMode;
+interface ContextRestorationBoundary {
   boundary: { length: number; hash: string };
 }
+
+export type PlanInteractionRestoration = ContextRestorationBoundary &
+  ({ version: 1 | 2; mode: PlanInteractionMode | "plan" | "normal" } | { version: 1; mode: "draft"; plan: string });
 
 export interface PlanModeState {
   enabled: boolean;
@@ -61,6 +62,7 @@ export interface PlanModeState {
   interactionMode?: PlanInteractionMode;
   /** Historical model-visible anchors survive toggles and exits, not as active interaction state. */
   interactionRestorations?: PlanInteractionRestoration[];
+  draftPlan?: string;
   latestPlan?: string;
   latestPlanSource?: PlanCompletionSource;
   awaitingAction: boolean;
@@ -82,6 +84,7 @@ type SessionEntry = {
   message?: {
     role?: string;
     toolName?: string;
+    isError?: boolean;
     details?: unknown;
   };
 };
@@ -119,6 +122,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     enabled,
     ...(enabled && entry.data.interactionMode !== undefined ? { interactionMode } : {}),
     ...(interactionRestorations.length ? { interactionRestorations } : {}),
+    draftPlan: enabled && latestPlan === undefined ? normalizePersistedPlan(entry.data.draftPlan) : undefined,
     latestPlan,
     latestPlanSource: enabled
       ? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
@@ -137,14 +141,23 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 }
 
 function normalizeInteractionRestoration(value: unknown): PlanInteractionRestoration | undefined {
-  if (
-    !isRecord(value) ||
-    value.version !== 1 ||
-    (value.mode !== "questions" && value.mode !== "discussion") ||
-    !isRecord(value.boundary)
-  )
-    return undefined;
-  const mode = value.mode;
+  if (!isRecord(value) || !isRecord(value.boundary)) return undefined;
+  const { mode, version } = value;
+  if (version !== 1 && version !== 2) return undefined;
+  switch (mode) {
+    case "draft":
+    case "normal":
+      if (version !== 1) return undefined;
+      break;
+    case "plan":
+      if (version !== 2) return undefined;
+      break;
+    case "questions":
+    case "discussion":
+      break;
+    default:
+      return undefined;
+  }
   const { length, hash } = value.boundary;
   if (
     typeof length !== "number" ||
@@ -154,7 +167,10 @@ function normalizeInteractionRestoration(value: unknown): PlanInteractionRestora
     !/^[a-f0-9]{64}$/u.test(hash)
   )
     return undefined;
-  return { version: 1, mode, boundary: { length, hash } };
+  const boundary = { length, hash };
+  if (mode !== "draft") return { version, mode, boundary };
+  const plan = normalizePersistedPlan(value.plan);
+  return version === 1 && plan !== undefined && plan === value.plan ? { version, mode, plan, boundary } : undefined;
 }
 
 function normalizeWorkflowToolPolicy(value: unknown): PlanModeWorkflowToolPolicy | undefined {
@@ -236,7 +252,7 @@ function normalizePersistedPlan(value: unknown) {
 function latestCompletionPlan(entries: SessionEntry[]) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const message = entries[index]?.message;
-    if (message?.role !== "toolResult" || message.toolName !== PLAN_MODE_COMPLETE_TOOL_NAME) {
+    if (message?.role !== "toolResult" || message.toolName !== PLAN_MODE_COMPLETE_TOOL_NAME || message.isError) {
       continue;
     }
     const plan = planFromCompletionDetails(message.details);

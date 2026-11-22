@@ -10,7 +10,7 @@ import { readPlanModeSettings } from "../src/settings.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
-const REQUIRED_PLAN_TOOLS = ["plan_mode_question", "plan_mode_complete"];
+const REQUIRED_PLAN_TOOLS = ["plan_mode_question", "plan_mode_update", "plan_mode_complete"];
 const STARTUP_TOOLS = ["read", "write", "custom", ...REQUIRED_PLAN_TOOLS];
 const STABLE_TOOLS = STARTUP_TOOLS;
 
