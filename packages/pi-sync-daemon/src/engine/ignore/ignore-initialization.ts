@@ -16,24 +16,25 @@ const starter = Buffer.from(DEFAULT_IGNORE_RULES);
 const record = Buffer.from(`pi-sync-ignore-creation-v1\n${DEFAULT_IGNORE_RULES}`);
 const noFollow = (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 const openRead = constants.O_RDONLY | noFollow;
+const openExisting = process.platform === "win32" ? constants.O_RDWR | noFollow : openRead;
 const openExclusive = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | noFollow;
 
 export class AutomaticIgnoreCreationUnavailable extends Error {}
 
 export async function checkAutomaticIgnoreCreation(root: string, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
-  assertAutomaticCreationPlatform();
   root = path.resolve(root);
   const expected = await fs.lstat(root, { bigint: true });
   signal.throwIfAborted();
   assertRoot(root, expected);
-  const { directory } = await openAnchoredDirectory(root, expected);
+  await checkCreationAccess(root);
+  const { directory } = await openCreationDirectory(root, expected);
   try {
     signal.throwIfAborted();
     await syncCreationDirectory(directory);
     assertRoot(root, expected);
   } finally {
-    await directory.close();
+    await directory?.close();
     signal.throwIfAborted();
   }
 }
@@ -62,16 +63,20 @@ export async function prepareDefaultIgnoreSource(
       checkRoot();
       if (source.present) return { source, created: false };
     }
-    const { directory, anchor } = await openAnchoredDirectory(root, initialRoot);
+    await checkCreationAccess(root);
+    const { directory, anchor } = await openCreationDirectory(root, initialRoot);
     try {
       checkRoot();
-      await syncCreationDirectory(directory);
+      const flushDirectory = await syncCreationDirectory(directory);
       checkRoot();
       const markerPath = path.join(anchor, DEFAULT_IGNORE_CREATION_RECORD);
       const target = path.join(anchor, DEFAULT_IGNORE_FILENAME);
       if (priorRecord) assertOwned(priorRecord, DEFAULT_IGNORE_CREATION_RECORD, true);
       else if (statAt(target)) changed(DEFAULT_IGNORE_FILENAME);
-      const marker = await fs.open(markerPath, priorRecord ? openRead : openExclusive, 0o600);
+      const marker = await fs.open(markerPath, priorRecord ? openExisting : openExclusive, 0o600).catch((error) => {
+        if (!priorRecord) checkCreationError(error);
+        throw error;
+      });
       try {
         const markerStat = await flushAndVerify(
           marker,
@@ -82,17 +87,17 @@ export async function prepareDefaultIgnoreSource(
           priorRecord,
           true,
         );
-        await directory.sync();
+        await flushDirectory();
         checkRoot();
         assertCurrent(markerPath, markerStat);
         const priorFile = priorRecord ? statAt(target) : undefined;
         if (priorFile) assertOwned(priorFile, DEFAULT_IGNORE_FILENAME, false);
-        const file = await fs.open(target, priorFile ? openRead : openExclusive, 0o600).catch(async (cause) => {
+        const file = await fs.open(target, priorFile ? openExisting : openExclusive, 0o600).catch(async (cause) => {
           if (!priorRecord && (cause as NodeJS.ErrnoException).code === "EEXIST") {
             verifyRoot();
             assertCurrent(markerPath, markerStat);
             unlinkSync(markerPath);
-            await directory.sync();
+            await flushDirectory();
           }
           throw cause;
         });
@@ -109,12 +114,12 @@ export async function prepareDefaultIgnoreSource(
             },
             priorFile,
           );
-          await directory.sync();
+          await flushDirectory();
           checkTargetRoot();
           assertCurrent(target, fileStat);
           assertCurrent(markerPath, markerStat);
           unlinkSync(markerPath);
-          await directory.sync();
+          await flushDirectory();
           checkRoot();
           const source = await readIgnoreSource(root, DEFAULT_IGNORE_FILENAME, signal);
           checkRoot();
@@ -129,7 +134,7 @@ export async function prepareDefaultIgnoreSource(
         await marker.close();
       }
     } finally {
-      await directory.close();
+      await directory?.close();
       signal?.throwIfAborted();
     }
   } catch (cause) {
@@ -146,9 +151,18 @@ export async function prepareDefaultIgnoreSource(
   }
 }
 
-function assertAutomaticCreationPlatform() {
-  if (process.platform !== "linux" || !constants.O_DIRECTORY || !constants.O_NOFOLLOW || !constants.O_NONBLOCK) {
-    throw new AutomaticIgnoreCreationUnavailable("this platform does not support durable directory-relative creation");
+function checkCreationError(error: unknown) {
+  if (["EACCES", "EPERM", "EROFS", "ENOTSUP", "EOPNOTSUPP"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+    throw new AutomaticIgnoreCreationUnavailable("the filesystem does not permit automatic creation", { cause: error });
+  }
+}
+
+async function checkCreationAccess(root: string) {
+  try {
+    await fs.access(root, constants.W_OK);
+  } catch (error) {
+    checkCreationError(error);
+    throw error;
   }
 }
 
@@ -159,23 +173,30 @@ function assertRoot(root: string, expected: BigIntStats) {
   }
 }
 
-async function openAnchoredDirectory(root: string, expected: BigIntStats) {
-  assertAutomaticCreationPlatform();
-  const directory = await fs.open(root, openRead | constants.O_DIRECTORY);
+async function openCreationDirectory(root: string, expected: BigIntStats) {
+  if (process.platform === "win32") return { anchor: root };
+  const directory = await fs.open(root, openRead | (constants.O_DIRECTORY ?? 0));
   try {
     if (!sameIdentity(expected, await directory.stat({ bigint: true }))) changed("Pi agent directory");
-    return { directory, anchor: await directoryAnchor(directory, expected) };
+    return { directory, anchor: (await directoryAnchor(directory, expected)) ?? root };
   } catch (error) {
     await directory.close();
     throw error;
   }
 }
 
-async function syncCreationDirectory(directory: FileHandle) {
+async function syncCreationDirectory(directory?: FileHandle): Promise<() => Promise<void>> {
+  if (!directory) return async () => {};
   try {
     await directory.sync();
+    return () => directory.sync();
   } catch (error) {
-    if (["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+    if (
+      ["EBADF", "EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM"].includes(
+        (error as NodeJS.ErrnoException).code ?? "",
+      )
+    ) {
+      if (process.platform === "darwin") return async () => {};
       throw new AutomaticIgnoreCreationUnavailable("the filesystem does not support flushing the Pi agent directory");
     }
     throw error;
@@ -191,7 +212,6 @@ async function directoryAnchor(directory: FileHandle, expected: BigIntStats) {
     });
     if (observed?.isDirectory() && sameIdentity(expected, observed)) return candidate;
   }
-  throw new AutomaticIgnoreCreationUnavailable("directory-relative creation is unavailable");
 }
 
 function statAt(target: string) {
@@ -212,7 +232,7 @@ function assertOwned(stat: BigIntStats, name: string, privateRecord: boolean) {
     !stat.isFile() ||
     stat.nlink !== 1n ||
     (process.getuid && stat.uid !== BigInt(process.getuid())) ||
-    (privateRecord && (stat.mode & 0o077n) !== 0n)
+    (privateRecord && process.platform !== "win32" && (stat.mode & 0o077n) !== 0n)
   ) {
     throw new Error(`unsafe "${name}"; preserve it for manual recovery`);
   }

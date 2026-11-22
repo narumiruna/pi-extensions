@@ -482,21 +482,17 @@ function manualGuidance(target: string) {
   };
 }
 
-function unavailableAnchors() {
-  const stat = fs.stat;
-  return vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-    if (/^\/(?:proc\/self|dev)\/fd\//u.test(String(args[0]))) {
-      throw Object.assign(new Error("no directory anchor"), { code: "ENOTDIR" });
-    }
-    return stat(...args);
-  });
+function unavailableCreation() {
+  return vi
+    .spyOn(fs, "access")
+    .mockRejectedValue(Object.assign(new Error("directory is not writable"), { code: "EACCES" }));
 }
 
 test("manual default creation precedes setup review and migration review or backend I/O", () =>
   fixture(async (root, execution, proposal) => {
     const target = path.join(root, file);
     const before = await fs.readdir(root);
-    const anchors = unavailableAnchors();
+    const unavailable = unavailableCreation();
     try {
       await assert.rejects(reviewNewIgnoreSource(root, file, execution), manualGuidance(target));
       await assert.rejects(migrateIgnoreSetup(execution, "home"), manualGuidance(target));
@@ -520,7 +516,7 @@ test("manual default creation precedes setup review and migration review or back
       assert.equal(await fs.readFile(target, "utf8"), "/local-only/\n");
       assert.equal((await fs.stat(target, { bigint: true })).ctimeNs, original.ctimeNs);
     } finally {
-      anchors.mockRestore();
+      unavailable.mockRestore();
     }
   }));
 
@@ -561,7 +557,7 @@ test("unavailable safe creation preserves partial rules and the interrupted mark
     await fs.writeFile(marker, record, { mode: 0o600 });
     await fs.writeFile(target, "/npm/");
     const before = await fs.readdir(root);
-    const anchors = unavailableAnchors();
+    const unavailable = unavailableCreation();
     try {
       for (const run of [
         () => reviewNewIgnoreSource(root, file, execution),
@@ -583,7 +579,7 @@ test("unavailable safe creation preserves partial rules and the interrupted mark
       assert.equal(await fs.readFile(target, "utf8"), "/npm/");
       assert.deepEqual(await readSettings(root), fixtureSettings);
     } finally {
-      anchors.mockRestore();
+      unavailable.mockRestore();
     }
   }));
 

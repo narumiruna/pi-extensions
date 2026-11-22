@@ -232,9 +232,8 @@ test("available IPC validates inputs and a deferred or cancelled offer does not 
 
 test.for(["existing rule file", "new starter after deferral"] as const)(
   "confirmed IPC changes only local settings with an %s",
-  (scenario, { skip }) => {
+  (scenario) => {
     const shouldCreate = scenario === "new starter after deferral";
-    if (shouldCreate && process.platform !== "linux") skip("Native automatic creation is only verified on Linux.");
     return fixture(true, async ({ root, connection, methods, settingsPath, source, answer }) => {
       const defaultPath = path.join(root, ".syncignore");
       const alternative = path.join(root, "work.rules");

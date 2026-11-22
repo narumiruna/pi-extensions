@@ -308,7 +308,7 @@ For reference, the `sync` object of a version 8 setup using the default rule fil
 }
 ```
 
-On confirmation the daemon can create a missing default file on Linux when safe directory-anchored creation is available. On macOS, Windows, or when that Linux path is unavailable, use the exact path and starter text shown by Pi Sync. Create a regular UTF-8 file there without overwriting an existing file, then reopen the setup or migration and confirm the review. The starter rules are:
+On confirmation the daemon can create a missing default file on Linux, macOS, and Windows. If automatic creation is unavailable on your filesystem, use the exact path and starter text shown by Pi Sync. Create a regular UTF-8 file there without overwriting an existing file, then reopen the setup or migration and confirm the review. The starter rules are:
 
 ```gitignore
 /npm/
