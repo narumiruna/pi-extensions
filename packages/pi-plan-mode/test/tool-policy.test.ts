@@ -411,6 +411,39 @@ test("arbitrary configured Git subcommands trust arguments but not neighboring s
   assert.equal(isSafeCommandWithPolicy("git rev-parse HEAD && rm -rf build", { git: ["rev-parse"] }), false);
 });
 
+test("Git inspection accepts --no-optional-locks but not unreviewed option forms", () => {
+  const cwd = process.cwd();
+  const cases = [
+    ["git --no-optional-locks status --short", true],
+    ["git --no-optional-locks --no-pager -C . status --short", true],
+    ["git -C . --no-pager --no-optional-locks status --short", true],
+    ["git --no-optional-locks", false],
+    ["git --optional-locks status --short", false],
+    ["git --no-optional-lock status --short", false],
+    ["git --NO-OPTIONAL-LOCKS status --short", false],
+    ["git --no-optional-locks=true status --short", false],
+    ["git --no-optional-locks -c color.ui=false status --short", false],
+    ["git -c color.ui=false --no-optional-locks status --short", false],
+    ["git --no-optional-locks -C packages status --short", false],
+    ["git --no-optional-locks checkout main", false],
+    ["git --no-optional-locks diff --ext-diff", false],
+  ] as const;
+
+  for (const [command, accepted] of cases) {
+    assert.equal(isSafeCommand(command, {}, cwd), accepted, `Bash: ${command}`);
+    assert.equal(isSafePowerShellCommand(command, {}, cwd), accepted, `PowerShell: ${command}`);
+  }
+});
+
+test("Git --no-optional-locks does not exempt neighboring shell segments", () => {
+  const git = "git --no-optional-locks status --short";
+  const search =
+    "rg --files --hidden -g '!node_modules' -g '!.git' | rg 'pi-(plan-mode|btw)|extension-conventions|readme-conventions'";
+  assert.equal(findBlockedCommandSegment(`${git}; ${search}`), undefined);
+  assert.equal(findBlockedCommandSegment(`${git}; ${search}; touch output`), "touch output");
+  assert.equal(findBlockedPowerShellCommandSegment(`${git}; Get-Location; Remove-Item output`), "Remove-Item output");
+});
+
 test("Git validators allow ordinary inspection while rejecting explicit helpers", () => {
   for (const command of [
     "git diff",

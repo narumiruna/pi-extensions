@@ -651,7 +651,7 @@ function parseGitGlobalOptions(args: string[], workingDirectory?: string) {
   let index = 0;
   while (index < args.length) {
     const argument = args[index];
-    if (argument === "--no-pager") {
+    if (argument === "--no-pager" || argument === "--no-optional-locks") {
       index += 1;
       continue;
     }

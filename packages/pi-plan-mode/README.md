@@ -147,7 +147,7 @@ Limited `bash` uses a fail-closed Bash policy, including when an extension overr
 It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`.
 Case-insensitive `-i` is allowed for inspection commands such as `rg`, `grep`, and `git grep`. Commands where `-i` edits in place, including `sed`, stay blocked.
 It also accepts `hostname` without arguments and local Windows `tasklist` queries using reviewed display, filter, module, and service flags.
-Reviewed Git inspections may place `--no-pager` before the accepted subcommand.
+Reviewed Git inspections may place `--no-pager` or `--no-optional-locks` before the accepted subcommand. For example, `git --no-optional-locks status --short` skips optional work that requires a Git lock.
 They may also place one or more complete `-C <path>` pairs before the accepted subcommand only when every path is `.` or the exact current Pi working directory.
 Other targets are rejected so `git -C` cannot introduce executable configuration, hooks, filters, signing programs, or lazy-fetch remotes from another repository.
 It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, incomplete or directory-changing `-C` pairs, other Git global options, Git config overrides, mutating flags, dependency changes, editors, and unknown commands.
