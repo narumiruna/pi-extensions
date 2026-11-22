@@ -16,6 +16,7 @@ import {
   requestDaemon,
   waitForDaemonExit,
 } from "../dist/client.js";
+import { inspectDaemonRecovery, stopDaemonForRecovery } from "../dist/daemon-recovery.js";
 import { DAEMON_BUILD_VERSION } from "../src/build-version.js";
 import {
   daemonPaths,
@@ -363,6 +364,87 @@ for (const buildVersion of [DAEMON_BUILD_VERSION, "999.0.0"]) {
       buildVersion,
     ));
 }
+
+test("reviewed recovery can resume after cancellation and never starts a replacement", () =>
+  fixture(
+    async (owner) => {
+      launches.mockClear();
+      const target = await inspectDaemonRecovery(owner.root);
+      assert.ok(target);
+      assert.equal(target.pid, owner.identity.pid);
+      await owner.unchanged();
+      await assert.rejects(stopDaemonForRecovery({ ...target, instance: randomUUID() }), /owner changed/u);
+      await owner.unchanged();
+
+      const controller = new AbortController();
+      const stopped = message(owner.child, "stop");
+      const first = stopDaemonForRecovery(target, controller.signal);
+      const cancelled = assert.rejects(first, { name: "AbortError" });
+      void cancelled.catch(() => {});
+      try {
+        await stopped;
+        await owner.command("release");
+      } finally {
+        controller.abort();
+      }
+      await cancelled;
+      assert.equal(await readIdentity(owner.paths), undefined);
+      assert.equal((await readUpgradeOwner(owner.paths))?.purpose, "cleanup");
+      assert.deepEqual(await inspectDaemonRecovery(owner.root), target);
+      assert.equal(processExists(target.pid), true);
+      assert.equal(launches.mock.calls.length, 0);
+
+      const waiting = observeExitPoll(owner);
+      const startup = new AbortController();
+      const concurrent = ensureDaemon(owner.root, startup.signal);
+      const blocked = assert.rejects(concurrent, { name: "AbortError" });
+      void blocked.catch(() => {});
+      try {
+        assert.equal(await beforeStartupSettles(waiting.first, "owner exit", concurrent), "poll");
+        assert.equal(launches.mock.calls.length, 0);
+      } finally {
+        startup.abort();
+        waiting.restore();
+      }
+      await blocked;
+
+      const exited = once(owner.child, "exit");
+      owner.child.send("exit");
+      await exited;
+      await stopDaemonForRecovery(target);
+      assert.equal(launches.mock.calls.length, 0);
+      assert.equal(await readUpgradeOwner(owner.paths), undefined);
+      assert.equal(await inspectDaemonRecovery(owner.root), undefined);
+      await owner.preserved();
+    },
+    "upgrade",
+    DAEMON_BUILD_VERSION,
+  ));
+
+test("reviewed recovery leaves retained unattended consent and the owner unchanged", () =>
+  fixture(
+    async (owner) => {
+      const dir = path.join(owner.root, "pi-sync");
+      const file = path.join(dir, "daemon.json");
+      const consent = JSON.stringify({
+        version: 1,
+        root: owner.root,
+        handover: true,
+        nonce: "a".repeat(64),
+        setups: { home: { fingerprint: "b".repeat(64), afterExit: true } },
+      });
+      await fs.mkdir(dir);
+      await fs.writeFile(file, consent, { mode: 0o600 });
+      const target = await inspectDaemonRecovery(owner.root);
+      assert.ok(target);
+      await assert.rejects(stopDaemonForRecovery(target), /revoke unattended Pi Sync permission/u);
+      assert.equal(await readUpgradeOwner(owner.paths), undefined);
+      assert.deepEqual(await fs.readFile(owner.paths.identity), owner.identityBytes);
+      assert.equal(await fs.readFile(file, "utf8"), consent);
+    },
+    "upgrade",
+    DAEMON_BUILD_VERSION,
+  ));
 
 test("a new caller waits for the old PID after cancellation and identity release", () =>
   fixture(async (owner) => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { completeSyncArguments, parseOptions, validateCommandOptions } from "../src/commands/command.js";
 
-for (const action of ["status", "handover", "allow-after-exit", "revoke-after-exit"])
+for (const action of ["status", "recover", "handover", "allow-after-exit", "revoke-after-exit"])
   test(`daemon ${action} is accepted and completed`, () => {
     assert.doesNotThrow(() => validateCommandOptions("daemon", parseOptions([action])));
     assert.ok(completeSyncArguments("daemon ")?.some((item) => item.value === `daemon ${action}`));

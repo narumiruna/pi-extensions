@@ -321,6 +321,7 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | `/sync` | Set up storage, manage synced content, and review sync operations or recovery. |
 | `/sync help` | Show command usage. |
 | `/sync daemon [status\|handover\|allow-after-exit\|revoke-after-exit]` | Connect to the service or review ownership and unattended permission; no argument connects and shows status. |
+| `/sync daemon recover` | Review and stop the current daemon in TUI or RPC without starting a replacement or retrying a transfer. |
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
 | `/sync config` | Show resolved configuration. |
@@ -348,6 +349,8 @@ Use the [daemon CLI](./docs/daemon-migration.md#daemon-cli) for explicit `stop` 
 ```bash
 node "/path/to/installed/pi-sync/dist/daemon/dist/cli.js" status --root "/path/to/agent-directory"
 ```
+
+If Pi Sync reports uncertain daemon cleanup, open `/sync` and choose **Stop daemon for recovery…**. After the confirmed stop, use `/reload` and follow the [cleanup recovery steps](./docs/daemon-migration.md#recover-from-uncertain-daemon-cleanup).
 
 Use the directory containing the installed Pi Sync `package.json` and the agent directory of the owner you want to inspect. `status` does not start a service. `stop` drains the service; reload Pi to reattach afterward. CLI `start` without clients follows the same 30-second grace policy. If ownership, consent, or cleanup is uncertain, follow the [recovery guide](./docs/daemon-migration.md#diagnostics-and-rollback) instead of forcing a restart. Print/JSON never launch a service.
 

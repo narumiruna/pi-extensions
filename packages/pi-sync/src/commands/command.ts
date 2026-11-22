@@ -19,7 +19,7 @@ export const SYNC_COMMANDS = [
   {
     name: "daemon",
     description: "Review service handover and unattended permission",
-    usageSuffix: " [status|handover|allow-after-exit|revoke-after-exit]",
+    usageSuffix: " [status|recover|handover|allow-after-exit|revoke-after-exit]",
   },
   { name: "push", description: "Upload local settings" },
   { name: "pull", description: "Apply remote settings" },
@@ -152,7 +152,7 @@ export function validateCommandOptions(command: string, options: CommandOptions)
   }
 }
 
-const DAEMON_ACTIONS = ["status", "handover", "allow-after-exit", "revoke-after-exit"] as const;
+const DAEMON_ACTIONS = ["status", "recover", "handover", "allow-after-exit", "revoke-after-exit"] as const;
 
 export function completeSyncArguments(argumentPrefix: string): CommandArgumentCompletion[] | null {
   const prefix = argumentPrefix.trimStart();
@@ -255,6 +255,7 @@ export function usage() {
   return [
     "Usage: /sync <command>",
     `Commands: ${commands}`,
+    "Daemon cleanup: /sync daemon recover reviews and stops the existing daemon. It does not start a replacement or retry a transfer.",
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",

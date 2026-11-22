@@ -7,7 +7,11 @@ import { readConsent } from "./consent.js";
 import { configureEngineHost, type EngineContext } from "./engine/host.js";
 import { canonicalRootGuard, processExists } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
-import type { ClientFacts, Execution } from "./protocol.js";
+import { type ClientFacts, type Execution, OWNERSHIP_CLEANUP_REQUIRED } from "./protocol.js";
+
+class OwnershipCleanupError extends Error {
+  readonly code = OWNERSHIP_CLEANUP_REQUIRED;
+}
 
 interface Scope {
   execution: Execution;
@@ -33,7 +37,8 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
   async function reserve<T>(targets: readonly string[], action: () => Promise<T>): Promise<T> {
     const owner = current();
     assertRoot();
-    if (poisoned) throw new Error("Daemon ownership cleanup is uncertain; stop and reconcile before retrying.");
+    if (poisoned)
+      throw new OwnershipCleanupError("Daemon ownership cleanup is uncertain; stop and reconcile before retrying.");
     const missing = [...new Set(targets)].filter((target) => !owner.held.has(target)).sort();
     if (!missing.length) return action();
     if (!owner.peers)
@@ -64,17 +69,17 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
         // Release by request identity even when a grant response was lost. A cancelled
         // prompt is not evidence that a granted remote writer stopped.
         const results = await Promise.allSettled(
-          requested.map(({ client, reservation }) => {
+          requested.map(async ({ client, reservation }) => {
             const peer = peers.find((peer) => peer.id === client);
-            return peer && !processExists(peer.pid)
-              ? Promise.resolve(true)
-              : owner.execution.request("queue-release", { reservation }, client);
+            if (peer && !processExists(peer.pid)) return;
+            if ((await owner.execution.request("queue-release", { reservation }, client)) !== true)
+              throw new Error("File-queue release was not acknowledged.");
           }),
         );
         const failure = results.find((result) => result.status === "rejected");
         if (failure?.status === "rejected") {
           poisoned = true;
-          throw new Error(
+          throw new OwnershipCleanupError(
             "File-queue release is uncertain; stop the daemon and keep grants quarantined until owner exit.",
             { cause: failure.reason },
           );
@@ -87,7 +92,8 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
     allowConfigMigration: () => Boolean(readConsent(root)),
     root: () => {
       assertRoot();
-      if (poisoned) throw new Error("Daemon ownership cleanup is uncertain; stop and reconcile before restarting.");
+      if (poisoned)
+        throw new OwnershipCleanupError("Daemon ownership cleanup is uncertain; stop and reconcile before restarting.");
       return root;
     },
     reserveTargets: reserve,
@@ -122,7 +128,12 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
                 await release?.();
               } catch (error) {
                 poisoned = true;
-                throw error;
+                throw new OwnershipCleanupError(
+                  "Pi settings lock release failed; stop and reconcile before restarting.",
+                  {
+                    cause: error,
+                  },
+                );
               }
             },
           );
@@ -136,8 +147,19 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
     status: (_ctx, value, presentation) => current().execution.emit("status", { value, presentation }),
   });
   return {
+    cleanupRequired: () => poisoned,
     run<T>(execution: Execution, action: () => Promise<T>): Promise<T> {
-      return scope.run({ execution, held: new Set() }, action);
+      return scope.run({ execution, held: new Set() }, async () => {
+        try {
+          return await action();
+        } catch (error) {
+          if (error instanceof AggregateError) {
+            const cleanup = error.errors.find((entry: unknown) => entry instanceof OwnershipCleanupError);
+            if (cleanup) throw new OwnershipCleanupError(`${error.message} ${cleanup.message}`, { cause: error });
+          }
+          throw error;
+        }
+      });
     },
   };
 }
