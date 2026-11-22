@@ -302,6 +302,10 @@ Upgrade all peers to compatible Pi Sync clients and daemons before the first ver
 
 For selected-path setups, **Settings → Excluded paths** edits `sync.exclude` rules that win over `include`; saving opts into at least settings version 6 and snapshot version 4. For directory scope, **Settings → Agent directory scope** also edits `reinclude` and session opt-in. Excluded local files remain untouched, including on rollback. New publications omit matching remote paths, but old history is **not erased**. Removing rules can expose or replace content. See [Excluded paths](./skills/configure-pi-sync/references/configuration.md#excluded-paths) for syntax, review, and recovery.
 
+### Scan limits
+
+If the agent-directory scan exceeds 64 MiB, use `/sync config` to find the active ignore file. Exclude large files or folders you do not need to sync, then check `/sync files` again. For a legacy agent-directory setup, use **Settings → Agent directory scope** to edit exclusions instead. Storage diagnostics do not change the local scan limit.
+
 Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, content policy, legacy paths, and recovery steps.
 
 ## 🧠 Skills

@@ -17,6 +17,7 @@ import { MAX_AGENT_DIRECTORY_BYTES } from "../src/engine/snapshot/snapshot-bound
 import { decodeSnapshot, encodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
 import { assertUnexcludedTargets } from "../src/engine/snapshot/snapshot-exclude-safety.js";
 import type { Snapshot } from "../src/engine/snapshot/snapshot-types.js";
+import { syncErrorGuidance } from "../src/engine/sync/sync-error-guidance.js";
 
 async function fixture(run: (root: string, sessionDir: string) => Promise<void>) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-ignore-snapshot-")));
@@ -149,7 +150,10 @@ test("collection prunes directory rules and preserves typed inventory, privacy, 
       assert.ok(!serialized.includes(privateValue));
     }
     await fs.truncate(path.join(root, "directory-only"), MAX_AGENT_DIRECTORY_BYTES + 1);
-    await assert.rejects(createSnapshot("test", options), /64 MiB scan byte bound/);
+    await assert.rejects(createSnapshot("test", options), (error: unknown) => {
+      assert.match(syncErrorGuidance(error), /^Agent directory exceeds the 64 MiB scan byte bound\.\n.*\/sync config/u);
+      return true;
+    });
   }));
 
 test("projection uses reviewed local rules, never a remote fingerprint as a matcher", () =>

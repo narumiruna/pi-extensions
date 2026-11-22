@@ -43,7 +43,7 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
       "Username and password: stored privately (values hidden)",
       ...policy.lines,
       `Automatic sync: ${automaticSyncSummary(policy.sync.automatic)}`,
-      "Check setup tests whether this server can safely save sync updates using a temporary probe.",
+      "After saving, Diagnostics in /sync checks WebDAV write support with a temporary probe.",
       "Saving does not contact remote storage or start syncing.",
     ],
     "Save setup",
