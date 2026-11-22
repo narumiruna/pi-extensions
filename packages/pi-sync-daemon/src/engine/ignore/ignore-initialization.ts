@@ -12,8 +12,11 @@ import {
   sameIdentity,
 } from "./ignore-source.js";
 
-const starter = Buffer.from(DEFAULT_IGNORE_RULES);
-const record = Buffer.from(`pi-sync-ignore-creation-v1\n${DEFAULT_IGNORE_RULES}`);
+const recordPrefix = "pi-sync-ignore-creation-v1\n";
+const records = [
+  Buffer.from(`${recordPrefix}${DEFAULT_IGNORE_RULES}`),
+  Buffer.from(`${recordPrefix}/npm/\n/sessions/\n/auth.json\n/truth.json\n`),
+] as const;
 const noFollow = (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 const openRead = constants.O_RDONLY | noFollow;
 const openExisting = process.platform === "win32" ? constants.O_RDWR | noFollow : openRead;
@@ -39,6 +42,32 @@ export async function checkAutomaticIgnoreCreation(root: string, signal: AbortSi
   }
 }
 
+function creationRecordToken(stat: BigIntStats): string {
+  return `${ignoreFileIdentity(stat)}:${stat.size}:${stat.ctimeNs}:${stat.mtimeNs}`;
+}
+
+export async function readPendingIgnoreCreation(root: string, signal: AbortSignal) {
+  signal.throwIfAborted();
+  root = path.resolve(root);
+  const initialRoot = await fs.lstat(root, { bigint: true });
+  const checkRoot = () => {
+    signal.throwIfAborted();
+    assertRoot(root, initialRoot);
+  };
+  checkRoot();
+  const target = path.join(root, DEFAULT_IGNORE_CREATION_RECORD);
+  const prior = await fs.lstat(target, { bigint: true });
+  assertOwned(prior, DEFAULT_IGNORE_CREATION_RECORD, true);
+  const marker = await fs.open(target, openRead);
+  try {
+    const { stat, bytes } = await verifyCreationFile(marker, target, target, records, checkRoot, prior, false);
+    return { token: creationRecordToken(stat), text: bytes.toString("utf8", recordPrefix.length) };
+  } finally {
+    await marker.close();
+    signal.throwIfAborted();
+  }
+}
+
 export async function initializeDefaultIgnoreSource(root: string, signal?: AbortSignal): Promise<IgnoreSource> {
   return (await prepareDefaultIgnoreSource(root, signal)).source;
 }
@@ -46,6 +75,7 @@ export async function initializeDefaultIgnoreSource(root: string, signal?: Abort
 export async function prepareDefaultIgnoreSource(
   root: string,
   signal?: AbortSignal,
+  reviewedCreation?: string | null,
 ): Promise<{ source: IgnoreSource; created: boolean }> {
   signal?.throwIfAborted();
   root = path.resolve(root);
@@ -58,6 +88,12 @@ export async function prepareDefaultIgnoreSource(
     };
     checkRoot();
     const priorRecord = statAt(path.join(root, DEFAULT_IGNORE_CREATION_RECORD));
+    if (
+      reviewedCreation !== undefined &&
+      reviewedCreation !== (priorRecord ? creationRecordToken(priorRecord) : null)
+    ) {
+      changed(DEFAULT_IGNORE_CREATION_RECORD);
+    }
     if (!priorRecord) {
       const source = await readIgnoreSource(root, DEFAULT_IGNORE_FILENAME, signal);
       checkRoot();
@@ -78,15 +114,15 @@ export async function prepareDefaultIgnoreSource(
         throw error;
       });
       try {
-        const markerStat = await flushAndVerify(
+        const { stat: markerStat, bytes } = await verifyCreationFile(
           marker,
           markerPath,
           path.join(root, DEFAULT_IGNORE_CREATION_RECORD),
-          record,
+          records,
           priorRecord ? checkRoot : verifyRoot,
           priorRecord,
-          true,
         );
+        const starter = bytes.subarray(recordPrefix.length);
         await flushDirectory();
         checkRoot();
         assertCurrent(markerPath, markerStat);
@@ -103,11 +139,11 @@ export async function prepareDefaultIgnoreSource(
         });
         try {
           const checkTargetRoot = priorFile ? checkRoot : verifyRoot;
-          const fileStat = await flushAndVerify(
+          const { stat: fileStat } = await verifyCreationFile(
             file,
             target,
             path.join(root, DEFAULT_IGNORE_FILENAME),
-            starter,
+            [starter],
             () => {
               checkTargetRoot();
               assertCurrent(markerPath, markerStat);
@@ -123,7 +159,7 @@ export async function prepareDefaultIgnoreSource(
           checkRoot();
           const source = await readIgnoreSource(root, DEFAULT_IGNORE_FILENAME, signal);
           checkRoot();
-          if (source.identity !== ignoreFileIdentity(fileStat) || source.text !== DEFAULT_IGNORE_RULES) {
+          if (source.identity !== ignoreFileIdentity(fileStat) || source.text !== starter.toString("utf8")) {
             changed(DEFAULT_IGNORE_FILENAME);
           }
           return { source, created: priorFile === undefined };
@@ -238,16 +274,17 @@ function assertOwned(stat: BigIntStats, name: string, privateRecord: boolean) {
   }
 }
 
-async function flushAndVerify(
+async function verifyCreationFile(
   handle: FileHandle,
   target: string,
   canonical: string,
-  expected: Buffer,
+  expected: readonly [Buffer, ...Buffer[]],
   checkRoot: () => void,
   prior: BigIntStats | undefined,
-  privateRecord = false,
+  persist = true,
 ) {
   const name = path.basename(target);
+  const privateRecord = name === DEFAULT_IGNORE_CREATION_RECORD;
   const opened = await handle.stat({ bigint: true });
   assertOwned(opened, name, privateRecord);
   if (prior && !sameFile(prior, opened)) changed(name);
@@ -255,13 +292,13 @@ async function flushAndVerify(
   if ((await fs.realpath(target)) !== canonical) throw new Error(`use the exact on-disk filename "${name}"`);
   checkRoot();
   assertCurrent(target, opened);
-  if (!prior) await handle.writeFile(expected);
+  if (!prior && persist) await handle.writeFile(expected[0]);
   const before = await handle.stat({ bigint: true });
   assertOwned(before, name, privateRecord);
   if (!(prior ? sameFile(opened, before) : sameIdentity(opened, before))) changed(name);
   checkRoot();
   assertCurrent(target, before);
-  const observed = Buffer.alloc(expected.length + 1);
+  const observed = Buffer.alloc(Math.max(...expected.map((bytes) => bytes.length)) + 1);
   let count = 0;
   while (count < observed.length) {
     checkRoot();
@@ -269,16 +306,17 @@ async function flushAndVerify(
     if (bytesRead === 0) break;
     count += bytesRead;
   }
-  if (count !== expected.length || !observed.subarray(0, count).equals(expected)) {
+  const bytes = expected.find((candidate) => observed.subarray(0, count).equals(candidate));
+  if (!bytes) {
     throw new Error(
       privateRecord
         ? `invalid creation record "${name}"; preserve it for manual recovery`
-        : `unfinished creation of "${name}"; move the incomplete file outside the Pi agent directory or restore the full starter rules, then retry confirmed setup or migration`,
+        : `unfinished creation of "${name}"; move the incomplete file outside the Pi agent directory or restore the full starter rules recorded in "${DEFAULT_IGNORE_CREATION_RECORD}", then retry confirmed setup or migration`,
     );
   }
-  await handle.sync();
+  if (persist) await handle.sync();
   if (!sameFile(before, await handle.stat({ bigint: true }))) changed(name);
   checkRoot();
   assertCurrent(target, before);
-  return before;
+  return { stat: before, bytes };
 }

@@ -29,7 +29,7 @@ test("fallback defaults do not write; a present empty file overrides them", () =
   fixture(async (root) => {
     const fallback = await readIgnoreSource(root);
     assert.equal(fallback.filename, DEFAULT_IGNORE_FILENAME);
-    assert.equal(fallback.text, "/npm/\n/sessions/\n/auth.json\n/truth.json\n");
+    assert.equal(fallback.text, "/auth.json\n/git/\n/npm/\n/sessions/\n/truth.json\n");
     assert.equal(fallback.present, false);
     assert.equal(fallback.identity, undefined);
     assert.deepEqual(await readIgnoreSource(root, DEFAULT_IGNORE_FILENAME), fallback);
@@ -328,6 +328,9 @@ test("unsupported escaped path separators refuse the entire rules source", () =>
 test("default root rules match Git's path and directory handling", () =>
   fixture((root) =>
     compareWithGit(root, DEFAULT_IGNORE_RULES, [
+      { path: "git", directory: true, ignored: true },
+      { path: "git/github.com/example/package/README.md", ignored: true },
+      { path: "nested/git/README.md", ignored: false },
       { path: "npm", directory: true, ignored: true },
       { path: "npm/npm.json", ignored: true },
       { path: "nested/npm/npm.json", ignored: false },

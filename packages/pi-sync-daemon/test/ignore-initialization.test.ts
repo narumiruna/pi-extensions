@@ -11,6 +11,8 @@ import {
   AutomaticIgnoreCreationUnavailable,
   checkAutomaticIgnoreCreation,
   initializeDefaultIgnoreSource,
+  prepareDefaultIgnoreSource,
+  readPendingIgnoreCreation,
 } from "../src/engine/ignore/ignore-initialization.js";
 import {
   DEFAULT_IGNORE_CREATION_RECORD,
@@ -148,6 +150,32 @@ test.each(["missing", "pending", "partial"] as const)(
         noAnchor.mockRestore();
       }
     }),
+);
+
+posixCreation("a different supported record cannot replace the reviewed starter at commit", () =>
+  fixture(async (root, target, markerPath) => {
+    const signal = new AbortController().signal;
+    const oldRecord = "pi-sync-ignore-creation-v1\n/npm/\n/sessions/\n/auth.json\n/truth.json\n";
+    await fs.writeFile(markerPath, oldRecord, { mode: 0o600 });
+    const { token } = await readPendingIgnoreCreation(root, signal);
+    await fs.writeFile(markerPath, record, { mode: 0o600 });
+    await assert.rejects(prepareDefaultIgnoreSource(root, signal, token), /changed during initialization/u);
+    assert.equal(await fs.readFile(markerPath, "utf8"), record);
+    await assertMissing(target);
+    assert.equal((await fs.stat(markerPath)).mode & 0o777, 0o600);
+  }),
+);
+
+posixCreation("a pre-upgrade record does not accept a different complete template", () =>
+  fixture(async (root, target, markerPath) => {
+    const oldRecord = "pi-sync-ignore-creation-v1\n/npm/\n/sessions/\n/auth.json\n/truth.json\n";
+    await fs.writeFile(markerPath, oldRecord, { mode: 0o600 });
+    await fs.writeFile(target, starter, { mode: 0o600 });
+    await assert.rejects(initializeDefaultIgnoreSource(root), /restore the full starter rules recorded in/u);
+    assert.equal(await fs.readFile(markerPath, "utf8"), oldRecord);
+    assert.equal(await fs.readFile(target, "utf8"), starter);
+    await assert.rejects(readIgnoreSource(root), unfinished);
+  }),
 );
 
 test("confirmed calls share one complete default file and never touch alternatives", () =>

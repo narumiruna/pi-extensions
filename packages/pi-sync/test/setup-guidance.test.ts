@@ -161,15 +161,33 @@ test("additional setup rejects a connection changed during exact destination rev
 test.each([
   [Object.assign(new Error("write failed"), { code: "ENOSPC" }), /Free disk space/u],
   [Object.assign(new Error("write failed"), { code: "EACCES" }), /write access/u],
-  [new Error("WebDAV request failed (403)"), /credentials and remote permissions/u],
+  [new Error("WebDAV request failed (403)"), /\/sync → Settings → Manage storage connections/u],
   [new Error("Git authentication failed"), /credentials and remote permissions/u],
+  [Object.assign(new Error("Storage unavailable"), { status: 503 }), /\/sync doctor/u],
   [new Error("S3 request timed out"), /server address and network/u],
   [new Error("settings changed while review was open"), /Reopen the item/u],
   [new Error("Invalid pi-sync settings"), /repair it before retrying/u],
-  [new Error("Remote publication outcome is unknown"), /Remote publication outcome is unknown/u],
+  [new Error("Remote publication outcome is unknown"), /\/sync doctor or choose Diagnostics in \/sync/u],
 ] as const)("error guidance preserves outcome and supplies an action: %s", (error, expected) => {
-  assert.match(syncErrorGuidance(error), expected);
-  assert.doesNotMatch(syncErrorGuidance(error), /nothing changed|no remote.*changed/u);
+  const output = syncErrorGuidance(error);
+  assert.ok(output.startsWith(`${error.message}\n`));
+  assert.match(output, expected);
+  assert.doesNotMatch(output, /nothing changed|no remote.*changed|More →|Check setup/u);
+});
+
+test.each([
+  ["Agent directory exceeds the 64 MiB scan byte bound.", /find the active ignore file/u],
+  ["Agent directory exceeds the scan file bound.", /edit Agent directory scope/u],
+  ["Agent directory exceeds the scan entry bound.", /Exclude whole subdirectories/u],
+  ["Projected agent directory exceeds the 64 MiB scan byte bound.", /local or incoming sync content/u],
+  ["Projected agent directory exceeds the scan file bound.", /local or incoming sync content/u],
+  ["Projected agent directory exceeds the scan entry bound.", /Exclude whole subdirectories/u],
+] as const)("scan limits give local recovery guidance: %s", (message, expected) => {
+  const output = syncErrorGuidance(new Error(message));
+  assert.ok(output.startsWith(`${message}\n`));
+  assert.match(output, /use \/sync config|with \/sync config/iu);
+  assert.match(output, expected);
+  assert.doesNotMatch(output, /Check setup|Diagnostics|\/sync doctor/u);
 });
 
 test("technical error details are bounded and terminal-safe", () => {

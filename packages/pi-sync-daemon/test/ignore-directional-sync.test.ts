@@ -24,6 +24,7 @@ import {
   selectionForSnapshot,
 } from "../src/engine/sync/sync-policy.js";
 import { syncPolicyChanged } from "../src/engine/sync/sync-state.js";
+import { formatPullSummary, formatRollbackSummary } from "../src/engine/ui/sync-format.js";
 
 vi.mock(import("../src/engine/settings/config.js"), async (importOriginal) => {
   const actual = await importOriginal();
@@ -166,6 +167,32 @@ const legacy = (id: string, files: SnapshotFile[] = []): Snapshot => ({
   selection: { version: 1, include: ["remote.txt"] },
   files,
 });
+
+test("local transfer summaries count all writes and case cleanup without listing individual paths", () =>
+  fixture(async () => {
+    const config = await loadConfig();
+    const before = legacy("before", [
+      file("update.md", "old"),
+      file("remove.md", "old"),
+      file("sessions/live.jsonl", "keep"),
+    ]);
+    const after = legacy("after", [file("add.md", "new"), file("update.md", "new")]);
+    const protectedPaths = new Set(["sessions/live.jsonl"]);
+    for (const review of [
+      formatPullSummary(config, "memory", before, after, protectedPaths, ["ADD.md"]),
+      formatRollbackSummary(config, "memory", before, after, after.id, protectedPaths, ["ADD.md"]),
+    ]) {
+      const summary = review.lines.join("\n");
+      assert.match(summary, /1 add · 1 update · 2 remove/u);
+      assert.match(summary, /Case-variant aliases are removed/u);
+      assert.doesNotMatch(summary, /(?:Add|Update|Remove) locally:/u);
+      assert.match(review.content, /Add locally: add\.md/u);
+      assert.match(review.content, /Update locally: update\.md/u);
+      assert.match(review.content, /Remove locally: remove\.md/u);
+      assert.match(review.content, /Remove locally: ADD\.md/u);
+      assert.doesNotMatch(review.content, /sessions\/live\.jsonl/u);
+    }
+  }));
 
 function mismatch(comparison: string) {
   return (error: unknown) =>

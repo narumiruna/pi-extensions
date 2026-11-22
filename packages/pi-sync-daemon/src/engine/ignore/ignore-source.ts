@@ -7,7 +7,7 @@ import { isDeniedPath } from "../paths.js";
 
 export const DEFAULT_IGNORE_FILENAME = ".syncignore";
 export const DEFAULT_IGNORE_CREATION_RECORD = ".pi-sync.json.syncignore-creation";
-export const DEFAULT_IGNORE_RULES = "/npm/\n/sessions/\n/auth.json\n/truth.json\n";
+export const DEFAULT_IGNORE_RULES = "/auth.json\n/git/\n/npm/\n/sessions/\n/truth.json\n";
 export const MAX_IGNORE_BYTES = 64 * 1024;
 const MAX_MATCH_PATH_BYTES = 4_096;
 const MATCH_CACHE_PATH_BUDGET = 2_048;

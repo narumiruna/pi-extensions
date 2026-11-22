@@ -433,6 +433,28 @@ test.skipIf(process.platform !== "linux")("a recovered starter that already exis
   }),
 );
 
+test.skipIf(process.platform !== "linux").each([false, true])(
+  "setup finishes a pre-upgrade creation using the original reviewed template (target present: %s)",
+  (present) =>
+    fixture(async (root, execution, proposal) => {
+      const oldStarter = "/npm/\n/sessions/\n/auth.json\n/truth.json\n";
+      const marker = path.join(root, DEFAULT_IGNORE_CREATION_RECORD);
+      const target = path.join(root, file);
+      await fs.writeFile(marker, `pi-sync-ignore-creation-v1\n${oldStarter}`, { mode: 0o600 });
+      if (present) await fs.writeFile(target, oldStarter, { mode: 0o600 });
+      proposal(async ({ content }) => {
+        assert.ok(content.includes(oldStarter.trimEnd()));
+        assert.doesNotMatch(content, /^\/git\/$/mu);
+        return true;
+      });
+      const reviewed = await reviewNewIgnoreSource(root, file, execution);
+      const prepared = await prepareReviewedIgnoreSource(root, reviewed, execution);
+      assert.equal(prepared.created, !present);
+      assert.equal(await fs.readFile(target, "utf8"), oldStarter);
+      await assert.rejects(fs.lstat(marker), { code: "ENOENT" });
+    }),
+);
+
 test("ordinary settings proposals cannot migrate or silently switch an existing rule file", () => {
   const next = structuredClone(fixtureSettings);
   next.version = 8;

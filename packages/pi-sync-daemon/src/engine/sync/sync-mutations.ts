@@ -35,6 +35,7 @@ import {
   formatPullSummary,
   formatPushSummary,
   formatRollbackSummary,
+  formatTransferReview,
 } from "../ui/sync-format.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { confirmTransferReview } from "../ui/transfer-review.js";
@@ -800,11 +801,18 @@ export async function rollback(
       ? await confirmTransferReview(
           ctx,
           title,
-          `Historical files are projected through this device's current ignore rules. Historical rules are not adopted. Retained history is not erased.\n\n${summary}\n\nRemote publication:\n${formatPublicationPreview(currentRemote, upload)}`,
+          formatTransferReview(
+            "Historical files are projected through this device's current ignore rules. Historical rules are not adopted. Retained history is not erased.",
+            "",
+            summary,
+            "",
+            "Remote publication:",
+            formatPublicationPreview(currentRemote, upload),
+          ),
           options.signal,
           validateMutation,
         )
-      : await ctx.ui.confirm(title, summary, { signal: options.signal });
+      : await ctx.ui.confirm(title, summary.content, { signal: options.signal });
     validateMutation();
     if (!confirmed) {
       ctx.ui.notify("Rollback cancelled.", "info");
@@ -980,7 +988,12 @@ async function confirmPush(
     ctx,
     title,
     comparison && comparison !== "match"
-      ? `${formatIgnorePolicyComparison(comparison)}\nOnly files selected by this device's rules are published. Remote rules are not adopted.\n\n${summary}`
+      ? formatTransferReview(
+          formatIgnorePolicyComparison(comparison),
+          "Only files selected by this device's rules are published. Remote rules are not adopted.",
+          "",
+          summary,
+        )
       : summary,
     options.signal,
     validateMutation,

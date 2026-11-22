@@ -331,9 +331,10 @@ For reference, the `sync` object of a version 8 setup using the default rule fil
 On confirmation the daemon can create a missing default file on Linux, macOS, and Windows. If automatic creation is unavailable on your filesystem, use the exact path and starter text shown by Pi Sync. Create a regular UTF-8 file there without overwriting an existing file, then reopen the setup or migration and confirm the review. The starter rules are:
 
 ```gitignore
+/auth.json
+/git/
 /npm/
 /sessions/
-/auth.json
 /truth.json
 ```
 
@@ -342,6 +343,8 @@ A leading `/` anchors a rule to the agent directory; a trailing `/` matches a di
 Use **Settings → Ignore file** to find the source or review a switch. Edit the existing file manually, with no sync or recovery running, and recheck `/sync files` before approving a transfer. All setups sharing the file see the edit. There is no in-app rule save. Sessions require separate opt-in and must be allowed by the rules: the starter `/sessions/` still excludes them. Match sessions by logical `sessions/` paths even when stored elsewhere. Pi credentials and trust (`auth.json` and `trust.json`), Pi Sync private settings and state, and `.syncignore` and configured alternatives stay local independently of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Loaded sessions stay protected during apply. Ignored files are not replaced or removed by transfer. Retained snapshots and backups are not erased.
 
 Setup, migration, switching the rule file, and editing rules do not start a transfer or grant permission for one. Upgrade all peers before publishing a version 6 snapshot. It carries a portable policy fingerprint, not the filename or rule text. Configure matching rules in the same order and matching session opt-in on peers; do not copy rules from the remote. A legacy or mismatched head requires separately reviewed directional policy publication, not `--yes` or automatic work. Use `/sync diff` to inspect the scope and `/sync` to review the direction. A pull cannot apply a foreign policy; rollback requires compatible history. If rules, setup, or head change during review, reopen the review rather than relying on stale approval.
+
+New starter files exclude Pi's top-level `git/` package checkouts. Existing files are not rewritten. An interrupted creation uses the starter rules recorded before the interruption, even after an upgrade.
 
 For blocked or interrupted creation or transfer, stop new work and preserve the rule file, creation marker, journals, backups, and consent records. Use the compatible daemon to review recovery with the originating setup and exact source. If source or remote evidence differs, keep it rather than forcing replay or deleting a marker. Before settings commit the old policy remains authoritative; a verified starter or settings backup can remain after a failed save. After any v6 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers; keep the retained history intact.
 
