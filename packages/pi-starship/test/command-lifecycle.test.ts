@@ -255,9 +255,20 @@ test("session replacement clears an open preset footer preview before returning"
     const newContext = createMockContext({ mode: "tui", cwd: "/work/replacement" });
     await emit(mock.events, "session_start", {}, newContext.ctx);
     await command;
-    assert.match(oldFooter.render(80).join("\n"), /π/u);
+    assert.deepEqual(oldFooter.render(80), []);
+    const newFooter = (newContext.footer as FooterFactory)(
+      { requestRender() {} },
+      {},
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        onBranchChange: () => () => undefined,
+      },
+    );
+    assert.match(newFooter.render(80).join("\n"), /π active/u);
     assert.equal(readFileSync(join(root, "pi-starship.toml"), "utf8"), activeDocument);
     oldFooter.dispose();
+    newFooter.dispose();
     await emit(mock.events, "session_shutdown", {}, newContext.ctx);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
