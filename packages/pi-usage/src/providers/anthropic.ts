@@ -1,12 +1,16 @@
-import type { UsageReport } from "../types.js";
+import type { UsageBucket, UsageReport } from "../types.js";
 
-export type AnthropicUsagePayload = { extra_usage?: unknown };
+export type AnthropicUsagePayload = { extra_usage?: unknown; five_hour?: unknown; seven_day?: unknown };
 
 const UNAVAILABLE_NOTE = "Claude extra usage is unavailable.";
 const METRICS = [
   ["extra-usage-used", "Used this month"],
   ["extra-usage-limit", "Monthly limit"],
   ["extra-usage-remaining", "Remaining"],
+] as const;
+const PLAN_WINDOWS = [
+  ["five_hour", 300],
+  ["seven_day", 10_080],
 ] as const;
 
 export function normalizeAnthropicUsagePayload(payload: AnthropicUsagePayload, capturedAt: number): UsageReport {
@@ -19,11 +23,12 @@ export function normalizeAnthropicUsagePayload(payload: AnthropicUsagePayload, c
     capturedAt,
     source: "anthropic-extra-usage",
     semantics: { kind: "consumer-subscription", label: "Claude extra-usage spending limit" },
-    buckets: [],
+    buckets: planBuckets(root),
     metrics: [],
   };
+  if (report.buckets.length > 0) report.semantics.label = "Claude plan limits and extra-usage spending";
   if (root.extra_usage === undefined || root.extra_usage === null) {
-    report.notes = [UNAVAILABLE_NOTE];
+    if (report.buckets.length === 0) report.notes = [UNAVAILABLE_NOTE];
     return report;
   }
   const extra = asObject(root.extra_usage);
@@ -34,7 +39,8 @@ export function normalizeAnthropicUsagePayload(payload: AnthropicUsagePayload, c
     throw new Error("Claude extra usage enabled flag was not a boolean.");
   }
   if (enabled === false) {
-    report.notes = ["Claude extra usage is disabled."];
+    // Plan-window users commonly have extra usage off; the windows already explain the account state.
+    if (report.buckets.length === 0) report.notes = ["Claude extra usage is disabled."];
     return report;
   }
 
@@ -79,6 +85,30 @@ export function normalizeAnthropicUsagePayload(payload: AnthropicUsagePayload, c
   if (used === undefined || limit === undefined) report.notes = [UNAVAILABLE_NOTE];
   if (overLimit) report.notes = ["Claude extra usage exceeds the monthly limit."];
   return report;
+}
+
+// Plan windows are optional companions to extra usage, so malformed windows are omitted instead of failing the report.
+function planBuckets(root: Record<string, unknown>): UsageBucket[] {
+  const buckets: UsageBucket[] = [];
+  for (const [key, windowMinutes] of PLAN_WINDOWS) {
+    const window = asObject(root[key]);
+    const used = window?.utilization;
+    if (typeof used !== "number" || !Number.isFinite(used)) continue;
+    const resetsAtMs = typeof window?.resets_at === "string" ? Date.parse(window.resets_at) : Number.NaN;
+    buckets.push({
+      id: `claude:${key}`,
+      label: windowMinutes === 300 ? "5h limit" : "Weekly limit",
+      groupId: "claude",
+      groupLabel: "Claude",
+      used,
+      remaining: 100 - Math.min(100, Math.max(0, used)),
+      limit: 100,
+      unit: "percent",
+      windowMinutes,
+      ...(Number.isFinite(resetsAtMs) ? { resetsAt: Math.floor(resetsAtMs / 1_000) } : {}),
+    });
+  }
+  return buckets;
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {

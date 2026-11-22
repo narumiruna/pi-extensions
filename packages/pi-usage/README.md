@@ -80,7 +80,7 @@ Separate Pi processes are not mutually locked.
 
 **Experimental features are Off by default:**
 
-- [Claude extra usage](./docs/providers/anthropic.md#setup-and-settings) uses an undocumented OAuth endpoint based on one user-reported Enterprise response. Live Pro/Max coverage and provider-disabled response shapes remain unverified.
+- [Claude extra usage](./docs/providers/anthropic.md#setup-and-settings) uses an undocumented OAuth endpoint. Extra-usage parsing is based on one user-reported Enterprise response; five-hour and weekly plan windows are based on one Pro response. Max coverage and provider-disabled response shapes remain unverified.
 - [OpenAI companion usage](./docs/providers/openai.md#companion-setup-and-settings) uses undocumented ChatGPT endpoints. Enable it only when both logins use the **same account and workspace**; the extension cannot prove this identity match. App numerical agreement and broader live coverage remain unverified.
 
 See [Codex settings](./docs/providers/openai-codex.md#statusline-settings) for percentage and reset-countdown preferences and [Fast mode](./docs/providers/openai-codex.md#codex-fast-mode) for its default-Off routing preference.

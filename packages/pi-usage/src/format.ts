@@ -15,7 +15,9 @@ export function formatUsageReport(report: UsageReport, displayState: UsageDispla
   const stateLabel = displayState === "current" ? "Current" : "Configured";
   const title =
     report.providerId === "anthropic"
-      ? "Claude Extra Usage"
+      ? report.buckets.length > 0
+        ? "Claude Usage"
+        : "Claude Extra Usage"
       : report.providerId === "baseten"
         ? "Baseten Model APIs Spend"
         : report.providerId === "deepseek"
@@ -127,6 +129,18 @@ function formatStatusline(
     return `chatgpt plan ${windows.join(" ")}`;
   }
   if (report.providerId === "anthropic") {
+    // Mirror Codex: plan windows stay compact and take precedence over the extra-usage allowance.
+    const windows = report.buckets
+      .filter((bucket) => bucket.groupId === "claude" && bucket.remaining !== undefined)
+      .map((bucket) =>
+        formatQuotaWindow(
+          bucket,
+          `${clampPercent(bucket.remaining ?? 0).toFixed(0)}%`,
+          formatWindowLabel(bucket.windowMinutes, "5h", true),
+          countdown,
+        ),
+      );
+    if (windows.length > 0) return renderQuotaStatusline("claude", windows, countdown.display);
     const remaining = formatAnthropicMoney(report.metrics.find((metric) => metric.id === "extra-usage-remaining"));
     return remaining ? `anthropic ${remaining} left` : undefined;
   }
@@ -187,6 +201,10 @@ export function formatProviderStates(states: readonly ProviderUsageState[]): str
 }
 
 function formatAnthropicReport(lines: string[], report: UsageReport): void {
+  for (const bucket of report.buckets) {
+    if (bucket.groupId === "claude")
+      lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${formatPercentBucket(bucket)}`);
+  }
   for (const [id, label] of [
     ["extra-usage-used", "Used this month"],
     ["extra-usage-limit", "Monthly limit"],

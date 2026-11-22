@@ -77,7 +77,7 @@ export async function showUsageSettings(
           id: "anthropicExtraUsage",
           label: "Claude extra usage",
           description:
-            "Experimental: read Claude extra-usage spending and the monthly limit with the matched Anthropic OAuth login. Sends the access token to an undocumented Anthropic usage endpoint; no billing settings are changed.",
+            "Experimental: read Claude plan limits, extra-usage spending, and the monthly limit with the matched Anthropic OAuth login. Sends the access token to an undocumented Anthropic usage endpoint; no billing settings are changed.",
           currentValue: state.settings.anthropicExtraUsage ? ON : OFF,
           values: [OFF, ON],
         },

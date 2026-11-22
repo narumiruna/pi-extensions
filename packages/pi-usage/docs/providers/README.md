@@ -7,7 +7,7 @@ A subscription allowance, current balance, and rated spend are not interchangeab
 
 | Provider | Reported data |
 | --- | --- |
-| [Anthropic (Claude subscription OAuth)](./anthropic.md) | Opt-in extra-usage spend, monthly limit, and remaining allowance |
+| [Anthropic (Claude subscription OAuth)](./anthropic.md) | Opt-in five-hour and weekly plan limits, extra-usage spend, monthly limit, and remaining allowance |
 | [OpenAI (native ChatGPT OAuth)](./openai.md) | Authentication status by default; optional companion-sourced plan percentages and plan/app resets |
 | [OpenAI Codex (legacy)](./openai-codex.md) | Subscription windows, credits, resets, model buckets, Fast mode, and reset redemption |
 | [Kimi For Coding](./kimi-coding.md) | Plan request windows and a separate booster wallet |

@@ -76,3 +76,30 @@ test.each([
   assert.equal(formatUsageReport(report, "current").includes("Remaining:"), false);
   assert.deepEqual(report, raw);
 });
+
+const planWindows = {
+  five_hour: { utilization: 15, resets_at: "1970-01-01T03:00:00Z" },
+  seven_day: { utilization: 2, resets_at: "1970-01-05T04:00:00Z" },
+};
+
+test("Claude plan windows display compact Codex-style status and detailed limits", () => {
+  const report = normalizeAnthropicUsagePayload({ ...planWindows, extra_usage: { is_enabled: false } }, 1);
+  const formatted = formatUsageReport(report, "current");
+  assert.match(formatted, /^Claude Usage · Current/);
+  assert.match(formatted, /5h limit:\s+\[█{17}░{3}\] 85% left \(resets /);
+  assert.match(formatted, /Weekly limit:\s+\[█{20}\] 98% left \(resets /);
+  assert.doesNotMatch(formatted, /disabled|Remaining:/);
+  assert.deepEqual(formatUsageStatuslineWithCountdown(report, undefined, 7_020_000), {
+    value: "claude 85% ↻ 1h3m · 98% ↻ 4d2h",
+    hasCountdown: true,
+  });
+  assert.equal(formatUsageStatusline(report, undefined, 20_000_000), "claude 5h:85% · 98% ↻ 3d22h");
+});
+
+test("Claude plan windows take statusline precedence over extra-usage allowance", () => {
+  const report = normalizeAnthropicUsagePayload({ five_hour: { utilization: 40 }, extra_usage: extra }, 1);
+  assert.equal(formatUsageStatusline(report), "claude 5h:60%");
+  const formatted = formatUsageReport(report, "current");
+  assert.match(formatted, /5h limit:\s+.*60% left/);
+  assert.match(formatted, /Remaining:\s+\$20\.00/);
+});

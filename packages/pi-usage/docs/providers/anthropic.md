@@ -1,25 +1,25 @@
-# Anthropic Claude extra usage
+# Anthropic Claude usage
 
 [Provider guides](./README.md) · [Package README](../../README.md)
 
-**Experimental and Off by default:** this feature reads an undocumented Anthropic OAuth usage endpoint. The contract is based on one user-reported Enterprise response; live Pro/Max coverage and provider-disabled response shapes remain unverified.
+**Experimental and Off by default:** this feature reads an undocumented Anthropic OAuth usage endpoint. The extra-usage contract is based on one user-reported Enterprise response and the plan-window contract on one Pro response; live Max coverage and provider-disabled response shapes remain unverified.
 
 - Provider ID: `anthropic`
-- Semantics: Claude subscription extra-usage spending and monthly cap, not ordinary plan quotas or a prepaid balance
+- Semantics: Claude subscription five-hour and weekly plan utilization, plus extra-usage spending and monthly cap; not a prepaid balance
 - Source: undocumented `GET https://api.anthropic.com/api/oauth/usage`
-- Displayed data: `extra_usage.used_credits`, `monthly_limit`, and derived nonnegative remaining allowance
-- Statusline example: `anthropic $20.00 left`
+- Displayed data: `five_hour` and `seven_day` utilization and reset times; `extra_usage.used_credits`, `monthly_limit`, and derived nonnegative remaining allowance
+- Statusline examples: `claude 85% ↻ 2h53m · 98% ↻ 4d4h` with plan windows; `anthropic $20.00 left` with extra usage only
 
 ## Setup and settings
 
-Use `/login anthropic` with a Claude subscription, select an official `anthropic` model, then turn **Claude extra usage** On in `/usage` → **Settings**.
+Use `/login anthropic` with a Claude subscription, select an official `anthropic` model, then turn **Claude extra usage** On in `/usage` → **Settings**. This one setting enables both plan windows and extra usage.
 In RPC mode, set `"anthropicExtraUsage": true` in the user settings file and run `/reload`.
 The setting accepts only a boolean and defaults to `false`; TUI changes apply immediately after a successful save.
 See [shared settings](../../README.md#-settings) for the file path, scope, validation, and save behavior.
 
-`/usage` shows extra-usage spend, the monthly spending limit, and the amount left. The reported example produces `$80.00` used, a `$100.00` limit, and `anthropic $20.00 left` in the statusline.
-This is a spending allowance, not the Claude plan's five-hour/seven-day quota. No reset date is inferred.
-Disabled or incomplete allowance data has no monetary status.
+`/usage` shows the five-hour and weekly plan limits as percentages left with reset times when the response contains them, followed by extra-usage spend, the monthly spending limit, and the amount left.
+Like Codex, the statusline shows only the plan windows, as remaining percentages with reset countdowns. Without plan windows it falls back to the extra-usage allowance: the reported Enterprise example produces `$80.00` used, a `$100.00` limit, and `anthropic $20.00 left`.
+The extra-usage allowance is a spending allowance with no inferred reset date. Disabled or incomplete allowance data has no monetary status.
 
 Off prevents Anthropic usage requests and credential discovery.
 Disabling cancels owned requests and clears previous numerical cache, menu, and status data; a request already sent cannot be recalled.
@@ -43,11 +43,12 @@ Auth behavior is characterized with synthetic credentials through Pi's real runt
 Currency must be an explicit uppercase three-letter label and `decimal_places` an integer from 0 through 6; neither USD nor cents is assumed.
 Amounts must be finite, nonnegative numbers no larger than `Number.MAX_SAFE_INTEGER`. Decimal-string normalization retains fractional minor units without binary subtraction errors.
 Zero caps remain zero; usage above the cap remains visible, with zero remaining and an over-limit note. Missing counters do not become zero, and present invalid fields fail the query.
-The mirrored `spend` object, utilization percentages, ordinary plan windows, reset fields, and raw disabled reasons are ignored.
-The read-only API advertises spend and spending-cap quota, not balance or reset-time measurements.
+Plan windows are read only from `five_hour` and `seven_day`. Each needs a finite numeric `utilization`; remaining percent is clamped to 0 through 100, and an unparseable `resets_at` omits the reset. Malformed or null windows are omitted without failing extra-usage reporting. When a plan window is present, the disabled or unavailable extra-usage note is omitted.
+The mirrored `spend` object, `limits` array, model-specific and other weekly windows, extra-usage utilization, and raw disabled reasons are ignored.
+The read-only API advertises spend and spending-cap quota, not balance measurements.
 
 ## Contract evidence and live verification
 
 The source contract is the redacted Enterprise-seat response in [issue #1757](https://github.com/narumiruna/pi-extensions/issues/1757), not a published Anthropic API specification.
-Live availability, agreement with the Claude usage page, Pro/Max behavior, and provider-disabled shapes remain unverified. Fixture tests do not establish broader live compatibility.
+The plan-window contract comes from one live Pro response, where `/usage` matched [Claude usage settings](https://claude.ai/settings/usage). Max behavior and provider-disabled shapes remain unverified. Fixture tests do not establish broader live compatibility.
 An eligible account owner can enable the feature with their own Pi login and compare `/usage` and the statusline with [Claude usage settings](https://claude.ai/settings/usage); no credential sharing is needed.

@@ -134,15 +134,97 @@ test.each([
   { name: "missing extra_usage", payload: {} },
   { name: "undefined extra_usage", payload: { extra_usage: undefined } },
   { name: "null extra_usage", payload: { extra_usage: null } },
+  { name: "only alternate spend data", payload: { spend: VALID_EXTRA_USAGE } },
   {
-    name: "only alternate spend and plan data",
-    payload: { spend: VALID_EXTRA_USAGE, five_hour: { utilization: 80 }, seven_day: { utilization: 80 } },
+    name: "malformed plan windows",
+    payload: {
+      five_hour: { utilization: "80" },
+      seven_day: { utilization: Number.NaN },
+      seven_day_opus: { utilization: 80 },
+      limits: [{ kind: "session", percent: 80 }],
+    },
   },
 ])("Anthropic extra usage stays unavailable for $name", ({ payload }) => {
   const report = normalizeAnthropicUsagePayload(payload as AnthropicUsagePayload, CAPTURED_AT);
   assert.deepEqual(report.metrics, []);
   assert.deepEqual(report.buckets, []);
   assert.deepEqual(report.notes, [UNAVAILABLE_NOTE]);
+});
+
+test("Claude plan windows normalize five-hour and weekly utilization with reset times", () => {
+  const report = normalizeAnthropicUsagePayload(
+    {
+      five_hour: { utilization: 13, resets_at: "2026-11-22T06:20:00.171258+00:00", limit_dollars: null },
+      seven_day: { utilization: 2.5, resets_at: "2026-11-26T08:00:00.171278+00:00" },
+      seven_day_opus: null,
+      extra_usage: { ...VALID_EXTRA_USAGE, is_enabled: false },
+    } as AnthropicUsagePayload,
+    CAPTURED_AT,
+  );
+  assert.equal(report.semantics.label, "Claude plan limits and extra-usage spending");
+  assert.deepEqual(report.buckets, [
+    {
+      id: "claude:five_hour",
+      label: "5h limit",
+      groupId: "claude",
+      groupLabel: "Claude",
+      used: 13,
+      remaining: 87,
+      limit: 100,
+      unit: "percent",
+      windowMinutes: 300,
+      resetsAt: Date.UTC(2026, 10, 22, 6, 20) / 1_000,
+    },
+    {
+      id: "claude:seven_day",
+      label: "Weekly limit",
+      groupId: "claude",
+      groupLabel: "Claude",
+      used: 2.5,
+      remaining: 97.5,
+      limit: 100,
+      unit: "percent",
+      windowMinutes: 10_080,
+      resetsAt: Date.UTC(2026, 10, 26, 8) / 1_000,
+    },
+  ]);
+  assert.deepEqual(report.metrics, []);
+  assert.equal(report.notes, undefined);
+});
+
+test.each([
+  { name: "over-limit utilization", window: { utilization: 120 }, remaining: 0 },
+  { name: "negative utilization", window: { utilization: -5 }, remaining: 100 },
+  { name: "unparseable reset", window: { utilization: 40, resets_at: "soon" }, remaining: 60 },
+])("Claude plan window clamps remaining percent and omits invalid resets for $name", ({ window, remaining }) => {
+  const report = normalizeAnthropicUsagePayload({ five_hour: window } as AnthropicUsagePayload, CAPTURED_AT);
+  assert.equal(report.buckets.length, 1);
+  assert.equal(report.buckets[0]?.remaining, remaining);
+  assert.equal(report.buckets[0]?.resetsAt, undefined);
+  assert.equal(report.notes, undefined);
+});
+
+test("Claude plan windows keep extra-usage metrics and validation", () => {
+  const report = normalizeAnthropicUsagePayload(
+    { five_hour: { utilization: 50 }, extra_usage: VALID_EXTRA_USAGE } as AnthropicUsagePayload,
+    CAPTURED_AT,
+  );
+  assert.equal(report.buckets.length, 1);
+  assert.deepEqual(
+    report.metrics.map((metric) => metric.value),
+    ["80.00", "100.00", "20.00"],
+  );
+  assert.throws(
+    () =>
+      normalizeAnthropicUsagePayload(
+        {
+          five_hour: { utilization: 50 },
+          extra_usage: { ...VALID_EXTRA_USAGE, currency: "usd" },
+        } as AnthropicUsagePayload,
+        CAPTURED_AT,
+      ),
+    /currency/,
+  );
 });
 
 test.each([
