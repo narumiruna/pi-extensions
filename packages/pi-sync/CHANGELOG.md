@@ -1,5 +1,18 @@
 # @narumitw/pi-sync
 
+## 0.63.0
+
+### Minor Changes
+
+- 5dfa289: Use local `.syncignore` rules for new TUI setups. Keep existing setup policies until the user reviews and confirms migration. Review the scope before transferring, upgrade peers before publishing version 6 snapshots, and edit existing rule files locally. Setup, migration, and rule-file switching do not start or authorize a transfer, and exclusions do not erase retained history. The bundled configuration skill can edit an explicitly identified local rule file on request; it no longer edits private JSON settings.
+
+### Patch Changes
+
+- 25777f7: Read Git history manifests in bounded batches to reduce subprocess launches. Keep the same history preview and validate all retained publications in the original order.
+- e3f2537: Keep the `/sync help` route from loading the interactive ignore-file editor or a second Pi TUI runtime from the extension install.
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.62.0
 
 ### Minor Changes

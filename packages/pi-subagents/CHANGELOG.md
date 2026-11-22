@@ -1,5 +1,13 @@
 # @narumitw/pi-subagents
 
+## 4.0.2
+
+### Patch Changes
+
+- 20a3fae: Show a read-only sample widget preview above the Settings options. A divider separates the preview from the Saved preferences and This session groups.
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 4.0.1
 
 ### Patch Changes

@@ -2,6 +2,14 @@
 
 Versions through 0.54.3 were released as `@narumitw/pi-langfuse`.
 
+## 0.55.2
+
+### Patch Changes
+
+- 648e3ab: Reuse the context usage snapshot when an automatic continuation opens a new trace at turn start, avoiding a second history scan without changing trace metadata.
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.55.1
 
 ### Patch Changes

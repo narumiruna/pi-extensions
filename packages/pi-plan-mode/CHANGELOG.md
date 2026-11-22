@@ -1,5 +1,20 @@
 # @narumitw/pi-plan-mode
 
+## 0.61.0
+
+### Minor Changes
+
+- bfd6893: Show the current completed plan in a read-only side pane in Pi's fullscreen terminal. Place the pane on the left or right, or turn it off from Plan settings.
+- 7f3b7b1: Use Pi's native file tools to maintain one managed Markdown draft in eligible Plan workflows. The fullscreen pane previews successful changes, and `plan_mode_complete({})` snapshots the draft for review and implementation. Read-only workflows retain text-based completion.
+- d5d3ad2: Drag the fullscreen Plan pane divider to resize it on either side. The pane and conversation keep usable widths, and the chosen width stays in effect only while the pane is mounted.
+- 4bdddb6: Show a short completion confirmation in the conversation while the fullscreen Plan pane displays the same plan. Keep the full result when the pane is hidden and preserve it in exports and non-interactive output.
+
+### Patch Changes
+
+- 2dc2026: Allow `git --no-optional-locks status --short` and other reviewed Git inspections with this flag in Plan mode's Bash and PowerShell tools. Subcommands and other arguments still pass their existing safety checks.
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.60.3
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @narumitw/pi-starship
 
+## 0.67.4
+
+### Patch Changes
+
+- 252dcc0: Skip session history calculations that the footer does not display, and reuse unchanged usage or branch data across redraws. Keep visible context-window usage current when Pi changes model routing.
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.67.3
 
 ### Patch Changes
