@@ -7,6 +7,7 @@ import { confirmMergeReview } from "../src/ui/merge-review.js";
 
 const defaultKeys = { up: "\u001b[A", down: "\u001b[B", confirm: "\r", cancel: "\u001b" };
 const remappedKeys = { up: "k", down: "j", confirm: "l", cancel: "q" };
+const pageDown = "\u001b[6~";
 type Keys = typeof defaultKeys;
 type Component = { render(width: number): string[]; handleInput(data: string): void; dispose?(): void };
 
@@ -16,6 +17,7 @@ function tuiDriver(scripts: readonly (readonly string[])[], keys: Keys, width = 
   const bindings: Record<string, string> = {
     "tui.select.up": keys.up,
     "tui.select.down": keys.down,
+    "tui.select.pageDown": pageDown,
     "tui.select.confirm": keys.confirm,
     "tui.select.cancel": keys.cancel,
   };
@@ -62,7 +64,7 @@ function tuiDriver(scripts: readonly (readonly string[])[], keys: Keys, width = 
           continue;
         }
         if (data === "scroll-without-render") {
-          for (let attempt = 0; attempt < 20; attempt++) component.handleInput(keys.down);
+          for (let attempt = 0; attempt < 20; attempt++) component.handleInput(pageDown);
           continue;
         }
         if (data === "scroll-summary") {
@@ -71,7 +73,7 @@ function tuiDriver(scripts: readonly (readonly string[])[], keys: Keys, width = 
             frames.push(frame);
             const position = frame.join("\n").match(/Summary \d+-(\d+)\/(\d+)/);
             if (position && position[1] === position[2]) break;
-            component.handleInput(keys.down);
+            component.handleInput(pageDown);
           }
           continue;
         }
@@ -179,7 +181,7 @@ const materialSummary = [
 
 for (const rows of [16, 24]) {
   test(`compact ${rows}-row confirmation cannot approve hidden facts`, async () => {
-    const driver = tuiDriver([[defaultKeys.down, defaultKeys.confirm]], defaultKeys, 80, rows);
+    const driver = tuiDriver([[defaultKeys.down, defaultKeys.confirm, defaultKeys.cancel]], defaultKeys, 80, rows);
     assert.equal(
       await confirmMergeReview(
         driver.ctx,
@@ -233,7 +235,12 @@ for (const keys of [defaultKeys, remappedKeys]) {
 }
 
 test("coalesced scroll input cannot count unseen layout rows as reviewed", async () => {
-  const driver = tuiDriver([["scroll-without-render", defaultKeys.confirm]], defaultKeys, 80, 16);
+  const driver = tuiDriver(
+    [["scroll-without-render", defaultKeys.down, defaultKeys.confirm, defaultKeys.cancel]],
+    defaultKeys,
+    80,
+    16,
+  );
   assert.equal(
     await confirmMergeReview(
       driver.ctx,

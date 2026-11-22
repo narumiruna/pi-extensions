@@ -40,6 +40,18 @@ export function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
   ].join("\n");
 }
 
+export interface TransferReview {
+  lines: readonly string[];
+  content: string;
+}
+
+export function formatTransferReview(...sections: (string | TransferReview)[]): TransferReview {
+  return {
+    lines: sections.flatMap((section) => (typeof section === "string" ? section.split("\n") : section.lines)),
+    content: sections.map((section) => (typeof section === "string" ? section : section.content)).join("\n"),
+  };
+}
+
 export function formatPushSummary(
   config: CommonSyncConfig,
   destination: string,
@@ -48,7 +60,7 @@ export function formatPushSummary(
   preservedRemoteFileCount = 0,
   remote?: Snapshot,
 ) {
-  return [
+  return formatTransferReview(
     `Sync setup: ${safeTerminalText(config.setupName)}`,
     `Storage location: ${safeTerminalText(destination)}`,
     `Direction: Local → Remote. Source: ${safeTerminalText(agentDir())}.`,
@@ -69,7 +81,7 @@ export function formatPushSummary(
     ...(config.scope === "agent-directory"
       ? ["Warning: synced files may contain secrets or other sensitive data that the scanner cannot identify."]
       : []),
-  ].join("\n");
+  );
 }
 
 function excludedPolicyLines(config: CommonSyncConfig) {
@@ -120,7 +132,7 @@ export function formatPullSummary(
   protectedPaths: ReadonlySet<string>,
   additionalRemovals: readonly string[] = [],
 ) {
-  return [
+  return formatTransferReview(
     `Sync setup: ${safeTerminalText(config.setupName)}`,
     `Storage location: ${safeTerminalText(destination)}`,
     "Direction: Remote → Local.",
@@ -129,11 +141,9 @@ export function formatPullSummary(
     `Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
     `Protected live sessions: ${protectedPaths.size || "none"}`,
     formatApplyPreview(local, remote, protectedPaths, additionalRemovals),
-    ...(additionalRemovals.length
-      ? ["Case-variant aliases listed above are removed before writing canonical paths."]
-      : []),
+    ...(additionalRemovals.length ? ["Case-variant aliases are removed before writing canonical paths."] : []),
     "A local backup is created before these writes/deletes. The remote active snapshot is unchanged.",
-  ].join("\n");
+  );
 }
 
 export function formatRollbackSummary(
@@ -145,7 +155,7 @@ export function formatRollbackSummary(
   protectedPaths: ReadonlySet<string>,
   additionalRemovals: readonly string[] = [],
 ) {
-  return [
+  return formatTransferReview(
     `Sync setup: ${safeTerminalText(config.setupName)}`,
     `Storage location: ${safeTerminalText(destination)}`,
     "Direction: Historical snapshot → Local and remote active head.",
@@ -154,11 +164,9 @@ export function formatRollbackSummary(
     `Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
     `Protected live sessions: ${protectedPaths.size || "none"}`,
     formatApplyPreview(local, remote, protectedPaths, additionalRemovals),
-    ...(additionalRemovals.length
-      ? ["Case-variant aliases listed above are removed before writing canonical paths."]
-      : []),
+    ...(additionalRemovals.length ? ["Case-variant aliases are removed before writing canonical paths."] : []),
     "A local backup is created before applying; the backend's active head will change.",
-  ].join("\n");
+  );
 }
 
 export function formatPublicationPreview(remote: Snapshot | undefined, upload: Snapshot) {
@@ -186,11 +194,14 @@ function formatDirectionalChanges(
   }
   const counts = transferCounts(changes);
   const label = { Add: labels.add, Update: labels.update, Delete: labels.remove };
-  return [
-    `Changes: ${counts.add} add · ${counts.update} update · ${counts.remove} remove`,
-    ...changes.map((change) => `${label[change.action]}: ${snapshotPathLabel(change.path)}`),
-    ...(changes.length ? [] : ["No file changes."]),
-  ].join("\n");
+  const heading = `Changes: ${counts.add} add · ${counts.update} update · ${counts.remove} remove`;
+  const lines = changes.length ? [heading] : [heading, "No file changes."];
+  return {
+    lines,
+    content: [...lines, ...changes.map((change) => `${label[change.action]}: ${snapshotPathLabel(change.path)}`)].join(
+      "\n",
+    ),
+  };
 }
 
 export function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {

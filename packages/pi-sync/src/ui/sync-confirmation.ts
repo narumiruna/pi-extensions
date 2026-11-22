@@ -1,6 +1,11 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, SelectList, type TUI, type TuiMouseEvent, truncateToWidth } from "@earendil-works/pi-tui";
-import { HorizontalRule, hardWrapTerminalDocument, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { Key, matchesKey, SelectList, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  HorizontalRule,
+  hardWrapTerminalDocument,
+  renderBoundedFrameLayout,
+  sanitizeTerminalText,
+} from "@narumitw/pi-tui-kit";
 
 export type SyncConfirmationChoice = "cancel" | "approve" | "details";
 
@@ -42,9 +47,9 @@ export function createSyncConfirmation(options: {
   let reviewed = false;
   let disposed = false;
   let finished = false;
-  let summaryStart = 0;
-  let summaryEnd = 0;
-  let actionsStart = 0;
+  let pageSize = 0;
+  let actionRows: ReturnType<typeof renderBoundedFrameLayout>["contentRows"] = [];
+  let clickedChoice: SyncConfirmationChoice | undefined;
   const finish = (choice: SyncConfirmationChoice) => {
     if (disposed || finished) return;
     finished = true;
@@ -57,59 +62,66 @@ export function createSyncConfirmation(options: {
   list.onSelectionChange = (item) => {
     selected = Math.max(0, choices.indexOf(item.value as SyncConfirmationChoice));
   };
-  list.onSelect = (item) => {
-    const choice = choices[selected] ?? "cancel";
-    if (item.value === choice && (choice !== "approve" || reviewed)) finish(choice);
+  const activate = (choice: SyncConfirmationChoice) => {
+    if (choice !== "approve" || reviewed) finish(choice);
   };
+  list.onSelect = (item) => {
+    if (clickedChoice && item.value === clickedChoice) activate(clickedChoice);
+  };
+  const scroll = (delta: number) => {
+    offset = Math.max(0, Math.min(maximumOffset, offset + delta));
+  };
+  const terminalRows = () => Math.max(1, Math.floor(tui.terminal.rows) - 3);
   const component = {
     get capturesViewportInput() {
       return list.capturesViewportInput;
     },
     render(width: number, expose = true): string[] {
-      if (!Number.isFinite(width) || width <= 0) {
+      const cells = Math.floor(width);
+      if (!Number.isFinite(cells) || cells <= 0) {
         reviewed = false;
+        actionRows = [];
         return [];
       }
-      const cells = Math.floor(width);
-      const rows = Math.max(1, Math.floor(tui.terminal.rows) - 3);
+      const rows = terminalRows();
       if (cells !== lastWidth || rows !== lastRows) {
         // Reflow can expose previously unseen rows or hide the selected action.
         // Reset proof and selection rather than carry approval across a resize.
-        summary = options.lines.flatMap((line) => hardWrapTerminalDocument(line, cells));
+        summary = options.lines.flatMap((line) => hardWrapTerminalDocument(line, cells)).filter((line) => line.trim());
         seen = new Set();
         offset = 0;
         select(0);
         lastWidth = cells;
         lastRows = rows;
       }
-      const framed = rows >= 9;
       const actions = list.render(cells);
-      const viewport = Math.max(0, rows - actions.length - 3 - (framed ? 2 : 0));
-      maximumOffset = Math.max(0, summary.length - viewport);
+      const framingRows = 5;
+      pageSize = Math.max(0, rows - actions.length - framingRows);
+      maximumOffset = Math.max(0, summary.length - pageSize);
       offset = Math.min(offset, maximumOffset);
-      const visible = summary.slice(offset, offset + viewport);
+      const visible = summary.slice(offset, offset + pageSize);
       if (expose) for (let index = offset; index < offset + visible.length; index++) seen.add(index);
-      reviewed = viewport > 0 && seen.size === summary.length;
-      // Describe actions without advertising configured keys that can be invalid,
-      // aliased, or shadowed by an earlier cancellation/navigation binding.
-      const hint = reviewed ? "Select an action." : "Navigation keys scroll the summary before selecting Yes.";
-      const body = [
-        theme.fg("accent", theme.bold(hardWrapTerminalDocument(options.title, cells).join(" "))),
-        ...visible.map((line) => theme.fg("text", line)),
-        theme.fg(
-          "muted",
-          `Summary ${visible.length ? offset + 1 : 0}-${offset + visible.length}/${summary.length}${reviewed ? "" : " — review before Yes"}`,
-        ),
-        ...actions,
-        theme.fg("dim", hint),
-      ];
-      summaryStart = Number(framed) + 1;
-      summaryEnd = summaryStart + visible.length;
-      actionsStart = summaryEnd + 1;
-      const frame = framed ? [...rule.render(cells), ...body, ...rule.render(cells)] : body;
       // Very small terminals cannot display the summary and all choices together.
       // Keep cancellation available, but never approve a zero-row summary viewport.
-      return frame.slice(0, rows).map((line) => truncateToWidth(line, cells, ""));
+      reviewed = pageSize > 0 && seen.size === summary.length;
+      // Describe actions without advertising configured keys that can be invalid,
+      // aliased, or shadowed by an earlier cancellation/navigation binding.
+      const status = theme.fg(
+        "muted",
+        `Summary ${visible.length ? offset + 1 : 0}-${offset + visible.length}/${summary.length}${reviewed ? "" : " — page before Yes"}`,
+      );
+      const layout = renderBoundedFrameLayout({
+        width: cells,
+        maxRows: rows,
+        rule: rule.render(cells)[0] ?? "",
+        title: [theme.fg("accent", theme.bold(sanitizeTerminalText(options.title)))],
+        context: [...visible.map((line) => theme.fg("text", line)), status],
+        content: actions,
+        priorityRows: [selected, 0, 1, 2],
+        focusedRow: selected,
+      });
+      actionRows = layout.contentRows;
+      return layout.lines;
     },
     invalidate() {
       list.invalidate();
@@ -124,28 +136,35 @@ export function createSyncConfirmation(options: {
       // Refresh height/width proof before handling an input racing with terminal resize.
       component.render(tui.terminal.columns ?? lastWidth, false);
       if (keybindings.matches(data, "tui.select.up")) {
-        if (!reviewed || (selected === 0 && offset > 0)) offset = Math.max(0, offset - 1);
-        else select(selected - 1);
+        select(selected - 1);
       } else if (keybindings.matches(data, "tui.select.down")) {
-        if (!reviewed || (selected === 0 && offset < maximumOffset)) offset = Math.min(maximumOffset, offset + 1);
-        else select(selected + 1);
+        select(selected + 1);
       } else if (keybindings.matches(data, "tui.select.confirm")) {
-        const choice = choices[selected] ?? "cancel";
-        if (choice !== "approve" || reviewed) finish(choice);
+        activate(choices[selected] ?? "cancel");
+      } else if (keybindings.matches(data, "tui.select.pageUp")) {
+        scroll(-pageSize);
+      } else if (keybindings.matches(data, "tui.select.pageDown")) {
+        scroll(pageSize);
+      } else {
+        return;
       }
       tui.requestRender();
     },
     handleMouse(event: TuiMouseEvent) {
-      if (disposed || finished || event.width !== lastWidth) return undefined;
-      component.render(event.width, false);
-      if (event.y >= summaryStart && event.y < summaryEnd && event.type === "wheel" && event.wheelDelta) {
-        offset = Math.max(0, Math.min(maximumOffset, offset + (event.wheelDelta < 0 ? -1 : 1)));
-        select(0);
-        tui.requestRender();
+      if (disposed || finished || event.width !== lastWidth || terminalRows() !== lastRows) return undefined;
+      if (
+        event.y >= 2 &&
+        event.y < 2 + Math.min(pageSize, summary.length) &&
+        event.type === "wheel" &&
+        event.wheelDelta
+      ) {
+        scroll(Math.sign(event.wheelDelta));
         return { handled: true, render: true };
       }
-      if (event.y < actionsStart || event.y >= actionsStart + choices.length || event.y >= lastRows) return undefined;
-      return list.handleMouse({ ...event, y: event.y - actionsStart, height: choices.length });
+      const row = actionRows.find(({ frameIndex }) => frameIndex === event.y);
+      if (!row) return undefined;
+      clickedChoice = event.type === "click" ? choices[row.contentIndex] : undefined;
+      return list.handleMouse({ ...event, y: row.contentIndex, height: choices.length });
     },
     dispose() {
       disposed = true;

@@ -64,7 +64,7 @@ A version 6 snapshot carries portable intent (a versioned fingerprint of ordered
 | `ctx.isIdle()` | Current participating-client facts, not a captured Pi context | `service-host.ts` |
 | Protected sessions and missing-settings guard | All live client PIDs, including retired clients; separate from active participation | `server.ts`, `service-host.ts` |
 | `ctx.ui.notify`, status | Bounded events | `server.ts`, `service-host.ts` |
-| Confirm/select/exact merge review | Job-bound callbacks; revalidation after response | `service-host.ts`, `engine/ui/merge-review.ts` |
+| Confirm/select/exact merge review | Job-bound callbacks; revalidation after response; directional TUI review sends compact summary lines and the full path list as separate fields | `service-host.ts`, `engine/ui/transfer-review.ts` |
 | Reload | Explicit client callback after the existing user confirmation | `engine/sync/sync-mutations.ts` |
 | `ctx.model`, `modelRegistry.streamSimple` | Explicit selected model identity/signature; independent public SDK runtime | `model-signature.ts`, `resolver-host.ts` |
 | `withFileMutationQueue` | Participating Pi queue grants plus daemon-local queue | `service-host.ts`, Pi adapter `daemon/apply-gate.ts` |

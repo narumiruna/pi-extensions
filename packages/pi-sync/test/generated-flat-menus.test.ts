@@ -72,7 +72,17 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     await mkdir(agentDir);
-    const settings = v3S3Settings();
+    const pushPreview = choice === "Push to remote…";
+    const settings = v3S3Settings(pushPreview ? { include: ["managed"], skipSecretScan: true } : undefined);
+    if (pushPreview) {
+      const thumbnails = join(agentDir, "managed", "docs", "screenshots", "thumbs");
+      await mkdir(thumbnails, { recursive: true });
+      await Promise.all(
+        Array.from({ length: 829 }, (_, index) =>
+          writeFile(join(thumbnails, `example-${String(index).padStart(3, "0")}.webp`), "fixture"),
+        ),
+      );
+    }
     settings.storageConnections.r2.endpoint = `http://127.0.0.1:${address.port}`;
     const bytes = JSON.stringify(settings);
     await writeFile(join(agentDir, "pi-sync.json"), bytes, { mode: 0o600 });
@@ -115,6 +125,15 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
           }
         } else if (frame.split("\n").includes("Pi Sync Settings")) {
           tui.send("\u001b[200~Show sync status\u001b[201~");
+          frames.push(tui.render().join("\n"));
+          tui.press("ctrl+c");
+        } else if (frame.includes("Push pi settings?")) {
+          tui.press("tui.select.down");
+          frames.push(tui.render().join("\n"));
+          tui.press("tui.select.down");
+          tui.press("tui.select.confirm");
+        } else if (frame.includes("Sync change details")) {
+          tui.press("end");
           frames.push(tui.render().join("\n"));
           tui.press("ctrl+c");
         } else if (frame.includes("Preparing push preview")) {
@@ -163,7 +182,15 @@ describe.each(cases)("package-directory Jiti $name", ({ choice, mode }) => {
         );
       } else if (choice === "Push to remote…") {
         assert.ok(frames.some((frame) => frame.includes("Preparing push preview")));
-        assert.ok(frames.some((frame) => frame.includes("Push pi settings?") && frame.includes("No, cancel")));
+        const [initial, selected] = frames.filter((frame) => frame.includes("Push pi settings?"));
+        assert.match(initial ?? "", /→ No, cancel/u);
+        assert.match(initial ?? "", /829 add · 0 update · 0 remove/u);
+        assert.match(initial ?? "", /possible-secret scanning is disabled/u);
+        assert.doesNotMatch(initial ?? "", /Add remotely:|page before Yes/u);
+        assert.match(selected ?? "", /→ Yes, apply reviewed transfer/u);
+        const details = frames.filter((frame) => frame.includes("Sync change details"));
+        assert.ok(details.some((frame) => frame.includes("example-000.webp")));
+        assert.ok(details.some((frame) => frame.includes("example-828.webp")));
       } else {
         assert.ok(
           rpc.notifications.some((entry) => entry.message.includes("No remote pi-sync history")),

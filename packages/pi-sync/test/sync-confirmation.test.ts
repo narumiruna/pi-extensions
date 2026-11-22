@@ -12,6 +12,7 @@ import {
   KeybindingsManager as TuiKeybindingsManager,
   TuiMainScreen,
   type TuiMouseEvent,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
@@ -70,12 +71,14 @@ test("mouse cannot approve hidden facts but can open optional details", () => {
   }
 });
 
-test("mouse wheel scrolls summary and resets selection to No", () => {
+test("mouse wheel scrolls the summary independently of the selected action", () => {
   const { harness, component } = componentHarness(
     Array.from({ length: 30 }, (_, index) => `Fact ${index}`),
     16,
   );
   try {
+    harness.render();
+    harness.handleInput("\u001b[B");
     const frame = harness.render();
     component.handleMouse({
       ...mouse(frame.findIndex((line) => line.includes("Fact 0"))),
@@ -85,7 +88,7 @@ test("mouse wheel scrolls summary and resets selection to No", () => {
     });
     const scrolled = harness.render().join("\n");
     assert.match(scrolled, /Summary 2-/);
-    assert.match(scrolled, /→ No, cancel/);
+    assert.match(scrolled, /→ Yes,/);
   } finally {
     harness.dispose();
   }
@@ -205,6 +208,8 @@ for (const fullscreen of [false, true]) {
     const keys = new TuiKeybindingsManager(TUI_KEYBINDINGS, {
       "tui.select.up": "pageUp",
       "tui.select.down": "pageDown",
+      "tui.select.pageUp": "u",
+      "tui.select.pageDown": "d",
     });
     setKeybindings(keys);
     const terminal = new FullscreenTerminal();
@@ -229,16 +234,22 @@ for (const fullscreen of [false, true]) {
       host.start();
       host.renderNow(true);
       terminal.input("\u001b[6~");
-      assert.match(component.render(80).join("\n"), /Summary 2-/u);
-      assert.match(component.render(80).join("\n"), /→ No, cancel/u);
-      assert.match(component.render(80).join("\n"), /review before Yes/u);
+      assert.match(component.render(80).join("\n"), /Summary 1-5\/30 — page before Yes/u);
+      assert.match(component.render(80).join("\n"), /→ Yes,/u);
+      terminal.input("\r");
+      assert.equal(result, undefined);
       terminal.input("\u001b[5~");
+      assert.match(component.render(80).join("\n"), /→ No, cancel/u);
+      terminal.input("d");
+      assert.match(component.render(80).join("\n"), /Summary 6-10\/30/u);
+      terminal.input("u");
       assert.match(component.render(80).join("\n"), /Summary 1-/u);
-      for (let index = 0; index < 30 && component.render(80).join("\n").includes("review before Yes"); index++) {
-        terminal.input("\u001b[6~");
-      }
-      assert.doesNotMatch(component.render(80).join("\n"), /review before Yes/u);
       terminal.input("\u001b[6~");
+      for (let index = 0; index < 5; index++) {
+        terminal.input("d");
+        component.render(80);
+      }
+      assert.doesNotMatch(component.render(80).join("\n"), /page before Yes/u);
       assert.match(component.render(80).join("\n"), /→ Yes,/u);
       terminal.input("\r");
       assert.equal(result, "approve");
@@ -250,16 +261,36 @@ for (const fullscreen of [false, true]) {
   });
 }
 
-test("confirmation capture does not add a paging action", () => {
+test("confirmation prioritizes the focused action at constrained heights and maps clicks to visible rows", () => {
+  const { harness, component } = componentHarness(["Fact"], 8);
+  try {
+    assert.deepEqual(component.render(0), []);
+    const frame = harness.render();
+    assert.match(frame[0] ?? "", /^─+$/u);
+    assert.match(frame.at(-1) ?? "", /^─+$/u);
+    assert.ok(frame.every((line) => visibleWidth(line) <= 80));
+    harness.setTerminalRows(4);
+    assert.match(harness.render().join("\n"), /→ No, cancel/u);
+    harness.handleInput("\u001b[A");
+    assert.match(harness.render()[0] ?? "", /→ View details/u);
+    component.handleMouse(mouse(0));
+    assert.equal(harness.result, "details");
+  } finally {
+    harness.dispose();
+  }
+});
+
+test("default page keys advance the summary, and Ctrl+C cancels from a later page", () => {
   const { harness, component } = componentHarness(
     Array.from({ length: 30 }, (_, index) => `Fact ${index}`),
     16,
   );
   try {
     assert.equal(component.capturesViewportInput, true);
-    const before = harness.render();
-    harness.handleInput("\u001b[6~");
-    assert.deepEqual(harness.render(), before);
+    assert.match(harness.render().join("\n"), /Summary 1-5\/30/u);
+    const later = harness.handleInput("\u001b[6~").join("\n");
+    assert.match(later, /Summary 6-10\/30/u);
+    assert.match(later, /→ No, cancel/u);
     harness.handleInput("\u0003");
     assert.equal(harness.result, "cancel");
   } finally {
