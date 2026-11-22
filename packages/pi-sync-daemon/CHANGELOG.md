@@ -1,5 +1,15 @@
 # @narumitw/pi-sync-daemon
 
+## 0.9.0
+
+### Minor Changes
+
+- 5dfa289: Resolve local ignore-file policies for reviewed setup, inspection, transfer, and recovery while keeping legacy policies usable in mixed settings. Keep rule files local and publish only the portable policy fingerprint in version 6 snapshots. Create a missing starter after confirmation on Linux, macOS, and Windows; if automatic creation is unavailable, show the exact path and instructions for manual creation. Preserve the existing settings writer and keep in-app rule saves disabled.
+
+### Patch Changes
+
+- 25777f7: Read Git history manifests in bounded batches to reduce subprocess launches. Keep the same history preview and validate all retained publications in the original order.
+
 ## 0.8.0
 
 ### Minor Changes

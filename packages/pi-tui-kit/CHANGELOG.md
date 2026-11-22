@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.71.0
+
+### Minor Changes
+
+- 1cbb470: Add a lightweight `key-syntax` entrypoint for configured-key validation and `createFramedSettingsMouseRouter()` for routing mouse input to a framed native settings list.
+
 ## 0.70.1
 
 ### Patch Changes

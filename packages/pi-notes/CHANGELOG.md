@@ -1,5 +1,12 @@
 # @narumitw/pi-notes
 
+## 0.2.7
+
+### Patch Changes
+
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.2.6
 
 ### Patch Changes

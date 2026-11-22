@@ -1,5 +1,12 @@
 # @narumitw/pi-accounts
 
+## 0.54.4
+
+### Patch Changes
+
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.54.3
 
 ### Patch Changes

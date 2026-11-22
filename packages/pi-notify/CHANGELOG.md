@@ -1,5 +1,12 @@
 # @narumitw/pi-notify
 
+## 0.4.5
+
+### Patch Changes
+
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.4.4
 
 ### Patch Changes

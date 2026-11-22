@@ -1,5 +1,12 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.54.2
+
+### Patch Changes
+
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.54.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-rex",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Show Pi sessions in Rex above the editor and switch to their terminal panes.",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.70.0"
+    "@narumitw/pi-tui-kit": "^0.71.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

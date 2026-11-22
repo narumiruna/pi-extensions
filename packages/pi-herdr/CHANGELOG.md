@@ -1,5 +1,12 @@
 # @narumitw/pi-herdr
 
+## 0.6.1
+
+### Patch Changes
+
+- Updated dependencies [1cbb470]
+  - @narumitw/pi-tui-kit@0.71.0
+
 ## 0.6.0
 
 ### Minor Changes
