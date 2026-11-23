@@ -857,6 +857,7 @@ export async function showSyncSettings(
           { expectedActiveSetup: true, expectedConfigFingerprint, signal: mutationSignal },
         );
       } catch (error) {
+        if (cancel.signal.aborted) return exitSettings();
         if (!mutationSignal.aborted && isCurrent()) notifySaveFailure(ctx, error);
         return rejected;
       }

@@ -38,7 +38,7 @@ All settings are private to this device. There are no project overrides. Default
 | Show sync status | `showStatus`, true | All setups | Immediate save and immediate status visibility change; notifications/widgets remain |
 | Debug mode | `debug`, false | All setups | Immediate save; Pi logging and timing display use the next session start in TUI/RPC; daemon log uses the next owner, job, or Continuous sync cycle boundary |
 
-Opening foreground Settings cancels and drains startup work. Simple changes report saving, then one setting-specific confirmation or an error in Pi's notifications. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
+Opening foreground Settings cancels and drains startup work. Simple changes report saving, then one setting-specific confirmation or an error in Pi's notifications. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. In a transfer-size input or its version-upgrade review, Ctrl+C discards the draft and closes the `/sync` flow; ordinary cancellation returns to Settings. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
 
 Writers queue the complete read-modify-write operation, hold the cross-process lock through validation and same-directory atomic replacement, preserve unknown fields and private permissions, and refuse invalid existing files. UI changes do not replace those writers.
 

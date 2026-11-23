@@ -170,21 +170,34 @@ for (const cancelAt of ["input", "upgrade"] as const) {
   test(`cancelling transfer-size ${cancelAt} leaves old settings unchanged`, async () =>
     withTempHome(async (root) => {
       const before = await writeSettings(root, 8);
-      const choices = [directoryLabel, undefined];
+      const tui = limitHarness();
       let reviews = 0;
       const context = createMockContext({
         mode: "tui",
-        select: async () => choices.shift(),
+        custom: tui.custom,
         input: async () => (cancelAt === "input" ? undefined : "4"),
         confirm: async () => {
           reviews++;
           return false;
         },
       });
-      await showSyncSettings(context.ctx, async () => undefined);
-      assert.equal(reviews, cancelAt === "input" ? 0 : 1);
-      assert.equal(await fs.readFile(localConfigPath(), "utf8"), before);
-      assert.deepEqual(context.notifications, []);
+      const running = showSyncSettings(context.ctx, async () => undefined);
+      try {
+        await tui.waitForOpen();
+        search(tui, directoryLabel);
+        tui.send("x");
+        await tui.waitForPending();
+        assert.equal(tui.isOpen, true);
+        assert.match(tui.render().join("\n"), /Max directory size\s+Off/u);
+        assert.equal(reviews, cancelAt === "input" ? 0 : 1);
+        assert.equal(await fs.readFile(localConfigPath(), "utf8"), before);
+        assert.deepEqual(context.notifications, []);
+        tui.send("q");
+        assert.equal(await running, "back");
+      } finally {
+        tui.dispose();
+        await running;
+      }
     }));
 }
 
@@ -256,8 +269,14 @@ for (const change of ["active setup", "same setup policy"] as const) {
 
 type TerminalInputHandler = Parameters<ExtensionCommandContext["ui"]["onTerminalInput"]>[0];
 
-for (const reason of ["Ctrl+C", "owner cancellation", "component disposal", "session replacement"] as const) {
-  test(`pending transfer-size input is abandoned on ${reason}`, async () =>
+for (const reason of [
+  "Ctrl+C during input",
+  "Ctrl+C during upgrade review",
+  "owner cancellation",
+  "component disposal",
+  "session replacement",
+] as const) {
+  test(`pending transfer-size edit is abandoned on ${reason}`, async () =>
     withTempHome(async (root) => {
       const before = await writeSettings(root);
       const tui = limitHarness();
@@ -276,21 +295,24 @@ for (const reason of ["Ctrl+C", "owner cancellation", "component disposal", "ses
       const ctx = context.ctx as ExtensionCommandContext;
       const opened = Promise.withResolvers<AbortSignal | undefined>();
       const answer = Promise.withResolvers<string | undefined>();
-      ctx.ui.input = async (_title, _placeholder, options) => {
-        const signal = options?.signal;
+      const waitForAnswer = (signal?: AbortSignal) => {
         signal?.addEventListener("abort", () => answer.resolve(undefined), { once: true });
         opened.resolve(signal);
         return answer.promise;
       };
+      ctx.ui.input = async (_title, _placeholder, options) =>
+        reason === "Ctrl+C during upgrade review" ? "5" : waitForAnswer(options?.signal);
+      ctx.ui.confirm = async (_title, _message, options) => (await waitForAnswer(options?.signal)) === "yes";
+      const hardCancel = reason === "Ctrl+C during input" || reason === "Ctrl+C during upgrade review";
       const running = showSyncSettings(ctx, async () => undefined, owner.signal);
       try {
         await tui.waitForOpen();
         search(tui, fileLabel);
         tui.send("x");
-        const inputSignal = await opened.promise;
-        assert.ok(inputSignal);
-        assert.equal(inputSignal.aborted, false);
-        if (reason === "Ctrl+C") {
+        const dialogSignal = await opened.promise;
+        assert.ok(dialogSignal);
+        assert.equal(dialogSignal.aborted, false);
+        if (hardCancel) {
           const listener = [...listeners][0];
           assert.ok(listener);
           assert.equal(listener("\u001b[99;5:3u"), undefined);
@@ -303,9 +325,14 @@ for (const reason of ["Ctrl+C", "owner cancellation", "component disposal", "ses
           answer.resolve("5");
         }
         await tui.waitForPending();
-        if (reason !== "session replacement") assert.equal(inputSignal.aborted, true);
-        if (tui.isOpen) tui.press("ctrl+c");
-        await running;
+        if (reason !== "session replacement") assert.equal(dialogSignal.aborted, true);
+        if (hardCancel) {
+          assert.equal(tui.isOpen, false);
+          assert.equal(await running, "exit");
+        } else {
+          if (tui.isOpen) tui.press("ctrl+c");
+          await running;
+        }
         assert.equal(listeners.size, 0);
         assert.equal(await fs.readFile(localConfigPath(), "utf8"), before);
         assert.deepEqual(context.notifications, []);
