@@ -30,22 +30,6 @@ Try without installing:
 pi -e npm:@narumitw/pi-edit-scope
 ```
 
-For a local checkout, run from the repository root:
-
-```sh
-npm install
-npm run build
-pi -e ./packages/pi-edit-scope
-```
-
-Pi loads `./src/index.ts` directly, so this extension needs no package build. The root build supplies the built [Pi TUI Kit](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-tui-kit) dependency.
-
-To register the same checkout for later sessions, run from the repository root:
-
-```sh
-pi install ./packages/pi-edit-scope
-```
-
 ## 🚀 Quick start
 
 1. Run `/edit-scope` to open **Edit Scope**, then choose **Select files…**.
@@ -127,7 +111,7 @@ Native file tools retain their own mutation queue and cancellation behavior. Fil
 - `src/index.ts` is the thin Pi entrypoint; `src/edit-scope.ts` owns lifecycle, commands, enforcement, and publication.
 - Other `src/` modules own target resolution, state, model contracts, discovery, settings, and UI behavior.
 - `docs/verification.md` contains the detailed behavior reference, developer compatibility rules, historical evidence, and migration handoff.
-- `test/` contains repository-only tests and runtime smoke support. Root `npm test` includes these tests; there is no package-local Vitest configuration.
+- `test/` contains repository-only tests and runtime smoke support.
 
 The package includes `src/`, `docs/`, `README.md`, and `LICENSE`, plus npm's package metadata. Tests and repository configuration are not shipped.
 

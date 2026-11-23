@@ -103,9 +103,9 @@ Additional options:
 | Option | Type | Default | Constraints and meaning |
 | --- | --- | --- | --- |
 | `shorten_model` | boolean | `false` | Opt in to removing a leading `claude-`, a trailing `-20` plus six digits, or a trailing `-latest` from model IDs that do not match an alias; `gpt-` is unchanged. |
-| `truncation_length` | integer | `0` | Inclusive range 0 through 1000. Inclusive range 0 through 1000. Maximum retained model-label grapheme clusters; zero disables truncation. |
+| `truncation_length` | integer | `0` | Inclusive range 0 through 1000. Maximum retained model-label grapheme clusters; zero disables truncation. |
 | `truncation_symbol` | string | `"…"` | May be empty. Marker placed at the removed start, middle, or end; an empty string removes text without a marker. |
-| `truncation_direction` | string enum | `"end"` | One of `start`, `middle`, `end`. One of `start`, `middle`, `end`. Which part of the model label is removed when truncating. |
+| `truncation_direction` | string enum | `"end"` | One of `start`, `middle`, `end`. Which part of the model label is removed when truncating. |
 | `model_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact model-ID replacements that bypass optional shortening and are then subject to configured truncation. |
 
 ### `thinking`
@@ -161,9 +161,9 @@ Additional options:
 
 | Option | Type | Default | Constraints and meaning |
 | --- | --- | --- | --- |
-| `truncation_length` | integer | `3` | Inclusive range 0 through 1000000. Inclusive range 0 through 1000000. Number of trailing path components retained; zero keeps every component. |
+| `truncation_length` | integer | `3` | Inclusive range 0 through 1000000. Number of trailing path components retained; zero keeps every component. |
 | `truncate_to_repo` | boolean | `true` | Contracts the displayed path relative to the current Git repository root before component truncation. |
-| `fish_style_pwd_dir_length` | integer | `0` | Inclusive range 0 through 1000. Inclusive range 0 through 1000. Abbreviates otherwise omitted parent components to this many grapheme clusters when no substitution is configured. |
+| `fish_style_pwd_dir_length` | integer | `0` | Inclusive range 0 through 1000. Abbreviates otherwise omitted parent components to this many grapheme clusters when no substitution is configured. |
 | `truncation_symbol` | string | `""` | May be empty. Prefix placed before a contracted or component-truncated path when fish-style abbreviation is inactive. |
 | `home_symbol` | string | `"~"` | May be empty. Replacement for the current user's home-directory prefix. |
 | `use_os_path_sep` | boolean | `true` | Uses the platform path separator instead of always rendering `/`. |
@@ -208,7 +208,7 @@ Additional options:
 
 | Option | Type | Default | Constraints and meaning |
 | --- | --- | --- | --- |
-| `truncation_length` | integer | `0` | Inclusive range 0 through 1000000. Inclusive range 0 through 1000000. Grapheme clusters retained independently for branch and remote labels; zero disables truncation. |
+| `truncation_length` | integer | `0` | Inclusive range 0 through 1000000. Grapheme clusters retained independently for branch and remote labels; zero disables truncation. |
 | `truncation_symbol` | string | `"…"` | May be empty. Its first grapheme is appended to each truncated branch or remote label. |
 | `only_attached` | boolean | `false` | Hide the branch when HEAD is detached. |
 | `always_show_remote` | boolean | `true` | Keep equal branch/remote labels when true (Pi default); false hides the matching remote branch after truncation. |
@@ -252,7 +252,7 @@ Additional options:
 
 | Option | Type | Default | Constraints and meaning |
 | --- | --- | --- | --- |
-| `commit_hash_length` | integer | `7` | Inclusive range 0 through 64. Inclusive range 0 through 64. Maximum commit-hash characters retained from the collected HEAD hash. |
+| `commit_hash_length` | integer | `7` | Inclusive range 0 through 64. Maximum commit-hash characters retained from the collected HEAD hash. |
 | `only_detached` | boolean | `false` | Show the commit only while HEAD is detached. |
 | `tag_symbol` | string | `" 🏷 "` | Prefix included in the rendered $tag value. |
 | `tag_disabled` | boolean | `false` | Do not collect or display a tag. |
@@ -715,7 +715,7 @@ Additional options:
 | --- | --- | --- | --- |
 | `ignore_base` | boolean | `true` | Hides the Conda module when `CONDA_DEFAULT_ENV` is exactly `base`. |
 | `detect_env_vars` | string array | `[]` | Presence detectors: positive names are OR conditions and !name vetoes presence, including empty values; an empty list preserves the module's existing detection. |
-| `truncation_length` | integer | `1` | Inclusive range 0 through 1000000. Inclusive range 0 through 1000000. Number of trailing environment-path components retained; zero keeps the complete value. |
+| `truncation_length` | integer | `1` | Inclusive range 0 through 1000000. Number of trailing environment-path components retained; zero keeps the complete value. |
 
 ### `pixi`
 
@@ -836,7 +836,7 @@ Additional options:
 | `namespace_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact Kubernetes namespace-name to display-label replacements. |
 | `cluster_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact Kubernetes cluster-name to display-label replacements. |
 | `user_aliases` | string-to-string table | `{}` | Keys and values are strings. Exact Kubernetes user-name to display-label replacements. |
-| `max_config_files` | integer | `8` | Inclusive range 1 through 32. Inclusive range 1 through 32. Maximum number of `KUBECONFIG` files read from left to right. |
+| `max_config_files` | integer | `8` | Inclusive range 1 through 32. Maximum number of `KUBECONFIG` files read from left to right. |
 
 ### `terraform`
 

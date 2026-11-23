@@ -141,8 +141,7 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Mermaid Markdown transformers](./docs/api.md#mermaid-markdown-transformers) — lazy preparation, final-message transformation, fallback behavior, and lifecycle ownership.
 - [Public exports and compatibility history](./docs/api.md#-public-api) — helpers, types, focused subpaths, and API-version changes.
 - [Horizontal rules](./docs/api.md#-horizontal-rules) and [editor status widgets](./docs/api.md#-editor-status-widgets) — width-safe presentation with optional named collapse controls.
-- [Editor status presentation](./docs/editor-status-presentation.md) — optional stable snapshot publication, explicit view controls, and bounded consumer-local items without taking over Pi's layout.
-- [Editor status presentation](./docs/editor-status-presentation.md) — stable snapshots, session-local view controls, and bounded item collections with consumer-owned policy.
+- [Editor status presentation](./docs/editor-status-presentation.md) — optional stable snapshot publication, session-local view controls, and bounded items with consumer-owned policy, without taking over Pi's layout.
 - [Bounded frames](./docs/api.md#bounded-frames) and [configured keys](./docs/api.md#configured-keys) — row mappings and key syntax helpers with caller-owned input policy.
 
 The consuming extension owns domain state, persistence, confirmations, and session signals.

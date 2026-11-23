@@ -97,7 +97,3 @@ Pi's public `getAllTools()` metadata omits the optional `constrainedSampling` fi
 ## Codex CLI routing comparison
 
 The examined Codex CLI source uses Remote V2 on its resolved Responses route: ChatGPT/Codex OAuth defaults to the Codex backend, while API keys default to the OpenAI API. This extension already uses V2 for Codex-profile `auto` routes; OpenAI/Azure `auto` remains unary Compact API. Select Remote V2 explicitly to use that request form on a compatible API-key backend. Pi's newer OpenAI ChatGPT token-sharing OAuth is a different grant: neither an API label nor Codex CLI source establishes its compaction permission. No authentication-dependent automatic routing is added.
-
-## Menu compatibility
-
-Menu rendering inherits Kit's minimum one-cell width. Synthetic zero-column renders are clamped to one cell. This is a rendering compatibility limit, not an additional command mode.

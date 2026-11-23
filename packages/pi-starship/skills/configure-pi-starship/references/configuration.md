@@ -52,7 +52,7 @@ Cancelling naming returns to the chat without saving; closing or session replace
 Application checks the initial disk snapshot, loaded revision, and saved profile identity, blocks detected concurrent changes, and warns before explicitly repairing an invalid original.
 Chat content and settings read by the agent go to the selected model provider; the child uses the opening model/thinking selection with Pi authentication, has no shell tool, and does not persist its transcript or change the main conversation.
 The fullscreen view uses Pi's native user/assistant/tool message components. Short gray status and control labels sit on the editor borders; the live preview ends at the terminal bottom, in the saved footer's position.
-It shows recent output with expanded, read-only tool results; saving opens an exact-draft review.
+It shows recent output with read-only tool results; saving opens an exact-draft review.
 Choose **Continue** to leave the save review; cancelling the review discards the flow without publishing.
 
 Outside this hosted chat, the bundled `configure-pi-starship` skill uses a separate external-edit workflow.

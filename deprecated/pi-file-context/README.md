@@ -33,15 +33,6 @@ Run once from npm:
 pi -e npm:@narumitw/pi-file-context
 ```
 
-Build and run the local working tree:
-
-```bash
-npm --workspace @narumitw/pi-file-context run build
-pi -e ./packages/pi-file-context
-```
-
-The package declares `dist/index.ts`, so build a local checkout before loading its package directory.
-
 Pi extensions run with your user permissions.
 Review third-party extension source before installing it.
 
