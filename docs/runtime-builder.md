@@ -73,9 +73,7 @@ The original migration replaced import-like string matching with parsed, non-bun
 
 ## Builder contract
 
-`createRuntimeBuilder` accepts package root, temporary prefix, banner, optional named entries, forbidden eager inputs/externals, exact allowed externals, external subpath/dynamic matching, and additive graph/file validators. It also supports build-time `alias` mappings and a `stageFiles` callback to add files to the staging directory before validation. A wrapper can designate an `additionalRuntimeDirectory` outside the common `.ts` inventory; the package must validate those files separately. The default build remains split ESM, ES2024, external packages, `.ts` JavaScript output and source maps.
-
-Package graph validators receive normalized input sets and the main eager graph. After common validation, file validators receive the staged directory, `.ts` inventory, and parsed imports. They cannot replace the common policy. The per-build `validateOutput` seam supports failure injection after normal validation.
+See [`createRuntimeBuilder`](../scripts/runtime-builder.mjs) for wrapper options and callback arguments. Package validators add to the common checks; they cannot replace them. If a wrapper designates an `additionalRuntimeDirectory` outside the common `.ts` inventory, the package must validate that directory separately.
 
 Only `dist` and the wrapper's test-output prefix are writable. Staging must be a build-owned sibling, and symlink outputs, staging links and parent aliases are rejected. Output ownership is checked again after validation. Publication preserves the previous directory until staging validates, restores it if the final rename fails, and retains a recovery backup if restoration itself fails. This is same-filesystem rename publication, not a cross-process lock or crash-durable transaction; concurrent builds of one destination are not supported.
 

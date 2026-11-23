@@ -201,30 +201,15 @@ For an existing Husky checkout, run `git config --local --unset-all core.hooksPa
 before `prek install` if the local hook path is still `.husky/_`.
 Hook installation is explicit; `npm install` does not install Git hooks.
 
-[`prek.toml`](./prek.toml) runs Biome configuration migration, Biome checks,
-the [package source comment ratchet](./docs/source-comments.md), the package
-README linter, `uvx zizmor --pedantic .github`, and staged typechecks, in that
-order. Use `/delete-comment` in a trusted Pi checkout to review a cleanup batch
-and shrink the baseline. The migration hook runs
-`npx @biomejs/biome migrate --write` on every commit before file checks.
-The Biome check hook uses the installed `@biomejs/biome` dependency and receives
-matching staged text files: JavaScript, TypeScript, JSON/JSONC, and CSS.
-`biome check --write` applies formatting and safe fixes in one pass without
-scanning all of `packages/` on every commit.
-The other hooks run without filename arguments, even when no files match.
-The README linter scans every package so it can catch deleted READMEs.
-Run it on its own with `uv run scripts/check_readmes.py`.
-Distinct priorities keep the hooks sequential, and `fail_fast` stops later hooks
-when a check fails or modifies files.
+See [`prek.toml`](./prek.toml) for the hook order and file filters. Use `/delete-comment`
+in a trusted Pi checkout to review a cleanup batch and shrink the
+[source comment baseline](./docs/source-comments.md).
+Run the README linter on its own with `uv run scripts/check_readmes.py`.
 Run `prek run --all-files` to run all hooks manually, or select one by ID, such as
 `prek run zizmor --all-files`; typechecks still use the Git index.
-Root `npm run typecheck` uses the installed `tsc-rs` binary for workspace
-`--noEmit` checks by default; no compiler flag is needed.
-The runner starts the compiler launcher with Node.js directly in each workspace,
-without passing checkout paths through an npm shell.
-Root Node.js workflows resolve npm through [`npmInvocation()`](./scripts/npm-invocation.mjs):
-they use the invoking npm CLI if available, Node.js's bundled npm CLI on Windows otherwise,
-and `npm` on `PATH` on other platforms. Biome checks this boundary in `npm run check`.
+Root `npm run typecheck` uses `tsc-rs` for workspace checks; no compiler flag is needed.
+Root Node.js workflows use [`npmInvocation()`](./scripts/npm-invocation.mjs) to launch npm.
+Biome checks this boundary in `npm run check`.
 The prek hook uses `npm run typecheck -- --staged` to check affected workspaces
 after building their prerequisites.
 `tsc-rs` is an early-release compiler: combined test compilation showed diagnostic
@@ -296,9 +281,7 @@ Repository-only documentation, tests, tooling, and path migrations may omit a ch
 `npm run changeset:status` to inspect pending releases. Versioning and publication run through the
 release workflow; initial publication remains the manually approved exception described above.
 
-`@narumitw/pi-tui-kit` remains independently versioned. Publish a new Kit API before raising an
-extension's compatibility floor to consume it; do not release an unpublished Kit API and its first
-consumer together.
+See [coordinated Kit and consumer releases](./docs/coordinated-releases.md) for dependency floors and publication safeguards.
 
 ## 🗂️ Repository structure
 

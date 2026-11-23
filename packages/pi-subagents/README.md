@@ -137,7 +137,7 @@ The main Pi session exposes five fixed tools:
 
 | Tool | Parameters | Purpose |
 | --- | --- | --- |
-| `subagent_spawn` | `task`, optional `provider`, `model`, `tools`, `skills`, `extensions`, `thinkingLevel`, `timeout` | Start one subagent job and return its `jobId`. |
+| `subagent_spawn` | [Spawn parameters](./docs/tools.md#subagent_spawn) | Start one subagent job and return its `jobId`. |
 | `subagent_inspect` | none | List privacy-filtered retained-job metadata. |
 | `subagent_cancel` | `jobId` | Idempotently cancel one queued or running job. |
 | `subagent_wait` | `jobId`, optional `timeout` | Wait for a job or return early for an incoming child message. |
@@ -201,21 +201,6 @@ The task should state the child's role, objective, scope, constraints, and expec
 For reusable delegation policy, you can create your own project skill under `.pi/skills/<your-skill>/SKILL.md` or global skill under `~/.pi/agent/skills/<your-skill>/SKILL.md`.
 Choose its name, trigger, tool policy, task format, and verification workflow for your use case.
 The package intentionally registers and publishes no skill; the repository-only [`using-pi-subagents` example](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-subagents/skills/using-pi-subagents) is an optional starting point.
-
-`subagent_spawn` accepts this additive configuration:
-
-```ts
-{
-  task: string;
-  provider?: string;
-  model?: string;
-  tools?: string[];
-  skills?: string[];
-  extensions?: Array<{ path: string; tools: string[] }>;
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  timeout?: number;
-}
-```
 
 `provider` and `model` are exact IDs. Each omitted field inherits independently from the main agent at spawn time; later parent changes do not affect the job.
 A provider-only override retains the parent's model ID and fails if that pair is unavailable. To select another pair explicitly:
