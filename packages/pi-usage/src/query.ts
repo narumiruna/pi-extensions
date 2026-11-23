@@ -90,6 +90,7 @@ const SHARED_MOONSHOT_ENV_VAR = "MOONSHOT_API_KEY";
 // /v1/billing/usage 404s outside Enterprise and /v1/admin/usage 401s without an admin key.
 const MISTRAL_SUBSCRIPTION_URL = "https://api.mistral.ai/v1/billing/subscription";
 const MISTRAL_BUDGET_URL = "https://api.mistral.ai/v1/billing/budget";
+const MISTRAL_BUDGET_REVALIDATION_RESERVE_MS = 1_000;
 const XAI_USER_URL = "https://cli-chat-proxy.grok.com/v1/user?include=subscription";
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const XAI_CLIENT_HEADERS = Object.freeze({
@@ -387,12 +388,18 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
       // Mirrors the official Vibe CLI: /billing/budget carries the monthly Vibe Code and API
       // allowances. It is optional upstream (403 without the usage permission, 404 on platforms
       // that do not serve billing), so plan details still publish when it is unavailable.
-      const budget = await fetchMistralBudgetOptional(
-        MISTRAL_BUDGET_URL,
-        auth,
-        signal,
-        timeoutMs - (Date.now() - startedAt),
-      );
+      // Reserve time for the revalidation guard below so a stalled optional budget request
+      // cannot consume the whole budget and block revalidation or discard the subscription data.
+      const budgetRemainingMs = timeoutMs - (Date.now() - startedAt);
+      const budget =
+        budgetRemainingMs > MISTRAL_BUDGET_REVALIDATION_RESERVE_MS
+          ? await fetchMistralBudgetOptional(
+              MISTRAL_BUDGET_URL,
+              auth,
+              signal,
+              budgetRemainingMs - MISTRAL_BUDGET_REVALIDATION_RESERVE_MS,
+            )
+          : undefined;
       await guard();
       if (signal.aborted) throw abortError();
       return normalizeMistralBillingPayload(subscription, budget as MistralBudgetPayload | undefined, Date.now());
