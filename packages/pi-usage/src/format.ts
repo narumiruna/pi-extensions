@@ -53,7 +53,8 @@ export function formatUsageReport(report: UsageReport, displayState: UsageDispla
     formatMoonshotReport(lines, report);
   } else if (report.providerId === "minimax" || report.providerId === "minimax-cn") {
     formatMiniMaxReport(lines, report);
-  } else if (report.providerId === "xai") formatXaiReport(lines, report);
+  } else if (report.providerId === "mistral") formatMistralReport(lines, report);
+  else if (report.providerId === "xai") formatXaiReport(lines, report);
   else if (report.providerId === "zai" || report.providerId === "zai-coding-cn") {
     formatZaiReport(lines, report);
   } else formatGenericReport(lines, report);
@@ -152,6 +153,7 @@ function formatStatusline(
     const total = report.metrics.find((metric) => metric.id === "usage-total");
     if (typeof total?.value === "number") return `openrouter ${formatUsd(total.value)} used`;
   }
+  if (report.providerId === "mistral") return formatMistralStatusline(report);
   if (report.providerId === "opencode-go") return formatOpenCodeZenStatusline(report, countdown);
   if (report.providerId === "command-code") return formatCommandCodeStatusline(report, countdown);
   if (report.providerId === "kimi-coding") return formatKimiCodingStatusline(report, countdown);
@@ -400,6 +402,44 @@ function formatCommandCodeReport(lines: string[], report: UsageReport): void {
   for (const metric of report.metrics) {
     lines.push(`${`${metric.label}:`.padEnd(VALUE_COLUMN)}${formatMetricValue(metric.value, metric.unit)}`);
   }
+}
+
+// Mistral reports allowances as a fractional percentage, so the shared quota renderers would print
+// raw floats. Round once here and keep the reset in parentheses like the other single-window plans.
+function formatMistralReport(lines: string[], report: UsageReport): void {
+  for (const bucket of report.buckets) {
+    const reset = bucket.resetsAt ? ` (resets ${formatReset(bucket.resetsAt)})` : "";
+    const remaining = bucket.remaining === undefined ? undefined : Math.round(clampPercent(bucket.remaining));
+    const used = bucket.used === undefined ? undefined : Math.round(clampPercent(bucket.used));
+    const value =
+      used === undefined || remaining === undefined
+        ? "unavailable"
+        : `${String(used)}% used \u00b7 ${String(remaining)}% left`;
+    lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}${reset}`);
+  }
+  // Buckets were rendered above; the generic fallback would print them a second time.
+  for (const metric of report.metrics) {
+    lines.push(`${`${metric.label}:`.padEnd(VALUE_COLUMN)}${formatMetricValue(metric.value, metric.unit)}`);
+  }
+}
+
+function formatMistralStatusline(report: UsageReport): string | undefined {
+  const parts: string[] = [];
+  for (const [id, label] of [
+    ["vibe-allowance", "vibe"],
+    ["api-allowance", "api"],
+  ] as const) {
+    const bucket = report.buckets.find((candidate) => candidate.id === id);
+    if (bucket?.remaining === undefined) continue;
+    const remaining = Math.round(clampPercent(bucket.remaining));
+    // Only disambiguate the two windows once both are present.
+    parts.push(report.buckets.length > 1 ? `${label} ${String(remaining)}%` : `${String(remaining)}%`);
+  }
+  if (parts.length === 0) {
+    const plan = report.metrics.find((metric) => metric.id === "plan");
+    return plan === undefined ? undefined : `mistral ${String(plan.value)}`;
+  }
+  return `mistral ${parts.join(" \u00b7 ")}`;
 }
 
 function formatCommandCodeStatusline(report: UsageReport, countdown: StatusCountdown): string | undefined {

@@ -37,6 +37,7 @@ const measurements: Readonly<Record<string, readonly UsageMeasurementV1[]>> = {
   "kimi-coding": ["quota", "balance", "spend", "reset-time"],
   minimax: ["quota", "balance", "reset-time"],
   "minimax-cn": ["quota", "balance", "reset-time"],
+  "mistral": ["quota", "reset-time"],
   moonshotai: ["balance"],
   "moonshotai-cn": ["balance"],
   zai: ["quota", "reset-time"],

@@ -5,6 +5,7 @@ import {
   formatUsageStatusline,
   normalizeCodexBackendPayload,
   normalizeGitHubCopilotUsagePayload,
+  normalizeMistralBillingPayload,
   normalizeOpenRouterKeyPayload,
 } from "../src/index.js";
 
@@ -366,5 +367,124 @@ test("Codex adapter preserves windows, credits, and model-specific statusline bu
       provider: "openai-codex",
     }),
     "codex spark 5h:90%",
+  );
+});
+
+const MISTRAL_SUBSCRIPTION = {
+  plan_name: "INDIVIDUAL",
+  payg_enabled: false,
+  vibe_payg_enabled: false,
+  enterprise: false,
+};
+
+// Captured verbatim from a live INDIVIDUAL-plan standard API key.
+const MISTRAL_BUDGET = {
+  vibe_budget: {
+    usage_percentage: 3.257940325333333,
+    initial_budget: 255.0,
+    currency: "EUR",
+    reset_at: "2026-12-01T00:00:00Z",
+    payg_enabled: false,
+  },
+  api_budget: {
+    usage_percentage: 0.0,
+    initial_budget: 25.5,
+    currency: "EUR",
+    reset_at: "2026-12-01T00:00:00Z",
+    payg_enabled: false,
+  },
+};
+
+test("Mistral adapter reports both public allowance budgets from the live payload", () => {
+  const report = normalizeMistralBillingPayload(MISTRAL_SUBSCRIPTION, MISTRAL_BUDGET, 1000);
+
+  assert.equal(report.providerId, "mistral");
+  assert.equal(report.providerName, "Mistral");
+  assert.equal(report.source, "mistral-billing");
+  assert.equal(report.accountLabel, "INDIVIDUAL");
+  assert.deepEqual(report.metrics, [
+    { id: "plan", label: "Plan", value: "INDIVIDUAL" },
+    { id: "payg", label: "Pay-as-you-go", value: "disabled" },
+  ]);
+  assert.deepEqual(report.buckets, [
+    {
+      id: "vibe-allowance",
+      label: "Vibe Code monthly allowance",
+      used: 3.257940325333333,
+      remaining: 96.74205967466667,
+      limit: 100,
+      unit: "percent",
+      period: "monthly",
+      resetsAt: 1_796_083_200,
+    },
+    {
+      id: "api-allowance",
+      label: "API monthly allowance",
+      used: 0,
+      remaining: 100,
+      limit: 100,
+      unit: "percent",
+      period: "monthly",
+      resetsAt: 1_796_083_200,
+    },
+  ]);
+  assert.equal(report.notes, undefined);
+  const rendered = formatUsageReport(report, "current");
+  assert.match(rendered, /Vibe Code monthly allowance: 3% used \u00b7 97% left/u);
+  assert.match(rendered, /API monthly allowance:\s+0% used \u00b7 100% left/u);
+  // Each bucket is printed once, and no raw fractional percentage leaks through.
+  assert.equal(rendered.match(/Vibe Code monthly allowance:/gu)?.length, 1);
+  assert.doesNotMatch(rendered, /3\.2579/u);
+  assert.equal(formatUsageStatusline(report), "mistral vibe 97% \u00b7 api 100%");
+});
+
+test("Mistral adapter ignores a non-positive budget and clamps negative usage", () => {
+  const report = normalizeMistralBillingPayload(
+    MISTRAL_SUBSCRIPTION,
+    { vibe_budget: { usage_percentage: -5, initial_budget: 0 }, api_budget: { usage_percentage: 150, initial_budget: 10 } },
+    1100,
+  );
+  // initial_budget <= 0 means "not configured", exactly as the official CLI treats it.
+  assert.deepEqual(
+    report.buckets.map((bucket) => bucket.id),
+    ["api-allowance"],
+  );
+  assert.equal(report.buckets[0]?.used, 150);
+  assert.equal(report.buckets[0]?.remaining, 0);
+});
+
+test("Mistral adapter degrades to plan details when the budget route is unavailable", () => {
+  const report = normalizeMistralBillingPayload(MISTRAL_SUBSCRIPTION, undefined, 1200);
+
+  assert.equal(report.accountLabel, "INDIVIDUAL");
+  assert.deepEqual(report.buckets, []);
+  assert.match(report.notes?.join(" ") ?? "", /usage permission/u);
+  assert.match(formatUsageReport(report, "current"), /Plan:\s+INDIVIDUAL/u);
+});
+
+test("Mistral adapter prefers the budget payg flag over the subscription fallback", () => {
+  const report = normalizeMistralBillingPayload(
+    { ...MISTRAL_SUBSCRIPTION, vibe_payg_enabled: true },
+    { vibe_budget: { usage_percentage: 42.5, initial_budget: 300, payg_enabled: false } },
+    1300,
+  );
+  assert.equal(report.metrics.find((metric) => metric.id === "payg")?.value, "disabled");
+
+  const fallback = normalizeMistralBillingPayload(
+    { ...MISTRAL_SUBSCRIPTION, vibe_payg_enabled: true },
+    { vibe_budget: { usage_percentage: 42.5, initial_budget: 300 } },
+    1400,
+  );
+  assert.equal(fallback.metrics.find((metric) => metric.id === "payg")?.value, "enabled");
+});
+
+test("Mistral adapter sanitizes display text and rejects invalid field types", () => {
+  const report = normalizeMistralBillingPayload({ plan_name: "INDI\t\u001b[31mVIDUAL" }, undefined, 1500);
+  assert.equal(report.accountLabel, "INDI VIDUAL");
+  assert.doesNotMatch(report.metrics[0]?.value as string, /[\u0000-\u001f\u007f-\u009f]/u);
+  assert.throws(() => normalizeMistralBillingPayload({ plan_name: "X".repeat(65) }, undefined, 1600), /bounded/u);
+  assert.throws(
+    () => normalizeMistralBillingPayload(MISTRAL_SUBSCRIPTION, { vibe_budget: { usage_percentage: "nope", initial_budget: 1 } }, 1700),
+    /finite number/u,
   );
 });

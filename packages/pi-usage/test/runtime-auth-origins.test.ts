@@ -41,6 +41,15 @@ const cases = [
     },
     proxyModelUrl: "https://proxy.example.test/inference",
   },
+  {
+    model: {
+      id: "codestral-2508",
+      name: "Codestral 25.08",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai",
+    },
+    proxyModelUrl: "https://proxy.example.test/v1",
+  },
 ] as const;
 
 for (const { model: officialModel, proxyModelUrl } of cases) {

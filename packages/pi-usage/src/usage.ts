@@ -437,6 +437,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         "deepseek",
         "minimax",
         "minimax-cn",
+        "mistral",
         "moonshotai",
         "moonshotai-cn",
         "openai",
