@@ -484,7 +484,7 @@ test("Mistral adapter prefers the budget payg flag over the subscription fallbac
 test("Mistral adapter sanitizes display text and rejects invalid field types", () => {
   const report = normalizeMistralBillingPayload({ plan_name: "INDI\t\u001b[31mVIDUAL" }, undefined, 1500);
   assert.equal(report.accountLabel, "INDI VIDUAL");
-  assert.doesNotMatch(report.metrics[0]?.value as string, /[\u0000-\u001F\u007F-\u009F]/u);
+  assert.doesNotMatch(report.metrics[0]?.value as string, /\p{Cc}/u);
   assert.throws(() => normalizeMistralBillingPayload({ plan_name: "X".repeat(65) }, undefined, 1600), /bounded/u);
   assert.throws(
     () =>
