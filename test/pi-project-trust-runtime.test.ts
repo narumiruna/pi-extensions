@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ProjectTrustUpdate, RpcResponse } from "@earendil-works/pi-coding-agent";
@@ -66,7 +66,7 @@ for (const scenario of cases) {
     };
 
     beforeEach(async (context) => {
-      root = await mkdtemp(join(tmpdir(), "pi-project-trust-runtime-"));
+      root = await mkdtemp(join(await realpath(tmpdir()), "pi-project-trust-runtime-"));
       cwd = join(root, "projects", "workspace");
       owned = [];
       context.onTestFinished(async () => {

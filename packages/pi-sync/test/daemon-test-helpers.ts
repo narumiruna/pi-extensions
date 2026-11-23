@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DaemonConnection, ensureDaemon } from "@narumitw/pi-sync-daemon";
 import type { createMockPi } from "../../../test/support.js";
 import { installPiDaemonHost } from "../src/daemon/pi-client.js";
 import { installEngineFixtureHost } from "./engine-host.js";
+export function assertDisposableAgentRoot(root: string) {
+  const canonical = realpathSync(root);
+  const temp = path.relative(realpathSync(tmpdir()), canonical).split(path.sep);
+  const build = path.relative(realpathSync("packages/pi-sync"), canonical).split(path.sep);
+  assert.ok(
+    /^(?:pi-sync-(?:home|rpc)|pi-extension-status-contract)-[A-Za-z0-9]+$/u.test(temp[0] ?? "") ||
+      /^\.pi-sync-build-test-[A-Za-z0-9]+$/u.test(build[0] ?? ""),
+    "This operation is only allowed in disposable Pi Sync fixtures.",
+  );
+}
+
 /** Explicit approval in disposable fixtures; never use this helper with a real agent root. */
 export async function adoptFixtureRoot(root: string) {
-  assert.match(root, /(?:\/tmp\/|\.pi-sync-build-test-)/u);
+  assertDisposableAgentRoot(root);
   const daemon = await ensureDaemon(root);
   const client = await new DaemonConnection(
     daemon.paths,

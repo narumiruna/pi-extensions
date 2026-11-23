@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { beforeEach, describe, test } from "vitest";
 import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
 
@@ -50,21 +50,27 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   }
 });
 
-test.each([
+describe.each([
   {
     layout: "installed",
     tuiKitRoot: resolve(fileURLToPath(import.meta.resolve("@narumitw/pi-tui-kit")), "../.."),
   },
   { layout: "workspace", tuiKitRoot: resolve("packages/pi-tui-kit") },
-])("managed package layouts load the settings menu without physical Pi peers ($layout Kit)", async ({ tuiKitRoot }) => {
-  const builder = await loadBuilder();
-  const buildRoot = await mkdtemp(join(packageRoot, ".pi-codex-compact-build-test-"));
-  const isolatedRoot = await mkdtemp(join(tmpdir(), "pi-codex-compact-isolated-"));
-  const agentDir = join(isolatedRoot, "agent");
-  const output = join(buildRoot, "dist");
-  const isolatedTuiKitRoot = join(isolatedRoot, "node_modules", "@narumitw", "pi-tui-kit");
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  try {
+])("managed package layout ($layout Kit)", ({ tuiKitRoot }) => {
+  let isolatedRoot: string;
+  let agentDir: string;
+  let peers: string[];
+
+  beforeEach(async (context) => {
+    const builder = await loadBuilder();
+    const buildRoot = await mkdtemp(join(packageRoot, ".pi-codex-compact-build-test-"));
+    context.onTestFinished(() => rm(buildRoot, { force: true, recursive: true }));
+    const root = await mkdtemp(join(tmpdir(), "pi-codex-compact-isolated-"));
+    context.onTestFinished(() => rm(root, { force: true, recursive: true }));
+    isolatedRoot = root;
+    agentDir = join(root, "agent");
+    const output = join(buildRoot, "dist");
+    const isolatedTuiKitRoot = join(root, "node_modules", "@narumitw", "pi-tui-kit");
     await builder.buildRuntime({ outputDirectory: output });
     await cp(output, join(isolatedRoot, "dist"), { recursive: true });
     await cp(join(packageRoot, "package.json"), join(isolatedRoot, "package.json"));
@@ -85,30 +91,35 @@ test.each([
       await mkdir(dirname(destination), { recursive: true });
       await cp(dependencyRoot, destination, { recursive: true });
     }
-    for (const peer of Object.keys(kitManifest.peerDependencies ?? {})) {
+    peers = Object.keys(kitManifest.peerDependencies ?? {});
+    await mkdir(agentDir, { recursive: true });
+  });
+
+  test("loads the settings menu without physical Pi peers", async () => {
+    for (const peer of peers) {
       await assert.rejects(access(join(isolatedRoot, "node_modules", peer)));
     }
-    await mkdir(agentDir, { recursive: true });
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    const loader = new DefaultResourceLoader({
-      cwd: isolatedRoot,
-      agentDir,
-      settingsManager: SettingsManager.inMemory({}),
-      additionalExtensionPaths: [join(isolatedRoot, "dist", "index.ts")],
-    });
-    await loader.reload();
-    const loaded = loader.getExtensions();
-    assert.deepEqual(loaded.errors, []);
-    assert.equal(loaded.extensions.length, 1);
-    const extension = loaded.extensions[0];
-    const command = extension?.commands.get("codex-compact");
-    assert.ok(command);
-    const { ctx } = createMockContext({ cwd: isolatedRoot, mode: "tui" });
-    await assert.doesNotReject(() => command.handler("", ctx));
-  } finally {
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(buildRoot, { force: true, recursive: true });
-    await rm(isolatedRoot, { force: true, recursive: true });
-  }
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      const loader = new DefaultResourceLoader({
+        cwd: isolatedRoot,
+        agentDir,
+        settingsManager: SettingsManager.inMemory({}),
+        additionalExtensionPaths: [join(isolatedRoot, "dist", "index.ts")],
+      });
+      await loader.reload();
+      const loaded = loader.getExtensions();
+      assert.deepEqual(loaded.errors, []);
+      assert.equal(loaded.extensions.length, 1);
+      const extension = loaded.extensions[0];
+      const command = extension?.commands.get("codex-compact");
+      assert.ok(command);
+      const { ctx } = createMockContext({ cwd: isolatedRoot, mode: "tui" });
+      await assert.doesNotReject(() => command.handler("", ctx));
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
 });

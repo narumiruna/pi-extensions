@@ -24,7 +24,7 @@ let project: string;
 let external: string;
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-resources-"));
+  root = mkdtempSync(path.join(realpathSync(os.tmpdir()), "pi-subagents-resources-"));
   project = path.join(root, "project");
   external = path.join(root, "external");
   mkdirSync(project);
@@ -326,7 +326,7 @@ test("attests a shared extension entrypoint using Pi's first lexical alias", asy
   assert.deepEqual(resolved.toolSources, { alias_tool: [toolSourceId(owner)] });
 });
 
-test("bounds and cancels attachment directory preflight", async () => {
+test("bounds the number of entries in skill attachment directories", async () => {
   const wideDirectory = path.join(external, "wide-directory");
   mkdirSync(wideDirectory);
   for (let index = 0; index <= MAX_SKILL_SCAN_ENTRIES; index++) {
@@ -337,7 +337,9 @@ test("bounds and cancels attachment directory preflight", async () => {
       resolveResourceAttachments({ skills: [wideDirectory] }, { cwd: project, projectTrusted: true, coreTools: [] }),
     /skill attachment exceeds traversal limits/i,
   );
+});
 
+test("bounds and cancels skill attachment preflight", async () => {
   const deepDirectory = path.join(external, "deep-directory");
   let nestedDirectory = deepDirectory;
   mkdirSync(nestedDirectory);
@@ -397,7 +399,9 @@ test("bounds and cancels attachment directory preflight", async () => {
   );
   queueMicrotask(() => controller.abort());
   await assert.rejects(pending, (error: Error) => error.name === "AbortError");
+});
 
+test("bounds the number of entries in extension attachment directories", async () => {
   const wideExtensionDirectory = path.join(external, "wide-extension-directory");
   mkdirSync(wideExtensionDirectory);
   for (let index = 0; index <= MAX_EXTENSION_SCAN_ENTRIES; index++) {
@@ -411,7 +415,9 @@ test("bounds and cancels attachment directory preflight", async () => {
       ),
     /extension attachment exceeds preflight limits/i,
   );
+});
 
+test("bounds the number of entries across package resource directories", async () => {
   const widePackageDirectory = path.join(external, "wide-package-directory");
   mkdirSync(path.join(widePackageDirectory, "extensions"), { recursive: true });
   mkdirSync(path.join(widePackageDirectory, "prompts"));
@@ -427,7 +433,9 @@ test("bounds and cancels attachment directory preflight", async () => {
       ),
     /extension attachment exceeds preflight limits/i,
   );
+});
 
+test("bounds and cancels extension attachment preflight", async () => {
   const oversizedManifestDirectory = path.join(external, "oversized-manifest-directory");
   mkdirSync(oversizedManifestDirectory);
   writeFileSync(path.join(oversizedManifestDirectory, "package.json"), Buffer.alloc(MAX_EXTENSION_METADATA_BYTES + 1));

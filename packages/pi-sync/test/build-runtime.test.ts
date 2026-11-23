@@ -85,12 +85,10 @@ test("generated runtime preserves every first-use import boundary", async () => 
   }
 });
 
-test("generated runtime is mapped, external, self-contained, and loadable by Pi", async () => {
+test("generated runtime is mapped, external, and self-contained", async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
-  const agentDir = join(root, "agent");
   const output = join(root, "dist");
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
     const metadata = await builder.buildRuntime({ outputDirectory: output });
     const files = await listFiles(output);
@@ -110,14 +108,23 @@ test("generated runtime is mapped, external, self-contained, and loadable by Pi"
         assert.equal(input.includes("node_modules/"), false, `bundled package input: ${input}`);
       }
     }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
+test("Pi loads the built package and runs the generated recovery and setup routes", async () => {
+  const root = await mkdtemp(join(packageRoot, ".pi-sync-build-test-"));
+  const agentDir = join(root, "agent");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  try {
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,
       settingsManager: SettingsManager.inMemory({}),
-      additionalExtensionPaths: [join(output, "index.ts")],
+      additionalExtensionPaths: [packageRoot],
     });
     await loader.reload();
     const loaded = loader.getExtensions();

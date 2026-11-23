@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stopDaemon } from "@narumitw/pi-sync-daemon";
@@ -22,7 +22,7 @@ export async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
   const previousNodeOptions = process.env.NODE_OPTIONS;
-  const home = mkdtempSync(path.join(os.tmpdir(), "pi-sync-home-"));
+  const home = mkdtempSync(path.join(realpathSync(os.tmpdir()), "pi-sync-home-"));
   const agentDir = path.join(home, ".pi", "agent");
   process.env.HOME = home;
   process.env.PI_CODING_AGENT_DIR = agentDir;

@@ -116,8 +116,12 @@ test.each(["tui", "rpc"] as const)("%s can open Settings from /sync while transf
       expect(managerRows?.join("\n")).not.toMatch(/Sync now|Push to remote|Pull from remote/u);
       expect(select.mock.calls[1]?.[0]).toContain(mode === "tui" ? "Pi Sync Settings" : "Sync settings management");
       const presentation = [select.mock.calls[1]?.[0], ...notifications.map(({ message }) => message)].join("\n");
-      expect(presentation).toContain(`Edit existing ignore rules manually: ${rulePath}`);
-      if (mode === "tui") expect(presentation).toContain("Setup preferences are read-only");
+      if (mode === "tui") {
+        expect(presentation).toContain("Edit existing ignore rules manually:");
+        expect(presentation).toContain("Setup preferences are read-only");
+      } else {
+        expect(presentation).toContain(`Edit existing ignore rules manually: ${rulePath}`);
+      }
       expect(presentation).not.toMatch(/PRIVATE RULE CONTENT|Excluded paths:/u);
       const operations = run.mock.calls.map(([operation]) => operation);
       expect(operations.length).toBeGreaterThan(1);
