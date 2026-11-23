@@ -31,7 +31,7 @@ function setup(mode?: "regular" | "fullscreen") {
       return terminal.render().map(stripTerminalSequences);
     },
     stop() {
-      pane.clear();
+      pane.reset();
       terminal.stop();
     },
   };
@@ -102,7 +102,7 @@ test("terminal resize clamps the saved width without changing it or continuing a
     mouse(f, 0, 73, "m");
     assert.equal(dividerColumn(await f.set("right", "# Revised plan")), 56);
     assert.equal(dividerColumn(await f.set("off")), 0);
-    assert.equal(dividerColumn(await f.set("right")), 67);
+    assert.equal(dividerColumn(await f.set("right", "# Reopened")), 67);
   } finally {
     f.stop();
   }
@@ -111,7 +111,7 @@ test("terminal resize clamps the saved width without changing it or continuing a
 test("only a left-button press on the visible divider enables a resize", async () => {
   const f = setup();
   try {
-    await f.set("right");
+    await f.set("right", "# Plan");
     mouse(f, 1, 67);
     mouse(f, 33, 56);
     mouse(f, 1, 56, "m");
@@ -153,7 +153,7 @@ test("a replaced layout cannot receive further resize updates from its captured 
   const f = setup();
   try {
     const setter = vi.spyOn(f.terminal.fullscreen, "setLayoutRoot");
-    await f.set("right");
+    await f.set("right", "# Plan");
     const originalSplit = setter.mock.calls[0]?.[0];
     assert.ok(originalSplit);
     mouse(f, 0, 67);
@@ -177,10 +177,11 @@ test("a replaced layout cannot receive further resize updates from its captured 
 test("fullscreen split reserves real columns and collapses below either resize threshold", async () => {
   const f = setup();
   try {
-    const [first] = await f.set("right");
+    const empty = await f.set("right");
+    assert.doesNotMatch(empty.join("\n"), /│|No completed plan yet/u);
+    const [first] = await f.set("right", "# Right pane");
     assert.match(first ?? "", /^history .*│Plan/u);
     assert.equal(first?.indexOf("│"), 66);
-    assert.match(f.frame().join("\n"), /No completed plan yet\./u);
     assert.match(f.frame().join("\n"), /main draft/u);
     assert.match((await f.set("left", "# Left pane"))[0] ?? "", /^Plan .*│history/u);
     for (const [width, height, visible] of [
@@ -253,6 +254,69 @@ test.each([
   }
 });
 
+test("empty or failed previews do not mount a pane and invalidate a pending mount", async () => {
+  const f = setup();
+  try {
+    const setter = vi.spyOn(f.terminal.fullscreen, "setLayoutRoot");
+    for (const preview of [
+      undefined,
+      { kind: "waiting" },
+      { kind: "error", reason: "Cannot read the Markdown draft." },
+      { kind: "draft", text: " \n\t" },
+      { kind: "draft", text: "\u202e\u001b]0;Example\u0007" },
+    ] as const) {
+      f.pane.update(f.ctx, "right", "# Pending plan");
+      f.pane.update(f.ctx, "right", preview);
+      await Promise.resolve();
+      assert.doesNotMatch(f.frame().join("\n"), /│|Pending plan|Cannot read/u);
+    }
+    assert.equal(setter.mock.calls.length, 0);
+    assert.equal(dividerColumn(await f.set("right", "# Recovered")), 67);
+  } finally {
+    f.stop();
+  }
+});
+
+test("manual hiding survives content and placement changes, but only toggles in a usable viewport", async () => {
+  const f = setup();
+  const toggle = () => f.pane.toggle(f.ctx.sessionManager);
+  try {
+    assert.equal(dividerColumn(await f.set("right", "# First plan")), 67);
+    mouse(f, 0, 67);
+    mouse(f, 32, 56);
+    mouse(f, 0, 56, "m");
+    assert.equal(dividerColumn(f.frame()), 56);
+    f.resize(79, 18);
+    toggle();
+    f.resize(100, 18);
+    assert.equal(dividerColumn(f.frame()), 56, "a narrow viewport cannot change the preference");
+    toggle();
+    assert.equal(dividerColumn(f.frame()), 0);
+    toggle();
+    assert.equal(dividerColumn(f.frame()), 67, "manually reopening resets the divider width");
+    toggle();
+    assert.equal(dividerColumn(await f.set("left")), 0);
+    assert.equal(dividerColumn(await f.set("off", "# Updated plan")), 0);
+    toggle();
+    assert.equal(dividerColumn(await f.set("left", "# Updated plan")), 0);
+    f.switchMode("regular");
+    toggle();
+    f.switchMode("fullscreen");
+    const foreign = new Text("Foreign layout", 0, 0);
+    f.terminal.fullscreen.setLayoutRoot(foreign);
+    toggle();
+    assert.match(f.frame().join("\n"), /Foreign layout/u);
+    f.terminal.fullscreen.setLayoutRoot(f.root);
+    assert.equal(dividerColumn(f.frame()), 0, "ignored keys do not reopen the pane on a compatible renderer");
+    toggle();
+    assert.equal(dividerColumn(f.frame()), 34);
+    assert.match(f.frame().join("\n"), /Updated plan/u);
+    assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
+  } finally {
+    f.stop();
+  }
+});
+
 test("pane visibility requires a mounted layout and an exact, displayable completed plan", async () => {
   const f = setup();
   try {
@@ -273,7 +337,7 @@ test("pane visibility requires a mounted layout and an exact, displayable comple
     assert.equal(shows(), true);
     f.pane.update(f.ctx, "left", "\u202e");
     assert.equal(f.pane.showsCompletedPlan(f.ctx.sessionManager, "\u202e"), false);
-    f.pane.clear();
+    f.pane.reset();
     assert.equal(shows(), false);
   } finally {
     f.stop();
@@ -328,11 +392,11 @@ test("incompatible and replaced roots are not overwritten during attachment or c
     const unsupported = new Text("Foreign layout", 0, 0);
     f.terminal.fullscreen.setLayoutRoot(unsupported);
     const setter = vi.spyOn(f.terminal.fullscreen, "setLayoutRoot");
-    assert.match((await f.set("right")).join("\n"), /Foreign layout/u);
+    assert.match((await f.set("right", "# Plan")).join("\n"), /Foreign layout/u);
     assert.equal(setter.mock.calls.length, 0);
     await f.set("off");
     f.terminal.fullscreen.setLayoutRoot(f.root);
-    assert.match((await f.set("right")).join("\n"), /No completed plan yet/u);
+    assert.match((await f.set("right", "# Plan")).join("\n"), /│Plan/u);
     f.terminal.fullscreen.setLayoutRoot(unsupported);
     assert.match((await f.set("off")).join("\n"), /Foreign layout/u);
     assert.match(f.frame().join("\n"), /Foreign layout/u);
@@ -350,14 +414,14 @@ test("failed attachment restores the original layout and is not retried every fr
       setRoot(root);
       throw new Error("incompatible layout setter");
     });
-    assert.doesNotMatch((await f.set("right")).join("\n"), /│/u);
+    assert.doesNotMatch((await f.set("right", "# Plan")).join("\n"), /│/u);
     f.frame();
     f.frame();
     await Promise.resolve();
     assert.equal(setter.mock.calls.length, 2);
     assert.equal(setter.mock.calls.at(-1)?.[0], f.root);
-    f.pane.clear();
-    f.pane.clear();
+    f.pane.reset();
+    f.pane.reset();
     assert.equal(setter.mock.calls.length, 2);
   } finally {
     f.stop();
@@ -368,7 +432,7 @@ test.each(["rpc", "print", "json"] as const)("%s never initializes the pane widg
   const context = createMockContext({ mode });
   const pane = createPlanPaneController();
   pane.update(context.ctx, "right", "# Plan");
-  pane.clear();
+  pane.reset();
   assert.equal(context.widgets.has(PANE_KEY), false);
 });
 
@@ -386,7 +450,7 @@ test("widget disposal and session replacement invalidate queued mounts", async (
     await Promise.resolve();
     assert.equal(setter.mock.calls.length, 0);
     assert.match(next.frame().join("\n"), /Current session/u);
-    f.pane.clear();
+    f.pane.reset();
     assert.doesNotMatch(next.frame().join("\n"), /Current session/u);
   } finally {
     f.stop();

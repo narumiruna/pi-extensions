@@ -28,13 +28,6 @@ type Budget = {
   payg?: boolean;
 };
 
-/**
- * Normalize the two public billing routes the official Mistral Vibe CLI reads
- * (`vibe/app_server/_billing.py`). `/billing/subscription` names the plan; `/billing/budget`
- * reports the monthly Vibe Code and API allowances as a used percentage. Both are optional
- * upstream: a member without the usage permission gets 403 on `/budget` only, so each route
- * degrades independently instead of failing the report.
- */
 export function normalizeMistralBillingPayload(
   subscription: MistralSubscriptionPayload | undefined,
   budget: MistralBudgetPayload | undefined,
@@ -52,7 +45,6 @@ export function normalizeMistralBillingPayload(
     const parsed = parseBudget(budget?.[key], label);
     if (parsed === undefined) continue;
     buckets.push(parsed.bucket);
-    // Vibe pay-as-you-go decides whether spend can continue past the allowance.
     paygState ??= parsed.payg;
   }
   paygState ??= optionalBoolean(subscription?.vibe_payg_enabled, "vibe_payg_enabled");
@@ -90,13 +82,10 @@ export function normalizeMistralBillingPayload(
 function parseBudget(value: unknown, label: string): Budget | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const detail = value as MistralBudgetDetail;
-  // The official CLI ignores a non-positive budget: it means the allowance is not configured.
   const limit = optionalNumber(detail.initial_budget, "initial_budget");
   if (limit === undefined || limit <= 0) return undefined;
   const usedPercent = optionalNumber(detail.usage_percentage, "usage_percentage");
   if (usedPercent === undefined) return undefined;
-  // Round to billionths of a percent so raw float subtraction (100 - used) cannot
-  // leak precision noise like 96.74205967500001 into the report.
   const used = roundPercent(Math.max(0, usedPercent));
   return {
     bucket: {

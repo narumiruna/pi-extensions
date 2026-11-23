@@ -137,8 +137,8 @@ test.each(["right", "left", "off"] as const)(
     try {
       await f.applyContext();
       const path = f.draftPath();
-      assert.equal(f.widgets.has(PANE_KEY), planPane !== "off");
-      assert.equal((await f.frame()).includes("Waiting for the Markdown draft"), planPane !== "off");
+      assert.equal(f.widgets.has(PANE_KEY), false);
+      assert.doesNotMatch(await f.frame(), /│|Waiting for the Markdown draft/u);
       assert.equal(await f.call("write", path, "write"), undefined);
       const raw = "# 草稿\n\n\u202eChecklist\n";
       await createWriteTool(f.dir).execute("write", { path, content: raw });
@@ -363,7 +363,7 @@ test("invalid draft reads are recoverable and the last write is reread after can
       assert.equal(await f.call("write", path), undefined);
       await writeFile(path, text);
       await f.end("write", "call");
-      assert.match(await f.frame(), /Keep the draft within/u);
+      assert.doesNotMatch(await f.frame(), /│|Keep the draft within/u);
       await assert.rejects(f.complete(), /Keep the draft within/u);
     }
     const abort = new AbortController();

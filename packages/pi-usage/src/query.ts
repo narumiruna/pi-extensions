@@ -86,8 +86,6 @@ const MOONSHOT_BALANCE_URLS = Object.freeze({
   "moonshotai-cn": "https://api.moonshot.cn/v1/users/me/balance",
 });
 const SHARED_MOONSHOT_ENV_VAR = "MOONSHOT_API_KEY";
-// Verified against a live standard API key: the subscription route answers 200, while
-// /v1/billing/usage 404s outside Enterprise and /v1/admin/usage 401s without an admin key.
 const MISTRAL_SUBSCRIPTION_URL = "https://api.mistral.ai/v1/billing/subscription";
 const MISTRAL_BUDGET_URL = "https://api.mistral.ai/v1/billing/budget";
 const MISTRAL_BUDGET_REVALIDATION_RESERVE_MS = 1_000;
@@ -385,11 +383,6 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
         { redirect: "error" },
       )) as MistralSubscriptionPayload;
       await guard();
-      // Mirrors the official Vibe CLI: /billing/budget carries the monthly Vibe Code and API
-      // allowances. It is optional upstream (403 without the usage permission, 404 on platforms
-      // that do not serve billing), so plan details still publish when it is unavailable.
-      // Reserve time for the revalidation guard below so a stalled optional budget request
-      // cannot consume the whole budget and block revalidation or discard the subscription data.
       const budgetRemainingMs = timeoutMs - (Date.now() - startedAt);
       const budget =
         budgetRemainingMs > MISTRAL_BUDGET_REVALIDATION_RESERVE_MS
@@ -1352,9 +1345,6 @@ async function fetchCommandCodeOptional(
   }
 }
 
-// The budget route is optional: a 403 means this member lacks the usage permission and a 404
-// means the platform does not serve billing. Neither should discard the plan read, so only abort
-// and stale-context failures propagate.
 async function fetchMistralBudgetOptional(
   url: string,
   auth: ResolvedUsageAuth,

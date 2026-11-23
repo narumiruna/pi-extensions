@@ -419,7 +419,7 @@ Read the [settings reference](./docs/settings.md) for all accepted values, tool-
 
 ## 🚧 Limitations
 
-The Plan pane shows the current Markdown draft, or the completed snapshot once it is ready. In read-only workflows it starts blank except for a waiting message. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
+The Plan pane opens only when a Markdown draft or completed plan has content to show. Read-only workflows open it after completion. Press **F4** from the main editor to hide or reopen it on the configured side while the layout has room. Hiding lasts for the current Plan workflow and does not change **Plan pane** in Settings. See [Plan pane settings](docs/settings.md#plan-pane) for shortcut conflicts and limits. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
 
 The pane starts at about one-third of the terminal width. Drag the divider with the left mouse button to resize it on either side without moving keyboard focus. The pane keeps at least 24 columns and the conversation at least 48. The chosen width lasts until the pane closes, moves to the other side, or the fullscreen layout is replaced; it is not saved.
 

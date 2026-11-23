@@ -404,8 +404,6 @@ function formatCommandCodeReport(lines: string[], report: UsageReport): void {
   }
 }
 
-// Mistral reports allowances as a fractional percentage, so the shared quota renderers would print
-// raw floats. Round once here and keep the reset in parentheses like the other single-window plans.
 function formatMistralReport(lines: string[], report: UsageReport): void {
   for (const bucket of report.buckets) {
     const reset = bucket.resetsAt ? ` (resets ${formatReset(bucket.resetsAt)})` : "";
@@ -417,7 +415,6 @@ function formatMistralReport(lines: string[], report: UsageReport): void {
         : `${String(used)}% used \u00b7 ${String(remaining)}% left`;
     lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}${reset}`);
   }
-  // Buckets were rendered above; the generic fallback would print them a second time.
   for (const metric of report.metrics) {
     lines.push(`${`${metric.label}:`.padEnd(VALUE_COLUMN)}${formatMetricValue(metric.value, metric.unit)}`);
   }
@@ -432,7 +429,6 @@ function formatMistralStatusline(report: UsageReport): string | undefined {
     const bucket = report.buckets.find((candidate) => candidate.id === id);
     if (bucket?.remaining === undefined) continue;
     const remaining = Math.round(clampPercent(bucket.remaining));
-    // Only disambiguate the two windows once both are present.
     parts.push(report.buckets.length > 1 ? `${label} ${String(remaining)}%` : `${String(remaining)}%`);
   }
   if (parts.length === 0) {

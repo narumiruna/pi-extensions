@@ -60,7 +60,7 @@ for (const mode of ["tui", "rpc", "print", "json"] as const) {
         assert.equal(result.terminate, undefined);
         assert.match(result.content[0]?.text ?? "", /plain text/u);
         assert.equal(f.tui.openCount, 0);
-        assert.equal(f.listeners.size, mode === "tui" ? 1 : 0);
+        assert.equal(f.listeners.size, mode === "tui" ? 2 : 0);
         assert.equal(f.aborts, 0);
       },
       { mode, branch },
@@ -76,7 +76,7 @@ for (const page of ["options", "review", "custom answer", "note"] as const) {
       const running = f.execute("plan_mode_question", "question", { questions });
       await f.tui.waitForOpen();
       f.tui.setFocused(true);
-      assert.equal(f.listeners.size, 2);
+      assert.equal(f.listeners.size, 3);
       if (page === "review") {
         await f.dispatch("\r");
         await f.dispatch("\r");
@@ -99,7 +99,7 @@ for (const page of ["options", "review", "custom answer", "note"] as const) {
       assert.equal(result.terminate, true);
       assert.equal(result.details.answers, undefined);
       assert.equal(f.tui.isOpen, false);
-      assert.equal(f.listeners.size, 1);
+      assert.equal(f.listeners.size, 2);
       assert.equal(f.context.editorText, "main draft stays here");
       assert.equal(f.mock.sentUserMessages.length, 0);
       assert.equal(f.aborts, 0, "abort must wait for the matching execution-end event");
@@ -280,7 +280,7 @@ for (const failure of ["persist", "publish"] as const) {
       assert.equal(f.state().interactionMode, "questions");
       assert.equal(f.tui.isOpen, true);
       assert.equal(f.tui.openCount, 1);
-      assert.equal(f.listeners.size, 2);
+      assert.equal(f.listeners.size, 3);
       assert.equal(f.aborts, 0);
       assert.match(f.context.notifications.at(-1)?.message ?? "", /unchanged/u);
       assert.deepEqual(f.tui.render(), before, "rollback must preserve the exact editor and draft");
@@ -330,7 +330,7 @@ test("native F2 conflict suppresses registration and hints but /plan can toggle 
     async (f) => {
       await f.command("start");
       assert.equal(f.mock.shortcuts.has("f2"), false);
-      assert.equal(f.listeners.size, 0);
+      assert.equal(f.listeners.size, 1, "only the F4 guard remains");
       const menu = f.command("");
       await f.tui.waitForOpen();
       assert.doesNotMatch(f.tui.render().join("\n"), /F2/u);
@@ -386,7 +386,7 @@ for (const cancel of ["\u0018", "\u0003"]) {
         assert.equal(result.terminate, undefined);
         assert.equal(f.state().interactionMode, "questions");
         assert.equal(f.aborts, 0);
-        assert.equal(f.listeners.size, 1);
+        assert.equal(f.listeners.size, 2);
       },
       { bindings: { "tui.select.cancel": "ctrl+x" } },
     );
@@ -593,7 +593,7 @@ for (const boundary of ["session_tree", "session_start", "session_shutdown"] as 
       assert.equal(f.tui.isOpen, false);
       stale(F2);
       assert.equal(f.aborts, 0);
-      assert.equal(f.listeners.size, boundary === "session_shutdown" ? 0 : 1);
+      assert.equal(f.listeners.size, boundary === "session_shutdown" ? 0 : 2);
     });
   });
 }
