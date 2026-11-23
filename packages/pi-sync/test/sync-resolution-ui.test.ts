@@ -18,26 +18,35 @@ import { v3S3Settings, withTempHome } from "./helpers.js";
 initTheme("dark", false);
 
 for (const direction of ["push", "pull"] as const) {
-  test(`manager preserves an explicit ${direction} direction through conflict resolution`, async () => {
-    await withConfiguredDecision(async (decision) => {
-      const choices = [
-        direction === "push" ? "Push to remote…" : "Pull from remote…",
-        direction === "push" ? "Keep local content and replace remote…" : "Use remote content and replace local…",
-      ];
-      const routes: string[] = [];
-      const { ctx } = createMockContext({
-        hasUI: true,
-        mode: "rpc",
-        select: async () => choices.shift(),
+  for (const outcome of ["applied", "decision-required"] as const) {
+    test(`manager ${direction} with ${outcome} never opens a second review`, async () => {
+      await withConfiguredDecision(async (decision) => {
+        const label = direction === "push" ? "Push to remote" : "Pull from remote";
+        const titles: string[] = [];
+        const routes: string[] = [];
+        const confirmations: string[] = [];
+        const { ctx } = createMockContext({
+          mode: "rpc",
+          select: async (title: string) => {
+            titles.push(title);
+            return titles.length === 1 ? label : undefined;
+          },
+          confirm: async (title: string) => {
+            confirmations.push(title);
+            return false;
+          },
+        });
+        await showSyncManager(ctx, async (route) => {
+          routes.push(route);
+          return outcome === "applied" ? { kind: "completed", outcome } : { kind: outcome, decision };
+        });
+        assert.deepEqual(routes, [direction]);
+        assert.deepEqual(confirmations, []);
+        assert.equal(titles.length, outcome === "applied" ? 1 : 2);
+        for (const title of titles) assert.match(title, /^Manage sync\n/u);
       });
-      await showSyncManager(ctx, async (route) => {
-        routes.push(route);
-        if (route === direction) return { kind: "decision-required", decision };
-        return { kind: "completed", outcome: "applied" };
-      });
-      assert.deepEqual(routes, [direction, `${direction} --force`]);
     });
-  });
+  }
 }
 
 for (const outcome of ["decision", "selection"] as const)
@@ -58,8 +67,10 @@ for (const outcome of ["decision", "selection"] as const)
           return choices.shift();
         },
       });
-      await showSyncManager(context.ctx, async (route) => {
+      const fingerprints: Array<string | undefined> = [];
+      await showSyncManager(context.ctx, async (route, _signal, _commit, _target, _dialog, _retry, fingerprint) => {
         routes.push(route);
+        fingerprints.push(fingerprint);
         if (route !== "conflicts") return { kind: "completed", outcome: "applied" };
         if (outcome === "selection")
           return {
@@ -74,6 +85,10 @@ for (const outcome of ["decision", "selection"] as const)
         return { kind: "decision-required", decision };
       });
       assert.deepEqual(routes, outcome === "decision" ? ["conflicts", "push --force"] : ["conflicts"]);
+      assert.deepEqual(
+        fingerprints,
+        routes.map(() => undefined),
+      );
       if (outcome === "selection")
         assert.ok(context.notifications.some((item) => item.message.includes("models.json")));
       if (outcome === "decision") assert.equal(titles.length, 2);

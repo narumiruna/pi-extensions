@@ -180,7 +180,7 @@ test("RPC stale recovery confirms the local-only effect and returns directly to 
     assert.equal(await fileExists(lockPath()), false);
     assert.deepEqual(readFileSync(localConfigPath()), settingsBytes);
     assert.match(rpc.dialogs[1]?.title ?? "", /only the local operation lock/iu);
-    assert.ok(rpc.dialogs[2]?.options?.includes("Pull from remote…"));
+    assert.ok(rpc.dialogs[2]?.options?.includes("Pull from remote"));
   });
 });
 
@@ -265,7 +265,7 @@ test("refresh returns a finished live operation directly to the normal manager",
     });
     await showSyncManager(ctx, async () => ({ kind: "completed" }));
     assert.equal(optionsSeen[0]?.[0], "Refresh operation status");
-    assert.ok(optionsSeen[1]?.includes("Pull from remote…"));
+    assert.ok(optionsSeen[1]?.includes("Pull from remote"));
   });
 });
 
@@ -353,7 +353,7 @@ test("conditional recovery returns directly to the normal main manager", async (
       return { kind: "completed" };
     });
     rpc.assertConsumed();
-    assert.ok(rpc.dialogs[2]?.options?.includes("Pull from remote…"));
+    assert.ok(rpc.dialogs[2]?.options?.includes("Pull from remote"));
   });
 });
 

@@ -19,6 +19,7 @@ import {
   type SyncBackend,
   SyncBackendConflictError,
   SyncBackendPublicationOutcomeUnknownError,
+  verifyPreviousHeadInHistory,
 } from "../sync-backend.js";
 import { WebDavClient, WebDavHttpError, WebDavPreconditionError } from "./webdav-client.js";
 
@@ -105,19 +106,29 @@ export class WebDavSyncBackend implements SyncBackend {
     }
     const currentObject = await client.getJson<LatestPointer>(latestPath(this.config));
     throwIfAborted(options.signal);
-    const current = currentObject.missing
+    const currentPointer = currentObject.missing
       ? undefined
-      : remoteHead(
-          requirePointer(currentObject.value, this.config.destination.namespace),
-          this.identity,
-          currentObject.etag,
-        );
+      : requirePointer(currentObject.value, this.config.destination.namespace);
+    const current = currentPointer && remoteHead(currentPointer, this.identity, currentObject.etag);
     if (!matchesExpected(current, expected)) {
       throw new SyncBackendConflictError("Remote changed while pushing. Run /sync pull first, then retry.", {
         currentHead: current,
       });
     }
     const condition = publicationCondition(currentObject, expected, this.identity);
+    if (options.preservePreviousHead && current && currentPointer) {
+      try {
+        this.registerChecksum(currentPointer.snapshot, currentPointer.sha256);
+        await this.ensureHistoryPointer(client, currentPointer, true);
+        await verifyPreviousHeadInHistory(this, current, options.signal);
+      } catch (error) {
+        throwIfAborted(options.signal);
+        throw new Error(
+          `Cannot verify the previous remote snapshot ${current.snapshotId} in History; remote head was not updated.`,
+          { cause: error },
+        );
+      }
+    }
     if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
     throwIfAborted(options.signal);
     options.onCommit?.();
@@ -334,7 +345,7 @@ export class WebDavSyncBackend implements SyncBackend {
       : "webdav history: active snapshot entry present";
   }
 
-  private async ensureHistoryPointer(client: WebDavClient, pointer: LatestPointer) {
+  private async ensureHistoryPointer(client: WebDavClient, pointer: LatestPointer, keepRecent = false) {
     const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(historyPath(this.config));
     const snapshots = object.missing ? [] : requireHistory(object.value, this.config.destination.namespace);
     const existing = snapshots.find((entry) => entry.snapshot === pointer.snapshot);
@@ -342,9 +353,9 @@ export class WebDavSyncBackend implements SyncBackend {
       if (!samePointer(existing, pointer)) {
         throw new Error("Remote history rebound an immutable snapshot reference.");
       }
-      return false;
+      if (!keepRecent || snapshots.at(-1) === existing) return false;
     }
-    const next = [...snapshots, pointer].slice(-100);
+    const next = [...snapshots.filter((entry) => entry !== existing), pointer].slice(-100);
     const condition = object.missing ? { ifAbsent: true } : { ifMatch: requireStrongEtag(object.etag, "history") };
     await client.putJson(historyPath(this.config), { version: VERSION, snapshots: next }, condition);
     return true;

@@ -72,6 +72,7 @@ async function fixture(agentDir: string) {
       identity: path.join(root, "runtime", "identity.json"),
       startup: path.join(root, "runtime", "startup.lock"),
       owner: path.join(root, "runtime", "owner.lock"),
+      endpoint: path.join(root, "runtime", `${instance}.sock`),
     },
     identity: { version: 1, root, instance, pid: process.pid, token: instance } satisfies Identity,
   }));
@@ -102,11 +103,12 @@ async function fixture(agentDir: string) {
         events.push(`${label}:update`);
         Object.assign(facts, next);
       }),
-      run: vi.fn(async (..._args: Parameters<DaemonConnection["run"]>) => {
+      run: vi.fn<DaemonConnection["run"]>(async () => {
         events.push(`${label}:run`);
         if (operationError) throw operationError;
         return result;
       }),
+      recoverForeground: vi.fn<DaemonConnection["recoverForeground"]>(),
       dispose: vi.fn(async () => {
         events.push(`${label}:dispose`);
       }),
@@ -231,6 +233,57 @@ for (const invalidation of ["session cancellation", "disposal", "replacement", "
         await replacement?.dispose();
       }
     }));
+
+test("no external connection caller can bypass a directional recovery's compatible-only lookup", () =>
+  withClient(async (f) => {
+    f.attachErrors[0] = undefined;
+    await f.client.connect();
+    const [original] = f.connections;
+    const [previousAddress, replacement] = f.addresses;
+    assert.ok(original && previousAddress && replacement);
+    original.recoverForeground.mockImplementation(async () => original.dispose());
+    const verified = { outcome: "applied", message: "Local backup: /test/restore.json" };
+    original.run.mockImplementationOnce(async (_operation, _payload, _signal, _commit, submitted) => {
+      submitted?.("verified-job");
+      return { foregroundQueueCleanup: "verified-result", result: verified };
+    });
+    const enteredLookup = Promise.withResolvers<void>();
+    const continueLookup = Promise.withResolvers<void>();
+    transport.ensure.mockImplementationOnce(async () => {
+      enteredLookup.resolve();
+      await continueLookup.promise;
+      return replacement;
+    });
+    const running = f.client.run("pull.foreground", { setup: "test" });
+    void running.catch(() => {});
+    try {
+      await Promise.race([
+        enteredLookup.promise,
+        running.then(() => assert.fail("Recovery did not look up a daemon.")),
+      ]);
+      assert.deepEqual(transport.ensure.mock.calls[1]?.[2], { compatibleOnly: true });
+      for (const result of await Promise.allSettled([
+        f.client.connect(),
+        f.client.connect({ ...previousAddress, needsUpgrade: true }),
+        f.client.verifyConnection(),
+        f.client.attachExisting({ allowUpgrade: true }),
+      ])) {
+        assert.equal(result.status, "rejected");
+        assert.match(String(result.reason), /recovering the daemon.*retry after recovery/iu);
+      }
+      assert.equal(transport.ensure.mock.calls.length, 2);
+      assert.equal(f.connections.length, 1);
+    } finally {
+      continueLookup.resolve();
+      await running;
+    }
+    assert.equal(await running, verified);
+    assert.equal((await f.client.verifyConnection()).identity.instance, replacement.identity.instance);
+    assert.equal(transport.ensure.mock.calls.length, 2);
+    assert.equal(original.run.mock.calls.length, 1);
+    assert.equal(original.recoverForeground.mock.calls[0]?.[0], "verified-job");
+    assert.equal(f.connections[1]?.run.mock.calls.length, 0);
+  }));
 
 test("a second closing attach exhausts the single retry without submitting the operation", () =>
   withClient(async (f) => {

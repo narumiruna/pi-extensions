@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -42,6 +42,7 @@ import {
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
 import { observeDebugJob } from "./client-debug.js";
+import { type DirectionalCheckpoint, isForegroundDirection, runDirectionalRecovery } from "./directional-recovery.js";
 import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
@@ -266,6 +267,8 @@ export class PiDaemonClient {
   private uiContext: ExtensionContext;
   private reloadRequest?: { received: boolean };
   private pendingReload?: AbortController;
+  private directionalCheckpoint?: DirectionalCheckpoint;
+  private recoveringDirectionalOwner = false;
   private readonly busy = new Set<string>();
   private initialized = false;
   private startupDebug = false;
@@ -343,8 +346,8 @@ export class PiDaemonClient {
       cwd: this.ctx.cwd,
       mode: this.ctx.mode,
       hasUI: !protectionOnly && this.ctx.hasUI,
-      idle: !protectionOnly && !this.paused && !this.busy.size && this.ctx.isIdle(),
-      ready: !protectionOnly && this.initialized,
+      idle: !protectionOnly && !this.recoveringDirectionalOwner && !this.paused && !this.busy.size && this.ctx.isIdle(),
+      ready: !protectionOnly && !this.recoveringDirectionalOwner && this.initialized,
       startupDebug: this.startupDebug,
       sessionFile: canonicalPath(manager.getSessionFile?.()),
       sessionId: manager.getSessionId?.(),
@@ -378,12 +381,14 @@ export class PiDaemonClient {
   }
   async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
+    this.assertNoDirectionalRecovery();
     if (!allowUpgrade && !this.paused && this.connection?.contactState === "active") return !this.protectionOnly;
     const address = await findDaemon(this.root).catch((error: unknown) => {
       this.recordDebug({ event: "connection", outcome: "failed" });
       throw error;
     });
     this.validate();
+    this.assertNoDirectionalRecovery();
     if (!address) {
       this.recordDebug({ event: "connection", outcome: "skipped" });
       return false;
@@ -397,7 +402,7 @@ export class PiDaemonClient {
         return true;
       } catch (error) {
         this.validate();
-        if (this.paused) throw error;
+        if (this.paused || this.recoveringDirectionalOwner) throw error;
         upgradeFailure = safeTerminalText(errorMessage(error));
       }
     }
@@ -429,7 +434,15 @@ export class PiDaemonClient {
       this.validateFactsScope(connection);
     });
   }
+  private assertNoDirectionalRecovery() {
+    if (this.recoveringDirectionalOwner)
+      throw new Error("Pi Sync is recovering the daemon for a transfer. Retry after recovery finishes.");
+  }
   async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
+    this.assertNoDirectionalRecovery();
+    return this.attachConnection(existing, requestSignal);
+  }
+  private async attachConnection(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
     const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
     const validateStartup = () => {
       this.validate();
@@ -495,7 +508,12 @@ export class PiDaemonClient {
           contact: (state) => this.observeContact(connection, state),
           queueRelease: (event) => this.observeQueueRelease(connection, event),
           error: () => {
-            if (this.ownsContactUI() && connection.facts.hasUI && !this.releaseUI.retrying)
+            if (
+              !this.recoveringDirectionalOwner &&
+              this.ownsContactUI() &&
+              connection.facts.hasUI &&
+              !this.releaseUI.retrying
+            )
               this.showContactStatus("sync service unavailable", "blocked", true);
           },
         });
@@ -706,9 +724,11 @@ export class PiDaemonClient {
   }
   async verifyConnection(signal?: AbortSignal) {
     const connection = await this.connect(undefined, signal);
-    signal?.throwIfAborted();
+    this.validateFactsScope(connection, signal);
+    this.assertNoDirectionalRecovery();
     await this.publishFacts(connection, signal);
-    signal?.throwIfAborted();
+    this.validateFactsScope(connection, signal);
+    this.assertNoDirectionalRecovery();
     return connection;
   }
   async readSettings(repair = false) {
@@ -722,6 +742,14 @@ export class PiDaemonClient {
       return document;
     }
     return decode(await this.run(repair ? "settings.repair-read" : "settings.read", {}));
+  }
+  canReportDirectionalResult() {
+    try {
+      this.validateFactsScope();
+      return !this.pendingReload;
+    } catch {
+      return false;
+    }
   }
   get ownershipCleanupRequired() {
     return this.cleanupRequired;
@@ -764,6 +792,38 @@ export class PiDaemonClient {
     );
     return result;
   }
+  private async recoverDirectionalOwner(
+    connection: DaemonConnection,
+    job: string,
+    signal: AbortSignal,
+    assertRoot: () => void,
+  ) {
+    this.validateFactsScope(connection, signal);
+    this.recoveringDirectionalOwner = true;
+    try {
+      this.stopContactRepair(true);
+      await this.factsQueue;
+      this.validateFactsScope(connection, signal);
+      await connection.recoverForeground(job, signal);
+      if (this.connection !== connection) throw new Error("The Pi participant changed during daemon recovery.");
+      this.confirmRecoveryExit(connection.identity);
+      await this.gate.releaseAfterDrain();
+      this.connection = undefined;
+      this.connecting = undefined;
+      this.cleanupRequired = false;
+      this.validateFactsScope(undefined, signal);
+      assertRoot();
+      const replacement = await ensureDaemon(this.root, signal, { compatibleOnly: true });
+      this.validateFactsScope(undefined, signal);
+      assertRoot();
+      const attached = await this.attachConnection(replacement, signal);
+      this.validateFactsScope(attached, signal);
+      assertRoot();
+      return attached;
+    } finally {
+      this.recoveringDirectionalOwner = false;
+    }
+  }
   private async runCurrent(
     operation: string,
     payload: unknown,
@@ -801,7 +861,43 @@ export class PiDaemonClient {
     const clearForeground = () => this.releaseUI.finishForeground(Boolean(this.releaseContext()));
     runSignal.addEventListener("abort", clearForeground, { once: true });
     try {
-      const result = await connection.run(operation, payload, runSignal, onCommit, diagnostics?.onSubmit);
+      const root = isForegroundDirection(operation) ? lstatSync(this.root) : undefined;
+      const assertRoot = () => {
+        const current = lstatSync(this.root);
+        if (!root || !current.isDirectory() || current.dev !== root.dev || current.ino !== root.ino)
+          throw new Error("The agent directory changed during the transfer.");
+      };
+      const intent = root ? structuredClone(payload) : payload;
+      const result = root
+        ? await runDirectionalRecovery(
+            connection,
+            runSignal,
+            async (checkpoint, retryCheckpoint) => {
+              const current = checkpoint.connection;
+              this.validateFactsScope(current, runSignal);
+              assertRoot();
+              this.directionalCheckpoint = checkpoint;
+              try {
+                return await current.run(
+                  operation,
+                  retryCheckpoint === undefined ? intent : { ...(intent as object), retryCheckpoint },
+                  runSignal,
+                  onCommit,
+                  (id) => {
+                    checkpoint.job = id;
+                    diagnostics?.onSubmit(id);
+                  },
+                );
+              } finally {
+                this.directionalCheckpoint = undefined;
+              }
+            },
+            (owner, job, recoverySignal) => this.recoverDirectionalOwner(owner, job, recoverySignal, assertRoot),
+            () => {
+              this.cleanupRequired = true;
+            },
+          )
+        : await connection.run(operation, payload, runSignal, onCommit, diagnostics?.onSubmit);
       if (runSignal.aborted || reload?.signal.aborted) diagnostics?.rejected(undefined, true);
       else diagnostics?.returned(result);
       if (request?.received && reload && !this.paused && !reload.signal.aborted && !signal?.aborted) {
@@ -924,7 +1020,7 @@ export class PiDaemonClient {
     this.validate();
   }
   async update() {
-    if (this.connection && !this.paused && !this.disposed && !this.signal.aborted)
+    if (this.connection && !this.recoveringDirectionalOwner && !this.paused && !this.disposed && !this.signal.aborted)
       await this.publishFacts(this.connection);
   }
   private async pagedMergeReview(
@@ -984,6 +1080,7 @@ export class PiDaemonClient {
       items?: string[];
       helpText?: string;
       background?: boolean;
+      fingerprint?: string;
     };
     if (callback.kind === "queue-release") {
       if (typeof payload?.reservation !== "string") throw new Error("Invalid queue release.");
@@ -993,6 +1090,12 @@ export class PiDaemonClient {
     this.validate();
     signal.throwIfAborted();
     if (this.paused) throw new Error("Pi session is changing; no new work is authorized.");
+    if (callback.kind === "directional-checkpoint") {
+      this.validateFactsScope(connection, this.runSignal);
+      return (
+        !protectionOnly && this.directionalCheckpoint?.accept(connection, callback.job, payload?.fingerprint) === true
+      );
+    }
     if (callback.kind === "queue-acquire") {
       if (this.pendingReload) throw new Error("Pi resources are about to reload.");
       if (payload.background && !this.facts().idle) throw new Error("Pi is busy; background apply was not granted.");

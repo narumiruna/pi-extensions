@@ -208,6 +208,64 @@ test.for(operations)(
   },
 );
 
+test.each(kinds)("%s restores the previous head to History before replacing it", async (kind) => {
+  const store = new ObjectStoreFixture(kind, {});
+  try {
+    const backend = await store.start("./");
+    const first = await backend.publishSnapshot(snapshot(), { kind: "missing" });
+    store.objects.delete("/storage/history.json");
+    store.requests.length = 0;
+    const second = await backend.publishSnapshot(snapshot("second"), expectedRemoteHead(first.head), {
+      preservePreviousHead: true,
+      onCommit() {
+        const historyWrite = store.requests.findIndex(
+          ({ path, method }) => path.endsWith("/history.json") && method === "PUT",
+        );
+        const historyVerification = store.requests.findIndex(
+          ({ path, method }, index) => index > historyWrite && path.endsWith("/history.json") && method === "GET",
+        );
+        assert.ok(historyWrite >= 0 && historyVerification > historyWrite);
+        assert.ok(
+          store.requests.some(
+            ({ path, method }, index) =>
+              index > historyVerification && path.endsWith("/first.json.gz") && method === "GET",
+          ),
+        );
+      },
+    });
+    assert.deepEqual(
+      (await backend.listHistory()).map(({ snapshotId }) => snapshotId),
+      [first.head.snapshotId, second.head.snapshotId],
+    );
+    assert.deepEqual(await backend.readSnapshot(first.head.snapshotRef), snapshot());
+  } finally {
+    await store.close();
+  }
+});
+
+test.each(kinds)("%s refuses to replace an active head with unsafe History evidence", async (kind) => {
+  const store = new ObjectStoreFixture(kind, {});
+  try {
+    const backend = await store.start("./");
+    const first = await backend.publishSnapshot(snapshot(), { kind: "missing" });
+    store.objects.set("/storage/snapshots/first.json.gz", Buffer.from("not the verified snapshot"));
+    store.requests.length = 0;
+    const onCommit = vi.fn();
+    await assert.rejects(
+      backend.publishSnapshot(snapshot("second"), expectedRemoteHead(first.head), {
+        preservePreviousHead: true,
+        onCommit,
+      }),
+      /Cannot verify the previous remote snapshot .* in History/u,
+    );
+    assert.equal(onCommit.mock.calls.length, 0);
+    assert.ok(!store.requests.some(({ method, path }) => method === "PUT" && path.endsWith("/latest.json")));
+    assert.equal((await backend.readHead())?.revision, first.head.revision);
+  } finally {
+    await store.close();
+  }
+});
+
 test.each(kinds)("%s hashes v6 file bytes once per publication and read", async (kind) => {
   const store = new ObjectStoreFixture(kind, {});
   const payload = Buffer.from("checksum-work sentinel", "utf8");

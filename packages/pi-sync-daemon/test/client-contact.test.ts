@@ -329,6 +329,84 @@ test.each(["failed", "rejected", "exhausted", "detached"] as const)(
   },
 );
 
+test.each(["submit", "terminal result", "result until drain"] as const)(
+  "the foreground client keeps the same daemon job through a lost %s reply",
+  async (dropped) => {
+    let requested: unknown;
+    let executions = 0;
+    let results = 0;
+    const outcome = { outcome: "applied", message: "One verified apply" };
+    const terminal = () => ({ id: requested as string, phase: "done" as const, result: outcome });
+    await fixture(
+      ({ method, params }, response) => {
+        if (method === "attach") return poll("active");
+        if (method === "submit") {
+          if (requested === undefined) {
+            requested = params.id;
+            executions++;
+            if (dropped === "submit") response.destroy();
+          } else assert.equal(params.id, requested);
+          return { result: terminal() };
+        }
+        if (method === "poll" && params.job !== undefined) {
+          assert.equal(params.job, requested);
+          results++;
+          if ((dropped === "terminal result" && results === 1) || dropped === "result until drain") response.destroy();
+          return poll("active", { job: terminal() });
+        }
+        if (method === "cancel") return { result: terminal() };
+        return poll("active");
+      },
+      async (client, calls) => {
+        await client.attach();
+        assert.deepEqual(await client.run("pull.foreground", {}), outcome);
+        assert.equal(executions, 1);
+        assert.equal(calls.filter(({ method }) => method === "submit").length, dropped === "submit" ? 2 : 1);
+        assert.equal(
+          calls.filter(({ method }) => method === "cancel").length,
+          dropped === "result until drain" ? 1 : 0,
+        );
+      },
+    );
+  },
+);
+
+test("a lost foreground job result with no terminal drain evidence stays uncertain", async () => {
+  let submitted = false;
+  await fixture(
+    ({ method, params }) => {
+      if (method === "attach") return poll("active");
+      if (method === "submit") {
+        submitted = true;
+        return { result: { id: params.id, phase: "running" } };
+      }
+      if (method === "poll" && params.job)
+        return failure("Operation is unknown or its result expired; reconcile journals instead of replaying.");
+      if (method === "cancel") return { result: { cancelled: true } };
+      return poll("active");
+    },
+    async (client, calls) => {
+      await client.attach();
+      let job: string | undefined;
+      await assert.rejects(
+        client.run("pull.foreground", {}, undefined, undefined, (value) => {
+          job = value;
+        }),
+        /could not be verified.*Changes may have been made/u,
+      );
+      assert.equal(submitted, true);
+      assert.ok(job);
+      await assert.rejects(
+        client.recoverForeground(job, AbortSignal.timeout(500)),
+        /could not verify a completed transfer/u,
+      );
+      assert.equal(client.hasPendingWork, true);
+      assert.equal(calls.filter(({ method }) => method === "submit").length, 1);
+      assert.equal(calls.filter(({ method }) => method === "foreground-stop").length, 0);
+    },
+  );
+});
+
 test("an old background poll cannot cancel a newer queue-release delivery", async () => {
   const release = releaseCallback();
   const oldPoll = Promise.withResolvers<void>();

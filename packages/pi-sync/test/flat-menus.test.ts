@@ -54,8 +54,8 @@ test("ordinary main exposes transfers, inspection and management actions with co
 
 for (const [label, expected] of [
   ["Sync now", "sync"],
-  ["Pull from remote…", "pull"],
-  ["Push to remote…", "push"],
+  ["Pull from remote", "pull"],
+  ["Push to remote", "push"],
   ["View differences", "diff"],
   ["Check remote status", "status"],
   ["History", "history"],
@@ -130,7 +130,7 @@ for (const operation of operationStates) {
   test(`main ${operation.kind} hides transfer and settings actions`, async () => {
     await configured(async () => {
       const manager = await describeManagerState(undefined, undefined, async () => operation);
-      for (const action of ["Sync now", "Pull from remote…", "Push to remote…", "Settings", "Diagnostics"])
+      for (const action of ["Sync now", "Pull from remote", "Push to remote", "Settings", "Diagnostics"])
         assert.equal(manager.actions.includes(action), false, action);
       assert.equal(
         manager.actions[0],

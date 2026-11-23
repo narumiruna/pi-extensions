@@ -1,5 +1,9 @@
 import type { Snapshot, SnapshotSelection } from "../snapshot/snapshot-types.js";
 
+import { sameSnapshotSelection } from "../sync/sync-policy.js";
+
+export const HISTORY_PREVIEW_LIMIT = 20;
+
 export type PublicationCapability =
   | "read-check-write-verify"
   | "conditional-required"
@@ -32,6 +36,7 @@ export type ExpectedRemoteHead = { kind: "missing" } | { kind: "revision"; revis
 export interface PublishSnapshotOptions {
   signal?: AbortSignal;
   validateIgnorePolicy?: () => Promise<void>;
+  preservePreviousHead?: boolean;
   /** Called at the backend's active-head commit boundary. */
   onCommit?: () => void;
 }
@@ -96,6 +101,26 @@ export class SyncBackendPublicationOutcomeUnknownError extends Error {
     super(message, options);
     this.name = "SyncBackendPublicationOutcomeUnknownError";
   }
+}
+
+export async function verifyPreviousHeadInHistory(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {
+  const entries = await backend.listHistory(signal);
+  if (
+    !entries
+      .slice(-(HISTORY_PREVIEW_LIMIT - 1))
+      .some(
+        (entry) =>
+          entry.snapshotRef === head.snapshotRef &&
+          entry.snapshotId === head.snapshotId &&
+          entry.createdAt === head.createdAt &&
+          entry.machine === head.machine &&
+          entry.syncSessions === head.syncSessions,
+      )
+  )
+    throw new Error(`Cannot replace remote snapshot ${head.snapshotId}: it is not available in History.`);
+  const snapshot = await backend.readSnapshot(head.snapshotRef, signal);
+  if (snapshot.id !== head.snapshotId || (head.selection && !sameSnapshotSelection(head.selection, snapshot.selection)))
+    throw new Error(`Cannot replace remote snapshot ${head.snapshotId}: History resolved to a different snapshot.`);
 }
 
 export function expectedRemoteHead(head: RemoteHead | undefined): ExpectedRemoteHead {

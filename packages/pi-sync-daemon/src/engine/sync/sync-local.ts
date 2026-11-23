@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
@@ -24,7 +25,29 @@ export function protectedSessionPaths(
   );
 }
 
-export { captureMutationOwner } from "./mutation-owner.js";
+import { captureMutationOwner } from "./mutation-owner.js";
+
+export { captureMutationOwner };
+
+export async function maybeReload(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  signal?: AbortSignal,
+  validateMutation = captureMutationOwner(ctx, signal),
+) {
+  if (signal?.aborted || typeof ctx.reload !== "function") return;
+  validateMutation();
+  if (
+    ctx.hasUI &&
+    (await ctx.ui.confirm(
+      "Reload Pi resources now?",
+      "This reloads extensions, skills, prompts, themes, and context files.",
+    ))
+  ) {
+    if (signal?.aborted) return;
+    validateMutation();
+    await ctx.reload();
+  }
+}
 
 export async function backupLocal(profile: string, options: SnapshotOptions = {}, signal?: AbortSignal) {
   throwIfAborted(signal);
@@ -32,9 +55,46 @@ export async function backupLocal(profile: string, options: SnapshotOptions = {}
 }
 
 export async function backupSnapshot(snapshot: Snapshot, signal?: AbortSignal) {
+  return (await writeSnapshotBackup(snapshot, signal)).backupPath;
+}
+
+export class LocalBackupVerificationError extends Error {}
+
+export async function backupDirectionalSnapshot(snapshot: Snapshot, signal?: AbortSignal) {
+  const { backupPath, encoded } = await writeSnapshotBackup(snapshot, signal, true);
+  const validate = async () => {
+    throwIfAborted(signal);
+    try {
+      if (
+        stateDir() !== path.dirname(path.dirname(backupPath)) ||
+        !(await fs.lstat(path.dirname(backupPath))).isDirectory()
+      )
+        throw new Error("Local backup directory changed before Pull.");
+      const handle = await fs.open(backupPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size !== encoded.length || !(await handle.readFile()).equals(encoded))
+          throw new Error("Local backup no longer matches the exact pre-Pull bytes.");
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      throwIfAborted(signal);
+      throw new LocalBackupVerificationError(`Local backup could not be verified at ${backupPath}.`, { cause: error });
+    }
+    throwIfAborted(signal);
+  };
+  await validate();
+  return { backupPath, validate };
+}
+
+async function writeSnapshotBackup(snapshot: Snapshot, signal?: AbortSignal, durableParent = false) {
   throwIfAborted(signal);
-  const backupDirectory = path.join(stateDir(), "backups");
+  const root = stateDir();
+  const backupDirectory = path.join(root, "backups");
   await fs.mkdir(backupDirectory, { recursive: true, mode: 0o700 });
+  if (durableParent && !(await fs.lstat(backupDirectory)).isDirectory())
+    throw new Error("Refusing to write to a linked local backup directory.");
   throwIfAborted(signal);
   const backupPath = path.join(backupDirectory, `${snapshot.id}.json.gz`);
   const encoded = await encodeSnapshot(snapshot);
@@ -47,5 +107,9 @@ export async function backupSnapshot(snapshot: Snapshot, signal?: AbortSignal) {
     await handle.close();
   }
   await syncDirectory(backupDirectory);
-  return backupPath;
+  if (durableParent) {
+    await syncDirectory(root);
+    await syncDirectory(path.dirname(root));
+  }
+  return { backupPath, encoded };
 }

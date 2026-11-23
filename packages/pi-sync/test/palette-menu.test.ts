@@ -14,8 +14,8 @@ initTheme("dark", false);
 
 const ordinaryActions = [
   { label: "Sync…", rpcLabel: "Sync now", route: "sync", description: "Merge changes on both sides." },
-  { label: "Pull from remote…", route: "pull", description: "Remote → this device." },
-  { label: "Push to remote…", route: "push", description: "This device → remote snapshot." },
+  { label: "Pull from remote", route: "pull", description: "Remote → this device; replaces conflicting local files." },
+  { label: "Push to remote", route: "push", description: "This device → remote; replaces conflicting remote files." },
   { label: "View differences", route: "diff", description: "Inspect changes; no transfer." },
   { label: "Check remote status", route: "status", description: "Check remote; no transfer." },
   { label: "Settings", route: undefined, description: "Change sync settings." },
@@ -328,6 +328,37 @@ for (const remapped of [false, true]) {
   });
 }
 
+for (const reason of ["remapped Back", "hard Ctrl+C", "session replacement", "disposal"] as const) {
+  test(`${reason} releases an in-flight directional action without starting a second route`, async () => {
+    await withPalette(async ({ tui, owner, running, routeStarted, completeRoute, routes, confirmations }) => {
+      tui.type("Pull from remote");
+      tui.send("x");
+      const call = await routeStarted;
+      await tui.waitForOpen();
+      assert.equal(call.route, "pull");
+      assert.match(tui.render().join("\n"), /Pulling from remote…/u);
+      assert.equal(call.signal?.aborted, false);
+      if (reason === "remapped Back") tui.send("q");
+      else if (reason === "hard Ctrl+C") tui.press("ctrl+c");
+      else if (reason === "session replacement") owner.abort(new DOMException(reason, "AbortError"));
+      else tui.dispose();
+      assert.equal(call.signal?.aborted, true);
+      // A late result cannot open a review or apply a second time.
+      completeRoute({ kind: "completed", outcome: "applied" });
+      if (reason === "remapped Back" || reason === "hard Ctrl+C") {
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        assert.equal(selectedLabel(tui.render()), "Pull from remote");
+        tui.press("ctrl+c");
+      }
+      await running;
+      assert.deepEqual(routes, [call]);
+      assert.deepEqual(confirmations, []);
+      assert.equal(tui.isOpen, false);
+    }, remappedKeys());
+  });
+}
+
 test("short palette keeps the active setup visible while navigating, searching and closing", async () => {
   await withPalette(async ({ tui, running, routes }) => {
     let frame = tui.resize({ width: 36, rows: 16 });
@@ -337,7 +368,7 @@ test("short palette keeps the active setup visible while navigating, searching a
     tui.press("tui.select.down");
     frame = tui.render();
     assert.ok(frame.includes("Manage sync · home"), frame.join("\n"));
-    assertSelectedDescription(frame, "Push to remote…");
+    assert.equal(selectedLabel(frame), "Push to remote");
     assert.ok(frame.length <= 13);
     assert.ok(frame.every((line) => visibleWidth(line) <= 36));
     tui.type("no transferzz");
@@ -392,7 +423,7 @@ for (const cancel of ["remapped Back", "hard Ctrl+C"] as const) {
   test(`${cancel} closes the searched palette under non-default keybindings without routing`, async () => {
     await withPalette(async ({ tui, running, routes, notifications }) => {
       tui.send("j");
-      assertSelectedDescription(tui.render(), "Pull from remote…");
+      assertSelectedDescription(tui.render(), "Pull from remote");
       tui.send("k");
       assertSelectedDescription(tui.render(), "Sync…");
       tui.send(`${pasteStart}History${pasteEnd}`);

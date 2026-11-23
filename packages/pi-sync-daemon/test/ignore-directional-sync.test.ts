@@ -4,13 +4,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, vi } from "vitest";
-import { expectedRemoteHead, type RemoteHead, type SyncBackend } from "../src/engine/backends/sync-backend.js";
+import {
+  expectedRemoteHead,
+  type RemoteHead,
+  type SyncBackend,
+  verifyPreviousHeadInHistory,
+} from "../src/engine/backends/sync-backend.js";
 import type { CommandOptions } from "../src/engine/commands/command-types.js";
-import { configureEngineHost, type EngineContext, getEngineRoot } from "../src/engine/host.js";
-import { configFromSettings, loadConfig } from "../src/engine/settings/config.js";
+import { configureEngineHost, type EngineContext, engineHost, getEngineRoot } from "../src/engine/host.js";
+import { configFromSettings, loadConfig, syncCheckConfigFingerprint } from "../src/engine/settings/config.js";
 import type { PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import { snapshotOptionsForContext } from "../src/engine/snapshot/session-paths.js";
 import { createSnapshot } from "../src/engine/snapshot/snapshot.js";
+import { applySnapshot } from "../src/engine/snapshot/snapshot-apply.js";
+import { decodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
 import type { Snapshot, SnapshotFile } from "../src/engine/snapshot/snapshot-types.js";
 import { readStateForConfig } from "../src/engine/state/sync-state-store.js";
 import { readRemoteSnapshot } from "../src/engine/sync/remote-snapshot.js";
@@ -28,13 +35,11 @@ import { formatPullSummary, formatRollbackSummary } from "../src/engine/ui/sync-
 
 vi.mock(import("../src/engine/settings/config.js"), async (importOriginal) => {
   const actual = await importOriginal();
-  return {
-    ...actual,
-    loadConfig: async (setup?: string) => {
-      const settings = JSON.parse(await fs.readFile(path.join(getEngineRoot(), "pi-sync.json"), "utf8"));
-      return actual.resolveIgnoreConfig(settings, setup);
-    },
+  const load = async (setup?: string) => {
+    const settings = JSON.parse(await fs.readFile(path.join(getEngineRoot(), "pi-sync.json"), "utf8"));
+    return actual.resolveIgnoreConfig(settings, setup);
   };
+  return { ...actual, loadConfig: load, loadConfigForCheck: load };
 });
 
 const options: CommandOptions = {
@@ -57,6 +62,7 @@ function file(path: string, content: string): SnapshotFile {
 
 function memoryRemote() {
   const snapshots = new Map<string, Snapshot>();
+  const history: RemoteHead[] = [];
   let head: RemoteHead | undefined;
   let reads = 0;
   let publicationHook: (() => void | Promise<void>) | undefined;
@@ -72,6 +78,7 @@ function memoryRemote() {
       syncSessions: snapshot.syncSessions ?? false,
       selection: snapshot.selection,
     };
+    history.push(head);
     return head;
   };
   const backend: SyncBackend = {
@@ -91,11 +98,12 @@ function memoryRemote() {
       assert.ok(opts?.validateIgnorePolicy, "v6 publication requires a late freshness guard");
       await opts.validateIgnorePolicy();
       assert.deepEqual(expected, expectedRemoteHead(head));
+      if (opts.preservePreviousHead && head) await verifyPreviousHeadInHistory(backend, head, opts.signal);
       opts.onCommit?.();
       commits.push(snapshot);
       return { head: seed(snapshot), warnings: [] };
     },
-    listHistory: async () => [],
+    listHistory: async () => history,
     diagnose: async () => [],
   };
   return {
@@ -416,6 +424,242 @@ for (const history of ["v6", "legacy"] as const) {
       assert.deepEqual(remote.commits[0]?.selection, current.selection);
     }));
 }
+
+async function boundAction(ctx: EngineContext): Promise<CommandOptions> {
+  ctx.ui.confirm = async () => assert.fail("Unexpected transfer confirmation");
+  ctx.ui.select = async () => assert.fail("Unexpected transfer selection");
+  const expected = syncCheckConfigFingerprint(await loadConfig());
+  return {
+    ...options,
+    directionalAction: {
+      validate: (current) => assert.equal(syncCheckConfigFingerprint(current), expected, "stale settings binding"),
+    },
+  };
+}
+
+for (const direction of ["push", "pull"] as const) {
+  test(`the bound ${direction} selects its source, keeps excluded/live files, and retains a usable exact restore point`, () =>
+    fixture(async ({ root, ctx, settings, save, remote }) => {
+      const setup = settings.syncSetups.work;
+      assert.ok(setup && setup.sync.scope === "agent-directory");
+      setup.sync.sessions = true;
+      await save();
+      const dir = path.join(root, "sessions");
+      await fs.mkdir(dir);
+      const peer = path.join(dir, "peer.jsonl");
+      ctx.protectedSessionFiles = [peer];
+      const note = path.join(root, "notes.txt");
+      const privateFile = path.join(root, "private.txt");
+      const localOnly = path.join(root, "local.txt");
+      const remoteOnly = path.join(root, "remote.txt");
+      await fs.writeFile(peer, "local live");
+      await fs.writeFile(privateFile, "private stays");
+      await fs.writeFile(note, "accepted");
+      assert.equal(await push(ctx, await boundAction(ctx), undefined, remote.factory), "applied");
+      const config = await loadConfig();
+      const seed = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+      const previous = remote.seed({
+        ...seed,
+        files: [
+          file("notes.txt", "remote changed"),
+          file("remote.txt", "remote only"),
+          file("sessions/peer.jsonl", "remote live"),
+        ],
+      });
+      await fs.writeFile(note, "local changed");
+      await fs.writeFile(localOnly, "unpushed local only");
+      const action = await boundAction(ctx);
+      let message = "";
+      assert.ok(action.directionalAction);
+      action.directionalAction.notifySuccess = (value) => {
+        message = value;
+      };
+      if (direction === "push") {
+        await assert.rejects(push(ctx, options, undefined, remote.factory), /Remote or sync policy changed/u);
+        assert.equal(await push(ctx, action, undefined, remote.factory), "applied");
+        const latest = remote.commits.at(-1);
+        assert.deepEqual(latest?.files, [
+          file("local.txt", "unpushed local only"),
+          file("notes.txt", "local changed"),
+          file("sessions/peer.jsonl", "remote live"),
+        ]);
+        assert.match(message, /Restore the previous remote version .*History/u);
+        const history = await remote.backend.listHistory();
+        assert.ok(history.some((entry) => entry.snapshotRef === previous.snapshotRef));
+        ctx.ui.confirm = async () => true;
+        await rollback(ctx, { ...options, args: [previous.snapshotRef] }, remote.factory);
+        assert.deepEqual(remote.commits.at(-1)?.files, [
+          file("notes.txt", "remote changed"),
+          file("remote.txt", "remote only"),
+          file("sessions/peer.jsonl", "remote live"),
+        ]);
+      } else {
+        await assert.rejects(pull(ctx, options, remote.factory), /Both local and remote changed/u);
+        assert.equal(await pull(ctx, action, remote.factory), "applied");
+        assert.equal(await fs.readFile(note, "utf8"), "remote changed");
+        assert.equal(await fs.readFile(remoteOnly, "utf8"), "remote only");
+        await assert.rejects(fs.stat(localOnly), { code: "ENOENT" });
+        const backupPath = /Local backup: (.*\.json\.gz)\. To restore/u.exec(message)?.[1];
+        assert.ok(backupPath);
+        const backup = await decodeSnapshot(await fs.readFile(backupPath));
+        assert.deepEqual(backup.files, [
+          file("local.txt", "unpushed local only"),
+          file("notes.txt", "local changed"),
+          file("sessions/peer.jsonl", "local live"),
+        ]);
+        await applySnapshot(backup, new Set(["sessions/peer.jsonl"]), snapshotOptionsForContext(ctx, config));
+        assert.equal(await fs.readFile(note, "utf8"), "local changed");
+        assert.equal(await fs.readFile(localOnly, "utf8"), "unpushed local only");
+        assert.equal((await remote.backend.readHead())?.revision, previous.revision);
+      }
+      assert.equal(await fs.readFile(privateFile, "utf8"), "private stays");
+      assert.equal(await fs.readFile(peer, "utf8"), "local live");
+    }));
+}
+
+for (const direction of ["push", "pull"] as const) {
+  test(`one-action ${direction} accepts provable narrowing but not a new managed path`, () =>
+    fixture(async ({ root, ctx, rules, remote }) => {
+      await fs.writeFile(path.join(root, "notes.txt"), "accepted");
+      await fs.writeFile(path.join(root, "omitted.txt"), "kept local");
+      await fs.writeFile(path.join(root, "private.txt"), "never synchronized");
+      await push(ctx, await boundAction(ctx), undefined, remote.factory);
+      const invoke = (action: CommandOptions) =>
+        direction === "push" ? push(ctx, action, undefined, remote.factory) : pull(ctx, action, remote.factory);
+      await fs.writeFile(rules, "/omitted.txt\n");
+      await assert.rejects(invoke(await boundAction(ctx)), /policy differs/u);
+      assert.equal(remote.commits.length, 1);
+      await fs.writeFile(rules, "/private.txt\n/omitted.txt\n");
+      assert.equal(await invoke(await boundAction(ctx)), "applied");
+      assert.equal(await fs.readFile(path.join(root, "omitted.txt"), "utf8"), "kept local");
+      assert.equal(await fs.readFile(path.join(root, "private.txt"), "utf8"), "never synchronized");
+      assert.equal(remote.commits.length, direction === "push" ? 2 : 1);
+      if (direction === "push")
+        assert.deepEqual(
+          remote.commits.at(-1)?.files.map((item) => item.path),
+          ["notes.txt"],
+        );
+    }));
+}
+
+for (const failure of ["backup write", "backup corruption", "local race", "remote race"] as const) {
+  test(`one-action Pull does not overwrite after ${failure}`, () =>
+    fixture(async ({ root, ctx, remote }) => {
+      const note = path.join(root, "notes.txt");
+      const backups = path.join(root, "pi-sync", "backups");
+      await fs.writeFile(note, "local");
+      const config = await loadConfig();
+      const snapshot = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+      remote.seed({ ...snapshot, files: [file("notes.txt", "incoming")] });
+      if (failure === "backup write") {
+        await fs.mkdir(path.dirname(backups));
+        await fs.writeFile(backups, "not a directory");
+      } else {
+        engineHost().reserveTargets = async (_targets, run) => {
+          if (failure === "backup corruption") {
+            const [backup] = await fs.readdir(backups);
+            assert.ok(backup);
+            await fs.writeFile(path.join(backups, backup), "not a snapshot");
+          } else if (failure === "local race") await fs.writeFile(note, "edited during reservation");
+          else remote.seed({ ...snapshot, id: "raced", files: [file("notes.txt", "new incoming")] });
+          return run();
+        };
+      }
+      const onCommit = vi.fn();
+      const expected = {
+        "backup write": /EEXIST/u,
+        "backup corruption": /backup could not be verified/u,
+        "local race": /preimage changed/u,
+        "remote race": /Remote changed/u,
+      }[failure];
+      await assert.rejects(pull(ctx, { ...(await boundAction(ctx)), onCommit }, remote.factory), expected);
+      assert.equal(onCommit.mock.calls.length, 0);
+      assert.equal(await fs.readFile(note, "utf8"), failure === "local race" ? "edited during reservation" : "local");
+    }));
+}
+
+test("an aggregate Pull failure retains the exact backup and both cleanup errors", () =>
+  fixture(async ({ root, ctx, remote }) => {
+    const note = path.join(root, "notes.txt");
+    await fs.writeFile(note, "local before Pull");
+    const config = await loadConfig();
+    const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+    remote.seed({ ...local, files: [file("notes.txt", "incoming")] });
+    const failures = [new Error("Apply did not settle."), new Error("Cleanup could not be confirmed.")];
+    engineHost().reserveTargets = async (_targets, apply) => {
+      await apply();
+      throw new AggregateError(failures, "Queue cleanup did not settle after apply.");
+    };
+    let archive: string | undefined;
+    await assert.rejects(pull(ctx, await boundAction(ctx), remote.factory), (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, failures);
+      assert.match(error.message, /outcome is not verified/u);
+      archive = /Local backup: (.*\.json\.gz)\. To restore/u.exec(error.message)?.[1];
+      return true;
+    });
+    assert.ok(archive);
+    assert.deepEqual((await decodeSnapshot(await fs.readFile(archive))).files, [
+      file("notes.txt", "local before Pull"),
+    ]);
+  }));
+
+test("bound Push rechecks the checkpoint before any remote write", () =>
+  fixture(async ({ root, ctx, remote }) => {
+    const note = path.join(root, "notes.txt");
+    await fs.writeFile(note, "initially approved");
+    const action = await boundAction(ctx);
+    assert.ok(action.directionalAction);
+    action.directionalAction.checkpoint = async (fingerprint) => {
+      assert.match(fingerprint, /^[a-f0-9]{64}$/u);
+      await fs.writeFile(note, "changed while the checkpoint was retained");
+    };
+    await assert.rejects(
+      push(ctx, action, undefined, remote.factory),
+      /Local bytes changed at the push publication boundary/u,
+    );
+    assert.equal(remote.commits.length, 0);
+  }));
+
+test("bound Push still rejects local changes inside backend publication", () =>
+  fixture(async ({ root, ctx, remote }) => {
+    const note = path.join(root, "notes.txt");
+    await fs.writeFile(note, "initial bytes");
+    remote.duringPublish(() => fs.writeFile(note, "changed in backend"));
+    await assert.rejects(
+      push(ctx, await boundAction(ctx), undefined, remote.factory),
+      /Local bytes changed at the push publication boundary/u,
+    );
+    assert.equal(remote.commits.length, 0);
+    assert.equal(await fs.readFile(note, "utf8"), "changed in backend");
+  }));
+
+test("one-action Pull protects a selected-path case alias even for a destination-only removal", () =>
+  fixture(async ({ root, ctx, settings, save, remote }) => {
+    const setup = settings.syncSetups.work;
+    assert.ok(setup);
+    setup.sync = { include: ["AGENTS.md"], automatic: false };
+    await save();
+    await fs.writeFile(path.join(root, "agents.MD"), "preimage not stored at its actual spelling");
+    const config = await loadConfig();
+    const snapshot = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+    remote.seed({ ...snapshot, files: [] });
+    await assert.rejects(pull(ctx, await boundAction(ctx), remote.factory), /case-variant paths/u);
+    assert.equal(await fs.readFile(path.join(root, "agents.MD"), "utf8"), "preimage not stored at its actual spelling");
+  }));
+
+test("the bound Push cannot be combined with existing commands or authorization flags", () =>
+  fixture(async ({ ctx, remote }) => {
+    const action = await boundAction(ctx);
+    for (const extra of [{ auto: true }, { force: true }, { yes: true }, { background: { validate() {} } }]) {
+      await assert.rejects(
+        push(ctx, { ...action, ...extra }, undefined, remote.factory),
+        /bound foreground Push or Pull/u,
+      );
+    }
+    await assert.rejects(syncBoth(ctx, action, remote.factory), /cannot authorize bidirectional Sync/u);
+    assert.deepEqual(remote.commits, []);
+  }));
 
 test("mixed legacy setups reserve configured ignore control files without changing portable selection", () =>
   fixture(async ({ settings }) => {

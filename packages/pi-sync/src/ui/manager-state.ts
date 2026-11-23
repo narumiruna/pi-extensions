@@ -25,8 +25,8 @@ import { safeTerminalText } from "./terminal-text.js";
 
 export const MAIN_MENU_ACTIONS = [
   "Sync now",
-  "Pull from remote…",
-  "Push to remote…",
+  "Pull from remote",
+  "Push to remote",
   "View differences",
   "Check remote status",
   "Settings",

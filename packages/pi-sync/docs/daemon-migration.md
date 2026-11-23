@@ -92,21 +92,18 @@ accepts the current participant's facts. An older daemon can stay reachable
 without supporting this repair; a healthy CLI status alone does not confirm Pi
 participation.
 
-Reconnect does not replay a submitted operation or restart startup transfers.
+Ordinary reconnect does not replay a submitted operation or restart startup transfers.
 If Pi releases a file queue but the local acknowledgement is lost in transit,
 it retries that acknowledgement with the same daemon. Brief retries stay
 quiet; longer retries show `sync recovering` when sync status is enabled.
 If a background release remains unconfirmed during a command, Pi reports it
 after the command finishes.
 A release acknowledgement alone does not confirm that a transfer succeeded.
-If a write or file-queue release cannot be confirmed, preserve the journals and
-use the existing recovery path before retrying a transfer. Reconnect does not
-stop or restart the service, and it does not extend transfer or model permission.
+For the manager's explicit **Push to remote** and **Pull from remote** actions, the client first resolves the original job with the same daemon. On an eligible file-queue failure it can then drain that exact owner and reconnect after verifying exit. It never repeats a verified result. It can resume after a proven pre-write failure only once and only when the original setup and source/destination evidence still match. It does not restart an owner that still has other live participating Pi clients, pending work, or unresolved consent or upgrade state. A missing result or conflicting evidence is not permission to replay. If recovery stops after a verified transfer, Pi Sync reports the restore point to the active session. If `/sync daemon status` is blocked by recovery, run it after recovery finishes. This path does not extend transfer or model permission.
 
 ## Recover from uncertain daemon cleanup
 
-**Stop daemon for recovery…** in `/sync` remains available when daemon cleanup
-blocks Pi Sync initialization. In TUI or RPC, `/sync daemon recover` opens the same
+**Stop daemon for recovery…** in `/sync` remains a diagnostic fallback when automatic recovery cannot verify cleanup or daemon cleanup blocks initialization. In TUI or RPC, `/sync daemon recover` opens the same
 review without starting or upgrading the daemon. The review identifies the
 agent directory and PID before requesting permission to stop work for every
 Pi session attached to that daemon.

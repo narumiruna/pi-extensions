@@ -83,7 +83,9 @@ Remote status: Not checked
 Last applied: Never synced
 ```
 
-Use **Sync…** (**Sync now** in RPC) for bidirectional merging, or **Pull from remote…** and **Push to remote…** for reviewed directional transfers. Type to filter actions; navigation scrolls the list. **Settings**, **History**, and **Diagnostics** remain directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed. Pull and Push do not implicitly force overwrites. The palette does not change transfer authorization: Autonomous sync can still apply eligible transfers without another confirmation.
+Use **Sync…** (**Sync now** in RPC) to merge both ways. **Push to remote** uses this device's version for managed files; **Pull from remote** uses the remote version. After initial daemon handover, each choice can replace or remove managed files at the destination without a second transfer confirmation. Push preserves the previous remote version in **History**; Pull creates a local backup before applying changes. History rollback still follows the current sync rules; see [Recover excluded files from History](#recover-excluded-files-from-history) for files those rules no longer select. Use **View differences** first if you want a preview. Selecting a direction does not authorize background transfers or model use. If a file-queue release cannot be confirmed, Pi Sync attempts recovery within the same action. It does not repeat a known commit or guess when the write outcome is unknown.
+
+Type to filter actions; navigation scrolls the list. **Settings**, **History**, and **Diagnostics** remain directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
 
 The summary distinguishes cached observations, recorded background state, and the last successful background transfer; none proves current remote equality. Missing or invalid background evidence is not shown as Waiting. Automatic-transfer permissions and possible AI costs remain visible when enabled; detailed preferences stay in Settings. Setup-specific actions stay bound to the displayed setup; if its configuration changes while the menu is open, review the refreshed setup before continuing. Choose **Check remote status** for a fresh check or **View differences** for file differences; `/sync status`, `/sync diff`, and `/sync help` remain available. Last applied shows a compact snapshot ID and states when application time is unavailable; History retains full IDs.
 
@@ -96,7 +98,7 @@ With Continuous sync configured, **Diagnostics** first opens a scrollable local 
 
 On secondary menus, **Back** and Escape return to the previous screen. In setup inputs and save reviews, cancellation (including Ctrl+C) discards the current unsaved draft and returns to its owning menu. Session replacement or shutdown closes the owning flow.
 Specialized operation and masked-credential prompts show the effective cancellation bindings and keep Ctrl+C as a hard-cancel input when Back is remapped.
-Destructive, credential-bearing, and externally visible operations show exact previews and confirmations, except transfers explicitly authorized by automatic-transfer policy or Autonomous sync.
+Other destructive, credential-bearing, and externally visible actions show previews and confirmations where applicable. Autonomous and automatic transfers require their own authorization.
 
 ### Review transfer changes
 
@@ -104,7 +106,7 @@ Unless Autonomous sync or another explicit transfer authorization applies, a mer
 
 In TUI, select **Yes** from the first confirmation to proceed. **View details** is optional and shows the complete add/update/delete lists and unresolved paths. It cannot apply changes. Escape returns to confirmation with **No** selected; Ctrl+C cancels the whole TUI flow. RPC can show details in bounded pages and can require opening them first. RPC offers No first but the client controls visual selection, and protocol cancellation from details returns to confirmation. Session replacement or shutdown closes the flow; local files and remote state are rechecked before transfer.
 
-Unresolved paths stay unchanged on each side. A backup and recovery journal protect the transfer; resources do not reload automatically. Remote snapshot publication is shown separately because it can occur without file-content changes. File lists on the main screen are shortened when needed; details retain every path. `--yes` does not bypass a required policy-transition review. Automatic transfers require their own authorization and a compatible policy. Interactive TUI Push and Pull show directional add/update/remove counts and safety notes in the summary. Individual file paths are in **View details**, so a large file list does not delay confirmation. Loaded sessions are excluded from local change counts. Pull and rollback also list case-variant path cleanup; changed aliases invalidate approval. Push describes changes to the active immutable snapshot, not physical deletion of retained history. RPC and History rollback keep their existing confirmation protocols, with the complete directional summary. Local bytes, settings, baseline, and remote head are rechecked before applying a reviewed transfer.
+Unresolved paths stay unchanged on each side. A backup and recovery journal protect the transfer; resources do not reload automatically. Remote snapshot publication is shown separately because it can occur without file-content changes. File lists on the main screen are shortened when needed; details retain every path. `--yes` does not bypass a required policy-transition review. Automatic transfers require their own authorization and a compatible policy. The direct `/sync push` and `/sync pull` routes retain their reviewed behavior and existing flags. Their TUI previews show directional add/update/remove counts and safety notes. Individual file paths are in **View details**, so a large file list does not delay confirmation. Loaded sessions are excluded from local change counts. Pull and rollback also list case-variant path cleanup; changed aliases invalidate approval. Push describes changes to the active immutable snapshot, not physical deletion of retained history. RPC and History rollback keep their existing confirmation protocols, with the complete directional summary. Local bytes, settings, baseline, and remote head are rechecked before applying a reviewed transfer.
 
 ### Restore sync access
 
@@ -126,7 +128,7 @@ After the same no-other-sync verification, `/sync unlock --stale` provides a det
 
 **Sync now** merges independent file additions, edits, and deletions against an established baseline. Equal concurrent edits are accepted. With the settings field merge opt-in enabled, supported `settings.json` fields can also merge using a verified accepted ancestor; arrays, nested objects and coupled fields remain atomic. Other divergent file edits, delete/modify conflicts, protected-session changes, selection changes, and case/file-directory collisions still require review; one unresolved path stops the entire merged transfer unless partial sync is explicitly enabled. Explicit push and pull remain directional.
 
-When **Sync now**, **Pull from remote…**, or **Push to remote…** requires a direction choice, the manager opens **Resolve sync conflict**.
+When **Sync now** requires a direction choice, the manager opens **Resolve sync conflict**.
 The flow names the current setup and explains whether local content, remote content, or the included-content policy changed.
 
 An explicit remote content-list mismatch opens **Synced content differs** in the same manager flow.
@@ -325,7 +327,7 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | `/sync` | Set up storage, manage synced content, and review sync operations or recovery. |
 | `/sync help` | Show command usage. |
 | `/sync daemon [status\|handover\|allow-after-exit\|revoke-after-exit]` | Connect to the service or review ownership and unattended permission; no argument connects and shows status. |
-| `/sync daemon recover` | Review and stop the current daemon in TUI or RPC without starting a replacement or retrying a transfer. |
+| `/sync daemon recover` | Diagnostic fallback: review and stop the current daemon in TUI or RPC without starting a replacement or retrying a transfer. |
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
 | `/sync config` | Show resolved configuration. |
@@ -393,13 +395,80 @@ S3/R2 publishes `latest.json` and history using ETag `If-Match`, or `If-None-Mat
 
 Snapshot recovery is guarded: new journals record before/after images, older journals are retired only when their unchanged preimages are provable, and unrecognized bytes remain untouched for manual review. Current-session targets are never restored during startup. Preserve a blocked transaction and its backup, close Pi, and review the private evidence before restoring selected paths; malformed/unsupported journals are not disposable. Pi may have loaded resources before lifecycle recovery, so reload or restart explicitly after recovery if loaded resources need to match the restored files.
 
-Before pull or rollback, Pi Sync writes a backup under `<agent-dir>/pi-sync/backups/`. It leaves byte-identical regular files in place when their exact paths already match and no structural change is needed. It checks those files again before accepting the transfer.
+Before pull or rollback, Pi Sync writes a backup under `<agent-dir>/pi-sync/backups/`. It leaves byte-identical regular files in place when their exact paths already match and no structural change is needed. It checks those files again before accepting the transfer. See [Restore a local backup](#restore-a-local-backup) for local edits that were never published.
 Snapshot apply and recovery require canonical agent and session paths. Preflight refuses parent aliases it detects because Pi's file queue uses different keys for existing and missing aliases. Node's path-based writes and deletes cannot prevent another process from replacing a parent directory after a check. Use directories you control, and pause tools that move or replace their directories during sync. Preserve any pending recovery evidence; an unresolved startup recovery barrier still blocks transfers. Old journals recorded under an alias require manual review because their exact root and target paths remain pinned. Changing the agent path alone does not authorize recovery or rewriting those journals.
 Apply preflights paths and checksums, journals mutations, and restores prior state only when current bytes match verified preimages or planned postimages. Unknown intermediate directory states and newer edits require review rather than a blind rollback. An interruption after replacement is armed can require manual recovery even if installation never ran; a later deletion of installed content is not treated as an unfinished remove.
 The file queue coordinates one Pi runtime, not separate processes or lock-unaware editors. Hash-based journals cannot distinguish a later write of identical recorded bytes; they do not provide a cross-process compare-and-swap.
 Merged transfers instead retain a private publication/apply/baseline journal and roll forward only when the active remote candidate and every changed local preimage/postimage can be verified. A crash or uncertain publication is reconciled through `/sync sync` without blind republishing. If newer local or remote changes prevent reconciliation, preserve the evidence and review `/sync diff`. With a legacy policy, an explicitly reviewed `push --force` or `pull --force` can archive the old journal. With an ignore-file policy, keep the originating setup and exact rule source; a mismatch blocks replay and force direction does not bypass pending recovery. Follow the [ignore-file recovery guidance](./skills/configure-pi-sync/references/configuration.md#ignore-file-policy). Disabling automatic transfer does not undo completed transfers. Do not downgrade while a merge or snapshot recovery journal is pending.
 
 Removing a local setup or connection never deletes remote data.
+
+### Recover excluded files from History
+
+Use the snapshot reference reported by Push (use its snapshot ID if no separate reference is shown). History rollback follows the current sync rules and does not restore excluded files. To recover one excluded file without changing the sync rules or remote data, run this example with Node.js 22.19.0 or later from a directory where the installed `@narumitw/pi-sync-daemon` package resolves. Use the same sync setup and storage location as the original Push. The example writes only the selected file to a new private temporary directory; Git may also update its private local cache.
+
+```sh
+node --input-type=module - "$HOME/.pi/agent" 'home' 'snapshot-reference' 'sessions/example.jsonl' <<'JS'
+import { createHash } from 'node:crypto';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { configureEngineHost } from '@narumitw/pi-sync-daemon/engine/host';
+import { loadSettingsConfig } from '@narumitw/pi-sync-daemon/engine/settings/config';
+import { withStateDirectoryAccess } from '@narumitw/pi-sync-daemon/engine/state/state-directory';
+import { createSyncBackend } from '@narumitw/pi-sync-daemon/engine/backends/backend-factory';
+
+const [agentDir, setup, reference, relative] = process.argv.slice(2);
+const root = await realpath(agentDir);
+configureEngineHost({
+  root: () => root,
+  mutate: () => { throw new Error('This example only reads the remote snapshot.'); },
+  review: async () => false,
+});
+const file = await withStateDirectoryAccess(async () => {
+  const backend = await createSyncBackend(await loadSettingsConfig(setup));
+  const signal = AbortSignal.timeout(60_000);
+  const entry = (await backend.listHistory(signal)).find((item) => item.snapshotRef === reference);
+  if (!entry) throw new Error('Snapshot reference not found in History.');
+  const snapshot = await backend.readSnapshot(reference, signal);
+  const files = snapshot.files.filter((item) => item.path === relative);
+  if (snapshot.id !== entry.snapshotId || files.length !== 1) throw new Error('Snapshot or path did not match.');
+  return files[0];
+});
+const bytes = Buffer.from(file.contentBase64, 'base64');
+if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error('Snapshot checksum mismatch.');
+const output = join(await mkdtemp(join(tmpdir(), 'pi-sync-history-')), 'restored');
+await writeFile(output, bytes, { flag: 'wx', mode: 0o600 });
+console.log(output);
+JS
+```
+
+Compare the recovered file with any current copy. If you need to put it back, close Pi first and copy it to the intended local path. For a logical `sessions/` path, use the original session directory. Do not overwrite a symlink or publish the temporary file. Remove the temporary copy when finished.
+
+### Restore a local backup
+
+Use the exact backup path reported by Pull. Close all Pi processes using the affected agent directory. The backup is private and can contain unpushed settings and sessions. Extract the file you want to restore into a private temporary directory before replacing any local file. This example verifies the file's stored checksum and does not contact remote storage:
+
+```sh
+backup='/path/reported/by/pull.json.gz'
+relative='settings.json'
+scratch=$(mktemp -d)
+node --input-type=commonjs - "$backup" "$relative" "$scratch/restored" <<'JS'
+const { createHash } = require('node:crypto');
+const { readFileSync, writeFileSync } = require('node:fs');
+const { gunzipSync } = require('node:zlib');
+const [archive, relative, output] = process.argv.slice(2);
+const snapshot = JSON.parse(gunzipSync(readFileSync(archive), { maxOutputLength: 512 * 1024 * 1024 }));
+const entries = snapshot.files.filter((file) => file.path === relative);
+if (entries.length !== 1) throw new Error('Expected exactly one matching backup path.');
+const bytes = Buffer.from(entries[0].contentBase64, 'base64');
+if (createHash('sha256').update(bytes).digest('hex') !== entries[0].sha256) throw new Error('Backup checksum mismatch.');
+writeFileSync(output, bytes, { flag: 'wx', mode: 0o600 });
+JS
+printf '%s\n' "$scratch/restored"
+```
+
+Compare the extracted file with the current version. Keep any newer changes you need, then copy the verified file back to its original path. For a logical `sessions/` path, use the session directory from before Pull, not necessarily `<agent-dir>/sessions/`. Do not copy over a symlink, publish a local backup, or extract it wholesale over the agent directory. Remove the temporary copy after verifying your restored file.
 
 The operational state root is `<agent-dir>/pi-sync/`.
 An existing installation continues using `<agent-dir>/.pisync/` and shows migration guidance on startup; it is never moved merely because no sync is active.
