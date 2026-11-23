@@ -21,6 +21,7 @@ A subscription allowance, current balance, and rated spend are not interchangeab
 | [Baseten](./baseten.md) | Organization-wide trailing 30-day Model APIs spend after credits |
 | [OpenCode Go](./opencode-go.md) | Rolling, weekly, and monthly plan windows |
 | [Command Code](./command-code.md) | Billing-period plan credits and rolling 5-hour/weekly spending caps |
+| [Mistral](./mistral.md) | Monthly Vibe Code and API allowance percentages, plan, and pay-as-you-go |
 | [xAI](./xai.md) | OAuth subscription allowance and credits; explicit menu queries only |
 | [Z.AI](./zai.md) | Coding Plan quota windows, MCP allowance, plan name, and renewal date |
 

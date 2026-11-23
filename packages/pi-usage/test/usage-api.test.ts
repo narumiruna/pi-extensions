@@ -298,6 +298,7 @@ describe("usage potential capabilities and conservative cache reads", () => {
     "kimi-coding": ["quota", "balance", "spend", "reset-time"],
     minimax: ["quota", "balance", "reset-time"],
     "minimax-cn": ["quota", "balance", "reset-time"],
+    mistral: ["quota", "reset-time"],
     moonshotai: ["balance"],
     "moonshotai-cn": ["balance"],
     zai: ["quota", "reset-time"],
@@ -311,7 +312,7 @@ describe("usage potential capabilities and conservative cache reads", () => {
         .map((adapter) => adapter.id)
         .sort(),
     );
-    expect(Object.keys(expected)).toHaveLength(19);
+    expect(Object.keys(expected)).toHaveLength(20);
   });
 
   it.each(Object.entries(expected))(

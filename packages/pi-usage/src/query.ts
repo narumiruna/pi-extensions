@@ -15,6 +15,11 @@ import { createFireworksAdapter } from "./providers/fireworks.js";
 import { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
 import { normalizeKimiCodingUsagePayload } from "./providers/kimi-coding.js";
 import { type MiniMaxProviderId, miniMaxUsageKind, normalizeMiniMaxUsagePayload } from "./providers/minimax.js";
+import {
+  type MistralBudgetPayload,
+  type MistralSubscriptionPayload,
+  normalizeMistralBillingPayload,
+} from "./providers/mistral.js";
 import { normalizeMoonshotBalancePayload } from "./providers/moonshot.js";
 import {
   OPENAI_CHATGPT_ADAPTER,
@@ -81,6 +86,11 @@ const MOONSHOT_BALANCE_URLS = Object.freeze({
   "moonshotai-cn": "https://api.moonshot.cn/v1/users/me/balance",
 });
 const SHARED_MOONSHOT_ENV_VAR = "MOONSHOT_API_KEY";
+// Verified against a live standard API key: the subscription route answers 200, while
+// /v1/billing/usage 404s outside Enterprise and /v1/admin/usage 401s without an admin key.
+const MISTRAL_SUBSCRIPTION_URL = "https://api.mistral.ai/v1/billing/subscription";
+const MISTRAL_BUDGET_URL = "https://api.mistral.ai/v1/billing/budget";
+const MISTRAL_BUDGET_REVALIDATION_RESERVE_MS = 1_000;
 const XAI_USER_URL = "https://cli-chat-proxy.grok.com/v1/user?include=subscription";
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const XAI_CLIENT_HEADERS = Object.freeze({
@@ -356,6 +366,43 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
     semantics: { kind: "consumer-subscription", label: "GLM Coding Plan usage" },
     async query(auth, signal, timeoutMs, guard) {
       return queryZaiUsage("zai-coding-cn", "Z.AI Coding CN", auth, signal, timeoutMs, guard);
+    },
+  },
+  {
+    id: "mistral",
+    displayName: "Mistral",
+    semantics: { kind: "api-key", label: "Mistral monthly allowance" },
+    async query(auth, signal, timeoutMs, guard) {
+      if (!guard) throw new Error("Mistral usage requires request-boundary revalidation.");
+      const startedAt = Date.now();
+      await guard();
+      const subscription = (await fetchProviderJson(
+        MISTRAL_SUBSCRIPTION_URL,
+        auth,
+        signal,
+        remainingTimeout(timeoutMs, startedAt, "fetching the Mistral subscription"),
+        "Mistral billing subscription endpoint",
+        { redirect: "error" },
+      )) as MistralSubscriptionPayload;
+      await guard();
+      // Mirrors the official Vibe CLI: /billing/budget carries the monthly Vibe Code and API
+      // allowances. It is optional upstream (403 without the usage permission, 404 on platforms
+      // that do not serve billing), so plan details still publish when it is unavailable.
+      // Reserve time for the revalidation guard below so a stalled optional budget request
+      // cannot consume the whole budget and block revalidation or discard the subscription data.
+      const budgetRemainingMs = timeoutMs - (Date.now() - startedAt);
+      const budget =
+        budgetRemainingMs > MISTRAL_BUDGET_REVALIDATION_RESERVE_MS
+          ? await fetchMistralBudgetOptional(
+              MISTRAL_BUDGET_URL,
+              auth,
+              signal,
+              budgetRemainingMs - MISTRAL_BUDGET_REVALIDATION_RESERVE_MS,
+            )
+          : undefined;
+      await guard();
+      if (signal.aborted) throw abortError();
+      return normalizeMistralBillingPayload(subscription, budget as MistralBudgetPayload | undefined, Date.now());
     },
   },
 ];
@@ -1117,6 +1164,7 @@ function hasOfficialUrlOrigin(value: string, providerId: string): boolean {
     if (providerId === "kimi-coding") return url.origin === "https://api.kimi.com";
     if (providerId === "minimax") return url.origin === "https://api.minimax.io";
     if (providerId === "minimax-cn") return url.origin === "https://api.minimaxi.com";
+    if (providerId === "mistral") return url.origin === "https://api.mistral.ai";
     if (providerId === "moonshotai") return url.origin === "https://api.moonshot.ai";
     if (providerId === "moonshotai-cn") return url.origin === "https://api.moonshot.cn";
     if (providerId === "xai") return url.origin === "https://api.x.ai";
@@ -1295,6 +1343,30 @@ async function fetchCommandCodeOptional(
   if (timeoutMs <= 0) return undefined;
   try {
     const payload = await fetchProviderJson(url, auth, signal, timeoutMs, description, { redirect: "error" });
+    if (signal.aborted) throw abortError();
+    return payload;
+  } catch (error) {
+    if (signal.aborted) throw abortError();
+    if (isAbortError(error) || isStaleExtensionContextError(error)) throw error;
+    return undefined;
+  }
+}
+
+// The budget route is optional: a 403 means this member lacks the usage permission and a 404
+// means the platform does not serve billing. Neither should discard the plan read, so only abort
+// and stale-context failures propagate.
+async function fetchMistralBudgetOptional(
+  url: string,
+  auth: ResolvedUsageAuth,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<Record<string, unknown> | undefined> {
+  if (signal.aborted) throw abortError();
+  if (timeoutMs <= 0) return undefined;
+  try {
+    const payload = await fetchProviderJson(url, auth, signal, timeoutMs, "Mistral billing budget endpoint", {
+      redirect: "error",
+    });
     if (signal.aborted) throw abortError();
     return payload;
   } catch (error) {

@@ -60,6 +60,13 @@ const deepSeekModel = {
   baseUrl: "https://api.deepseek.com",
 };
 
+const mistralModel = {
+  id: "codestral-2508",
+  name: "Codestral 25.08",
+  provider: "mistral",
+  baseUrl: "https://api.mistral.ai",
+};
+
 const miniMaxModel = {
   id: "MiniMax-M3",
   name: "MiniMax M3",
@@ -3262,4 +3269,75 @@ test("shutdown cancels an explicit xAI identity body before billing or status pu
 
   assert.equal(fetches, 1);
   assert.equal(statuses.get("usage"), undefined);
+});
+
+// The request-boundary guard is only supplied to providers listed in usage.ts. Mistral issues two
+// requests and re-sends the API key, so it must be governed like DeepSeek: this test drives the real
+// extension flow, which is what surfaced "requires request-boundary revalidation" when it was absent.
+test("current Mistral allowance renders through the guarded extension flow", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.onTestFinished(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.includes("/v1/billing/budget")) {
+      return new Response(
+        JSON.stringify({
+          vibe_budget: {
+            usage_percentage: 3.25,
+            initial_budget: 255,
+            currency: "EUR",
+            reset_at: "2026-12-01T00:00:00Z",
+            payg_enabled: false,
+          },
+          api_budget: {
+            usage_percentage: 0,
+            initial_budget: 25.5,
+            currency: "EUR",
+            reset_at: "2026-12-01T00:00:00Z",
+            payg_enabled: false,
+          },
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(
+      JSON.stringify({ plan_name: "INDIVIDUAL", payg_enabled: false, vibe_payg_enabled: false, enterprise: false }),
+      { status: 200 },
+    );
+  };
+  const mock = createMockPi();
+  usageExtension(mock.pi);
+  const command = mock.commands.get("usage");
+  assert.ok(command);
+  const titles: string[] = [];
+  const { ctx } = createMockContext({
+    hasUI: true,
+    mode: "rpc",
+    model: mistralModel,
+    select: async (title: string) => {
+      titles.push(title);
+      return "Close";
+    },
+    modelRegistry: {
+      getProviderAuth: async () => ({ auth: { apiKey: "mistral-key", baseUrl: mistralModel.baseUrl } }),
+      getAvailable: () => [mistralModel],
+      getAll: () => [mistralModel],
+    },
+  });
+
+  await mock.events.get("session_start")?.[0]?.({}, ctx);
+  await settle();
+  await command.handler("", ctx);
+  const rendered = titles.join("\n");
+  assert.match(rendered, /mistral Usage · Current/u);
+  assert.match(rendered, /Plan:\s+INDIVIDUAL/u);
+  assert.match(rendered, /Vibe Code monthly allowance/u);
+  assert.match(rendered, /API monthly allowance/u);
+  assert.doesNotMatch(rendered, /request-boundary revalidation/u);
+  assert.doesNotMatch(rendered, /Query failed/u);
+  assert.ok(requested.every((url) => new URL(url).origin === "https://api.mistral.ai"));
 });
