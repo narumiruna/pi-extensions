@@ -369,6 +369,54 @@ test.each([
   }),
 );
 
+test.each(["unchanged", "matching edit", "matching deletion"] as const)(
+  "oversized apply-only recovery with %s requires proof of commit",
+  (localChange) =>
+    fixture(async ({ root, config, ctx, load }) => {
+      const state = await baseline(config);
+      const before = snapshot(config, "baseline", [file("notes.md", "baseline")]);
+      const after = snapshot(config, "candidate", [
+        file("large.txt", Buffer.alloc(MiB + 1, 0x78)),
+        file("small.txt", "remote"),
+      ]);
+      const remote = backendFixture(after);
+      const head = remote.head();
+      const backup = path.join(path.dirname(statePathForConfig(config)), "backup-evidence");
+      await fs.writeFile(backup, "kept backup");
+      await fs.writeFile(path.join(root, "notes.md"), "baseline");
+      await writeMergeJournal(config, {
+        ...mergeJournalPolicy(config),
+        identity: mergeJournalIdentity(config, "memory"),
+        before,
+        after,
+        upload: after,
+        accepted: after,
+        expectedHead: head,
+        committedHead: head,
+        applyOnly: true,
+        backup,
+        stateIdentity: syncStateFingerprint(state),
+        sessionRoot: path.join(root, "sessions"),
+      });
+      if (localChange === "matching edit") await fs.writeFile(path.join(root, "small.txt"), "remote");
+      if (localChange === "matching deletion") await fs.rm(path.join(root, "notes.md"));
+      const journalPath = mergeJournalPath(config);
+      const recorded = await fs.readFile(journalPath);
+      load.mockResolvedValue({ ...config, maxFileSizeMiB: 1 });
+      await assert.rejects(
+        mergeSync(ctx, options, remote.factory),
+        localChange === "unchanged" ? /blocked by size limits/u : /local apply is not verified/u,
+      );
+      await assert.rejects(fs.stat(path.join(root, "large.txt")), { code: "ENOENT" });
+      if (localChange === "unchanged") await assert.rejects(fs.stat(journalPath), { code: "ENOENT" });
+      else assert.deepEqual(await fs.readFile(journalPath), recorded);
+      assert.equal(await fs.readFile(backup, "utf8"), "kept backup");
+      assert.deepEqual(await readStateForConfig(config), state);
+      assert.deepEqual(remote.head(), head);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 0);
+    }),
+);
+
 const foreground = { ...options, auto: false, yes: false, silent: false };
 
 async function interruptBeforeCommit(root: string, config: AnySyncConfig, ctx: EngineContext) {

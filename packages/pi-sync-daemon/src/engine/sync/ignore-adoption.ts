@@ -341,7 +341,7 @@ export async function adoptRemoteRules(input: AdoptionInput) {
     ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
   });
   const hashes = fileHashMap(await refresh());
-  if (resuming && source.text !== text && sameHashes(hashes, journal.beforeFiles)) checkSize();
+  if (resuming && source.identity !== journal.installedIdentity) checkSize();
   if (source.text !== text && journal.stateFingerprint !== stateFingerprint)
     throw new Error("Baseline changed after the reviewed Pull. Preserve its journal.");
   if (!sameHashes(hashes, journal.afterFiles)) {

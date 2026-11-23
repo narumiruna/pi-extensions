@@ -816,11 +816,9 @@ async function completeJournal(
     if (!sameMergeRecoveryHead(backend, head, latest))
       throw new Error("Remote head changed during merge recovery; journal and backup retained.");
     await validateFresh();
-    const hashes = fileHashMap(local);
     return {
-      hashes,
       sameBaseline: syncStateFingerprint(state) === journal.stateIdentity,
-      sameLocal: sameHashes(hashes, fileHashMap(journal.before)),
+      sameLocal: sameHashes(fileHashMap(local), fileHashMap(journal.before)),
     };
   };
   // Baseline publication is the durable completion boundary. A later remote revision
@@ -932,17 +930,14 @@ async function completeJournal(
     const selected = journal.accepted ?? portableSnapshot(journal.after, config.localFields);
     const details = transferSizeDetails(config, [{ side: "Local", files: selected.files }]);
     if (details) {
-      const { hashes, sameBaseline, sameLocal } = await readRetirementEvidence();
-      const before = fileHashMap(journal.before);
-      const after = fileHashMap(journal.after);
-      const applied =
-        [...new Set([...Object.keys(before), ...Object.keys(after)])].some(
-          (path) => before[path] !== after[path] && Object.hasOwn(hashes, path) && hashes[path] === after[path],
-        ) || Object.keys(before).some((path) => !Object.hasOwn(after, path) && !Object.hasOwn(hashes, path));
-      if (!applied) {
-        if (sameBaseline && sameLocal) await clearMergeJournal(config);
+      const { sameBaseline, sameLocal } = await readRetirementEvidence();
+      if (sameBaseline && sameLocal) {
+        await clearMergeJournal(config);
         throw new TransferSizeError(`Transfer blocked by size limits. ${details}`);
       }
+      throw new TransferSizeError(
+        `Transfer blocked by size limits. The local apply is not verified. Keep the journal and backup. Review the limits before retrying /sync sync. ${details}`,
+      );
     }
   }
   if (sessionRoot !== undefined) requireStableMergeSessionRoot(journal.before, journal.after, config.scope);

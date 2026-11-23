@@ -833,10 +833,12 @@ test("rule adoption checks files newly included by the incoming rules before cha
 test.each(["during payload", "before rule install", "after rule install", "during rule directory sync"] as const)(
   "an interruption %s leaves a reviewed recovery path after the remote head advances",
   (phase) =>
-    fixture(async ({ root, rules, ctx, remote }) => {
+    fixture(async ({ root, rules, ctx, remote, settings, save }) => {
       const config = await loadConfig();
       const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
       assert.equal(local.selection?.version, 4);
+      const checkNewLimit = phase === "before rule install" || phase === "after rule install";
+      const incoming = checkNewLimit ? "x".repeat(MIB + 1) : "incoming";
       const incomingRules = "# Active publisher rules\r\n/leave-local.txt\r\n";
       if (phase === "during rule directory sync" && process.platform === "win32") return;
       const head = remote.seed({
@@ -845,7 +847,7 @@ test.each(["during payload", "before rule install", "after rule install", "durin
         version: 7,
         selection: { ...local.selection, fingerprint: ignorePolicyFingerprint(incomingRules, false) },
         ignoreRules: { filename: ".syncignore", text: incomingRules },
-        files: [file("notes.txt", "incoming")],
+        files: [file("notes.txt", incoming)],
       });
       const notes = path.join(root, "notes.txt");
       await fs.writeFile(notes, "local");
@@ -893,7 +895,7 @@ test.each(["during payload", "before rule install", "after rule install", "durin
       } finally {
         syncFault.mockRestore();
       }
-      assert.equal(await fs.readFile(notes, "utf8"), "incoming");
+      assert.ok((await fs.readFile(notes, "utf8")) === incoming);
       assert.equal(
         await fs.readFile(rules, "utf8"),
         phase === "after rule install" || phase === "during rule directory sync" ? incomingRules : activeRules,
@@ -925,13 +927,27 @@ test.each(["during payload", "before rule install", "after rule install", "durin
       assert.equal(await pull(ctx, options, remote.factory), "cancelled");
       assert.equal(hasPendingAdoption(), true);
       ctx.ui.confirm = async () => true;
+      if (checkNewLimit) {
+        await enableSizeLimits(settings, save);
+        if (phase === "before rule install") {
+          await assert.rejects(pull(ctx, options, remote.factory), /Transfer blocked by size limits/u);
+          assert.equal(hasPendingAdoption(), true);
+          assert.equal(await fs.readFile(rules, "utf8"), activeRules);
+          assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
+          assert.ok((await fs.readFile(notes, "utf8")) === incoming);
+          const setup = settings.syncSetups.work;
+          delete setup.sync.maxFileSizeMiB;
+          delete setup.sync.maxDirectorySizeMiB;
+          await save();
+        }
+      }
       assert.equal(await pull(ctx, options, remote.factory), "applied");
       assert.equal(hasPendingAdoption(), false);
       assert.equal(await fs.readFile(rules, "utf8"), incomingRules);
       assert.equal(await fs.readFile(path.join(root, "leave-local.txt"), "utf8"), "left local under the new rules");
       assert.equal((await readStateForConfig(await loadConfig())).lastAppliedSnapshot, head.snapshotId);
       assert.equal((await remote.backend.readHead())?.revision, newer.revision);
-      assert.equal(await fs.readFile(notes, "utf8"), "incoming");
+      assert.ok((await fs.readFile(notes, "utf8")) === incoming);
     }),
 );
 
