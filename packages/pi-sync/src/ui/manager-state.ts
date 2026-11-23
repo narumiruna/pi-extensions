@@ -159,7 +159,12 @@ export async function describeManagerState(
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
       `Storage: ${backendStorageDescription(config)}`,
       ...(config.pathPolicy === "ignore-file"
-        ? [`Sync scope: Pi agent directory · ignore file: ${safeTerminalText(config.ignoreFile ?? ".syncignore")}`]
+        ? [
+            `Sync scope: Pi agent directory · ignore file: ${safeTerminalText(config.ignoreFile ?? ".syncignore")}`,
+            ...(config.ignorePolicy?.matches(config.ignorePolicy.filename) === false
+              ? ["New snapshots include this rule file and its comments in remote history."]
+              : []),
+          ]
         : config.scope
           ? ["Sync scope: Pi agent directory, with exclusions"]
           : []),
@@ -171,13 +176,15 @@ export async function describeManagerState(
             currentAttention.decision.setupName === config.setupName
               ? "Sync status: Review needed"
               : `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
-            attentionDirectoryPolicy
-              ? "Sync scopes or directory rules differ."
-              : attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
-                ? attentionExclusionsDiffer
-                  ? "Synced-content exclusion rules differ."
-                  : "Only the synced-content order differs."
-                : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
+            currentAttention.decision.ignorePolicyComparison
+              ? "Ignore-file policies differ."
+              : attentionDirectoryPolicy
+                ? "Sync scopes or directory rules differ."
+                : attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
+                  ? attentionExclusionsDiffer
+                    ? "Synced-content exclusion rules differ."
+                    : "Only the synced-content order differs."
+                  : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
           ]
         : currentObservation
           ? [`Observed ${safeTerminalText(currentObservation.checkedAt)}: ${observationSummary(currentObservation)}`]

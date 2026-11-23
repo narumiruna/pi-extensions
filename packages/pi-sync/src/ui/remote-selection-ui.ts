@@ -179,12 +179,19 @@ async function showSelectionDifference(
   validateOwner: () => void,
 ): Promise<DifferenceFlowResult> {
   type Screen = "choice" | "review" | "saved";
-  type Action = "adopt" | "keep" | "cancel" | "continue" | "done";
+  type Action = "adopt" | "keep" | "pull-rules" | "cancel" | "continue" | "done";
   interface FlowState {
     decision: RemoteSelectionDecision;
     saved: boolean;
   }
   const isCurrent = () => isReviewOwnerCurrent(validateOwner);
+  const canReviewPull = Boolean(
+    runRoute &&
+      !options.readOnly &&
+      initialDecision.ignorePolicyComparison === "mismatch" &&
+      (await (await import("./ignore-file-ui.js")).portableIgnoreRulesAvailable(ctx, sessionSignal)),
+  );
+  if (!isCurrent()) return { kind: "stale" };
   let flowState: FlowState = { decision: initialDecision, saved: false };
   let continuationFingerprint: string | undefined;
   let nextResult: RemoteSelectionReviewResult | undefined;
@@ -218,6 +225,16 @@ async function showSelectionDifference(
                   action: "adopt" as const,
                 },
               ]),
+          ...(canReviewPull
+            ? [
+                {
+                  id: "pull-rules",
+                  label: "Review pulling the remote rules…",
+                  description: "Preview overwriting this device's rules and files if the snapshot includes rules.",
+                  action: "pull-rules" as const,
+                },
+              ]
+            : []),
           ...(options.readOnly || !canPublishLocalPolicy(state.decision)
             ? []
             : [
@@ -356,6 +373,30 @@ async function showSelectionDifference(
           }
           ctx.ui.notify(`Could not save the remote content list: ${errorMessage(error)}`, "error");
           return { kind: "stay" as const };
+        }
+      },
+      "pull-rules": async ({ state, signal: actionSignal }) => {
+        if (!canReviewPull || !runRoute) return { kind: "rejected" };
+        const signal = combineSignals(sessionSignal, actionSignal);
+        try {
+          const latest = await loadConfig(state.decision.setupName);
+          if (signal.aborted) return { kind: "close" };
+          validateOwner();
+          if (syncConfigReviewFingerprint(latest) !== state.decision.configIdentity) {
+            refreshRequested = true;
+            return { kind: "close" };
+          }
+          const result = await runCancellableOperation(ctx, "Preparing remote policy preview…", "pull", runRoute, {
+            commitAware: true,
+            cancelAcrossDialogs: true,
+            target: state.decision.setupName,
+            signal,
+          });
+          return handleNestedRouteResult(result, "pull");
+        } catch (error) {
+          if (signal.aborted || !isCurrent()) return { kind: "close" };
+          ctx.ui.notify(`Could not prepare the local update: ${errorMessage(error)}`, "error");
+          return { kind: "stay" };
         }
       },
       keep: async ({ state, signal: actionSignal }) => {
@@ -681,7 +722,7 @@ function canPublishLocalPolicy(decision: RemoteSelectionDecision) {
 
 function adoptionUnavailable(decision: RemoteSelectionDecision) {
   if (decision.ignorePolicyComparison)
-    return "Ignore files are local. Published metadata cannot reconstruct remote rules.";
+    return "A policy comparison does not apply rules. A reviewed Pull can use a snapshot that contains rule text.";
   if (scopesDiffer(decision))
     return "Scope differs. Configure a setup with the remote scope to join it; this location is not migrated in place.";
   if (

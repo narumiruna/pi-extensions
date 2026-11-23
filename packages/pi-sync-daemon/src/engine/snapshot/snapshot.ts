@@ -667,8 +667,9 @@ export function filterSnapshotForConfigPolicy(
   const files = wholeDirectory
     ? filterAgentDirectoryFiles(snapshot.files, config, options.sessionDir)
     : canonicalizeSnapshotFilesForConfig(snapshot.files, config, customIncludePathsByLower(include));
+  const { ignoreRules: _ignoreRules, ...image } = snapshot;
   const filtered = {
-    ...snapshot,
+    ...image,
     version:
       selection.version === 4
         ? IGNORE_SNAPSHOT_VERSION
@@ -686,7 +687,8 @@ export function filterSnapshotForConfigPolicy(
     selection,
     files,
   };
-  if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
+  if (!options.regenerateId || (snapshot.version === filtered.version && snapshotsMatch(snapshot, filtered)))
+    return filtered;
   return {
     ...filtered,
     id: snapshotId(),
@@ -793,6 +795,8 @@ export function scanSnapshot(snapshot: Snapshot) {
       }
     }
   }
+  if (snapshot.ignoreRules && SECRET_PATTERNS.some((pattern) => pattern.test(snapshot.ignoreRules?.text ?? "")))
+    findings.push(snapshot.ignoreRules.filename);
   return findings;
 }
 

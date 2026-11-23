@@ -3,7 +3,7 @@ import path from "node:path";
 import { DEBUG_LOG_FILENAME, isDebugLogPath, isDeniedPath, toPosix } from "../paths.js";
 import {
   type DirectoryScope,
-  IGNORE_SNAPSHOT_VERSION,
+  isIgnoreSnapshotVersion,
   type Snapshot,
   type SnapshotSelection,
 } from "../snapshot/snapshot-types.js";
@@ -245,8 +245,8 @@ export function validateSnapshotSelection(snapshot: Pick<Snapshot, "version" | "
     throw new Error("Exclude policy requires snapshot version 4 and selection version 2.");
   if ((snapshot.version === 5) !== (selection?.version === 3))
     throw new Error("Agent-directory policy requires snapshot version 5 and selection version 3.");
-  if ((snapshot.version === IGNORE_SNAPSHOT_VERSION) !== (selection?.version === 4))
-    throw new Error("Ignore-file policy requires snapshot version 6 and selection version 4.");
+  if (isIgnoreSnapshotVersion(snapshot.version) !== (selection?.version === 4))
+    throw new Error("Ignore-file policy requires snapshot version 6 or 7 and selection version 4.");
 }
 
 export function assertSnapshotPathExcludesDebugLog(filePath: unknown) {
@@ -261,7 +261,7 @@ export function assertSnapshotExcludesDebugLog(snapshot: Pick<Snapshot, "files">
 }
 
 export function requireLegacyTransferPolicy(snapshot: Partial<Pick<Snapshot, "version" | "selection">>) {
-  if (snapshot.version === IGNORE_SNAPSHOT_VERSION || snapshot.selection?.version === 4)
+  if (isIgnoreSnapshotVersion(snapshot.version) || snapshot.selection?.version === 4)
     throw new Error("This setup cannot transfer an ignore-file snapshot without a reviewed local ignore policy.");
 }
 
@@ -317,7 +317,7 @@ export function formatIgnorePolicyComparison(comparison: IgnorePolicyComparison)
     case "match":
       return "Remote ignore-file policy matches this device.";
     case "mismatch":
-      return "Remote ignore-file policy differs. Edit local rules to match, or review publishing this device's policy.";
+      return "Remote ignore-file policy differs. Review a directional Push or Pull; Pull needs the remote rule text.";
     case "local-ignore-remote-legacy":
       return "Remote uses a legacy content policy. Review publishing this device's ignore-file policy.";
     case "local-legacy-remote-ignore":

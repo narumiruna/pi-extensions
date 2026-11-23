@@ -8,6 +8,7 @@ import path from "node:path";
 import { test } from "vitest";
 import type { LatestPointer } from "../src/engine/backends/backend-types.js";
 import { WebDavSyncBackend } from "../src/engine/backends/webdav/webdav-backend.js";
+import { ignorePolicyFingerprint } from "../src/engine/ignore/ignore-source.js";
 import { configFromSettings, syncCheckConfigFingerprint } from "../src/engine/settings/config.js";
 import type { AnySyncConfig, PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import { createEngineService } from "../src/engine-service.js";
@@ -242,7 +243,9 @@ test("the documented History recovery extracts a file excluded by a narrower Pus
     await run("push", { yes: true });
     const reference = readHead().snapshot.snapshot;
     await fs.appendFile(path.join(root, ".syncignore"), "/legacy.txt\n");
-    onCallback(async ({ kind }) => ["directional-checkpoint", "queue-acquire", "queue-release"].includes(kind));
+    onCallback(async ({ kind }) =>
+      ["confirm", "directional-checkpoint", "queue-acquire", "queue-release"].includes(kind),
+    );
     const outcome = (await run("push.foreground", await foregroundPayload())) as { outcome: string; message: string };
     assert.equal(outcome.outcome, "applied");
     assert.match(outcome.message, /Rollback uses the current rules and does not restore excluded files/u);
@@ -270,6 +273,57 @@ test("the documented History recovery extracts a file excluded by a narrower Pus
     assert.ok(requests.length > 0 && requests.every(([method]) => method === "GET"));
   }));
 
+test("the daemon previews a policy conflict, and only confirmed Pull adopts it without rewriting WebDAV", () =>
+  fixture(async ({ root, run, foregroundPayload, loadSettings, readHead, onCallback, requests }) => {
+    await run("push", { yes: true });
+    const backend = fixtureBackend(loadSettings());
+    const initial = await backend.readHead();
+    assert.ok(initial);
+    const image = await backend.readSnapshot(initial.snapshotRef);
+    assert.ok(image.selection?.version === 4);
+    const text = "\uFEFF# rule bytes\r\n/private.md\r\n";
+    await backend.publishSnapshot(
+      {
+        ...image,
+        id: "remote-rules",
+        files: [snapshotFile("notes.md", "incoming")],
+        ignoreRules: { filename: ".syncignore", text },
+        selection: { ...image.selection, fingerprint: ignorePolicyFingerprint(text, false) },
+      },
+      { kind: "revision", revision: initial.revision },
+    );
+    const head = readHead().bytes;
+    const rules = path.join(root, ".syncignore");
+    const previous = await fs.readFile(rules, "utf8");
+    const localNote = path.join(root, "notes.md");
+    let approved = false;
+    const reviews: string[] = [];
+    onCallback(async ({ kind, payload }) => {
+      if (kind === "confirm") {
+        const { title, message } = payload as { title: string; message: string };
+        reviews.push(`${title}\n${message}`);
+        return approved;
+      }
+      return ["directional-checkpoint", "queue-acquire", "queue-release"].includes(kind);
+    });
+    await assert.rejects(run("pull", { force: true, yes: true }), /policy differs/u);
+    const before = await foregroundPayload();
+    assert.equal(((await run("pull.foreground", before)) as { outcome: string }).outcome, "cancelled");
+    assert.equal(await fs.readFile(rules, "utf8"), previous);
+    assert.equal(await fs.readFile(localNote, "utf8"), "local notes\n");
+    assert.match(reviews[0] ?? "", /Overwrite local rules and pull\?/u);
+    assert.match(reviews[0] ?? "", /Update locally: notes\.md/u);
+    assert.match(reviews[0] ?? "", /rule bytes/u);
+    approved = true;
+    requests.length = 0;
+    assert.equal(((await run("pull.foreground", before)) as { outcome: string }).outcome, "applied");
+    assert.equal(await fs.readFile(rules, "utf8"), text);
+    assert.equal(await fs.readFile(localNote, "utf8"), "incoming");
+    assert.equal(await fs.readFile(path.join(root, "private.md"), "utf8"), "never publish\n");
+    assert.deepEqual(readHead().bytes, head);
+    assert.ok(requests.length > 0 && requests.every(([method]) => method === "GET"));
+  }));
+
 test("a foreground request rejects unbound actions or replay under a different checkpoint", () =>
   fixture(async ({ run, foregroundPayload, requests, root, onCallback }) => {
     await run("push", { yes: true });
@@ -289,7 +343,7 @@ test("a foreground request rejects unbound actions or replay under a different c
     assert.equal(await fs.readFile(notes, "utf8"), "local changed after last sync\n");
   }));
 
-test("daemon routes review a legacy-to-v6 publication, merge divergent files, and roll back through current rules", () =>
+test("daemon routes review a legacy-to-v7 publication, merge divergent files, and roll back through current rules", () =>
   fixture(async ({ root, run, loadSettings, saveSettings, readHead, onCallback }) => {
     const legacy = loadSettings();
     const home = legacy.syncSetups.home;
@@ -314,7 +368,8 @@ test("daemon routes review a legacy-to-v6 publication, merge divergent files, an
     const first = await backend.readHead();
     assert.ok(first);
     const image = await backend.readSnapshot(first.snapshotRef);
-    assert.equal(image.version, 6);
+    assert.equal(image.version, 7);
+    assert.equal(image.ignoreRules?.text, await fs.readFile(path.join(root, ".syncignore"), "utf8"));
     assert.deepEqual(Object.keys(image.selection ?? {}).sort(), ["fingerprint", "scope", "sessions", "version"]);
     assert.deepEqual(
       image.files.map(({ path }) => path),

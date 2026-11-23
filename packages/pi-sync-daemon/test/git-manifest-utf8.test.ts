@@ -6,7 +6,9 @@ import { test } from "vitest";
 import { GitSyncBackend } from "../src/engine/backends/git/git-backend.js";
 import { runGit } from "../src/engine/backends/git/git-runner.js";
 import { GIT_MANIFEST_VERSION } from "../src/engine/backends/git/git-storage.js";
-import { IGNORE_SNAPSHOT_VERSION } from "../src/engine/snapshot/snapshot-types.js";
+import { expectedRemoteHead } from "../src/engine/backends/sync-backend.js";
+import { ignorePolicyFingerprint } from "../src/engine/ignore/ignore-source.js";
+import { IGNORE_SNAPSHOT_VERSION, RULES_SNAPSHOT_VERSION } from "../src/engine/snapshot/snapshot-types.js";
 
 const branch = "pi-sync/test";
 
@@ -64,6 +66,30 @@ async function withPublication(
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test("Git round-trips portable rule bytes without adding the rule file to the published tree payload", () =>
+  withPublication(IGNORE_SNAPSHOT_VERSION, Buffer.from("fixture"), async (backend, commit) => {
+    const prior = await backend.readSnapshot(commit);
+    assert.equal(prior.ignoreRules, undefined);
+    const text = "\uFEFF# Exact rules\r\n/notes/\r\n# no final newline";
+    const next = {
+      ...prior,
+      id: "rules-v7",
+      version: RULES_SNAPSHOT_VERSION,
+      selection: {
+        version: 4 as const,
+        scope: "agent-directory" as const,
+        fingerprint: ignorePolicyFingerprint(text, false),
+        sessions: false,
+      },
+      ignoreRules: { filename: ".syncignore", text },
+    };
+    const result = await backend.publishSnapshot(next, expectedRemoteHead(await backend.readHead()));
+    assert.deepEqual(await backend.readSnapshot(result.head.snapshotRef), next);
+    assert.deepEqual(await backend.readHead(), result.head);
+    assert.doesNotMatch(JSON.stringify(result.head), /Exact rules|\.syncignore/u);
+    assert.equal((await backend.readSnapshot(commit)).version, 6);
+  }));
 
 const invalidUtf8 = /Git publication manifest is not valid UTF-8\./u;
 

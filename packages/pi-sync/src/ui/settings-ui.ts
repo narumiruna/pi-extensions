@@ -413,7 +413,7 @@ export async function showSyncSettings(
           if (
             !(await ctx.ui.confirm(
               "Save content policy?",
-              `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and snapshot version 6; older clients must refuse them." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5; older clients must refuse it." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
+              `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and publishes snapshot version 7; upgrade older clients first." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5; older clients must refuse it." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
               { signal: mutationSignal },
             ))
           )
@@ -488,7 +488,7 @@ export async function showSyncSettings(
           if (sameLocalFields(previous.localFields, fields)) return { kind: "stay" };
           const confirmed = await ctx.ui.confirm(
             "Save portable field policy?",
-            `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and snapshot version 6." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
+            `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and publishes snapshot version 7." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
             { signal: mutationSignal },
           );
           validate();

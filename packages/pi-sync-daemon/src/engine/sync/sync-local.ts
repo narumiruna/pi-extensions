@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -85,7 +86,7 @@ export async function backupDirectionalSnapshot(snapshot: Snapshot, signal?: Abo
     throwIfAborted(signal);
   };
   await validate();
-  return { backupPath, validate };
+  return { backupPath, validate, digest: createHash("sha256").update(encoded).digest("hex") };
 }
 
 async function writeSnapshotBackup(snapshot: Snapshot, signal?: AbortSignal, durableParent = false) {

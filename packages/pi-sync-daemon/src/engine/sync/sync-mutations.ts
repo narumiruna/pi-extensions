@@ -8,6 +8,7 @@ import {
 } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
+import { loadAdoptionJournal, requireNoPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig, loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import {
@@ -29,6 +30,7 @@ import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { pruneMergeBaselines } from "../state/merge-baseline-store.js";
 import type { SyncState } from "../state/state-types.js";
 import { readStateForConfig, syncStateFingerprint, writeStateForConfig } from "../state/sync-state-store.js";
+import { formatRuleChanges } from "../ui/ignore-rule-preview.js";
 import {
   countPreservedRemoteFiles,
   formatPullSummary,
@@ -51,6 +53,8 @@ import {
   validateDirectionalSettings,
 } from "./directional-action.js";
 import { confirmFieldMigration } from "./field-migration.js";
+import { adoptRemoteRules, canReviewAdoption } from "./ignore-adoption.js";
+import { ignorePublicationNotice, withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { readMergeJournal, requireNoMergeJournal, retireMergeJournal } from "./merge-journal.js";
 import { mergeSync } from "./merged-sync.js";
@@ -120,6 +124,7 @@ export async function push(
   input?: PushInput,
   factory: SyncBackendFactory = createSyncBackend,
 ) {
+  requireNoPendingAdoption();
   const validateOwner = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);
   const action = foregroundDirectionalAction(ctx, options);
@@ -166,19 +171,24 @@ export async function push(
       ? await readSnapshotForHead(backend, head, options.signal, config)
       : await readRemoteSnapshotForUpload(backend, config, head, state, options);
   validateMutation();
-  if (config.ignorePolicy && remoteForUpload && options.force && (options.auto || options.yes || !ctx.hasUI)) {
-    const comparison = inspectRemoteSelection(config.include, remoteForUpload, config.exclude, config);
-    if (comparison.kind === "different") requireCompatibleRemoteSelection(config, remoteForUpload);
-  }
-  if (action) requireDirectionalSelection(config, state, localRaw, remoteForUpload, snapshotOptions.sessionDir);
+  const policyOverwrite = Boolean(
+    config.ignorePolicy &&
+      remoteForUpload &&
+      inspectRemoteSelection(config.include, remoteForUpload, config.exclude, config).kind === "different",
+  );
+  if (policyOverwrite && remoteForUpload && (options.auto || options.background || options.yes || !ctx.hasUI))
+    requireCompatibleRemoteSelection(config, remoteForUpload);
+  if (action && !policyOverwrite)
+    requireDirectionalSelection(config, state, localRaw, remoteForUpload, snapshotOptions.sessionDir);
   else requireIgnoreBaselineReview(ctx, config, state, options);
-  if (!action && remoteForUpload && !options.force) {
+  if (!action && remoteForUpload && !options.force && !policyOverwrite) {
     requireCompatibleRemoteSelection(config, remoteForUpload);
   }
   if (
     !action &&
     remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)) &&
-    !options.force
+    !options.force &&
+    !policyOverwrite
   ) {
     const remoteForConflict = remoteForUpload
       ? filterSnapshotForConfigPolicy(remoteForUpload, config, snapshotOptions)
@@ -216,13 +226,21 @@ export async function push(
     );
     validatePortableSnapshot(upload);
   }
+  upload = await withPublishedIgnoreRules(upload, config, options.signal);
+  validateMutation();
   if (!config.skipSecretScan) {
-    const secrets = scanSnapshot(local);
+    const secrets = scanSnapshot({ ...local, ...(upload.ignoreRules ? { ignoreRules: upload.ignoreRules } : {}) });
     if (secrets.length > 0) {
       throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
     }
   }
 
+  if (
+    (!action || policyOverwrite) &&
+    !(await confirmPush(ctx, options, config, backend, local, upload, head, remoteForUpload, validateMutation))
+  ) {
+    return "cancelled" as const;
+  }
   if (action) {
     await checkpointDirectionalAction(options, {
       direction: "push",
@@ -235,10 +253,6 @@ export async function push(
       protectedPaths: reviewedProtectedPaths,
     });
     validateMutation();
-  } else if (
-    !(await confirmPush(ctx, options, config, backend, local, upload, head, remoteForUpload, validateMutation))
-  ) {
-    return "cancelled" as const;
   }
 
   if (options.force) {
@@ -435,6 +449,9 @@ export async function pull(
 ) {
   const action = foregroundDirectionalAction(ctx, options);
   if (action && initial) throw new Error("Single-action Pull cannot be used for initial-source selection.");
+  const adoptionReview = !initial && canReviewAdoption(ctx, options);
+  const journal = adoptionReview ? await loadAdoptionJournal() : undefined;
+  if (!adoptionReview) requireNoPendingAdoption();
   const validateOwner = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);
   const config = action ? await loadConfigForCheck(undefined, options.signal) : await loadConfig(options.setup);
@@ -447,7 +464,7 @@ export async function pull(
   if (initial && initial.configIdentity !== configIdentity)
     throw new Error("Settings changed before initial pull; run sync again.");
   await requireNoMergeJournal(config, options);
-  if (action && (await pendingTransactionEntries()).length)
+  if (action && !journal && (await pendingTransactionEntries()).length)
     throw new Error("A pending local transaction must be reconciled before Pull; its evidence was retained.");
   validateMutation();
   setSyncStatus(ctx, `pulling ${config.setupName}`, { activity: "pulling" });
@@ -468,18 +485,45 @@ export async function pull(
   if (initial && !sameHashes(initial.localHashes, fileHashMap(local)))
     throw new Error("Local bytes changed before initial pull; run sync again.");
   let preimageRemote: Snapshot | undefined;
+  let adoption: Snapshot | undefined;
   const { head, snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal, {
     ...snapshotOptions,
-    ...(action
+    ...(action || (adoptionReview && config.ignorePolicy) || journal
       ? {
           validateSelection: (raw: Snapshot) => {
-            requireDirectionalSelection(config, state, local, raw, snapshotOptions.sessionDir);
-            preimageRemote = raw;
+            const comparison = inspectRemoteSelection(
+              config.include,
+              raw,
+              config.exclude,
+              config,
+            ).ignorePolicyComparison;
+            if (journal || (adoptionReview && comparison === "mismatch")) {
+              adoption = raw;
+            } else if (action) {
+              requireDirectionalSelection(config, state, local, raw, snapshotOptions.sessionDir);
+              preimageRemote = raw;
+            } else {
+              requireCompatibleRemoteSelection(config, raw);
+            }
           },
         }
       : {}),
   });
   validateMutation();
+  if (adoption && head)
+    return adoptRemoteRules({
+      ctx,
+      options,
+      config,
+      backend,
+      state,
+      head,
+      remote: adoption,
+      snapshotOptions,
+      validateMutation,
+      journal,
+    });
+  if (journal) throw new Error("Pending rule adoption no longer matches the remote. Preserve its journal.");
   if (initial && !matchesInitialHead(initial, backend, head))
     throw new Error("Remote changed before initial pull; run sync again.");
   if (!action) requireIgnoreBaselineReview(ctx, config, state, options);
@@ -723,6 +767,7 @@ export async function syncBoth(
   options: CommandOptions,
   factory: SyncBackendFactory = createSyncBackend,
 ) {
+  requireNoPendingAdoption();
   if (options.directionalAction) throw new Error("Single-action transfer cannot authorize bidirectional Sync.");
   const validateMutation = captureMutationOwner(ctx, options.signal);
   const config = await loadConfig(options.setup);
@@ -911,17 +956,23 @@ async function confirmPush(
     config.ignorePolicy && remote
       ? inspectRemoteSelection(config.include, remote, config.exclude, config).ignorePolicyComparison
       : undefined;
+  const notice = ignorePublicationNotice(upload);
+  const overwrite = comparison !== undefined && comparison !== "match";
   const confirmed = await confirmTransferReview(
     ctx,
-    title,
-    comparison && comparison !== "match"
-      ? formatTransferReview(
-          formatIgnorePolicyComparison(comparison),
-          "Only files selected by this device's rules are published. Remote rules are not adopted.",
-          "",
-          summary,
-        )
-      : summary,
+    overwrite ? "Overwrite remote policy and push?" : title,
+    formatTransferReview(
+      ...(overwrite
+        ? [
+            formatIgnorePolicyComparison(comparison),
+            "This replaces the remote policy with this device's rules. Remote rules are not adopted on this device.",
+            `Sessions opt-in: ${remote?.selection?.version === 4 ? (remote.selection.sessions ? "on" : "off") : "legacy"} → ${config.ignorePolicy?.sessions ? "on" : "off"}.`,
+            formatRuleChanges(remote?.ignoreRules?.text, upload.ignoreRules?.text),
+          ]
+        : []),
+      ...(notice ? [notice, ""] : []),
+      summary,
+    ),
     options.signal,
     validateMutation,
   );

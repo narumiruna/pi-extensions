@@ -36,7 +36,7 @@ import {
 } from "./snapshot-transaction.js";
 import { ignorePolicyValidator } from "./snapshot-transaction-policy.js";
 import {
-  IGNORE_SNAPSHOT_VERSION,
+  isIgnoreSnapshotVersion,
   type Snapshot,
   type SnapshotApplyPlan,
   type SnapshotOptions,
@@ -52,7 +52,7 @@ function fileHashMap(snapshot: Snapshot) {
 
 function assertSnapshotApplyPolicy(snapshot: Snapshot, options: SnapshotOptions) {
   assertSnapshotExcludesDebugLog(snapshot);
-  if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) {
+  if (!isIgnoreSnapshotVersion(snapshot.version)) {
     requireLegacyTransferPolicy(snapshot);
     if (options.ignorePolicy)
       throw new Error("Project the snapshot into the reviewed local ignore-file policy before applying it.");

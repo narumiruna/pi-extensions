@@ -202,7 +202,7 @@ export function consentFingerprint(root: string, config: AnySyncConfig) {
   if (!consent) throw new Error("Review daemon handover first.");
   // Keep the original digest domain across package renames; never persist the internal freshness token.
   return createHmac("sha256", consent.nonce)
-    .update("sync-daemon-consent/v1")
+    .update(config.ignorePolicy ? "sync-daemon-consent/portable-ignore/v1" : "sync-daemon-consent/v1")
     .update(syncCheckConfigFingerprint(config))
     .digest("hex");
 }
@@ -210,6 +210,17 @@ export function automaticPolicyAuthorized(root: string, config: AnySyncConfig) {
   if (config.reservedIgnoreNames === undefined) return true;
   const saved = readConsent(root)?.setups[config.setupName];
   return saved?.automaticFingerprint !== undefined && saved.automaticFingerprint === consentFingerprint(root, config);
+}
+
+function ignorePublicationConsentLines(config: AnySyncConfig) {
+  const policy = config.ignorePolicy;
+  if (!policy) return [];
+  return [
+    "Review this file before you approve its scope. Peers must be able to read snapshot version 7.",
+    policy.matches(policy.filename)
+      ? "The rule file excludes itself; new snapshots omit its text."
+      : "New snapshots include the rule file, including any rule comments and private path names.",
+  ];
 }
 
 export async function reviewAutomaticPolicy(execution: Execution, config: AnySyncConfig, expectedFingerprint: string) {
@@ -261,7 +272,7 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
       ...(config.ignorePolicy
         ? [
             `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
-            "Review this file before you approve its scope.",
+            ...ignorePublicationConsentLines(config),
           ]
         : []),
       `Enabled modes: ${modes.join("; ")}`,
@@ -391,6 +402,7 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
     ? [
         "Selected content: eligible files in the Pi agent directory",
         `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
+        ...ignorePublicationConsentLines(config),
         `Session opt-in: ${config.ignorePolicy.sessions ? "On — ignore rules still apply" : "Off"}`,
       ].join("\n")
     : config.scope === "agent-directory"

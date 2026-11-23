@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
@@ -14,6 +14,11 @@ import { statePathForConfig } from "../src/state/sync-state-store.js";
 import { showRemoteSelectionReview } from "../src/ui/remote-selection-ui.js";
 import { snapshot, v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
+
+vi.mock("../src/ui/ignore-file-ui.js", async (original) => ({
+  ...(await original<typeof import("../src/ui/ignore-file-ui.js")>()),
+  portableIgnoreRulesAvailable: async () => true,
+}));
 
 initTheme("dark", false);
 
@@ -72,7 +77,10 @@ test.each([undefined, "mismatch", "local-legacy-remote-ignore", "local-ignore-re
       await waitForSelectionScreen(tui);
       const menu = tui.render().join("\n");
       assert.match(menu, /Review (policy difference|all paths)/u);
-      assert.doesNotMatch(menu, /Use remote content list|publishing this device|update remote|Continue/u);
+      assert.doesNotMatch(
+        menu,
+        /Use remote content list|pulling the remote rules|publishing this device|update remote|Continue/u,
+      );
       tui.press("tui.select.confirm");
       await waitForSelectionScreen(tui);
       assert.match(
@@ -90,6 +98,49 @@ test.each([undefined, "mismatch", "local-legacy-remote-ignore", "local-ignore-re
     }
   },
 );
+
+test("ignore-policy conflicts offer both directions and a cancelled Pull does not modify settings", () =>
+  withTempHome(async (root) => {
+    mkdirSync(root, { recursive: true });
+    const before = JSON.stringify(v3S3Settings({ include: ["settings.json"] }));
+    writeFileSync(localConfigPath(), before, { mode: 0o600 });
+    const config = await loadConfig();
+    const keys = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "ctrl+x" });
+    const tui = createTuiHarness({ width: 100, rows: 28, keybindings: keys });
+    const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+    const invoked = Promise.withResolvers<string>();
+    const runRoute = vi.fn(async (route: string) => {
+      invoked.resolve(route);
+      return { kind: "completed", outcome: "cancelled" } as const;
+    });
+    const owner = new AbortController();
+    const running = showRemoteSelectionReview(ctx, "home", owner.signal, undefined, {
+      decision: {
+        setupName: "home",
+        configIdentity: syncConfigReviewFingerprint(config),
+        localInclude: [],
+        remoteInclude: [],
+        ignorePolicyComparison: "mismatch",
+      },
+      origin: "sync",
+      runRoute,
+    });
+    try {
+      await waitForSelectionScreen(tui);
+      for (const width of [48, 100]) assert.ok(tui.render(width).every((line) => visibleWidth(line) <= width));
+      assert.match(tui.render(100).join("\n"), /Review pulling the remote rules/u);
+      assert.match(tui.render(100).join("\n"), /Review publishing this device/u);
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      assert.equal(await invoked.promise, "pull");
+      assert.equal(runRoute.mock.calls.length, 1);
+    } finally {
+      owner.abort();
+      tui.dispose();
+      await running;
+    }
+    assert.equal(readFileSync(localConfigPath(), "utf8"), before);
+  }));
 
 test("captured setup text is sanitized at the review display boundary", async () => {
   const rendered = new Map<number, string[]>();

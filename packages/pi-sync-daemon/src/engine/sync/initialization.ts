@@ -1,4 +1,5 @@
 import type { EngineContext } from "../host.js";
+import { hasPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
@@ -27,6 +28,14 @@ export async function initializeSync(
       const stateNotice = stateDirectoryMigrationNotice();
       if (stateNotice && ctx.hasUI) ctx.ui.notify(stateNotice, "warning");
       await timings.measure("transaction recovery", async () => {
+        if (hasPendingAdoption()) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Ignore-rule adoption is pending. Resume from the originating setup with /sync pull.",
+              "warning",
+            );
+          return;
+        }
         const pending = await pendingTransactionEntries();
         validate();
         if (!pending.some((entry) => entry.isDirectory())) return;

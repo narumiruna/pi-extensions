@@ -25,7 +25,7 @@ function contentLines(config: AnySyncConfig) {
     config.scope === "agent-directory"
       ? "included content: eligible files in the Pi agent directory"
       : `included content: ${config.include.map(safeTerminalText).join(", ") || "none"}`,
-    ...(config.ignorePolicy ? ["path policy: local ignore file (rule text is not published)"] : []),
+    ...(config.ignorePolicy ? ["path policy: local ignore file (published unless it excludes itself)"] : []),
     ...(config.exclude === undefined
       ? []
       : [`excluded paths: ${config.exclude.map(safeTerminalText).join(", ") || "none"}`]),

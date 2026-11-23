@@ -12,6 +12,8 @@ import {
 } from "../src/engine/backends/sync-backend.js";
 import type { CommandOptions } from "../src/engine/commands/command-types.js";
 import { configureEngineHost, type EngineContext, engineHost, getEngineRoot } from "../src/engine/host.js";
+import { hasPendingAdoption } from "../src/engine/ignore/adoption-journal.js";
+import { ignorePolicyFingerprint } from "../src/engine/ignore/ignore-source.js";
 import { configFromSettings, loadConfig, syncCheckConfigFingerprint } from "../src/engine/settings/config.js";
 import type { PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import { snapshotOptionsForContext } from "../src/engine/snapshot/session-paths.js";
@@ -19,7 +21,7 @@ import { createSnapshot } from "../src/engine/snapshot/snapshot.js";
 import { applySnapshot } from "../src/engine/snapshot/snapshot-apply.js";
 import { decodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
 import type { Snapshot, SnapshotFile } from "../src/engine/snapshot/snapshot-types.js";
-import { readStateForConfig } from "../src/engine/state/sync-state-store.js";
+import { readStateForConfig, statePathForConfig } from "../src/engine/state/sync-state-store.js";
 import { readRemoteSnapshot } from "../src/engine/sync/remote-snapshot.js";
 import { inspectSync } from "../src/engine/sync/sync-inspection.js";
 import { pull, push, rollback, syncBoth } from "../src/engine/sync/sync-mutations.js";
@@ -230,11 +232,16 @@ for (const comparison of ["mismatch", "local-ignore-remote-legacy"] as const) {
       const observed = await readRemoteSnapshot(remote.backend, config, undefined, { allowSelectionDifference: true });
       assert.equal(observed.selectionState?.ignorePolicyComparison, comparison);
       assert.deepEqual(observed.snapshot?.selection, local.selection);
-      for (const direction of [options, { ...options, force: true, yes: true }]) {
-        await assert.rejects(push(ctx, direction, undefined, remote.factory), mismatch(comparison));
-        await assert.rejects(pull(ctx, direction, remote.factory), mismatch(comparison));
-        await assert.rejects(syncBoth(ctx, direction, remote.factory), mismatch(comparison));
-      }
+      ctx.ui.confirm = async () => false;
+      assert.equal(await push(ctx, options, undefined, remote.factory), "cancelled");
+      const unattended = { ...options, force: true, yes: true };
+      await assert.rejects(push(ctx, unattended, undefined, remote.factory), mismatch(comparison));
+      await assert.rejects(pull(ctx, unattended, remote.factory), mismatch(comparison));
+      await assert.rejects(
+        pull(ctx, options, remote.factory),
+        comparison === "mismatch" ? /does not contain rule text/u : mismatch(comparison),
+      );
+      await assert.rejects(syncBoth(ctx, options, remote.factory), mismatch(comparison));
       await assert.rejects(pull(ctx, { ...options, auto: true }, remote.factory), mismatch(comparison));
       assert.equal(remote.commits.length, 0);
       assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
@@ -287,13 +294,14 @@ test("reviewed push transitions selected-path history using only current local b
     assert.match(review, /Remote rules are not adopted/u);
     const [upload] = remote.commits;
     assert.ok(upload);
-    assert.equal(upload.version, 6);
+    assert.equal(upload.version, 7);
     assert.deepEqual(
       upload.files.map((entry) => entry.path),
       ["notes.txt"],
     );
     assert.deepEqual(upload.selection, selectionForSnapshot([], undefined, config));
-    assert.doesNotMatch(JSON.stringify(upload), /Local\.rules|private\.txt|sourceDigest/u);
+    assert.deepEqual(upload.ignoreRules, { filename: "Local.rules", text: activeRules });
+    assert.doesNotMatch(JSON.stringify(upload.selection), /Local\.rules|private\.txt|sourceDigest/u);
     const accepted = await readStateForConfig(config);
     assert.ok(accepted.ignorePolicyKey);
     assert.ok(!syncPolicyChanged(accepted, config));
@@ -518,7 +526,7 @@ for (const direction of ["push", "pull"] as const) {
 }
 
 for (const direction of ["push", "pull"] as const) {
-  test(`one-action ${direction} accepts provable narrowing but not a new managed path`, () =>
+  test(`one-action ${direction} requires approval before a narrowing policy can overwrite the destination`, () =>
     fixture(async ({ root, ctx, rules, remote }) => {
       await fs.writeFile(path.join(root, "notes.txt"), "accepted");
       await fs.writeFile(path.join(root, "omitted.txt"), "kept local");
@@ -526,11 +534,23 @@ for (const direction of ["push", "pull"] as const) {
       await push(ctx, await boundAction(ctx), undefined, remote.factory);
       const invoke = (action: CommandOptions) =>
         direction === "push" ? push(ctx, action, undefined, remote.factory) : pull(ctx, action, remote.factory);
-      await fs.writeFile(rules, "/omitted.txt\n");
-      await assert.rejects(invoke(await boundAction(ctx)), /policy differs/u);
+      const narrowed = "/private.txt\n/omitted.txt\n";
+      await fs.writeFile(rules, narrowed);
+      let action = await boundAction(ctx);
+      ctx.ui.confirm = async (title) => {
+        assert.match(title, /^Overwrite /u);
+        return false;
+      };
+      assert.equal(await invoke(action), "cancelled");
+      assert.equal(await fs.readFile(rules, "utf8"), narrowed);
       assert.equal(remote.commits.length, 1);
-      await fs.writeFile(rules, "/private.txt\n/omitted.txt\n");
-      assert.equal(await invoke(await boundAction(ctx)), "applied");
+      action = await boundAction(ctx);
+      ctx.ui.confirm = async (title) => {
+        assert.match(title, /^Overwrite /u);
+        return true;
+      };
+      assert.equal(await invoke(action), "applied");
+      assert.equal(await fs.readFile(rules, "utf8"), direction === "push" ? narrowed : activeRules);
       assert.equal(await fs.readFile(path.join(root, "omitted.txt"), "utf8"), "kept local");
       assert.equal(await fs.readFile(path.join(root, "private.txt"), "utf8"), "never synchronized");
       assert.equal(remote.commits.length, direction === "push" ? 2 : 1);
@@ -659,6 +679,126 @@ test("the bound Push cannot be combined with existing commands or authorization 
     }
     await assert.rejects(syncBoth(ctx, action, remote.factory), /cannot authorize bidirectional Sync/u);
     assert.deepEqual(remote.commits, []);
+  }));
+
+test.each(["during payload", "before rule install", "after rule install"] as const)(
+  "an interruption %s retains reviewed rule adoption for explicit resumption",
+  (phase) =>
+    fixture(async ({ root, rules, ctx, remote }) => {
+      const config = await loadConfig();
+      const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+      assert.equal(local.selection?.version, 4);
+      const incomingRules = "# Active publisher rules\r\n/leave-local.txt\r\n";
+      const head = remote.seed({
+        ...local,
+        id: "incoming",
+        version: 7,
+        selection: { ...local.selection, fingerprint: ignorePolicyFingerprint(incomingRules, false) },
+        ignoreRules: { filename: ".syncignore", text: incomingRules },
+        files: [file("notes.txt", "incoming")],
+      });
+      const notes = path.join(root, "notes.txt");
+      await fs.writeFile(notes, "local");
+      await fs.writeFile(path.join(root, "leave-local.txt"), "left local under the new rules");
+      const controller = new AbortController();
+      const mutate = engineHost().mutate;
+      const rename = fs.rename;
+      const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (phase === "after rule install" && to === statePathForConfig(config))
+          throw new Error("Simulated interruption before baseline publication");
+        await rename(from, to);
+        if (phase === "during payload" && to === notes) controller.abort();
+      });
+      engineHost().mutate = async (target, action) => {
+        if (phase === "before rule install" && target === rules)
+          throw new Error("Simulated interruption before rule installation");
+        return mutate(target, action);
+      };
+      try {
+        await assert.rejects(
+          pull(ctx, { ...options, signal: controller.signal }, remote.factory),
+          /Simulated interruption|cancelled/u,
+        );
+      } finally {
+        fault.mockRestore();
+        engineHost().mutate = mutate;
+      }
+      assert.equal(await fs.readFile(notes, "utf8"), "incoming");
+      assert.equal(await fs.readFile(rules, "utf8"), phase === "after rule install" ? incomingRules : activeRules);
+      assert.equal(hasPendingAdoption(), true);
+      assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
+      await assert.rejects(push(ctx, options, undefined, remote.factory), /Pending ignore-rule adoption/u);
+      assert.equal(await pull(ctx, options, remote.factory), "applied");
+      assert.equal(hasPendingAdoption(), false);
+      assert.equal(await fs.readFile(rules, "utf8"), incomingRules);
+      assert.equal(await fs.readFile(path.join(root, "leave-local.txt"), "utf8"), "left local under the new rules");
+      assert.equal((await readStateForConfig(await loadConfig())).lastAppliedSnapshot, head.snapshotId);
+      assert.equal((await remote.backend.readHead())?.revision, head.revision);
+    }),
+);
+
+test.each(["head changed", "shared source", "session opt-in changed", "protected live file"] as const)(
+  "Pull preserves local rules and files when the %s",
+  (reason) =>
+    fixture(async ({ root, ctx, rules, remote, settings, save }) => {
+      const config = await loadConfig();
+      const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+      assert.equal(local.selection?.version, 4);
+      const text = "# remote rules\n/private.txt\n";
+      const sessions = reason === "session opt-in changed";
+      const foreign = {
+        ...local,
+        id: "incoming-rules",
+        version: 7,
+        ignoreRules: { filename: ".syncignore", text },
+        selection: { ...local.selection, sessions, fingerprint: ignorePolicyFingerprint(text, sessions) },
+        files: [file("notes.txt", "incoming")],
+      };
+      remote.seed(foreign);
+      const note = path.join(root, "notes.txt");
+      await fs.writeFile(note, "keep local");
+      if (reason === "shared source") {
+        const setup = settings.syncSetups.work;
+        assert.ok(setup);
+        settings.syncSetups.shared = { ...setup, storage: { ...setup.storage, path: "another" } };
+        await save();
+      }
+      if (reason === "protected live file") ctx.protectedSessionFiles = [rules];
+      ctx.ui.confirm = async () => {
+        assert.equal(reason, "head changed");
+        remote.seed({ ...foreign, id: "advanced" });
+        return true;
+      };
+      const error = {
+        "head changed": /Remote changed/u,
+        "shared source": /shared by other setups/u,
+        "session opt-in changed": /Sessions opt-in differs/u,
+        "protected live file": /protected live session/u,
+      }[reason];
+      await assert.rejects(pull(ctx, options, remote.factory), error);
+      assert.equal(await fs.readFile(note, "utf8"), "keep local");
+      assert.equal(await fs.readFile(rules, "utf8"), activeRules);
+      assert.equal(hasPendingAdoption(), false);
+    }),
+);
+
+test("a self-excluding publication never carries the active rule text forward or deletes local rules on Pull", () =>
+  fixture(async ({ root, rules, ctx, remote }) => {
+    await fs.writeFile(path.join(root, "notes.txt"), "notes");
+    assert.equal(await push(ctx, options, undefined, remote.factory), "applied");
+    const first = await remote.backend.readHead();
+    assert.ok(first);
+    await fs.appendFile(rules, "/Local.rules\n# text stays local\n");
+    assert.equal(await push(ctx, options, undefined, remote.factory), "applied");
+    assert.equal(remote.commits.at(-1)?.ignoreRules, null);
+    assert.doesNotMatch(JSON.stringify(remote.commits.at(-1)), /text stays local/u);
+    assert.deepEqual((await remote.backend.readSnapshot(first.snapshotRef)).ignoreRules, {
+      filename: "Local.rules",
+      text: activeRules,
+    });
+    await fs.writeFile(rules, activeRules);
+    await assert.rejects(pull(ctx, options, remote.factory), /exclude their own file/u);
+    assert.equal(await fs.readFile(rules, "utf8"), activeRules);
   }));
 
 test("mixed legacy setups reserve configured ignore control files without changing portable selection", () =>

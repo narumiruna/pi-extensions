@@ -2,6 +2,7 @@ import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-
 import { expectedRemoteHead, type PublishSnapshotResult } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext } from "../host.js";
+import { requireNoPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import {
   effectiveSessionRoot,
@@ -13,17 +14,20 @@ import {
   createSnapshot,
   filterSnapshotForConfigPolicy,
   regenerateSnapshotIdentity,
+  scanSnapshot,
   snapshotIncludesSessions,
   snapshotWithoutSessions,
 } from "../snapshot/snapshot.js";
 import { applySnapshot } from "../snapshot/snapshot-apply.js";
 import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
+import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { pruneMergeBaselines } from "../state/merge-baseline-store.js";
 import { readStateForConfig, syncStateFingerprint, writeStateForConfig } from "../state/sync-state-store.js";
 import { formatPublicationPreview, formatRollbackSummary, formatTransferReview } from "../ui/sync-format.js";
 import { confirmTransferReview } from "../ui/transfer-review.js";
 import { inspectCaseCleanup, revalidateCaseCleanup } from "./apply-review.js";
 import { confirmFieldMigration } from "./field-migration.js";
+import { ignorePublicationNotice, withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { requireNoMergeJournal, retireMergeJournal } from "./merge-journal.js";
 import {
@@ -54,6 +58,7 @@ export async function rollback(
   expectedSelection?: { backendIdentity: string; setup?: string; snapshotId?: string },
 ) {
   if (options.directionalAction) throw new Error("Single-action transfer cannot authorize rollback.");
+  requireNoPendingAdoption();
   const validateMutation = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);
   const target = options.args[0];
@@ -105,10 +110,13 @@ export async function rollback(
   validateMutation();
   const physical = overlayLocalFields(remote, local, config.localFields);
   if (config.scope === "agent-directory") requireStableMergeSessionRoot(local, physical, config.scope);
-  const upload = config.ignorePolicy
-    ? remote
+  const upload: Snapshot = config.ignorePolicy
+    ? await withPublishedIgnoreRules(remote, config, options.signal)
     : await snapshotForUpload(backend, config, remote, expectedHead, currentRemote, snapshotOptions);
+  validateMutation();
   if (config.scope === "agent-directory") validatePortableSnapshot(upload);
+  if (upload.ignoreRules && !config.skipSecretScan && scanSnapshot({ ...upload, files: [] }).length)
+    throw new Error("Refusing to publish possible secrets in the ignore file.");
   const caseCleanup = options.yes ? [] : await inspectCaseCleanup(physical, snapshotOptions);
   validateMutation();
   const reviewedProtectedPaths = protectedSessionPaths(ctx, snapshotOptions.sessionDir);
@@ -130,7 +138,7 @@ export async function rollback(
           title,
           formatTransferReview(
             "Historical files are projected through this device's current ignore rules. Historical rules are not adopted. Retained history is not erased.",
-            "",
+            ignorePublicationNotice(upload) ?? "",
             summary,
             "",
             "Remote publication:",

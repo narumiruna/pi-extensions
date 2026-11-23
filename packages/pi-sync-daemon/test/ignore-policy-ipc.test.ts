@@ -199,7 +199,7 @@ test("inspection uses the active local source and a stale local fingerprint neve
 
 test("available IPC validates inputs and a deferred or cancelled offer does not change settings", () =>
   fixture(true, async ({ root, connection, methods, settingsPath, source, answer }) => {
-    assert.deepEqual(await connection.run("ignore.capabilities", {}), { available: true });
+    assert.deepEqual(await connection.run("ignore.capabilities", {}), { available: true, portableRules: 1 });
     await assert.rejects(connection.run("ignore.migrate", { ...setup, offerToken: "bad" }), /Invalid.*request/u);
     await assert.rejects(connection.run("ignore.migrate", { ...setup, yes: true }), /Invalid.*request/u);
     await assert.rejects(
