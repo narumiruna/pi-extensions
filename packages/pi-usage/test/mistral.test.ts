@@ -90,9 +90,13 @@ test("Mistral reads the subscription and budget routes, mirroring the official V
 });
 
 test("Mistral keeps plan details when the budget route denies the usage permission", async () => {
-  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-    String(input).includes("/v1/billing/subscription") ? jsonResponse(SUBSCRIPTION) : jsonResponse({ detail: "forbidden" }, 403),
-  );
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input) =>
+      String(input).includes("/v1/billing/subscription")
+        ? jsonResponse(SUBSCRIPTION)
+        : jsonResponse({ detail: "forbidden" }, 403),
+    );
   try {
     const report = await queryMistral();
     assert.equal(report.accountLabel, "INDIVIDUAL");
@@ -104,9 +108,11 @@ test("Mistral keeps plan details when the budget route denies the usage permissi
 });
 
 test("Mistral keeps a route that answers when the other 404s", async () => {
-  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-    String(input).includes("/v1/billing/subscription") ? jsonResponse(SUBSCRIPTION, 404) : jsonResponse(BUDGET),
-  );
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input) =>
+      String(input).includes("/v1/billing/subscription") ? jsonResponse(SUBSCRIPTION, 404) : jsonResponse(BUDGET),
+    );
   try {
     // Subscription is the required route here; the adapter fails closed rather than guessing a plan.
     await assert.rejects(() => queryMistral(), /404|Not Found/u);
