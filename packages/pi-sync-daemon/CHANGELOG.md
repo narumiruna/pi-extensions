@@ -1,5 +1,11 @@
 # @narumitw/pi-sync-daemon
 
+## 0.12.0
+
+### Minor Changes
+
+- 94d781f: Include the active ignore file in new snapshots unless it ignores itself. Require a reviewed overwrite for either direction of a policy conflict, and let Pull adopt verified remote rules without changing the remote. Upgrade all peers before publishing the new snapshot format and review automatic transfers again.
+
 ## 0.11.0
 
 ### Minor Changes

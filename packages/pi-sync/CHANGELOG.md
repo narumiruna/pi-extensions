@@ -1,5 +1,15 @@
 # @narumitw/pi-sync
 
+## 0.66.0
+
+### Minor Changes
+
+- 94d781f: Include the active ignore file in new snapshots unless it ignores itself. Require a reviewed overwrite for either direction of a policy conflict, and let Pull adopt verified remote rules without changing the remote. Upgrade all peers before publishing the new snapshot format and review automatic transfers again.
+
+### Patch Changes
+
+- 39e05a9: Find Settings by searching for storage connections in the sync menu. Show setting-specific save confirmations instead of generic transfer advice.
+
 ## 0.65.0
 
 ### Minor Changes

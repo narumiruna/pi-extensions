@@ -1,5 +1,11 @@
 # @narumitw/pi-plan-mode
 
+## 0.62.0
+
+### Minor Changes
+
+- cb6b507: Open the fullscreen Plan pane only when a draft or completed plan has content to show. Press F4 from the main editor to hide or reopen it on the configured side without changing settings.
+
 ## 0.61.0
 
 ### Minor Changes
