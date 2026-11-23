@@ -395,11 +395,7 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
       );
       await guard();
       if (signal.aborted) throw abortError();
-      return normalizeMistralBillingPayload(
-        subscription,
-        budget as MistralBudgetPayload | undefined,
-        Date.now(),
-      );
+      return normalizeMistralBillingPayload(subscription, budget as MistralBudgetPayload | undefined, Date.now());
     },
   },
 ];

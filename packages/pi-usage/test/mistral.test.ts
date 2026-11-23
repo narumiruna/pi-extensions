@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
-import { queryProviderUsage, type ResolvedUsageAuth, SUPPORTED_ADAPTERS, type UsageProviderAdapter } from "../src/index.js";
+import {
+  queryProviderUsage,
+  type ResolvedUsageAuth,
+  SUPPORTED_ADAPTERS,
+  type UsageProviderAdapter,
+} from "../src/index.js";
 
 const MISTRAL_MODEL = {
   id: "codestral-2508",
@@ -70,7 +75,7 @@ test("Mistral reads the subscription and budget routes, mirroring the official V
     assert.deepEqual(
       report.buckets.map((bucket) => [bucket.id, bucket.used, bucket.remaining]),
       [
-        ["vibe-allowance", 3.257940325333333, 96.74205967466667],
+        ["vibe-allowance", 3.257940325333332, 96.74205967466666],
         ["api-allowance", 0, 100],
       ],
     );
