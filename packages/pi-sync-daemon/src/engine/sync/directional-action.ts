@@ -5,14 +5,18 @@ import type { EngineContext } from "../host.js";
 import { loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { effectiveSessionRoot } from "../snapshot/session-paths.js";
-import { agentDirectoryInventory, filterSnapshotForConfigPolicy } from "../snapshot/snapshot.js";
+import {
+  agentDirectoryInventory,
+  filterSnapshotForConfigPolicy,
+  snapshotWithoutSessions,
+} from "../snapshot/snapshot.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import type { SyncState } from "../state/state-types.js";
 import { syncStateFingerprint } from "../state/sync-state-store.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { inspectCaseCleanup } from "./apply-review.js";
 import { requireCompatibleRemoteSelection } from "./remote-snapshot.js";
-import { inspectRemoteSelection, syncSelectionHasContent } from "./sync-policy.js";
+import { inspectRemoteSelection, syncSelectionHasContent, syncSessionsSelected } from "./sync-policy.js";
 import { fileHashMap, syncPolicyChanged } from "./sync-state.js";
 import { checkLiveProtection } from "./transfer-freshness.js";
 
@@ -181,9 +185,19 @@ export function notifyDirectionalSuccess(
   else if (!options.silent) ctx.ui.notify(message, warning ? "warning" : "info");
 }
 
-export function remoteRestoreGuidance(head: RemoteHead) {
+export function remoteRestoreGuidance(
+  head: RemoteHead,
+  previous: Snapshot,
+  config: AnySyncConfig,
+  sessionDir: string | undefined,
+) {
   const ref = head.snapshotRef === head.snapshotId ? "" : ` (reference ${safeTerminalText(head.snapshotRef)})`;
-  return `Restore the previous remote version ${safeTerminalText(head.snapshotId)}${ref} from /sync → History.`;
+  const version = `${safeTerminalText(head.snapshotId)}${ref}`;
+  const eligible = config.ignorePolicy || syncSessionsSelected(config) ? previous : snapshotWithoutSessions(previous);
+  const selected = filterSnapshotForConfigPolicy(eligible, config, { sessionDir });
+  return selected.files.length === previous.files.length
+    ? `Restore the previous remote version ${version} from /sync → History.`
+    : `History retains remote version ${version}. Rollback uses the current rules and does not restore excluded files. See “Recover excluded files from History” in the Pi Sync README.`;
 }
 
 export function localRestoreGuidance(backup: string) {

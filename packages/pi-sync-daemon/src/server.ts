@@ -424,6 +424,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       },
     };
   }
+  function assertForegroundQueueReady() {
+    if (foregroundRecoveryJob)
+      throw Object.assign(new Error("File-queue cleanup is pending; no new daemon work can start."), {
+        code: OWNERSHIP_CLEANUP_REQUIRED,
+      });
+  }
   function enqueue(id: string, client: string, operation: string, payload: unknown): Job {
     const peer = requireParticipant(client);
     if (!id.startsWith(operationPrefix(identity)))
@@ -435,10 +441,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         throw new Error("Operation ID was reused with different input.");
       return duplicate;
     }
-    if (foregroundRecoveryJob)
-      throw Object.assign(new Error("File-queue cleanup is pending; no new daemon work can start."), {
-        code: OWNERSHIP_CLEANUP_REQUIRED,
-      });
+    assertForegroundQueueReady();
     if (retired.has(id))
       throw new Error("Operation result expired; reconcile the existing journal before starting new work.");
     if (retired.size + jobs.size >= 4096)
@@ -482,6 +485,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     job.promise = queue
       .then(async () => {
         execution.validate();
+        assertForegroundQueueReady();
         job.view.phase = "running";
         note("started");
         const result = await execute(operation, payload, execution);

@@ -1,4 +1,4 @@
-import { hello, requestDaemon } from "./client-transport.js";
+import { DaemonError, hello, requestDaemon } from "./client-transport.js";
 import { acquireStartupLock, checkUpgradeConsent, finishUpgrade } from "./daemon-startup.js";
 import {
   canonicalRootGuard,
@@ -78,16 +78,25 @@ export async function stopDaemonAfterForegroundQueueFailure(
       reply = await requestDaemon(paths, identity, "foreground-stop", params, signal);
     } catch (error) {
       signal.throwIfAborted();
-      if (await readIdentity(paths))
+      const current = await readIdentity(paths);
+      signal.throwIfAborted();
+      assertRoot();
+      if (current && !samePublished(current))
+        throw new Error("Daemon owner changed during recovery. Keep the recorded evidence.", { cause: error });
+      if (current && error instanceof DaemonError)
         throw new Error("Daemon stop could not be confirmed. Queue grants and recovery evidence were retained.", {
           cause: error,
         });
+      return finishUpgrade(paths, barrier, assertRoot, signal);
     }
     if (record(reply) && typeof reply.blocked === "string") {
-      if (samePublished(await readIdentity(paths))) await clearUpgradeOwner(paths);
+      const current = await readIdentity(paths);
+      signal.throwIfAborted();
+      assertRoot();
+      if (samePublished(current)) await clearUpgradeOwner(paths);
       throw new Error(reply.blocked);
     }
-    if (reply !== undefined && (!record(reply) || reply.stopping !== true))
+    if (!record(reply) || reply.stopping !== true)
       throw new Error("Daemon stop could not be confirmed. Queue grants and recovery evidence were retained.");
     await finishUpgrade(paths, barrier, assertRoot, signal);
   }, release);

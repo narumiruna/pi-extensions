@@ -381,12 +381,14 @@ export class PiDaemonClient {
   }
   async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
+    this.assertNoDirectionalRecovery();
     if (!allowUpgrade && !this.paused && this.connection?.contactState === "active") return !this.protectionOnly;
     const address = await findDaemon(this.root).catch((error: unknown) => {
       this.recordDebug({ event: "connection", outcome: "failed" });
       throw error;
     });
     this.validate();
+    this.assertNoDirectionalRecovery();
     if (!address) {
       this.recordDebug({ event: "connection", outcome: "skipped" });
       return false;
@@ -400,7 +402,7 @@ export class PiDaemonClient {
         return true;
       } catch (error) {
         this.validate();
-        if (this.paused) throw error;
+        if (this.paused || this.recoveringDirectionalOwner) throw error;
         upgradeFailure = safeTerminalText(errorMessage(error));
       }
     }
@@ -432,7 +434,15 @@ export class PiDaemonClient {
       this.validateFactsScope(connection);
     });
   }
+  private assertNoDirectionalRecovery() {
+    if (this.recoveringDirectionalOwner)
+      throw new Error("Pi Sync is recovering the daemon for a transfer. Retry after recovery finishes.");
+  }
   async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
+    this.assertNoDirectionalRecovery();
+    return this.attachConnection(existing, requestSignal);
+  }
+  private async attachConnection(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
     const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
     const validateStartup = () => {
       this.validate();
@@ -714,9 +724,11 @@ export class PiDaemonClient {
   }
   async verifyConnection(signal?: AbortSignal) {
     const connection = await this.connect(undefined, signal);
-    signal?.throwIfAborted();
+    this.validateFactsScope(connection, signal);
+    this.assertNoDirectionalRecovery();
     await this.publishFacts(connection, signal);
-    signal?.throwIfAborted();
+    this.validateFactsScope(connection, signal);
+    this.assertNoDirectionalRecovery();
     return connection;
   }
   async readSettings(repair = false) {
@@ -730,6 +742,14 @@ export class PiDaemonClient {
       return document;
     }
     return decode(await this.run(repair ? "settings.repair-read" : "settings.read", {}));
+  }
+  canReportDirectionalResult() {
+    try {
+      this.validateFactsScope();
+      return !this.pendingReload;
+    } catch {
+      return false;
+    }
   }
   get ownershipCleanupRequired() {
     return this.cleanupRequired;
@@ -796,7 +816,7 @@ export class PiDaemonClient {
       const replacement = await ensureDaemon(this.root, signal, { compatibleOnly: true });
       this.validateFactsScope(undefined, signal);
       assertRoot();
-      const attached = await this.connect(replacement, signal);
+      const attached = await this.attachConnection(replacement, signal);
       this.validateFactsScope(attached, signal);
       assertRoot();
       return attached;

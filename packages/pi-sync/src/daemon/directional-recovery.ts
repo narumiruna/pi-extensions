@@ -42,6 +42,17 @@ function restoreMessage(value: unknown): string {
     : "";
 }
 
+export class CompletedDirectionalRecoveryError extends Error {}
+
+function cancelledAfterCompletion(result: unknown, cause: unknown) {
+  const error = new CompletedDirectionalRecoveryError(
+    `The transfer finished, but file-queue recovery was cancelled.${restoreMessage(result)}`,
+    { cause },
+  );
+  error.name = "AbortError";
+  return error;
+}
+
 export async function runDirectionalRecovery(
   connection: DaemonConnection,
   signal: AbortSignal,
@@ -64,11 +75,17 @@ export async function runDirectionalRecovery(
     replacement = await recover(connection, attempt.job, bounded);
     bounded.throwIfAborted();
   } catch (error) {
-    if (signal.aborted) throw signal.reason;
+    if (signal.aborted) {
+      if (primary.phase === "completed") throw cancelledAfterCompletion(primary.result, signal.reason);
+      throw signal.reason;
+    }
     const detail = bounded.aborted ? "The daemon did not recover in time." : errorMessage(error);
-    const prefix = primary.phase === "completed" ? "The transfer finished" : "No transfer was applied";
-    const restore = primary.phase === "completed" ? restoreMessage(primary.result) : "";
-    throw new Error(`${prefix}, but file-queue recovery stopped. ${detail}${restore}`, { cause: error });
+    if (primary.phase === "completed")
+      throw new CompletedDirectionalRecoveryError(
+        `The transfer finished, but file-queue recovery stopped. ${detail}${restoreMessage(primary.result)}`,
+        { cause: error },
+      );
+    throw new Error(`No transfer was applied, but file-queue recovery stopped. ${detail}`, { cause: error });
   }
   if (primary.phase === "completed") return primary.result;
   const retry = new DirectionalCheckpoint(replacement, attempt.fingerprint);
@@ -76,9 +93,11 @@ export async function runDirectionalRecovery(
   const remaining = recoveryOutcome(retried);
   if (!remaining) return retried;
   markCleanupRequired();
-  if (remaining.phase === "completed")
-    throw new Error(
+  if (remaining.phase === "completed") {
+    if (signal.aborted) throw cancelledAfterCompletion(remaining.result, signal.reason);
+    throw new CompletedDirectionalRecoveryError(
       `Transfer finished, but file-queue cleanup is still uncertain after one recovery attempt.${restoreMessage(remaining.result)}`,
     );
+  }
   throw new Error("File-queue release could not be verified after one recovery attempt. No transfer was applied.");
 }

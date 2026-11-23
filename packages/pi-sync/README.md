@@ -83,7 +83,7 @@ Remote status: Not checked
 Last applied: Never synced
 ```
 
-Use **Sync…** (**Sync now** in RPC) to merge both ways. **Push to remote** uses this device's version for managed files; **Pull from remote** uses the remote version. After initial daemon handover, each choice can replace or remove managed files at the destination without a second transfer confirmation. Push preserves the previous remote version in **History**; Pull creates a local backup before applying changes. Use **View differences** first if you want a preview. Selecting a direction does not authorize background transfers or model use. If a file-queue release cannot be confirmed, Pi Sync attempts recovery within the same action. It does not repeat a known commit or guess when the write outcome is unknown.
+Use **Sync…** (**Sync now** in RPC) to merge both ways. **Push to remote** uses this device's version for managed files; **Pull from remote** uses the remote version. After initial daemon handover, each choice can replace or remove managed files at the destination without a second transfer confirmation. Push preserves the previous remote version in **History**; Pull creates a local backup before applying changes. History rollback still follows the current sync rules; see [Recover excluded files from History](#recover-excluded-files-from-history) for files those rules no longer select. Use **View differences** first if you want a preview. Selecting a direction does not authorize background transfers or model use. If a file-queue release cannot be confirmed, Pi Sync attempts recovery within the same action. It does not repeat a known commit or guess when the write outcome is unknown.
 
 Type to filter actions; navigation scrolls the list. **Settings**, **History**, and **Diagnostics** remain directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
 
@@ -402,6 +402,48 @@ The file queue coordinates one Pi runtime, not separate processes or lock-unawar
 Merged transfers instead retain a private publication/apply/baseline journal and roll forward only when the active remote candidate and every changed local preimage/postimage can be verified. A crash or uncertain publication is reconciled through `/sync sync` without blind republishing. If newer local or remote changes prevent reconciliation, preserve the evidence and review `/sync diff`. With a legacy policy, an explicitly reviewed `push --force` or `pull --force` can archive the old journal. With an ignore-file policy, keep the originating setup and exact rule source; a mismatch blocks replay and force direction does not bypass pending recovery. Follow the [ignore-file recovery guidance](./skills/configure-pi-sync/references/configuration.md#ignore-file-policy). Disabling automatic transfer does not undo completed transfers. Do not downgrade while a merge or snapshot recovery journal is pending.
 
 Removing a local setup or connection never deletes remote data.
+
+### Recover excluded files from History
+
+Use the snapshot reference reported by Push (use its snapshot ID if no separate reference is shown). History rollback follows the current sync rules and does not restore excluded files. To recover one excluded file without changing the sync rules or remote data, run this example with Node.js 22.19.0 or later from a directory where the installed `@narumitw/pi-sync-daemon` package resolves. Use the same sync setup and storage location as the original Push. The example writes only the selected file to a new private temporary directory; Git may also update its private local cache.
+
+```sh
+node --input-type=module - "$HOME/.pi/agent" 'home' 'snapshot-reference' 'sessions/example.jsonl' <<'JS'
+import { createHash } from 'node:crypto';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { configureEngineHost } from '@narumitw/pi-sync-daemon/engine/host';
+import { loadSettingsConfig } from '@narumitw/pi-sync-daemon/engine/settings/config';
+import { withStateDirectoryAccess } from '@narumitw/pi-sync-daemon/engine/state/state-directory';
+import { createSyncBackend } from '@narumitw/pi-sync-daemon/engine/backends/backend-factory';
+
+const [agentDir, setup, reference, relative] = process.argv.slice(2);
+const root = await realpath(agentDir);
+configureEngineHost({
+  root: () => root,
+  mutate: () => { throw new Error('This example only reads the remote snapshot.'); },
+  review: async () => false,
+});
+const file = await withStateDirectoryAccess(async () => {
+  const backend = await createSyncBackend(await loadSettingsConfig(setup));
+  const signal = AbortSignal.timeout(60_000);
+  const entry = (await backend.listHistory(signal)).find((item) => item.snapshotRef === reference);
+  if (!entry) throw new Error('Snapshot reference not found in History.');
+  const snapshot = await backend.readSnapshot(reference, signal);
+  const files = snapshot.files.filter((item) => item.path === relative);
+  if (snapshot.id !== entry.snapshotId || files.length !== 1) throw new Error('Snapshot or path did not match.');
+  return files[0];
+});
+const bytes = Buffer.from(file.contentBase64, 'base64');
+if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error('Snapshot checksum mismatch.');
+const output = join(await mkdtemp(join(tmpdir(), 'pi-sync-history-')), 'restored');
+await writeFile(output, bytes, { flag: 'wx', mode: 0o600 });
+console.log(output);
+JS
+```
+
+Compare the recovered file with any current copy. If you need to put it back, close Pi first and copy it to the intended local path. For a logical `sessions/` path, use the original session directory. Do not overwrite a symlink or publish the temporary file. Remove the temporary copy when finished.
 
 ### Restore a local backup
 

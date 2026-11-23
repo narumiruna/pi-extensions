@@ -578,6 +578,32 @@ for (const failure of ["backup write", "backup corruption", "local race", "remot
     }));
 }
 
+test("an aggregate Pull failure retains the exact backup and both cleanup errors", () =>
+  fixture(async ({ root, ctx, remote }) => {
+    const note = path.join(root, "notes.txt");
+    await fs.writeFile(note, "local before Pull");
+    const config = await loadConfig();
+    const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+    remote.seed({ ...local, files: [file("notes.txt", "incoming")] });
+    const failures = [new Error("Apply did not settle."), new Error("Cleanup could not be confirmed.")];
+    engineHost().reserveTargets = async (_targets, apply) => {
+      await apply();
+      throw new AggregateError(failures, "Queue cleanup did not settle after apply.");
+    };
+    let archive: string | undefined;
+    await assert.rejects(pull(ctx, await boundAction(ctx), remote.factory), (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, failures);
+      assert.match(error.message, /outcome is not verified/u);
+      archive = /Local backup: (.*\.json\.gz)\. To restore/u.exec(error.message)?.[1];
+      return true;
+    });
+    assert.ok(archive);
+    assert.deepEqual((await decodeSnapshot(await fs.readFile(archive))).files, [
+      file("notes.txt", "local before Pull"),
+    ]);
+  }));
+
 test("bound Push rechecks the checkpoint before any remote write", () =>
   fixture(async ({ root, ctx, remote }) => {
     const note = path.join(root, "notes.txt");
@@ -588,8 +614,24 @@ test("bound Push rechecks the checkpoint before any remote write", () =>
       assert.match(fingerprint, /^[a-f0-9]{64}$/u);
       await fs.writeFile(note, "changed while the checkpoint was retained");
     };
-    await assert.rejects(push(ctx, action, undefined, remote.factory), /Local content changed/u);
+    await assert.rejects(
+      push(ctx, action, undefined, remote.factory),
+      /Local bytes changed at the push publication boundary/u,
+    );
     assert.equal(remote.commits.length, 0);
+  }));
+
+test("bound Push still rejects local changes inside backend publication", () =>
+  fixture(async ({ root, ctx, remote }) => {
+    const note = path.join(root, "notes.txt");
+    await fs.writeFile(note, "initial bytes");
+    remote.duringPublish(() => fs.writeFile(note, "changed in backend"));
+    await assert.rejects(
+      push(ctx, await boundAction(ctx), undefined, remote.factory),
+      /Local bytes changed at the push publication boundary/u,
+    );
+    assert.equal(remote.commits.length, 0);
+    assert.equal(await fs.readFile(note, "utf8"), "changed in backend");
   }));
 
 test("one-action Pull protects a selected-path case alias even for a destination-only removal", () =>

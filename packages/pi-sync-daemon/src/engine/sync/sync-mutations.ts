@@ -280,11 +280,12 @@ export async function push(
     throw new Error("Settings changed during push review.");
   validateMutation();
   if (
-    config.scope === "agent-directory" ||
-    validateIgnorePolicy ||
-    !options.yes ||
-    config.localFields !== undefined ||
-    (await readMergeJournal(config))
+    !action &&
+    (config.scope === "agent-directory" ||
+      validateIgnorePolicy ||
+      !options.yes ||
+      config.localFields !== undefined ||
+      (await readMergeJournal(config)))
   ) {
     const current = await createSnapshot(config.snapshotIdentity, snapshotOptions);
     if (!sameHashes(fileHashMap(current), fileHashMap(localRaw)))
@@ -339,7 +340,10 @@ export async function push(
   }
   if (action) await validatePublication?.();
   const accepted = action ? filterSnapshotForConfigPolicy(upload, config, snapshotOptions) : local;
-  const restore = action && head ? remoteRestoreGuidance(head) : undefined;
+  const restore =
+    action && head && remoteForUpload
+      ? remoteRestoreGuidance(head, remoteForUpload, config, snapshotOptions.sessionDir)
+      : undefined;
   let result: PublishSnapshotResult;
   let startedPublication = false;
   try {
@@ -688,16 +692,15 @@ export async function pull(
     await pruneMergeBaselines(config, await readStateForConfig(config), validateCommittedOwner);
     validateCommittedOwner();
   } catch (error) {
-    if (!action || error instanceof AggregateError || (options.signal?.aborted && !mayHaveApplied)) throw error;
+    if (!action || (options.signal?.aborted && !mayHaveApplied)) throw error;
     const phase = installed
       ? "Local snapshot was applied, but final bookkeeping failed."
       : mayHaveApplied
         ? "Local apply did not finish; its outcome is not verified."
         : "Pull stopped before applying local files.";
-    throw new Error(
-      `${phase} ${error instanceof LocalBackupVerificationError ? "" : `${localRestoreGuidance(backup)} `}${errorMessage(error)}`,
-      { cause: error },
-    );
+    const message = `${phase} ${error instanceof LocalBackupVerificationError ? "" : `${localRestoreGuidance(backup)} `}${errorMessage(error)}`;
+    if (error instanceof AggregateError) throw new AggregateError(error.errors, message, { cause: error });
+    throw new Error(message, { cause: error });
   }
   if (options.signal?.aborted && !action) return "applied" as const;
   if (!options.signal?.aborted) setSyncStatus(ctx, undefined);

@@ -52,6 +52,7 @@ const RELEASE_ATTEMPT_MS = 2_000;
 const RELEASE_BUDGET_MS = 25_000;
 const RELEASE_MAX_ATTEMPTS = 20;
 const FOREGROUND_RPC_MS = 3_000;
+const FOREGROUND_DRAIN_MS = 30_000;
 const FOREGROUND_RECOVERY_MS = 45_000;
 const FOREGROUND_UNKNOWN_RESULT =
   "The daemon's transfer result could not be verified. Changes may have been made; recovery evidence was retained.";
@@ -300,14 +301,9 @@ export class DaemonConnection {
     let birth: string | undefined;
     const rpc = async (method: "submit" | "poll" | "cancel", params: unknown) => {
       if (!foreground) return requestDaemon(paths, identity, method, params, transport);
+      const timeout = method === "cancel" ? FOREGROUND_DRAIN_MS : FOREGROUND_RPC_MS;
       const attempt = () =>
-        requestDaemon(
-          paths,
-          identity,
-          method,
-          params,
-          AbortSignal.any([transport, AbortSignal.timeout(FOREGROUND_RPC_MS)]),
-        );
+        requestDaemon(paths, identity, method, params, AbortSignal.any([transport, AbortSignal.timeout(timeout)]));
       try {
         return await attempt();
       } catch (error) {

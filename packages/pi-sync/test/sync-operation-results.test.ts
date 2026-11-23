@@ -7,7 +7,7 @@ import { createSyncLoaders } from "../src/sync/sync-loaders.js";
 import { pull, push, syncBoth } from "../src/sync/sync-operations.js";
 import { mergeOptions } from "./merge-options.js";
 
-const foreground = vi.hoisted(() => ({ run: vi.fn(), validate: vi.fn() }));
+const foreground = vi.hoisted(() => ({ run: vi.fn(), canReportDirectionalResult: () => true }));
 vi.mock("../src/daemon/pi-client.js", () => ({
   piDaemonClient: () => foreground,
   remoteOperation: vi.fn(),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -234,6 +235,40 @@ for (const direction of ["push", "pull"] as const) {
       }
     }));
 }
+
+test("the documented History recovery extracts a file excluded by a narrower Push without rewriting the head", () =>
+  fixture(async ({ root, run, foregroundPayload, onCallback, requests, readHead }) => {
+    await fs.writeFile(path.join(root, "legacy.txt"), "excluded after Push\n");
+    await run("push", { yes: true });
+    const reference = readHead().snapshot.snapshot;
+    await fs.appendFile(path.join(root, ".syncignore"), "/legacy.txt\n");
+    onCallback(async ({ kind }) => ["directional-checkpoint", "queue-acquire", "queue-release"].includes(kind));
+    const outcome = (await run("push.foreground", await foregroundPayload())) as { outcome: string; message: string };
+    assert.equal(outcome.outcome, "applied");
+    assert.match(outcome.message, /Rollback uses the current rules and does not restore excluded files/u);
+    assert.ok(outcome.message.includes(reference));
+    const head = readHead().bytes;
+    const readme = await fs.readFile("packages/pi-sync/README.md", "utf8");
+    const example = readme.match(/### Recover excluded files from History[\s\S]*?<<'JS'\n([\s\S]*?)\nJS\n/u)?.[1];
+    assert.ok(example);
+    requests.length = 0;
+    const child = spawn(process.execPath, ["--input-type=module", "-", root, "home", reference, "legacy.txt"], {
+      env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const done = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    child.stdin.end(example);
+    const [code, stdout, stderr] = await Promise.all([done, child.stdout.toArray(), child.stderr.toArray()]);
+    assert.equal(code, 0, Buffer.concat(stderr).toString());
+    const output = Buffer.concat(stdout).toString().trim();
+    assert.equal(await fs.readFile(output, "utf8"), "excluded after Push\n");
+    if (process.platform !== "win32") assert.equal((await fs.stat(output)).mode & 0o777, 0o600);
+    assert.deepEqual(readHead().bytes, head);
+    assert.ok(requests.length > 0 && requests.every(([method]) => method === "GET"));
+  }));
 
 test("a foreground request rejects unbound actions or replay under a different checkpoint", () =>
   fixture(async ({ run, foregroundPayload, requests, root, onCallback }) => {

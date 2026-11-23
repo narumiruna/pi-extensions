@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
+import { CompletedDirectionalRecoveryError } from "../daemon/directional-recovery.js";
+import { type PiDaemonClient, piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
 import { loadSettingsConfig, sessionTokenWarnings, syncSessionsWarnings } from "../settings/config.js";
 import { activeLocalConfigPath, createLocalConfigDocument, localConfigPath } from "../settings/config-file.js";
 import { localConfigTemplate, readLocalConfigObject } from "../settings/settings-store.js";
@@ -78,13 +79,22 @@ export async function executeCommand(
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
   try {
+    const directionalClient = directionalFingerprint === undefined ? undefined : piDaemonClient(ctx);
     const command = await resolveSyncCommand(rawArgs, ctx);
     if (signal?.aborted || !command) return { kind: "completed" };
     const { subcommand, rest } = command;
-    if (directionalFingerprint !== undefined) {
+    if (directionalClient && directionalFingerprint !== undefined) {
       if ((subcommand !== "push" && subcommand !== "pull") || rest.length || !setup || retryRefusal)
         throw new Error("Invalid directional action.");
-      return await runDirectionalAction(ctx, subcommand, setup, directionalFingerprint, signal, onCommit);
+      return await runDirectionalAction(
+        directionalClient,
+        ctx,
+        subcommand,
+        setup,
+        directionalFingerprint,
+        signal,
+        onCommit,
+      );
     }
     const options = parseOptions(rest);
     if (setup !== undefined) options.setup = setup;
@@ -242,6 +252,7 @@ export async function executeCommand(
 }
 
 async function runDirectionalAction(
+  client: PiDaemonClient,
   ctx: ExtensionCommandContext,
   direction: "push" | "pull",
   setup: string,
@@ -249,21 +260,29 @@ async function runDirectionalAction(
   signal: AbortSignal | undefined,
   onCommit: (() => void) | undefined,
 ): Promise<RunRouteResult> {
-  const client = piDaemonClient(ctx);
-  const result = (await client.run(`${direction}.foreground`, { setup, fingerprint }, signal, ctx, onCommit)) as
-    | { outcome?: "applied" | "cancelled"; message?: string }
-    | undefined;
-  client.validate();
-  throwIfAborted(signal);
-  if (
-    !result ||
-    (result.outcome !== "applied" && result.outcome !== "cancelled") ||
-    (result.message !== undefined && typeof result.message !== "string")
-  ) {
-    throw new Error("Invalid result from directional synchronization.");
+  try {
+    const result = (await client.run(`${direction}.foreground`, { setup, fingerprint }, signal, ctx, onCommit)) as
+      | { outcome?: "applied" | "cancelled"; message?: string }
+      | undefined;
+    if (!client.canReportDirectionalResult() || (signal?.aborted && result?.outcome !== "applied"))
+      return { kind: "failed" };
+    if (
+      !result ||
+      (result.outcome !== "applied" && result.outcome !== "cancelled") ||
+      (result.message !== undefined && typeof result.message !== "string")
+    ) {
+      throw new Error("Invalid result from directional synchronization.");
+    }
+    if (result.message) ctx.ui.notify(safeTerminalText(result.message), "info");
+    return signal?.aborted ? { kind: "failed" } : { kind: "completed", outcome: result.outcome };
+  } catch (error) {
+    const completed = error instanceof CompletedDirectionalRecoveryError;
+    if (!client.canReportDirectionalResult() || (signal?.aborted && !completed)) return { kind: "failed" };
+    if (!signal?.aborted) setSyncStatus(ctx, undefined);
+    const message = safeTerminalText(errorMessage(error));
+    ctx.ui.notify(completed ? message : message.slice(0, 1200), "error");
+    return { kind: "failed" };
   }
-  if (result.message) ctx.ui.notify(safeTerminalText(result.message), "info");
-  return { kind: "completed", outcome: result.outcome };
 }
 
 async function migrateStateDirectory(ctx: ExtensionCommandContext, options: CommandOptions) {
