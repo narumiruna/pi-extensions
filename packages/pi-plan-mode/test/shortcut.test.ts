@@ -14,11 +14,21 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { type KeyId, setKittyProtocolActive } from "@earendil-works/pi-tui";
+import {
+  getKeybindings,
+  Input,
+  type KeybindingsConfig,
+  type KeyId,
+  setKeybindings,
+  setKittyProtocolActive,
+  stripTerminalSequences,
+} from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
+import { paneShortcutAvailable } from "../src/plan-pane-shortcut.js";
 import * as settingsModule from "../src/settings.js";
+import { createPlanPaneHost } from "./plan-pane-support.js";
 import { waitForSettingsWatch } from "./settings-watch-support.js";
 import { createMockContext, createMockPi } from "./support.js";
 
@@ -34,24 +44,28 @@ type AppKeybindings = KeybindingsManager & {
 async function withShortcut(
   initial: KeyId | undefined,
   run: (fixture: Awaited<ReturnType<typeof createShortcutFixture>>) => Promise<void>,
+  bindings?: KeybindingsConfig,
 ) {
-  const fixture = await createShortcutFixture(initial);
+  const previous = getKeybindings();
   try {
-    await run(fixture);
-    assert.deepEqual(fixture.errors, []);
+    const fixture = await createShortcutFixture(initial, bindings);
+    try {
+      await run(fixture);
+      assert.deepEqual(fixture.errors, []);
+    } finally {
+      await fixture.dispose();
+    }
   } finally {
-    await fixture.dispose();
+    setKeybindings(previous);
     setKittyProtocolActive(false);
   }
 }
 
-async function createShortcutFixture(initial: KeyId | undefined) {
+async function createShortcutFixture(initial: KeyId | undefined, bindings?: KeybindingsConfig) {
   const root = await mkdtemp(join(tmpdir(), "pi-plan-shortcut-"));
   const settingsPath = join(root, "pi-plan-mode.json");
   const tui = createTuiHarness();
   const sessionManager = SessionManager.inMemory(root);
-  const context = createMockContext({ cwd: root, mode: "tui", hasUI: true, sessionManager, custom: tui.custom });
-  const ctx = context.ctx as ExtensionContext;
   const mock = createMockPi({ activeTools: ["read", "write"], thinkingLevel: "low" });
   const errors: unknown[] = [];
   const reads: settingsModule.PlanModeSettingsLoadResult[] = [];
@@ -77,14 +91,32 @@ async function createShortcutFixture(initial: KeyId | undefined) {
   // This test-only import uses the installed implementation, including reserved-key conflicts.
   const { KeybindingsManager: AppKeys } = (await import(
     new URL("./core/keybindings.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
-  )) as { KeybindingsManager: new () => AppKeybindings };
-  const keybindings = new AppKeys();
+  )) as { KeybindingsManager: new (bindings?: KeybindingsConfig) => AppKeybindings };
+  const keybindings = new AppKeys(bindings);
+  setKeybindings(keybindings);
   initTheme("dark");
-  const editor = new CustomEditor(
-    { requestRender() {} } as never,
-    { borderColor: (text) => text, selectList: getSelectListTheme() },
-    keybindings,
+  const terminal = createPlanPaneHost(
+    "fullscreen",
+    (host, theme) => new CustomEditor(host, { ...theme, selectList: getSelectListTheme() }, keybindings),
   );
+  const editor = terminal.editor;
+  let idle = true;
+  const context = createMockContext({
+    cwd: root,
+    mode: "tui",
+    hasUI: true,
+    sessionManager,
+    custom: tui.custom,
+    onTerminalInput: (listener: Parameters<ExtensionContext["ui"]["onTerminalInput"]>[0]) =>
+      terminal.host.addInputListener(listener),
+    isIdle: () => idle,
+  });
+  const ctx: ExtensionContext = context.ctx;
+  const setWidget = ctx.ui.setWidget;
+  ctx.ui.setWidget = ((...args: Parameters<ExtensionContext["ui"]["setWidget"]>) => {
+    setWidget(...args);
+    terminal.setWidget(...args);
+  }) as ExtensionContext["ui"]["setWidget"];
   let runner: ExtensionRunner;
   const bind = async (reason: "startup" | "reload") => {
     await loader.reload();
@@ -95,7 +127,7 @@ async function createShortcutFixture(initial: KeyId | undefined) {
     runner.bindCore({ ...mock.rawPi, refreshTools() {}, getCommands: () => [], setLabel() {} } as never, {
       getModel: () => undefined,
       getScopedModels: () => [],
-      isIdle: () => true,
+      isIdle: () => idle,
       isProjectTrusted: () => false,
       getSignal: () => undefined,
       abort() {},
@@ -114,7 +146,14 @@ async function createShortcutFixture(initial: KeyId | undefined) {
       defaultEditor: editor,
       createExtensionUIContext: () => ctx.ui,
       sessionManager,
-      session: { isIdle: true, scopedModels: [], agent: {}, pendingMessageCount: 0 },
+      session: {
+        get isIdle() {
+          return idle;
+        },
+        scopedModels: [],
+        agent: {},
+        pendingMessageCount: 0,
+      },
       settingsManager: { isProjectTrusted: () => false },
       showError: (error: unknown) => errors.push(error),
     };
@@ -134,6 +173,7 @@ async function createShortcutFixture(initial: KeyId | undefined) {
   } catch (error) {
     await shutdown().catch(() => undefined);
     tui.dispose();
+    terminal.stop();
     await rm(root, { recursive: true, force: true });
     throw error;
   }
@@ -149,6 +189,19 @@ async function createShortcutFixture(initial: KeyId | undefined) {
     registrations: () => new Map(loader.getExtensions().extensions[0]?.shortcuts),
     active: () => context.statuses.get("plan-mode") === "plan active",
     press: (data: string) => editor.handleInput(data),
+    terminal,
+    setIdle(value: boolean) {
+      idle = value;
+    },
+    frame: () => terminal.render().map(stripTerminalSequences).join("\n"),
+    async complete(plan: string) {
+      const tool = runner.getToolDefinition("plan_mode_complete");
+      assert.ok(tool);
+      const id = "ready";
+      const signal = new AbortController().signal;
+      await tool.execute(id, { plan }, signal, undefined, runner.createToolContext(id, signal));
+      await Promise.resolve();
+    },
     async change(next: KeyId | undefined) {
       const initialReads = reads.length;
       await waitForSettingsWatch(settingsPath, () => reads.length > initialReads);
@@ -174,6 +227,7 @@ async function createShortcutFixture(initial: KeyId | undefined) {
     async dispose() {
       await shutdown();
       tui.dispose();
+      terminal.stop();
       await rm(root, { recursive: true, force: true });
     },
   };
@@ -187,7 +241,7 @@ for (const [name, initial, next] of [
   test(`watched shortcut ${name} stays pending until runtime reload`, async () => {
     await withShortcut(initial, async (f) => {
       const startup = f.registrations();
-      assert.deepEqual([...startup.keys()], initial ? [initial, "f2"] : ["f2"]);
+      assert.deepEqual([...startup.keys()], initial ? [initial, "f2", "f4"] : ["f2", "f4"]);
       await f.change(next);
       assert.deepEqual(f.registrations(), startup, "settings reload must not change Pi's registered shortcuts");
       f.press(INPUT);
@@ -203,7 +257,7 @@ for (const [name, initial, next] of [
       await f.runner.emit({ type: "session_start", reason: "new" });
       assert.deepEqual(f.registrations(), startup);
       await f.reload();
-      assert.deepEqual([...f.registrations().keys()], next ? [next, "f2"] : ["f2"]);
+      assert.deepEqual([...f.registrations().keys()], next ? [next, "f2", "f4"] : ["f2", "f4"]);
       f.press(next === NEXT_KEY ? NEXT_INPUT : INPUT);
       assert.equal(f.active(), next !== undefined);
     });
@@ -238,7 +292,7 @@ for (const boundary of ["shutdown", "replacement"] as const) {
     else await shutdown({ reason: "quit" }, oldContext.ctx);
     resolveRead({ kind: "loaded", settings: { thinkingLevel: "inherit", toggleShortcut: KEY } });
     await pendingStart;
-    assert.deepEqual([...mock.shortcuts.keys()], boundary === "replacement" ? [NEXT_KEY, "f2"] : []);
+    assert.deepEqual([...mock.shortcuts.keys()], boundary === "replacement" ? [NEXT_KEY, "f2", "f4"] : []);
     if (boundary === "replacement") await shutdown({ reason: "quit" }, nextContext.ctx);
   });
 }
@@ -266,6 +320,84 @@ for (const kitty of [false, true]) {
     });
   });
 }
+
+test.each([
+  ["f4", false],
+  [["escape", "F4"], false],
+  ["Ctrl+Shift+F4", true],
+  ["Shift+Ctrl+F4", true],
+  ["alt+f4", true],
+  ["shift+shift+f4", true],
+  ["F4+", true],
+  [true, true],
+] as const)("F4 conflict detection for %j", (binding, available) => {
+  assert.equal(paneShortcutAvailable({ binding: Array.isArray(binding) ? [...binding] : binding }), available);
+});
+
+test("the Plan-mode toggle retains F4 if explicitly assigned", async () => {
+  await withShortcut("f4", async (f) => {
+    assert.notEqual(f.registrations().get("f4")?.description, "Hide or show the Plan pane in fullscreen");
+    f.terminal.send("\u001bOS");
+    assert.equal(f.active(), true);
+    f.terminal.send("\u001bOS");
+    assert.equal(f.active(), false);
+  });
+});
+
+test("an effective native F4 binding takes priority and remains usable", async () => {
+  await withShortcut(
+    undefined,
+    async (f) => {
+      assert.equal(f.registrations().has("f4"), false);
+      f.terminal.send("\u001bOS");
+      f.terminal.send("x");
+      assert.equal(f.terminal.editor.getExpandedText(), "main drafxt");
+    },
+    { "tui.editor.cursorLeft": ["left", "F4" as KeyId] },
+  );
+});
+
+test("native editor dispatch toggles the pane, not paste, key repeat or dialog focus", async () => {
+  await withShortcut(
+    undefined,
+    async (f) => {
+      const press = f.terminal.send;
+      const divider = /│/u;
+      const key = "\u001bOS";
+      await f.runner.getCommand("plan")?.handler("start", f.runner.createCommandContext());
+      press(key);
+      assert.doesNotMatch(f.frame(), divider);
+      await f.complete("# Visible plan");
+      assert.match(f.frame(), divider);
+      const dialog = f.terminal.fullscreen.showOverlay(new Input(), { width: 20 });
+      try {
+        press(key);
+        assert.match(f.frame(), divider);
+      } finally {
+        dialog.hide();
+      }
+      setKittyProtocolActive(true);
+      f.setIdle(false);
+      press("\u001b[14;1:1~");
+      assert.doesNotMatch(f.frame(), divider);
+      press("\u001b[14;1:2~");
+      press("\u001b[14;1:3~");
+      press(`\u001b[200~hello${key}\nworld\u001b[201~`);
+      assert.doesNotMatch(f.frame(), divider);
+      assert.match(f.terminal.editor.getExpandedText(), /hello.*\nworld/u);
+      press("\u001b[1;1S");
+      assert.match(f.frame(), divider);
+      press(key);
+      assert.doesNotMatch(f.frame(), divider);
+      f.setIdle(true);
+      await f.reload();
+      await f.runner.getCommand("plan")?.handler("start", f.runner.createCommandContext());
+      await f.complete("# New plan");
+      assert.match(f.frame(), divider);
+    },
+    { "tui.select.cancel": "ctrl+g" },
+  );
+});
 
 test("saving a shortcut in Plan Settings preserves registration until reload", async () => {
   await withShortcut(KEY, async (f) => {

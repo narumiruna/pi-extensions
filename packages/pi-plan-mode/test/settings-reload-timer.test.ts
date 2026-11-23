@@ -118,6 +118,16 @@ test("pane settings apply on save and reject obsolete or invalid watcher reads",
     assert.ok(command);
     const invoke = (args: string) => command.handler(args, ctx as Parameters<typeof command.handler>[1]);
     await invoke("start");
+    assert.doesNotMatch(frame(), /│/u);
+    const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete");
+    assert.ok(complete);
+    await (complete.execute as (...args: unknown[]) => Promise<unknown>)(
+      "pane-settings",
+      { plan: "# Plan content" },
+      undefined,
+      undefined,
+      ctx,
+    );
     assert.match(frame(), /^history .*│Plan/u);
     const watcher = watches.at(-1);
     assert.ok(watcher);

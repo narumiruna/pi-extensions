@@ -247,7 +247,7 @@ async function createRuntime(options: { queued?: boolean }) {
     await live.prompt("/plan start");
     assert.equal(faux.state.callCount, 0);
     assert.equal(harness.openCount, 0);
-    assert.equal(listeners.size, 1, "only the session input guard is installed while idle");
+    assert.equal(listeners.size, 2, "only the F2 and F4 session input guards are installed while idle");
 
     return {
       session: live,
@@ -307,7 +307,7 @@ async function switchQuestionToDiscussion(f: Fixture, scenario: Scenario, queued
       }),
     ]);
     assert.match(f.tui.render().join("\n"), /How broad should the change be/);
-    assert.equal(f.listeners.size, 2, "the questionnaire adds its scoped F2 listener");
+    assert.equal(f.listeners.size, 3, "the questionnaire adds its scoped F2 listener");
     if (queued) {
       assert.equal(await f.session.followUp("queued user follow-up"), "queued");
       assert.equal(f.session.pendingMessageCount, 1);
@@ -332,7 +332,7 @@ async function switchQuestionToDiscussion(f: Fixture, scenario: Scenario, queued
   assert.equal(f.tui.openCount, 1, "no automatic questionnaire or ready menu opens");
   assert.equal(f.tui.isOpen, false);
   assert.equal(f.dialogCount, 0);
-  assert.equal(f.listeners.size, 1, "the scoped questionnaire listener is removed");
+  assert.equal(f.listeners.size, 2, "the scoped questionnaire listener is removed");
   assert.deepEqual(f.session.getActiveToolNames(), active);
   assert.equal(f.requests.filter((request) => !request.aborted).length, 1);
   assert.equal(f.faux.state.callCount, f.requests.length);

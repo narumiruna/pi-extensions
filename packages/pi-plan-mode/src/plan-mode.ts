@@ -67,6 +67,7 @@ import { createPlanActionController, type FreshImplementationTiming } from "./pl
 import { createPlanDraftController, DRAFT_TOOL_NAMES, isActiveNativeDraftTool } from "./plan-draft.js";
 import { createPlanExportController } from "./plan-export-controller.js";
 import { createPlanPaneController } from "./plan-pane.js";
+import { createPlanPaneShortcut } from "./plan-pane-shortcut.js";
 import {
   clearPlanModeUi,
   planModeStatusText as formatPlanModeStatusText,
@@ -187,6 +188,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let shutdownTask: Promise<void> | undefined;
   let widgetState: EditorStatusWidgetState = { collapsed: false };
   const planPane = createPlanPaneController();
+  const paneShortcut = createPlanPaneShortcut(pi, (ctx) => {
+    if (
+      shutdownStarted ||
+      currentSession !== ctx.sessionManager ||
+      !state.enabled ||
+      !workflowMutex.isOwner(workflowOwner)
+    )
+      return;
+    if (ctx.mode === "tui" && ctx.hasUI && configuredPlanPane(settings) !== "off") {
+      planPane.toggle(ctx.sessionManager);
+    }
+  });
   let liveCompletion: { session: ExtensionContext["sessionManager"]; toolCallId: string; plan: string } | undefined;
   const draft = createPlanDraftController();
   let interactiveUiPromise: Promise<InteractiveUi> | undefined;
@@ -581,7 +594,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   pi.on("session_start", async (event, ctx) => {
     draft.reset();
     liveCompletion = undefined;
-    planPane.clear();
+    paneShortcut.disposeSession();
+    planPane.reset();
     stopPlanModeSettingsWatch();
     interaction.disposeSession();
     invalidateReadyMenu();
@@ -615,6 +629,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (generation !== menuGeneration || menuController.signal.aborted) return;
     initializePlanModeShortcut();
     interaction.startSession(ctx, startupToggleShortcut);
+    paneShortcut.startSession(ctx, startupToggleShortcut);
     startPlanModeSettingsWatch(generation);
     if (!installRestoredState(restoredState, ctx)) return;
     implementationRetention.restore(state.activeImplementation);
@@ -655,7 +670,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("session_tree", async (_event, ctx) => {
-    planPane.clear();
     cancelDeferredFreshImplementation();
     advanceWorkflowGeneration();
     menuGeneration += 1;
@@ -705,7 +719,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     shutdownStarted = true;
     draft.reset();
     liveCompletion = undefined;
-    planPane.clear();
+    paneShortcut.disposeSession();
+    planPane.reset();
     stopPlanModeSettingsWatch();
     interaction.disposeSession();
     invalidateReadyMenu();
@@ -1693,6 +1708,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function advanceWorkflowGeneration() {
     liveCompletion = undefined;
+    planPane.reset();
     draft.reset();
     interaction.reset();
     invalidateReadyMenu();
@@ -2314,6 +2330,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function bindWorkflowSessionIfNeeded(ctx: ExtensionContext) {
     if (currentSession === ctx.sessionManager) return;
+    planPane.reset();
     widgetState = { collapsed: false };
     currentSession = ctx.sessionManager;
     workflowOwner = undefined;

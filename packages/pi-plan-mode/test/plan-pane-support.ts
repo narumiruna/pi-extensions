@@ -3,6 +3,7 @@ import {
   type Component,
   Container,
   Editor,
+  type EditorTheme,
   ScrollView,
   type Terminal,
   Text,
@@ -15,7 +16,10 @@ import {
 export const PANE_KEY = "plan-mode.pane";
 type Widget = Component & { dispose?(): void };
 
-export function createPlanPaneHost(mode: TUI["mode"] = "fullscreen") {
+export function createPlanPaneHost<E extends Editor = Editor>(
+  mode: TUI["mode"] = "fullscreen",
+  createEditor?: (tui: TUI, theme: EditorTheme) => E,
+) {
   let columns = 100;
   let rows = 18;
   let input: (data: string) => void = () => {};
@@ -59,7 +63,7 @@ export function createPlanPaneHost(mode: TUI["mode"] = "fullscreen") {
     fg: (role: string, text: string) => (role === "accent" ? `${titleStyle}${text}\u001b[39m` : text),
     bold: (text: string) => text,
   } as Theme;
-  const editor = new Editor(tui, {
+  const editorTheme: EditorTheme = {
     borderColor: (text) => text,
     selectList: {
       selectedPrefix: (text) => text,
@@ -68,7 +72,8 @@ export function createPlanPaneHost(mode: TUI["mode"] = "fullscreen") {
       scrollInfo: (text) => text,
       noMatch: (text) => text,
     },
-  });
+  };
+  const editor = createEditor?.(tui, editorTheme) ?? (new Editor(tui, editorTheme) as E);
   editor.setText("main draft");
   const editorContainer = new Container();
   editorContainer.addChild(editor);

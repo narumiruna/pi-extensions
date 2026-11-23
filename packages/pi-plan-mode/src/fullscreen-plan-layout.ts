@@ -21,13 +21,7 @@ function canShowPane({ width, height }: Viewport) {
   return width >= MIN_COLUMNS && height >= MIN_ROWS;
 }
 
-export function mountFullscreenPlanLayout(
-  tui: TUI,
-  rendererChildren: readonly Component[],
-  side: PlanPaneSide,
-  pane: Component,
-  theme: Theme,
-): MountedPlanLayout | undefined {
+function nativeFullscreenRoot(tui: TUI, rendererChildren: readonly Component[]) {
   if (
     tui.mode !== "fullscreen" ||
     tui.children !== rendererChildren ||
@@ -36,10 +30,28 @@ export function mountFullscreenPlanLayout(
     !tuiCore.isViewportTUI(tui)
   )
     return;
-  const readRoot = (): unknown => Reflect.get(tui, "layoutRoot");
-  const original = readRoot();
-  if (!isNativeFullscreenRoot(original, rendererChildren)) return;
+  const root: unknown = Reflect.get(tui, "layoutRoot");
+  return isNativeFullscreenRoot(root, rendererChildren) ? { root, viewport: tui } : undefined;
+}
 
+export function canOpenFullscreenPlanLayout(tui: TUI): boolean {
+  return (
+    canShowPane({ width: tui.terminal.columns, height: tui.terminal.rows }) &&
+    nativeFullscreenRoot(tui, tui.children) !== undefined
+  );
+}
+
+export function mountFullscreenPlanLayout(
+  tui: TUI,
+  rendererChildren: readonly Component[],
+  side: PlanPaneSide,
+  pane: Component,
+  theme: Theme,
+): MountedPlanLayout | undefined {
+  const native = nativeFullscreenRoot(tui, rendererChildren);
+  if (!native) return;
+  const { root: original, viewport } = native;
+  const readRoot = (): unknown => Reflect.get(tui, "layoutRoot");
   let active = true;
   const ownsLayout = (): boolean =>
     active && tui.mode === "fullscreen" && tui.children === rendererChildren && readRoot() === wrapper;
@@ -47,11 +59,11 @@ export function mountFullscreenPlanLayout(
   const restore = () => {
     active = false;
     if (tui.mode === "fullscreen" && readRoot() === wrapper) {
-      tui.setLayoutRoot(original);
+      viewport.setLayoutRoot(original);
     }
   };
   try {
-    tui.setLayoutRoot(wrapper);
+    viewport.setLayoutRoot(wrapper);
     if (readRoot() === wrapper) {
       return {
         isVisible: () => ownsLayout() && canShowPane({ width: tui.terminal.columns, height: tui.terminal.rows }),

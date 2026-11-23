@@ -44,7 +44,11 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 
 `planPane` accepts `right` (default), `left`, or `off`. Saves from **Plan pane** take effect immediately, including during an active Plan workflow. Valid edits to the watched user file also take effect; an invalid update does not replace the active settings.
 
-The pane opens on a compatible Pi fullscreen layout without taking keyboard focus. It shows the current managed Markdown draft or a short waiting or error message, then switches to the completed snapshot. Read-only workflows only show completed plans. A changed document is displayed from the top. It closes when Plan mode ends, including when you save a plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
+The pane opens on a compatible Pi fullscreen layout without taking keyboard focus, and only when the managed draft or completed snapshot has content to show. Missing, blank, or unreadable drafts do not open a pane; existing tool errors still appear in the conversation. Read-only workflows only show completed plans. The pane closes when Plan mode ends, including when you save the plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
+
+From the main editor, press **F4** to hide or reopen the pane when there is content and the layout has room (at least 80 columns and 12 rows). Close any focused questionnaire or menu before using it. Hiding lasts across draft edits, completion, resizing, and placement changes, but resets when you start a new workflow, switch sessions or branches, or run `/reload`. Reopening uses the configured side and default width, and starts at the top. The shortcut never overrides `off` or writes to the settings file.
+
+Plan mode does not register the pane shortcut if F4 is already assigned to an effective Pi keybinding or the loaded **Plan mode shortcut**. See `/hotkeys` for the registered binding. A custom editor must forward Pi extension shortcuts to support F4.
 
 ### Plan helper tools
 

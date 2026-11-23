@@ -28,6 +28,8 @@ async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" 
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     cwd: directory,
+    onTerminalInput: (listener: Parameters<ExtensionContext["ui"]["onTerminalInput"]>[0]) =>
+      terminal.host.addInputListener(listener),
     sessionManager: { getSessionId: () => "pane", getBranch: () => branch, getEntries: () => branch },
   });
   const ctx: ExtensionContext = context.ctx;
@@ -71,6 +73,10 @@ async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" 
       directory,
       mock,
       terminal,
+      togglePane() {
+        terminal.send("\u001bOS");
+        mock.shortcuts.get("f4")?.handler(ctx);
+      },
       setBranch(entries: unknown[]) {
         branch = entries;
       },
@@ -92,7 +98,8 @@ test("Plan pane reflects only accepted plans on the active branch", async () => 
   const f = await fixture();
   const { context, emit, frame, invoke, mock } = f;
   try {
-    assert.match(await frame(), /No completed plan yet/u);
+    assert.doesNotMatch(await frame(), /│|No completed plan yet/u);
+    f.togglePane();
     const rawPlan = "# Accepted plan\n\n\u202eChecklist";
     await f.complete("plan-pane-test", rawPlan);
     assert.match(await frame(), /Accepted plan/u);
@@ -100,8 +107,7 @@ test("Plan pane reflects only accepted plans on the active branch", async () => 
     assert.ok(mock.entries.some(({ data }) => (data as PlanModeState).latestPlan === rawPlan));
 
     await emit("before_agent_start", { messageType: "user" });
-    assert.match(await frame(), /No completed plan yet/u);
-    assert.doesNotMatch(await frame(), /Accepted plan/u);
+    assert.doesNotMatch(await frame(), /│|Accepted plan/u);
     await emit("agent_end", { messages: [{ role: "assistant", content: "# Draft only" }] });
     assert.doesNotMatch(await frame(), /Draft only/u);
     await emit("agent_end", {
@@ -129,7 +135,7 @@ test("Plan pane reflects only accepted plans on the active branch", async () => 
     assert.doesNotMatch(await frame(), /Restored plan|│/u);
 
     await invoke("start");
-    assert.match(await frame(), /No completed plan yet/u);
+    assert.doesNotMatch(await frame(), /│|No completed plan yet/u);
     await invoke("exit");
     assert.doesNotMatch(await frame(), /No completed plan yet|│/u);
     await emit("session_tree");
@@ -174,6 +180,10 @@ test.each(sides)("a live completion is compact only while its %s pane is visible
     await assertFrame(true);
     row.setExpanded(true);
     await assertFrame(true);
+    f.togglePane();
+    await assertFrame(false);
+    f.togglePane();
+    await assertFrame(true);
     for (const [width, height, visible] of [
       [79, 18, false],
       [80, 18, true],
@@ -191,6 +201,29 @@ test.each(sides)("a live completion is compact only while its %s pane is visible
     await f.invoke(`export ${destination}`);
     assert.equal(await readFile(destination, "utf8"), `${PLAN}\n`);
     await assertFrame(false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("completion respects a manually hidden pane, but a restored branch starts in automatic mode", async () => {
+  const f = await fixture();
+  try {
+    const original = "# Original plan";
+    await f.complete("original", original);
+    assert.match(await f.frame(), /│.*Original plan/u);
+    f.togglePane();
+    assert.doesNotMatch(await f.frame(), /│/u);
+    await f.emit("before_agent_start", { messageType: "user" });
+    const row = f.row("replacement");
+    f.terminal.appendToTranscript(row);
+    const replacement = await f.complete("replacement", PLAN);
+    row.updateResult({ ...replacement, isError: false, durationMs: 0 });
+    assert.doesNotMatch(await f.frame(), CONFIRMATION);
+    assert.match(await f.frame(), /DecisionMarker/u);
+    f.setBranch([stateEntry({ enabled: true, awaitingAction: true, latestPlan: original })]);
+    await f.emit("session_tree");
+    assert.match(await f.frame(), /│.*Original plan/u);
   } finally {
     await f.close();
   }

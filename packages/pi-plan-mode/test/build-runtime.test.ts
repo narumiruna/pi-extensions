@@ -174,7 +174,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     const { ui } = mockContext.ctx as { ui: ExtensionUIContext };
     runner.setUIContext({ ...ui, setWidget: host.setWidget }, "tui");
     await command.handler("start", runner.createCommandContext());
-    assert.match(host.render().map(stripTerminalSequences).join("\n"), /No completed plan yet\./u);
+    assert.doesNotMatch(host.render().map(stripTerminalSequences).join("\n"), /│|No completed plan yet/u);
     const complete = runner.getToolDefinition("plan_mode_complete");
     assert.ok(complete);
     const signal = new AbortController().signal;
