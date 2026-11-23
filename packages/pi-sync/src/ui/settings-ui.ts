@@ -142,7 +142,6 @@ export async function showSyncSettings(
     | "storage-location"
     | "setups"
     | "connections";
-  let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
   // Keep Kit's existing settings adapter: native SettingsList has no async save/rollback
   // contract or injected keybindings. Kit preserves these safety and accessibility behaviors.
   const menu = defineMenu<SettingsState, "settings", Action, ExtensionCommandContext>({
@@ -155,7 +154,7 @@ export async function showSyncSettings(
           `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
           ...(state.reservedIgnoreNames !== undefined && !ignoreAvailable
             ? ["Setup preferences are read-only; adding, editing, and switching setups are unavailable."]
-            : [saveStatus]),
+            : ["Back does not undo saved changes."]),
           ...(state.pathPolicy === "ignore-file" ? [manualIgnoreFileGuidance(state.ignoreFile ?? ".syncignore")] : []),
         ],
         items: (
@@ -440,9 +439,10 @@ export async function showSyncSettings(
             };
           }, mutationSignal);
           validate();
-          saveStatus =
-            "Saved reviewed policy for this setup. Applies to subsequent sync operations; recovery evidence is retained.";
-          ctx.ui.notify(saveStatus, "info");
+          ctx.ui.notify(
+            "Saved reviewed policy for this setup. Applies to subsequent sync operations; recovery evidence is retained.",
+            "info",
+          );
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -513,9 +513,10 @@ export async function showSyncSettings(
             };
           }, mutationSignal);
           validate();
-          saveStatus =
-            "Saved reviewed policy for this setup. Applies to subsequent sync operations; recovery evidence is retained.";
-          ctx.ui.notify(saveStatus, "info");
+          ctx.ui.notify(
+            "Saved reviewed policy for this setup. Applies to subsequent sync operations; recovery evidence is retained.",
+            "info",
+          );
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -533,10 +534,6 @@ export async function showSyncSettings(
             signal: mutationSignal,
           });
           if (mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(
-            `Automatic sync ${automatic ? "enabled" : "disabled"} for “${safeTerminalText(setupName)}”.`,
-            "info",
-          );
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -606,10 +603,6 @@ export async function showSyncSettings(
             signal: mutationSignal,
           });
           if (mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(
-            `Automatic startup transfer ${automaticTransfer ? "enabled for the next session start" : "disabled"}. Completed transfers are not undone.`,
-            "info",
-          );
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -625,7 +618,6 @@ export async function showSyncSettings(
           if (latest.skipSecretScan === skipSecretScan) return { kind: "stay" };
           await updateLocalConfig((settings) => ({ ...settings, skipSecretScan }), mutationSignal);
           if (mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(`Secret scan ${skipSecretScan ? "disabled" : "enabled"} for pushes in all setups.`, "info");
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -642,7 +634,6 @@ export async function showSyncSettings(
           await updateLocalConfig((settings) => ({ ...settings, showStatus }), mutationSignal);
           if (mutationSignal.aborted) return { kind: "rejected" };
           configureSyncStatus(ctx, showStatus);
-          ctx.ui.notify(`Pi Sync status ${showStatus ? "enabled" : "disabled"} for all setups.`, "info");
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -671,7 +662,6 @@ export async function showSyncSettings(
           if (latest.onSwitch === action) return { kind: "stay" };
           await saveOnSwitch(action, mutationSignal);
           if (mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(`After switching setup: ${value}.`, "info");
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -756,15 +746,25 @@ export async function showSyncSettings(
       const result = await save(action);
       if (action.signal.aborted || signal?.aborted) return { kind: "rejected" };
       validate();
-      saveStatus =
-        result?.kind === "rejected"
-          ? "Save failed or rejected. Previous value retained; retry is available."
-          : id === "automatic-transfer" || id === "automatic" || id === "debug"
-            ? action.state.reservedIgnoreNames !== undefined
-              ? "Saved. Review automatic transfers separately before enabling automatic work for this policy."
-              : "Saved. Enabling startup work applies next session start; completed transfers are not undone."
-            : "Saved. Applies to subsequent operations; status visibility applies immediately.";
-      ctx.ui.notify(saveStatus, result?.kind === "rejected" ? "warning" : "info");
+      if (result?.kind === "stay") {
+        const { value, state } = action;
+        const enabled = value === "On";
+        const setup = safeTerminalText(setupName);
+        const approval =
+          enabled && state.reservedIgnoreNames !== undefined
+            ? " Use Review automatic transfers to approve this policy separately."
+            : "";
+        const message = {
+          automatic: `Automatic sync for “${setup}”: ${value}.${enabled ? " New startup checks begin next session." : ""}${approval}`,
+          "automatic-transfer": `Startup transfer for “${setup}”: ${value}.${enabled ? " Applies at the next session start." : ""}${approval}`,
+          "merge-settings": `Merge settings fields for “${setup}”: ${value}. Applies to subsequent sync operations.`,
+          "skip-secret-scan": `Secret scan ${enabled ? "disabled" : "enabled"} for subsequent pushes in all setups.`,
+          "show-status": `Show sync status: ${value}. Applies immediately to all setups.`,
+          debug: `Debug mode: ${value}. Pi applies it at the next session start.`,
+          "on-switch": `On setup switch: ${value}.${state.reservedIgnoreNames !== undefined ? " Switching still won't pull while any setup uses an ignore file." : ""}`,
+        }[id];
+        ctx.ui.notify(`Saved. ${message}`, "info");
+      }
       return result;
     };
   }

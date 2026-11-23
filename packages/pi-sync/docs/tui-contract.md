@@ -4,7 +4,7 @@ This reference records the setting and transfer contracts used by the TUI. It do
 
 ## Action palette
 
-The `/sync` TUI manager uses Kit's public searchable `ChoiceScreen` with at most five visible choices. Ordinary rows contain only labels; the selected action's short description appears below the list and is included in search. Search and selection survive a cancelled operation. Navigation, confirmation, cancellation, paste, focus, scrolling and constrained-height framing remain Kit-owned. RPC keeps an unfiltered list with the established **Sync now** label and a **Done** exit; TUI displays **Sync…** for that same action.
+The `/sync` TUI manager uses Kit's public searchable `ChoiceScreen` with at most five visible choices. Ordinary rows contain only labels; the selected action's short description appears below the list and is included in search. Searching for `storage connections` finds **Settings** in the configured manager. Search and selection survive a cancelled operation. Navigation, confirmation, cancellation, paste, focus, scrolling and constrained-height framing remain Kit-owned. RPC keeps an unfiltered list with the established **Sync now** label and a **Done** exit; TUI displays **Sync…** for that same action.
 
 The homepage shows setup/storage, cached remote observations, last applied state and relevant automatic-transfer permissions. It does not render scheduler owners, leases, request accounting or candidate limits. Recorded background phases and successful background-transfer timestamps are explicitly historical; neither replaces a fresh remote check. Missing records show **not yet observed**, and unreadable or invalid records show **Unknown**. Last applied does not invent a timestamp or direction.
 
@@ -37,7 +37,7 @@ All settings are private to this device. There are no project overrides. Default
 | Show sync status | `showStatus`, true | All setups | Immediate save and immediate status visibility change; notifications/widgets remain |
 | Debug mode | `debug`, false | All setups | Immediate save; Pi logging and timing display use the next session start in TUI/RPC; daemon log uses the next owner, job, or Continuous sync cycle boundary |
 
-Opening foreground Settings cancels and drains startup work. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
+Opening foreground Settings cancels and drains startup work. Simple changes report saving, then one setting-specific confirmation or an error in Pi's notifications. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
 
 Writers queue the complete read-modify-write operation, hold the cross-process lock through validation and same-directory atomic replacement, preserve unknown fields and private permissions, and refuse invalid existing files. UI changes do not replace those writers.
 
