@@ -42,11 +42,19 @@ import { backupLocal, captureMutationOwner, maybeReload, protectedSessionPaths }
 import { requireLegacyTransferPolicy, syncSessionsSelected } from "./sync-policy.js";
 import { acceptedSelection, fileHashMap, sameHashes } from "./sync-state.js";
 import {
+  checkLiveProtection,
   directionalApplyGuards,
   requireIgnoreBaselineReview,
   requireResolvedDirectionalProgress,
   validateDirectionalPublication,
 } from "./transfer-freshness.js";
+
+import {
+  requireTransferSize,
+  selectedPublicationImage,
+  selectedPullImage,
+  transferSizeLimitsEnabled,
+} from "./transfer-size-limits.js";
 
 const VERSION = 1;
 const POST_LOCAL_COMMIT_TIMEOUT_MS = 30_000;
@@ -120,6 +128,13 @@ export async function rollback(
   const caseCleanup = options.yes ? [] : await inspectCaseCleanup(physical, snapshotOptions);
   validateMutation();
   const reviewedProtectedPaths = protectedSessionPaths(ctx, snapshotOptions.sessionDir);
+  const sizeLimited = transferSizeLimitsEnabled(config);
+  if (sizeLimited)
+    requireTransferSize(
+      config,
+      selectedPullImage(remote, local, reviewedProtectedPaths),
+      selectedPublicationImage(upload, config, snapshotOptions.sessionDir),
+    );
 
   if (!options.yes) {
     const title = snapshotIncludesSessions(remote) ? "Rollback pi settings and sessions?" : "Rollback pi settings?";
@@ -184,6 +199,7 @@ export async function rollback(
     await validateIgnorePolicy();
   }
   const protectedPaths = protectedSessionPaths(ctx, snapshotOptions.sessionDir);
+  if (sizeLimited) checkLiveProtection(ctx, snapshotOptions.sessionDir, reviewedProtectedPaths);
   const applyGuards = directionalApplyGuards({
     ctx,
     config,
@@ -196,6 +212,15 @@ export async function rollback(
     onCommit: options.onCommit,
     validateMutation,
     validateIgnorePolicy,
+    validateSettings: async () => {
+      if (
+        syncCheckConfigFingerprint(config) !==
+        syncCheckConfigFingerprint(await loadConfig(options.setup, options.signal))
+      )
+        throw new Error("Settings changed before rollback apply.");
+      validateMutation();
+      if (sizeLimited) checkLiveProtection(ctx, snapshotOptions.sessionDir, reviewedProtectedPaths);
+    },
   });
   applyGuards.validateMutation();
   if (!validateIgnorePolicy) options.onCommit?.();
@@ -203,7 +228,7 @@ export async function rollback(
     ...snapshotOptions,
     sessionDir: applySessionDir,
     ...applyGuards,
-    ...(config.scope === "agent-directory" || validateIgnorePolicy ? { reviewedLocal: local } : {}),
+    ...(config.scope === "agent-directory" || validateIgnorePolicy || sizeLimited ? { reviewedLocal: local } : {}),
     expectedFileHashes: config.localFields?.length
       ? { "settings.json": fileHashMap(local)["settings.json"] ?? null }
       : undefined,

@@ -34,6 +34,7 @@ import {
   RemoteSelectionMismatchError,
   selectionForSnapshot,
 } from "../src/engine/sync/sync-policy.js";
+import { diff } from "../src/engine/sync/sync-queries.js";
 import { syncPolicyChanged } from "../src/engine/sync/sync-state.js";
 import { formatPullSummary, formatRollbackSummary } from "../src/engine/ui/sync-format.js";
 
@@ -124,6 +125,16 @@ function memoryRemote() {
 }
 
 const activeRules = "/private.txt\n";
+const MIB = 1024 ** 2;
+
+async function enableSizeLimits(settings: PiSyncSettingsV3, save: () => Promise<void>) {
+  const setup = settings.syncSetups.work;
+  assert.ok(setup);
+  settings.version = 9;
+  setup.sync.maxFileSizeMiB = 1;
+  setup.sync.maxDirectorySizeMiB = 1;
+  await save();
+}
 
 async function fixture(
   run: (fixture: {
@@ -564,6 +575,108 @@ for (const direction of ["push", "pull"] as const) {
     }));
 }
 
+for (const direction of ["push", "pull"] as const) {
+  test(`size-blocked ${direction} preserves both images and the baseline, then allows a reviewed replacement`, () =>
+    fixture(async ({ root, ctx, settings, save, remote }) => {
+      await enableSizeLimits(settings, save);
+      const config = await loadConfig();
+      const relative = direction === "push" ? "notes.txt" : "notes/first.txt";
+      const note = path.join(root, relative);
+      await fs.mkdir(path.dirname(note), { recursive: true });
+      await fs.writeFile(note, "accepted");
+      assert.equal(await push(ctx, options, undefined, remote.factory), "applied");
+      const accepted = await readStateForConfig(config);
+      const [small] = remote.commits;
+      assert.ok(small);
+      assert.equal(accepted.lastAppliedSnapshot, small.id);
+      if (direction === "push") {
+        await fs.writeFile(note, "x".repeat(MIB + 1));
+      } else {
+        remote.seed({
+          ...small,
+          id: "oversize-directory",
+          files: [file(relative, "x".repeat(MIB / 2)), file("notes/nested/second.txt", "y".repeat(MIB / 2 + 1))],
+        });
+      }
+      const head = await remote.backend.readHead();
+      assert.ok(head);
+      const remoteBefore = structuredClone(await remote.backend.readSnapshot(head.snapshotRef));
+      const snapshotOptions = snapshotOptionsForContext(ctx, config);
+      const localBefore = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+      const onCommit = vi.fn();
+      const error =
+        direction === "push"
+          ? /Transfer blocked by size limits\. Remote file "notes\.txt": 1048577 bytes \(limit 1048576 bytes\)/u
+          : /Transfer blocked by size limits\. Local directory "notes": 1048577 bytes \(limit 1048576 bytes\)/u;
+      const transfer = (attempt: CommandOptions) => {
+        const command = { ...attempt, onCommit };
+        return direction === "push"
+          ? push(ctx, command, undefined, remote.factory)
+          : pull(ctx, command, remote.factory);
+      };
+      await assert.rejects(transfer(options), error);
+      await assert.rejects(transfer({ ...options, force: true, yes: true }), error);
+      await assert.rejects(transfer(await boundAction(ctx)), error);
+      assert.equal(onCommit.mock.calls.length, 0);
+      assert.equal(remote.commits.length, 1);
+      assert.deepEqual(await remote.backend.readHead(), head);
+      assert.deepEqual(await remote.backend.readSnapshot(head.snapshotRef), remoteBefore);
+      assert.deepEqual((await createSnapshot(config.snapshotIdentity, snapshotOptions)).files, localBefore.files);
+      assert.deepEqual(await readStateForConfig(config), accepted);
+
+      let message = "";
+      const report = (value: string) => {
+        message = value;
+      };
+      ctx.ui.notify = report;
+      await diff(ctx, options, remote.factory);
+      assert.ok(message.includes(`Different: ${relative}`));
+
+      const action = await boundAction(ctx);
+      assert.ok(action.directionalAction);
+      action.directionalAction.notifySuccess = report;
+      if (direction === "push") {
+        assert.equal(await pull(ctx, action, remote.factory), "applied");
+        assert.equal(await fs.readFile(note, "utf8"), "accepted");
+        const backupPath = /Local backup: (.*\.json\.gz)\. To restore/u.exec(message)?.[1];
+        assert.ok(backupPath);
+        assert.deepEqual((await decodeSnapshot(await fs.readFile(backupPath))).files, localBefore.files);
+        assert.deepEqual(await remote.backend.readHead(), head);
+      } else {
+        assert.equal(await push(ctx, action, undefined, remote.factory), "applied");
+        assert.deepEqual(remote.commits.at(-1)?.files, small.files);
+        assert.match(message, /Restore the previous remote version oversize-directory from .*History/u);
+        assert.ok((await remote.backend.listHistory()).some((entry) => entry.snapshotRef === head.snapshotRef));
+        assert.deepEqual((await remote.backend.readSnapshot(head.snapshotRef)).files, remoteBefore.files);
+      }
+    }));
+
+  test(`initial Sync cannot ${direction} an oversize file`, () =>
+    fixture(async ({ root, ctx, settings, save, remote }) => {
+      await enableSizeLimits(settings, save);
+      const config = await loadConfig();
+      const note = path.join(root, "notes.txt");
+      const oversized = "x".repeat(MIB + 1);
+      if (direction === "push") {
+        await fs.writeFile(note, oversized);
+      } else {
+        const empty = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
+        remote.seed({ ...empty, files: [file("notes.txt", oversized)] });
+      }
+      const head = await remote.backend.readHead();
+      const error =
+        direction === "push"
+          ? /Transfer blocked by size limits\. Remote file "notes\.txt"/u
+          : /Transfer blocked by size limits\. Local file "notes\.txt"/u;
+      await assert.rejects(syncBoth(ctx, options, remote.factory), error);
+      assert.deepEqual(await remote.backend.readHead(), head);
+      assert.equal(remote.commits.length, 0);
+      assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
+      if (direction === "push") assert.equal(await fs.readFile(note, "utf8"), oversized);
+      else await assert.rejects(fs.stat(note), { code: "ENOENT" });
+    }));
+}
+
 for (const failure of ["backup write", "backup corruption", "local race", "remote race"] as const) {
   test(`one-action Pull does not overwrite after ${failure}`, () =>
     fixture(async ({ root, ctx, remote }) => {
@@ -681,6 +794,40 @@ test("the bound Push cannot be combined with existing commands or authorization 
     }
     await assert.rejects(syncBoth(ctx, action, remote.factory), /cannot authorize bidirectional Sync/u);
     assert.deepEqual(remote.commits, []);
+  }));
+
+test("rule adoption checks files newly included by the incoming rules before changing local state", () =>
+  fixture(async ({ root, rules, ctx, settings, save, remote }) => {
+    await enableSizeLimits(settings, save);
+    const config = await loadConfig();
+    const privateFile = path.join(root, "private.txt");
+    const note = path.join(root, "notes.txt");
+    await fs.writeFile(privateFile, "keep local");
+    await fs.writeFile(note, "accepted");
+    assert.equal(await push(ctx, options, undefined, remote.factory), "applied");
+    const accepted = await readStateForConfig(config);
+    const [baseline] = remote.commits;
+    assert.ok(baseline?.selection?.version === 4);
+    const text = "/leave-local.txt\n";
+    const head = remote.seed({
+      ...baseline,
+      id: "oversize-rule-adoption",
+      selection: { ...baseline.selection, fingerprint: ignorePolicyFingerprint(text, false) },
+      ignoreRules: { filename: ".syncignore", text },
+      files: [file("notes.txt", "incoming"), file("private.txt", "x".repeat(MIB + 1))],
+    });
+    const onCommit = vi.fn();
+    await assert.rejects(
+      pull(ctx, { ...options, onCommit }, remote.factory),
+      /Transfer blocked by size limits\. Local file "private\.txt"/u,
+    );
+    assert.equal(onCommit.mock.calls.length, 0);
+    assert.equal(hasPendingAdoption(), false);
+    assert.equal(await fs.readFile(rules, "utf8"), activeRules);
+    assert.equal(await fs.readFile(privateFile, "utf8"), "keep local");
+    assert.equal(await fs.readFile(note, "utf8"), "accepted");
+    assert.deepEqual(await remote.backend.readHead(), head);
+    assert.deepEqual(await readStateForConfig(config), accepted);
   }));
 
 test.each(["during payload", "before rule install", "after rule install", "during rule directory sync"] as const)(

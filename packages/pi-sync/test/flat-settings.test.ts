@@ -119,6 +119,8 @@ const settingLabels = [
   "Excluded paths",
   "Compare included paths",
   "Machine-local fields",
+  "Max file size",
+  "Max directory size",
   "Storage location",
   "Manage sync setups",
   "Manage storage connections",
@@ -230,7 +232,7 @@ test("all four opt-in Settings descriptions omit maturity markers and retain pol
     assert.deepEqual(context.notifications, []);
   }));
 
-test("Settings opens all original rows in order and one Back returns directly to the manager", async () =>
+test("Settings opens all rows in order and one Back returns directly to the manager", async () =>
   withTempHome(async (root) => {
     mkdirSync(root, { recursive: true });
     writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));

@@ -24,6 +24,7 @@ const cases = [
   { name: "TUI cancelled Pull", mode: "tui", action: "cancel", direction: "pull" },
   { name: "TUI cancelled Push", mode: "tui", action: "cancel", direction: "push" },
   { name: "TUI applied Push", mode: "tui", action: "apply", direction: "push" },
+  { name: "TUI size-limited Push", mode: "tui", action: "block", direction: "push" },
   { name: "RPC applied Pull", mode: "rpc", action: "apply", direction: "pull" },
   { name: "TUI cancelled direct /sync push review", mode: "tui", action: "review-push" },
   { name: "RPC History", mode: "rpc", action: "history" },
@@ -111,7 +112,11 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
       );
     }
     const localPath = join(agentDir, "AGENTS.md");
-    if (direction) await writeFile(localPath, localText);
+    if (action === "block") {
+      settings.version = 9;
+      Object.assign(settings.syncSetups.home.sync, { maxFileSizeMiB: 1 });
+    }
+    if (direction) await writeFile(localPath, action === "block" ? Buffer.alloc(1_048_577, 0x78) : localText);
     settings.storageConnections.dav.url = server.url;
     const bytes = JSON.stringify(settings);
     const settingsPath = join(agentDir, "pi-sync.json");
@@ -246,11 +251,13 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
       if (direction) assert.deepEqual(menus.slice(menuCountAtActivation), []);
       const notices = context.notifications.slice(noticeStart);
       const requests = server.requests.slice(requestStart);
-      assert.ok(!notices.some(({ level }) => level === "error"), JSON.stringify(notices));
+      if (action !== "block") assert.ok(!notices.some(({ level }) => level === "error"), JSON.stringify(notices));
       if (action === "settings") {
         const settingsFrames = frames.filter((frame) => frame.split("\n").includes("Pi Sync Settings"));
         assert.equal(settingsFrames.length, 2);
         assert.match(settingsFrames[0] ?? "", /Included paths/u);
+        assert.match(settingsFrames[0] ?? "", /Max file size.*Off/u);
+        assert.match(settingsFrames[0] ?? "", /Max directory size.*Off/u);
         assert.match(settingsFrames[0] ?? "", /Type to search/u);
         for (const frame of settingsFrames)
           assert.doesNotMatch(
@@ -264,6 +271,15 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
         assert.ok(frames[1]?.includes(progress), frames.join("\n\n"));
         assert.equal(notices.filter(({ message }) => /cancellation requested/u.test(message)).length, 1);
         assert.equal(await readFile(localPath, "utf8"), localText);
+      } else if (action === "block") {
+        assert.ok(
+          notices.some(
+            ({ level, message }) => level === "error" && /Remote file "AGENTS\.md": 1048577 bytes/u.test(message),
+          ),
+          JSON.stringify(notices),
+        );
+        assert.equal((await backend.readHead())?.snapshotId, remote.id);
+        assert.equal((await readFile(localPath)).length, 1_048_577);
       } else if (action === "apply") {
         if (mode === "tui") {
           assert.equal(frames.length, 2, frames.join("\n\n"));

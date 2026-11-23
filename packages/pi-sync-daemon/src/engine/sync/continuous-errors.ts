@@ -23,6 +23,13 @@ export class ContinuousError extends Error {
   }
 }
 
+export class TransferSizeError extends ContinuousError {
+  constructor(message: string) {
+    super("unsafe", message);
+    this.name = "TransferSizeError";
+  }
+}
+
 export function continuousFailure(error: unknown): { kind: ContinuousErrorKind; retry: boolean; delay?: number } {
   const seen = new Set<unknown>();
   for (let current = error; current && !seen.has(current) && seen.size < 8; ) {

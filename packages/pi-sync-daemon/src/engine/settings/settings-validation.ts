@@ -36,9 +36,17 @@ export function normalizeOnSwitch(value: unknown): OnSwitchAction {
 
 export function validateSettingsDocument(value: Record<string, unknown>): PiSyncSettingsV3 {
   const version = value.version;
-  if (version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) {
+  if (
+    version !== 3 &&
+    version !== 4 &&
+    version !== 5 &&
+    version !== 6 &&
+    version !== 7 &&
+    version !== 8 &&
+    version !== 9
+  ) {
     throw new Error(
-      `Unsupported pi-sync settings: version 3 through 8 is required. Keep the existing ${CONFIG_FILE_NAME} for recovery and use a compatible pi-sync client or review a separate supported setup; do not downgrade portable policies. pi-sync will not migrate or overwrite unsupported settings.`,
+      `Unsupported pi-sync settings: version 3 through 9 is required. Keep the existing ${CONFIG_FILE_NAME} for recovery and use a compatible Pi Sync client and daemon; do not downgrade settings. Pi Sync will not migrate or overwrite unsupported settings.`,
     );
   }
   rejectLegacyFields(
@@ -248,6 +256,21 @@ function validateSyncSetup(
     throw new Error("sync.exclude requires explicit settings version 6; older clients must refuse excluded content.");
   if ((sync.mergeContent || sync.partialSync) && version < 5)
     throw new Error("Content/partial sync requires explicit settings version 5.");
+  for (const key of ["maxFileSizeMiB", "maxDirectorySizeMiB"]) {
+    const limit = sync[key];
+    if (limit === undefined) continue;
+    if (version < 9) throw new Error(`sync.${key} requires explicit settings version 9.`);
+    if (
+      typeof limit !== "number" ||
+      !Number.isInteger(limit) ||
+      limit <= 0 ||
+      !Number.isSafeInteger(limit * 1_048_576)
+    ) {
+      throw new Error(
+        `Invalid pi-sync settings: sync.${key} must be a positive whole number of MiB with a safe byte count.`,
+      );
+    }
+  }
   for (const key of ["mergeContent", "partialSync", "agentMode", "continuous"])
     if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`${key} must be boolean.`);
   if (sync.mergeSettings !== undefined && typeof sync.mergeSettings !== "boolean")

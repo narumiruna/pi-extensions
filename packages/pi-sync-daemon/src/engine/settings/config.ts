@@ -68,12 +68,9 @@ async function operationalConfig(document: LocalConfigDocument | undefined, setu
   return resolveOperationPolicy(config, setupName, signal, document && { kind: "checked", document });
 }
 
-export async function loadSettingsConfig(setupName?: string): Promise<AnySyncConfig> {
-  return configFromSettings(await readSettingsForCheck(), setupName);
-}
-
-async function readSettingsForCheck() {
-  return settingsFromCheckDocument(await readActiveLocalConfigDocumentForRepair());
+export async function loadSettingsConfig(setupName?: string) {
+  const settings = settingsFromCheckDocument(await readActiveLocalConfigDocumentForRepair());
+  return { ...configFromSettings(settings, setupName), settingsVersion: settings.version };
 }
 
 function settingsFromCheckDocument(document: LocalConfigDocument | undefined) {
@@ -337,9 +334,9 @@ export function syncConfigReviewFingerprint(config: AnySyncConfig) {
 }
 
 /** Internal freshness token, including credentials; never display or persist it. */
-export function syncCheckConfigFingerprint(config: AnySyncConfig) {
+export function syncCheckConfigFingerprint(config: AnySyncConfig & { settingsVersion?: PiSyncSettingsV3["version"] }) {
   return createHash("sha256")
-    .update(JSON.stringify({ ...config, showStatus: undefined, debug: undefined }))
+    .update(JSON.stringify({ ...config, showStatus: undefined, debug: undefined, settingsVersion: undefined }))
     .digest("hex");
 }
 
@@ -409,6 +406,8 @@ function resolveSyncConfig(
     mergeSettings: setup.sync.mergeSettings ?? false,
     mergeContent: setup.sync.mergeContent ?? false,
     partialSync: setup.sync.partialSync ?? false,
+    ...(policy.maxFileSizeMiB === undefined ? {} : { maxFileSizeMiB: policy.maxFileSizeMiB }),
+    ...(policy.maxDirectorySizeMiB === undefined ? {} : { maxDirectorySizeMiB: policy.maxDirectorySizeMiB }),
     onSwitch,
     skipSecretScan,
     showStatus,

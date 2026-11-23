@@ -82,6 +82,7 @@ export function directionalApplyGuards({
   signal,
   validateMutation,
   validateIgnorePolicy,
+  validateSettings,
   onCommit,
   effectiveRoot = false,
 }: {
@@ -95,10 +96,11 @@ export function directionalApplyGuards({
   signal?: AbortSignal;
   validateMutation: () => void;
   validateIgnorePolicy?: () => Promise<void>;
+  validateSettings?: () => Promise<void>;
   onCommit?: () => void;
   effectiveRoot?: boolean;
 }) {
-  if (!validateIgnorePolicy) return { validateMutation };
+  if (!validateIgnorePolicy) return { validateMutation, validateApplyReview: validateSettings };
   const validateOwner = () => {
     validateMutation();
     checkLiveProtection(ctx, sessionDir, protectedPaths);
@@ -118,6 +120,7 @@ export function directionalApplyGuards({
           : (await resolvedSnapshotOptionsForContext(ctx, config, signal)).sessionDir)
       )
         throw new StaleIgnorePolicyError("Pi session storage changed before local apply; reopen the review.");
+      await validateSettings?.();
       await validateIgnorePolicy();
       validateOwner();
       if (!committed) {

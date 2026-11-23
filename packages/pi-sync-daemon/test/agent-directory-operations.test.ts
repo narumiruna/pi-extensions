@@ -7,11 +7,13 @@ import { test } from "vitest";
 import { expectedRemoteHead, type RemoteHead, type SyncBackend } from "../src/engine/backends/sync-backend.js";
 import type { CommandOptions } from "../src/engine/commands/command-types.js";
 import { configureEngineHost, type EngineContext } from "../src/engine/host.js";
-import { loadConfig } from "../src/engine/settings/config.js";
+import { loadConfig, loadSettingsConfig } from "../src/engine/settings/config.js";
+import { updateSyncSetup } from "../src/engine/settings/settings-management.js";
 import { snapshotOptionsForContext } from "../src/engine/snapshot/session-paths.js";
 import { createSnapshot } from "../src/engine/snapshot/snapshot.js";
 import type { Snapshot, SnapshotFile } from "../src/engine/snapshot/snapshot-types.js";
 import { readStateForConfig } from "../src/engine/state/sync-state-store.js";
+import { ContinuousError } from "../src/engine/sync/continuous-errors.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "../src/engine/sync/merge-apply.js";
 import { inspectSync } from "../src/engine/sync/sync-inspection.js";
 import { push, rollback, syncBoth } from "../src/engine/sync/sync-mutations.js";
@@ -359,4 +361,35 @@ test("rollback projects legacy history without applying or publishing credential
       remote.publications[1]?.files.map((entry) => entry.path),
       ["notes.txt"],
     );
+  }));
+
+test("oversized legacy History cannot replace local or remote content even with --force --yes", () =>
+  fixture(async (root, ctx, remote) => {
+    const target = path.join(root, "notes.txt");
+    await fs.writeFile(target, "current");
+    await push(ctx, options, undefined, remote.factory);
+    const head = await remote.backend.readHead();
+    assert.ok(head);
+    const limit = 1024 ** 2;
+    const snapshot = historical([file("notes.txt", Buffer.alloc(limit + 1))]);
+    remote.history.set(snapshot.id, snapshot);
+    const state = await readStateForConfig(await loadConfig());
+    assert.equal(state.lastAppliedSnapshot, head.snapshotId);
+    await updateSyncSetup("work", (setup) => ({ ...setup, sync: { ...setup.sync, maxFileSizeMiB: 1 } }));
+    const config = await loadSettingsConfig();
+    assert.equal(config.settingsVersion, 9);
+    await assert.rejects(rollback(ctx, { ...options, args: [snapshot.id], force: true }, remote.factory), (error) => {
+      assert.ok(error instanceof ContinuousError);
+      assert.equal(error.kind, "unsafe");
+      assert.match(error.message, /^Transfer blocked by size limits\. /u);
+      for (const side of ["Local", "Remote"]) {
+        assert.ok(error.message.includes(`${side} file "notes.txt": ${limit + 1} bytes (limit ${limit} bytes).`));
+      }
+      return true;
+    });
+    assert.equal(await fs.readFile(target, "utf8"), "current");
+    assert.deepEqual(await remote.backend.readHead(), head);
+    assert.equal(remote.publications.length, 1);
+    assert.equal(await remote.backend.readSnapshot(snapshot.id), snapshot);
+    assert.deepEqual(await readStateForConfig(config), state);
   }));

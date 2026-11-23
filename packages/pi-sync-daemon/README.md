@@ -11,6 +11,7 @@
 
 - One authenticated local owner per canonical agent directory, shared by multiple Pi clients.
 - Existing Git, WebDAV, S3, and Cloudflare R2 engine formats and recovery evidence.
+- Enforces optional per-file and per-directory limits on the selected bytes of new transfers, without changing snapshot formats.
 - Separate process lifetime, transfer permission, and isolated-model permission.
 - Explicit lifecycle control without an OS service, supervisor, database, or public TCP listener.
 
@@ -65,6 +66,12 @@ Pi starts the service only after configured interactive synchronization is neede
 Existing `pi-sync.json`, canonical `pi-sync/`, and legacy `.pisync/` remain in the selected agent directory. There is no second backend or credential configuration format. The daemon is the authoritative Pi Sync settings writer; stale reviews must reopen rather than overwrite a newer document. Ignore-file setups publish snapshot version 7. It can include the active rule text and comments unless the rules exclude their own file. Upgrade all peers and review automatic permissions again before publishing. See [ignore-file policy and recovery](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#ignore-file-policy). Settings version 7 and snapshot version 5 support [agent-directory scope](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#agent-directory-scope). Older clients must refuse these formats, and existing selected-path setups do not change scope automatically.
 
 Automatic, Autonomous, and Continuous defaults remain unchanged. Old permission for work while Pi is open does not permit work after the last client exits. `/sync daemon allow-after-exit` reviews that extra permission for the current setup and selected independently reproducible provider/model; `/sync daemon revoke-after-exit` revokes it. Setup changes invalidate the saved digest. Changes to an interactive client’s model, working directory, or session-directory binding revoke older unattended grants, including across restart. Print/JSON never launch a service; passive attachment to an existing service protects their sessions and pauses automatic work. Registered live PIDs keep the service alive, including passive, disconnected, publishing, and orderly retired clients. A valid explicit after-exit grant for the active setup keeps service lifetime under the existing fingerprint and binding rules; it does not expand transfer or model permission. Temporary provider or backend unavailability does not itself revoke that grant. Lifetime checks do not call a model, contact a provider or storage, or execute credential commands. There is no new setting, environment variable, or keep-alive flag.
+
+### Transfer size limits
+
+The daemon enforces each setup's configured file and directory size limits before new local applies and remote publications, including automatic work. It checks each affected side separately after selection and portable field projection. Old destination bytes outside the proposed image, backups, and retained History do not count. These limits default to Off and do not replace existing scan, decode, merge, or backend bounds.
+
+Enabling either limit requires settings document version 9 for the whole agent directory. Close or upgrade older Pi Sync clients and daemon owners on that root before enabling a limit. Older builds refuse the entire document, including other setups, and clearing the limits does not make version 9 readable by older builds. Other devices enforce only their own limits. See the [Pi Sync settings reference](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#transfer-size-limits) for settings values and safe recovery.
 
 ### Debug mode
 

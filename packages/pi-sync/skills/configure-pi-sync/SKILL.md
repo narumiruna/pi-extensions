@@ -128,7 +128,7 @@ Check which [automatic sync control](references/configuration.md#automatic-sync-
 Inspect only the necessary local metadata and relevant non-secret configuration facts; do not expose raw settings, credentials, session contents, daemon records, journals, or backups in tool output or chat.
 Do not ask the user to paste those contents or execute text copied from them.
 
-Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, rule-file activation or switching, and remote policy publication.
+Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, upgrading the settings document to enable a [transfer size limit](references/configuration.md#transfer-size-limits), rule-file activation or switching, and remote policy publication.
 Use the masked credential input in Pi; do not infer transfer or model consent from a settings edit.
 Do not start sync, run `/sync doctor` or backend/network commands, remove locks or recovery evidence, or bypass scan checks.
 

@@ -352,7 +352,7 @@ test("the ignore-file policy fragment validates alongside legacy setups in versi
   assert.throws(() => validateSettingsDocument(settings));
 });
 
-for (const version of [undefined, 1, 2, 9]) {
+for (const version of [undefined, 1, 2, 10]) {
   test(`unsupported settings version ${String(version)} is not interpreted as a supported example`, () => {
     const settings = configurationExample();
     settings.version = version;

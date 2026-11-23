@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 import { defineMenu, type MenuSettingItem, runMenu } from "@narumitw/pi-tui-kit";
 import { piDaemonClient } from "../daemon/pi-client.js";
 import { configFromSettings, loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
@@ -37,6 +38,22 @@ import { safeTerminalText } from "./terminal-text.js";
 
 export type SyncSettingsRoute = RunRoute;
 
+type SettingsState = Awaited<ReturnType<typeof loadSettingsConfig>>;
+const transferSizeLimits = [
+  {
+    field: "maxFileSizeMiB",
+    label: "Max file size",
+    description: "Block a transfer when an included file exceeds this uncompressed size.",
+  },
+  {
+    field: "maxDirectorySizeMiB",
+    label: "Max directory size",
+    description:
+      "Block a transfer when a directory below the sync root exceeds this total uncompressed size, counting included files in its subdirectories too.",
+  },
+] as const;
+type TransferSizeLimit = (typeof transferSizeLimits)[number];
+
 export async function showSyncSettings(
   ctx: ExtensionCommandContext,
   runRoute: SyncSettingsRoute,
@@ -63,7 +80,7 @@ export async function showSyncSettings(
     const document = await readActiveLocalConfigDocumentForRepair().catch(() => null);
     if (!isCurrent()) return disposition;
     const settingsPath = document?.path ?? localConfigPath();
-    let config: Awaited<ReturnType<typeof loadSettingsConfig>> | undefined;
+    let config: ReturnType<typeof configFromSettings> | undefined;
     try {
       if (document) config = configFromSettings(validateSettingsDocument(document.parsed), reviewedSetup);
     } catch {
@@ -77,6 +94,12 @@ export async function showSyncSettings(
           ? "Could not read the active pi-sync settings file. Check file access or repair the JSON before reopening /sync."
           : `Edit pi-sync settings manually: ${safeTerminalText(settingsPath)}`,
         ...(limited ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(settingsPath)] : []),
+        ...(!limited && config
+          ? [
+              "In the active entry in syncSetups, set sync.maxFileSizeMiB or sync.maxDirectorySizeMiB to a positive whole number of MiB with a safe byte count. Remove a field to turn that limit Off.",
+              "A limit requires settings version 9. Upgrade all Pi Sync clients and daemons that share this agent directory before enabling a limit. Keep version 9 even if both limits are later Off.",
+            ]
+          : []),
         ...(!limited && config?.reservedIgnoreNames !== undefined
           ? ["Use TUI Settings → Review automatic transfers to approve the current setup separately."]
           : []),
@@ -120,8 +143,8 @@ export async function showSyncSettings(
   const ignoreAvailable = await ignoreFileSettingsAvailable(ctx, signal);
   if (!isCurrent()) return disposition;
   const setupName = initial.setupName;
-  type SettingsState = Awaited<ReturnType<typeof loadSettingsConfig>>;
   type Action =
+    | TransferSizeLimit["field"]
     | "automatic"
     | "automatic-transfer"
     | "agent-mode"
@@ -238,6 +261,13 @@ export async function showSyncSettings(
               currentValue: `${state.localFields?.length ?? 0} fields · Edit`,
               action: "local-fields",
             },
+            ...transferSizeLimits.map(({ field, label, description }) => ({
+              id: field,
+              label,
+              description: `This setup: ${description} Also applies to automatic transfers. Saving starts no transfer.`,
+              currentValue: transferSizeLimitLabel(state[field]),
+              action: field,
+            })),
             {
               id: "storageLocation",
               label: "Storage location",
@@ -386,6 +416,8 @@ export async function showSyncSettings(
       }),
     },
     actions: {
+      maxFileSizeMiB: transferSizeLimitAction(transferSizeLimits[0]),
+      maxDirectorySizeMiB: transferSizeLimitAction(transferSizeLimits[1]),
       "storage-location": async ({ signal: actionSignal }) => {
         const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
         await showEditSyncSetupStorage(ctx, setupName, editorSignal);
@@ -412,7 +444,7 @@ export async function showSyncSettings(
           if (
             !(await ctx.ui.confirm(
               "Save content policy?",
-              `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and publishes snapshot version 7; upgrade older clients first." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5; older clients must refuse it." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
+              `${previous.pathPolicy === "ignore-file" ? `Ignore-file policy keeps settings version ${previous.settingsVersion} and publishes snapshot version 7; upgrade older clients first.` : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5; older clients must refuse it." : "This explicitly upgrades settings to at least version 5; partial snapshots use version 3, or version 4 with exclusions, and older clients must refuse them."} Text/session merge is conservative. Partial sync preserves withheld versions and old baselines. Disabling does not clear unresolved groups or recovery evidence. Review a directional migration first if portable policy changes.`,
               { signal: mutationSignal },
             ))
           )
@@ -488,7 +520,7 @@ export async function showSyncSettings(
           if (sameLocalFields(previous.localFields, fields)) return { kind: "stay" };
           const confirmed = await ctx.ui.confirm(
             "Save portable field policy?",
-            `${previous.pathPolicy === "ignore-file" ? "Ignore-file policy keeps settings version 8 and publishes snapshot version 7." : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
+            `${previous.pathPolicy === "ignore-file" ? `Ignore-file policy keeps settings version ${previous.settingsVersion} and publishes snapshot version 7.` : previous.scope === "agent-directory" ? "Agent directory scope uses snapshot version 5." : "This opts into at least settings/snapshot version 4/2; exclude-enabled setups retain snapshot version 4."} Older clients must refuse unsupported formats. Future snapshots omit these fields, but old remote history is NOT erased. Review an explicit force push/pull migration before further sync. Removed rules can expose or replace local-only values.`,
             { signal: mutationSignal },
           );
           validate();
@@ -768,6 +800,83 @@ export async function showSyncSettings(
       return result;
     };
   }
+  function transferSizeLimitAction({ field, label }: TransferSizeLimit) {
+    return async ({ state, signal: actionSignal }: { state: SettingsState; signal: AbortSignal }) => {
+      const cancel = new AbortController();
+      const mutationSignal = AbortSignal.any([actionSignal, cancel.signal, ...(signal ? [signal] : [])]);
+      const validate = captureMutationOwner(ctx, mutationSignal);
+      const rejected = { kind: "rejected" } as const;
+      const stay = { kind: "stay" } as const;
+      const setupLabel = safeTerminalText(setupName);
+      let limit: number | undefined;
+      try {
+        const expectedConfigFingerprint = syncCheckConfigFingerprint(state);
+        const active = await loadSettingsConfig();
+        validate();
+        if (active.setupName !== setupName || syncCheckConfigFingerprint(active) !== expectedConfigFingerprint) {
+          throw new Error("Current sync setup changed while Settings was open; reopen Settings.");
+        }
+        const stop = ctx.ui.onTerminalInput((data) => {
+          if (!isKeyRelease(data) && matchesKey(data, Key.ctrl("c"))) {
+            cancel.abort();
+            return { consume: true };
+          }
+        });
+        try {
+          const input = await ctx.ui.input(
+            `${label} for “${setupLabel}” (current: ${transferSizeLimitLabel(state[field])})\nEnter Off or a positive whole number of MiB.`,
+            undefined,
+            { signal: mutationSignal },
+          );
+          validate();
+          if (input === undefined) return rejected;
+          limit = parseTransferSizeLimit(input);
+          if (limit === state[field]) return stay;
+          if (limit !== undefined && active.settingsVersion < 9) {
+            const confirmed = await ctx.ui.confirm(
+              "Upgrade Pi Sync settings to version 9?",
+              `${label} for “${setupLabel}”: ${transferSizeLimitLabel(limit)}. Older Pi Sync clients and daemons cannot read this settings file for any setup. Upgrade all processes that share this agent directory before continuing. Turning both limits Off later does not downgrade the file. Remote snapshots are unchanged.`,
+              { signal: mutationSignal },
+            );
+            validate();
+            if (!confirmed) return rejected;
+          }
+        } finally {
+          stop();
+        }
+        validate();
+        ctx.ui.notify("Saving Pi Sync setting…", "info");
+        await updateSyncSetup(
+          setupName,
+          (setup) => {
+            validate();
+            if (limit === undefined) delete setup.sync[field];
+            else setup.sync[field] = limit;
+            return setup;
+          },
+          { expectedActiveSetup: true, expectedConfigFingerprint, signal: mutationSignal },
+        );
+      } catch (error) {
+        if (!mutationSignal.aborted && isCurrent()) notifySaveFailure(ctx, error);
+        return rejected;
+      }
+      try {
+        validate();
+        const approval =
+          state.reservedIgnoreNames !== undefined &&
+          (startupTransferEnabled(state) || (state.automatic && syncSessionsSelected(state)))
+            ? " Use Review automatic transfers to approve this policy separately."
+            : "";
+        ctx.ui.notify(
+          `Saved. ${label} for “${setupLabel}”: ${transferSizeLimitLabel(limit)}. Applies to subsequent transfers; no transfer started.${approval}`,
+          "info",
+        );
+      } catch {
+        return stay;
+      }
+      return stay;
+    };
+  }
   function ignoreAction(action: Parameters<typeof showIgnoreFileAction>[2]) {
     return async ({ state, signal: actionSignal }: { state: SettingsState; signal: AbortSignal }) => {
       if (!ignoreAvailable || (state.pathPolicy === "ignore-file") === (action === "migrate"))
@@ -800,6 +909,20 @@ export async function showSyncSettings(
     isCurrent,
   });
   return disposition;
+}
+
+function transferSizeLimitLabel(limit: number | undefined) {
+  return limit === undefined ? "Off" : `${limit} MiB`;
+}
+
+function parseTransferSizeLimit(input: string) {
+  const value = input.trim();
+  if (value.toLowerCase() === "off") return undefined;
+  const limit = Number(value);
+  if (!/^[0-9]+$/u.test(value) || limit <= 0 || !Number.isSafeInteger(limit * 1_048_576)) {
+    throw new Error("Enter Off or a positive whole number of MiB that fits in a safe byte count.");
+  }
+  return limit;
 }
 
 function notifySaveFailure(ctx: ExtensionCommandContext, error: unknown) {

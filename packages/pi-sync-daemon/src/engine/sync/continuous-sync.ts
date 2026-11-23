@@ -8,7 +8,12 @@ import { withStateDirectoryAccess } from "../state/state-directory.js";
 import { readStateForConfig } from "../state/sync-state-store.js";
 import { setSyncStatus, syncStatusFailureReason } from "../ui/sync-status.js";
 import { withAgentSyncLock } from "./agent-sync.js";
-import { ContinuousError, type ContinuousErrorKind, continuousFailure } from "./continuous-errors.js";
+import {
+  ContinuousError,
+  type ContinuousErrorKind,
+  continuousFailure,
+  TransferSizeError,
+} from "./continuous-errors.js";
 import { acquireContinuousLease, type ContinuousLease } from "./continuous-lease.js";
 import {
   normalizeContinuousClock,
@@ -405,7 +410,9 @@ export function createContinuousSync(
             validate();
             if (announce && !failure.retry)
               ctx.ui.notify(
-                `Continuous sync blocked (${failure.kind}). Review /sync or repair the setup. Evidence was retained.`,
+                error instanceof TransferSizeError
+                  ? `Continuous sync blocked. ${error.message}`
+                  : `Continuous sync blocked (${failure.kind}). Review /sync or repair the setup. Evidence was retained.`,
                 "warning",
               );
           } finally {

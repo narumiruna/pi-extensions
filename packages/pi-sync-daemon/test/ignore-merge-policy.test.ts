@@ -22,7 +22,10 @@ import {
   syncStateFingerprint,
   writeStateForConfig,
 } from "../src/engine/state/sync-state-store.js";
-import { createContinuousSync } from "../src/engine/sync/continuous-sync.js";
+import { ContinuousError } from "../src/engine/sync/continuous-errors.js";
+import { readContinuousRecord } from "../src/engine/sync/continuous-record.js";
+import { continuousBinding } from "../src/engine/sync/continuous-storage.js";
+import { type ContinuousClock, createContinuousSync } from "../src/engine/sync/continuous-sync.js";
 import { watchContinuous } from "../src/engine/sync/continuous-watch.js";
 import { applyMergedSnapshot } from "../src/engine/sync/merge-apply.js";
 import {
@@ -44,6 +47,7 @@ import type { Execution } from "../src/protocol.js";
 
 const filename = ".work.syncignore";
 const rules = "/ignored/\n";
+const MiB = 1024 ** 2;
 const input = { filename, sessions: false, configuredFilenames: [".other.syncignore"] };
 const options: CommandOptions = {
   args: [],
@@ -68,11 +72,12 @@ const legacy = settings.configFromSettings({
   },
 });
 
-function file(relative: string, content: string) {
+function file(relative: string, content: string | Buffer) {
+  const bytes = typeof content === "string" ? Buffer.from(content) : content;
   return {
     path: relative,
-    contentBase64: Buffer.from(content).toString("base64"),
-    sha256: createHash("sha256").update(content).digest("hex"),
+    contentBase64: bytes.toString("base64"),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
   };
 }
 
@@ -271,13 +276,12 @@ test("an edit at the publish guard retains pending evidence across force, retry 
     assert.deepEqual(await fs.readFile(filePath), pending);
   }));
 
-test("recovering an uncertain v6 commit applies its verified snapshot without republishing", () =>
-  fixture(async ({ root, config, ctx }) => {
+test("recovering an uncertain commit applies the verified snapshot despite a newly enabled limit", () =>
+  fixture(async ({ root, config, ctx, load }) => {
     const state = await baseline(config);
+    const incoming = Buffer.alloc(MiB + 1);
     await fs.writeFile(path.join(root, "notes.md"), "local edit");
-    const remote = backendFixture(
-      snapshot(config, "remote", [file("notes.md", "baseline"), file("new.md", "remote edit")]),
-    );
+    const remote = backendFixture(snapshot(config, "remote", [file("notes.md", "baseline"), file("new.md", incoming)]));
     const publish = remote.publishSnapshot.getMockImplementation();
     assert.ok(publish);
     remote.publishSnapshot.mockImplementationOnce(async (...args) => {
@@ -289,8 +293,12 @@ test("recovering an uncertain v6 commit applies its verified snapshot without re
     assert.ok(journal?.version === 3);
     assert.equal(journal.committedHead, undefined);
     assert.deepEqual(await readStateForConfig(config), state);
+    assert.equal(remote.head().snapshotId, journal.upload.id);
+    const target = path.join(root, "new.md");
+    await assert.rejects(fs.stat(target), { code: "ENOENT" });
+    load.mockResolvedValue({ ...config, maxFileSizeMiB: 1 });
     assert.equal(await mergeSync(ctx, options, remote.factory), "applied");
-    assert.equal(await fs.readFile(path.join(root, "new.md"), "utf8"), "remote edit");
+    assert.ok((await fs.readFile(target)).equals(incoming));
     assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, journal.upload.id);
     assert.equal(await readMergeJournal(config), undefined);
     assert.equal(remote.publishSnapshot.mock.calls.length, 1);
@@ -669,6 +677,168 @@ for (const transition of ["old baseline", "legacy remote", "different remote", "
       assert.equal(await readMergeJournal(config), undefined);
     }));
 }
+
+function transferSizeBlock(...findings: string[]) {
+  return (error: unknown) => {
+    assert.ok(error instanceof ContinuousError);
+    assert.equal(error.kind, "unsafe");
+    assert.match(error.message, /^Transfer blocked by size limits\. /u);
+    for (const finding of findings) assert.ok(error.message.includes(finding), error.message);
+    assert.equal(error.message.match(/\(limit /gu)?.length, findings.length);
+    return true;
+  };
+}
+
+for (const side of ["Local", "Remote"] as const) {
+  test(`merge checks an oversized ${side} file even when only that side would change`, () =>
+    fixture(async ({ root, config, ctx, load }) => {
+      const state = await baseline(config);
+      const target = path.join(root, "oversized.bin");
+      const big = Buffer.alloc(MiB + 1);
+      await fs.writeFile(path.join(root, "notes.md"), "baseline");
+      if (side === "Remote") await fs.writeFile(target, big);
+      const files = [file("notes.md", "baseline")];
+      if (side === "Local") files.push(file("oversized.bin", big));
+      const remote = backendFixture(snapshot(config, "remote", files));
+      const original = remote.head();
+      load.mockResolvedValue({ ...config, maxFileSizeMiB: 1 });
+      await assert.rejects(
+        mergeSync(ctx, { ...foreground, yes: true, force: true }, remote.factory),
+        transferSizeBlock(`${side} file "oversized.bin": ${MiB + 1} bytes (limit ${MiB} bytes).`),
+      );
+      assert.deepEqual(remote.head(), original);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 0);
+      if (side === "Local") await assert.rejects(fs.stat(target), { code: "ENOENT" });
+      else assert.ok((await fs.readFile(target)).equals(big));
+      assert.deepEqual(await readStateForConfig(config), state);
+      assert.equal(await readMergeJournal(config), undefined);
+    }));
+}
+
+test("continuous merge blocks a combined oversized directory until the candidate evidence changes", () =>
+  fixture(async ({ root, config, ctx, load }) => {
+    const state = await baseline(config);
+    const policy = { ...config, continuous: true, maxDirectorySizeMiB: 1 };
+    load.mockResolvedValue(policy);
+    vi.spyOn(settings, "loadConfigForCheck").mockResolvedValue(policy);
+    const localPath = path.join(root, "data/local.bin");
+    const incomingPath = path.join(root, "data/incoming.bin");
+    const local = Buffer.alloc((3 * MiB) / 4);
+    const remoteImage = (id: string, size: number) =>
+      snapshot(config, id, [file("notes.md", "baseline"), file("data/incoming.bin", Buffer.alloc(size))]);
+    await fs.mkdir(path.dirname(localPath));
+    await fs.writeFile(localPath, local);
+    await fs.writeFile(path.join(root, "notes.md"), "baseline");
+    const remote = backendFixture(remoteImage("oversized", MiB / 2));
+    const original = remote.head();
+    const loaders = createEngineLoaders();
+    const inspection = await loaders.inspection();
+    const operations = await loaders.operations();
+    const transfer = vi.fn((ctx: EngineContext, options: CommandOptions) => syncBoth(ctx, options, remote.factory));
+    let now = Date.now();
+    let poll: (() => void) | undefined;
+    let status: string | undefined;
+    const clock: ContinuousClock = {
+      now: () => now,
+      random: () => 0,
+      schedule(_ms, run, kind) {
+        if (kind !== "wait") return () => {};
+        poll = run;
+        return () => {
+          if (poll === run) poll = undefined;
+        };
+      },
+    };
+    const waitForPoll = (expected: string) =>
+      vi.waitFor(
+        () => {
+          assert.equal(status, expected);
+          assert.ok(poll);
+        },
+        { interval: 5 },
+      );
+    const nextPoll = () => {
+      assert.ok(poll);
+      now += 61_000;
+      poll();
+    };
+    ctx.ui.setStatus = (_key, value) => {
+      status = value;
+    };
+    const continuous = createContinuousSync(
+      {
+        ...loaders,
+        inspection: async () => ({
+          inspectSync: (config, options, signal, _factory, timings) =>
+            inspection.inspectSync(config, options, signal, remote.factory, timings),
+        }),
+        operations: async () => ({ ...operations, syncBoth: transfer }),
+      },
+      clock,
+    );
+    const binding = await continuousBinding(policy);
+    const abort = new AbortController();
+    continuous.start(ctx, abort.signal);
+    try {
+      await waitForPoll("sync blocked: unsafe");
+      assert.equal(transfer.mock.calls.length, 1);
+      const attempt = transfer.mock.results[0];
+      assert.ok(attempt?.type === "return");
+      await assert.rejects(
+        attempt.value,
+        transferSizeBlock(
+          `Local directory "data": ${(5 * MiB) / 4} bytes (limit ${MiB} bytes).`,
+          `Remote directory "data": ${(5 * MiB) / 4} bytes (limit ${MiB} bytes).`,
+        ),
+      );
+      const blocked = await readContinuousRecord(binding);
+      assert.equal(blocked.failures, 1);
+      nextPoll();
+      await waitForPoll("sync blocked: unsafe");
+      const repeated = await readContinuousRecord(binding);
+      assert.ok(repeated.checked && blocked.checked && repeated.checked > blocked.checked);
+      assert.equal(repeated.evidence, blocked.evidence);
+      assert.equal(repeated.failures, 1);
+      assert.equal(transfer.mock.calls.length, 1);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 0);
+      assert.deepEqual(remote.head(), original);
+      assert.ok((await fs.readFile(localPath)).equals(local));
+      await assert.rejects(fs.stat(incomingPath), { code: "ENOENT" });
+      assert.deepEqual(await readStateForConfig(config), state);
+      assert.equal(await readMergeJournal(config), undefined);
+
+      remote.replaceHead(remoteImage("smaller", MiB / 4));
+      nextPoll();
+      await waitForPoll("sync waiting for changes");
+      assert.equal(transfer.mock.calls.length, 2);
+      assert.equal(remote.committed.mock.calls.length, 1);
+      assert.ok((await fs.readFile(incomingPath)).equals(Buffer.alloc(MiB / 4)));
+      assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, remote.head().snapshotId);
+    } finally {
+      abort.abort();
+      await continuous.stop();
+    }
+    assert.equal(poll, undefined);
+  }));
+
+test("limits Off do not bypass the hard combined merge input-file bound", () =>
+  fixture(async ({ root, config, ctx }) => {
+    const state = await baseline(config);
+    await fs.writeFile(path.join(root, "notes.md"), "baseline");
+    const empty = file("empty", "");
+    const files = Array.from({ length: 16_384 }, (_, index) => ({ ...empty, path: `data/${index}.bin` }));
+    files[0] = file("notes.md", "baseline");
+    const remote = backendFixture(snapshot(config, "remote", files));
+    const original = remote.head();
+    await assert.rejects(mergeSync(ctx, options, remote.factory), {
+      message: "Merged transfer exceeds the 64 MiB / 16,384 input-file bound; review an explicit push or pull instead.",
+    });
+    assert.equal(remote.publishSnapshot.mock.calls.length, 0);
+    assert.deepEqual(remote.head(), original);
+    await assert.rejects(fs.stat(path.join(root, "data")), { code: "ENOENT" });
+    assert.deepEqual(await readStateForConfig(config), state);
+    assert.equal(await readMergeJournal(config), undefined);
+  }));
 
 test("continuous inspection of a v6 policy mismatch never enters operations", () =>
   fixture(async ({ root, config, ctx }) => {

@@ -1021,7 +1021,7 @@ test("unsupported settings pause startup automatic sync and remain unchanged", a
     await notified.promise;
     await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
     const output = notifications.map((item) => item.message).join("\n");
-    assert.match(output, /recovery required.*Unsupported pi-sync settings.*version 3 through 8/su);
+    assert.match(output, /recovery required.*Unsupported pi-sync settings.*version 3 through 9/su);
     assert.doesNotMatch(output, /hidden/u);
     assert.deepEqual(readFileSync(localConfigPath()), bytes);
   });

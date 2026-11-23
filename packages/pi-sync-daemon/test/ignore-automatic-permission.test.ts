@@ -143,6 +143,18 @@ test("automatic permission requires a separate review and does not survive setti
         await checkDenied("startup-transfer");
         await checkDenied("shutdown");
         assert.equal(reviews, 4);
+
+        const beforeLimit = (await policy()).fingerprint;
+        assert.equal(await client.run("daemon.authorize-connected", { fingerprint: beforeLimit }), true);
+        const limitSource = (await client.run("settings.read", {})) as DocumentView;
+        const limited = structuredClone(limitSource.parsed) as typeof settings;
+        limited.version = 9;
+        Object.assign(limited.syncSetups.home.sync, { maxFileSizeMiB: 2 });
+        await client.run("settings.cas", { expected: documentFingerprint(limitSource), next: limited });
+        assert.equal((await policy()).automatic, false);
+        await assert.rejects(client.run("daemon.authorize-connected", { fingerprint: beforeLimit }), /Setup changed/u);
+        await checkDenied("startup-transfer");
+        await checkDenied("shutdown");
         assert.deepEqual(backendCalls, []);
         assert.equal(await fs.readFile(rule, "utf8"), rules);
 

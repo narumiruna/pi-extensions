@@ -14,6 +14,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 - Uses one ordered include list for Pi roots, safe agent-relative paths, and privacy-sensitive sessions, with optional path/glob exclusions.
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Keeps snapshot selection portable and free of credentials.
+- Offers opt-in file and directory size limits for new local applies and remote publications.
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
 - Offers default-off Autonomous sync for eligible startup and Sync now transfers without another transfer confirmation, with model-assisted conflict resolution and a separate Continuous sync opt-in.
 - Shares one detached synchronization service across Pi clients, with a generated split UI client runtime.
@@ -242,7 +243,7 @@ Successful transfers show one summary. They do not reload resources, activate ex
 
 **Settings → Merge settings fields** controls the per-setup `sync.mergeSettings` opt-in, default **Off**. It combines independent global `settings.json` fields, not arbitrary JSON or keybindings. Missing/corrupt ancestors, unsupported syntax, and incompatible fields retain whole-transfer review. Sensitive accepted content is cached privately under the denied state root; disabling does not delete evidence.
 
-**Settings → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. An explicit array requires at least settings version 4 and snapshot version 2; legacy directory scope keeps settings version 7 or later and snapshot version 5; ignore-file setups use settings version 8 and publish snapshot version 7. Nonempty rules require `settings.json` in `sync.include` only for selected-path setups. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./skills/configure-pi-sync/references/configuration.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
+**Settings → Machine-local fields** edits explicit `sync.localFields` root field names for global `settings.json` (default none). Excluded values and absence stay local; future portable snapshots omit them. An explicit array requires at least settings version 4 and snapshot version 2; legacy directory scope keeps settings version 7 or later and snapshot version 5; ignore-file setups require settings version 8 or later and publish snapshot version 7. Nonempty rules require `settings.json` in `sync.include` only for selected-path setups. All receiving machines must configure compatible rules. Additions/removals require a separately confirmed force-direction migration, even with `--yes`; old remote history is **not erased**. See [settings merge and local fields](./skills/configure-pi-sync/references/configuration.md#settings-field-merge-and-machine-local-fields) for formats, compatibility and recovery.
 
 **Settings → Content merge / partial progress** controls independent `sync.mergeContent` and `sync.partialSync` opt-ins, both default **Off**. Saving opts into at least settings version 5; partial publications use snapshot version 3 for selected paths, version 4 with selected-path exclusions, version 5 for legacy directory scope, or version 7 for ignore-file policy. Older readers must refuse unsupported formats. Supported Markdown/plain-text resources merge bounded independent line edits without Git or conflict markers. Diff grids and hunk comparisons share an eight-million-work-unit budget across the operation and its retries; exhausted paths remain conflicts for review. Same-session reconciliation only accepts validated complete byte-prefix extensions; divergent histories and the loaded session require review. A syntactically clean text merge is **not a semantic correctness guarantee**.
 
@@ -307,6 +308,14 @@ Upgrade all peers before publishing a version 7 snapshot. When policies differ, 
 ### Legacy path rules
 
 For selected-path setups, **Settings → Excluded paths** edits `sync.exclude` rules that win over `include`; saving opts into at least settings version 6 and snapshot version 4. For directory scope, **Settings → Agent directory scope** also edits `reinclude` and session opt-in. Excluded local files remain untouched, including on rollback. New publications omit matching remote paths, but old history is **not erased**. Removing rules can expose or replace content. See [Excluded paths](./skills/configure-pi-sync/references/configuration.md#excluded-paths) for syntax, review, and recovery.
+
+### Transfer size limits
+
+In **/sync → Settings**, use **Max file size** and **Max directory size** for the current setup. Both default to **Off**. Enter `Off` or a positive whole number of MiB. The daemon checks the uncompressed bytes selected for each new local apply or remote publication. A directory limit counts all included files below that directory, not the entire sync root. A failure stops the transfer instead of skipping files, even for automatic transfers or with `--force` or `--yes`.
+
+**Before enabling either limit, close or upgrade older Pi Sync clients and daemon processes that use this agent directory.** Enabling a limit upgrades an older local `pi-sync.json` to version 9. Older processes refuse the entire document, even for other setups. Turning both limits Off does not downgrade the file. Remote peers need no upgrade for this setting alone; it does not change snapshots.
+
+A save applies to subsequent transfer attempts. It neither starts a transfer nor grants automatic permission. If blocked, inspect `/sync diff`, narrow the selection with [ignore rules](#ignore-file-policy) or [legacy exclusions](#legacy-path-rules), then review a Push or Pull from the side that has the version you want. See [Transfer size limits](./skills/configure-pi-sync/references/configuration.md#transfer-size-limits) for the manual settings fields, an example, and recovery guidance.
 
 ### Scan limits
 

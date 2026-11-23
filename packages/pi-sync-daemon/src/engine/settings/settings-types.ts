@@ -91,6 +91,8 @@ interface CommonSyncPolicySettings {
   mergeSettings?: boolean;
   mergeContent?: boolean;
   partialSync?: boolean;
+  maxFileSizeMiB?: number;
+  maxDirectorySizeMiB?: number;
   [key: string]: unknown;
 }
 
@@ -132,7 +134,7 @@ export interface SyncSetupSettings {
 }
 
 export interface PiSyncSettingsV3 {
-  version: 3 | 4 | 5 | 6 | 7 | 8;
+  version: 3 | 4 | 5 | 6 | 7 | 8 | 9;
   activeSyncSetup?: string;
   onSwitch: OnSwitchAction;
   skipSecretScan?: boolean;
@@ -168,6 +170,8 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   mergeSettings?: boolean;
   mergeContent?: boolean;
   partialSync?: boolean;
+  maxFileSizeMiB?: number;
+  maxDirectorySizeMiB?: number;
   onSwitch: OnSwitchAction;
   skipSecretScan: boolean;
   showStatus: boolean;
