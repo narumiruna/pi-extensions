@@ -47,13 +47,20 @@ for (const failFirst of [false, true]) {
           }, toggle);
           assert.equal((await loadConfig()).debug, false);
           assert.match(tui.render().join("\n"), /Debug mode.*Off/u);
-          assert.ok(context.notifications.some((entry) => /save failed/iu.test(entry.message)));
+          assert.deepEqual(context.notifications, [
+            { message: "Saving Pi Sync setting…", level: "info" },
+            { message: "Pi Sync settings save failed: publication failed", level: "error" },
+          ]);
+          context.notifications.length = 0;
         }
         await toggle();
         assert.equal((await loadConfig()).debug, true);
         assert.match(tui.render().join("\n"), /Debug mode.*On/u);
         assert.equal(JSON.parse(await fs.readFile(localConfigPath(), "utf8")).futureField, "keep");
-        assert.ok(context.notifications.some((entry) => entry.message.includes("next session start")));
+        assert.deepEqual(context.notifications, [
+          { message: "Saving Pi Sync setting…", level: "info" },
+          { message: "Saved. Debug mode: On. Pi applies it at the next session start.", level: "info" },
+        ]);
         tui.send("q");
         await running;
       } finally {

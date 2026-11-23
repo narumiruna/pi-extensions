@@ -18,7 +18,7 @@ const ordinaryActions = [
   { label: "Push to remote", route: "push", description: "This device → remote; replaces conflicting remote files." },
   { label: "View differences", route: "diff", description: "Inspect changes; no transfer." },
   { label: "Check remote status", route: "status", description: "Check remote; no transfer." },
-  { label: "Settings", route: undefined, description: "Change sync settings." },
+  { label: "Settings", route: undefined, description: "Edit settings, setups, and storage connections." },
   { label: "History", route: "history", description: "Review snapshots and rollback." },
   { label: "Diagnostics", route: "doctor", description: "Review backend diagnostics." },
 ] as const;
@@ -236,7 +236,7 @@ for (const action of ordinaryActions) {
 
 test("searched Settings opens its existing screen and returns to the same palette choice without writing", async () => {
   await withPalette(async ({ tui, routes }) => {
-    tui.type("Change sync settings.");
+    tui.type("storage connections");
     assertSelectedDescription(tui.render(), "Settings");
     tui.send("\u0015");
     tui.type("Settings");

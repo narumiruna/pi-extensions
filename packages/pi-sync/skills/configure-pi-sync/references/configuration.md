@@ -76,7 +76,7 @@ The screen uses a searchable flat list without category navigation. Compare cont
 Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
 
 Descriptions identify the owner: this setup, all setups on this device, or shared connections.
-Simple choices report Saving and the durable Saved or failed/rejected result, preserve the selected row and search during refresh, and restore their previous value if saving fails.
+Simple choices report saving, then a setting-specific confirmation or an error in Pi's notifications. They preserve the selected row and search during refresh and restore the previous value if saving fails.
 Escape closes the screen without undoing successful saves.
 Complex values retain their input/review flows.
 This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.

@@ -492,7 +492,7 @@ function syncMainMenuItem(
       push: "This device → remote; replaces conflicting remote files.",
       diff: "Inspect changes; no transfer.",
       status: "Check remote; no transfer.",
-      settings: "Change sync settings.",
+      settings: "Edit settings, setups, and storage connections.",
       history: "Review snapshots and rollback.",
       doctor: "Review backend diagnostics.",
       switch: "Choose another sync setup.",
