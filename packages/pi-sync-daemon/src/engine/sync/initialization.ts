@@ -28,7 +28,15 @@ export async function initializeSync(
       const stateNotice = stateDirectoryMigrationNotice();
       if (stateNotice && ctx.hasUI) ctx.ui.notify(stateNotice, "warning");
       await timings.measure("transaction recovery", async () => {
+        const pending = await pendingTransactionEntries();
+        validate();
         if (hasPendingAdoption()) {
+          if (pending.length) {
+            const { recoverAdoptionFilesOnStartup } = await import("./ignore-adoption-recovery.js");
+            validate();
+            await recoverAdoptionFilesOnStartup(ctx, signal, validate);
+            validate();
+          }
           if (ctx.hasUI)
             ctx.ui.notify(
               "Ignore-rule adoption is pending. Resume from the originating setup with /sync pull.",
@@ -36,8 +44,6 @@ export async function initializeSync(
             );
           return;
         }
-        const pending = await pendingTransactionEntries();
-        validate();
         if (!pending.some((entry) => entry.isDirectory())) return;
         const { recoverSnapshotTransactionsOnStartup } = await import("../snapshot/snapshot-transaction.js");
         validate();

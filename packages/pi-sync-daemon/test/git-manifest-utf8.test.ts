@@ -85,6 +85,10 @@ test("Git round-trips portable rule bytes without adding the rule file to the pu
       ignoreRules: { filename: ".syncignore", text },
     };
     const result = await backend.publishSnapshot(next, expectedRemoteHead(await backend.readHead()));
+    const firstRead = await backend.readSnapshot(result.head.snapshotRef);
+    assert.deepEqual(firstRead, next);
+    assert.ok(firstRead.ignoreRules);
+    firstRead.ignoreRules.filename = "Local.rules";
     assert.deepEqual(await backend.readSnapshot(result.head.snapshotRef), next);
     assert.deepEqual(await backend.readHead(), result.head);
     assert.doesNotMatch(JSON.stringify(result.head), /Exact rules|\.syncignore/u);

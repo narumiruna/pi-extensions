@@ -3,6 +3,7 @@ import { constants, lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { RemoteHead } from "../backends/sync-backend.js";
+import { validateConfigName } from "../settings/settings-validation.js";
 import { syncDirectory, writeJson } from "../state/json-file.js";
 import { stateDir } from "../state/state-directory.js";
 import { compileIgnoreRules, sameFile, validateIgnoreFilename } from "./ignore-source.js";
@@ -13,6 +14,7 @@ const recoveryMessage =
 
 export interface AdoptionJournal {
   version: 1;
+  setupName: string;
   setupFingerprint: string;
   stateFingerprint: string;
   filename: string;
@@ -113,6 +115,7 @@ export async function loadAdoptionJournal(): Promise<AdoptionJournal | undefined
       !/^[\w-]{1,128}$/u.test(journal.backupId)
     )
       throw new Error(recoveryMessage);
+    validateConfigName(journal.setupName, "sync setup");
     validateIgnoreFilename(journal.filename);
     compileIgnoreRules(journal.beforeRules);
     compileIgnoreRules(journal.afterRules);

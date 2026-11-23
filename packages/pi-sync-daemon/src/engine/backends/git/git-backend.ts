@@ -173,7 +173,7 @@ export class GitSyncBackend implements SyncBackend {
       profile: manifest.profile,
       ...(manifest.snapshotSyncSessions === undefined ? {} : { syncSessions: manifest.snapshotSyncSessions }),
       ...(manifest.selection === undefined ? {} : { selection: structuredClone(manifest.selection) }),
-      ...(manifest.ignoreRules === undefined ? {} : { ignoreRules: manifest.ignoreRules }),
+      ...(manifest.ignoreRules === undefined ? {} : { ignoreRules: structuredClone(manifest.ignoreRules) }),
       ...(manifest.localFields === undefined ? {} : { localFields: [...manifest.localFields] }),
       files,
     };

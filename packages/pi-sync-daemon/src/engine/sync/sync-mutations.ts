@@ -53,7 +53,7 @@ import {
   validateDirectionalSettings,
 } from "./directional-action.js";
 import { confirmFieldMigration } from "./field-migration.js";
-import { adoptRemoteRules, canReviewAdoption } from "./ignore-adoption.js";
+import { adoptionSettingsFingerprint, adoptRemoteRules, canReviewAdoption } from "./ignore-adoption.js";
 import { ignorePublicationNotice, withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { readMergeJournal, requireNoMergeJournal, retireMergeJournal } from "./merge-journal.js";
@@ -477,6 +477,30 @@ export async function pull(
   const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
   if (action) snapshotOptions.sessionDir = await effectiveSessionRoot(ctx, config, options.signal);
   validateMutation();
+  if (journal) {
+    if (
+      journal.setupName !== config.setupName ||
+      journal.setupFingerprint !== adoptionSettingsFingerprint(config) ||
+      config.pathPolicy !== "ignore-file"
+    )
+      throw new Error(
+        "Pending rule adoption belongs to a different setup. Preserve its journal and use the originating setup.",
+      );
+    const remote = await readSnapshotForHead(backend, journal.head, options.signal, config);
+    validateMutation();
+    return adoptRemoteRules({
+      ctx,
+      options,
+      config,
+      backend,
+      state,
+      head: journal.head,
+      remote,
+      snapshotOptions,
+      validateMutation,
+      journal,
+    });
+  }
   const validateIgnorePolicy = ignorePolicyValidator({ ...snapshotOptions, validateMutation });
   if (initial && initial.sessionDir !== snapshotOptions.sessionDir)
     throw new Error("Pi session storage changed before initial pull; run sync again.");
@@ -488,7 +512,7 @@ export async function pull(
   let adoption: Snapshot | undefined;
   const { head, snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal, {
     ...snapshotOptions,
-    ...(action || (adoptionReview && config.ignorePolicy) || journal
+    ...(action || (adoptionReview && config.ignorePolicy)
       ? {
           validateSelection: (raw: Snapshot) => {
             const comparison = inspectRemoteSelection(
@@ -497,7 +521,7 @@ export async function pull(
               config.exclude,
               config,
             ).ignorePolicyComparison;
-            if (journal || (adoptionReview && comparison === "mismatch")) {
+            if (adoptionReview && comparison === "mismatch") {
               adoption = raw;
             } else if (action) {
               requireDirectionalSelection(config, state, local, raw, snapshotOptions.sessionDir);
@@ -521,9 +545,7 @@ export async function pull(
       remote: adoption,
       snapshotOptions,
       validateMutation,
-      journal,
     });
-  if (journal) throw new Error("Pending rule adoption no longer matches the remote. Preserve its journal.");
   if (initial && !matchesInitialHead(initial, backend, head))
     throw new Error("Remote changed before initial pull; run sync again.");
   if (!action) requireIgnoreBaselineReview(ctx, config, state, options);

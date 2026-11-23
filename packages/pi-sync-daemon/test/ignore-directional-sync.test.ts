@@ -20,8 +20,10 @@ import { snapshotOptionsForContext } from "../src/engine/snapshot/session-paths.
 import { createSnapshot } from "../src/engine/snapshot/snapshot.js";
 import { applySnapshot } from "../src/engine/snapshot/snapshot-apply.js";
 import { decodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
+import { pendingTransactionEntries } from "../src/engine/snapshot/snapshot-transaction-directory.js";
 import type { Snapshot, SnapshotFile } from "../src/engine/snapshot/snapshot-types.js";
 import { readStateForConfig, statePathForConfig } from "../src/engine/state/sync-state-store.js";
+import { initializeSync } from "../src/engine/sync/initialization.js";
 import { readRemoteSnapshot } from "../src/engine/sync/remote-snapshot.js";
 import { inspectSync } from "../src/engine/sync/sync-inspection.js";
 import { pull, push, rollback, syncBoth } from "../src/engine/sync/sync-mutations.js";
@@ -681,14 +683,15 @@ test("the bound Push cannot be combined with existing commands or authorization 
     assert.deepEqual(remote.commits, []);
   }));
 
-test.each(["during payload", "before rule install", "after rule install"] as const)(
-  "an interruption %s retains reviewed rule adoption for explicit resumption",
+test.each(["during payload", "before rule install", "after rule install", "during rule directory sync"] as const)(
+  "an interruption %s leaves a reviewed recovery path after the remote head advances",
   (phase) =>
     fixture(async ({ root, rules, ctx, remote }) => {
       const config = await loadConfig();
       const local = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
       assert.equal(local.selection?.version, 4);
       const incomingRules = "# Active publisher rules\r\n/leave-local.txt\r\n";
+      if (phase === "during rule directory sync" && process.platform === "win32") return;
       const head = remote.seed({
         ...local,
         id: "incoming",
@@ -703,6 +706,17 @@ test.each(["during payload", "before rule install", "after rule install"] as con
       const controller = new AbortController();
       const mutate = engineHost().mutate;
       const rename = fs.rename;
+      const open = fs.open;
+      const syncFault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (
+          phase === "during rule directory sync" &&
+          args[0] === root &&
+          args[1] === "r" &&
+          (await fs.readFile(rules, "utf8")) === incomingRules
+        )
+          throw new Error("Simulated interruption syncing the rule directory");
+        return open(...args);
+      });
       const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
         if (phase === "after rule install" && to === statePathForConfig(config))
           throw new Error("Simulated interruption before baseline publication");
@@ -723,17 +737,54 @@ test.each(["during payload", "before rule install", "after rule install"] as con
         fault.mockRestore();
         engineHost().mutate = mutate;
       }
+      try {
+        if (phase === "during rule directory sync") {
+          await assert.rejects(pull(ctx, options, remote.factory), /interruption syncing the rule directory/u);
+          assert.equal(hasPendingAdoption(), true);
+          assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
+        }
+      } finally {
+        syncFault.mockRestore();
+      }
       assert.equal(await fs.readFile(notes, "utf8"), "incoming");
-      assert.equal(await fs.readFile(rules, "utf8"), phase === "after rule install" ? incomingRules : activeRules);
+      assert.equal(
+        await fs.readFile(rules, "utf8"),
+        phase === "after rule install" || phase === "during rule directory sync" ? incomingRules : activeRules,
+      );
       assert.equal(hasPendingAdoption(), true);
       assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
       await assert.rejects(push(ctx, options, undefined, remote.factory), /Pending ignore-rule adoption/u);
+      const newer = remote.seed(legacy("newer-head", [file("remote.txt", "not reviewed")]));
+      if (phase === "during payload") {
+        assert.ok((await pendingTransactionEntries()).length);
+        const reads = remote.reads();
+        await fs.writeFile(rules, "# different local rules\n");
+        await assert.rejects(initializeSync(ctx, new AbortController().signal), /file transaction no longer match/u);
+        assert.ok((await pendingTransactionEntries()).length);
+        assert.equal(await fs.readFile(notes, "utf8"), "incoming");
+        await fs.writeFile(rules, activeRules);
+        await initializeSync(ctx, new AbortController().signal);
+        assert.equal(remote.reads(), reads);
+        assert.equal(await fs.readFile(notes, "utf8"), "local");
+        assert.equal(await fs.readFile(rules, "utf8"), activeRules);
+        assert.deepEqual(await pendingTransactionEntries(), []);
+        assert.equal(hasPendingAdoption(), true);
+      }
+      ctx.ui.confirm = async (title, summary) => {
+        assert.match(title, /Resume reviewed/u);
+        assert.match(summary, /recorded snapshot, not the current remote head/u);
+        return false;
+      };
+      assert.equal(await pull(ctx, options, remote.factory), "cancelled");
+      assert.equal(hasPendingAdoption(), true);
+      ctx.ui.confirm = async () => true;
       assert.equal(await pull(ctx, options, remote.factory), "applied");
       assert.equal(hasPendingAdoption(), false);
       assert.equal(await fs.readFile(rules, "utf8"), incomingRules);
       assert.equal(await fs.readFile(path.join(root, "leave-local.txt"), "utf8"), "left local under the new rules");
       assert.equal((await readStateForConfig(await loadConfig())).lastAppliedSnapshot, head.snapshotId);
-      assert.equal((await remote.backend.readHead())?.revision, head.revision);
+      assert.equal((await remote.backend.readHead())?.revision, newer.revision);
+      assert.equal(await fs.readFile(notes, "utf8"), "incoming");
     }),
 );
 

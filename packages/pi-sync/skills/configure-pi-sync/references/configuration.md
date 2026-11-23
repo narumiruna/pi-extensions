@@ -361,7 +361,9 @@ Setup, migration, rule-file switching, and edits neither start nor authorize tra
 
 When policies differ, a reviewed Push can replace the remote policy. Pull can preview and adopt verified remote rules without writing to the remote. Cancel to leave both sides unchanged. Neither `--force`, `--yes` nor background work approves a policy overwrite. If rule text is unavailable, match the publisher's rules manually. If Sessions opt-in differs, review that setting locally first. Select a dedicated rule file before adopting into a shared source. An omitted rule file is not a request to delete it. Rollback projects historical content through the current local rules; it does not adopt historical rules.
 
-If adoption is interrupted, keep the local rules, backups and journals. With a compatible daemon, run `/sync pull` on the originating setup to review resumption; it does not proceed if local files or remote evidence diverged. The successful transfer reports the path of the backup containing the previous rule text. Preserve unresolved merge or file-creation evidence instead of trying to force past it.
+If adoption is interrupted, keep the local rules, backups and journals. Startup recovers an interrupted local file transaction before opening sync, without adopting rules or contacting the backend. If startup cannot verify the recovery evidence, do not edit the affected files; preserve the journals for review.
+
+Run `/sync pull` on the originating setup to review resumption. It uses the recorded, retained snapshot even if another device has since published a newer one. If that snapshot is missing or the local evidence no longer matches, preserve the journals and backups; do not replace them with the newer snapshot. After recovery, run `/sync status` to check the newer remote state. The successful transfer reports the backup path for the previous rule text.
 
 After a version 6 or 7 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers. Keep retained history intact.
 

@@ -58,7 +58,7 @@ export function canReviewAdoption(ctx: EngineContext, options: CommandOptions) {
   );
 }
 
-function adoptionSettingsFingerprint(config: AnySyncConfig) {
+export function adoptionSettingsFingerprint(config: AnySyncConfig) {
   return syncConfigReviewFingerprint({ ...config, ignorePolicy: undefined, ignoreSourceIdentity: undefined });
 }
 
@@ -159,10 +159,12 @@ export async function adoptRemoteRules(input: AdoptionInput) {
   const sessionDir = snapshotOptions.sessionDir;
   const protectedPaths = protectedSessionPaths(ctx, sessionDir);
   const remoteFilesIdentity = rawSnapshotHashIdentity(remote);
+  const resuming = input.journal !== undefined;
   let current = input.journal;
   if (
     current &&
-    (current.setupFingerprint !== setupFingerprint ||
+    (current.setupName !== config.setupName ||
+      current.setupFingerprint !== setupFingerprint ||
       current.filename !== filename ||
       current.afterRules !== text ||
       current.remoteFilesIdentity !== remoteFilesIdentity ||
@@ -219,7 +221,7 @@ export async function adoptRemoteRules(input: AdoptionInput) {
       `Local rule file: ${snapshotPathLabel(target)}. The remote will not change.`,
       `Sessions opt-in: ${sessions ? "on" : "off"} (unchanged).`,
       ...(current
-        ? ["Resume the recorded local transaction only if its preimages or installed files still match."]
+        ? ["Resume from the recorded snapshot, not the current remote head. Local evidence must still match."]
         : []),
       formatPullSummary(
         policyConfig,
@@ -249,6 +251,7 @@ export async function adoptRemoteRules(input: AdoptionInput) {
   });
   validateMutation();
   const validateHead = async () => {
+    if (resuming) return;
     const latestHead = await backend.readHead(signal);
     validateMutation();
     if (!sameRemoteHead(backend, head, latestHead)) throw new Error("Remote changed during Pull; reopen the review.");
@@ -300,6 +303,7 @@ export async function adoptRemoteRules(input: AdoptionInput) {
     await validateSource();
     current = {
       version: 1,
+      setupName: config.setupName,
       setupFingerprint,
       stateFingerprint,
       filename,
@@ -388,6 +392,9 @@ export async function adoptRemoteRules(input: AdoptionInput) {
         true,
       );
     });
+  } else {
+    await syncDirectory(root);
+    validateCommittedOwner();
   }
   const installed = await loadConfigForCheck(config.setupName);
   if (
