@@ -75,7 +75,7 @@ test("Mistral reads the subscription and budget routes, mirroring the official V
     assert.deepEqual(
       report.buckets.map((bucket) => [bucket.id, bucket.used, bucket.remaining]),
       [
-        ["vibe-allowance", 3.257940325333332, 96.74205967466666],
+        ["vibe-allowance", 3.258, 96.742],
         ["api-allowance", 0, 100],
       ],
     );

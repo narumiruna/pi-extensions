@@ -410,8 +410,8 @@ test("Mistral adapter reports both public allowance budgets from the live payloa
     {
       id: "vibe-allowance",
       label: "Vibe Code monthly allowance",
-      used: 3.257940325333332,
-      remaining: 96.74205967466666,
+      used: 3.258,
+      remaining: 96.742,
       limit: 100,
       unit: "percent",
       period: "monthly",

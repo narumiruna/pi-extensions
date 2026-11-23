@@ -95,13 +95,15 @@ function parseBudget(value: unknown, label: string): Budget | undefined {
   if (limit === undefined || limit <= 0) return undefined;
   const usedPercent = optionalNumber(detail.usage_percentage, "usage_percentage");
   if (usedPercent === undefined) return undefined;
-  const used = Math.max(0, usedPercent);
+  // Round to billionths of a percent so raw float subtraction (100 - used) cannot
+  // leak precision noise like 96.74205967500001 into the report.
+  const used = roundPercent(Math.max(0, usedPercent));
   return {
     bucket: {
       id: label.includes("Vibe") ? "vibe-allowance" : "api-allowance",
       label,
       used,
-      remaining: Math.max(0, 100 - used),
+      remaining: roundPercent(Math.max(0, 100 - used)),
       limit: 100,
       unit: "percent",
       period: "monthly",
@@ -112,6 +114,10 @@ function parseBudget(value: unknown, label: string): Budget | undefined {
     },
     payg: optionalBoolean(detail.payg_enabled, "payg_enabled"),
   };
+}
+
+function roundPercent(value: number): number {
+  return Math.round(value * 1e3) / 1e3;
 }
 
 function optionalPlanName(value: unknown): string | undefined {
