@@ -1,10 +1,10 @@
-import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { stopDaemon } from "@narumitw/pi-sync-daemon";
+import { assertDisposableAgentRoot } from "./daemon-test-helpers.js";
 
 /** A real isolated engine paused before startup recovery, not a parent-process fs mock. */
 export async function initializationGate(root: string) {
-  assert.match(root, /\/tmp\//u);
+  assertDisposableAgentRoot(root);
   await stopDaemon(root);
   let ready!: () => void;
   let failReady!: (error: Error) => void;

@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 import { piDaemonClient } from "../daemon/pi-client.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
@@ -8,16 +8,24 @@ import { safeTerminalText } from "./terminal-text.js";
 
 type IgnoreOperation = "switch" | "migrate";
 
-export async function ignoreFileSettingsAvailable(ctx: ExtensionCommandContext, signal?: AbortSignal) {
-  if (signal?.aborted) return false;
+async function ignoreCapabilities(ctx: ExtensionContext, signal?: AbortSignal) {
+  if (signal?.aborted) return;
   try {
     const client = piDaemonClient(ctx);
     const result = await client.run("ignore.capabilities", {}, signal, ctx);
     client.validate();
-    return !signal?.aborted && (result as { available?: unknown } | undefined)?.available === true;
+    if (!signal?.aborted) return result as { available?: unknown; portableRules?: unknown } | undefined;
   } catch {
-    return false;
+    return;
   }
+}
+
+export async function ignoreFileSettingsAvailable(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+  return (await ignoreCapabilities(ctx, signal))?.available === true;
+}
+
+export async function portableIgnoreRulesAvailable(ctx: ExtensionContext, signal?: AbortSignal) {
+  return (await ignoreCapabilities(ctx, signal))?.portableRules === 1;
 }
 
 export async function showIgnoreFileAction(

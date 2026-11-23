@@ -1,4 +1,5 @@
 import type { EngineContext } from "../host.js";
+import { hasPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
@@ -29,6 +30,20 @@ export async function initializeSync(
       await timings.measure("transaction recovery", async () => {
         const pending = await pendingTransactionEntries();
         validate();
+        if (hasPendingAdoption()) {
+          if (pending.length) {
+            const { recoverAdoptionFilesOnStartup } = await import("./ignore-adoption-recovery.js");
+            validate();
+            await recoverAdoptionFilesOnStartup(ctx, signal, validate);
+            validate();
+          }
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Ignore-rule adoption is pending. Resume from the originating setup with /sync pull.",
+              "warning",
+            );
+          return;
+        }
         if (!pending.some((entry) => entry.isDirectory())) return;
         const { recoverSnapshotTransactionsOnStartup } = await import("../snapshot/snapshot-transaction.js");
         validate();

@@ -2,6 +2,7 @@ import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-
 import { expectedRemoteHead, type SyncBackend, SyncBackendConflictError } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
+import { requireNoPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import {
@@ -37,6 +38,7 @@ import { pruneCompletedConflicts } from "./conflict-retention.js";
 import { resolveContentConflicts } from "./content-conflicts.js";
 import { ContinuousError } from "./continuous-errors.js";
 import { planFileMerge } from "./file-merge-planner.js";
+import { ignorePublicationNotice, withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields } from "./local-fields.js";
 import { acceptedState, matchesAcceptedState, writeAcceptedState } from "./merge-acceptance.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "./merge-apply.js";
@@ -76,6 +78,7 @@ export async function mergeSync(
   factory: SyncBackendFactory = createSyncBackend,
   resolution?: ConflictResolution,
 ) {
+  requireNoPendingAdoption();
   const timings = options.startupTimings ?? createStartupTimings();
   const sessionOwner = captureMutationOwner(ctx, options.signal);
   const validateOwner = (config?: AnySyncConfig) => {
@@ -481,10 +484,12 @@ export async function mergeSync(
           ...remote.files.filter((file) => withheld.has(file.path)),
         ],
       });
-      const upload = mergeRemotePreservedFiles(publication, rawRemote, config, { sessionDir: sessionRoot });
       const publish =
         !sameHashes(fileHashMap(publication), fileHashMap(remote)) ||
         Boolean(config.partialSync && rawRemote.version < 3);
+      const candidate = mergeRemotePreservedFiles(publication, rawRemote, config, { sessionDir: sessionRoot });
+      const upload = publish ? await withPublishedIgnoreRules(candidate, config, options.signal) : candidate;
+      if (config.ignorePolicy && publish) await validate();
       const apply = !sameHashes(fileHashMap(localRaw), fileHashMap(after));
       if (!publish && !apply) {
         const beforeEvidence = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
@@ -574,15 +579,16 @@ export async function mergeSync(
           decisions: plan.decisions,
           capability: backend.capability,
         });
+        const notice = ignorePublicationNotice(upload);
         if (
           !(await confirmMergeReview(
             ctx,
             summary.title,
-            summary.content,
+            notice ? `${notice}\n\n${summary.content}` : summary.content,
             options.signal,
             isCurrent,
             summary.confirmationLabel,
-            summary.lines,
+            notice ? [notice, "", ...summary.lines] : summary.lines,
           ))
         )
           return "cancelled" as const;
@@ -870,7 +876,11 @@ async function completeJournal(
   requireCompatibleRemoteSelection(config, observed);
   if (
     !sameHashes(fileHashMap(observed), fileHashMap(journal.upload)) ||
-    JSON.stringify(observed.selection) !== JSON.stringify(journal.upload.selection)
+    JSON.stringify(observed.selection) !== JSON.stringify(journal.upload.selection) ||
+    observed.version !== journal.upload.version ||
+    (observed.ignoreRules === null) !== (journal.upload.ignoreRules === null) ||
+    observed.ignoreRules?.filename !== journal.upload.ignoreRules?.filename ||
+    observed.ignoreRules?.text !== journal.upload.ignoreRules?.text
   )
     throw new Error("Remote snapshot does not match the recorded merge publication.");
   const state = await timings.measure("transfer state read", () => readStateForConfig(config));

@@ -52,7 +52,7 @@ async function attach(fixture: RpcFixture, automatic = false) {
 async function configure(fixture: RpcFixture, original: Record<string, unknown>) {
   const client = await attach(fixture);
   try {
-    assert.deepEqual(await client.run("ignore.capabilities", {}), { available: true });
+    assert.deepEqual(await client.run("ignore.capabilities", {}), { available: true, portableRules: 1 });
     const document = (await client.run("settings.read", {})) as DocumentView | null;
     if (document) {
       assert.equal(await client.run("ignore.migrate", { setup: "home" }), "saved");
@@ -148,19 +148,18 @@ test("the packaged daemon does not publish on cancellation or rule edits during 
   assert.equal(await remote.readHead(), undefined);
 });
 
-test("packaged Pi clients use the reviewed v6 policy and preserve excluded local files", async () => {
+test("packaged Pi clients exchange v7 rules and preserve excluded local files", async () => {
   await writer.command("/sync push --yes", () => true);
   const head = await remote.readHead();
   assert.ok(head);
   const published = await remote.readSnapshot(head.snapshotRef);
-  assert.equal(published.version, 6);
+  assert.equal(published.version, 7);
   assert.deepEqual(published.files.map(({ path }) => path).sort(), ["AGENTS.md", "selected.txt"]);
   assert.equal(published.selection?.version, 4);
   assert.deepEqual(Object.keys(published.selection ?? {}).sort(), ["fingerprint", "scope", "sessions", "version"]);
-  assert.doesNotMatch(
-    JSON.stringify(published),
-    /sourceDigest|private\.txt|\.syncignore|alternate\.rules|trust\.json/u,
-  );
+  assert.deepEqual(published.ignoreRules, { filename: ".syncignore", text: rules });
+  assert.doesNotMatch(JSON.stringify(head), /private\.txt|\.syncignore|sourceDigest/u);
+  assert.doesNotMatch(JSON.stringify(published), /sourceDigest|alternate\.rules|trust\.json/u);
 
   await reader.command("/sync pull --force --yes", () => true);
   await assert.rejects(fs.lstat(localFile(second, "selected.txt")), { code: "ENOENT" });

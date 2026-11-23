@@ -29,6 +29,11 @@ export interface DirectoryScope {
 }
 
 export const IGNORE_SNAPSHOT_VERSION = 6;
+export const RULES_SNAPSHOT_VERSION = 7;
+
+export function isIgnoreSnapshotVersion(version: unknown) {
+  return version === IGNORE_SNAPSHOT_VERSION || version === RULES_SNAPSHOT_VERSION;
+}
 
 export function isSupportedSnapshotVersion(version: unknown) {
   return (
@@ -37,7 +42,7 @@ export function isSupportedSnapshotVersion(version: unknown) {
     version === 3 ||
     version === 4 ||
     version === 5 ||
-    version === IGNORE_SNAPSHOT_VERSION
+    isIgnoreSnapshotVersion(version)
   );
 }
 
@@ -67,6 +72,7 @@ export interface Snapshot {
   syncSessions?: boolean;
   /** Portable, credential-free included-content intent. Absent on legacy snapshots. */
   selection?: SnapshotSelection;
+  ignoreRules?: { filename: string; text: string } | null;
   localFields?: string[];
   files: SnapshotFile[];
 }

@@ -68,7 +68,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
     host.run(execution, async () => {
       if (operation === "ignore.capabilities") {
         execution.validate();
-        return { available: ignoreFileSettingsAvailable };
+        return { available: ignoreFileSettingsAvailable, ...(ignoreFileSettingsAvailable ? { portableRules: 1 } : {}) };
       }
       if (operation === "ignore.migration-offer" || operation === "ignore.migration-defer") {
         execution.validate();

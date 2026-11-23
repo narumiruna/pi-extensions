@@ -15,7 +15,7 @@ import {
   type TransactionJournalPolicy,
   validateJournalPolicy,
 } from "../snapshot/snapshot-transaction-policy.js";
-import { IGNORE_SNAPSHOT_VERSION, type Snapshot } from "../snapshot/snapshot-types.js";
+import { isIgnoreSnapshotVersion, type Snapshot } from "../snapshot/snapshot-types.js";
 import { readJsonIfExists, syncDirectory, writeJson } from "../state/json-file.js";
 import { readStateForConfig, statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { confirmMergeReview } from "../ui/merge-review.js";
@@ -200,7 +200,7 @@ export async function readMergeJournal(config: AnySyncConfig): Promise<MergeJour
       validateSnapshotSelection(snapshot);
       if (
         (journal.ignoreSource !== undefined
-          ? snapshot.version !== IGNORE_SNAPSHOT_VERSION ||
+          ? !isIgnoreSnapshotVersion(snapshot.version) ||
             !sameSnapshotSelection(snapshot.selection, journal.upload.selection)
           : ![1, 2, 3, 4, 5].includes(snapshot.version)) ||
         typeof snapshot.id !== "string" ||

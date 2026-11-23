@@ -24,18 +24,18 @@ import { createBareRemote } from "./git-test-helpers.js";
 import { withEnv, withTempHome } from "./helpers.js";
 
 function options(args: string[] = []): CommandOptions {
-  return {
-    yes: true,
-    force: false,
-    stale: false,
-    silent: false,
-    reload: false,
-    auto: false,
-    args,
-  };
+  return { yes: true, force: false, stale: false, silent: false, reload: false, auto: false, args };
 }
 
-test("all backend-neutral sync routes operate against a Git target", async () => {
+interface GitRouteFixture {
+  ctx: ReturnType<typeof createMockContext>["ctx"];
+  notifications: ReturnType<typeof createMockContext>["notifications"];
+  backend: GitSyncBackend;
+  factory: () => GitSyncBackend;
+  settingsPath: string;
+}
+
+async function withGitRoutes(run: (fixture: GitRouteFixture) => Promise<void>) {
   const fixture = createBareRemote();
   try {
     await withEnv(
@@ -47,7 +47,8 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
       () =>
         withTempHome(async (agentDir) => {
           mkdirSync(agentDir, { recursive: true });
-          writeFileSync(path.join(agentDir, "settings.json"), '{"theme":"dark"}\n');
+          const settingsPath = path.join(agentDir, "settings.json");
+          writeFileSync(settingsPath, '{"theme":"dark"}\n');
           writeFileSync(
             localConfigPath(),
             JSON.stringify({
@@ -59,11 +60,7 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
               },
               syncSetups: {
                 home: {
-                  storage: {
-                    connection: "github",
-                    branch: "pi-sync/home",
-                    path: "pi-sync/home",
-                  },
+                  storage: { connection: "github", branch: "pi-sync/home", path: "pi-sync/home" },
                   sync: { include: ["settings.json"], automatic: true },
                 },
               },
@@ -78,37 +75,53 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
             cacheRoot: path.join(fixture.root, "cache"),
             allowLocalRemotes: true,
           });
-          const factory = () => backend;
           const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
-
-          await doctor(ctx, options(), factory);
-          await status(ctx, options(), factory);
-          await diff(ctx, options(), factory);
-          await push(ctx, options(), undefined, factory);
-          const first = await backend.readHead();
-          assert.ok(first);
-          await history(ctx, options(), factory);
-          writeFileSync(path.join(agentDir, "settings.json"), '{"theme":"light"}\n');
-          await pull(ctx, options(), factory);
-          assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"theme":"dark"}\n');
-          await syncBoth(ctx, options(), factory);
-          await rollback(ctx, options([first.snapshotId]), factory);
-          assert.notEqual((await backend.readHead())?.snapshotRef, first.snapshotRef);
-
-          const mock = createMockPi();
-          syncExtension(mock.pi);
-          await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
-          const configOutput = notifications.at(-1)?.message ?? "";
-          assert.match(configOutput, /kind: git/);
-          assert.match(configOutput, /branch: pi-sync\/home/);
-          assert.doesNotMatch(configOutput, /password|accessKeyId|secretAccessKey/i);
-          const output = notifications.map((item) => item.message).join("\n");
-          assert.match(output, /lease-protected \(exact expected-ref update\)/);
-          assert.match(output, /git remote: reachable/i);
-          assert.doesNotMatch(output, /PI_SYNC_|ignored-access|ignored-secret/);
+          await run({ ctx, notifications, backend, factory: () => backend, settingsPath });
         }),
     );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
-});
+}
+
+test("Git target supports diagnostic and inspection routes without exposing credentials", () =>
+  withGitRoutes(async ({ ctx, notifications, factory }) => {
+    await doctor(ctx, options(), factory);
+    await status(ctx, options(), factory);
+    await diff(ctx, options(), factory);
+    const output = notifications.map(({ message }) => message).join("\n");
+    assert.match(output, /lease-protected \(exact expected-ref update\)/);
+    assert.match(output, /git remote: reachable/i);
+    assert.doesNotMatch(output, /PI_SYNC_|ignored-access|ignored-secret/);
+  }));
+
+test("Git target supports push, history, and pulling the published files", () =>
+  withGitRoutes(async ({ ctx, backend, factory, settingsPath }) => {
+    await push(ctx, options(), undefined, factory);
+    assert.ok(await backend.readHead());
+    await history(ctx, options(), factory);
+    writeFileSync(settingsPath, '{"theme":"light"}\n');
+    await pull(ctx, options(), factory);
+    assert.equal(readFileSync(settingsPath, "utf8"), '{"theme":"dark"}\n');
+  }));
+
+test("Git target supports bidirectional sync and historical rollback", () =>
+  withGitRoutes(async ({ ctx, backend, factory }) => {
+    await push(ctx, options(), undefined, factory);
+    const first = await backend.readHead();
+    assert.ok(first);
+    await syncBoth(ctx, options(), factory);
+    await rollback(ctx, options([first.snapshotId]), factory);
+    assert.notEqual((await backend.readHead())?.snapshotRef, first.snapshotRef);
+  }));
+
+test("registered Git config ignores deprecated environment settings", () =>
+  withGitRoutes(async ({ ctx, notifications }) => {
+    const mock = createMockPi();
+    syncExtension(mock.pi);
+    await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
+    const output = notifications.at(-1)?.message ?? "";
+    assert.match(output, /kind: git/);
+    assert.match(output, /branch: pi-sync\/home/);
+    assert.doesNotMatch(output, /password|accessKeyId|secretAccessKey|PI_SYNC_|ignored-access|ignored-secret/i);
+  }));

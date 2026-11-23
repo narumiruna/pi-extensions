@@ -12,6 +12,7 @@ import {
   loadEffectiveIgnorePolicy,
   requireUnchangedIgnorePolicy,
 } from "../src/engine/ignore/effective-ignore-policy.js";
+import { readIgnoreSource } from "../src/engine/ignore/ignore-source.js";
 import * as settings from "../src/engine/settings/config.js";
 import type { AnySyncConfig } from "../src/engine/settings/settings-types.js";
 import type { Snapshot } from "../src/engine/snapshot/snapshot-types.js";
@@ -164,6 +165,7 @@ async function fixture(
     return {
       ...legacy,
       ignorePolicy,
+      ignoreSourceIdentity: (await readIgnoreSource(root, filename)).identity,
       validateIgnorePolicy: () => requireUnchangedIgnorePolicy(root, ignorePolicy, input),
     };
   };
@@ -201,7 +203,7 @@ async function baseline(config: AnySyncConfig, policy = config) {
   return state;
 }
 
-test("v6 merge records local policy evidence separately and publishes only managed paths", () =>
+test("v7 merge records the shared rule source separately and publishes only managed paths", () =>
   fixture(async ({ root, config, ctx }) => {
     await baseline(config);
     await fs.writeFile(path.join(root, "notes.md"), "local edit");
@@ -228,6 +230,8 @@ test("v6 merge records local policy evidence separately and publishes only manag
     });
     const [published] = remote.committed.mock.calls[0] ?? [];
     assert.ok(published?.selection);
+    assert.equal(published.version, 7);
+    assert.deepEqual(published.ignoreRules, { filename, text: rules });
     assert.deepEqual(
       published.files.map((entry) => entry.path),
       ["new.md", "notes.md"],

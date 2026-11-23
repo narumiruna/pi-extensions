@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { validateSnapshotIgnoreRules } from "../ignore/snapshot-ignore-rules.js";
 import { regenerateSnapshotIdentity } from "../snapshot/snapshot.js";
 import { assertAgentDirectorySnapshotBound } from "../snapshot/snapshot-bounds.js";
 import { assertSnapshotFilePayload } from "../snapshot/snapshot-payload.js";
 import {
-  IGNORE_SNAPSHOT_VERSION,
   type IgnoreSnapshotSelection,
+  isIgnoreSnapshotVersion,
   isSupportedSnapshotVersion,
   type Snapshot,
   type SnapshotFile,
@@ -83,6 +84,7 @@ function validateIgnoreSnapshotEnvelope(snapshot: Snapshot, selection: IgnoreSna
           "profile",
           "syncSessions",
           "selection",
+          "ignoreRules",
           "localFields",
           "files",
         ].includes(key),
@@ -111,13 +113,14 @@ export function validatePortableSnapshot(snapshot: Snapshot) {
   validateSnapshotFieldPolicy(snapshot);
   validateSnapshotSelection(snapshot);
   const selection = snapshot.selection;
+  const policy = validateSnapshotIgnoreRules(snapshot);
   if (selection?.version === 4) validateIgnoreSnapshotEnvelope(snapshot, selection);
   if (selection?.scope) {
-    const selected = configuredSnapshotPathMatcher(selection);
+    const selected = configuredSnapshotPathMatcher(policy ? { ...selection, ignorePolicy: policy } : selection);
     if (snapshot.files.some((file) => typeof file?.path !== "string" || !selected(file.path)))
       throw new Error("Portable snapshot retains excluded or unsafe agent-directory paths.");
     assertAgentDirectorySnapshotBound(snapshot.files);
-    if (snapshot.version === IGNORE_SNAPSHOT_VERSION) validateIgnoreSnapshotFiles(snapshot.files);
+    if (isIgnoreSnapshotVersion(snapshot.version)) validateIgnoreSnapshotFiles(snapshot.files);
   } else {
     const excludedPath = compileSyncPolicyExclude(selection ?? {});
     if (snapshot.files.some((file) => excludedPath(file.path)))

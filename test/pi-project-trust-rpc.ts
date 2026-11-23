@@ -30,7 +30,7 @@ function projectTrustEnvironment(root: string): NodeJS.ProcessEnv {
     XDG_CONFIG_HOME: join(root, "config"),
     XDG_CACHE_HOME: join(root, "cache"),
     XDG_DATA_HOME: join(root, "data"),
-    NODE_COMPILE_CACHE: join(root, "cache", "node"),
+    NODE_DISABLE_COMPILE_CACHE: "1",
     PI_CODING_AGENT_DIR: join(root, "agent"),
     PI_OFFLINE: "1",
     PI_TELEMETRY: "0",

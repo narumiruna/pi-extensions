@@ -9,7 +9,7 @@ import {
   snapshotSelectionInclude,
   validateSnapshotSelection,
 } from "../sync/sync-policy.js";
-import { IGNORE_SNAPSHOT_VERSION, isSupportedSnapshotVersion, type Snapshot } from "./snapshot-types.js";
+import { isIgnoreSnapshotVersion, isSupportedSnapshotVersion, type Snapshot } from "./snapshot-types.js";
 
 const VERSION = 1;
 const MAX_DECOMPRESSED_SNAPSHOT_BYTES = 512 * 1024 * 1024;
@@ -18,9 +18,9 @@ const gzipAsync = promisify(gzip);
 export async function encodeSnapshot(snapshot: Snapshot) {
   if (!isSupportedSnapshotVersion(snapshot?.version)) throw new Error("Unsupported snapshot format.");
   assertSnapshotExcludesDebugLog(snapshot);
-  if (snapshot.version !== IGNORE_SNAPSHOT_VERSION) snapshotSelectionInclude(snapshot);
+  if (!isIgnoreSnapshotVersion(snapshot.version)) snapshotSelectionInclude(snapshot);
   validateSnapshotSelection(snapshot);
-  if (snapshot.version === 4 || snapshot.version === 5 || snapshot.version === IGNORE_SNAPSHOT_VERSION) {
+  if (snapshot.version >= 4 || Object.hasOwn(snapshot, "ignoreRules")) {
     const { validatePortableSnapshot } = await import("../sync/local-fields.js");
     validatePortableSnapshot(snapshot);
   }
@@ -53,14 +53,14 @@ export async function decodeSnapshot(
   if (!isSupportedSnapshotVersion(parsed?.version) || !Array.isArray(parsed.files)) {
     throw new Error("Unsupported snapshot format.");
   }
-  if (parsed.version === IGNORE_SNAPSHOT_VERSION && !isUtf8(payload)) throw new Error("Invalid snapshot UTF-8.");
+  if (isIgnoreSnapshotVersion(parsed.version) && !isUtf8(payload)) throw new Error("Invalid snapshot UTF-8.");
   assertSnapshotExcludesDebugLog(parsed);
   validateSnapshotSelection(parsed);
-  if (parsed.version !== VERSION) {
+  if (parsed.version !== VERSION || Object.hasOwn(parsed, "ignoreRules")) {
     const { normalizeLocalFields, validatePortableSnapshot } = await import("../sync/local-fields.js");
     validatePortableSnapshot(parsed);
     if (parsed.localFields !== undefined) parsed.localFields = normalizeLocalFields(parsed.localFields);
   } else if (parsed.localFields !== undefined) throw new Error("Portable field policy requires snapshot version 2.");
-  if (parsed.version !== IGNORE_SNAPSHOT_VERSION) snapshotSelectionInclude(parsed);
+  if (!isIgnoreSnapshotVersion(parsed.version)) snapshotSelectionInclude(parsed);
   return parsed;
 }

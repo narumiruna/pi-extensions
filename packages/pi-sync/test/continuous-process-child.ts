@@ -1,9 +1,6 @@
 import "./engine-process-host.js";
-import fs from "node:fs/promises";
-import { setImmediate } from "node:timers/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { inspectSync } from "@narumitw/pi-sync-daemon/engine/sync/sync-inspection";
-import { localConfigPath } from "../src/settings/config-file.js";
 import { type ContinuousClock, createContinuousSync } from "../src/sync/continuous-sync.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
@@ -12,12 +9,14 @@ import { createEngineTestLoaders as createSyncLoaders } from "./engine-loaders.j
 // Drive only scheduler time. Real fetch and lock-renewal timers must not be faked.
 let now = Date.now();
 const timers = new Set<{ at: number; waiting: boolean; run(): void }>();
+let wake: (() => void) | undefined;
 const clock: ContinuousClock = {
   now: () => now,
   random: () => 0,
   schedule: (ms, run, kind) => {
     const timer = { at: now + ms, waiting: kind === "wait", run };
     timers.add(timer);
+    if (timer.waiting) wake?.();
     return () => {
       timers.delete(timer);
     };
@@ -53,6 +52,7 @@ const service = createContinuousSync(
           return await inspectSync(...args);
         } finally {
           inFlight--;
+          wake?.();
         }
       },
     }),
@@ -64,26 +64,34 @@ const service = createContinuousSync(
           return await syncBoth(...args);
         } finally {
           inFlight--;
+          wake?.();
         }
       },
     }),
   }),
   clock,
 );
+async function waitForScheduler() {
+  while (inFlight || ![...timers].some((timer) => timer.waiting)) {
+    await new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    wake = undefined;
+  }
+}
+
 let queue = Promise.resolve();
 process.on("message", (value) => {
   queue = queue.then(async () => {
     const message = value as { id: number; command: "advance" | "state" | "stop"; ms?: number };
     try {
       if (message.command === "advance") {
-        for (let elapsed = 0; elapsed < (message.ms ?? 0); elapsed += 1000) {
-          tick(Math.min(1000, (message.ms ?? 0) - elapsed));
-          for (let pass = 0; pass < 5; pass++) {
-            await fs.stat(localConfigPath());
-            await setImmediate();
-          }
-          // Synchronize on actual HTTP completion, not a fixed sleep.
-          while (inFlight || ![...timers].some((timer) => timer.waiting)) await setImmediate();
+        const end = now + (message.ms ?? 0);
+        await waitForScheduler();
+        while (now < end) {
+          const next = Math.min(end, ...[...timers].map(({ at }) => at));
+          tick(next - now);
+          await waitForScheduler();
         }
       } else if (message.command === "stop") await service.stop();
       process.send?.({

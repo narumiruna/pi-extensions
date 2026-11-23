@@ -16,7 +16,7 @@ import { syncStateFingerprint } from "../state/sync-state-store.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { inspectCaseCleanup } from "./apply-review.js";
 import { requireCompatibleRemoteSelection } from "./remote-snapshot.js";
-import { inspectRemoteSelection, syncSelectionHasContent, syncSessionsSelected } from "./sync-policy.js";
+import { syncSelectionHasContent, syncSessionsSelected } from "./sync-policy.js";
 import { fileHashMap, syncPolicyChanged } from "./sync-state.js";
 import { checkLiveProtection } from "./transfer-freshness.js";
 
@@ -103,20 +103,7 @@ export function requireDirectionalSelection(
         priorPaths.some((item) => !managed.has(item) && current.matches(item, false)))
     );
   };
-  if (remote) {
-    const selection = inspectRemoteSelection(config.include, remote, config.exclude, config);
-    if (
-      !(
-        selection.ignorePolicyComparison === "mismatch" &&
-        remote.selection?.version === 4 &&
-        provesNarrowing(
-          remote.files.map((file) => file.path),
-          remote.selection.sessions,
-        )
-      )
-    )
-      requireCompatibleRemoteSelection(config, remote);
-  }
+  if (remote) requireCompatibleRemoteSelection(config, remote);
   if (
     state.lastAppliedSnapshot &&
     syncPolicyChanged(state, config) &&

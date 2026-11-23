@@ -1,4 +1,4 @@
-import { type FSWatcher, watch } from "node:fs";
+import { existsSync, type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getEngineRoot as getAgentDir } from "../host.js";
@@ -46,7 +46,8 @@ export async function watchContinuous(
         // Unknown names can be our own private writes. Periodic scans cover them.
         if (!file || closed || options.signal?.aborted) return;
         const target = path.resolve(directory, String(file));
-        if (!relativeWithin(directory, target)) return;
+        const directoryOnlyHint = event === "change" && file === path.basename(directory) && !existsSync(target);
+        if (!relativeWithin(directory, target) || directoryOnlyHint) return;
         if (
           target === path.join(root, "pi-sync.json") ||
           (config.ignorePolicy &&

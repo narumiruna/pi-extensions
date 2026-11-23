@@ -353,17 +353,19 @@ Use `/` as the separator; escaped `/` is not supported. A leading `/` anchors a 
 
 Session sync requires both a separate opt-in and rules that allow sessions. The starter `/sessions/` still excludes them. Match sessions by their logical `sessions/` paths even if stored elsewhere. Loaded sessions stay protected during apply.
 
-Pi credentials and trust (`auth.json` and `trust.json`), private Pi Sync files (settings, state, and the [debug log](#shared-log)), and `.syncignore` or its configured alternatives stay local regardless of the rules. `truth.json` is a starter exclusion, not Pi's trust file. Transfers do not replace or remove ignored local files, and exclusions do not erase retained snapshots or backups.
+Pi credentials and trust (`auth.json` and `trust.json`), private Pi Sync files (settings, state, and the [debug log](#shared-log)), and other setups' rule files stay local. `truth.json` is a starter exclusion, not Pi's trust file. A new snapshot includes the active rule text and filename unless the file excludes itself. Add `/.syncignore` to keep the default rule file out of future snapshots. A later `!/.syncignore` can include it again. This does not erase rules or comments from retained history.
 
 #### Transfer review and recovery
 
-Setup, migration, rule-file switching, and edits neither start nor authorize transfers. Upgrade all peers before publishing a version 6 snapshot. It stores a policy fingerprint, not the filename or rule text. Use the same rule text and session opt-in on peers: even comment or whitespace changes can change the fingerprint. Do not copy rules from the remote.
+Setup, migration, rule-file switching, and edits neither start nor authorize transfers. Upgrade all peers before publishing a version 7 snapshot. A version 6 snapshot has only the policy fingerprint; an upgraded publisher with matching rules can publish again to include rule text. Comments, whitespace and session opt-in affect the fingerprint. Re-review automatic transfers after upgrading an ignore-file setup.
 
-A legacy or mismatched head requires separately reviewed directional policy publication. Neither `--yes` nor automatic work can authorize it. Inspect scope with `/sync diff` and review the direction in `/sync`. A pull cannot apply a foreign policy, and rollback requires compatible history. If the rules, setup, or head change, reopen the review.
+When policies differ, a reviewed Push can replace the remote policy. Pull can preview and adopt verified remote rules without writing to the remote. Cancel to leave both sides unchanged. Neither `--force`, `--yes` nor background work approves a policy overwrite. If rule text is unavailable, match the publisher's rules manually. If Sessions opt-in differs, review that setting locally first. Select a dedicated rule file before adopting into a shared source. An omitted rule file is not a request to delete it. Rollback projects historical content through the current local rules; it does not adopt historical rules.
 
-If creation or transfer is blocked or interrupted, stop new work. Preserve the rule file, creation marker, journals, backups, and consent records. Use a compatible daemon to review recovery with the originating setup and exact source. If source or remote evidence differs, preserve it instead of forcing replay or deleting a marker. The old policy remains authoritative until settings commit; a verified starter or settings backup can remain after a failed save.
+If adoption is interrupted, keep the local rules, backups and journals. Startup recovers an interrupted local file transaction before opening sync, without adopting rules or contacting the backend. If startup cannot verify the recovery evidence, do not edit the affected files; preserve the journals for review.
 
-After any version 6 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers. Keep retained history intact.
+Run `/sync pull` on the originating setup to review resumption. It uses the recorded, retained snapshot even if another device has since published a newer one. If that snapshot is missing or the local evidence no longer matches, preserve the journals and backups; do not replace them with the newer snapshot. After recovery, run `/sync status` to check the newer remote state. The successful transfer reports the backup path for the previous rule text.
+
+After a version 6 or 7 publication, downgrading the package alone is not rollback. Close incompatible clients, verify daemon exit, and review compatible local and remote restoration before resuming transfers. Keep retained history intact.
 
 ### Agent-directory scope
 
@@ -785,7 +787,7 @@ Coupled fields must be excluded together.
 Selected-path setups with nonempty rules must include `settings.json` in `sync.include`. Directory-scope setups must omit `sync.include` and can configure local fields without it. Path rules still govern whether `settings.json` syncs, and nonempty field rules require that exact file spelling if it is synced. Absent or explicitly empty rules remain valid for either scope.
 Settings asks for confirmation before saving changes to these rules. An explicit array requires settings version 4 or later, and editing the rules does not downgrade an existing settings version.
 Absent rules keep a setup nonportable, including unrelated setups in a version-4 document.
-An explicit array opts that setup into at least snapshot version 2; exclusion-enabled selected-path setups retain version 4, legacy directory scope retains version 5, and ignore-file setups use version 6.
+An explicit array opts that setup into at least snapshot version 2; exclusion-enabled selected-path setups retain version 4, legacy directory scope retains version 5, and ignore-file setups publish version 7.
 `[]` after rule removal retains this reviewed opt-in and differs from absence.
 Older clients must refuse portable data rather than replace local-only values.
 
@@ -825,7 +827,7 @@ Never reinterpret portable snapshots with an old binary.
 `sync.mergeContent` and `sync.partialSync` are independent opt-in booleans, both default `false`.
 The owning **Settings → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit upgrade to at least settings version 5.
 Use a supported settings version of at least 5 (at least 7 for legacy directory scope and 8 for ignore-file policy).
-Partial publications retain snapshot version 4 for exclusion-enabled selected paths, version 5 for legacy directory scope, and version 6 for ignore-file policy.
+Partial publications retain snapshot version 4 for exclusion-enabled selected paths, version 5 for legacy directory scope, and version 7 for ignore-file policy.
 Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration.
 Disabling options retains the schema and recovery evidence.
 
