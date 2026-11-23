@@ -1,5 +1,15 @@
 # @narumitw/pi-sync
 
+## 0.65.0
+
+### Minor Changes
+
+- c31f9c4: Make the `/sync` manager's Push and Pull actions apply the selected direction without another confirmation. Preserve a restore point before an overwrite, and recover eligible daemon file-queue failures within the same action without repeating a committed write. Direct slash commands retain their existing behavior.
+
+### Patch Changes
+
+- 25d766a: Show Yes in the first terminal transfer confirmation, even for large reviews. Open View details only when you want to see individual paths. The summary still defaults to No, and Pi Sync verifies the transfer before applying it.
+
 ## 0.64.0
 
 ### Minor Changes
