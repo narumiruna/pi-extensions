@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.70.0
+
+### Minor Changes
+
+- 852901d: Add Mistral usage reporting. See your plan, pay-as-you-go status, and monthly Vibe Code and API allowances in `/usage`. The statusline shows remaining allowances when available, or the plan name otherwise.
+
 ## 0.69.4
 
 ### Patch Changes
