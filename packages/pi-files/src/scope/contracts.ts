@@ -10,8 +10,10 @@ export const NOTICE_TYPE = "scope-contract";
 export const ANCHOR_TYPE = "scope-context-anchor";
 export const MAX_NOTICE_BYTES = 48_000;
 
+type ContractVersion = 1 | 2;
+
 export interface ContractAnchor {
-  version: 1;
+  version: ContractVersion;
   stateId: string;
   state: ScopeState["state"];
   count: number;
@@ -40,12 +42,22 @@ const NON_MODEL_FIELDS = new Set([
   "nestedCalls",
 ]);
 
-export function createScopeNotice(state: ScopeState, timestamp = 0): ScopeNotice | undefined {
+function currentContractVersion(state: ScopeState): ContractVersion {
+  return state.state === "inactive" ? 1 : 2;
+}
+
+export function createScopeNotice(
+  state: ScopeState,
+  timestamp = 0,
+  version = currentContractVersion(state),
+): ScopeNotice | undefined {
   if (!state.entryId) return undefined;
   let content: string;
   if (state.state === "blocked") {
     content =
-      "Scope state is unavailable. Do not edit files or use writing commands. The user must repair it with /scope or exit with /scope off. Reading remains available.";
+      version === 1
+        ? "Scope state is unavailable. Do not edit files or use writing commands. The user must repair it with /scope or exit with /scope off. Reading remains available."
+        : "Scope state is unavailable. Do not edit files or use writing commands. The user must repair it in /files or exit with /files off. Reading remains available.";
   } else if (state.state === "inactive") {
     content =
       "The user ended the Scope editing restriction. Earlier Scope notices no longer apply. All other existing instructions and tool restrictions remain unchanged.";
@@ -57,7 +69,9 @@ export function createScopeNotice(state: ScopeState, timestamp = 0): ScopeNotice
         (target) =>
           `- ${JSON.stringify(pathToFileURL(target.path).href)}${target.path === target.canonical ? "" : ` (canonical target ${displayPath(target.canonical)})`}`,
       ),
-      "Other files may be read. Shell commands and unsupported tools cannot bypass this editing boundary. Only the user can change or end the scope with /scope.",
+      version === 1
+        ? "Other files may be read. Shell commands and unsupported tools cannot bypass this editing boundary. Only the user can change or end the scope with /scope."
+        : "Other files may be read. Shell and unsupported tools cannot bypass scope. Only the user can change scope in /files or end it with /files off.",
     ].join("\n");
   }
   if (Buffer.byteLength(content) > MAX_NOTICE_BYTES)
@@ -67,7 +81,7 @@ export function createScopeNotice(state: ScopeState, timestamp = 0): ScopeNotice
     customType: NOTICE_TYPE,
     content,
     display: false,
-    details: { version: 1, stateId: state.entryId },
+    details: { version, stateId: state.entryId },
     timestamp,
   };
 }
@@ -75,8 +89,8 @@ export function createScopeNotice(state: ScopeState, timestamp = 0): ScopeNotice
 function contractKey(message: AgentMessage): string | undefined {
   if (message.role !== "custom" || message.customType !== NOTICE_TYPE || typeof message.content !== "string") return;
   const details = message.details as { version?: unknown; stateId?: unknown } | undefined;
-  if (details?.version !== 1 || typeof details.stateId !== "string") return;
-  return JSON.stringify([details.stateId, message.content]);
+  if ((details?.version !== 1 && details?.version !== 2) || typeof details.stateId !== "string") return;
+  return JSON.stringify([details.version, details.stateId, message.content]);
 }
 
 function noticeKey(message: AgentMessage): string | undefined {
@@ -89,7 +103,7 @@ function noticeKey(message: AgentMessage): string | undefined {
 function anchoredNotice(notice: ScopeNotice, anchor: ContractAnchor): ScopeNotice {
   return anchor.recovery === undefined
     ? notice
-    : { ...notice, details: { version: 1, stateId: anchor.stateId, recovery: anchor.recovery } };
+    : { ...notice, details: { version: anchor.version, stateId: anchor.stateId, recovery: anchor.recovery } };
 }
 
 function prefixDigests(messages: readonly AgentMessage[], counts: ReadonlySet<number>): Map<number, string> {
@@ -119,7 +133,7 @@ function readAnchors(branch: readonly SessionEntry[]): PlacedAnchor[] {
       continue;
     const value = entry.data as Partial<ContractAnchor>;
     if (
-      value.version !== 1 ||
+      (value.version !== 1 && value.version !== 2) ||
       typeof value.stateId !== "string" ||
       !["active", "inactive", "blocked"].includes(value.state ?? "") ||
       !Number.isSafeInteger(value.count) ||
@@ -140,9 +154,16 @@ function readAnchors(branch: readonly SessionEntry[]): PlacedAnchor[] {
           : { state: value.state as "active" | "inactive", entryId: source.id, snapshot: parseSnapshot(source.data) };
       if (state.state !== "blocked" && (state.snapshot?.targets === null) !== (state.state === "inactive")) continue;
       const anchor = value as ContractAnchor;
-      const notice = createScopeNotice(state, anchor.sentAt);
+      const notice = createScopeNotice(state, anchor.sentAt, anchor.version);
       if (!notice) continue;
-      const key = JSON.stringify([anchor.stateId, anchor.state, anchor.count, anchor.digest, anchor.recovery ?? 0]);
+      const key = JSON.stringify([
+        anchor.version,
+        anchor.stateId,
+        anchor.state,
+        anchor.count,
+        anchor.digest,
+        anchor.recovery ?? 0,
+      ]);
       if (!found.has(key)) found.set(key, { anchor, notice: anchoredNotice(notice, anchor) });
     } catch {
       // An invalid historical anchor cannot become model instructions.
@@ -228,7 +249,14 @@ export function reconcileScopeContext(
   const prepared = project(messages, placed.anchors, repeated ? [] : [notice]);
   const count = prepared.base.length;
   const digest = prefixDigests(prepared.base, new Set([count])).get(count) as string;
-  const anchor: ContractAnchor = { version: 1, stateId: state.entryId, state: state.state, count, digest, sentAt };
+  const anchor: ContractAnchor = {
+    version: currentContractVersion(state),
+    stateId: state.entryId,
+    state: state.state,
+    count,
+    digest,
+    sentAt,
+  };
   if (repeated) {
     anchor.recovery =
       candidates.reduce(

@@ -4,7 +4,7 @@ Pi Files retains the checked-file picker and native-tool guard from Edit Scope. 
 
 ## Manager and command behavior
 
-Open scope management through `/files`, or use the dedicated `/edit-scope` manager (`/scope` is an identical compatibility alias). Select or replace targets, reserve one new file, change discovery preferences, or read the complete Status list and Help. `/files off`, `/edit-scope off`, and `/scope off` explicitly end the same restriction without consuming queued context.
+Open `/files` → **Manage edit scope** to select or replace targets or reserve a new file. Use **End restriction** there, or run `/files off` directly. Neither consumes queued context. Use **Settings** in `/files` to change discovery preferences, or **Status** and **Help** to review the full target list and guard behavior.
 
 Scope commands and permission changes require TUI mode, an idle agent, and no pending messages. Unknown or trailing arguments are rejected. RPC, print, and JSON commands fail before custom UI; restored tool enforcement works in all modes. Pi reports command errors through RPC `extension_error` events or CLI stderr. A handled command error does not imply a nonzero process exit code.
 
@@ -58,7 +58,7 @@ Version-1 snapshots belong to the active session branch, not settings. Reload, r
 
 Each mutation freshly rechecks both the selected reservation and candidate. A missing path resolves through its nearest existing parent plus the missing suffix. A changed symlink cannot expand the approved set. Nonregular targets and files with multiple hard links are rejected even if a hard-link alias was selected. A dangling symlink is not a missing target that `write` may create. Metadata or access errors also do not mean a path is missing.
 
-Uninitialized, invalid, uncertain, or unsupported restored state blocks edits. Repair the allowed set through `/files` or the dedicated scope manager, or explicitly end it with `/files off`. A broken selected alias can be removed and replaced with its real path; this changes the saved reservation even when the canonical target is unchanged. Do not delete settings or session entries to force unrestricted recovery. These checks do not provide race-free containment against other processes.
+Uninitialized, invalid, uncertain, or unsupported restored state blocks edits. Repair the allowed set through `/files` → **Manage edit scope**, or explicitly end the restriction with `/files off`. A broken selected alias can be removed and replaced with its real path; this changes the saved reservation even when the canonical target is unchanged. Do not delete settings or session entries to force unrestricted recovery. These checks do not provide race-free containment against other processes.
 
 ## Fixed limits
 
@@ -86,7 +86,7 @@ The user store is `<getAgentDir()>/pi-scope.json`, normally `~/.pi/agent/pi-scop
 }
 ```
 
-`showHiddenFiles` accepts a boolean and defaults to `false`. Effective settings use defaults followed by recognized user fields. It changes scope discovery, not context discovery or the active restriction. Open `/files` → **Settings** or the dedicated `/edit-scope` → **Settings** route. UI changes apply and save immediately without reload; Back or Escape does not undo a save. This preference remains editable while context is queued in the common settings screen. Manual file changes require reload. Settings reload on session start and tree navigation.
+`showHiddenFiles` accepts a boolean and defaults to `false`. Effective settings use defaults followed by recognized user fields. It changes scope discovery, not context discovery or the active restriction. Open `/files` → **Settings**. UI changes apply and save immediately without reload; Back or Escape does not undo a save. This preference remains editable while context is queued in the common settings screen. Manual file changes require reload. Settings reload on session start and tree navigation.
 
 There are no project overrides, extension-specific environment variables, policy switches, or saved file groups. The retained `pi-scope.json` basename is a deliberate compatibility exception. There is no filename migration; neither `pi-edit-scope.json` nor `pi-files.json` is read.
 
@@ -117,11 +117,13 @@ Selected paths and canonical redirects enter the model notice; selection does no
 
 ## Session and model-contract compatibility
 
-The persisted identities remain `scope-state`, `scope-contract`, and `scope-context-anchor`, with snapshot version 1 and original session entry IDs. `src/scope/state.ts` owns snapshots; `src/scope/contracts.ts` owns notices and anchors. Historical notice bytes retain the `Scope` name and `/scope` instructions. Rebranding those bytes would invalidate saved prefix digests. See [migration](migration.md) before changing resources or restoring a predecessor.
+The persisted identities remain `scope-state`, `scope-contract`, and `scope-context-anchor`, with snapshot version 1 and original session entry IDs. Version-1 anchors and notice bytes remain unchanged, including historical `Scope` and `/scope` text. Rewriting those bytes would invalidate saved prefix digests. The old names in historical notices are not live routes. See [migration and rollback](migration.md#rollback-and-recovery) before loading an older runtime.
 
-Scope adds no tools and changes no active tool definitions, snippets, guidelines, or leading system prompt. Explicit activation, changed reservation, or exit appends a fixed model notice without starting a turn. Reapplying an identical reservation is a no-op. Ordinary requests preserve the existing serialized model-visible prefix.
+Scope adds no tools and changes no active tool definitions, snippets, guidelines, or leading system prompt. Explicit activation, changed reservation, or exit appends a fixed model notice without starting a turn. Reapplying an identical reservation is a no-op. Live active and blocked notices and their anchors use version 2. The notices point to `/files` for scope changes and `/files off` to end the restriction.
 
-When a required notice is absent or compacted away, recovery appends one deterministic tail contract and persists a non-model prefix anchor. Ordinary requests reuse that boundary; deferred publication retains its first-seen boundary rather than moving past newer output. Historical contracts remain ordered after replacement or exit. Original entry IDs, state IDs, and old anchors without a recovery sequence remain valid. A repeated logical contract can have a distinct recovery sequence without erasing earlier history. Uncertain state or anchor publication must not open the guard.
+If a retained version-1 notice still describes the current active or blocked restriction, Pi Files appends a version-2 correction once at the conversation tail. It does not rewrite or move the historical notice. Unchanged inactive notices do not need a correction. Ordinary requests after the correction keep the same serialized model-visible prefix.
+
+When the current notice is absent or compacted away, recovery appends only that notice at the tail and persists a non-model prefix anchor. Ordinary requests reuse that boundary; deferred publication retains its first-seen boundary rather than moving past newer output. Historical contracts remain ordered after replacement or exit. Original entry IDs, state IDs, and old anchors without a recovery sequence remain valid. A repeated logical contract can have a distinct recovery sequence without erasing earlier history. Uncertain state or anchor publication must not open the guard.
 
 ## UI compatibility and cancellation
 
@@ -137,6 +139,6 @@ Scanning, lookup, and validation disable new work. Cancellation, disposal, sessi
 
 ## Verification limits
 
-The moved suites exercise native path behavior, the Pi loader and tool pipeline, cancellation, settings failures, input/paste, and model-prefix compatibility. Test presence or predecessor results are not new merge evidence. Current results and remaining checks belong in [verification](verification.md).
+Automated suites cover native path behavior, the Pi loader and tool pipeline, cancellation, settings failures, input and paste, and model-prefix compatibility. Current results and remaining checks belong in [verification](verification.md).
 
 Deterministic tests do not prove physical key delivery, IME placement, terminal usability, live-provider behavior, or untested operating systems. The physical-terminal and interactive `/reload` handoff remains separate from offline loader checks. Do not issue built-in `/reload` as an RPC prompt command: it can become model input rather than safely reload the runner.

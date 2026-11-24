@@ -26,6 +26,18 @@ const theme = {
 afterEach(() => setKeybindings(originalKeys));
 afterAll(cleanupSmokeRoot);
 
+async function openScope(host: ReturnType<typeof createScopeUIHost>, confirm = "\r") {
+  const files = await host.waitForOpen();
+  for (let index = 0; index < 6 && !host.screen().join("\n").includes("→ Manage edit scope"); index++) {
+    host.send("\x1b[B");
+  }
+  expect(host.screen().join("\n")).toContain("→ Manage edit scope");
+  host.send(confirm);
+  const scope = await host.waitForOpen(files);
+  expect(host.screen().join("\n")).toContain("Edit Scope");
+  return scope;
+}
+
 it("keeps live context getters and UI receivers while requesting a bounded owned overlay", async () => {
   let idle = true;
   const component = { render: (_width: number) => ["content"], invalidate() {}, dispose: vi.fn() };
@@ -92,11 +104,11 @@ it.each(["regular", "fullscreen"] as const)(
       writeFileSync(join(fixture.cwd, `file-${String(index).padStart(2, "0")}`), "fixture");
     const { session, errors } = await createNativeSession(fixture, { mode: "tui", uiContext: host.ui });
     host.attach(session, 4);
-    const command = session.prompt("/edit-scope");
+    const command = session.prompt("/files");
     try {
-      await host.waitForOpen();
+      const scope = await openScope(host, "\x1bOQ");
       host.send("\x1bOQ"); // Remapped F2 opens the picker.
-      const picker = await host.waitForOpen();
+      const picker = await host.waitForOpen(scope);
       await host.pending();
       host.send("file-");
       for (let index = 0; index < 12; index++) host.send("\x1b[B");
@@ -133,9 +145,11 @@ it.each(["regular", "fullscreen"] as const)(
           }
         }
       }
-      expect(host.calls.length).toBeGreaterThanOrEqual(2);
+      expect(host.calls[0]).toBeUndefined(); // The Files manager occupies the editor area, not an overlay.
+      const scopeCalls = host.calls.slice(1);
+      expect(scopeCalls.length).toBeGreaterThanOrEqual(2);
       expect(
-        host.calls.every(
+        scopeCalls.every(
           (options) =>
             JSON.stringify(options) ===
             JSON.stringify({
@@ -167,11 +181,11 @@ it.each(["regular", "fullscreen"] as const)(
       .filter((entry) => entry.type === "custom" && entry.customType === "scope-state");
     const { session, errors } = await createNativeSession(fixture, { mode: "tui", uiContext: host.ui });
     host.attach(session, 4);
-    const command = session.prompt("/edit-scope");
+    const command = session.prompt("/files");
     try {
-      await host.waitForOpen();
+      const scope = await openScope(host, "\x1bOQ");
       host.send("\x1bOQ");
-      const picker = await host.waitForOpen();
+      const picker = await host.waitForOpen(scope);
       await host.pending();
       host.send("file-");
       const evidence: Array<{ rows: number; expected: string; screen: string[]; overlay: string[] }> = [];
@@ -279,9 +293,9 @@ it.each(["regular", "fullscreen"] as const)(
     const host = createScopeUIHost(mode, keys, theme);
     const { session, errors } = await createNativeSession(createFixture(), { mode: "tui", uiContext: host.ui });
     host.attach(session);
-    const command = session.prompt("/scope");
+    const command = session.prompt("/files");
     try {
-      const scope = await host.waitForOpen();
+      const scope = await openScope(host);
       host.screen();
       const other = host.tui.showOverlay(new Text("Unrelated overlay", 0, 0), { width: 24, anchor: "top-right" });
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "reload" });

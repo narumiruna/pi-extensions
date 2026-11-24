@@ -6,7 +6,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { registerFileContext } from "../src/context-service.js";
+import { type ContextService, registerFileContext } from "../src/context-service.js";
 import {
   appendPendingQuote,
   createFileQuote,
@@ -16,6 +16,7 @@ import {
   loadProjectTextFile,
 } from "../src/file-context.js";
 import { FileQuoteExplorer } from "../src/file-context-explorer.js";
+import { publishFilesWidget } from "../src/files-widget.js";
 import { createPendingWidget } from "./widget-support.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
@@ -62,14 +63,14 @@ async function waitForHarnessText(tui: ReturnType<typeof createTuiHarness>, text
 }
 
 async function runFileContextExplorer(
-  command: { handler(args: string, ctx: unknown): unknown } | undefined,
+  browse: ContextService["browse"],
   context: ReturnType<typeof createMockContext>,
   path: string,
   finish: "quote" | "reference",
 ): Promise<void> {
   const tui = createFileContextHarness();
   (context.ctx as unknown as { ui: { custom: typeof tui.custom } }).ui.custom = tui.custom;
-  const running = Promise.resolve(command?.handler("browse", context.ctx));
+  const running = browse(context.ctx);
   await waitForHarnessText(tui, "File Context");
   tui.type(path);
   if (finish === "reference") {
@@ -247,38 +248,21 @@ test("explorer previews a file, selects a range, and keeps rendered rows width-s
   referenceExplorer.handleInput("tab");
   assert.deepEqual(result, { kind: "reference", path: "src/reference.ts" });
 
-  result = "unchanged";
-  const cancelledExplorer = new FileQuoteExplorer({
-    tui: tui as never,
-    theme: theme as never,
-    keybindings: keybindings as never,
-    files: ["src/cancelled.ts"],
-    loadFile: async () => ({ path: "", lines: [] }),
-    done: (value) => {
-      result = value;
-    },
-  });
-  cancelledExplorer.handleInput("\u001b");
-  assert.equal(result, undefined);
-
-  const menuExplorer = (input: string) => {
+  for (const cancel of ["\u001b", "\u0003"]) {
     result = "unchanged";
     const explorer = new FileQuoteExplorer({
       tui: tui as never,
       theme: theme as never,
       keybindings: keybindings as never,
-      files: ["src/menu.ts"],
+      files: ["src/cancelled.ts"],
       loadFile: async () => ({ path: "", lines: [] }),
-      rootNavigation: true,
       done: (value) => {
         result = value;
       },
     });
-    explorer.handleInput(input);
-    return result;
-  };
-  assert.deepEqual(menuExplorer("\u001b"), { kind: "back" });
-  assert.deepEqual(menuExplorer("\u0003"), { kind: "close" });
+    explorer.handleInput(cancel);
+    assert.equal(result, undefined);
+  }
 });
 
 test("explorer escapes errors and keeps narrow empty states width-safe", async () => {
@@ -824,18 +808,18 @@ test("accumulates ordered pending quotes within aggregate limits", () => {
   assert.throws(() => appendPendingQuote([fiftyKb, fiftyKb], first), /100000 bytes/);
 });
 
-test("registers a TUI fallback command and injects all pending quotes only once", async () => {
+test("the browser queues exact snapshots and injects all pending quotes only once", async () => {
   await withTempProject(async (root) => {
     await mkdir(join(root, "src"));
     await mkdir(join(root, "test"));
     await writeFile(join(root, "src", "example.ts"), "const example = true;\n");
     await writeFile(join(root, "test", "example.test.ts"), "skip\nexpect(example)\n  .toBe(true);\n");
     const mock = createMockPi();
-    await registerFileContext(mock.pi, {
+    const service = await registerFileContext(mock.pi, {
       loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+      onChange: publishFilesWidget,
     });
-    assert.ok(mock.commands.has("file-context"));
-    assert.equal(mock.commands.has("file-quote"), false);
+    assert.deepEqual([...mock.commands.keys()], []);
 
     const widgets = new Map<string, unknown>();
     const context = createMockContext({
@@ -856,12 +840,11 @@ test("registers a TUI fallback command and injects all pending quotes only once"
     });
 
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-    const command = mock.commands.get("file-context");
-    await runFileContextExplorer(command, context, "src/example.ts", "quote");
+    await runFileContextExplorer(service.browse, context, "src/example.ts", "quote");
 
     const secondTui = createFileContextHarness();
     (context.ctx as unknown as { ui: { custom: typeof secondTui.custom } }).ui.custom = secondTui.custom;
-    const second = Promise.resolve(command?.handler("browse", context.ctx));
+    const second = service.browse(context.ctx);
     await waitForHarnessText(secondTui, "File Context");
     secondTui.type("test/example.test.ts");
     secondTui.press("tui.select.confirm");
@@ -873,7 +856,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
     await second;
 
     assert.deepEqual(createPendingWidget(widgets.get("files")).render(100).slice(1), [
-      "Next prompt context · 2 snippets · ~13 tokens · /file-context to review",
+      "Next prompt context · 2 snippets · ~13 tokens · Review queued context in /files",
       "1. src/example.ts · lines 1-1 · ~6 tokens",
       "2. test/example.test.ts · lines 2-3 · ~8 tokens",
     ]);
@@ -904,7 +887,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
     await mkdir(join(root, "docs"));
     await writeFile(join(root, "docs", 'my "note".md'), "reference\n");
     const referenceMock = createMockPi();
-    await registerFileContext(referenceMock.pi, {
+    const reference = await registerFileContext(referenceMock.pi, {
       loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
     });
     const pasted: string[] = [];
@@ -927,16 +910,11 @@ test("quotes whole-file references and rejects picker results from replaced sess
       },
     });
     await referenceMock.events.get("session_start")?.[0]?.({}, referenceContext.ctx);
-    await runFileContextExplorer(
-      referenceMock.commands.get("file-context"),
-      referenceContext,
-      'docs/my "note".md',
-      "reference",
-    );
+    await runFileContextExplorer(reference.browse, referenceContext, 'docs/my "note".md', "reference");
     assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
 
     const staleMock = createMockPi();
-    await registerFileContext(staleMock.pi, {
+    const stale = await registerFileContext(staleMock.pi, {
       loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
     });
     const oldManager = { getSessionId: () => "old" };
@@ -956,42 +934,15 @@ test("quotes whole-file references and rejects picker results from replaced sess
       sessionManager: newManager,
     });
     await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
-    const command = Promise.resolve(staleMock.commands.get("file-context")?.handler("browse", oldContext.ctx));
+    const browsing = stale.browse(oldContext.ctx);
     await waitForHarnessText(tui, "File Context");
     await staleMock.events.get("session_shutdown")?.[0]?.({}, oldContext.ctx);
     await staleMock.events.get("session_start")?.[0]?.({}, newContext.ctx);
-    await command;
+    await browsing;
     assert.equal(tui.isOpen, false);
     assert.equal(
       await staleMock.events.get("before_agent_start")?.[0]?.({ prompt: "new", systemPrompt: "base" }, newContext.ctx),
       undefined,
     );
   });
-});
-
-test("rejects the fallback command observably outside TUI mode", async () => {
-  const mock = createMockPi();
-  await registerFileContext(mock.pi, {
-    loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
-  });
-  const rpc = createMockContext({ mode: "rpc", hasUI: true });
-  await mock.commands.get("file-context")?.handler("", rpc.ctx);
-  await mock.commands.get("file-context")?.handler("remove", rpc.ctx);
-  assert.equal(rpc.notifications.length, 2);
-  assert.ok(rpc.notifications.every(({ message }) => /interactive TUI/.test(message)));
-  assert.ok(rpc.notifications.every(({ level }) => level === "warning"));
-
-  const print = createMockContext({ mode: "print", hasUI: false });
-  await assert.rejects(async () => {
-    await mock.commands.get("file-context")?.handler("", print.ctx);
-  }, /interactive TUI/);
-  await assert.rejects(async () => {
-    await mock.commands.get("file-context")?.handler("remove", print.ctx);
-  }, /interactive TUI/);
-  await assert.rejects(async () => {
-    await mock.commands.get("file-context")?.handler("unexpected", print.ctx);
-  }, /Usage/);
-  await assert.rejects(async () => {
-    await mock.commands.get("file-context")?.handler("remove trailing", print.ctx);
-  }, /Usage/);
 });

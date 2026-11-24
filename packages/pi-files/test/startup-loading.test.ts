@@ -52,10 +52,8 @@ async function fixture() {
     for (const handler of mock.events.get(type) ?? []) await handler({ type, reason: "reload" }, ctx);
   };
   const tasks: Promise<void>[] = [];
-  const command = (name = "edit-scope", args = "") => {
-    const registered = mock.commands.get(name);
-    if (!registered) throw new Error(`Missing ${name} command`);
-    const task = registered.handler(args, ctx) as Promise<void>;
+  const open = () => {
+    const task = registration.open(ctx);
     tasks.push(task);
     void task.catch(() => {});
     return task;
@@ -73,7 +71,7 @@ async function fixture() {
     show,
     registration,
     emit,
-    command,
+    open,
     imported: imported.promise,
     finishImport,
     failImport: () => module.reject(new Error("Menu import failed")),
@@ -133,7 +131,7 @@ it("keeps scope enforcement, contracts, and display text eager without loading K
   ]);
 });
 
-it("registers both commands and completions synchronously and imports UI only on first menu use", async () => {
+it("registers no commands from the scope service and imports UI only on first menu use", async () => {
   const h = await fixture();
   expect(h.registration).toEqual({
     open: expect.any(Function),
@@ -143,25 +141,21 @@ it("registers both commands and completions synchronously and imports UI only on
     saveShowHiddenFiles: expect.any(Function),
     signal: expect.any(Function),
   });
-  expect([...h.commands.keys()]).toEqual(["edit-scope", "scope"]);
-  for (const command of h.commands.values())
-    expect(command.getArgumentCompletions?.("o")).toEqual([
-      { value: "off", label: "off", description: "End the editing restriction" },
-    ]);
+  expect([...h.commands.keys()]).toEqual([]);
   expect(h.tools).toEqual([]);
   expect(h.imports).toBe(0);
   await h.emit("session_start");
   expect(h.imports).toBe(0);
-  const running = h.command();
+  const running = h.open();
   await h.imported;
   expect(h.show).not.toHaveBeenCalled();
-  await expect(h.command("scope")).rejects.toThrow("already open");
+  await expect(h.open()).rejects.toThrow("already open");
   h.finishImport();
   await running;
   expect(h.show).toHaveBeenCalledTimes(1);
   expect(h.show.mock.calls[0]?.[1].isCurrent()).toBe(false);
   expect(h.show.mock.calls[0]?.[1].signal.aborted).toBe(true);
-  await h.command("scope");
+  await h.open();
   expect(h.show).toHaveBeenCalledTimes(2);
   expect(h.imports).toBe(1);
   expect(h.entries).toEqual([]);
@@ -174,7 +168,7 @@ it.each(["session_shutdown", "session_start"] as const)(
   async (event) => {
     const h = await fixture();
     await h.emit("session_start");
-    const running = h.command();
+    const running = h.open();
     await h.imported;
     let settled = false;
     const closing = h.emit(event).then(() => {
@@ -187,16 +181,16 @@ it.each(["session_shutdown", "session_start"] as const)(
     expect(h.show).not.toHaveBeenCalled();
     expect(settled).toBe(true);
     if (event === "session_start") {
-      await h.command();
+      await h.open();
       expect(h.show).toHaveBeenCalledTimes(1);
     } else await h.emit("session_shutdown");
   },
 );
 
-it("propagates an import failure without retaining the command flow", async () => {
+it("propagates an import failure without retaining the scope flow", async () => {
   const h = await fixture();
   await h.emit("session_start");
-  const running = h.command();
+  const running = h.open();
   // Vitest wraps a rejected mock-module factory and retains its original cause.
   const loadFailure = { cause: expect.objectContaining({ message: "Menu import failed" }) };
   const failure = expect(running).rejects.toMatchObject(loadFailure);
@@ -204,6 +198,6 @@ it("propagates an import failure without retaining the command flow", async () =
   h.failImport();
   await failure;
   expect(h.show).not.toHaveBeenCalled();
-  await expect(h.command("scope")).rejects.toMatchObject(loadFailure);
+  await expect(h.open()).rejects.toMatchObject(loadFailure);
   await h.emit("session_shutdown");
 });

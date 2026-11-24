@@ -32,11 +32,6 @@ interface PendingQuote {
   id: string;
   quote: FileQuote;
 }
-interface ExplorerRunOptions {
-  menuOwned?: boolean;
-  signal?: AbortSignal;
-}
-type ExplorerRunResult = "stay" | "close";
 type ExplorerDiscovery = [string[], Awaited<ReturnType<typeof createGitContext>>];
 
 export interface ContextOptions {
@@ -48,7 +43,7 @@ export interface ContextOptions {
   onChange?(ctx: ExtensionContext, quotes: readonly FileQuote[]): void;
 }
 export interface ContextService {
-  open(ctx: ExtensionCommandContext, start?: "main" | "remove"): Promise<void>;
+  review(ctx: ExtensionCommandContext): Promise<void>;
   browse(ctx: ExtensionContext): Promise<void>;
   getState(ctx: ExtensionContext): FileContextMenuState;
   saveShortcut(ctx: ExtensionContext, shortcut: KeyId | null, signal: AbortSignal): Promise<void>;
@@ -56,7 +51,7 @@ export interface ContextService {
 }
 interface ContextOwner {
   controller: AbortController;
-  open: ContextService["open"];
+  review: ContextService["review"];
   browse: ContextService["browse"];
   getState(): FileContextMenuState;
   saveShortcut: ContextService["saveShortcut"];
@@ -103,7 +98,7 @@ export async function registerFileContext(
       return work;
     };
     let activeExplorerLaunch: { promise: Promise<void> } | undefined;
-    let activeMenuLaunch: { promise: Promise<void> } | undefined;
+    let activeReviewLaunch: { promise: Promise<void> } | undefined;
     const updatePendingWidget = (ctx: ExtensionContext) =>
       (dependencies.onChange ?? publishFilesWidget)(
         ctx,
@@ -144,11 +139,8 @@ export async function registerFileContext(
       }
       activeExplorers.clear();
     };
-    const runExplorer = async (ctx: ExtensionContext, options: ExplorerRunOptions = {}): Promise<ExplorerRunResult> => {
-      if (ctx.mode !== "tui") {
-        rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
-        return "close";
-      }
+    const runExplorer = async (ctx: ExtensionContext): Promise<void> => {
+      if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("/files browse requires Pi TUI mode");
       const owner = ctx.sessionManager;
       const generation = sessionGeneration;
       const activeExplorer: ActiveExplorer = { controller: new AbortController() };
@@ -158,7 +150,6 @@ export async function registerFileContext(
         controller.signal,
         sessionController.signal,
         ...(ctx.signal ? [ctx.signal] : []),
-        ...(options.signal ? [options.signal] : []),
       ]);
       activeExplorers.add(activeExplorer);
       try {
@@ -166,7 +157,7 @@ export async function registerFileContext(
           import("@narumitw/pi-tui-kit"),
           import("./file-context-explorer.js"),
         ]);
-        if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
+        if (!isCurrentSession(owner, generation) || flowSignal.aborted) return;
         const task = await runTask(ctx, {
           label: "Scanning project files…",
           signal: flowSignal,
@@ -175,25 +166,21 @@ export async function registerFileContext(
             Promise.all([track(discoverFiles(ctx.cwd, { signal })), track(createGit(ctx.cwd, signal))]),
           onError: (_taskContext, error) => {
             ctx.ui.notify(
-              `File Context could not scan project files: ${escapeTerminalControls(formatError(error))}. Open File Context to retry.`,
+              `File Context could not scan project files: ${escapeTerminalControls(formatError(error))}. Use /files browse to retry.`,
               "error",
             );
           },
         });
-        if (task.kind === "cancelled" || task.kind === "error") {
-          return options.menuOwned ? "stay" : "close";
-        }
-        if (task.kind === "stale") return "close";
+        if (task.kind !== "completed" || !isCurrentSession(owner, generation) || flowSignal.aborted) return;
         const discovery: ExplorerDiscovery = task.value;
-        if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
         const [files, gitContext] = discovery;
         if (gitContext) {
           explorerGit = gitContext;
           gitContexts.add(gitContext);
         }
         if (files.length === 0) {
-          ctx.ui.notify("File Context found no project files. Choose Add context snippet to retry.", "warning");
-          return options.menuOwned ? "stay" : "close";
+          ctx.ui.notify("File Context found no project files. Use /files browse to retry.", "warning");
+          return;
         }
         const interaction = await runCustomInteraction<FileQuoteExplorerResult | undefined, ExtensionContext>(ctx, {
           signal: flowSignal,
@@ -224,7 +211,6 @@ export async function registerFileContext(
                   }),
                 ),
               gitContext,
-              rootNavigation: options.menuOwned,
               getSelectedContextState: () => ({
                 count: pendingQuotes.length,
                 totalBytes: pendingQuotes.reduce(
@@ -258,30 +244,20 @@ export async function registerFileContext(
           },
         });
         if (interaction.kind === "error") throw interaction.error;
-        const result = interaction.kind === "completed" ? interaction.value : undefined;
-        if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
-        if (result?.kind === "quote") {
-          appendPending(result.quote, ctx);
-          return "close";
-        }
-        if (result?.kind === "reference") {
-          ctx.ui.pasteToEditor(formatFileReference(result.path));
-          return "close";
-        }
-        return result?.kind === "back" ? "stay" : "close";
+        if (interaction.kind !== "completed" || !isCurrentSession(owner, generation) || flowSignal.aborted) return;
+        const result = interaction.value;
+        if (result?.kind === "quote") appendPending(result.quote, ctx);
+        else if (result?.kind === "reference") ctx.ui.pasteToEditor(formatFileReference(result.path));
       } catch (error: unknown) {
-        if (!isCurrentSession(owner, generation) || flowSignal.aborted || isAbortError(error)) {
-          return "close";
-        }
+        if (!isCurrentSession(owner, generation) || flowSignal.aborted || isAbortError(error)) return;
         try {
           ctx.ui.notify(
-            `File Context failed: ${escapeTerminalControls(formatError(error))}. Open File Context to retry.`,
+            `File Context failed: ${escapeTerminalControls(formatError(error))}. Use /files browse to retry.`,
             "error",
           );
         } catch {
           // The session may have been replaced while the picker was open.
         }
-        return options.menuOwned ? "stay" : "close";
       } finally {
         activeExplorers.delete(activeExplorer);
         if (explorerGit) {
@@ -293,8 +269,8 @@ export async function registerFileContext(
 
     const openExplorer = (ctx: ExtensionContext): Promise<void> => {
       if (activeExplorerLaunch) return activeExplorerLaunch.promise;
-      if (activeMenuLaunch) return activeMenuLaunch.promise;
-      const launch = { promise: runExplorer(ctx).then(() => undefined) };
+      if (activeReviewLaunch) return activeReviewLaunch.promise;
+      const launch = { promise: runExplorer(ctx) };
       activeExplorerLaunch = launch;
       void launch.promise
         .finally(() => {
@@ -303,53 +279,27 @@ export async function registerFileContext(
         .catch(() => {});
       return launch.promise;
     };
-    const openMenu = (ctx: ExtensionCommandContext, start: "main" | "remove" = "main"): Promise<void> => {
-      if (ctx.mode !== "tui") {
-        rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
-        return Promise.resolve();
-      }
-      if (activeMenuLaunch) return activeMenuLaunch.promise;
+    const review = (ctx: ExtensionCommandContext): Promise<void> => {
+      if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("/files requires Pi TUI mode");
+      if (activeReviewLaunch) return activeReviewLaunch.promise;
       if (activeExplorerLaunch) return activeExplorerLaunch.promise;
-      if (start === "remove" && pendingQuotes.length === 0) {
+      if (pendingQuotes.length === 0) {
         ctx.ui.notify("File Context has no context selected for the next prompt.", "warning");
         return Promise.resolve();
       }
       const owner = ctx.sessionManager;
       const generation = sessionGeneration;
-      const ownerController = {
-        signal: AbortSignal.any([sessionController.signal, ...(ctx.signal ? [ctx.signal] : [])]),
-      };
-      const isCurrent = () => isCurrentSession(owner, generation) && !ownerController.signal.aborted;
+      const signal = AbortSignal.any([sessionController.signal, ...(ctx.signal ? [ctx.signal] : [])]);
+      const isCurrent = () => isCurrentSession(owner, generation) && !signal.aborted;
       const promise = import("./file-context-menu.js")
         .then(({ showFileContextMenu }) => {
           if (!isCurrent()) return;
           return showFileContextMenu(ctx, {
-            start,
-            signal: ownerController.signal,
+            signal,
             isCurrent,
             getState: () => {
               if (!isCurrent()) throw new DOMException("File Context session replaced", "AbortError");
-              const quotes = pendingQuotes.map(menuQuote);
-              return {
-                quotes,
-                shortcut: loadedSettings.settings.openShortcut,
-                maximumQuotes: MAX_PENDING_QUOTES,
-                maximumBytes: MAX_PENDING_QUOTE_BYTES,
-                totalBytes: quotes.reduce((total, quote) => total + Buffer.byteLength(quote.text, "utf8"), 0),
-                settingsPath,
-                settingsInvalidReason: loadedSettings.invalidReason,
-              };
-            },
-            addQuote: (signal) => runExplorer(ctx, { menuOwned: true, signal }),
-            saveShortcut: async (shortcut, signal) => {
-              if (!isCurrent() || signal.aborted) {
-                throw new DOMException("File Context session replaced", "AbortError");
-              }
-              if (pendingQuotes.length > 0)
-                throw new Error("Submit or remove selected context before changing the shortcut");
-              const saved = await updateSettings(shortcut, { settingsPath, signal });
-              if (!isCurrent() || signal.aborted) return;
-              loadedSettings = { settings: saved };
+              return { quotes: pendingQuotes.map(menuQuote) };
             },
             removeQuote: (id, signal) => {
               if (!isCurrent() || signal.aborted) return { kind: "missing" };
@@ -368,9 +318,9 @@ export async function registerFileContext(
         })
         .then(() => undefined);
       const launch = { promise };
-      activeMenuLaunch = launch;
+      activeReviewLaunch = launch;
       const clearLaunch = () => {
-        if (activeMenuLaunch === launch) activeMenuLaunch = undefined;
+        if (activeReviewLaunch === launch) activeReviewLaunch = undefined;
       };
       void promise.then(clearLaunch, clearLaunch);
       return promise;
@@ -378,7 +328,7 @@ export async function registerFileContext(
 
     const runtime: ContextOwner = {
       controller: sessionController,
-      open: openMenu,
+      review,
       browse: openExplorer,
       getState: () => ({
         quotes: pendingQuotes.map(menuQuote),
@@ -427,7 +377,7 @@ export async function registerFileContext(
   }
 
   const service: ContextService = {
-    open: (ctx, start) => requireOwner(ctx).open(ctx, start),
+    review: (ctx) => requireOwner(ctx).review(ctx),
     browse: (ctx) => requireOwner(ctx).browse(ctx),
     getState: (ctx) => requireOwner(ctx).getState(),
     saveShortcut: (ctx, shortcut, signal) => requireOwner(ctx).saveShortcut(ctx, shortcut, signal),
@@ -439,24 +389,6 @@ export async function registerFileContext(
       handler: service.browse,
     });
   }
-  pi.registerCommand("file-context", {
-    description: "Open the File Context menu",
-    getArgumentCompletions: (prefix) => {
-      const items = [
-        { value: "browse", label: "browse", description: "Open the file browser directly" },
-        { value: "remove", label: "remove", description: "Review selected context directly" },
-      ].filter((item) => item.value.startsWith(prefix.trimStart().toLowerCase()));
-      return items.length ? items : null;
-    },
-    handler: async (args, ctx) => {
-      const route = args.trim().toLowerCase();
-      if (route !== "" && route !== "browse" && route !== "remove")
-        return rejectCommand(ctx, "Usage: /file-context [browse|remove]");
-      if (ctx.mode !== "tui") return rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
-      if (route === "browse") await service.browse(ctx);
-      else await service.open(ctx, route === "remove" ? "remove" : "main");
-    },
-  });
   pi.on("session_start", async (_event, ctx) => {
     const key = ctx.sessionManager;
     const previous = owners.get(key);
@@ -499,13 +431,6 @@ function escapeTerminalControls(text: string): string {
       return code <= 31 || (code >= 127 && code <= 159) ? `\\x${code.toString(16).padStart(2, "0")}` : character;
     })
     .join("");
-}
-function rejectCommand(ctx: ExtensionContext, message: string): void {
-  if (ctx.hasUI) {
-    ctx.ui.notify(message, "warning");
-    return;
-  }
-  throw new Error(message);
 }
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";

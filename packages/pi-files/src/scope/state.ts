@@ -27,7 +27,7 @@ function absolutePath(value: unknown): value is string {
 export function createSnapshot(cwd: string, targets: readonly ScopeTarget[] | null): ScopeSnapshot {
   if (!absolutePath(cwd)) throw new Error("Scope workspace must be an absolute normalized path");
   if (targets !== null && (targets.length === 0 || targets.length > MAX_TARGETS)) {
-    throw new Error(`Select between 1 and ${MAX_TARGETS} files; use /scope off to end the restriction`);
+    throw new Error(`Select between 1 and ${MAX_TARGETS} files; use /files off to end the restriction`);
   }
   const unique = new Map<string, ScopeTarget>();
   for (const target of targets ?? []) {
@@ -71,7 +71,7 @@ export function restoreScope(branch: readonly SessionEntry[], cwd: string): Scop
       return {
         state: "blocked",
         entryId: entry.id,
-        error: `${error instanceof Error ? error.message : "Scope restoration failed"}. Edits remain blocked; repair with /scope or exit with /scope off.`,
+        error: `${error instanceof Error ? error.message : "Scope restoration failed"}. Edits remain blocked; repair with Manage edit scope in /files or exit with /files off.`,
       };
     }
   }

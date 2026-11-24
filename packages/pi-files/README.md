@@ -17,7 +17,17 @@ Browse files, attach exact snapshots to the next prompt, and manage allowed edit
 
 **Extensions run with Pi's full user permissions. Load only trusted code. This is an in-process guard, not an OS sandbox.** Read the [security boundary](#-security-and-privacy) before enabling restrictions.
 
-Pi Files is not yet published to npm. A read-only registry query returned `E404` during implementation; it does not reserve the name or authorize publication. Use a local checkout. From the repository root:
+Before switching from File Context or Edit Scope, follow the [migration guide](docs/migration.md). Remove or disable predecessor resources in both user and project install scopes, then reload. **Do not co-load Pi Files with either predecessor.**
+
+Install from npm, or load it for one session instead:
+
+```bash
+pi install npm:@narumitw/pi-files
+# Or, for one session:
+pi -e npm:@narumitw/pi-files
+```
+
+To use a local checkout, run from the repository root:
 
 ```bash
 npm install
@@ -30,8 +40,6 @@ The root build supplies Pi TUI Kit and generates `dist/index.ts`. An unbuilt che
 ```bash
 pi install ./packages/pi-files
 ```
-
-Before switching from File Context or Edit Scope, follow the [migration guide](docs/migration.md). Remove or disable predecessor resources in both user and project install scopes, then reload. **Do not co-load Pi Files with either predecessor.**
 
 ## 🚀 Quick start
 
@@ -46,13 +54,12 @@ To restrict edits separately, open scope management from `/files`, check files i
 | Route | Result |
 | --- | --- |
 | `/files` | Open the common manager for browsing, context review, edit scope, Settings, Status, and Help. |
-| `/files browse` | Open the context explorer directly. |
+| `/files browse` | Open the context explorer directly. The configured browser shortcut still works. |
 | `/files off` | End the edit restriction without changing queued context. |
-| `/file-context [browse\|remove]` | Retain the dedicated context manager, direct browser, and snapshot-review route. `remove` does not delete files. |
-| `/edit-scope`, `/scope` | Retain the dedicated scope manager. |
-| `/edit-scope off`, `/scope off` | End the same restriction. |
 
-Interactive routes require TUI mode and reject unknown or trailing arguments. Scope routes and permission changes require an idle agent with no pending messages. RPC, print, and JSON reject interactive commands before custom UI; restored enforcement remains active in all modes.
+All three routes require TUI mode and reject unknown or trailing arguments. Scope management and permission changes require an idle agent with no pending messages. RPC, print, and JSON reject the command before custom UI; restored enforcement remains active in all modes.
+
+**Breaking change:** Pi Files no longer registers `/file-context`, `/edit-scope`, or `/scope`, with or without arguments. Pi can send unregistered slash names to the model as prompts. Do not submit the old commands to test removal; [update scripts, shortcuts, and saved instructions](docs/migration.md#replace-removed-commands).
 
 In fullscreen TUI mode, click the **Files** divider or any summary row, including its blank right side, to collapse or expand the widget. Collapse affects only the display; queued context and edit restrictions stay active. The choice survives summary updates and branch navigation, but resets on session replacement or reload. Open `/files` to expand it from the keyboard.
 
@@ -60,7 +67,7 @@ The explorer and checked-file picker remain separate components with different s
 
 ## ⚙️ Settings
 
-Open `/files` → **Settings** for the common Pi `SettingsList` screen. Changes save immediately; Escape does not undo a saved change. Only **Open shortcut** is blocked while context is queued because it reloads Pi. **Show hidden files** applies immediately to scope discovery without reload or permission changes. Dedicated compatibility managers keep their existing settings routes.
+Open `/files` → **Settings** for the common Pi `SettingsList` screen. Changes save immediately; Escape does not undo a saved change. Only **Open shortcut** is blocked while context is queued because it reloads Pi. **Show hidden files** applies immediately to scope discovery without reload or permission changes.
 
 The two user-only stores deliberately retain their legacy basenames under `getAgentDir()` (normally `~/.pi/agent`):
 

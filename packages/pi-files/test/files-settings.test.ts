@@ -80,7 +80,7 @@ function fixture(bindings: KeybindingsConfig = {}) {
       state.shortcut = value;
     }),
     signal: vi.fn(() => contextOwner.signal),
-    open: vi.fn(),
+    review: vi.fn(),
     browse: vi.fn(),
   } satisfies ContextService;
   const scope = {

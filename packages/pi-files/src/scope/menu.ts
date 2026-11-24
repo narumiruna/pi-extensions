@@ -45,7 +45,7 @@ function stateLines(view: ScopeView): string[] {
 }
 
 export async function showScopeMenu(context: ExtensionCommandContext, options: ScopeMenuOptions): Promise<void> {
-  if (context.mode !== "tui" || !context.hasUI) throw new Error("/edit-scope requires interactive TUI mode.");
+  if (context.mode !== "tui" || !context.hasUI) throw new Error("/files requires Pi TUI mode");
   const ctx = scopeOverlayContext(context);
   const current = () => !options.signal.aborted && options.isCurrent();
   const notify = (error: unknown) => {
@@ -133,7 +133,7 @@ export async function showScopeMenu(context: ExtensionCommandContext, options: S
           "",
           "Missing selected paths are reserved. The first normal write creates the file and parent directories.",
           "While restricted, write/edit are limited to exact allowed targets. Supported readers remain available.",
-          "Shell commands, tests, formatters, and opaque writing/delegation tools are blocked; use /edit-scope off first.",
+          "Shell commands, tests, formatters, and opaque writing/delegation tools are blocked; use /files off first.",
           "This guard is not an OS sandbox. User shell commands, other programs, filesystem races, and trusted extensions are outside its boundary.",
         ].join("\n"),
         format: { kind: "text" },
@@ -150,7 +150,7 @@ export async function showScopeMenu(context: ExtensionCommandContext, options: S
           "Use Add file for an existing full, ~/ or relative path, including files outside cwd. This separate field preserves the search and checked draft; adding does not apply the restriction.",
           "New file reserves one target; it replaces all allowed files and creates no content here.",
           "Cancelling a draft, closing this menu, and run completion do not release the restriction.",
-          "Use End restriction or /edit-scope off to release it explicitly.",
+          "Use End restriction or /files off to release it explicitly.",
           "Discovery starts at cwd, skips symlinks and fixed generated/dependency/version-control directories, and does not use .gitignore.",
           "Settings controls only hidden-file discovery. Selected targets remain visible even when discovery would exclude them.",
           "Status lists every selected path and the tool limitations.",

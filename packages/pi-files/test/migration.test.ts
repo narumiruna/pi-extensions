@@ -11,7 +11,6 @@ import * as contracts from "../src/scope/contracts.js";
 import * as state from "../src/scope/state.js";
 
 type Reader = { state: typeof state; contracts: typeof contracts };
-const successor: Reader = { state, contracts };
 const cwd = resolve("legacy-scope-fixture");
 const targets = [
   { path: join(cwd, "a.ts"), canonical: join(cwd, "a.ts") },
@@ -75,7 +74,9 @@ test("historical v1 scope state restores forward and backward without rewriting 
       const newState = state.restoreScope(branch, cwd);
       assert.equal(newState.state, expected);
       assert.equal(newState.entryId, "original-state-id");
-      assert.deepEqual(newState, oldState);
+      assert.deepEqual(newState.snapshot, oldState.snapshot);
+      if (expected === "blocked")
+        assert.match(newState.error ?? "", /repair with Manage edit scope in \/files or exit with \/files off/);
       assert.deepEqual(bytes(branch), historical);
     }
     for (const selection of [targets, null]) {
@@ -96,94 +97,136 @@ test("historical v1 scope state restores forward and backward without rewriting 
   });
 });
 
-test("historical notices and anchored prefixes remain byte-identical in both migration directions", async () => {
-  await withPredecessor(async (predecessor) => {
-    for (const [producer, reader] of [
-      [predecessor, successor],
-      [successor, predecessor],
-    ]) {
-      const branch = [entry("scope-state", snapshot, "original-state-id")];
-      const active = producer.state.restoreScope(branch, cwd);
-      const blocked: state.ScopeState = { state: "blocked", entryId: active.entryId };
-      const inactive: state.ScopeState = {
-        state: "inactive",
-        entryId: "off-id",
-        snapshot: producer.state.createSnapshot(cwd, null),
+test.each(["active", "blocked", "inactive"] as const)(
+  "upgrades saved v1 %s notices without rewriting history",
+  async (kind) => {
+    await withPredecessor(async (predecessor) => {
+      const data =
+        kind === "blocked" ? { invalid: true } : kind === "inactive" ? state.createSnapshot(cwd, null) : snapshot;
+      const scopeEntry = entry("scope-state", data, "original-state-id");
+      const current = state.restoreScope([scopeEntry], cwd);
+      assert.equal(current.state, kind);
+      assert.deepEqual(
+        bytes(contracts.createScopeNotice(current, 10, 1)),
+        bytes(predecessor.contracts.createScopeNotice(current, 10)),
+      );
+      const input = [user("original request")];
+      const produced = predecessor.contracts.reconcileScopeContext(input, [scopeEntry], current, 10);
+      assert.equal(produced.anchor?.version, 1);
+      const notice = produced.messages.at(-1);
+      assert.ok(notice?.role === "custom");
+      const persisted = [
+        scopeEntry,
+        entry("scope-context-anchor", produced.anchor, "original-anchor-id"),
+        {
+          type: "custom_message",
+          id: "original-notice-id",
+          parentId: "original-anchor-id",
+          timestamp: "2026-11-01T00:00:00.010Z",
+          customType: notice.customType,
+          content: notice.content,
+          display: notice.display,
+          details: notice.details,
+        } as SessionEntry,
+      ];
+      const historical = bytes(persisted);
+      const savedBranch = copy(persisted);
+      const later = user("later request", 11);
+      const next = user("next request", 21);
+      const delayed = [...input, later, { ...notice, timestamp: 12 }];
+      const upgrade = contracts.reconcileScopeContext(delayed, savedBranch, current, 20);
+      const prefix = [...produced.messages, later];
+      assert.deepEqual(bytes(upgrade.messages.slice(0, prefix.length)), bytes(prefix));
+      if (kind === "inactive") {
+        assert.equal(upgrade.anchor, undefined);
+        assert.deepEqual(upgrade.messages, prefix);
+      } else {
+        assert.equal(upgrade.anchor?.version, 2);
+        assert.equal(upgrade.messages.length, prefix.length + 1);
+        assert.deepEqual(upgrade.messages.at(-1), contracts.createScopeNotice(current, 20));
+      }
+      assert.deepEqual(bytes(savedBranch), historical);
+      const upgraded = upgrade.anchor
+        ? [...savedBranch, entry("scope-context-anchor", upgrade.anchor, "new-anchor")]
+        : savedBranch;
+      const lateCorrection = upgrade.anchor ? [contracts.createScopeNotice(current, 22) as AgentMessage] : [];
+      const resumed = contracts.reconcileScopeContext(
+        [...delayed, next, ...lateCorrection],
+        copy(upgraded),
+        current,
+        30,
+      );
+      assert.equal(resumed.anchor, undefined);
+      assert.deepEqual(resumed.messages, [...upgrade.messages, next]);
+      assert.equal(contracts.hasCurrentScopeNotice(resumed.messages, current), true);
+
+      const summary: AgentMessage = {
+        role: "compactionSummary",
+        summary: "retained summary",
+        tokensBefore: 50,
+        timestamp: 40,
       };
-      for (const current of [active, blocked, inactive]) {
-        const oldNotice = predecessor.contracts.createScopeNotice(current, 10);
-        const newNotice = contracts.createScopeNotice(current, 10);
-        assert.deepEqual(bytes(newNotice), bytes(oldNotice));
-        assert.ok(newNotice && typeof newNotice.content === "string");
-        assert.equal(newNotice.content.includes("/files"), false);
-        const states = [entry("scope-state", current.snapshot ?? { invalid: true }, current.entryId)];
-        const input = [user("original request")];
-        const produced = producer.contracts.reconcileScopeContext(input, states, current, 10);
-        assert.ok(produced.anchor);
-        assert.equal(produced.anchor.version, 1);
-        assert.equal(produced.anchor.stateId, current.entryId);
-        const notice = produced.messages.at(-1);
-        assert.ok(notice && notice.role === "custom");
-        const persisted = [
-          ...states,
-          entry("scope-context-anchor", produced.anchor, "original-anchor-id"),
-          {
-            type: "custom_message",
-            id: "original-notice-id",
-            parentId: "original-anchor-id",
-            timestamp: "2026-11-01T00:00:00.010Z",
-            customType: notice.customType,
-            content: notice.content,
-            display: notice.display,
-            details: notice.details,
-          } as SessionEntry,
-        ];
-        const historical = bytes(persisted);
-        const savedBranch = JSON.parse(historical.toString()) as SessionEntry[];
-        // Pi can publish the native notice after newer output. The saved anchor must
-        // still place it at its original model-visible boundary, not at a moving tail.
-        const later = user("later request", 11);
-        const resumed = reader.contracts.reconcileScopeContext([...input, later, notice], savedBranch, current, 20);
-        assert.equal(resumed.anchor, undefined);
-        assert.deepEqual(bytes(resumed.messages.slice(0, produced.messages.length)), bytes(produced.messages));
-        assert.deepEqual(resumed.messages.at(-1), later);
-        assert.equal(reader.contracts.hasCurrentScopeNotice(resumed.messages, current), true);
-        assert.deepEqual(
-          bytes(reader.contracts.reconcileScopeContext(resumed.messages, savedBranch, current, 30).messages),
-          bytes(resumed.messages),
-        );
-        assert.deepEqual(bytes(savedBranch), historical);
+      const recovered = contracts.reconcileScopeContext([summary], upgraded, current, 50);
+      assert.equal(recovered.anchor?.version, kind === "inactive" ? 1 : 2);
+      assert.deepEqual(recovered.messages, [summary, contracts.createScopeNotice(current, 50)]);
+      const compacted = [...upgraded, entry("scope-context-anchor", recovered.anchor, "recovered-anchor-id")];
+      const ordinary = contracts.reconcileScopeContext([summary, next], copy(compacted), current, 60);
+      assert.equal(ordinary.anchor, undefined);
+      assert.deepEqual(ordinary.messages, [...recovered.messages, next]);
 
-        const summary: AgentMessage = {
-          role: "compactionSummary",
-          summary: "retained summary",
-          tokensBefore: 50,
-          timestamp: 40,
-        };
-        const recovered = reader.contracts.reconcileScopeContext([summary], savedBranch, current, 50);
-        assert.ok(recovered.anchor);
-        savedBranch.push(entry("scope-context-anchor", recovered.anchor, "recovered-anchor-id"));
-        const reverseRead = producer.contracts.reconcileScopeContext([summary, later], savedBranch, current, 60);
-        assert.equal(reverseRead.anchor, undefined);
-        assert.deepEqual(bytes(reverseRead.messages.slice(0, recovered.messages.length)), bytes(recovered.messages));
-      }
+      const rollback = predecessor.state.restoreScope(copy(upgraded), cwd);
+      assert.equal(rollback.state, kind);
+      assert.equal(rollback.entryId, current.entryId);
+      assert.deepEqual(rollback.snapshot, current.snapshot);
+      const oldReader = predecessor.contracts.reconcileScopeContext(resumed.messages, copy(upgraded), rollback, 70);
+      assert.equal(predecessor.contracts.hasCurrentScopeNotice(oldReader.messages, rollback), true);
+    });
+  },
+);
 
-      // The optional v1 recovery counter is also predecessor-readable after a
-      // blocked state is repaired without replacing the original state entry ID.
-      const input = [user("unchanged request")];
-      let previous = input;
-      for (const [index, current] of [active, blocked, active].entries()) {
-        const produced = producer.contracts.reconcileScopeContext(input, branch, current, index + 1);
-        assert.ok(produced.anchor);
-        branch.push(entry("scope-context-anchor", produced.anchor, `transition-${index}`));
-        const resumed = reader.contracts.reconcileScopeContext(input, copy(branch), current, 100);
-        assert.equal(resumed.anchor, undefined);
-        assert.deepEqual(bytes(resumed.messages), bytes(produced.messages));
-        assert.deepEqual(bytes(resumed.messages.slice(0, previous.length)), bytes(previous));
-        if (index === 2) assert.equal(produced.anchor.recovery, 1);
-        previous = produced.messages;
-      }
+test("adds the command correction after a repeated v1 recovery on the active branch", async () => {
+  await withPredecessor(async (predecessor) => {
+    const scopeEntry = entry("scope-state", snapshot, "original-state-id");
+    const active = state.restoreScope([scopeEntry], cwd);
+    const blocked: state.ScopeState = { state: "blocked", entryId: active.entryId };
+    const input = [user("unchanged request")];
+    const branch = [scopeEntry];
+    let previous = input;
+    for (const [index, current] of [active, blocked, active].entries()) {
+      const legacy = predecessor.contracts.reconcileScopeContext(input, branch, current, index + 1);
+      assert.equal(legacy.anchor?.version, 1);
+      branch.push(entry("scope-context-anchor", legacy.anchor, `transition-${index}`));
+      assert.deepEqual(legacy.messages.slice(0, previous.length), previous);
+      if (index === 2) assert.equal(legacy.anchor?.recovery, 1);
+      previous = legacy.messages;
     }
+    const corrected = contracts.reconcileScopeContext(input, copy(branch), active, 100);
+    assert.equal(corrected.anchor?.version, 2);
+    assert.deepEqual(corrected.messages.slice(0, -1), previous);
+    branch.push(entry("scope-context-anchor", corrected.anchor, "correction"));
+    const forked = copy(branch);
+    const next = user("next after branch reload", 101);
+    const resumed = contracts.reconcileScopeContext([...input, next], forked, active, 102);
+    assert.equal(resumed.anchor, undefined);
+    assert.deepEqual(resumed.messages, [...corrected.messages, next]);
+
+    let prefix = resumed.messages;
+    const branchInput = [...input, next];
+    const inactive: state.ScopeState = {
+      state: "inactive",
+      entryId: "off-id",
+      snapshot: state.createSnapshot(cwd, null),
+    };
+    for (const [index, current] of [blocked, active, inactive].entries()) {
+      if (current === inactive) forked.push(entry("scope-state", current.snapshot, current.entryId));
+      const transition = contracts.reconcileScopeContext(branchInput, forked, current, 110 + index);
+      assert.equal(transition.anchor?.version, current === inactive ? 1 : 2);
+      assert.deepEqual(transition.messages.slice(0, -1), prefix);
+      forked.push(entry("scope-context-anchor", transition.anchor, `new-transition-${index}`));
+      assert.equal(contracts.reconcileScopeContext(branchInput, forked, current).anchor, undefined);
+      prefix = transition.messages;
+    }
+    assert.deepEqual(contracts.reconcileScopeContext(branchInput, branch, active).messages, resumed.messages);
   });
 });
 

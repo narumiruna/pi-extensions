@@ -20,7 +20,7 @@ async function assertExplorerLifecycleCancellation(event: "session_start" | "ses
   try {
     await writeFile(join(root, "example.txt"), "needle\n");
     const mock = createMockPi();
-    await registerFileContext(mock.pi, {
+    const service = await registerFileContext(mock.pi, {
       loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
     });
     const oldManager = { getSessionId: () => "old" };
@@ -46,7 +46,7 @@ async function assertExplorerLifecycleCancellation(event: "session_start" | "ses
     const newContext = makeContext(newManager, createTuiHarness().custom);
     await mock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
     let settled = false;
-    const command = Promise.resolve(mock.commands.get("file-context")?.handler("browse", oldContext.ctx)).then(() => {
+    const browsing = service.browse(oldContext.ctx).then(() => {
       settled = true;
     });
     const deadline = Date.now() + 3_000;
@@ -68,7 +68,8 @@ async function assertExplorerLifecycleCancellation(event: "session_start" | "ses
 
     assert.equal(tui.isOpen, false);
     assert.equal(settled, true);
-    await command;
+    await browsing;
+    tui.dispose();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

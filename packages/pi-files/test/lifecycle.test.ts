@@ -3,12 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  RegisteredCommand,
-  ToolInfo,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ScopeMenuOptions, ScopeView } from "../src/scope/menu.js";
@@ -19,7 +14,7 @@ const root = await mkdtemp(join(tmpdir(), "scope-lifecycle-"));
 process.env.PI_CODING_AGENT_DIR = join(root, "initial-agent");
 const sdk = await import("@earendil-works/pi-coding-agent");
 const { registerScope } = await import("../src/scope/edit-scope.js");
-const { createEditScopeExtension } = await import("./scope-extension.js");
+const { publishFilesWidget } = await import("../src/files-widget.js");
 const { resolveScopeTarget } = await import("../src/scope/paths.js");
 const { createSnapshot, STATE_TYPE } = await import("../src/scope/state.js");
 const { ANCHOR_TYPE, NOTICE_TYPE } = await import("../src/scope/contracts.js");
@@ -34,7 +29,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-async function harness(start = true, legacyWidget = true) {
+async function harness(start = true, filesWidget = false) {
   const directory = await mkdtemp(join(root, "fixture-"));
   const cwd = join(directory, "workspace");
   const agentDir = join(directory, "agent");
@@ -47,7 +42,6 @@ async function harness(start = true, legacyWidget = true) {
   const target = await resolveScopeTarget(pathToFileURL(allowed).href, cwd, "existing");
   const manager = sdk.SessionManager.inMemory(cwd);
   const hooks = new Map<string, Hook[]>();
-  const commands = new Map<string, RegisteredCommand>();
   const controls = {
     busy: false,
     pending: false,
@@ -93,9 +87,7 @@ async function harness(start = true, legacyWidget = true) {
       hooks.set(name, [...(hooks.get(name) ?? []), handler]);
       return () => {};
     }),
-    registerCommand: vi.fn((name: string, command: RegisteredCommand) => {
-      commands.set(name, command);
-    }),
+    registerCommand: vi.fn<ExtensionAPI["registerCommand"]>(),
     appendEntry: vi.fn((type: string, data: unknown) => {
       manager.appendCustomEntry(type, data);
     }),
@@ -112,26 +104,19 @@ async function harness(start = true, legacyWidget = true) {
       throw new Error("Factory action call");
     }),
   };
-  const changes = vi.fn();
+  const changes = vi.fn((ctx: ExtensionCommandContext, view: ScopeView | undefined) => {
+    if (filesWidget) publishFilesWidget(ctx, [], view);
+  });
   const showMenu = async (_ctx: ExtensionCommandContext, options: ScopeMenuOptions) => action(options);
-  const service = legacyWidget
-    ? createEditScopeExtension(showMenu, { onChange: changes })(api as unknown as ExtensionAPI)
-    : registerScope(api as unknown as ExtensionAPI, { showMenu, onChange: changes });
+  const service = registerScope(api as unknown as ExtensionAPI, { showMenu, onChange: changes });
   async function emit(name: string, fields: Record<string, unknown> = {}, ctx = context) {
     let result: unknown;
     for (const handler of hooks.get(name) ?? []) result = await handler({ type: name, ...fields }, ctx);
     return result;
   }
-  function getCommand(name: string): RegisteredCommand {
-    const command = commands.get(name);
-    if (!command) throw new Error(`Edit Scope command missing: ${name}`);
-    return command;
-  }
-  const scope = getCommand("edit-scope");
-  const legacyScope = getCommand("scope");
-  async function menu(next: (options: ScopeMenuOptions) => Promise<void>, command = scope) {
+  async function menu(next: (options: ScopeMenuOptions) => Promise<void>, signal?: AbortSignal) {
     action = next;
-    return command.handler("", context);
+    return service.open(context, signal);
   }
   const fixture = {
     root: directory,
@@ -150,12 +135,7 @@ async function harness(start = true, legacyWidget = true) {
     service,
     emit,
     menu,
-    open(next: (options: ScopeMenuOptions) => Promise<void>, signal?: AbortSignal) {
-      action = next;
-      return service.open(context, signal);
-    },
-    scope,
-    legacyScope,
+    open: menu,
     async close() {
       await emit("session_shutdown", { reason: "quit" });
     },
@@ -163,7 +143,7 @@ async function harness(start = true, legacyWidget = true) {
       await menu((options) => options.apply(targets));
     },
     async off() {
-      await scope.handler("off", context);
+      service.off(context);
     },
     async view(): Promise<ScopeView> {
       let result: ScopeView | undefined;
@@ -208,7 +188,7 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-describe("scope lifecycle and command ownership", () => {
+describe("scope lifecycle and service ownership", () => {
   it("exposes a service with eager registration and reports views without publishing local widgets", async () => {
     const h = await harness(false, false);
     expect(h.changes).not.toHaveBeenCalled();
@@ -217,6 +197,7 @@ describe("scope lifecycle and command ownership", () => {
     expect(() => h.service.off(h.context)).toThrow("not initialized");
     await expect(h.service.saveShowHiddenFiles(h.context, true)).rejects.toThrow("not initialized");
     await expect(h.service.open(h.context)).rejects.toThrow("not initialized");
+    expect(h.api.registerCommand).not.toHaveBeenCalled();
     expect([...h.api.on.mock.calls.map(([event]) => event)]).toEqual([
       "session_start",
       "session_tree",
@@ -231,7 +212,7 @@ describe("scope lifecycle and command ownership", () => {
     expect(h.changes).toHaveBeenLastCalledWith(h.context, {
       state: "active",
       cwd: h.cwd,
-      targets: [{ path: h.allowed, canonical: h.allowed }],
+      targets: [{ path: h.target.path, canonical: h.target.canonical }],
     });
     const exposed = h.service.getView(h.context);
     (exposed.targets[0] as ScopeTarget).path = h.other;
@@ -377,35 +358,6 @@ describe("scope lifecycle and command ownership", () => {
     expect(await h.gate("bash", { command: "echo normal" })).toBeUndefined();
     await expect(readFile(join(h.agentDir, "pi-scope.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
-  it("registers only exact routes and completions and rejects all non-TUI command modes", async () => {
-    const h = await harness();
-    expect(h.api.registerCommand.mock.calls.map(([name]) => name)).toEqual(["edit-scope", "scope"]);
-    for (const [name, command] of [
-      ["edit-scope", h.scope],
-      ["scope", h.legacyScope],
-    ] as const) {
-      h.controls.mode = "tui";
-      expect(command.getArgumentCompletions?.("o")).toEqual([
-        { value: "off", label: "off", description: "End the editing restriction" },
-      ]);
-      expect(command.getArgumentCompletions?.("off x")).toEqual([]);
-      for (const args of ["help", "off extra", "settings"])
-        await expect(command.handler(args, h.context)).rejects.toThrow(`Usage: /${name} or /${name} off`);
-      for (const mode of ["rpc", "print", "json"]) {
-        h.controls.mode = mode;
-        await expect(command.handler("", h.context)).rejects.toThrow(`/${name} requires Pi TUI mode`);
-        await expect(command.handler("off", h.context)).rejects.toThrow(`/${name} requires Pi TUI mode`);
-      }
-      h.controls.mode = "tui";
-      for (const condition of ["busy", "pending"] as const) {
-        h.controls[condition] = true;
-        await expect(command.handler("", h.context)).rejects.toThrow("Stop the current run");
-        await expect(command.handler("off", h.context)).rejects.toThrow("Stop the current run");
-        h.controls[condition] = false;
-      }
-    }
-    expect(h.api.appendEntry).not.toHaveBeenCalled();
-  });
   it("applies once, leaves reads available, blocks direct/nested bypasses, and releases only explicitly", async () => {
     const h = await harness();
     const definitions = JSON.stringify(h.surface.tools);
@@ -432,7 +384,6 @@ describe("scope lifecycle and command ownership", () => {
     await h.off();
     expect(await h.gate("write", { path: h.other })).toBeUndefined();
     expect((await h.view()).state).toBe("inactive");
-    expect(h.ui.setWidget).toHaveBeenLastCalledWith("edit-scope", undefined);
   });
   it.each(["removed", "retargeted"] as const)(
     "repairs a %s selected alias by committing the real path, not a canonical-only no-op",
@@ -499,38 +450,34 @@ describe("scope lifecycle and command ownership", () => {
     expect((await h.view()).targets[0].path).toBe(path);
     expect(await readFile(otherNew, "utf8")).toBe("external file");
   });
-  it.each(["edit-scope", "scope"] as const)(
-    "shares disposed callbacks and overlap checks through /%s",
-    async (name) => {
-      const h = await harness();
-      const command = name === "edit-scope" ? h.scope : h.legacyScope;
-      const other = name === "edit-scope" ? h.legacyScope : h.scope;
-      let stale: ScopeMenuOptions | undefined;
-      await h.menu(async (options) => {
-        stale = options;
-      });
-      expect(stale?.isCurrent()).toBe(false);
-      await expect(stale?.apply([h.target])).rejects.toMatchObject({ name: "AbortError" });
-      const opened = deferred();
-      const closed = deferred();
-      const running = h.menu(async () => {
-        opened.resolve();
-        await closed.promise;
-      }, command);
-      await opened.promise;
-      for (const route of ["", "off"]) {
-        await expect(command.handler(route, h.context)).rejects.toThrow("already open");
-        await expect(other.handler(route, h.context)).rejects.toThrow("already open");
-      }
+  it("rejects disposed menu callbacks and overlap between opening and ending scope", async () => {
+    const h = await harness();
+    let stale: ScopeMenuOptions | undefined;
+    await h.menu(async (options) => {
+      stale = options;
+    });
+    expect(stale?.isCurrent()).toBe(false);
+    await expect(stale?.apply([h.target])).rejects.toMatchObject({ name: "AbortError" });
+    const opened = deferred();
+    const closed = deferred();
+    const running = h.menu(async () => {
+      opened.resolve();
+      await closed.promise;
+    });
+    await opened.promise;
+    try {
+      await expect(h.menu(async () => {})).rejects.toThrow("already open");
+      await expect(h.off()).rejects.toThrow("already open");
+    } finally {
       closed.resolve();
       await running;
-      expect((await h.view()).state).toBe("inactive");
-      await h.menu((options) => options.apply([h.target]), command);
-      expect((await h.gate("write", { path: h.other }))?.block).toBe(true);
-      await other.handler("off", h.context);
-      expect(await h.gate("write", { path: h.other })).toBeUndefined();
-    },
-  );
+    }
+    expect((await h.view()).state).toBe("inactive");
+    await h.apply();
+    expect((await h.gate("write", { path: h.other }))?.block).toBe(true);
+    await h.off();
+    expect(await h.gate("write", { path: h.other })).toBeUndefined();
+  });
   it("keeps the legacy settings path and preserves unknown fields without migrating files", async () => {
     const h = await harness(false);
     await mkdir(h.agentDir, { recursive: true });
@@ -756,14 +703,14 @@ describe("scope lifecycle and command ownership", () => {
     expect((await h.view()).targets).toHaveLength(1);
     expect((await h.view()).error).toContain("codemode.mode=only");
   });
-  it("keeps widget rows within widths and escapes untrusted paths", async () => {
-    const h = await harness();
+  it("keeps Files widget rows within widths and escapes untrusted scope paths", async () => {
+    const h = await harness(true, true);
     const untrusted = join(h.cwd, "\u001b[31mfile\n\u202e.txt");
     await writeFile(untrusted, "content");
     const target = await resolveScopeTarget(pathToFileURL(untrusted).href, h.cwd, "existing");
     await h.apply([target, h.target]);
     const factory = h.ui.setWidget.mock.calls.find(
-      ([key, component]) => key === "edit-scope" && typeof component === "function",
+      ([key, component]) => key === "files" && typeof component === "function",
     )?.[1] as ((tui: unknown, theme: unknown) => { render(width: number): string[]; invalidate(): void }) | undefined;
     if (!factory) throw new Error("Widget factory missing");
     const fg = vi.fn((_role: string, text: string) => text);

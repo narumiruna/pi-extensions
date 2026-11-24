@@ -469,7 +469,8 @@ async function smokeFiles() {
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, 1);
   const extension = loaded.extensions[0];
-  assert.deepEqual([...extension.commands.keys()].sort(), ["edit-scope", "file-context", "files", "scope"]);
+  assert.deepEqual([...extension.commands.keys()], ["files"]);
+  for (const legacy of ["file-context", "edit-scope", "scope"]) assert.equal(extension.commands.has(legacy), false);
   for (const type of ["tool_call", "context_with_system", "session_start", "session_shutdown"]) {
     assert.ok(extension.handlers.has(type), type);
   }
@@ -490,15 +491,24 @@ async function smokeFiles() {
   };
   try {
     await emit("session_start");
-    for (const [name, title] of [["files", /Files/u], ["scope", /Edit Scope/u]]) {
-      const menu = extension.commands.get(name).handler("", filesCtx);
-      await Promise.race([harness.waitForOpen(), menu.then(() => { throw new Error("Menu closed before opening"); })]);
-      const frame = harness.render().join("\n");
-      harness.send("\x03");
-      await menu;
-      assert.match(frame, title);
-      assert.equal(harness.isOpen, false);
+    const menu = extension.commands.get("files").handler("", filesCtx);
+    const waitForMenu = () => Promise.race([
+      harness.waitForOpen(), menu.then(() => { throw new Error("Menu closed before opening"); }),
+    ]);
+    await waitForMenu();
+    assert.match(harness.render().join("\n"), /Files/u);
+    for (let index = 0; index < 6 && !harness.render().join("\n").includes("→ Manage edit scope"); index++) {
+      harness.press("tui.select.down");
     }
+    assert.match(harness.render().join("\n"), /→ Manage edit scope/u);
+    const filesClosed = harness.resultPromise;
+    harness.press("tui.select.confirm");
+    await filesClosed;
+    await waitForMenu();
+    assert.match(harness.render().join("\n"), /Edit Scope/u);
+    harness.send("\x03");
+    await menu;
+    assert.equal(harness.isOpen, false);
     const questionnaire = runQuestionnaire(filesCtx, {
       questions: [{ id: "proof", header: "Lazy", prompt: "Generated lazy boundary", options: [{ label: "Ready" }] }],
     });

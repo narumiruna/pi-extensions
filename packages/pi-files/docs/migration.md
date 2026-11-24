@@ -1,8 +1,18 @@
 # Migrate to Pi Files
 
-Pi Files replaces the repository's File Context and Edit Scope implementations with one owner. **Never load `pi-files` together with `pi-file-context` or `pi-edit-scope`.** Duplicate aliases, shortcuts, and guard handlers are not a coordination mechanism; load order cannot make co-loading safe.
+`/files` is the only slash command registered by Pi Files. Use the route mapping below when upgrading. If migrating from the standalone File Context or Edit Scope extensions, also follow the resource replacement instructions: **never load `pi-files` together with `pi-file-context` or `pi-edit-scope`.** Duplicate shortcuts and guard handlers are not a coordination mechanism; load order cannot make co-loading safe.
 
-Repository retirement is approved. This does not authorize first publication, npm visibility changes, tags, release workflow dispatch, or npm deprecation notices. The read-only `@narumitw/pi-files` metadata query returned `E404` during implementation; Pi Files is not yet published. Use the local build until a release is explicitly approved.
+## Replace removed commands
+
+| Removed route | Use instead |
+| --- | --- |
+| `/file-context` | `/files` |
+| `/file-context browse` | `/files browse` or the unchanged configured browser shortcut |
+| `/file-context remove` | `/files` → **Review queued context** → open a snapshot → **Remove from next prompt**. This does not delete the file. |
+| `/edit-scope`, `/scope` | `/files` → **Manage edit scope** |
+| `/edit-scope off`, `/scope off` | `/files off` or **End restriction** in scope management |
+
+There are no compatibility aliases, with or without arguments. Pi can treat an unregistered slash name as ordinary prompt text. Update launch scripts, shortcuts that submit command text, and saved instructions before reloading. Do not submit the removed commands to test removal; inspect the command list instead. If already using Pi Files, follow **Prepare**, then update or rebuild and reload the one Pi Files resource you already use.
 
 ## Prepare
 
@@ -51,7 +61,7 @@ npm run build
 pi -e ./packages/pi-files
 ```
 
-The root build supplies Pi TUI Kit and generates the successor's `dist/index.ts`. Package-directory loading requires this build; its generated entry does not import back into `src`. Pi's bundled peers stay external. Local loading does not require a published Pi Files package, but dependency installation still requires registry access or an adequate npm cache; this is not a promise of an air-gapped install.
+The root build supplies Pi TUI Kit and generates the successor's `dist/index.ts`. Package-directory loading requires this build; its generated entry does not import back into `src`. Pi's bundled peers stay external. For npm installation, see the [README](../README.md#-install). A local build does not require downloading Pi Files itself, but installing dependencies still requires registry access or an adequate npm cache.
 
 For later sessions, choose the intended registration scope:
 
@@ -75,21 +85,23 @@ Choose one intended registration rather than loading the same checkout by severa
 
 | Area | Preserved behavior |
 | --- | --- |
-| Commands | `/file-context [browse\|remove]` keeps the dedicated context workflow; `/edit-scope`, `/scope`, and their `off` routes keep the dedicated scope workflow. `/files` adds the common manager, `browse`, and `off`. |
+| Workflows | Context browsing and its shortcut, exact snapshot review/removal, and scope management keep their actions. Scope and queued context remain independent. |
 | Context | Exact snapshots, order, limits, Git provenance, whole-file references, and one-time attachment retain their format. The `file-context-quotes` identity remains unchanged. Custom-triggered turns do not consume the queue. |
-| Scope state | `scope-state`, `scope-contract`, and `scope-context-anchor`, snapshot version 1, original entry IDs, state references, and historical notice bytes remain unchanged. |
+| Scope state | `scope-state`, `scope-contract`, and `scope-context-anchor` keep their identities. Scope snapshots stay at version 1; original entry IDs, state references, and version-1 notice and anchor bytes are preserved. |
 | Recovery | The active branch restores after reload, resume, fork, tree navigation, and compaction as applicable. Invalid or uncertain state stays blocked until repaired or explicitly ended. |
 | Settings | `openShortcut` remains in `<getAgentDir()>/pi-file-context.json`; `showHiddenFiles` remains in `<getAgentDir()>/pi-scope.json`. Unknown fields and existing values are preserved. |
 | Defaults | Browser shortcut is `ctrl+shift+x`; hidden scope discovery defaults to `false`. Settings remain user-only. |
 
-The settings basenames and historical `Scope` / `/scope` notice text are deliberate compatibility exceptions. There is no `pi-files.json`, project settings migration, file renaming, or automatic legacy-file deletion. Do not copy values into Pi's core settings file. See [context settings](file-context-reference.md#settings) and [scope settings](edit-scope-reference.md#settings-and-persistence).
+The settings basenames are deliberate compatibility exceptions. There is no `pi-files.json`, project settings migration, file renaming, or automatic legacy-file deletion. Do not copy values into Pi's core settings file. See [context settings](file-context-reference.md#settings) and [scope settings](edit-scope-reference.md#settings-and-persistence).
 
-The new common Settings screen uses Pi's `SettingsList`. Only the reload-requiring shortcut action is blocked while context is queued; the hidden-file preference still applies immediately. Dedicated aliases keep their existing settings routes. A successful shortcut save remains saved if automatic reload fails; repair the reload problem and run `/reload` manually.
+The common Settings screen still blocks only the reload-requiring shortcut action while context is queued; the hidden-file preference applies immediately. A successful shortcut save remains saved if automatic reload fails; repair the reload problem and run `/reload` manually.
+
+Historical version-1 notices can still mention `/scope`; those bytes are not live instructions. Pi Files does not rewrite them. Live active and blocked notices use version 2 and point to `/files` and `/files off`. When a retained version-1 notice is still current for an active or blocked restriction, Pi Files appends one version-2 correction at the conversation tail, leaving the earlier notice in place. An unchanged inactive notice needs no correction. See [model notice compatibility](edit-scope-reference.md#session-and-model-contract-compatibility).
 
 ## Verify the transition
 
-1. Confirm that only the successor owns these commands and the combined status widget. There must be no predecessor resource left loaded, even if no duplicate is visible.
-2. Open `/files`, `/file-context`, `/edit-scope`, and `/scope` in TUI mode. Check the common manager and both dedicated workflows without changing the allowed set. Review Status for the same branch and full targets recorded before migration.
+1. Inspect the command list (for example, RPC `get_commands` in an isolated load) and confirm that Pi Files registers only `files`. Do not submit removed names. Confirm no predecessor resource remains loaded, even if no duplicate is visible.
+2. Open `/files` in TUI mode. Check browsing, context review, and **Manage edit scope** without changing the allowed set. Review Status for the same branch and full targets recorded before migration.
 3. Confirm a restored active restriction still rejects unselected writes and unsupported tools. A blocked restriction must remain blocked; repair targets through scope management or explicitly end it only if that is the intended user action.
 4. Queue a disposable snapshot and confirm this does not authorize its path. Review or remove it without changing scope. Confirm applying or ending scope does not consume context.
 5. Check the two unchanged settings paths. Do not expect old queued snapshots to reappear after reload. Check current automated and manual evidence in [verification](verification.md).
@@ -98,8 +110,10 @@ Scope cancellation and run completion do not end restrictions. The explorer and 
 
 ## Rollback and recovery
 
-Stop the run before rollback. Submit or remove queued context if needed, record the loaded sources, remove or disable Pi Files, restore the predecessor resources together, and reload **without co-loading guards**. Build predecessor resources if their package entrypoints require it. Restore the coherent repository layout and root manifest together through Git recovery when rolling back a checkout.
+Stop the run, submit or remove queued context if needed, and record the loaded sources, branch state, and full allowed target set. To roll back only the command change, load one previous built Pi Files revision instead of the current revision. Confirm the old routes are listed by that runtime and use a copied session to confirm that the same version-1 scope snapshot restores, including whether scope was active or blocked. The older runtime may not understand version-2 notices or anchors. Check that it publishes its own current notice when needed; exact model-visible placement of newer notices is not guaranteed after downgrade.
 
-Retained settings basenames, version-1 scope entries, original entry IDs, and historical notice bytes permit predecessor restoration without rewriting the session. Use copied sessions to verify forward and reverse recovery. Do not delete state, change IDs, or discard anchors to recover unrestricted access. A failed or uncertain scope publication stays blocked until the user repairs the target set or explicitly ends the restriction. If restoration differs from the recorded branch state, stop guarded work and inspect recovery rather than bypassing it.
+To roll back the original package merge instead, remove or disable Pi Files and restore both predecessor resources before reload. Build them if their entrypoints require it. When rolling back a checkout, restore the coherent repository layout and root manifest together through Git recovery. **Never co-load current and previous revision guards or Pi Files and its predecessors.**
 
-Registry unpublication, visibility changes, npm deprecation, tags, releases, and release workflow dispatch are not rollback steps authorized by this merge.
+Keep both settings files and the original session entries intact. Do not delete state, change IDs, discard anchors, or end a restriction as a recovery shortcut. A failed or uncertain state stays blocked until the user repairs the target set or explicitly ends the restriction. If restoration differs from the recorded branch state, stop guarded editing and inspect recovery rather than bypassing it.
+
+Registry unpublication, visibility changes, npm deprecation, tags, releases, and release workflow dispatch are not rollback steps.

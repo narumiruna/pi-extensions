@@ -6,7 +6,7 @@ import { publishFilesWidget } from "./files-widget.js";
 import { registerScope, type ScopeOptions, type ScopeView } from "./scope/edit-scope.js";
 
 interface Flow {
-  kind: "context" | "scope" | "manager";
+  kind: "browse" | "manager";
   controller: AbortController;
   promise: Promise<void>;
 }
@@ -44,12 +44,8 @@ export async function registerFiles(pi: ExtensionAPI, options: FilesOptions = {}
     const key = ctx.sessionManager;
     const previous = flows.get(key);
     if (previous) {
-      if (kind === "context" && previous.kind === kind) return previous.promise;
-      throw new Error(
-        kind === "scope" && previous.kind === "scope"
-          ? "A Scope menu is already open; close it before issuing another Scope command"
-          : "A Files menu is already open; close it before opening another file flow",
-      );
+      if (kind === "browse" && previous.kind === kind) return previous.promise;
+      throw new Error("A Files menu is already open; close it before opening another file flow");
     }
     const flow: Flow = { kind, controller: new AbortController(), promise: Promise.resolve() };
     const signal = AbortSignal.any([flow.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]);
@@ -85,29 +81,15 @@ export async function registerFiles(pi: ExtensionAPI, options: FilesOptions = {}
 
   const serviceAPI: ExtensionAPI = {
     ...pi,
-    registerCommand(name, command) {
-      pi.registerCommand(name, {
-        ...command,
-        handler: (args, ctx) => {
-          const route = name === "file-context" ? args.trim().toLowerCase() : args.trim();
-          const valid =
-            name === "file-context" ? ["", "browse", "remove"].includes(route) : ["", "off"].includes(route);
-          if (!valid || ctx.mode !== "tui") return command.handler(args, ctx);
-          return runFlow(ctx, name === "file-context" ? "context" : "scope", (scoped) =>
-            command.handler(args, scoped as ExtensionCommandContext),
-          );
-        },
-      });
-    },
     registerShortcut(key, shortcut) {
       pi.registerShortcut(key, {
         ...shortcut,
-        handler: (ctx) => runFlow(ctx, "context", (scoped) => shortcut.handler(scoped)),
+        handler: (ctx) => runFlow(ctx, "browse", shortcut.handler),
       });
     },
   };
   // Enforcement is registered before the first settings await and stays eager.
-  const scope = registerScope(serviceAPI, {
+  const scope = registerScope(pi, {
     ...options.scope,
     onChange: (ctx, state) => {
       display(ctx).scope = state;
@@ -133,7 +115,7 @@ export async function registerFiles(pi: ExtensionAPI, options: FilesOptions = {}
       const route = args.trim();
       if (route !== "" && route !== "browse" && route !== "off") throw new Error("Usage: /files [browse|off]");
       if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("/files requires Pi TUI mode");
-      await runFlow(ctx, route === "browse" ? "context" : "manager", async (scoped) => {
+      await runFlow(ctx, route === "browse" ? "browse" : "manager", async (scoped) => {
         if (route === "browse") return context.browse(scoped);
         const commandCtx = scoped as ExtensionCommandContext;
         if (route === "off") {
