@@ -417,6 +417,72 @@ test.each(["unchanged", "matching edit", "matching deletion"] as const)(
     }),
 );
 
+test.each(["unchanged", "growth before write", "new file before delete"] as const)(
+  "size-limited apply-only recovery checks selected local context: %s",
+  (change) =>
+    fixture(async ({ root, config, ctx, load }) => {
+      const state = await baseline(config);
+      const keep = file("d/keep.bin", Buffer.alloc(128 * 1024));
+      const incoming = Buffer.alloc(768 * 1024);
+      const removed = file("old.txt", "reviewed removal");
+      const directory = path.join(root, "d");
+      const old = path.join(root, removed.path);
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(root, keep.path), Buffer.alloc(128 * 1024));
+      if (change === "new file before delete") await fs.writeFile(old, "reviewed removal");
+      const before = snapshot(config, "baseline", change === "new file before delete" ? [keep, removed] : [keep]);
+      const after = snapshot(config, "candidate", [keep, file("d/incoming.bin", incoming)]);
+      const remote = backendFixture(after);
+      const head = remote.head();
+      const backup = path.join(path.dirname(statePathForConfig(config)), "backup-evidence");
+      await fs.writeFile(backup, "kept backup");
+      await writeMergeJournal(config, {
+        ...mergeJournalPolicy(config),
+        identity: mergeJournalIdentity(config, "memory"),
+        before,
+        after,
+        upload: after,
+        accepted: after,
+        expectedHead: head,
+        committedHead: head,
+        applyOnly: true,
+        backup,
+        stateIdentity: syncStateFingerprint(state),
+        sessionRoot: path.join(root, "sessions"),
+      });
+      const journalPath = mergeJournalPath(config);
+      const recorded = await fs.readFile(journalPath);
+      load.mockResolvedValue({ ...config, maxDirectorySizeMiB: 1 });
+      const run = () => mergeSync(ctx, options, remote.factory);
+      const target = path.join(directory, "incoming.bin");
+      if (change === "unchanged") {
+        assert.equal(await run(), "applied");
+        assert.ok((await fs.readFile(target)).equals(incoming));
+        assert.equal(await readMergeJournal(config), undefined);
+      } else {
+        let changed = false;
+        const edited = change === "growth before write" ? path.join(root, keep.path) : path.join(directory, "new.bin");
+        host(root, async (_target, action) => {
+          if (!changed) {
+            changed = true;
+            await fs.writeFile(edited, Buffer.alloc(512 * 1024));
+          }
+          return action();
+        });
+        await assert.rejects(run(), /size-limited local apply image: local files changed/u);
+        assert.equal(changed, true);
+        assert.equal((await fs.stat(edited)).size, 512 * 1024);
+        await assert.rejects(fs.stat(target), { code: "ENOENT" });
+        if (change === "new file before delete") assert.equal(await fs.readFile(old, "utf8"), "reviewed removal");
+        assert.deepEqual(await fs.readFile(journalPath), recorded);
+        assert.deepEqual(await readStateForConfig(config), state);
+      }
+      assert.equal(await fs.readFile(backup, "utf8"), "kept backup");
+      assert.deepEqual(remote.head(), head);
+      assert.equal(remote.publishSnapshot.mock.calls.length, 0);
+    }),
+);
+
 const foreground = { ...options, auto: false, yes: false, silent: false };
 
 async function interruptBeforeCommit(root: string, config: AnySyncConfig, ctx: EngineContext) {

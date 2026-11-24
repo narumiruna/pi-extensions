@@ -926,7 +926,8 @@ async function completeJournal(
     throw new Error(
       "Pending merge has unavailable remote selection metadata; preserve its journal and backup for review.",
     );
-  if (journal.applyOnly && transferSizeLimitsEnabled(config)) {
+  const requireReviewedApplyImage = journal.applyOnly && transferSizeLimitsEnabled(config);
+  if (requireReviewedApplyImage) {
     const selected = journal.accepted ?? portableSnapshot(journal.after, config.localFields);
     const details = transferSizeDetails(config, [{ side: "Local", files: selected.files }]);
     if (details) {
@@ -955,7 +956,7 @@ async function completeJournal(
       journal.before,
       journal.after,
       protectedPaths,
-      { ...snapshotOptions, validateMutation: validateApply, validateApplyReview },
+      { ...snapshotOptions, validateMutation: validateApply, validateApplyReview, requireReviewedApplyImage },
       validate,
       ctx.sessionManager.getSessionFile?.(),
     ),
