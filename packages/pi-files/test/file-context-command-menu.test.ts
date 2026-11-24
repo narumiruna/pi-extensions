@@ -2,291 +2,151 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { registerFileContext } from "../src/context-service.js";
+import type { ContextOptions } from "../src/context-service.js";
+import { registerFiles } from "../src/files.js";
 
-async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), "pi-file-context-menu-command-test-"));
+initTheme("dark", false);
+
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+
+async function createFixture(root: string, discoverFiles: ContextOptions["discoverFiles"]) {
+  const mock = createMockPi();
+  await registerFiles(mock.pi, {
+    context: {
+      settingsPath: join(root, "pi-file-context.json"),
+      loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
+      discoverFiles,
+      createGit: async () => undefined,
+    },
+  });
+  const tui = createTuiHarness({ width: 64, rows: 18 });
+  const base = createMockContext({ mode: "tui", cwd: root, custom: tui.custom });
+  const emit = async (type: string) => {
+    for (const hook of mock.events.get(type) ?? []) await hook({ type }, base.ctx);
+  };
+  const command = mock.commands.get("files");
+  const shortcut = mock.shortcuts.get("f8");
+  assert.ok(command);
+  assert.ok(shortcut);
+  await emit("session_start");
+  return {
+    ...base,
+    tui,
+    files: (args: string) => Promise.resolve(command.handler(args, base.ctx)),
+    shortcut: () => Promise.resolve(shortcut.handler(base.ctx)),
+    close: async () => {
+      await emit("session_shutdown");
+      tui.dispose();
+    },
+  };
+}
+
+async function withFixture(discoverFiles: ContextOptions["discoverFiles"], run: (f: Fixture) => Promise<void>) {
+  const root = await mkdtemp(join(tmpdir(), "pi-files-browser-test-"));
+  let f: Fixture | undefined;
   try {
     await writeFile(join(root, "example.ts"), "export const example = true;\n");
-    await run(root);
+    f = await createFixture(root, discoverFiles);
+    await run(f);
   } finally {
+    await f?.close();
     await rm(root, { recursive: true, force: true });
   }
 }
 
-async function waitForNextOpen(tui: ReturnType<typeof createTuiHarness>, previousCount: number): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (tui.openCount > previousCount && tui.isOpen) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error("Timed out waiting for the next File Context screen");
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
-test("makes the no-argument command a menu and advertises compatibility routes", async () => {
-  await withTempProject(async (root) => {
-    const mock = createMockPi();
-    await registerFileContext(mock.pi, {
-      loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
-    });
-    const command = mock.commands.get("file-context");
-    assert.ok(command?.getArgumentCompletions);
-    assert.deepEqual(
-      (command.getArgumentCompletions("") as Array<{ value: string }>).map(({ value }) => value),
-      ["browse", "remove"],
-    );
-    assert.deepEqual(
-      (command.getArgumentCompletions("br") as Array<{ value: string }>).map(({ value }) => value),
-      ["browse"],
-    );
-
-    const tui = createTuiHarness({ width: 40, rows: 12 });
-    const base = createMockContext({ mode: "tui", hasUI: true, cwd: root });
-    const baseCtx = base.ctx as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
-    const context = {
-      ...base,
-      ctx: {
-        ...baseCtx,
-        ui: { ...baseCtx.ui, custom: tui.custom },
-      } as never,
-    };
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-    const running = Promise.resolve(command?.handler("", context.ctx));
-    await tui.waitForOpen();
-    const frame = tui.render().join("\n");
-    assert.match(frame, /File Context/u);
-    assert.match(frame, /Add context snippet/u);
-    assert.match(frame, /Review selected context \(0\)/u);
-    tui.press("tui.select.down");
-    tui.press("tui.select.down");
-    const laterRows = tui.render().join("\n");
-    assert.match(laterRows, /Settings/u);
-    tui.press("tui.select.down");
-    assert.match(tui.render().join("\n"), /→ Status/u);
-    tui.press("ctrl+c");
-    await running;
-  });
-});
-
-test("saves shortcut settings and reloads instead of mutating stale TUI bindings", async () => {
-  await withTempProject(async (root) => {
-    const mock = createMockPi();
-    let storedShortcut: "ctrl+shift+x" | "ctrl+y" | null = "ctrl+shift+x";
-    const saved: Array<string | null> = [];
-    let reloadCalls = 0;
-    await registerFileContext(mock.pi, {
-      settingsPath: join(root, "pi-file-context.json"),
-      loadSettings: async () => ({ settings: { openShortcut: storedShortcut } }),
-      updateSettings: async (shortcut, options) => {
-        assert.equal(options?.settingsPath, join(root, "pi-file-context.json"));
-        assert.equal(options?.signal?.aborted, false);
-        storedShortcut = shortcut as typeof storedShortcut;
-        saved.push(shortcut);
-        return { openShortcut: shortcut };
+test.each(["browse", "shortcut"] as const)(
+  "opens the same lazy browser and pastes a reference via %s",
+  async (route) => {
+    const entered = deferred<void>();
+    const scan = deferred<string[]>();
+    await withFixture(
+      () => {
+        entered.resolve();
+        return scan.promise;
       },
-    });
-    assert.equal(mock.shortcuts.get("ctrl+shift+x")?.description, "Open File Context");
-
-    const tui = createTuiHarness({ width: 52, rows: 16 });
-    const base = createMockContext({
-      mode: "tui",
-      hasUI: true,
-      cwd: root,
-      async reload() {
-        reloadCalls += 1;
+      async (f) => {
+        const running = route === "browse" ? f.files("browse") : f.shortcut();
+        await entered.promise;
+        try {
+          await f.tui.waitForOpen();
+          assert.match(f.tui.render().join("\n"), /Scanning project files/u);
+          const scanClosed = f.tui.resultPromise;
+          scan.resolve(["example.ts"]);
+          await scanClosed;
+          await f.tui.waitForOpen();
+          assert.match(f.tui.render().join("\n"), /File Context · files/u);
+          f.tui.send("\t");
+          await running;
+          assert.deepEqual(f.pastedEditorTexts, ["@example.ts "]);
+        } finally {
+          scan.resolve([]);
+        }
       },
-    });
-    const baseCtx = base.ctx as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
-    const ctx = {
-      ...baseCtx,
-      ui: { ...baseCtx.ui, custom: tui.custom },
-    } as never;
-    await mock.events.get("session_start")?.[0]?.({}, ctx);
+    );
+  },
+);
 
-    const running = Promise.resolve(mock.commands.get("file-context")?.handler("", ctx));
-    await tui.waitForOpen();
-    tui.press("tui.select.down");
-    tui.press("tui.select.down");
-    tui.press("tui.select.confirm");
-    await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /Open shortcut\s+ctrl\+shift\+x/u);
-    tui.press("tui.select.confirm");
-    await tui.waitForPending();
-    await tui.waitForOpen();
-    tui.type("ctrl+y");
-    tui.press("tui.input.submit");
-    await tui.waitForPending();
-    await running;
-
-    assert.deepEqual(saved, ["ctrl+y"]);
-    assert.equal(reloadCalls, 1);
-    assert.equal(mock.shortcuts.get("ctrl+shift+x")?.description, "Open File Context");
-    assert.equal(mock.shortcuts.has("ctrl+y"), false);
-    await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
-  });
-});
-
-test("keeps direct routes while showing the same cancellable scan before browsing", async () => {
-  for (const route of ["browse", "shortcut"] as const) {
-    await withTempProject(async (root) => {
-      const mock = createMockPi();
-      let resolveScan: ((files: string[]) => void) | undefined;
-      await registerFileContext(mock.pi, {
-        loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
-        discoverFiles: async () =>
-          new Promise<string[]>((resolve) => {
-            resolveScan = resolve;
-          }),
-        createGit: async () => undefined,
-      });
-      const pasted: string[] = [];
-      const tui = createTuiHarness({
-        width: 40,
-        rows: 12,
-        keybindings: {
-          matches(data: string, binding: string) {
-            return data === "\t" && binding === "tui.input.tab";
-          },
-          getKeys() {
-            return [];
-          },
-        } as never,
-      });
-      const base = createMockContext({ mode: "tui", hasUI: true, cwd: root });
-      const baseCtx = base.ctx as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
-      const ctx = {
-        ...baseCtx,
-        ui: {
-          ...baseCtx.ui,
-          custom: tui.custom,
-          pasteToEditor(value: string) {
-            pasted.push(value);
-          },
-        },
-      } as never;
-      await mock.events.get("session_start")?.[0]?.({}, ctx);
-      const running = Promise.resolve(
-        route === "browse"
-          ? mock.commands.get("file-context")?.handler("browse", ctx)
-          : mock.shortcuts.get("f8")?.handler(ctx),
-      );
-      await tui.waitForOpen();
-      assert.match(tui.render().join("\n"), /Scanning project files/u);
-      const scanOpenCount = tui.openCount;
-      resolveScan?.(["example.ts"]);
-      await waitForNextOpen(tui, scanOpenCount);
-      assert.match(tui.render().join("\n"), /File Context · files/u);
-      tui.send("\t");
-      await running;
-      assert.deepEqual(pasted, ["@example.ts "]);
-    });
-  }
-});
-
-test("cancels direct-route scanning without opening a stale explorer", async () => {
-  await withTempProject(async (root) => {
-    const mock = createMockPi();
-    let scanSignal: AbortSignal | undefined;
-    await registerFileContext(mock.pi, {
-      loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
-      discoverFiles: async (_root, { signal } = {}) => {
-        scanSignal = signal;
-        return new Promise<string[]>((_resolve, reject) => {
+test.each(["cancel", "failure"] as const)("releases a scan after %s so Files can retry", async (outcome) => {
+  const entered = deferred<void>();
+  const result = deferred<Error>();
+  let scanSignal: AbortSignal | undefined;
+  let scans = 0;
+  await withFixture(
+    async (_root, { signal } = {}) => {
+      if (++scans > 1) return ["example.ts"];
+      scanSignal = signal;
+      entered.resolve();
+      throw await Promise.race([
+        result.promise,
+        new Promise((_, reject) => {
           signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
-      },
-      createGit: async () => undefined,
-    });
-    const tui = createTuiHarness({ width: 40, rows: 12 });
-    const base = createMockContext({ mode: "tui", hasUI: true, cwd: root });
-    const baseCtx = base.ctx as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
-    const ctx = {
-      ...baseCtx,
-      ui: { ...baseCtx.ui, custom: tui.custom },
-    } as never;
-    await mock.events.get("session_start")?.[0]?.({}, ctx);
-    const running = Promise.resolve(mock.shortcuts.get("f8")?.handler(ctx));
-    await tui.waitForOpen();
-    assert.match(tui.render().join("\n"), /Scanning project files/u);
-    tui.press("tui.select.cancel");
-    await running;
-    assert.equal(scanSignal?.aborted, true);
-    assert.equal(tui.openCount, 1);
-  });
-});
-
-test("reports project scanning failures and returns to a retryable menu", async () => {
-  await withTempProject(async (root) => {
-    const mock = createMockPi();
-    let rejectScan: ((error: Error) => void) | undefined;
-    await registerFileContext(mock.pi, {
-      loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
-      discoverFiles: async () =>
-        new Promise<string[]>((_resolve, reject) => {
-          rejectScan = reject;
         }),
-    });
-    const tui = createTuiHarness({ width: 40, rows: 12 });
-    const base = createMockContext({ mode: "tui", hasUI: true, cwd: root });
-    const baseCtx = base.ctx as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
-    const ctx = {
-      ...baseCtx,
-      ui: { ...baseCtx.ui, custom: tui.custom },
-    } as never;
-    await mock.events.get("session_start")?.[0]?.({}, ctx);
-    const running = Promise.resolve(mock.commands.get("file-context")?.handler("", ctx));
-    await tui.waitForOpen();
-    const menuOpenCount = tui.openCount;
-    tui.press("tui.select.confirm");
-    await tui.waitForPending();
-    await waitForNextOpen(tui, menuOpenCount);
-    const scanOpenCount = tui.openCount;
-    rejectScan?.(new Error("scan \u001b[31mfailed"));
-    await waitForNextOpen(tui, scanOpenCount);
-    assert.match(tui.render().join("\n"), /Add context snippet/u);
-    assert.ok(!(base.notifications.at(-1)?.message ?? "").includes("\u001b"));
-    assert.match(base.notifications.at(-1)?.message ?? "", /could not scan.*retry/iu);
-    tui.press("ctrl+c");
-    await running;
-  });
-});
+      ]);
+    },
+    async (f) => {
+      const running = f.files("");
+      await f.tui.waitForOpen();
+      assert.match(f.tui.render().join("\n"), /→ Browse files/u);
+      const managerClosed = f.tui.resultPromise;
+      f.tui.press("tui.select.confirm");
+      await managerClosed;
+      await entered.promise;
+      await f.tui.waitForOpen();
+      assert.match(f.tui.render().join("\n"), /Scanning project files/u);
+      if (outcome === "cancel") f.tui.press("tui.select.cancel");
+      else result.resolve(new Error("scan \u001b[31mfailed"));
+      await running;
+      assert.equal(f.tui.openCount, 2, "a cancelled or failed scan must not mount an explorer");
+      assert.equal(f.tui.isOpen, false);
+      if (outcome === "cancel") assert.equal(scanSignal?.aborted, true);
+      else {
+        const notice = f.notifications.at(-1)?.message ?? "";
+        assert.ok(!notice.includes("\u001b"));
+        assert.match(notice, /could not scan.*\/files browse to retry/iu);
+      }
 
-test("shows cancellable project scanning before Add and returns to the menu on cancellation", async () => {
-  await withTempProject(async (root) => {
-    const mock = createMockPi();
-    let scanSignal: AbortSignal | undefined;
-    await registerFileContext(mock.pi, {
-      loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
-      discoverFiles: async (_root, { signal } = {}) => {
-        scanSignal = signal;
-        return new Promise<string[]>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
-      },
-    });
-    const tui = createTuiHarness({ width: 40, rows: 12 });
-    const base = createMockContext({ mode: "tui", hasUI: true, cwd: root });
-    const baseCtx = base.ctx as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
-    const ctx = {
-      ...baseCtx,
-      ui: { ...baseCtx.ui, custom: tui.custom },
-    } as never;
-    await mock.events.get("session_start")?.[0]?.({}, ctx);
-    const running = Promise.resolve(mock.commands.get("file-context")?.handler("", ctx));
-    await tui.waitForOpen();
-    const menuOpenCount = tui.openCount;
-    tui.press("tui.select.confirm");
-    await tui.waitForPending();
-    await waitForNextOpen(tui, menuOpenCount);
-    assert.match(tui.render().join("\n"), /Scanning project files/u);
-    const scanOpenCount = tui.openCount;
-    tui.press("tui.select.cancel");
-    await waitForNextOpen(tui, scanOpenCount);
-    assert.equal(scanSignal?.aborted, true);
-    assert.match(tui.render().join("\n"), /Add context snippet/u);
-    tui.press("ctrl+c");
-    await running;
-  });
+      const retry = f.files("browse");
+      await f.tui.waitForOpen();
+      if (f.tui.render().join("\n").includes("Scanning project files")) {
+        await f.tui.resultPromise;
+        await f.tui.waitForOpen();
+      }
+      assert.match(f.tui.render().join("\n"), /File Context · files/u);
+      f.tui.press("ctrl+c");
+      await retry;
+      assert.equal(scans, 2);
+    },
+  );
 });

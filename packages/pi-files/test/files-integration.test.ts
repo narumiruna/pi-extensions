@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterAll, afterEach, expect, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -70,9 +71,33 @@ async function fixture() {
     }
     return result;
   };
-  const command = async (name: string, args = "", context = ctx) => mock.commands.get(name)?.handler(args, context);
+  const command = async (args = "", context = ctx) => {
+    const registered = mock.commands.get("files");
+    if (!registered) throw new Error("Missing /files");
+    return registered.handler(args, context);
+  };
+  const shortcut = async () => {
+    const registered = mock.shortcuts.get("f8");
+    if (!registered) throw new Error("Missing browser shortcut");
+    return registered.handler(ctx);
+  };
   const close = async () => {
-    await emit("session_shutdown");
+    try {
+      await emit("session_shutdown");
+    } finally {
+      tui.dispose();
+    }
+  };
+  const scope = async (action: typeof next) => {
+    next = action;
+    try {
+      const running = command();
+      await waitText(tui, "Manage edit scope");
+      select(tui, "Manage edit scope");
+      await running;
+    } finally {
+      next = async () => {};
+    }
   };
   pending.push(close);
   await emit("session_start");
@@ -88,12 +113,9 @@ async function fixture() {
     ctx,
     emit,
     command,
+    shortcut,
     close,
-    apply: async () => {
-      next = (options) => options.apply([target]);
-      await command("scope");
-      next = async () => {};
-    },
+    apply: () => scope((options) => options.apply([target])),
   };
 }
 async function waitText(tui: ReturnType<typeof createTuiHarness>, text: string) {
@@ -103,8 +125,15 @@ async function waitText(tui: ReturnType<typeof createTuiHarness>, text: string) 
   }
   throw new Error(`Screen did not show ${text}`);
 }
+function select(tui: ReturnType<typeof createTuiHarness>, label: string) {
+  for (let index = 0; index < 6 && !tui.render().join("\n").includes(`→ ${label}`); index++)
+    tui.press("tui.select.down");
+  expect(tui.render().join("\n")).toContain(`→ ${label}`);
+  tui.press("tui.select.confirm");
+}
+
 async function quote(f: Awaited<ReturnType<typeof fixture>>) {
-  const running = f.command("files", "browse");
+  const running = f.command(" browse ");
   await waitText(f.tui, "File Context · files");
   f.tui.press("tui.select.confirm");
   await waitText(f.tui, "Enter add");
@@ -116,7 +145,9 @@ const gate = (f: Awaited<ReturnType<typeof fixture>>, path: string) =>
 
 test("registers one command surface and keeps context attachment separate from scope", async () => {
   const f = await fixture();
-  expect([...f.mock.commands.keys()].sort()).toEqual(["edit-scope", "file-context", "files", "scope"]);
+  expect([...f.mock.commands.keys()]).toEqual(["files"]);
+  for (const legacy of ["file-context", "file-quote", "edit-scope", "scope"])
+    expect(f.mock.commands.has(legacy)).toBe(false);
   await quote(f);
   expect(f.manager.getBranch().some((entry) => entry.type === "custom" && entry.customType === STATE_TYPE)).toBe(false);
   await f.apply();
@@ -152,7 +183,7 @@ test("keeps Files collapsed across summary and branch updates, with manager keyb
   expect(component.render(120)).toHaveLength(1);
   expect(await gate(f, f.other)).toMatchObject({ block: true });
 
-  const running = f.command("files");
+  const running = f.command();
   await waitText(f.tui, "Manage edit scope");
   component.dispose?.();
   component = createPendingWidget(f.base.widgets.get("files"));
@@ -194,7 +225,7 @@ test("off preserves queued snapshots; tree restoration changes scope only", asyn
   const f = await fixture();
   await quote(f);
   await f.apply();
-  await f.command("files", "off");
+  await f.command(" off ");
   expect(await gate(f, f.other)).toBeUndefined();
   expect(createPendingWidget(f.base.widgets.get("files")).render(120).join("\n")).toContain(
     "Next prompt context · 1 snippet",
@@ -205,38 +236,128 @@ test("off preserves queued snapshots; tree restoration changes scope only", asyn
   expect(JSON.stringify(await f.emit("before_agent_start", { messageType: "user" }))).toContain("exact snapshot");
 });
 
-test("serializes manager/legacy/shortcut flows and cancels without ending scope", async () => {
+test("serializes manager, browser, and shortcut flows and cancels without ending scope", async () => {
   const f = await fixture();
   await f.apply();
-  const running = f.command("files");
+  const running = f.command();
   await waitText(f.tui, "Manage edit scope");
-  await expect(f.command("scope", "off")).rejects.toThrow("Files menu is already open");
-  await expect(f.command("files", "browse")).rejects.toThrow("Files menu is already open");
-  await expect(f.command("file-context", "invalid extra")).resolves.toBeUndefined();
-  expect(f.base.notifications.at(-1)?.message).toContain("Usage:");
+  for (const args of ["", "off", "browse"]) await expect(f.command(args)).rejects.toThrow("Files menu is already open");
+  await expect(f.shortcut()).rejects.toThrow("Files menu is already open");
+  await expect(f.command("invalid extra")).rejects.toThrow("Usage: /files [browse|off]");
   f.tui.press("ctrl+c");
   await running;
+
+  const browsing = f.shortcut();
+  await waitText(f.tui, "File Context · files");
+  const openCount = f.tui.openCount;
+  const joined = [f.shortcut(), f.command("browse")];
+  for (const args of ["", "off"]) await expect(f.command(args)).rejects.toThrow("Files menu is already open");
+  expect(f.tui.openCount).toBe(openCount);
+  f.tui.press("ctrl+c");
+  await Promise.all([browsing, ...joined]);
+  expect(f.tui.isOpen).toBe(false);
   expect(await gate(f, f.other)).toMatchObject({ block: true });
-  await f.command("files", "off");
+  await f.command("off");
   expect(await gate(f, f.other)).toBeUndefined();
 });
 
-test.each(["rpc", "print", "json"])("rejects files UI in %s before opening a screen", async (mode) => {
+test.each(["isIdle", "hasPendingMessages"] as const)(
+  "preserves scope permission-change checks for %s through /files",
+  async (check) => {
+    const f = await fixture();
+    await f.apply();
+    f.ctx[check] = () => check === "hasPendingMessages";
+    await expect(f.command("off")).rejects.toThrow("Stop the current run");
+    const running = f.command();
+    const rejected = expect(running).rejects.toThrow("Stop the current run");
+    await waitText(f.tui, "Manage edit scope");
+    select(f.tui, "Manage edit scope");
+    await rejected;
+    expect(f.tui.openCount).toBe(2); // Only Files opened for apply and for the rejected selection.
+    expect(await gate(f, f.other)).toMatchObject({ block: true });
+  },
+);
+
+test("tree navigation cancels an open review and leaves queued snapshots available", async () => {
   const f = await fixture();
-  const ctx = createMockContext({ mode, cwd: f.directory, sessionManager: f.manager })
+  await quote(f);
+  await f.apply();
+  const running = f.command();
+  await waitText(f.tui, "Manage edit scope");
+  select(f.tui, "Review queued context");
+  await waitText(f.tui, "Selected context");
+  f.tui.press("tui.select.confirm");
+  await waitText(f.tui, "Remove from next prompt");
+  await f.emit("session_tree");
+  await running;
+  expect(f.tui.isOpen).toBe(false);
+  expect(await gate(f, f.other)).toMatchObject({ block: true });
+  expect(JSON.stringify(await f.emit("before_agent_start", { messageType: "user" }))).toContain("exact snapshot");
+});
+
+test.each(["rpc", "print", "json", "tui"])("rejects files UI without an interactive TUI (%s)", async (mode) => {
+  const f = await fixture();
+  const ctx = createMockContext({ mode, hasUI: mode === "rpc", cwd: f.directory, sessionManager: f.manager })
     .ctx as unknown as ExtensionCommandContext;
-  for (const args of ["", "browse", "off"])
-    await expect(f.command("files", args, ctx)).rejects.toThrow("requires Pi TUI mode");
+  ctx.ui.custom = f.tui.custom;
+  for (const args of ["", "browse", "off"]) await expect(f.command(args, ctx)).rejects.toThrow("requires Pi TUI mode");
+  await expect(f.command("browse trailing", ctx)).rejects.toThrow("Usage: /files [browse|off]");
   expect(f.tui.openCount).toBe(0);
 });
 
 test("rejects unknown files arguments and supplies only known completions", async () => {
   const f = await fixture();
-  for (const args of ["help", "browse extra", "off extra", "OFF"])
-    await expect(f.command("files", args)).rejects.toThrow("Usage:");
-  expect(f.mock.commands.get("files")?.getArgumentCompletions?.("b")).toEqual([
-    { value: "browse", label: "browse", description: "Open the context browser" },
-  ]);
+  for (const args of ["help", "remove", "browse extra", "off extra", "OFF", "BROWSE"])
+    await expect(f.command(args)).rejects.toThrow("Usage: /files [browse|off]");
+  expect(f.tui.openCount).toBe(0);
+  const complete = f.mock.commands.get("files")?.getArgumentCompletions;
+  const browse = { value: "browse", label: "browse", description: "Open the context browser" };
+  const off = { value: "off", label: "off", description: "End the editing restriction" };
+  expect(complete?.("")).toEqual([browse, off]);
+  expect(complete?.("br")).toEqual([browse]);
+  expect(complete?.("o")).toEqual([off]);
+  for (const prefix of ["remove", "off extra", "browse ", "OFF"]) expect(complete?.(prefix)).toEqual([]);
+});
+
+test("shows current state, Status, and Help without changing scope or queued context", async () => {
+  const f = await fixture();
+  const empty = f.command();
+  await waitText(f.tui, "Manage edit scope");
+  expect(f.tui.render().join("\n")).toMatch(/\[-\].*Review queued context \(0\)/u);
+  for (const [width, rows] of [
+    [20, 6],
+    [40, 12],
+    [90, 22],
+  ]) {
+    expect(f.tui.resize({ width, rows }).every((line) => visibleWidth(line) <= width)).toBe(true);
+  }
+  f.tui.press("ctrl+c");
+  await empty;
+  await quote(f);
+  await f.apply();
+
+  const running = f.command();
+  await waitText(f.tui, "Manage edit scope");
+  expect(f.tui.render().join("\n")).toContain("Edit scope: 1 allowed files");
+  select(f.tui, "Status");
+  await waitText(f.tui, "Files Status");
+  const status = f.tui.render().join("\n");
+  expect(status).toContain("Next prompt context: 1/8 snippets");
+  expect(status).toContain("Browser shortcut: f8");
+  expect(status.replaceAll("\n", "")).toContain(f.allowed);
+  f.tui.press("tui.select.cancel");
+  await waitText(f.tui, "Manage edit scope");
+  select(f.tui, "Help");
+  await waitText(f.tui, "Files Help");
+  const help = f.tui.render().join("\n");
+  expect(help).toContain("Context snapshots attach once");
+  expect(help).not.toMatch(/\/(?:file-context|edit-scope|scope)\b/u);
+  f.tui.press("tui.select.cancel");
+  await waitText(f.tui, "Manage edit scope");
+  f.tui.press("ctrl+c");
+  await running;
+  expect(await gate(f, f.other)).toMatchObject({ block: true });
+  expect(JSON.stringify(await f.emit("before_agent_start", { messageType: "user" }))).toContain("exact snapshot");
 });
 
 test("retains scope and normalized model prefixes across quote attachment and reload", async () => {
@@ -280,29 +401,30 @@ test("isolates concurrent headless managers sharing the same no-op UI", async ()
   expect(await f.emit("tool_call", { toolName: "write", input: { path: f.other } }, a)).toMatchObject({ block: true });
 });
 
-test.each(["files", "file-context"])("shortcut reload through %s does not await its own lifecycle", async (route) => {
-  const f = await fixture();
-  await f.apply();
-  let reloads = 0;
-  f.ctx.reload = async () => {
-    reloads++;
-    await f.emit("session_shutdown");
-    await f.emit("session_start");
-  };
-  const running = f.command(route);
-  await waitText(f.tui, route === "files" ? "Manage edit scope" : "Add context snippet");
-  for (let index = 0; index < 8 && !f.tui.render().join("\n").includes("→ Settings"); index++)
-    f.tui.press("tui.select.down");
-  expect(f.tui.render().join("\n")).toContain("→ Settings");
-  f.tui.press("tui.select.confirm");
-  await waitText(f.tui, route === "files" ? "Files Settings" : "File Context Settings");
-  f.tui.press("tui.select.confirm");
-  await waitText(f.tui, route === "files" ? "Use a Pi key identifier" : "Submit an empty value");
-  f.tui.send("\u0015");
-  f.tui.type("ctrl+y");
-  f.tui.press("tui.input.submit");
-  await running;
-  expect(reloads).toBe(1);
-  expect(JSON.parse(await readFile(join(f.directory, "context.json"), "utf8"))).toEqual({ openShortcut: "ctrl+y" });
-  expect(await gate(f, f.other)).toMatchObject({ block: true });
-});
+test.each(["ctrl+y", null])(
+  "saving shortcut %s in Files Settings can reload without waiting on itself",
+  async (shortcut) => {
+    const f = await fixture();
+    await f.apply();
+    let reloads = 0;
+    f.ctx.reload = async () => {
+      reloads++;
+      await f.emit("session_shutdown");
+      await f.emit("session_start");
+    };
+    const running = f.command();
+    await waitText(f.tui, "Manage edit scope");
+    select(f.tui, "Settings");
+    await waitText(f.tui, "Files Settings");
+    f.tui.press("tui.select.confirm");
+    await waitText(f.tui, "Use a Pi key identifier");
+    f.tui.send("\u0015");
+    if (shortcut) f.tui.type(shortcut);
+    f.tui.press("tui.input.submit");
+    await running;
+    expect(reloads).toBe(1);
+    expect([...f.mock.shortcuts.keys()]).toEqual(["f8"]);
+    expect(JSON.parse(await readFile(join(f.directory, "context.json"), "utf8"))).toEqual({ openShortcut: shortcut });
+    expect(await gate(f, f.other)).toMatchObject({ block: true });
+  },
+);

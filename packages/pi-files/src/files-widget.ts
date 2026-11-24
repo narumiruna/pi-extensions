@@ -36,7 +36,7 @@ export function publishFilesWidget(
   if (quotes.length) {
     lines.push({
       role: "accent",
-      text: `Next prompt context · ${quotes.length} ${quotes.length === 1 ? "snippet" : "snippets"} · ~${Math.max(1, Math.ceil(totalBytes / 4))} tokens · /file-context to review`,
+      text: `Next prompt context · ${quotes.length} ${quotes.length === 1 ? "snippet" : "snippets"} · ~${Math.max(1, Math.ceil(totalBytes / 4))} tokens · Review queued context in /files`,
     });
     lines.push(
       ...quotes.map((quote, index) => ({

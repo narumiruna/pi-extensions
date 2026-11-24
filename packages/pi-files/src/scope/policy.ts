@@ -44,12 +44,13 @@ export function decideTool(name: string, tools: readonly ToolInfo[], scope: Scop
     return {
       kind: "block",
       reason:
-        scope.error ?? "Scope is not initialized; edits remain blocked. Use /scope to repair or /scope off to exit.",
+        scope.error ??
+        "Scope is not initialized; edits remain blocked. Use Manage edit scope in /files to repair or /files off to exit.",
     };
   }
   if (WRITERS.has(name) && isStockBuiltin(tool, name)) return { kind: "target" };
   return {
     kind: "block",
-    reason: `${JSON.stringify(name)} is blocked while Scope is active. Only stock readers and target-checked write/edit calls are supported. Shell, codemode, delegation, and opaque tools require /scope off.`,
+    reason: `${JSON.stringify(name)} is blocked while Scope is active. Only stock readers and target-checked write/edit calls are supported. Shell, codemode, delegation, and opaque tools require /files off.`,
   };
 }

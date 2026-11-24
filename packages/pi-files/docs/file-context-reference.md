@@ -4,20 +4,20 @@ Pi Files retains the File Context explorer and immutable snapshot workflow. Star
 
 ## Browser workflow
 
-1. Run `/files` and open context browsing, or use `/files browse`, `/file-context browse`, or the configured shortcut. `/file-context` keeps the dedicated context manager and its **Add context snippet** action. Every browser route starts the same cancellable project scan.
+1. Open `/files` → **Browse files**, run `/files browse`, or use the configured browser shortcut. All three start the same cancellable project scan.
 2. Use Up/Down to select an immediate child folder or file, then Enter to open it. When the search field is empty, Escape, Left, or Backspace returns to the parent folder. Type to fuzzy-search file names across discovered folders in relevance order. Tab on a file inserts a normal whole-file `@path` reference; Enter opens its quote preview.
 3. Ctrl+F switches between file-name and content search. Content search is literal and case-insensitive by default. Alt+C toggles case sensitivity; Alt+F toggles ordered fuzzy matching. The current states stay visible above results.
 4. Content results are highlighted path-and-line cards. Up/Down selects a card, Tab inserts a whole-file reference, and Enter previews the file at the matching line. Escape from preview restores the query, selected result, and scroll position.
 5. In preview, Space anchors a selection; Up/Down extends the range. Enter queues the snapshot and closes. The `a` action queues it and returns to the originating folder or results so browsing can continue. The adaptive footer shows selection, capacity, navigation, Git actions, external editing, and `?` help.
 6. Use Pi's `app.editor.external` action (default Ctrl+G) to edit the current worktree file. See [External editing](#external-editing) before use.
 7. Press `?` in preview to review actions. In a Git worktree, `[`/`]` selects changed hunks, `b` shows current-line blame, `h` opens file history, `r` opens a commit/branch/tag, and `d` reviews and adds explicit diff context. Historical previews are read-only.
-8. Open context review through `/files` or `/file-context` → **Review selected context**. Enter opens the exact snapshot before offering **Remove from next prompt**. `/file-context remove` is the compatibility review route; it does not delete files. Submit the question normally to attach queued snippets once, in order, then clear the queue.
+8. Open `/files` → **Review queued context**. Press Enter on a snapshot to inspect the exact text and access **Remove from next prompt**. Removing a snapshot does not delete the file. Submit the question normally to attach queued snippets once, in order, then clear the queue.
 
 The explorer and the scope checked-file picker are separate components. In the explorer, Tab inserts a whole-file reference; it does not check an allowed edit target. No action both queues context and authorizes editing.
 
 ## Cancellation and queue lifetime
 
-Escape returns from a preview to its originating folder or results. With an empty file-search field, Escape from a nested folder returns to its parent. A menu-opened browser returns to its menu at the root; a direct browser route cancels there. Ctrl+C closes the flow. Either cancel key stops project scanning; cancellation does not open a stale explorer.
+Escape returns from a preview to its originating folder or results. With an empty file-search field, Escape from a nested folder returns to its parent. At the root with an empty search field, Escape closes the browser. Ctrl+C closes the flow. Either cancel key stops project scanning; cancellation does not open a stale explorer.
 
 Review cancellation does not remove snapshots. Each queued snippet retains the text visible when selected; submission does not silently reread changed files. The next ordinary prompt consumes all queued snippets together. Extension-triggered custom turns do not consume them.
 
@@ -63,7 +63,7 @@ The optional user store is `<getAgentDir()>/pi-file-context.json`, normally `~/.
 
 Effective settings use defaults followed by recognized user fields. There are no project overrides or extension-specific environment variables. The retained basename is a deliberate compatibility exception; there is no `pi-files.json` or filename migration.
 
-Open `/files` → **Settings** → **Open shortcut** to save. Registration requires reload, so only this action is blocked while snippets are queued. The common settings screen remains available for the immediate hidden-file preference. The dedicated `/file-context` manager retains its original shortcut-only settings route, which is unavailable while context is queued. A successful shortcut save reloads Pi automatically. If reload fails after saving, the file stays saved; run `/reload` to apply it. Manual JSON changes also require `/reload`.
+Open `/files` → **Settings** → **Open shortcut** to save. Registration requires reload, so only this action is blocked while snippets are queued. The common settings screen remains available for the immediate hidden-file preference. A successful shortcut save reloads Pi automatically. If reload fails after saving, the file stays saved; run `/reload` to apply it. Manual JSON changes also require `/reload`.
 
 The default Ctrl+Shift+X requires Kitty keyboard protocol or modifyOtherKeys to distinguish it from Ctrl+X. Use F8 if the terminal cannot do so. Choose a key that does not conflict with Pi or another extension. Ctrl+F is the explorer's search-mode toggle; Pi reserves Ctrl+X for `app.message.copy` by default, so remap that action before assigning Ctrl+X here. The extension does not replace another extension's custom editor.
 

@@ -18,7 +18,7 @@ const quote = createFileQuoteSnapshot("example.txt", 1, 1, "example");
 const activeRows = ["Editing limited to 1 file · /files off", '"/workspace/a.ts"'];
 const blockedRows = ["Edit Scope unavailable · edits blocked · /files off", '"/workspace/a.ts"'];
 const quoteRows = [
-  "Next prompt context · 1 snippet · ~2 tokens · /file-context to review",
+  "Next prompt context · 1 snippet · ~2 tokens · Review queued context in /files",
   "1. example.txt · lines 1-1 · ~2 tokens",
 ];
 const divider = (width: number, collapsed = false) =>

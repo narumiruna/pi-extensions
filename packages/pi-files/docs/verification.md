@@ -1,8 +1,29 @@
 # Pi Files verification
 
-Pi Files has one extension factory and two independent domain services. The repository cutover replaces both predecessor entrypoints with `packages/pi-files/src/index.ts`; archived sources and tests remain under `deprecated/`. The maintainer authorized this retirement through the end-to-end implementation request. Publication and npm deprecation remain unauthorized.
+## `/files` command consolidation
 
-## Compatibility baseline
+Baseline: `f52e4cb0`. Pi Files registers only `files`, with `browse` and `off` argument completions. The browser shortcut and the context review and scope actions remain available. The [migration guide](migration.md#replace-removed-commands) maps the removed routes. Do not submit those routes in a smoke: Pi can interpret them as prompts.
+
+Use these checks for the command change. The historical results below cover only the original package merge.
+
+| Area | Verification for this change |
+| --- | --- |
+| Command and UI behavior | Review the routes and migration links. Test exact registration, completions, usage and mode errors, review/removal, scope picker/apply/off, shortcut routing, non-default keys, and retained frame/width behavior. |
+| Lifecycle and settings | Exercise cancellation, disposal, tree navigation, session replacement, reload, and shutdown. Review stale ownership after awaits and settings precedence, save ordering, publication, and recovery. Verify that only changing the shortcut is blocked by queued context. |
+| Scope and model context | Verify scope and context independence, unchanged v1 snapshots and historical notice and anchor bytes, a single tail correction for retained active or blocked v1 notices, and stable normalized prefixes on subsequent turns. Cover unchanged inactive notices, delayed publication, branch/reload, compaction, and older-runtime restoration of version-1 scope state. Do not require older runtimes to place v2 notices at the same model-visible boundary. |
+| Generated runtime | Validate exact emitted import paths and unchanged lazy boundaries. Exercise `/files` through the generated Jiti entry and production Git-install fixture. Record before/after startup samples with `npm run benchmark:extension-startup`, without a timing threshold. |
+| Repository and package | Run `uv run scripts/check_readmes.py`, `npm run check`, and separately `npm test`. Check Changesets status for a minor bump of Pi Files only. Build the workspace and inspect the tarball from `npm run package:pack -- files`. |
+| Native CLI | After rebuilding, run `node packages/pi-files/test/runtime-smoke.mjs`. It checks exact `files` registration by offline RPC `get_commands` for explicit loading and trusted discovery, no registration for denied discovery, and retained usage and TUI-mode errors in RPC, print, and JSON. It submits only `/files` forms. |
+
+Review against `docs/extension-conventions.md`, `docs/extension-settings.md`, `docs/readme-conventions.md`, and `docs/runtime-builder.md`. Report the exact tested commit and startup samples in the change handoff. Treat local timings as observations, not thresholds or provider timings.
+
+**External checks:** Physical-terminal completion, shortcut delivery, and interactive `/reload` are not verified by the offline CLI smoke or SDK tests. Repeat them on the target terminal if needed. These checks do not establish live-provider behavior or installation of the upgraded release from npm; release approval is separate.
+
+## Historical evidence: original File Context and Edit Scope merge
+
+The original merge introduced one extension factory and two independent domain services. The repository cutover replaced both predecessor entrypoints with `packages/pi-files/src/index.ts`; archived sources and tests remain under `deprecated/`. The maintainer authorized retirement, not publication or npm deprecation.
+
+### Compatibility baseline
 
 Baseline commit: `30ef6143`. Before moving sources, all 33 predecessor suites passed: 597 tests passed and one existing path test was skipped. Direct tests require canonical `TMPDIR` on macOS, as the root test runner already provides; otherwise `/var` versus `/private/var` fixture expectations differ. No production path behavior was changed to hide that fixture issue.
 
@@ -18,7 +39,7 @@ Baseline commit: `30ef6143`. Before moving sources, all 33 predecessor suites pa
 
 The source guidance to prefer direct user-owned context selection is retained in the successor's `AGENTS.md`. Existing changelogs remain in the archives. The pending predecessor breadth-first Changeset is retained in its archive's `release-notes/`; its behavior is included in the successor's release intent instead of targeting a removed workspace.
 
-## Decision branches and safety review
+### Decision branches and safety review
 
 Tool-policy tests cover inactive, active, blocked, invalid, and uninitialized state; stock readers versus same-named replacements; selected versus unselected native writers; and shell, codemode, delegation, unknown tools, and `readOnlyHint` tools. Loadout tests cover the presence or absence of a stock direct writer and active native `codemode.mode=only`. The service does not change core settings or active tool definitions to make a loadout acceptable.
 
@@ -28,7 +49,7 @@ The quote queue remains independent under ordinary/custom turns, duplicate-looki
 
 External editing remains user-controlled and outside native-tool enforcement. Project trust, contained regular worktree targets, final-symlink rejection, mutation-queue ownership, process cancellation, terminal restoration, and preview reload retain their previous checks. This is not an OS sandbox or an attestation of arbitrary SDK tool overrides. Historical revisions remain read-only.
 
-### Lifecycle and ownership
+#### Lifecycle and ownership
 
 Services own resources by `sessionManager`. Each UI flow also has a cancellation controller; only one context, scope, or manager flow is active for an owner. Repeated context openings can join their existing flow. Other overlapping openings are rejected, and invalid arguments still receive their original usage error rather than joining an unrelated operation.
 
@@ -38,19 +59,19 @@ Discovery and Git initialization promises are tracked separately, so one failure
 
 Owner keys are captured before asynchronous work. A stale settings refresh returns without reading its invalidated context; shortcut writes combine the caller and owner signals. Permission operations revalidate ownership, revision, loadout, and targets. Cancellation closes transient UI, not a persisted restriction.
 
-### Settings and terminal compatibility
+#### Settings and terminal compatibility
 
 The common screen uses Pi's native `SettingsList` and `getSettingsListTheme()`, an input submenu, and Kit's bounded frame with content-row mapping for mouse routing. The mapped frame implementation preserves the same framing rules as `renderBoundedFrame()`. Unknown fields and invalid-file protection stay in the two owning stores; queues provide in-process ordering, not a cross-process lock.
 
 Tests cover immediate hidden-file saves, queued/invalid context blocking only the shortcut, rapid action order, write failures and retry, reload failure, stale continuation, disposal, pending-write drain, input focus, paste, width/height limits, callback theme roles, terminal modes, and non-default keybindings. Host-owned disposal settles the local flow without calling Pi's `done()`, so native dialog-reset iteration and the replacement editor draft stay intact. Configured native actions retain their priority over remapped Escape; only Ctrl+C remains a hard cancel. The 63-case Settings suite includes real Pi reset methods, two dialogs, delayed writes, aliases, modifier order, legacy collisions, terminal modes, invalid bindings, and fallback selection. The explorer returns no cells for zero or unusable widths instead of forcing a one-cell frame; all seven modes have boundary regressions, and normal-width behavior is unchanged. Physical key delivery is not established by these tests.
 
-Compatibility exceptions are intentional: legacy commands keep their dedicated managers and settings routes; settings basenames and historical `/scope` notice text remain unchanged; the scope picker retains its bottom-overlay layout. The external editor does not become scope-enforced. The new combined widget uses only the `files` key, keeps the restriction and exit route separate from context summaries, and clears only its owned key.
+The original merge retained dedicated managers and settings routes for legacy commands, unchanged settings basenames and historical `/scope` notice text, and the scope picker's bottom-overlay layout. The external editor does not become scope-enforced. The new combined widget uses only the `files` key, keeps the restriction and exit route separate from context summaries, and clears only its owned key.
 
-### Model-visible context
+#### Model-visible context
 
 No tools or prompt metadata are registered, activated, removed, or rewritten by this merge. Existing scope notice bytes, entry IDs, anchors, quote serialization, and additive publication are retained. Ordinary requests preserve normalized model-visible prefixes; compaction recovery remains deterministic and deduplicated after the original contract disappears. Merged tests exercise quote attachment with active scope and restoration; predecessor contract/runtime suites retain delayed-publication, branch, compaction, and normalized-prefix cases. Package, command-menu, and widget naming changes are not model-prefix transitions.
 
-## Verification evidence
+### Verification evidence
 
 Applicable guides: `docs/extension-conventions.md`, `docs/extension-settings.md`, `docs/readme-conventions.md`, `docs/runtime-builder.md`, and the retained package guidance. Semantic review covers all touched areas above rather than treating root gates as a complete behavior audit.
 
@@ -68,7 +89,7 @@ Completed verification:
 - Changesets status passed for the successor only. A read-only successor registry query returned E404; no package was published.
 - Final semantic review covered correctness, security, lifecycle, compatibility, regressions, and scope. Review-found native-work, host-disposal, native-key priority, and project-install-directory issues were fixed with representative regressions or corrected instructions. There are no intentional model-prefix changes or unresolved implementation findings.
 
-### Startup samples
+#### Startup samples
 
 Separate-process samples used the existing startup benchmark, cold Jiti cache mode, one warm-up, and three measured runs per configuration on macOS/arm64. Values are medians, not a deterministic gate or a provider-latency claim.
 
@@ -80,15 +101,15 @@ Separate-process samples used the existing startup benchmark, cold Jiti cache mo
 
 All samples used isolated agent directories and sent only command-discovery requests. An intermediate full test run had seven process-startup/deadline failures in four unchanged suites; all 53 tests in those suites passed on a focused rerun, and the final full gate passed without concurrent build/smoke commands or timeout changes. Existing unrelated Biome schema/version informational notices remain; checks exit successfully. Physical-terminal and unavailable-platform items below remain external handoff, not passing automated results.
 
-## Retained external handoff
+### Retained external handoff
 
-### Physical terminal and unavailable platforms
+#### Physical terminal and unavailable platforms
 
 Responsible role: terminal/platform tester. Prerequisites: the built successor and the recorded deterministic/offline loading evidence. Exercise browsing, content search, exact-line review, scope apply/off, external editing, hard cancellation, reload, custom keys, paste/IME, and narrow/fullscreen layouts on the target terminal. Exercise native Windows path behavior on Windows.
 
 Expected result: usable input, focus, terminal restoration, and the documented guard boundary. Unverified until performed: physical key delivery, subjective usability, unavailable-platform behavior, and native Windows editor launch. Do not claim those environments were verified. Record any discovered defect and its release impact before making a compatibility claim; deterministic checks do not establish product acceptance.
 
-### First publication
+#### First publication
 
 Responsible role: package owner. Prerequisites: final implementation evidence, registry-name/ownership/visibility verification, and explicit publication approval. Approve and perform first publication through the repository's approved path; approve npm deprecation notices separately.
 

@@ -87,7 +87,7 @@ export async function showFilesMenu(
           "Edit scope lasts until explicitly ended and is restored from the active session branch; selecting a target never loads its content.",
           "An active restriction allows only stock readers and target-checked native write/edit. Shell, codemode, delegation, and custom tools are blocked.",
           "This is an in-process guard, not an OS sandbox. The user-controlled external editor is outside native-tool enforcement.",
-          "/file-context [browse|remove] and /edit-scope or /scope [off] keep their existing workflows.",
+          "Use /files browse or the configured shortcut to open the browser. Use /files off to end the restriction.",
           "Do not load predecessor extensions with Files. Remove or disable their user and project resources, then reload.",
           "Escape goes back. Ctrl+C closes transient UI without ending an active restriction.",
         ],
@@ -116,7 +116,7 @@ export async function showFilesMenu(
   const result = await runMenu(ctx, menu, { signal, isCurrent: current, getState: state });
   if (!current() || result.kind !== "closed") return;
   if (next === "browse") await context.browse(ctx);
-  else if (next === "review") await context.open(ctx, "remove");
+  else if (next === "review") await context.review(ctx);
   else if (next === "scope") await scope.open(ctx, signal);
   else if (next === "settings") {
     const { showFilesSettings } = await import("./files-settings.js");

@@ -56,9 +56,9 @@ const noticeCount = (messages: AgentMessage[]) =>
   messages.filter((message) => message.role === "custom" && message.customType === NOTICE_TYPE).length;
 
 describe("durable scope model contracts", () => {
-  it("preserves legacy identities and exact model notices across the package rename", () => {
+  it("preserves durable identities and exact v1 model notices", () => {
     expect([STATE_TYPE, NOTICE_TYPE, ANCHOR_TYPE]).toEqual(["scope-state", "scope-contract", "scope-context-anchor"]);
-    expect(createScopeNotice(active)?.content).toBe(
+    expect(createScopeNotice(active, 0, 1)?.content).toBe(
       [
         "Scope editing restriction is active. This notice replaces earlier Scope notices.",
         "Only write or edit these exact selected file targets. Use their file URLs as tool paths to preserve literal Unicode and control characters:",
@@ -69,10 +69,39 @@ describe("durable scope model contracts", () => {
     expect(createScopeNotice(inactive)?.content).toBe(
       "The user ended the Scope editing restriction. Earlier Scope notices no longer apply. All other existing instructions and tool restrictions remain unchanged.",
     );
-    expect(createScopeNotice({ state: "blocked", entryId: "legacy" })?.content).toBe(
+    expect(createScopeNotice({ state: "blocked", entryId: "legacy" }, 0, 1)?.content).toBe(
       "Scope state is unavailable. Do not edit files or use writing commands. The user must repair it with /scope or exit with /scope off. Reading remains available.",
     );
   });
+  it("uses the current command in v2 without making old allowed sets exceed the notice limit", () => {
+    const blocked: ScopeState = { state: "blocked", entryId: active.entryId };
+    for (const current of [active, blocked]) {
+      const legacy = createScopeNotice(current, 10, 1);
+      const notice = createScopeNotice(current, 10);
+      expect(notice?.details).toEqual({ version: 2, stateId: current.entryId });
+      expect(notice?.content).toContain("/files off");
+      expect(notice?.content).not.toMatch(/ with \/scope(?:\s|\.)/u);
+      expect(Buffer.byteLength(String(notice?.content))).toBeLessThanOrEqual(
+        Buffer.byteLength(String(legacy?.content)),
+      );
+    }
+    expect(createScopeNotice(inactive, 10)).toEqual(createScopeNotice(inactive, 10, 1));
+  });
+  it.each([active, { state: "blocked", entryId: active.entryId } as ScopeState])(
+    "appends a single correction after a retained native v1 $state notice",
+    (current) => {
+      const original = [user("request"), createScopeNotice(current, 1, 1) as AgentMessage, assistant("reply")];
+      const corrected = reconcileScopeContext(original, branch, current, 10);
+      expect(normalized(corrected.messages).slice(0, original.length)).toEqual(normalized(original));
+      expect(corrected.anchor).toMatchObject({ version: 2, count: original.length });
+      expect(noticeCount(corrected.messages)).toBe(2);
+      const persisted = [...branch, customEntry(ANCHOR_TYPE, corrected.anchor)];
+      const later = reconcileScopeContext([...original, user("next")], persisted, current, 20);
+      expect(later.anchor).toBeUndefined();
+      expect(normalized(later.messages).slice(0, corrected.messages.length)).toEqual(normalized(corrected.messages));
+      expect(noticeCount(later.messages)).toBe(2);
+    },
+  );
   it("does not publish a bootstrap-inactive notice or replace a retained current notice", () => {
     const messages = [user("request")];
     expect(reconcileScopeContext(messages, [], { state: "inactive" }).messages).toEqual(messages);
@@ -261,6 +290,7 @@ describe("durable scope model contracts", () => {
     null,
     {},
     { version: 2 },
+    { version: 3, stateId: "active", state: "active", count: 0, digest: "a".repeat(64), sentAt: 1 },
     { version: 1, stateId: "active", state: "active", count: -1, digest: "a".repeat(64), sentAt: 1 },
     { version: 1, stateId: "missing", state: "active", count: 0, digest: "a".repeat(64), sentAt: 1 },
     { version: 1, stateId: "active", state: "active", count: 1, digest: "a".repeat(64), sentAt: 1, recovery: -1 },

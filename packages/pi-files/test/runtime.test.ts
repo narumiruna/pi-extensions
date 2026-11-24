@@ -39,6 +39,28 @@ const { createTuiHarness } = await import("@narumitw/pi-tui-kit/testing");
 function componentCustom(tui: ReturnType<typeof createTuiHarness>): ExtensionUIContext["custom"] {
   return (factory) => tui.custom(factory);
 }
+function selectAction(tui: ReturnType<typeof createTuiHarness>, label: string) {
+  for (let i = 0; i < 7 && !tui.render().join("\n").includes(`→ ${label}`); i++) tui.press("tui.select.down");
+  expect(tui.render().join("\n")).toContain(`→ ${label}`);
+  tui.press("tui.select.confirm");
+}
+
+async function openScope(tui: ReturnType<typeof createTuiHarness>, command: Promise<unknown>, errors: unknown[]) {
+  const waitForOpen = () =>
+    Promise.race([
+      tui.waitForOpen(),
+      command.then(() => {
+        throw new Error(`Files or Edit Scope closed before opening: ${JSON.stringify(errors)}`);
+      }),
+    ]);
+  await waitForOpen();
+  const filesClosed = tui.resultPromise;
+  selectAction(tui, "Manage edit scope");
+  await filesClosed;
+  await waitForOpen();
+  expect(tui.render().join("\n")).toContain("Edit Scope");
+}
+
 const sessions = new Set<AgentSession>();
 async function open(...args: Parameters<typeof createNativeSession>) {
   const result = await createNativeSession(...args);
@@ -72,7 +94,7 @@ function loadout(session: AgentSession) {
 }
 
 describe("native Jiti runtime", () => {
-  it("loads the package entrypoint with /edit-scope and its compatibility alias, without replacement tools", async () => {
+  it("registers only /files from the package entrypoint, without replacement tools", async () => {
     const fixture = createFixture();
     const { session, loader, errors } = await open(fixture);
     const loaded = loader.getExtensions();
@@ -80,19 +102,22 @@ describe("native Jiti runtime", () => {
     expect(loaded.extensions).toHaveLength(1);
     const extension = loaded.extensions[0];
     expect(realpathSync(extension.path)).toBe(realpathSync(entrypoint));
-    expect([...extension.commands.keys()]).toEqual(expect.arrayContaining(["edit-scope", "scope"]));
+    expect([...extension.commands.keys()]).toEqual(["files"]);
+    for (const legacy of ["file-context", "edit-scope", "scope"]) expect(extension.commands.has(legacy)).toBe(false);
     expect([...extension.tools.keys()]).toEqual([]);
     expect([...extension.flags.keys()]).toEqual([]);
     expect([...extension.shortcuts.keys()]).toEqual(["ctrl+shift+x"]);
     expect(extension.handlers.has("context")).toBe(false);
     expect(extension.handlers.has("context_with_system")).toBe(true);
-    for (const name of ["edit-scope", "scope"]) {
-      const command = extension.commands.get(name);
-      expect(command?.getArgumentCompletions?.("o")).toEqual([
-        { value: "off", label: "off", description: "End the editing restriction" },
-      ]);
-      expect(command?.getArgumentCompletions?.("off ")).toEqual([]);
-    }
+    const command = extension.commands.get("files");
+    expect(command?.getArgumentCompletions?.("o")).toEqual([
+      { value: "off", label: "off", description: "End the editing restriction" },
+    ]);
+    expect(command?.getArgumentCompletions?.("br")).toEqual([
+      { value: "browse", label: "browse", description: "Open the context browser" },
+    ]);
+    expect(command?.getArgumentCompletions?.("off ")).toEqual([]);
+    expect(command?.getArgumentCompletions?.("remove")).toEqual([]);
     expect(session.getAllTools().find(({ name }) => name === "write")?.sourceInfo).toMatchObject({
       path: "builtin:write",
       source: "builtin",
@@ -100,30 +125,34 @@ describe("native Jiti runtime", () => {
     expect(errors).toEqual([]);
   });
 
-  it.each(
-    (["rpc", "print", "json"] as const).flatMap((mode) => ["edit-scope", "scope"].map((name) => ({ mode, name }))),
-  )("rejects /$name observably in $mode mode without releasing scope", async ({ mode, name }) => {
-    const fixture = createFixture();
-    const { session, errors } = await open(fixture, { mode });
-    for (const args of ["", " off", " status", " off trailing"]) {
-      const offset = errors.length;
-      await session.prompt(`/${name}${args}`);
-      expect(errors.slice(offset)).toEqual([
-        expect.objectContaining({
-          extensionPath: `command:${name}`,
-          event: "command",
-          error: args === "" || args === " off" ? `/${name} requires Pi TUI mode` : `Usage: /${name} or /${name} off`,
-        }),
-      ]);
-    }
-    expect((await callTool(session, "write", { path: fixture.outside, content: "not allowed" })).isError).toBe(true);
-    expect(readFileSync(fixture.outside, "utf8")).toBe("outside original\n");
-    expect(
-      session.sessionManager
-        .getBranch()
-        .filter((entry) => entry.type === "custom" && entry.customType === "scope-state"),
-    ).toHaveLength(1);
-  });
+  it.each(["rpc", "print", "json"] as const)(
+    "rejects /files observably in %s without releasing scope",
+    async (mode) => {
+      const fixture = createFixture();
+      const { session, errors } = await open(fixture, { mode });
+      const routes = [
+        ["", "/files requires Pi TUI mode"],
+        [" browse", "/files requires Pi TUI mode"],
+        [" off", "/files requires Pi TUI mode"],
+        [" remove", "Usage: /files [browse|off]"],
+        [" off trailing", "Usage: /files [browse|off]"],
+      ];
+      for (const [args, error] of routes) {
+        const offset = errors.length;
+        await session.prompt(`/files${args}`);
+        expect(errors.slice(offset)).toEqual([
+          expect.objectContaining({ extensionPath: "command:files", event: "command", error }),
+        ]);
+      }
+      expect((await callTool(session, "write", { path: fixture.outside, content: "not allowed" })).isError).toBe(true);
+      expect(readFileSync(fixture.outside, "utf8")).toBe("outside original\n");
+      expect(
+        session.sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "custom" && entry.customType === "scope-state"),
+      ).toHaveLength(1);
+    },
+  );
 
   it("allows stock write/edit/read and reserves a new path until its first write", async () => {
     const fixture = createFixture();
@@ -345,14 +374,9 @@ describe("native Jiti runtime", () => {
     const tui = createTuiHarness();
     const uiContext = { custom: componentCustom(tui), notify() {}, setWidget() {} } as unknown as ExtensionUIContext;
     const { session, errors } = await open(fixture, { mode: "tui", uiContext });
-    const command = session.prompt("/edit-scope");
+    const command = session.prompt("/files");
     try {
-      await Promise.race([
-        tui.waitForOpen(),
-        command.then(() => {
-          throw new Error(`Scope did not open: ${JSON.stringify(errors)}`);
-        }),
-      ]);
+      await openScope(tui, command, errors);
       expect(tui.render().join("\n")).toContain("Change allowed files");
       const managerClosed = tui.resultPromise;
       tui.press("tui.select.confirm");
@@ -373,9 +397,9 @@ describe("native Jiti runtime", () => {
     }
   });
 
-  it.each(["edit-scope", "scope"])(
-    "applies through /%s and ends through the other alias with unchanged native loadout",
-    async (name) => {
+  it.each(["direct", "menu"] as const)(
+    "applies scope through /files and ends via the %s route with unchanged native loadout",
+    async (route) => {
       sdk.initTheme("dark", false);
       const fixture = createFixture();
       fixture.manager.branch(fixture.beforeScope);
@@ -383,14 +407,9 @@ describe("native Jiti runtime", () => {
       const uiContext = { custom: componentCustom(tui), notify() {}, setWidget() {} } as unknown as ExtensionUIContext;
       const { session, errors } = await open(fixture, { mode: "tui", uiContext });
       const initial = loadout(session);
-      const command = session.prompt(`/${name}`);
+      const command = session.prompt("/files");
       try {
-        await Promise.race([
-          tui.waitForOpen(),
-          command.then(() => {
-            throw new Error(`Scope did not open: ${JSON.stringify(errors)}`);
-          }),
-        ]);
+        await openScope(tui, command, errors);
         const managerClosed = tui.resultPromise;
         tui.press("tui.select.confirm");
         await managerClosed;
@@ -407,7 +426,13 @@ describe("native Jiti runtime", () => {
         expect((await callTool(session, "write", { path: fixture.outside, content: "blocked" })).isError).toBe(true);
         expect(readFileSync(fixture.outside, "utf8")).toBe("outside original\n");
         expect(loadout(session)).toBe(initial);
-        await session.prompt(`/${name === "edit-scope" ? "scope" : "edit-scope"} off`);
+        if (route === "direct") await session.prompt("/files off");
+        else {
+          const ending = session.prompt("/files");
+          await openScope(tui, ending, errors);
+          selectAction(tui, "End restriction");
+          await ending;
+        }
         expect((await callTool(session, "write", { path: fixture.outside, content: "explicit UI exit" })).isError).toBe(
           false,
         );
@@ -453,14 +478,9 @@ describe("native Jiti runtime", () => {
     const stateEntries = () =>
       fixture.manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "scope-state");
     const text = () => stripVTControlCharacters(tui.render().join("\n"));
-    const command = session.prompt("/edit-scope");
+    const command = session.prompt("/files");
     try {
-      await Promise.race([
-        tui.waitForOpen(),
-        command.then(() => {
-          throw new Error(`Scope did not open: ${JSON.stringify(errors)}`);
-        }),
-      ]);
+      await openScope(tui, command, errors);
       const managerClosed = tui.resultPromise;
       tui.press("tui.select.confirm");
       await managerClosed;
@@ -725,6 +745,16 @@ describe("native Jiti runtime", () => {
 
   it("keeps normalized provider input prefixes and declarations stable across real offline agent requests", async () => {
     const fixture = createFixture();
+    const { createScopeNotice } = await import("../src/scope/contracts.js");
+    const state = {
+      state: "active" as const,
+      entryId: fixture.scopeEntry,
+      snapshot: { version: 1 as const, cwd: fixture.cwd, targets: fixture.snapshot.targets },
+    };
+    const legacy = createScopeNotice(state, 10, 1);
+    const correction = createScopeNotice(state);
+    if (!legacy || !correction) throw new Error("Missing fixture notice");
+    fixture.manager.appendCustomMessageEntry(legacy.customType, legacy.content, legacy.display, legacy.details);
     const { session, errors } = await open(fixture);
     const requests: Array<{ declarations: string; messages: unknown[] }> = [];
     session.agent.streamFunction = (_model, context) => {
@@ -758,6 +788,18 @@ describe("native Jiti runtime", () => {
     await session.agent.prompt("Second ordinary request");
     expect(requests).toHaveLength(2);
     expect(requests[1].declarations).toBe(requests[0].declarations);
+    const first = requests[0].messages.map((message) => JSON.stringify(message));
+    const legacyContent = JSON.stringify(legacy.content);
+    const correctedContent = JSON.stringify(correction.content);
+    const legacyMessages = first.filter((message) => message.includes(legacyContent));
+    const corrections = first.filter((message) => message.includes(correctedContent));
+    expect(legacyMessages).toHaveLength(1);
+    expect(corrections).toHaveLength(1);
+    expect(first.indexOf(corrections[0])).toBeGreaterThan(first.indexOf(legacyMessages[0]));
+    expect(correction.content).toContain("/files");
+    expect(requests[1].messages.filter((message) => JSON.stringify(message).includes(correctedContent))).toHaveLength(
+      1,
+    );
     expect(JSON.stringify(requests[1].messages.slice(0, requests[0].messages.length))).toBe(
       JSON.stringify(requests[0].messages),
     );
@@ -783,9 +825,7 @@ describe("native Jiti runtime", () => {
     await session.reload();
     expect(session.extensionRunner).not.toBe(oldRunner);
     expect(loader.getExtensions().errors).toEqual([]);
-    expect([...loader.getExtensions().extensions[0].commands.keys()]).toEqual(
-      expect.arrayContaining(["edit-scope", "scope"]),
-    );
+    expect([...loader.getExtensions().extensions[0].commands.keys()]).toEqual(["files"]);
     expect(loader.getExtensions().extensions[0].sourceInfo).toMatchObject({ source: "auto", scope: "project" });
     expect(loadout(session)).toEqual(initial);
     expect((await callTool(session, "write", { path: fixture.outside, content: "reload bypass" })).isError).toBe(true);
@@ -793,12 +833,12 @@ describe("native Jiti runtime", () => {
       false,
     );
     expect(errors).toEqual([]);
-    await session.prompt("/edit-scope");
+    await session.prompt("/files");
     expect(errors).toEqual([
       expect.objectContaining({
-        extensionPath: "command:edit-scope",
+        extensionPath: "command:files",
         event: "command",
-        error: "/edit-scope requires Pi TUI mode",
+        error: "/files requires Pi TUI mode",
       }),
     ]);
     await disposeNativeSession(session);

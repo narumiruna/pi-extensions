@@ -38,7 +38,8 @@ test("declared merged runtime loads once through Pi Jiti, opens the lazy browser
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.ok(extension);
-    for (const name of ["files", "file-context", "edit-scope", "scope"]) assert.ok(extension.commands.has(name), name);
+    assert.deepEqual([...extension.commands.keys()], ["files"]);
+    for (const name of ["file-context", "edit-scope", "scope"]) assert.equal(extension.commands.has(name), false, name);
     assert.equal(extension.tools.size, 0);
     assert.ok(extension.shortcuts.has("f8"), "the retained context settings file must configure registration");
     for (const event of ["tool_call", "context_with_system", "session_start", "session_shutdown"]) {
@@ -69,7 +70,7 @@ test("declared merged runtime loads once through Pi Jiti, opens the lazy browser
     try {
       await emit("session_shutdown");
       await emit("session_start");
-      const command = extension.commands.get("file-context");
+      const command = extension.commands.get("files");
       assert.ok(command);
       running = Promise.resolve(command.handler("browse", context.ctx));
       const frame = await Promise.race([

@@ -138,7 +138,7 @@ test("preserves plain RPC rows without a component factory or separator", () => 
   const context = createMockContext({ mode: "rpc" });
   publishPendingQuoteWidget(context.ctx, [createFileQuoteSnapshot("example.txt", 1, 1, "example")]);
   assert.deepEqual(context.widgets.get("files"), [
-    "Next prompt context · 1 snippet · ~2 tokens · /file-context to review",
+    "Next prompt context · 1 snippet · ~2 tokens · Review queued context in /files",
     "1. example.txt · lines 1-1 · ~2 tokens",
   ]);
 });

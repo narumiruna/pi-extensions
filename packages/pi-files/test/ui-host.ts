@@ -160,8 +160,8 @@ export function createScopeUIHost(mode: "regular" | "fullscreen", keys: Keybindi
           new Text(Array.from({ length: extraFooterRows }, () => "Additional footer row").join("\n"), 0, 0),
         );
     },
-    async waitForOpen() {
-      if (!mounted) await new Promise<void>((resolve) => opening.add(resolve));
+    async waitForOpen(previous?: Mounted) {
+      if (!mounted || mounted === previous) await new Promise<void>((resolve) => opening.add(resolve));
       return mounted;
     },
     async pending() {

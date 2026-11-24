@@ -38,11 +38,7 @@ const RESERVED_APP_ROWS = 3;
 const EXPLORER_CHROME_ROWS = 4;
 const DIFF_CHROME_ROWS = 3;
 
-export type FileQuoteExplorerResult =
-  | { kind: "quote"; quote: FileQuote }
-  | { kind: "reference"; path: string }
-  | { kind: "back" }
-  | { kind: "close" };
+export type FileQuoteExplorerResult = { kind: "quote"; quote: FileQuote } | { kind: "reference"; path: string };
 
 interface FileQuoteExplorerOptions {
   tui: TUI;
@@ -53,7 +49,6 @@ interface FileQuoteExplorerOptions {
   loadFile: (path: string, signal?: AbortSignal) => Promise<LoadedProjectTextFile>;
   editFile?: (path: string, signal?: AbortSignal) => Promise<void>;
   gitContext?: GitContext;
-  rootNavigation?: boolean;
   getSelectedContextState?: () => SelectedContextState;
   validateQuote?: (quote: FileQuote) => void;
   onAddAndContinue?: (quote: FileQuote) => void;
@@ -122,7 +117,7 @@ export class FileQuoteExplorer implements Component, Focusable {
       },
       onReference: (path) => this.finish({ kind: "reference", path }),
       onSwitchFiles: () => this.showFileSearch(),
-      onCancel: () => this.finish(this.rootExit("back")),
+      onCancel: () => this.finish(undefined),
     });
   }
 
@@ -157,7 +152,7 @@ export class FileQuoteExplorer implements Component, Focusable {
   handleInput(data: string): void {
     if (this.finished || this.disposed) return;
     if (matchesKey(data, Key.ctrl("c"))) {
-      this.finish(this.rootExit("close"));
+      this.finish(undefined);
       return;
     }
     if (this.mode === "files") this.handleFileInput(data);
@@ -863,7 +858,7 @@ export class FileQuoteExplorer implements Component, Focusable {
       this.showParentDirectory();
       return;
     }
-    this.finish(this.rootExit("back"));
+    this.finish(undefined);
   }
 
   private cancelOpenRequest(): void {
@@ -969,10 +964,6 @@ export class FileQuoteExplorer implements Component, Focusable {
     this.cancelDetailRequest();
     this.cancelEditRequest();
     this.options.done(result);
-  }
-
-  private rootExit(kind: "back" | "close"): FileQuoteExplorerResult | undefined {
-    return this.options.rootNavigation ? { kind } : undefined;
   }
 
   private keepFileVisible(height: number): void {

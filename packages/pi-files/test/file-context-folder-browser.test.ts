@@ -45,7 +45,6 @@ function createExplorer(
     } as never,
     files,
     loadFile,
-    rootNavigation: true,
     done: (value) => {
       result = value;
     },
@@ -101,7 +100,7 @@ test("browses folders with effective keybindings and keeps folder rows non-refer
   explorer.handleInput("q");
   assert.equal(explorer.render(44)[0], "File Context · files · /");
   explorer.handleInput("q");
-  assert.deepEqual(getResult(), { kind: "back" });
+  assert.equal(getResult(), undefined);
 });
 
 test("cancels a pending nested file open when returning to the parent folder", async () => {
@@ -132,7 +131,7 @@ test("prioritizes a remapped cancel binding over the additive content-search sho
   const { explorer, getResult } = createExplorer("\u0006");
 
   explorer.handleInput("\u0006");
-  assert.deepEqual(getResult(), { kind: "back" });
+  assert.equal(getResult(), undefined);
 });
 
 test("keeps fuzzy search global while browsing a folder", () => {

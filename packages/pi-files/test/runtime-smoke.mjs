@@ -11,11 +11,18 @@ import { fileURLToPath } from "node:url";
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 const entrypoint = join(packageDir, "dist", "index.ts");
 const cli = fileURLToPath(new URL("./bundle/cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
-const root = await mkdtemp(join(tmpdir(), "pi-scope-cli-"));
-const commandNames = ["edit-scope", "scope"];
-const expectedErrors = new Set(
-  commandNames.flatMap((name) => [`/${name} requires Pi TUI mode`, `Usage: /${name} or /${name} off`]),
-);
+const root = await mkdtemp(join(tmpdir(), "pi-files-cli-"));
+const commandPath = "command:files";
+const modeError = "/files requires Pi TUI mode";
+const usageError = "Usage: /files [browse|off]";
+const rejections = [
+  ["/files", modeError],
+  ["/files browse", modeError],
+  ["/files off", modeError],
+  ["/files status", usageError],
+  ["/files browse trailing", usageError],
+  ["/files off trailing", usageError],
+];
 // Parent-agent diagnostics and session controls must not alter these isolated CLI runs.
 const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("PI_")));
 
@@ -133,7 +140,7 @@ class RpcProcess {
   async request(type, args = {}) {
     if (this.#closed) throw new Error("Pi RPC is closed");
     if (this.#parseError) throw this.#parseError;
-    const id = `scope-smoke-${++this.#nextId}`;
+    const id = `files-smoke-${++this.#nextId}`;
     const response = new Promise((resolve, reject) => this.#pending.set(id, { resolve, reject }));
     try {
       if (!this.#child.stdin.write(`${JSON.stringify({ id, type, ...args })}\n`))
@@ -223,36 +230,31 @@ async function smoke(name, explicit, approved) {
         rpc.records.some((record) => record.type === "extension_error"),
         false,
       );
-      console.log("PASS native CLI trust denial: neither Edit Scope command is loaded");
+      console.log("PASS native CLI trust denial: no Files command is loaded");
       return;
     }
+    // The fixture loads no other command sources. Check the full list before sending prompts:
+    // unregistered slash names can become model input and must never be sent as removal probes.
     assert.deepEqual(
-      commands.data.commands
-        .filter(({ name }) => commandNames.includes(name))
-        .map(({ name, source }) => ({ name, source })),
-      commandNames.map((name) => ({ name, source: "extension" })),
+      commands.data.commands.map(({ name, source }) => ({ name, source })),
+      [{ name: "files", source: "extension" }],
     );
     const sourceInfo = commands.data.commands[0].sourceInfo;
     assert.equal(await realpath(sourceInfo.path), await realpath(entrypoint));
     assert.equal(sourceInfo.source, explicit ? "cli" : "auto");
     assert.equal(sourceInfo.scope, explicit ? "temporary" : "project");
 
-    for (const name of commandNames) {
-      for (const args of ["", " off", " status", " off trailing"]) {
-        const offset = rpc.records.length;
-        const response = await rpc.request("prompt", { message: `/${name}${args}` });
-        assert.equal(response.success, true, JSON.stringify(response));
-        assert.equal(response.data.disposition, "handled");
-        const error = await rpc.eventSince(
-          offset,
-          (record) => record.type === "extension_error" && record.extensionPath === `command:${name}`,
-        );
-        assert.equal(error.event, "command");
-        assert.equal(
-          error.error,
-          args === "" || args === " off" ? `/${name} requires Pi TUI mode` : `Usage: /${name} or /${name} off`,
-        );
-      }
+    for (const [message, expectedError] of rejections) {
+      const offset = rpc.records.length;
+      const response = await rpc.request("prompt", { message });
+      assert.equal(response.success, true, JSON.stringify(response));
+      assert.equal(response.data.disposition, "handled");
+      const error = await rpc.eventSince(
+        offset,
+        (record) => record.type === "extension_error" && record.extensionPath === commandPath,
+      );
+      assert.equal(error.event, "command");
+      assert.equal(error.error, expectedError);
     }
     assert.deepEqual((await rpc.request("get_commands")).data.commands, commands.data.commands);
     assert.equal(
@@ -268,18 +270,15 @@ async function smoke(name, explicit, approved) {
       ),
       false,
     );
-    assert.equal(
+    assert.deepEqual(
       rpc.records
         .filter((record) => record.type === "extension_error")
-        .every(
-          (record) =>
-            commandNames.some((name) => record.extensionPath === `command:${name}`) && expectedErrors.has(record.error),
-        ),
-      true,
+        .map(({ extensionPath, error }) => [extensionPath, error]),
+      rejections.map(([, error]) => [commandPath, error]),
     );
     assert.equal((await rpc.request("get_state")).data.isStreaming, false);
     console.log(
-      `PASS native CLI ${explicit ? "explicit package --no-extensions -e" : "trusted-project package discovery"}: both commands; eight observable non-TUI rejections; no model run`,
+      `PASS native CLI ${explicit ? "explicit package --no-extensions -e" : "trusted-project package discovery"}: files only; ${rejections.length} observable non-TUI rejections; no model run`,
     );
   } finally {
     await rpc.close();
@@ -306,7 +305,7 @@ async function smokeOneShot(mode) {
       "--no-mcp",
       "-e",
       packageDir,
-      ...commandNames.flatMap((name) => ["", " off", " status", " off trailing"].map((args) => `/${name}${args}`)),
+      ...rejections.map(([message]) => message),
     ],
     {
       cwd,
@@ -330,12 +329,7 @@ async function smokeOneShot(mode) {
   assert.equal(code, 0, stderr);
   assert.deepEqual(
     stderr.trim().split("\n"),
-    commandNames.flatMap((name) => [
-      `Extension error (command:${name}): /${name} requires Pi TUI mode`,
-      `Extension error (command:${name}): /${name} requires Pi TUI mode`,
-      `Extension error (command:${name}): Usage: /${name} or /${name} off`,
-      `Extension error (command:${name}): Usage: /${name} or /${name} off`,
-    ]),
+    rejections.map(([, error]) => `Extension error (${commandPath}): ${error}`),
   );
   if (mode === "json") {
     const records = stdout
@@ -350,7 +344,7 @@ async function smokeOneShot(mode) {
     assert.equal(stdout, "");
   }
   console.log(
-    `PASS native CLI ${mode === "json" ? "JSON" : "print"}: eight stderr rejections; no provider run or protocol corruption`,
+    `PASS native CLI ${mode === "json" ? "JSON" : "print"}: ${rejections.length} stderr rejections; no provider run or protocol corruption`,
   );
 }
 

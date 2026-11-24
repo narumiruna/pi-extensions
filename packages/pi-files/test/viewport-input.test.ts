@@ -24,6 +24,7 @@ function nativeExplorer(fullscreen: boolean, config: KeybindingsConfig = {}) {
   const host = fullscreen ? new TuiAltScreen(terminal, false) : new TuiMainScreen(terminal, false);
   const opened: string[] = [];
   let result: FileQuoteExplorerResult | undefined;
+  let completed = false;
   const explorer = new FileQuoteExplorer({
     tui: host,
     theme: {
@@ -65,8 +66,8 @@ function nativeExplorer(fullscreen: boolean, config: KeybindingsConfig = {}) {
         }));
       },
     } as never,
-    rootNavigation: true,
     done: (value) => {
+      completed = true;
       result = value;
     },
   });
@@ -80,6 +81,7 @@ function nativeExplorer(fullscreen: boolean, config: KeybindingsConfig = {}) {
     host,
     opened,
     result: () => result,
+    completed: () => completed,
     dispose() {
       explorer.dispose();
       host.stop({ preserveScreen: true });
@@ -166,8 +168,10 @@ test("fullscreen capture follows navigation modes but excludes revision Input an
     assert.ok(revision.includes(CURSOR_MARKER));
     f.terminal.input("\u001b");
     assert.equal(f.explorer.capturesViewportInput, true);
+    assert.equal(f.completed(), false);
     f.terminal.input("\u0003");
-    assert.deepEqual(f.result(), { kind: "close" });
+    assert.equal(f.completed(), true);
+    assert.equal(f.result(), undefined);
   } finally {
     unsubscribe();
     f.dispose();

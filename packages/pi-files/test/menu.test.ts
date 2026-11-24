@@ -396,7 +396,7 @@ describe("scope current-state manager", () => {
     h.down(1);
     await h.next();
     expect(h.text()).toContain("Edit Scope Help");
-    expect(h.text()).toContain("/edit-scope off");
+    expect(h.text()).toContain("/files off");
     expect(h.text().replace(/\s+/gu, " ")).toContain("Marking stops at the first or last match.");
     await h.back();
     h.tui.press("tui.select.cancel");

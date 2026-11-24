@@ -121,7 +121,8 @@ export function registerScope(pi: ExtensionAPI, options: ScopeOptions = {}): Sco
     } catch {
       owner.scope = {
         state: "blocked",
-        error: "Scope restoration failed; edits remain blocked. Use /scope to repair or /scope off to exit.",
+        error:
+          "Scope restoration failed; edits remain blocked. Use Manage edit scope in /files to repair or /files off to exit.",
       };
     }
     if (owner.scope.state === "active") {
@@ -178,7 +179,7 @@ export function registerScope(pi: ExtensionAPI, options: ScopeOptions = {}): Sco
       if (current(owner, ctx)) {
         owner.scope = {
           state: "blocked",
-          error: `Scope state could not be saved; edits remain blocked. Repair with /scope or /scope off. ${displayError(error)}`,
+          error: `Scope state could not be saved; edits remain blocked. Repair with Manage edit scope in /files or exit with /files off. ${displayError(error)}`,
         };
         updateView(owner, ctx);
       }
@@ -312,7 +313,8 @@ export function registerScope(pi: ExtensionAPI, options: ScopeOptions = {}): Sco
       owner.scope = {
         ...owner.scope,
         state: "blocked",
-        error: "Scope context could not be restored; edits remain blocked. Repair with /scope or /scope off.",
+        error:
+          "Scope context could not be restored; edits remain blocked. Repair with Manage edit scope in /files or exit with /files off.",
       };
       owner.revision += 1;
       owner.flow?.controller.abort(new DOMException("Scope context restoration failed", "AbortError"));
@@ -328,11 +330,11 @@ export function registerScope(pi: ExtensionAPI, options: ScopeOptions = {}): Sco
     return owner;
   }
   function assertNoFlow(owner: Owner): void {
-    if (owner.flow) throw new Error("A Scope menu is already open; close it before issuing another Scope command");
+    if (owner.flow) throw new Error("A Scope menu is already open; close it before changing edit scope");
   }
   const service: ScopeService = {
     async open(ctx, signal) {
-      if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("/edit-scope requires Pi TUI mode");
+      if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("/files requires Pi TUI mode");
       const owner = getOwner(ctx);
       mutationCheck(owner, ctx);
       assertNoFlow(owner);
@@ -413,23 +415,5 @@ export function registerScope(pi: ExtensionAPI, options: ScopeOptions = {}): Sco
     },
   };
 
-  // Both routes use the same service; /scope keeps historical notices usable.
-  for (const commandName of ["edit-scope", "scope"]) {
-    pi.registerCommand(commandName, {
-      description:
-        commandName === "scope"
-          ? "Compatibility alias for /edit-scope"
-          : "Temporarily restrict editing to selected files",
-      getArgumentCompletions: (prefix) =>
-        "off".startsWith(prefix) ? [{ value: "off", label: "off", description: "End the editing restriction" }] : [],
-      handler: async (args, ctx) => {
-        const route = args.trim();
-        if (route !== "" && route !== "off") throw new Error(`Usage: /${commandName} or /${commandName} off`);
-        if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error(`/${commandName} requires Pi TUI mode`);
-        if (route === "off") return service.off(ctx);
-        await service.open(ctx);
-      },
-    });
-  }
   return service;
 }
