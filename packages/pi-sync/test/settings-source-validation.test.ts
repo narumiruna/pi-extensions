@@ -14,10 +14,10 @@ const directorySetup: SyncSetupSettings = {
 };
 const unsupported = /Unsupported pi-sync settings/u;
 
-test("directory setup writers cannot relabel unsupported version 9 settings", () =>
+test("directory setup writers cannot relabel unsupported version 10 settings", () =>
   withTempHome(async (root) => {
     await fs.mkdir(root, { recursive: true });
-    const empty = { ...localConfigTemplate(), version: 9, future: { preserve: true } };
+    const empty = { ...localConfigTemplate(), version: 10, future: { preserve: true } };
     const firstSave = JSON.stringify(empty);
     await fs.writeFile(localConfigPath(), firstSave, { mode: 0o600 });
     await assert.rejects(
@@ -26,7 +26,7 @@ test("directory setup writers cannot relabel unsupported version 9 settings", ()
     );
     assert.equal(await fs.readFile(localConfigPath(), "utf8"), firstSave);
 
-    const configured = JSON.stringify({ ...v3S3Settings(), version: 9, future: empty.future });
+    const configured = JSON.stringify({ ...v3S3Settings(), version: 10, future: empty.future });
     await fs.writeFile(localConfigPath(), configured, { mode: 0o600 });
     await assert.rejects(addSyncSetup("directory", directorySetup), unsupported);
     await assert.rejects(
@@ -41,7 +41,7 @@ test("the writer validates the latest source after acquiring the lock, before ca
     await updateLocalConfig(() => localConfigTemplate());
     let attempted = false;
     let rejected: Promise<void> | undefined;
-    const replacement = JSON.stringify({ ...localConfigTemplate(), version: 9 });
+    const replacement = JSON.stringify({ ...localConfigTemplate(), version: 10 });
     await withLocalConfigFileLock(async () => {
       rejected = assert.rejects(
         updateLocalConfig((settings) => {
@@ -75,7 +75,7 @@ test.each([
 test("an unsupported legacy source is not migrated to the canonical filename", () =>
   withTempHome(async (root) => {
     await fs.mkdir(root, { recursive: true });
-    const original = JSON.stringify({ ...localConfigTemplate(), version: 9 });
+    const original = JSON.stringify({ ...localConfigTemplate(), version: 10 });
     await fs.writeFile(legacyLocalConfigPath(), original, { mode: 0o600 });
     await assert.rejects(
       updateLocalConfig(() => localConfigTemplate()),

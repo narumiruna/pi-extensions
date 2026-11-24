@@ -21,9 +21,8 @@ type EditorSource = { location: IgnoreLocation; existing?: { view: IgnoreEdit; s
 function locateIgnoreFile(document: LocalConfigDocument | undefined, root: string, setup: string): IgnoreLocation {
   const settings = document && validateSettingsDocument(document.parsed);
   const current = settings && Object.hasOwn(settings.syncSetups, setup) ? settings.syncSetups[setup] : undefined;
-  if (!current) throw new Error("Sync setup no longer exists; reopen ignore-file settings.");
-  if (settings?.version !== 8 || current.sync.scope !== "agent-directory" || current.sync.pathPolicy !== "ignore-file")
-    throw new Error("This sync setup does not use an ignore file.");
+  if (!settings || !current) throw new Error("Sync setup no longer exists; reopen ignore-file settings.");
+  if (current.sync.pathPolicy !== "ignore-file") throw new Error("This sync setup does not use an ignore file.");
   const filename = current.sync.ignoreFile ?? DEFAULT_IGNORE_FILENAME;
   return {
     filename,

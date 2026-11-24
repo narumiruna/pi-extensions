@@ -178,6 +178,31 @@ test.each(["approved", "cancelled", "setup changed"] as const)(
     }),
 );
 
+test("saving a transfer size limit preserves the separate automatic approval action", () =>
+  withTempHome(async (root) => {
+    const { settingsPath, settings } = await writeSetup(root, "ignore-file");
+    const expected = JSON.parse(settings);
+    expected.syncSetups.work.sync.automaticTransfer = true;
+    await fs.writeFile(settingsPath, JSON.stringify(expected));
+    run.mockReset().mockResolvedValue({ available: true });
+    const select = vi
+      .fn<(title: string, rows: string[]) => Promise<string | undefined>>()
+      .mockResolvedValueOnce("Max file size")
+      .mockResolvedValue(undefined);
+    const runRoute = vi.fn(async () => undefined);
+    const { ctx, notifications } = createMockContext({ mode: "tui", select, input: async () => "2" });
+    await showSyncSettings(ctx, runRoute);
+    expected.version = 9;
+    expected.syncSetups.work.sync.maxFileSizeMiB = 2;
+    expect(JSON.parse(await fs.readFile(settingsPath, "utf8"))).toEqual(expected);
+    expect(select.mock.calls[1]?.[1]).toContain("Review automatic transfers");
+    expect(notifications.at(-1)?.message).toContain(
+      "Use Review automatic transfers to approve this policy separately.",
+    );
+    expect(run.mock.calls.map(([operation]) => operation)).toEqual(["ignore.capabilities"]);
+    expect(runRoute).not.toHaveBeenCalled();
+  }));
+
 test.each([
   ["tui", "legacy", "ignore-file", true, true],
   ["rpc", "legacy", "ignore-file", true, true],

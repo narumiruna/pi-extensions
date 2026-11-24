@@ -162,6 +162,28 @@ test.each([
   }),
 );
 
+test("migration and switching rule files preserve version 9 and existing transfer limits", () =>
+  fixture(async (root, execution, proposal) => {
+    const original = structuredClone(fixtureSettings);
+    original.version = 9;
+    original.syncSetups.home.sync.maxFileSizeMiB = 2;
+    original.syncSetups.other.sync.maxDirectorySizeMiB = 20;
+    await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(original));
+    await fs.writeFile(path.join(root, file), "");
+    await fs.writeFile(path.join(root, ".other.syncignore"), "/drafts/\n");
+    proposal(async () => true);
+    assert.equal(await migrateIgnoreSetup(execution, "home"), "saved");
+    const migrated = await readSettings(root);
+    assert.equal(migrated.version, 9);
+    assert.equal(migrated.syncSetups.home.sync.maxFileSizeMiB, 2);
+    assert.deepEqual(migrated.syncSetups.other, original.syncSetups.other);
+    assert.equal(await switchIgnoreFile(execution, "home", ".other.syncignore", file), "saved");
+    const switched = await readSettings(root);
+    assert.equal(switched.version, 9);
+    assert.equal(switched.syncSetups.home.sync.ignoreFile, ".other.syncignore");
+    assert.equal(switched.syncSetups.home.sync.maxFileSizeMiB, 2);
+  }));
+
 test("reviewed migration requires canonical settings and does not promote the legacy filename", () =>
   fixture(async (root, execution, proposal) => {
     const canonical = path.join(root, "pi-sync.json");

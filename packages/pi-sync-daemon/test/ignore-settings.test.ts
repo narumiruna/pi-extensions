@@ -89,7 +89,7 @@ test("invalid versions, ambiguous policies and unsafe filenames are rejected", (
   type InvalidPolicy = [Record<string, unknown>, unknown, RegExp];
   const cases: InvalidPolicy[] = [
     [ignoreSync, 7, /requires explicit settings version 8/u],
-    [ignoreSync, 9, /Unsupported pi-sync settings/u],
+    [ignoreSync, 10, /Unsupported pi-sync settings/u],
     [ignoreSync, "8", /Unsupported pi-sync settings/u],
     [{ ...ignoreSync, scope: undefined }, 8, /requires agent-directory scope/u],
     [{ ...ignoreSync, scope: "selected-paths" }, 8, /requires agent-directory scope/u],
@@ -358,7 +358,7 @@ async function withPausedOpen(file: string, validate: () => Promise<void>, chang
   }
 }
 
-test("legacy-only configurations keep their previous fingerprint when the document version is 8", () => {
+test("legacy-only configurations keep their previous fingerprint through version 9 with limits Off", () => {
   const cases: [SyncPolicySettings, string, string][] = [
     [
       legacySync,
@@ -372,7 +372,7 @@ test("legacy-only configurations keep their previous fingerprint when the docume
     ],
   ];
   for (const [sync, review, check] of cases) {
-    for (const version of [7, 8] as const) {
+    for (const version of [7, 8, 9] as const) {
       const config = configFromSettings(validateSettingsDocument({ ...settings(sync), version }));
       assert.equal(syncConfigReviewFingerprint(config), review);
       assert.equal(syncCheckConfigFingerprint(config), check);

@@ -332,7 +332,7 @@ export async function migrateIgnoreSetup(execution: Execution, setupName: string
       const sessions =
         policy.scope === "agent-directory" ? policy.sessions === true : previous.include.includes("sessions");
       next.syncSetups[setupName].sync = { ...common, scope: "agent-directory", sessions, pathPolicy: "ignore-file" };
-      next.version = 8;
+      if (next.version < 8) next.version = 8;
       validateSettingsDocument(next);
       const source = await readPolicyReviewSource(execution.root, DEFAULT_IGNORE_FILENAME, execution, true);
       execution.validate();

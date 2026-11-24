@@ -46,6 +46,7 @@ import { readSnapshotForHead, sameRemoteHead } from "./remote-snapshot.js";
 import { backupDirectionalSnapshot, captureMutationOwner, maybeReload, protectedSessionPaths } from "./sync-local.js";
 import { acceptedSelection, fileHashMap, rawSnapshotHashIdentity, sameHashes } from "./sync-state.js";
 import { checkLiveProtection } from "./transfer-freshness.js";
+import { requireTransferSize, selectedPullImage, transferSizeLimitsEnabled } from "./transfer-size-limits.js";
 
 export function canReviewAdoption(ctx: EngineContext, options: CommandOptions) {
   return (
@@ -214,6 +215,11 @@ export async function adoptRemoteRules(input: AdoptionInput) {
   const caseCleanup = current ? [] : await inspectCaseCleanup(physical, projected);
   requireStableMergeSessionRoot(before, physical, config.scope);
   await validateSource();
+  const checkSize = () => {
+    if (transferSizeLimitsEnabled(config))
+      requireTransferSize(config, selectedPullImage(logical, before, protectedPaths, { filename, text }));
+  };
+  if (!resuming) checkSize();
   const approved = await confirmTransferReview(
     ctx,
     current ? "Resume reviewed ignore-rule Pull?" : "Overwrite local rules and pull?",
@@ -335,6 +341,7 @@ export async function adoptRemoteRules(input: AdoptionInput) {
     ...(config.localFields !== undefined ? { localFields: config.localFields } : {}),
   });
   const hashes = fileHashMap(await refresh());
+  if (resuming && source.identity !== journal.installedIdentity) checkSize();
   if (source.text !== text && journal.stateFingerprint !== stateFingerprint)
     throw new Error("Baseline changed after the reviewed Pull. Preserve its journal.");
   if (!sameHashes(hashes, journal.afterFiles)) {

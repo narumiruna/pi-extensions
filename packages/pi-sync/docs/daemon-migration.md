@@ -68,6 +68,8 @@ Before the first daemon-owned transfer, close or upgrade every older Pi process 
 
 Backend formats, `pi-sync.json`, `pi-sync/`, `.pisync/`, backups, and journals remain owned by the extracted engine. Legacy directory migration remains explicit. Coexisting or unsafe state roots must be reconciled without merging or deleting evidence automatically.
 
+Before enabling [transfer size limits](../skills/configure-pi-sync/references/configuration.md#transfer-size-limits), make sure the running owner supports both saving and enforcing the limits. A healthy `status` handshake alone does not establish that support. If an old owner remains after an update or an in-place rebuild, use the exit checks above before reloading Pi. Upgrade or close all older clients using that agent directory. Enabling a limit requires version 9 for the entire local settings document, which older processes refuse. It does not change the IPC protocol or remote snapshots.
+
 ## Lifetime is not consent
 
 Old Continuous consent was limited to an open Pi session. Existing Automatic, Autonomous, and Continuous defaults stay unchanged. When no registered live client PID remains for that canonical root and no valid explicit after-exit grant covers the active setup, a fixed 30-second grace period starts. Explicit CLI start without clients follows the same policy. Live passive, disconnected, publishing, and orderly retired PIDs keep the owner alive; detach, heartbeat loss, and an empty active-participant list do not prove process exit. `/reload`, `/new`, fork, and resume retain protection while their Pi process lives. A client arriving before shutdown becomes final cancels automatic exit. No new setting, environment variable, or keep-alive flag is added.
@@ -145,6 +147,10 @@ Before rollback:
    65,536 bytes because it keeps all other fields when revoking grants. Builds with the old
    65,536-byte limit cannot read that file. Preserve it and use a build that supports the larger
    file. Do not delete it or restore an older copy to make the rollback work.
+5. Check settings compatibility. Version 9 remains after both transfer limits are cleared. Keep a
+   compatible owner; do not relabel the document as version 8 or replace it with older bytes to
+   bypass the check. Keep journals and backups and verify the local and remote snapshot IDs before
+   retrying uncertain work.
 
 Operation retries are instance-bound and deduplicated. An expired result or old instance requires journal reconciliation, not blind replay. A full bounded result ledger requires an explicit drained restart.
 

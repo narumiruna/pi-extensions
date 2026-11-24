@@ -162,7 +162,7 @@ test("validates absent, legacy-filename, invalid JSON, invalid setup and unsuppo
   settings.activeSyncSetup = "missing";
   await writeSettings();
   await assert.rejects(offer(), /activeSyncSetup must reference/u);
-  settings.version = 9;
+  settings.version = 10;
   await writeSettings();
   await assert.rejects(offer(), /Unsupported pi-sync settings/u);
   assert.deepEqual((await fs.readdir(root)).sort(), ["pi-sync.json", "pi-sync.local.json"]);

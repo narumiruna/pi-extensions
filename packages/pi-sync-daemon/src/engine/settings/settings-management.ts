@@ -121,6 +121,7 @@ export async function updateSyncSetup(
     expectedStorage?: SyncSetupStorageReview;
     expectedInclude?: readonly string[];
     expectedConnection?: StorageConnectionSettings;
+    expectedActiveSetup?: boolean;
     expectedConfigFingerprint?: string;
     upgradeExclude?: boolean;
     signal?: AbortSignal;
@@ -128,6 +129,9 @@ export async function updateSyncSetup(
 ) {
   validateConfigName(name, "sync setup");
   await updateLocalConfig((settings) => {
+    if (options.expectedActiveSetup && settings.activeSyncSetup !== name) {
+      throw new SyncSetupReviewChangedError("The active sync setup changed while Settings was open; reopen it.");
+    }
     const setup = settings.syncSetups[name];
     if (!setup) throw new Error(`Sync setup not found: ${name}`);
     if (
@@ -218,7 +222,8 @@ function setupSettingsVersion(
   setup: SyncSetupSettings,
   upgradeExclude?: boolean,
 ): PiSyncSettingsV3["version"] {
-  if (setup.sync.pathPolicy === "ignore-file") return 8;
+  if (setup.sync.maxFileSizeMiB !== undefined || setup.sync.maxDirectorySizeMiB !== undefined) return 9;
+  if (current < 8 && setup.sync.pathPolicy === "ignore-file") return 8;
   if (current < 7 && setup.sync.scope === "agent-directory") return 7;
   if (current < 6 && upgradeExclude) return 6;
   return current;

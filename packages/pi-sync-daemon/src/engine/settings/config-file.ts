@@ -368,6 +368,11 @@ async function replaceLocalConfigDocumentUnlocked(
   signal?: AbortSignal,
   review?: PublicationReview,
 ) {
+  if (document.parsed.version === 9 && (typeof value.version !== "number" || value.version < 9)) {
+    throw new Error(
+      "Pi Sync settings version 9 cannot be downgraded; keep version 9 even when transfer limits are Off.",
+    );
+  }
   const nextBytes = serializedConfig(value);
   const canonicalPath = localConfigPath();
   if (document.path !== canonicalPath) {

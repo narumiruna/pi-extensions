@@ -8,6 +8,7 @@ import {
   agentDirectoryConfiguredSessionDir,
   agentDirectoryInventory,
   createSnapshot,
+  observeSnapshot,
   snapshotTarget,
 } from "../snapshot/snapshot.js";
 import { preflightSnapshotApply, preflightSnapshotMutations } from "../snapshot/snapshot-apply.js";
@@ -25,6 +26,7 @@ import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.j
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
+import { ContinuousError } from "./continuous-errors.js";
 import { mergePathIdentity } from "./file-merge-planner.js";
 import { configuredSnapshotPathMatcher } from "./sync-policy.js";
 import { fileHashMap } from "./sync-state.js";
@@ -302,7 +304,7 @@ export async function applyMergedSnapshot(
   before: Snapshot,
   after: Snapshot,
   protectedPaths: Set<string>,
-  options: SnapshotOptions,
+  options: SnapshotOptions & { requireReviewedApplyImage?: boolean },
   validate: () => Promise<void>,
   protectedTarget?: string,
 ) {
@@ -500,6 +502,23 @@ export async function applyMergedSnapshot(
       requireReviewedHash(relative, hash);
       return kind;
     };
+    let checkApplyImage = options.requireReviewedApplyImage;
+    const requireReviewedApplyImage = async () => {
+      const latest = fileHashMap(await observeSnapshot(options));
+      await validate();
+      options.validateMutation?.();
+      if (
+        [...new Set([...Object.keys(latest), ...paths])].some((relative) => {
+          const hash = Object.hasOwn(latest, relative) ? latest[relative] : undefined;
+          return hash !== beforeHashes[relative] && hash !== afterHashes[relative];
+        })
+      )
+        throw new ContinuousError(
+          "unsafe",
+          "Cannot verify the size-limited local apply image: local files changed. Keep the merge journal and backup for review.",
+        );
+      checkApplyImage = false;
+    };
     if (options.scope === "agent-directory" && plan.deletes.length)
       await recheckAgentDirectoryBudget(root, plan, options);
     for (const target of plan.deletes) {
@@ -510,6 +529,7 @@ export async function applyMergedSnapshot(
           await validate();
           kind = stat.isDirectory() ? "directory" : "file";
         }
+        if (kind !== "missing" && checkApplyImage) await requireReviewedApplyImage();
         if (kind === "directory")
           await fs.rmdir(target); // Only an empty, reviewed directory may be replaced.
         else if (kind === "file") await fs.rm(target, { force: true });
@@ -554,6 +574,7 @@ export async function applyMergedSnapshot(
         if (!relative) throw new Error("Unowned merge write target.");
         if (validateIgnore) await validateIgnore();
         await assertFilesystemTarget(root, relative, options, new Set());
+        if (checkApplyImage) await requireReviewedApplyImage();
         await fs.mkdir(path.dirname(item.target), { recursive: true });
         const temporary = path.join(path.dirname(item.target), `.pi-sync.json.${randomUUID()}.apply`);
         let mode = 0o600;

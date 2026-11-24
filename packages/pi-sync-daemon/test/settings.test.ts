@@ -195,7 +195,7 @@ test("an exact source fingerprint does not authorize relabeling an unsupported o
     const file = path.join(root, "pi-sync.json");
     const client = await connect();
     for (const [source, error] of [
-      [{ ...template, version: 9 }, /Unsupported pi-sync settings/u],
+      [{ ...template, version: 10 }, /Unsupported pi-sync settings/u],
       [{ ...template, debug: "invalid" }, /debug must be boolean/u],
     ] as const) {
       const original = `${JSON.stringify(source)}\n`;
@@ -207,6 +207,20 @@ test("an exact source fingerprint does not authorize relabeling an unsupported o
       );
       assert.equal(await fs.readFile(file, "utf8"), original);
     }
+  }));
+
+test("the authoritative writer cannot downgrade version 9 even with limits Off", () =>
+  fixture(async (root, connect) => {
+    const client = await connect();
+    const next = { ...template, version: 9 };
+    await client.run("settings.cas", { expected: null, next });
+    const source = (await client.run("settings.read", {})) as DocumentView;
+    assert.deepEqual(source.parsed, next);
+    await assert.rejects(
+      client.run("settings.cas", { expected: documentFingerprint(source), next: { ...template, version: 8 } }),
+      /cannot be downgraded/u,
+    );
+    assert.equal(await fs.readFile(path.join(root, "pi-sync.json"), "base64"), source.bytes);
   }));
 
 test("invalid existing settings are never replaced by a default or stale save", () =>

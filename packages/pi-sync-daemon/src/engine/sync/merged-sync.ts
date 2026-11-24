@@ -36,7 +36,7 @@ import {
 import { type ConflictResolution, resolveReviewedGroup } from "./conflict-resolution.js";
 import { pruneCompletedConflicts } from "./conflict-retention.js";
 import { resolveContentConflicts } from "./content-conflicts.js";
-import { ContinuousError } from "./continuous-errors.js";
+import { ContinuousError, TransferSizeError } from "./continuous-errors.js";
 import { planFileMerge } from "./file-merge-planner.js";
 import { ignorePublicationNotice, withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields } from "./local-fields.js";
@@ -68,6 +68,12 @@ import { configuredSnapshotPathMatcher, inspectRemoteSelection, syncSessionsSele
 import { fileHashMap, hasLocalChanges, hasRemoteChanges, sameHashes, syncPolicyChanged } from "./sync-state.js";
 import { TEXT_MERGE_WORK_LIMIT } from "./text-merge.js";
 import { checkLiveProtection, validateMergeApplyReview, validateMergedPublication } from "./transfer-freshness.js";
+import {
+  requireTransferSize,
+  selectedPublicationImage,
+  transferSizeDetails,
+  transferSizeLimitsEnabled,
+} from "./transfer-size-limits.js";
 
 const MAX_ATTEMPTS = 3;
 
@@ -257,9 +263,24 @@ export async function mergeSync(
           files.length > 16_384 ||
           files.reduce((bytes, file) => bytes + file.contentBase64.length * 0.75, 0) > 64 * 1024 * 1024
         ) {
-          throw new Error(
-            "Merged transfer exceeds the 64 MiB / 16,384 input-file bound; review an explicit push or pull instead.",
-          );
+          const message =
+            "Merged transfer exceeds the 64 MiB / 16,384 input-file bound; review an explicit push or pull instead.";
+          if (!transferSizeLimitsEnabled(config)) throw new Error(message);
+          let details: string | undefined;
+          try {
+            const projected = portableSnapshot(
+              filterSnapshotForConfigPolicy(rawRemote, config, { sessionDir: sessionRoot }),
+              rawRemote.localFields,
+            );
+            details = transferSizeDetails(config, [
+              { side: "Local input", files: local.files },
+              { side: "Remote input", files: projected.files },
+            ]);
+          } catch {
+            throw new ContinuousError("unsafe", message);
+          }
+          if (details) throw new TransferSizeError(`${message} ${details}`);
+          throw new ContinuousError("unsafe", message);
         }
       }
       const remote = rawRemote
@@ -553,6 +574,12 @@ export async function mergeSync(
           );
         return "applied" as const;
       }
+      if (transferSizeLimitsEnabled(config))
+        requireTransferSize(
+          config,
+          ...(apply ? [{ side: "Local" as const, files: accepted.files }] : []),
+          ...(publish ? [selectedPublicationImage(upload, config, sessionRoot)] : []),
+        );
       await timings.measure("transfer preflight", () =>
         preflightMergedTargets(localRaw, after, snapshotOptions, [
           ...(ctx.protectedSessionFiles ?? []),
@@ -685,7 +712,7 @@ export async function mergeSync(
                         validateFresh,
                       ),
                   }
-                : {}),
+                : { validateIgnorePolicy: validateFresh }),
             }),
           );
           journal.committedHead = result.head;
@@ -899,6 +926,21 @@ async function completeJournal(
     throw new Error(
       "Pending merge has unavailable remote selection metadata; preserve its journal and backup for review.",
     );
+  const requireReviewedApplyImage = journal.applyOnly && transferSizeLimitsEnabled(config);
+  if (requireReviewedApplyImage) {
+    const selected = journal.accepted ?? portableSnapshot(journal.after, config.localFields);
+    const details = transferSizeDetails(config, [{ side: "Local", files: selected.files }]);
+    if (details) {
+      const { sameBaseline, sameLocal } = await readRetirementEvidence();
+      if (sameBaseline && sameLocal) {
+        await clearMergeJournal(config);
+        throw new TransferSizeError(`Transfer blocked by size limits. ${details}`);
+      }
+      throw new TransferSizeError(
+        `Transfer blocked by size limits. The local apply is not verified. Keep the journal and backup. Review the limits before retrying /sync sync. ${details}`,
+      );
+    }
+  }
   if (sessionRoot !== undefined) requireStableMergeSessionRoot(journal.before, journal.after, config.scope);
   await validateFresh();
   const protectedPaths = protectedSessionPaths(ctx, sessionRoot);
@@ -914,7 +956,7 @@ async function completeJournal(
       journal.before,
       journal.after,
       protectedPaths,
-      { ...snapshotOptions, validateMutation: validateApply, validateApplyReview },
+      { ...snapshotOptions, validateMutation: validateApply, validateApplyReview, requireReviewedApplyImage },
       validate,
       ctx.sessionManager.getSessionFile?.(),
     ),

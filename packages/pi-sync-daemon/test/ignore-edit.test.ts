@@ -29,7 +29,7 @@ function client(root: string): ClientFacts {
   };
 }
 
-async function fixture() {
+async function fixture(version: 8 | 9 = 8) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-ignore-edit-")));
   const service = createEngineService(root);
   onTestFinished(async () => {
@@ -39,7 +39,7 @@ async function fixture() {
   const settingsPath = path.join(root, "pi-sync.json");
   const target = path.join(root, ".syncignore");
   const settings = {
-    version: 8,
+    version,
     activeSyncSetup: "home",
     onSwitch: "switch-only",
     future: { arbitrary: [1, 2] },
@@ -75,8 +75,8 @@ function proposal(result: unknown, text = "/edited/\n") {
   return { setup: "home", text, sourceDigest: result.sourceDigest, identity: result.identity };
 }
 
-test("reads existing, shared and missing sources without creating or changing settings or rules", async () => {
-  const { root, target, read, callbacks, settingsPath } = await fixture();
+test.each([8, 9] as const)("version %i reads existing, shared and missing rules without writes", async (version) => {
+  const { root, target, read, callbacks, settingsPath } = await fixture(version);
   const originalSettings = await fs.readFile(settingsPath);
   assert.deepEqual(await read(), { filename: ".syncignore", path: target, sharingSetups: ["shared"] });
   assert.deepEqual(await read("work"), {
