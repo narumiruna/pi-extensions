@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.67.0
+
+### Minor Changes
+
+- 93d6847: Add independent, default-off file and directory transfer size limits for each sync setup. The daemon checks the selected uncompressed content before a new transfer writes locally or publishes remotely, including automatic sync. Enabling either limit requires local settings version 9, which older processes refuse even after the limits are cleared. Remote snapshot formats are unchanged.
+
 ## 0.66.0
 
 ### Minor Changes
