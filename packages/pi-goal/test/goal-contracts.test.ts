@@ -77,7 +77,7 @@ test("completeGoalArguments suggests /goal subcommands and token options", () =>
 test("parseCommand parses budgets, quoted objectives, and management commands", () => {
   assert.deepEqual(parseCommand('--tokens 1.5k "ship tests"'), {
     kind: "start",
-    objective: "ship tests",
+    objective: '"ship tests"',
     tokenBudget: 1500,
   });
   assert.deepEqual(parseCommand("edit --tokens 2m revise scope"), {

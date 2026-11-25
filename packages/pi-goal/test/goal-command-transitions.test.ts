@@ -19,6 +19,30 @@ import {
   startGoalForTest,
 } from "./support/goal-fixture.js";
 
+test.each(["tui", "rpc", "print", "json"] as const)(
+  "start and edit preserve the objective in %s mode",
+  async (mode) => {
+    const objective = 'Keep  "quoted text" & <tags>.\n\n1. Start here.\n\t- Keep the indentation.';
+    const editedObjective = `Don't strip JSON quotes.\r\n  ${String.raw`{"suffix":"\"value\""}`}`;
+    const { mock, ctx } = await startGoalForTest({ mode, hasUI: mode === "tui" || mode === "rpc" }, objective);
+    const command = mock.commands.get("goal");
+    assert.ok(command);
+
+    assert.equal(requireLastGoal(mock).text, objective);
+    assert.ok(
+      mock.sentUserMessages[0]?.text.includes(
+        '<goal_objective>\nKeep  "quoted text" &amp; &lt;tags&gt;.\n\n1. Start here.\n\t- Keep the indentation.\n</goal_objective>',
+      ),
+    );
+
+    await command.handler(`edit --tokens 100k ${editedObjective}`, ctx);
+
+    assert.equal(requireLastGoal(mock).text, editedObjective);
+    assert.equal(requireLastGoal(mock).tokenBudget, 100_000);
+    assert.ok(mock.sentUserMessages[1]?.text.includes(`<goal_objective>\n${editedObjective}\n</goal_objective>`));
+  },
+);
+
 test("legacy queue commands warn affected users without replacing the goal", async () => {
   const legacySettingsPath = settingsPath("legacy-experimental-goals.json");
   writeFileSync(legacySettingsPath, '{"experimental":{"goals":true}}\n');

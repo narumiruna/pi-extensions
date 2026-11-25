@@ -136,8 +136,10 @@ Guaranteed coexistence with Plan mode requires `@narumitw/pi-plan-mode` `0.52.0`
 | `/goal clear` (alias: `stop`) | Immediately clear the goal and pending continuation, not unrelated in-flight work. |
 
 All routes support TUI and RPC; bare `/goal` and `status` reject print and JSON modes, while direct mutation routes remain available.
+Start and edit trim whitespace at the edges of the objective but preserve quotes, line breaks, and spacing inside it.
 Objectives are limited to 4,000 characters; reference a file for longer instructions.
-`--tokens` must precede the objective and accepts positive amounts such as `100k` or `1.5m`.
+Use unquoted command words and options.
+Put `--tokens <budget>` before the objective, with an unquoted positive amount such as `100k` or `1.5m`.
 `status`, `pause`, `resume`, and `clear`/`stop` reject trailing arguments; other text starts an objective.
 
 Starting, editing an active goal, or resuming can trigger paid model work; [token budgets](#-token-budgets-and-elapsed-time) are not dollar-cost caps.
