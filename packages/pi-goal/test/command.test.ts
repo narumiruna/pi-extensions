@@ -97,11 +97,23 @@ test("removed queue command detector recognizes legacy command words", () => {
     "unshift outage",
     "pop",
     "shift",
+    ' \t skip\n"this step" ',
   ]) {
-    assert.equal(isRemovedQueueCommand(input), true);
+    assert.equal(isRemovedQueueCommand(input), true, input);
   }
-  for (const input of ["", "edit add docs", "status", "--tokens 10k add docs", "address docs"]) {
-    assert.equal(isRemovedQueueCommand(input), false);
+  for (const input of [
+    "",
+    "edit add docs",
+    "status",
+    "--tokens 10k add docs",
+    "address docs",
+    '"skip" this step',
+    "'skip' this step",
+    's"k"ip this step',
+    '"" skip this step',
+    "skip: this step",
+  ]) {
+    assert.equal(isRemovedQueueCommand(input), false, input);
   }
 });
 

@@ -66,8 +66,8 @@ export function parseCommand(args: string): CommandResult | string {
 }
 
 export function isRemovedQueueCommand(args: string) {
-  const [first] = tokenize(args.trim());
-  return first !== undefined && REMOVED_QUEUE_COMMANDS.has(first);
+  const [first] = splitHead(args.trim());
+  return REMOVED_QUEUE_COMMANDS.has(first);
 }
 
 function parseObjective(kind: "start" | "edit", input: string): CommandResult | string {
@@ -95,31 +95,6 @@ function parseObjective(kind: "start" | "edit", input: string): CommandResult | 
 function splitHead(input: string): [string, string] {
   const boundary = input.search(/\s/);
   return boundary === -1 ? [input, ""] : [input.slice(0, boundary), input.slice(boundary).trimStart()];
-}
-
-function tokenize(input: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | undefined;
-  for (const char of input) {
-    if (quote) {
-      if (char === quote) quote = undefined;
-      else current += char;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) tokens.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (current) tokens.push(current);
-  return tokens;
 }
 
 export function parseTokenBudget(value: string): number | undefined {

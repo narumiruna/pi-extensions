@@ -43,19 +43,28 @@ test.each(["tui", "rpc", "print", "json"] as const)(
   },
 );
 
-test("legacy queue commands warn affected users without replacing the goal", async () => {
+test("legacy queue sessions warn on bare queue commands and accept quoted objective text", async () => {
   const legacySettingsPath = settingsPath("legacy-experimental-goals.json");
   writeFileSync(legacySettingsPath, '{"experimental":{"goals":true}}\n');
   const active = await startGoalForTest({}, "current objective", legacySettingsPath);
   const before = requireLastGoal(active.mock);
+  const command = active.mock.commands.get("goal");
+  assert.ok(command);
 
-  await active.mock.commands.get("goal")?.handler("prioritize urgent objective", active.ctx);
+  await command.handler("prioritize urgent objective", active.ctx);
 
   assert.equal(requireLastGoal(active.mock).id, before.id);
   assert.equal(requireLastGoal(active.mock).text, "current objective");
   assert.equal(active.mock.sentUserMessages.length, 1);
   assert.match(active.notifications.at(-1)?.message ?? "", /ordered goal queue has been removed/i);
   assert.match(active.notifications.at(-1)?.message ?? "", /\/goal edit/i);
+
+  const objective = '"skip" this step\n\nThen  review the docs.';
+  await command.handler(objective, active.ctx);
+
+  assert.notEqual(requireLastGoal(active.mock).id, before.id);
+  assert.equal(requireLastGoal(active.mock).text, objective);
+  assert.ok(active.mock.sentUserMessages[1]?.text.includes(`<goal_objective>\n${objective}\n</goal_objective>`));
 });
 
 test("legacy persisted queue state is inert and shows migration guidance", () => {

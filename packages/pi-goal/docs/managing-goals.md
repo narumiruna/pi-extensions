@@ -62,4 +62,5 @@ Use `/goal edit <objective>` to reprioritize one objective instead, for example:
 ```
 
 Former queue words `add`, `prioritize`, `drop-last`, `skip`, `push`, `unshift`, `pop`, and `shift` are ordinary objective text for unaffected users.
-Sessions with legacy queue settings or persisted queue state show a migration warning for those words instead of replacing the active Goal.
+In sessions with legacy queue settings or persisted queue state, an unquoted former queue word at the start of `/goal` arguments shows a migration warning instead of replacing the active Goal.
+A quoted word, as in `/goal "skip" this step`, stays part of the objective.
