@@ -172,7 +172,7 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalRuntime) {
       ctx.ui.setStatus(STATUS_KEY, formatStatus(runtime.activeGoal));
       runtime.clearCompletedGoal(ctx);
       runtime.showCompletionStatus(ctx);
-      notifyTerminal(ctx.ui, `Goal complete: ${goal}`, "info");
+      notifyTerminal(ctx.ui, `Goal complete: ${truncateNotification(summary)}`, "info");
 
       return {
         content: toolContent(`Goal complete: ${summary}`),

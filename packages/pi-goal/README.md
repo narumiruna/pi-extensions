@@ -146,7 +146,8 @@ See [Managing goals](./docs/managing-goals.md) for safety-epoch resets, failed-d
 
 ## 🛠️ Tools
 
-- `goal_complete` records completion only for the exact active goal id, requires an evidence-based summary, and renders an accepted summary as Markdown in the TUI.
+- `goal_complete` records completion only for the exact active goal id and requires an evidence-based summary.
+  The notification shows a short preview; the tool result renders the full summary as Markdown in the TUI.
 - `goal_blocked` records a true repeated impasse with the exact goal id, reason, evidence, and repeated-turn count.
 - `goal_wait` pauses automatic continuation after the agent arranges an external wake source, with an optional bounded resume deadline and expandable TUI details.
 
