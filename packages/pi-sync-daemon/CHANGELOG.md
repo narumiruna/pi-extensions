@@ -1,5 +1,11 @@
 # @narumitw/pi-sync-daemon
 
+## 0.13.1
+
+### Patch Changes
+
+- df24888: Resume an interrupted ignore-rule adoption from Pull when the original session can verify file-queue recovery. Use the recorded snapshot and ask before continuing.
+
 ## 0.13.0
 
 ### Minor Changes
