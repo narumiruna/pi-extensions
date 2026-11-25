@@ -89,7 +89,7 @@ The called-path audit covers these groups; it does not admit a whole package:
 | Notify injected providers, coordinator, and settings | Request-local timers/readers/listeners; instance-owned coordinator state; awaited close; explicit settings paths and restored spies |
 | Accounts storage and explicit-ID session selection | Explicit backends/paths, released renewal locks, and fully awaited operations |
 | Plan contracts, controllers, supplied-theme presentation, questionnaire, and settings | Local schedulers/controllers/editor state, drained interactions, pure command parsing, explicit paths, and restored migration environment |
-| Kit, Fleet, Progress, Analytics, Context Management, Ticker, Herdr, Stamp, Subagents, Notes, and Tool listed files | Local algorithms/models, supplied-theme rendering, immutable metadata, or explicit-path fixtures with settled queues |
+| Kit, Fleet, Progress, Analytics, Context Management, Ticker, Stamp, Subagents, Notes, and Tool listed files | Local algorithms/models, supplied-theme rendering, immutable metadata, or explicit-path fixtures with settled queues |
 
 Installed Pi paths were inspected, not inferred from type declarations. `getAgentDir()` resolves on
 call. The imported tools-manager directory is cached, but listed tests do not invoke that manager.
@@ -99,8 +99,8 @@ input. Context projection functions operate on supplied entries rather than allo
 Pi's file mutation queue removes settled path entries and retains only a settled registration barrier.
 These findings must be checked again when the relevant dependency implementation changes.
 
-Seventeen exact builder suites are also admitted: Accounts, Analytics, BTW, Caffeinate, Chat,
-Context Management, File Context, Fleet, GitHub PR, Goal, Herdr, LSP, Recall, Starship, Statusline,
+The reviewed list also admits exact builder suites for Accounts, Analytics, BTW, Caffeinate, Chat,
+Context Management, File Context, Fleet, GitHub PR, Goal, LSP, Recall, Starship, Statusline,
 Tool, and Worktree. They retain unique physical
 outputs and Pi Jiti's `moduleCache: false`, so extension evaluation stays cold even when the native
 SDK peer is warm. Loader reload does not emit lifecycle events. No extension watcher, inhibitor,

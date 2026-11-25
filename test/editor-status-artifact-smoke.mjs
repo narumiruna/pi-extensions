@@ -23,7 +23,7 @@ function command(file, args, cwd) {
 const packages = [];
 const dependencies = {};
 const peers = new Set(["@earendil-works/pi-ai"]);
-for (const id of ["pi-tui-kit", "pi-progress", "pi-subagents", "pi-herdr"]) {
+for (const id of ["pi-tui-kit", "pi-progress", "pi-subagents"]) {
   const source = join(root, "packages", id);
   const manifest = await json(join(source, "package.json"));
   const [packed] = JSON.parse(
@@ -144,9 +144,6 @@ function runReadyChild(entry, cwd) {
 
 async function runtimeProof() {
   process.env.PI_CODING_AGENT_DIR = join(process.cwd(), "agent");
-  process.env.HERDR_ENV = "1";
-  process.env.HERDR_PANE_ID = "artifact-pane";
-  process.env.HERDR_SOCKET_PATH = join(process.cwd(), "unused.sock");
   await mkdir(process.env.PI_CODING_AGENT_DIR);
   const sdk = await import("@earendil-works/pi-coding-agent");
   const kit = await import("@narumitw/pi-tui-kit");
@@ -234,7 +231,7 @@ async function runtimeProof() {
   assert.equal(publisher.setCollapsed(false), true);
   publisher.dispose();
   assert.equal(mounted.size, 0);
-  for (const id of ["pi-progress", "pi-subagents", "pi-herdr"]) {
+  for (const id of ["pi-progress", "pi-subagents"]) {
     const loader = new sdk.DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: process.env.PI_CODING_AGENT_DIR,
