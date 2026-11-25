@@ -36,7 +36,9 @@ interface LegacyStoredGoal extends Omit<ActiveGoal, "status"> {
 }
 
 export interface GoalStateEntryData {
-  goal: ActiveGoal | null;
+  goal: ActiveGoal | Omit<ActiveGoal, "text"> | null;
+  // Set only when `goal.text` is omitted: the earlier entry on the branch that stores the objective.
+  objectiveEntryId?: string;
 }
 
 export interface LegacyQueueState {
@@ -49,6 +51,8 @@ export interface LoadedGoalState {
 }
 
 interface SessionEntry {
+  id?: string;
+  parentId?: string | null;
   type?: string;
   customType?: string;
   data?: unknown;
@@ -61,22 +65,114 @@ interface SessionContext {
   };
 }
 
-export function serializeGoalState(goal: ActiveGoal | undefined): GoalStateEntryData {
+export function serializeGoalState(goal: ActiveGoal | undefined, branch?: readonly SessionEntry[]): GoalStateEntryData {
   // Pi retains custom-entry data by reference, so detach the full append-time snapshot.
-  return { goal: goal ? structuredClone(goal) : null };
+  if (!goal) return { goal: null };
+  const snapshot = structuredClone(goal);
+  // An objective can be thousands of characters and most checkpoints only update accounting, so
+  // point at the entry that already stores it instead of writing it again.
+  const objectiveEntryId = branch ? storedObjectiveEntryId(branch, goal) : undefined;
+  if (!objectiveEntryId) return { goal: snapshot };
+  const { text: _objective, ...accounting } = snapshot;
+  return { goal: accounting, objectiveEntryId };
 }
 
 export function loadGoalStateFromSession(ctx: SessionContext): LoadedGoalState {
-  const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
-  const canonicalEntry = entries
-    .filter((entry) => entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE)
-    .pop();
-  if (canonicalEntry) return loadCanonicalGoalState(canonicalEntry.data);
+  const branch = ctx.sessionManager?.getBranch?.() ?? undefined;
+  const entries = branch ?? ctx.sessionManager?.getEntries?.() ?? [];
+  const canonicalEntry = entries.findLast(isGoalStateEntry);
+  if (canonicalEntry) {
+    // getEntries lists every branch, so only the checkpoint's own ancestors may store its objective.
+    const lineage = () => branch ?? ancestorsOf(entries, canonicalEntry);
+    return loadCanonicalGoalState(withObjective(lineage, canonicalEntry.data));
+  }
 
   const legacyEntry = entries
     .filter((entry) => entry.type === "custom" && entry.customType === LEGACY_GOALS_STATE_ENTRY_TYPE)
     .pop();
   return legacyEntry ? loadLegacyGoalsState(legacyEntry.data) : emptyGoalState();
+}
+
+function isGoalStateEntry(entry: SessionEntry) {
+  return entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE;
+}
+
+// The entry storing `goal`'s unchanged objective, when the branch's latest Goal entry belongs to the same goal.
+function storedObjectiveEntryId(branch: readonly SessionEntry[], goal: ActiveGoal): string | undefined {
+  const latest = branch.findLast(isGoalStateEntry);
+  const data = latest?.data;
+  if (!isRecord(data) || !isRecord(data.goal) || data.goal.id !== goal.id) return undefined;
+  const entryId = Object.hasOwn(data.goal, "text") ? latest?.id : data.objectiveEntryId;
+  if (typeof entryId !== "string") return undefined;
+  return referencedObjective(branch, entryId, goal.id) === goal.text ? entryId : undefined;
+}
+
+// Walks the lineage (oldest first) back from its end. The writer names a source only while every
+// later Goal entry is a text-less checkpoint of the same goal naming that source, so a reference
+// across a clear, another goal or a malformed entry, or to anything but a valid full snapshot of the
+// goal, resolves to nothing. Each link must be a valid stored goal once the objective is filled in.
+function referencedObjective(lineage: readonly SessionEntry[], sourceId: string, goalId: string): string | undefined {
+  const links: Record<string, unknown>[] = [];
+  for (let index = lineage.length - 1; index >= 0; index -= 1) {
+    const entry = lineage[index];
+    if (!entry) continue;
+    if (entry.id === sourceId) {
+      // An ID that several entries share on the lineage does not name one objective.
+      if (!isGoalStateEntry(entry) || lineage.findIndex((candidate) => candidate.id === sourceId) !== index) {
+        return undefined;
+      }
+      const data = entry.data;
+      const goal = isRecord(data) && !Object.hasOwn(data, "objectiveEntryId") ? data.goal : undefined;
+      if (!isStoredGoal(goal) || goal.id !== goalId) return undefined;
+      return links.every((link) => isStoredGoal({ ...link, text: goal.text })) ? goal.text : undefined;
+    }
+    if (!isGoalStateEntry(entry)) continue;
+    const link = compactCheckpoint(entry.data);
+    if (link?.sourceId !== sourceId || link.goal.id !== goalId) return undefined;
+    links.push(link.goal);
+  }
+  return undefined;
+}
+
+// The goal and named source of a checkpoint that omits its objective, or undefined for any other data.
+function compactCheckpoint(data: unknown) {
+  if (!isRecord(data) || typeof data.objectiveEntryId !== "string" || !data.objectiveEntryId) return undefined;
+  const goal = data.goal;
+  if (!isRecord(goal) || Object.hasOwn(goal, "text") || typeof goal.id !== "string") return undefined;
+  return { goal: goal as Record<string, unknown> & { id: string }, sourceId: data.objectiveEntryId };
+}
+
+// The entry and its ancestors, oldest first. Each parent must be a single entry appended before its
+// child, which also rules out cycles; any other parent link yields an empty lineage.
+function ancestorsOf(entries: readonly SessionEntry[], entry: SessionEntry): SessionEntry[] {
+  const indexById = new Map<string | undefined, number | null>();
+  entries.forEach((candidate, index) => {
+    indexById.set(candidate.id, indexById.has(candidate.id) ? null : index);
+  });
+  const lineage: SessionEntry[] = [];
+  for (let index = entries.indexOf(entry); index >= 0; ) {
+    const current = entries[index];
+    if (!current) return [];
+    lineage.push(current);
+    if (typeof current.parentId !== "string") break;
+    const parent = indexById.get(current.parentId);
+    if (parent === undefined) break;
+    if (parent === null || parent >= index) return [];
+    index = parent;
+  }
+  return lineage.reverse();
+}
+
+// Restores an omitted objective from the entry the checkpoint names. A checkpoint that stores its
+// objective, or has no reference, is read as written, so a goal missing its objective stays malformed.
+function withObjective(lineage: () => readonly SessionEntry[], data: unknown): unknown {
+  if (!isRecord(data) || !Object.hasOwn(data, "objectiveEntryId")) return data;
+  if (isRecord(data.goal) && Object.hasOwn(data.goal, "text")) return data;
+  const compact = compactCheckpoint(data);
+  if (!compact) return undefined;
+  const text = referencedObjective(lineage(), compact.sourceId, compact.goal.id);
+  const { objectiveEntryId: _source, ...checkpoint } = data;
+  return text === undefined ? undefined : { ...checkpoint, goal: { ...compact.goal, text } };
 }
 
 function loadCanonicalGoalState(data: unknown): LoadedGoalState {
@@ -222,9 +318,8 @@ function isStoredGoal(value: unknown): value is LegacyStoredGoal {
     Boolean(value.id) &&
     value.id === value.id.trim() &&
     validObjective(value.text) &&
-    ["active", "queued", "paused", "blocked", "usage_limited", "budget_limited", "complete"].includes(
-      String(value.status),
-    ) &&
+    typeof value.status === "string" &&
+    ["active", "queued", "paused", "blocked", "usage_limited", "budget_limited", "complete"].includes(value.status) &&
     typeof value.startedAt === "number" &&
     typeof value.updatedAt === "number" &&
     typeof value.iteration === "number" &&

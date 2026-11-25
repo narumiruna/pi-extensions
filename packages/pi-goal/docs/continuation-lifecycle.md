@@ -213,7 +213,15 @@ Live quota reset, accounting delay, entitlement behavior, and provider-console a
 
 ## Compaction persistence
 
-Canonical Goal state is stored in `goal-state` session entries. Before compaction, the runtime
+Canonical Goal state is stored in `goal-state` session entries; a clear writes `{ goal: null }`.
+For an entry with a Goal, when the latest earlier `goal-state` entry on the branch is a valid full
+snapshot with an entry ID, or a text-less entry that resolves to one, and that snapshot has the same
+Goal ID and objective, the entry omits the objective `text` and names that snapshot in
+`objectiveEntryId`; otherwise,
+including without a readable session branch, the runtime writes the full snapshot. Restore reads
+an omitted objective from the named snapshot only when every `goal-state` entry between them on the
+restored entry's own branch is a valid text-less entry for the same Goal naming the same snapshot;
+an entry without `text` that has any other reference restores no Goal. Before compaction, the runtime
 checkpoints active elapsed time and current safety/accounting state. Automatic compaction retries do
 not enqueue another Goal turn. Non-retrying manual compaction creates at most one fresh intent and
 uses the common idle dispatcher. Old queue metadata in `goal-state` or legacy `goals-state` entries

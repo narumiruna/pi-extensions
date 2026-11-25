@@ -1388,8 +1388,15 @@ export class GoalRuntime {
     if (!isTerminalGoalStatus(goal.status) || this.terminalDetails?.goalId !== goal.id) {
       this.clearTerminalDetails();
     }
-    this.pi.appendEntry(GOAL_STATE_ENTRY_TYPE, serializeGoalState(goal));
+    this.pi.appendEntry(GOAL_STATE_ENTRY_TYPE, serializeGoalState(goal, this.workflowBranch()));
     this.publishGoalState(buildGoalStateSnapshot(goal, this.terminalDetails?.summary, this.terminalDetails?.reason));
+  }
+
+  // Pi appends extension entries to the bound session, so its branch decides whether the
+  // objective is already stored. Without one, persist a full snapshot.
+  private workflowBranch() {
+    const session = this.workflowSession as { getBranch?: () => Parameters<typeof serializeGoalState>[1] } | undefined;
+    return typeof session?.getBranch === "function" ? session.getBranch() : undefined;
   }
 
   clearPersistedGoal(cwd: string, clearedGoal?: ActiveGoal, reason = "goal cleared") {
