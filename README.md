@@ -92,7 +92,6 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | --- | --- | --- |
 | [`pi-chat`](./packages/pi-chat) | Join ephemeral peer-to-peer chat rooms that stay separate from Pi sessions, prompts, and model context. | `pi install npm:@narumitw/pi-chat` |
 | [`pi-fleet`](./packages/pi-fleet) | Start a separate Pi process in a terminal split and connect explicit local Pi sessions for bounded messages and one-turn requests. | `pi install npm:@narumitw/pi-fleet` |
-| [`pi-herdr`](./packages/pi-herdr) | Show agent status and spawn relationships in Herdr or hc. Start and message independent Pi peers in hc only. | `pi install npm:@narumitw/pi-herdr` |
 
 ### Accounts and data
 
@@ -114,7 +113,6 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | [`pi-inspect`](./packages/pi-inspect) | Inspect current session context and live tool calls in a private, read-only browser viewer with `/inspect`. | `pi install ./packages/pi-inspect` |
 | [`pi-notify`](./packages/pi-notify) | Send Telegram reminders when Pi settles, with optional inactivity timing and computer/session/worktree details. | `pi install ./packages/pi-notify` |
 | [`pi-otel`](./packages/pi-otel) | Send agent, model, and tool traces to an OTLP collector or Langfuse. | [Build and load locally](./packages/pi-otel#-install); npm publication pending |
-| [`pi-rex`](./packages/pi-rex) | Show Pi sessions in Rex above the editor and switch to their terminal panes with a click or keyboard picker. | `pi install ./packages/pi-rex`; not yet published |
 | [`pi-stamp`](./packages/pi-stamp) | Show configurable timestamps with opt-in assistant metadata, response timing, and tool timing in the TUI transcript. | `pi install npm:@narumitw/pi-stamp` |
 | [`pi-starship`](./packages/pi-starship) | Use a native Starship-style TOML footer with Pi-specific modules and no Starship binary dependency. | `pi install npm:@narumitw/pi-starship` |
 | [`pi-statusline`](./packages/pi-statusline) | Show model, tools, Git state, context usage, tokens, cost, and time in a preset or JSON-configured footer. | `pi install npm:@narumitw/pi-statusline` |
@@ -164,6 +162,8 @@ To load only selected extensions, replace the installed package entry in `~/.pi/
 ```
 
 Filters use resource paths relative to the repository root. A package directory such as `packages/pi-accounts` is not enough; select its `src/index.ts` entrypoint.
+
+`pi-herdr` and `pi-rex` are no longer bundled with this repository. Remove their paths from any resource filters that list them. If you installed either separately, use `pi remove <source>` with the original install source to remove it from Pi.
 
 Restart Pi or run `/reload` after changing the filter. Update the checkout later with:
 

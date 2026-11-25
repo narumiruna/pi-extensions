@@ -12,7 +12,6 @@ const probe = String.raw`
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createServer } from "node:net";
 import { pathToFileURL } from "node:url";
 
 const [kind, root] = process.argv.slice(1);
@@ -76,27 +75,6 @@ if (kind === "starship") {
   });
   await transport.start();
   assert.ok(transport.endpointManifest);
-} else if (kind === "herdr") {
-  const { openHerdrSubscription } = await load("packages/pi-herdr/src/herdr-client.js");
-  const endpoint = join(agentDir, "herdr.sock");
-  const server = createServer((socket) => {
-    // This fake external peer must not itself keep the probe alive.
-    socket.unref();
-    let input = "";
-    socket.on("data", (chunk) => {
-      input += chunk;
-      if (!input.includes("\n")) return;
-      const request = JSON.parse(input.split("\n")[0]);
-      socket.write(JSON.stringify({ id: request.id, result: { type: "subscription_started" } }) + "\n");
-    });
-  });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(endpoint, resolve);
-  });
-  server.unref();
-  await openHerdrSubscription(endpoint, { id: "idle", method: "events.subscribe", params: {} },
-    new AbortController().signal, () => {});
 } else if (kind === "goal-wakeup") {
   const { GoalWaitTimer } = await load("packages/pi-goal/src/wait.js");
   new GoalWaitTimer().schedule(Date.now() + 50, () => process.stdout.write("woke\n"));
@@ -104,7 +82,7 @@ if (kind === "starship") {
   throw new Error("Unknown probe: " + kind);
 }
 
-if (kind !== "fleet" && kind !== "herdr") {
+if (kind !== "fleet") {
   const delay = { starship: 30000, tool: 500, sync: 30000 }[kind];
   const owned = kind === "goal-wakeup" ? timers.at(-1) : timers.find((record) => record.delay === delay);
   assert.ok(owned, "Expected an armed timer");
@@ -115,11 +93,11 @@ process.disconnect();
 // Do not call session_shutdown, dispose(), process.exit(), or clear the owned timer.
 `;
 
-for (const kind of ["starship", "tool", "sync", "fleet", "herdr", "goal-wakeup"]) {
-  const run = process.platform === "win32" && (kind === "fleet" || kind === "herdr") ? test.skip : test;
+for (const kind of ["starship", "tool", "sync", "fleet", "goal-wakeup"]) {
+  const run = process.platform === "win32" && kind === "fleet" ? test.skip : test;
   run(`${kind}: background work permits natural exit; accepted wakeups still finish`, async (t) => {
     // These probes test handle ownership, not the Unix socket path limit.
-    const shortPath = process.platform !== "win32" && (kind === "fleet" || kind === "herdr");
+    const shortPath = kind === "fleet";
     const directory = await mkdtemp(
       join(shortPath ? await realpath("/tmp") : tmpdir(), shortPath ? "pi-bg-" : "pi-background-timer-exit-"),
     );

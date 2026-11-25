@@ -26,7 +26,6 @@
       "./packages/pi-fleet/src/index.ts",
       "./packages/pi-github-pr/src/index.ts",
       "./packages/pi-goal/src/index.ts",
-      "./packages/pi-herdr/src/index.ts",
       "./packages/pi-illustrate/src/index.ts",
       "./packages/pi-inline/src/index.ts",
       "./packages/pi-inspect/src/index.ts",
@@ -36,7 +35,6 @@
       "./packages/pi-otel/src/index.ts",
       "./packages/pi-plan-mode/src/index.ts",
       "./packages/pi-recall/src/index.ts",
-      "./packages/pi-rex/src/index.ts",
       "./packages/pi-stamp/src/index.ts",
       "./packages/pi-starship/src/index.ts",
       "./packages/pi-statusline/src/index.ts",
@@ -49,7 +47,6 @@
       "./packages/pi-worktree/src/index.ts"
     ],
     "skills": [
-      "./packages/pi-herdr/skills",
       "./packages/pi-starship/skills",
       "./packages/pi-sync/skills"
     ]

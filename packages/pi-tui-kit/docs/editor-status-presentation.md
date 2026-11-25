@@ -10,18 +10,16 @@ The owner supplies immutable display snapshots, safe text, summaries, priority, 
 
 | Helper | Real consumers | Shared responsibility |
 | --- | --- | --- |
-| `createEditorStatusPublisher` | Progress, Subagents, Herdr | Retain a visible component, replace its latest snapshot, request rendering, and clear its exact key. |
+| `createEditorStatusPublisher` | Progress, Subagents | Retain a visible component, replace its latest snapshot, request rendering, and clear its exact key. |
 | `createEditorStatusView` | Progress, Subagents | Session-local manual modes and explicitly armed one-shot compaction. |
 | `createEditorStatusCollection` | Progress, Subagents | Bounded authoritative replacement and independent item presentation. |
 
-Herdr retains its authoritative topology reads, invalidation handling, retries, sorting, and five-item limit.
 Progress retains its saved progress, model-context contract, and completion timer.
 Subagents retains its runtime, active-job projection, subscriptions, and elapsed-time refresh.
 No helper imports another extension, identifies extension-specific state, or owns a shared registry.
 
 The approved collection scope is whole-snapshot `replace`.
 Current Progress and Subagents sources do not provide two compatible incremental display-data boundaries; `upsert`, `push`, and `append` are deliberately absent.
-Herdr subscription payloads are invalidations, not authoritative incremental updates.
 Do not manufacture an incremental API by splitting a complete snapshot into item updates.
 
 ## Stable publication
@@ -64,7 +62,6 @@ Existing owner controls restore the body without changing domain data:
 | --- | --- |
 | Progress | `/progress` → Widget view → default, details, or summary. |
 | Subagents | `/subagents settings` → Status view → Job rows or Counts only. |
-| Herdr | Open `/herdr`. |
 | Files | Open `/files`. |
 | Plan mode | Open `/plan` without arguments. |
 | Active tools | Open `/tool`. |
@@ -169,7 +166,6 @@ Owners retain their standalone RPC, notification, and tool-result labels because
 | --- | --- | --- |
 | Progress | Blocked count, completion count, and compact-view active count; removed count when applicable. | Step rows; completion and summary-only views need no duplicate header. |
 | Subagents | Current running/queued counts and actual omitted or removed counts. | Job rows; deliberate summary mode does not claim every job was omitted by a limit. |
-| Herdr | Sibling-agent count. | Agent state and identity rows, including hidden-agent count. |
 | Files | Existing name-only divider. | Edit restriction or blocked warning first, followed by queued prompt context. |
 | Plan mode | Planning, discussion, readiness, saved, or implementation state. | Applicable edit restriction and user actions, not model-only tool instructions. |
 | Active tools | Callable-tool count. | Tool groups and exposure markers. |
@@ -192,7 +188,7 @@ Verification uses the repository's pinned Node release and both gates: `npm run 
 Named-disclosure regressions include full-width/body clicks, native drag selection and exact copy, independent owners, current-data restore, keyboard recovery, stale/disposed input, reentrant body/theme callbacks, and moved or replaced press targets in Pi's installed fullscreen host.
 These passing gates do not establish exact tracking across an unobserved maintenance/custom-run boundary; a separate native diagnostic reproduces the one-extra-cycle limit above.
 The complete intended diff was reviewed for correctness, security, lifecycle safety, compatibility, regressions, and scope against the extension, settings, README, Kit admission, and coordinated-release guides.
-Failure-injection tests cover cleanup exceptions across all three consumers, joining source/menu/settings/runtime work, stale context getters, retrying failed publication cleanup, reentrant policy/measurement callbacks, and capacity bypass attempts.
+Failure-injection tests cover cleanup exceptions across the consumers, joining source/menu/settings/runtime work, stale context getters, retrying failed publication cleanup, reentrant policy/measurement callbacks, and capacity bypass attempts.
 
 | Text/render contract | Previous behavior | Verified result |
 | --- | --- | --- |
@@ -202,7 +198,7 @@ Failure-injection tests cover cleanup exceptions across all three consumers, joi
 | Removed item receives cosmetic updates | No independent presentation state. | The raw identity stays hidden until owner reset or absence/reuse; domain data remains available. |
 | Cleanup throws during replacement/shutdown | Later invalidation or task release could be skipped. | Cleanup attempts complete, old generations become invalid, tasks are joined, and failures remain observable. |
 
-`npm run package:pack -- <unscoped-name>` passed for Kit, Progress, Subagents, and Herdr.
+Use `npm run package:pack -- <unscoped-name>` for dry-run package checks of Kit, Progress, and Subagents.
 `node test/editor-status-artifact-smoke.mjs` additionally packs the actual built artifacts, inspects files/exports/licenses, installs them offline outside the workspace with scripts disabled, and verifies isolated ESM/Jiti loading, lifecycle, lazy RPC menus, and provider-free widget behavior.
 Its bounded child operation deadline starts after an IPC readiness handshake; package identities, SHA256 hashes, and packed file lists are retained in the temporary evidence directory printed by the script.
 This does not publish packages or establish registry availability.

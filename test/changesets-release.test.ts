@@ -173,7 +173,6 @@ for (const { label, packageNames, minorConsumers } of [
       "pi-cache-hit-monitor",
       "pi-chat",
       "pi-files",
-      "pi-herdr",
       "pi-plan-mode",
       "pi-progress",
       "pi-subagents",
@@ -185,7 +184,7 @@ for (const { label, packageNames, minorConsumers } of [
   },
   {
     label: "editor status presentation",
-    packageNames: ["pi-tui-kit", "pi-progress", "pi-subagents", "pi-herdr"],
+    packageNames: ["pi-tui-kit", "pi-progress", "pi-subagents"],
     minorConsumers: ["@narumitw/pi-progress", "@narumitw/pi-subagents"],
   },
 ]) {
