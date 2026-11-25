@@ -1,5 +1,12 @@
 # @narumitw/pi-goal
 
+## 0.55.5
+
+### Patch Changes
+
+- bc8c3d3: Show a short preview of the completion summary instead of the original objective in the Goal completion notification.
+- 03e02fd: Preserve quotes, line breaks, and internal whitespace in `/goal` and `/goal edit` objectives, including when `--tokens` is set.
+
 ## 0.55.4
 
 ### Patch Changes
