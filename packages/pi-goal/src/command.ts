@@ -53,68 +53,48 @@ export function completeGoalArguments(argumentPrefix: string): GoalArgumentCompl
 }
 
 export function parseCommand(args: string): CommandResult | string {
-  const tokens = tokenize(args.trim());
-  if (tokens.length === 0) return { kind: "show" };
-  const [first, ...rest] = tokens;
-  if (first === "pause") return rest.length === 0 ? { kind: "pause" } : "Usage: /goal pause";
-  if (first === "resume") return rest.length === 0 ? { kind: "resume" } : "Usage: /goal resume";
-  if (first === "clear" || first === "stop") return rest.length === 0 ? { kind: "clear" } : "Usage: /goal clear";
-  if (first === "status") return rest.length === 0 ? { kind: "show" } : "Usage: /goal status";
+  const input = args.trim();
+  if (input === "") return { kind: "show" };
+  const [first, rest] = splitHead(input);
+  if (first === "pause") return rest === "" ? { kind: "pause" } : "Usage: /goal pause";
+  if (first === "resume") return rest === "" ? { kind: "resume" } : "Usage: /goal resume";
+  if (first === "clear" || first === "stop") return rest === "" ? { kind: "clear" } : "Usage: /goal clear";
+  if (first === "status") return rest === "" ? { kind: "show" } : "Usage: /goal status";
   if (first === "edit") return parseObjective("edit", rest);
 
-  return parseObjective("start", tokens);
+  return parseObjective("start", input);
 }
 
 export function isRemovedQueueCommand(args: string) {
-  const [first] = tokenize(args.trim());
-  return first !== undefined && REMOVED_QUEUE_COMMANDS.has(first);
+  const [first] = splitHead(args.trim());
+  return REMOVED_QUEUE_COMMANDS.has(first);
 }
 
-function parseObjective(kind: "start" | "edit", tokens: string[]): CommandResult | string {
+function parseObjective(kind: "start" | "edit", input: string): CommandResult | string {
+  const [option, rest] = splitHead(input);
+  let objective = input;
   let tokenBudget: number | undefined;
-  const objectiveTokens = [...tokens];
-  if (objectiveTokens[0] === "--tokens") {
-    const rawBudget = objectiveTokens[1];
+  if (option === "--tokens") {
+    const [rawBudget, body] = splitHead(rest);
     if (!rawBudget) {
       return kind === "start"
         ? "Usage: /goal --tokens 100k <goal_to_complete>"
         : `Usage: /goal ${kind} --tokens 100k <goal_to_complete>`;
     }
-    const parsedBudget = parseTokenBudget(rawBudget);
-    if (parsedBudget === undefined) return `Invalid token budget: ${rawBudget}`;
-    tokenBudget = parsedBudget;
-    objectiveTokens.splice(0, 2);
+    tokenBudget = parseTokenBudget(rawBudget);
+    if (tokenBudget === undefined) return `Invalid token budget: ${rawBudget}`;
+    objective = body;
   }
-  if (objectiveTokens.length === 0) {
+  if (objective === "") {
     if (kind === "start") return "Usage: /goal <goal_to_complete>";
     return `Usage: /goal ${kind} <goal_to_complete>`;
   }
-  return { kind, objective: objectiveTokens.join(" "), tokenBudget };
+  return { kind, objective, tokenBudget };
 }
 
-function tokenize(input: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | undefined;
-  for (const char of input) {
-    if (quote) {
-      if (char === quote) quote = undefined;
-      else current += char;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) tokens.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (current) tokens.push(current);
-  return tokens;
+function splitHead(input: string): [string, string] {
+  const boundary = input.search(/\s/);
+  return boundary === -1 ? [input, ""] : [input.slice(0, boundary), input.slice(boundary).trimStart()];
 }
 
 export function parseTokenBudget(value: string): number | undefined {

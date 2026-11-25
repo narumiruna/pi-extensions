@@ -19,19 +19,52 @@ import {
   startGoalForTest,
 } from "./support/goal-fixture.js";
 
-test("legacy queue commands warn affected users without replacing the goal", async () => {
+test.each(["tui", "rpc", "print", "json"] as const)(
+  "start and edit preserve the objective in %s mode",
+  async (mode) => {
+    const objective = 'Keep  "quoted text" & <tags>.\n\n1. Start here.\n\t- Keep the indentation.';
+    const editedObjective = `Don't strip JSON quotes.\r\n  ${String.raw`{"suffix":"\"value\""}`}`;
+    const { mock, ctx } = await startGoalForTest({ mode, hasUI: mode === "tui" || mode === "rpc" }, objective);
+    const command = mock.commands.get("goal");
+    assert.ok(command);
+
+    assert.equal(requireLastGoal(mock).text, objective);
+    assert.ok(
+      mock.sentUserMessages[0]?.text.includes(
+        '<goal_objective>\nKeep  "quoted text" &amp; &lt;tags&gt;.\n\n1. Start here.\n\t- Keep the indentation.\n</goal_objective>',
+      ),
+    );
+
+    await command.handler(`edit --tokens 100k ${editedObjective}`, ctx);
+
+    assert.equal(requireLastGoal(mock).text, editedObjective);
+    assert.equal(requireLastGoal(mock).tokenBudget, 100_000);
+    assert.ok(mock.sentUserMessages[1]?.text.includes(`<goal_objective>\n${editedObjective}\n</goal_objective>`));
+  },
+);
+
+test("legacy queue sessions warn on bare queue commands and accept quoted objective text", async () => {
   const legacySettingsPath = settingsPath("legacy-experimental-goals.json");
   writeFileSync(legacySettingsPath, '{"experimental":{"goals":true}}\n');
   const active = await startGoalForTest({}, "current objective", legacySettingsPath);
   const before = requireLastGoal(active.mock);
+  const command = active.mock.commands.get("goal");
+  assert.ok(command);
 
-  await active.mock.commands.get("goal")?.handler("prioritize urgent objective", active.ctx);
+  await command.handler("prioritize urgent objective", active.ctx);
 
   assert.equal(requireLastGoal(active.mock).id, before.id);
   assert.equal(requireLastGoal(active.mock).text, "current objective");
   assert.equal(active.mock.sentUserMessages.length, 1);
   assert.match(active.notifications.at(-1)?.message ?? "", /ordered goal queue has been removed/i);
   assert.match(active.notifications.at(-1)?.message ?? "", /\/goal edit/i);
+
+  const objective = '"skip" this step\n\nThen  review the docs.';
+  await command.handler(objective, active.ctx);
+
+  assert.notEqual(requireLastGoal(active.mock).id, before.id);
+  assert.equal(requireLastGoal(active.mock).text, objective);
+  assert.ok(active.mock.sentUserMessages[1]?.text.includes(`<goal_objective>\n${objective}\n</goal_objective>`));
 });
 
 test("legacy persisted queue state is inert and shows migration guidance", () => {
