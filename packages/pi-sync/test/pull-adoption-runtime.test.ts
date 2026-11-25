@@ -11,7 +11,7 @@ import { DaemonConnection, findDaemon, stopDaemon } from "@narumitw/pi-sync-daem
 import { ignorePolicyFingerprint } from "@narumitw/pi-sync-daemon/engine/ignore/ignore-source";
 import { configFromSettings } from "@narumitw/pi-sync-daemon/engine/settings/config";
 import { validateSettingsDocument } from "@narumitw/pi-sync-daemon/engine/settings/settings-validation";
-import { test } from "vitest";
+import { aroundEach, test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { v3WebDavSettings } from "./data-fixtures.js";
@@ -43,12 +43,22 @@ function file(text: string) {
   };
 }
 
-test("the built Pull action reselects and resumes a recorded adoption without reloading Pi", async ({ signal }) => {
+let verify: () => Promise<void>;
+let running: Promise<void> | undefined;
+
+aroundEach(async (runTest, { signal }) => {
   await using cleanup = new AsyncDisposableStack();
-  const root = await realpath(await mkdtemp(path.join(tmpdir(), "pi-sync-rpc-")));
-  cleanup.defer(() => rm(root, { recursive: true, force: true }));
+  verify = await preparePullAdoption(cleanup, signal);
+  await runTest();
+});
+
+async function preparePullAdoption(cleanup: AsyncDisposableStack, signal: AbortSignal) {
+  const temporary = await mkdtemp(path.join(tmpdir(), "pi-sync-rpc-"));
+  cleanup.defer(() => rm(temporary, { recursive: true, force: true }));
+  const root = await realpath(temporary);
   const listener = await new MockWebDavServer().start();
   cleanup.defer(() => listener.close());
+  signal.throwIfAborted();
   const packageRoot = path.resolve("packages/pi-sync");
   const base = v3WebDavSettings();
   base.storageConnections.dav.url = listener.url;
@@ -67,6 +77,7 @@ test("the built Pull action reselects and resumes a recorded adoption without re
   const rule = path.join(root, ".syncignore");
   await writeFile(rule, before);
   await writeFile(path.join(root, "notes.md"), "local");
+  signal.throwIfAborted();
   const child = spawn(
     process.execPath,
     [
@@ -88,7 +99,7 @@ test("the built Pull action reselects and resumes a recorded adoption without re
     }
   });
   const [ready] = await Promise.race([
-    once(child, "message"),
+    once(child, "message", { signal }),
     exited.then(() => assert.fail("Fixture daemon exited before readiness")),
   ]);
   assert.equal(ready, "ready");
@@ -108,6 +119,7 @@ test("the built Pull action reselects and resumes a recorded adoption without re
   await loader.reload();
   const loaded = loader.getExtensions();
   cleanup.defer(() => loaded.runtime.invalidate("Pull recovery smoke finished"));
+  signal.throwIfAborted();
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions[0];
   const command = extension?.commands.get("sync");
@@ -135,30 +147,42 @@ test("the built Pull action reselects and resumes a recorded adoption without re
     },
   });
   cleanup.defer(async () => {
-    for (const handler of extension?.handlers.get("session_shutdown") ?? [])
-      await handler({ type: "session_shutdown", reason: "reload" }, ctx);
+    try {
+      for (const handler of extension?.handlers.get("session_shutdown") ?? [])
+        await handler({ type: "session_shutdown", reason: "reload" }, ctx);
+    } finally {
+      // A timed-out test can still be draining. Keep its daemon and WebDAV fixtures alive until it settles.
+      await running?.catch(() => {});
+      running = undefined;
+    }
   });
+  signal.throwIfAborted();
   for (const handler of extension?.handlers.get("session_start") ?? [])
     await handler({ type: "session_start", reason: "startup" }, ctx);
+  signal.throwIfAborted();
   await command.handler("push", ctx);
+  signal.throwIfAborted();
   const config = configFromSettings(settings).backend;
   assert.equal(config.type, "webdav");
   const backend = new WebDavSyncBackend(config);
-  const starting = await backend.readHead();
+  const starting = await backend.readHead(signal);
   assert.ok(starting, JSON.stringify(notifications));
-  const current = await backend.readSnapshot(starting.snapshotRef);
+  const current = await backend.readSnapshot(starting.snapshotRef, signal);
   assert.ok(current.selection?.version === 4);
   const incoming = "# incoming\n/private.md\n";
-  await backend.publishSnapshot(
-    {
-      ...current,
-      id: "recorded",
-      files: [file("recorded")],
-      selection: { ...current.selection, fingerprint: ignorePolicyFingerprint(incoming, false) },
-      ignoreRules: { filename: ".syncignore", text: incoming },
-    },
+  const recorded = {
+    ...current,
+    id: "recorded",
+    files: [file("recorded")],
+    selection: { ...current.selection, fingerprint: ignorePolicyFingerprint(incoming, false) },
+    ignoreRules: { filename: ".syncignore", text: incoming },
+  };
+  const { head: pinned } = await backend.publishSnapshot(
+    recorded,
     { kind: "revision", revision: starting.revision },
+    { signal },
   );
+  signal.throwIfAborted();
   const peer = new DaemonConnection(
     owner.paths,
     owner.identity,
@@ -174,38 +198,50 @@ test("the built Pull action reselects and resumes a recorded adoption without re
     { callback: async () => true },
   );
   cleanup.defer(() => peer.dispose());
-  await peer.attach();
-  listener.requests.length = 0;
-  await command.handler("", ctx);
-  assert.ok(
-    notifications.some(({ message }) => /Another live Pi session/u.test(message)),
-    JSON.stringify(notifications),
-  );
-  assert.equal(await readFile(rule, "utf8"), before);
-  assert.ok(listener.requests.every(({ method }) => method === "GET"));
-  await peer.dispose();
-  const pinned = await backend.readHead();
-  assert.ok(pinned);
-  const recorded = await backend.readSnapshot(pinned.snapshotRef);
-  await backend.publishSnapshot(
-    { ...recorded, id: "new-head", files: [file("new head")] },
-    { kind: "revision", revision: pinned.revision },
-  );
-  listener.requests.length = 0;
-  selected = false;
-  signal.throwIfAborted();
-  await command.handler("", ctx);
-  assert.ok(
-    menus.some(
-      (choices) =>
-        choices.some((item) => item.includes("Pull from remote")) &&
-        choices.some((item) => item.includes("Stop daemon for recovery")),
-    ),
-  );
-  assert.ok(reviews.includes("Resume reviewed ignore-rule Pull?"), JSON.stringify(notifications));
-  assert.equal(await readFile(rule, "utf8"), incoming);
-  assert.equal(await readFile(path.join(root, "notes.md"), "utf8"), "recorded");
-  assert.equal((await findDaemon(root))?.identity.pid === child.pid, false);
-  assert.equal(reloads, 0);
-  assert.ok(listener.requests.length > 0 && listener.requests.every(({ method }) => method === "GET"));
+  await peer.attach(signal);
+  const pullFromMenu = async () => {
+    listener.requests.length = 0;
+    menus.length = 0;
+    selected = false;
+    await command.handler("", ctx);
+    signal.throwIfAborted();
+  };
+  return async () => {
+    signal.throwIfAborted();
+    await pullFromMenu();
+    assert.ok(
+      notifications.some(({ message }) => /Another live Pi session/u.test(message)),
+      JSON.stringify(notifications),
+    );
+    assert.equal(await readFile(rule, "utf8"), before);
+    assert.ok(listener.requests.every(({ method }) => method === "GET"));
+    await peer.dispose();
+    await backend.publishSnapshot(
+      { ...recorded, id: "new-head", files: [file("new head")] },
+      { kind: "revision", revision: pinned.revision },
+      { signal },
+    );
+    signal.throwIfAborted();
+    await pullFromMenu();
+    assert.ok(
+      menus.some(
+        (choices) =>
+          choices.some((item) => item.includes("Pull from remote")) &&
+          choices.some((item) => item.includes("Stop daemon for recovery")),
+      ),
+    );
+    assert.ok(reviews.includes("Resume reviewed ignore-rule Pull?"), JSON.stringify(notifications));
+    assert.equal(await readFile(rule, "utf8"), incoming);
+    assert.equal(await readFile(path.join(root, "notes.md"), "utf8"), "recorded");
+    const replacement = await findDaemon(root);
+    assert.ok(replacement);
+    assert.notEqual(replacement.identity.pid, owner.identity.pid);
+    assert.equal(reloads, 0);
+    assert.ok(listener.requests.length > 0 && listener.requests.every(({ method }) => method === "GET"));
+  };
+}
+
+test("the built Pull action reselects and resumes a recorded adoption without reloading Pi", () => {
+  running = verify();
+  return running;
 });
