@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { DaemonError, requestDaemon } from "./client-transport.js";
-import { stopDaemonAfterForegroundQueueFailure } from "./daemon-recovery.js";
+import { ForegroundStopRefusedError, stopDaemonAfterForegroundQueueFailure } from "./daemon-recovery.js";
 import { isForegroundDirection, isForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import { canonicalRootGuard, type RuntimePaths, readProcessBirth } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
@@ -89,6 +89,7 @@ export class DaemonConnection {
     assertRoot(): void;
     birth?: string;
     attempted?: true;
+    retryOnRefusal: boolean;
   };
   private observesState = false;
   private stateRevision?: string;
@@ -331,7 +332,13 @@ export class DaemonConnection {
         throw new DaemonError(job.error ?? { name: "Error", message: "Daemon operation failed." });
       if (!foreground) signal?.throwIfAborted();
       if (assertRoot && isForegroundQueueOutcome(job.result))
-        this.foregroundRecovery = { job: id, generation, birth, assertRoot };
+        this.foregroundRecovery = {
+          job: id,
+          generation,
+          birth,
+          assertRoot,
+          retryOnRefusal: job.result.foregroundQueueCleanup === "resume-adoption",
+        };
       return job.result;
     };
     if (onCommit) this.commits.set(id, { notify: onCommit, signal });
@@ -417,36 +424,42 @@ export class DaemonConnection {
       this.pendingJobs.delete(id);
     });
   }
+  canRecoverForeground(job: string): boolean {
+    const target = this.foregroundRecovery;
+    return (
+      !!target &&
+      target.job === job &&
+      target.generation === this.facts.generation &&
+      !target.attempted &&
+      this.attached &&
+      !this.closed &&
+      !this.admitting &&
+      !this.disposing &&
+      !this.pausing &&
+      this.pendingJobs.size === 0 &&
+      !this.uncertain &&
+      this.contactResumeState === "idle"
+    );
+  }
   async recoverForeground(job: string, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     const target = this.foregroundRecovery;
-    if (
-      !target ||
-      target.job !== job ||
-      target.generation !== this.facts.generation ||
-      target.attempted ||
-      !this.attached ||
-      this.closed ||
-      this.admitting ||
-      this.disposing ||
-      this.pausing ||
-      this.pendingJobs.size ||
-      this.uncertain ||
-      this.contactResumeState !== "idle"
-    )
+    if (!target || !this.canRecoverForeground(job))
       throw new Error("The current Pi session could not verify a completed transfer for daemon recovery.");
     target.assertRoot();
     target.attempted = true;
     const owned = AbortSignal.any([signal, this.controller.signal, AbortSignal.timeout(FOREGROUND_RECOVERY_MS)]);
-    await stopDaemonAfterForegroundQueueFailure(
-      this.paths,
-      this.identity,
-      {
-        ...target,
-        client: this.facts.id,
-      },
-      owned,
-    );
+    try {
+      await stopDaemonAfterForegroundQueueFailure(
+        this.paths,
+        this.identity,
+        { ...target, client: this.facts.id },
+        owned,
+      );
+    } catch (error) {
+      if (target.retryOnRefusal && error instanceof ForegroundStopRefusedError) delete target.attempted;
+      throw error;
+    }
     await this.closeLocal();
     target.assertRoot();
   }

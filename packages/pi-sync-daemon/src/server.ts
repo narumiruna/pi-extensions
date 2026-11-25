@@ -492,7 +492,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         if (Buffer.byteLength(JSON.stringify(result ?? null)) > MAX_MESSAGE_BYTES / 2)
           throw new Error("Operation result exceeds its byte limit; use bounded inspection.");
         if (isForegroundDirection(operation) && isForegroundQueueOutcome(result)) {
-          if (result.foregroundQueueCleanup === "before-mutation" && job.committed)
+          if (
+            (result.foregroundQueueCleanup === "before-mutation" && job.committed) ||
+            (result.foregroundQueueCleanup === "resume-adoption" && (!job.committed || operation !== "pull.foreground"))
+          )
             throw Object.assign(new Error("File-queue release and transfer outcome could not be verified."), {
               code: OWNERSHIP_CLEANUP_REQUIRED,
             });

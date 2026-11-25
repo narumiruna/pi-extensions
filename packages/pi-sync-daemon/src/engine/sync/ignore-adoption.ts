@@ -7,6 +7,8 @@ import type { CommandOptions } from "../commands/command-types.js";
 import { type EngineContext, getEngineRoot, withEngineMutationQueue } from "../host.js";
 import {
   type AdoptionJournal,
+  adoptionJournalFingerprint,
+  assertCurrentAdoptionJournal,
   completeAdoptionJournal,
   createAdoptionJournal,
   recordInstalledIdentity,
@@ -277,7 +279,10 @@ export async function adoptRemoteRules(input: AdoptionInput) {
     rawSnapshotHashIdentity(latest) !== remoteFilesIdentity
   )
     throw new Error("The reviewed remote snapshot changed; reopen Pull.");
-  if (current) await verifyAdoptionBackup(current, signal);
+  if (current) {
+    await verifyAdoptionBackup(current, signal);
+    await assertCurrentAdoptionJournal(current);
+  }
   await validateContext();
   const refresh = async () => {
     const next = await createSnapshot(config.snapshotIdentity, projected);
@@ -352,15 +357,18 @@ export async function adoptRemoteRules(input: AdoptionInput) {
     )
       throw new Error("Local files changed after the reviewed Pull. Preserve its journal.");
     markCommit();
+    if (!journal.installedIdentity) options.directionalAction?.setAdoptionResume?.(adoptionJournalFingerprint(journal));
     await applySnapshot(physical, protectedPaths, {
       ...projected,
       reviewedLocal: before,
       validateApplyReview: async () => {
         await validateContext();
+        await assertCurrentAdoptionJournal(journal);
         if (syncStateFingerprint(await readStateForConfig(config)) !== journal.stateFingerprint)
           throw new Error("Baseline changed at Pull's commit boundary.");
       },
     });
+    options.directionalAction?.setAdoptionResume?.(undefined);
   }
   await validateContext();
   if (!sameHashes(fileHashMap(await refresh()), journal.afterFiles))

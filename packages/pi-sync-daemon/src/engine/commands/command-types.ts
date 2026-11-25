@@ -25,6 +25,8 @@ export interface CommandOptions {
   directionalAction?: {
     validate(config: AnySyncConfig): void;
     checkpoint?(fingerprint: string): Promise<void>;
+    expectedAdoptionJournal?: string;
+    setAdoptionResume?(journal: string | undefined): void;
     notifySuccess?(message: string): void;
   };
   args: string[];

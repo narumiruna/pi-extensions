@@ -176,14 +176,20 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
   });
   return {
     cleanupRequired: () => poisoned !== undefined,
-    async runForeground<T>(execution: Execution, action: () => Promise<T>): Promise<T | ForegroundQueueOutcome> {
+    async runForeground<T>(
+      execution: Execution,
+      action: (setAdoptionResume: (journal: string | undefined) => void) => Promise<T>,
+    ): Promise<T | ForegroundQueueOutcome> {
       const owner = current();
       if (owner.execution !== execution || !execution.clientId || owner.held.size || owner.foreground)
         throw new Error("Foreground queue recovery requires one attached directional job.");
       const foreground: ForegroundQueueState = { entered: false, deferred: false };
+      let adoptionResume: string | undefined;
       return scope.run({ ...owner, foreground }, async () => {
         try {
-          const result = await action();
+          const result = await action((journal) => {
+            adoptionResume = journal;
+          });
           if (foreground.deferred && poisoned === "queue") return { foregroundQueueCleanup: "verified-result", result };
           return result;
         } catch (error) {
@@ -193,7 +199,9 @@ export function installServiceHost(root: string, ignoreFileOperationsAvailable?:
             error instanceof AggregateError &&
             error.errors.includes(foreground.beforeMutation)
           )
-            return { foregroundQueueCleanup: "before-mutation" };
+            return adoptionResume === undefined
+              ? { foregroundQueueCleanup: "before-mutation" }
+              : { foregroundQueueCleanup: "resume-adoption", journal: adoptionResume };
           if (foreground.deferred && !(error instanceof OwnershipCleanupError)) {
             const detail = error instanceof Error ? ` ${error.message}` : "";
             throw new OwnershipCleanupError(`File-queue release was not confirmed.${detail}`, { cause: error });

@@ -38,6 +38,7 @@ export interface ManagerDescription {
   title: string;
   actions: string[];
   configReview?: { setupName: string; fingerprint: string };
+  recoveryPull?: true;
   settingsReview?: { setupName: string; fingerprint: string };
   operation?: OperationAvailability;
   attention?: SyncAttentionState;
