@@ -145,31 +145,38 @@ test("the same owner samples settings at job boundaries and logs only fixed outc
     try {
       await withRpcServer(
         root,
-        async (operation, _payload, execution) => {
-          if (operation === "push") return "cancelled";
+        async (operation, payload, execution) => {
+          if (operation === "push.foreground") return { outcome: "cancelled" };
+          if (operation === "pull.foreground") return { outcome: "applied", message: "sensitive backup path" };
           if (operation === "pull") {
             execution.noteDebugOutcome?.("blocked");
-            throw new Error("sensitive raw failure");
+            throw new Error(String(payload));
           }
           return "result";
         },
         async ({ createConnection }) => {
           const client = await createConnection(facts(root, true), { callback: async () => true }).attach();
-          await client.run("push", {});
-          await assert.rejects(client.run("pull", {}), /sensitive raw failure/u);
+          await client.run("push.foreground", {});
+          await client.run("pull.foreground", {});
+          await assert.rejects(client.run("pull", "sensitive raw failure"), /sensitive raw failure/u);
           await vi.waitFor(async () => {
             const job = (await events(root)).filter((entry) => entry.event === "job");
             assert.deepEqual(
               job.map(({ operation, outcome }) => [operation, outcome]),
               [
-                ["push", "started"],
-                ["push", "cancelled"],
+                ["push.foreground", "started"],
+                ["push.foreground", "cancelled"],
+                ["pull.foreground", "started"],
+                ["pull.foreground", "completed"],
                 ["pull", "started"],
                 ["pull", "blocked"],
               ],
             );
             assert.equal(job[0].operationId, job[1].operationId);
             assert.notEqual(job[0].operationId, job[2].operationId);
+            assert.equal(job[2].operationId, job[3].operationId);
+            assert.notEqual(job[2].operationId, job[4].operationId);
+            assert.equal(job[4].operationId, job[5].operationId);
             assert.doesNotMatch(JSON.stringify(job), /sensitive/u);
           });
 

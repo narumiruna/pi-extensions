@@ -1,4 +1,4 @@
-import { type DebugEvent, debugOperation } from "@narumitw/pi-sync-daemon/engine/debug-log";
+import { type DebugEvent, debugJobResult, debugOperation } from "@narumitw/pi-sync-daemon/engine/debug-log";
 
 export function observeDebugJob(operation: string, append: (event: DebugEvent) => void) {
   const kind = debugOperation(operation);
@@ -8,11 +8,14 @@ export function observeDebugJob(operation: string, append: (event: DebugEvent) =
     append({ event: "job", operation: kind, outcome, ...(operationId ? { operationId } : {}) });
   return {
     onSubmit(id: string) {
+      if (operationId && operationId !== id) record("blocked");
       operationId = id;
       record("started");
     },
-    returned(result: unknown) {
-      if (result === "cancelled") record("cancelled");
+    returned(result: unknown, interrupted = false) {
+      const outcome = debugJobResult(kind, result);
+      if (interrupted && outcome !== "completed") record("cancelled");
+      else if (outcome) record(outcome);
       else if (
         result === "archived" ||
         (kind === "initialize" &&

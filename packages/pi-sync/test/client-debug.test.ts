@@ -4,6 +4,7 @@ import path from "node:path";
 import { DaemonConnection, ensureDaemon, findDaemon } from "@narumitw/pi-sync-daemon";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { observeDebugJob } from "../src/daemon/client-debug.js";
 import { readClientDebug } from "./client-debug-records.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
@@ -138,6 +139,26 @@ test("startup logs attach and handover-blocked submission with the daemon's own 
       await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, ctx);
     }
   }));
+
+test("a foreground retry correlates both attempts and a verified apply survives late cancellation", () => {
+  const records: unknown[] = [];
+  const observer = observeDebugJob("pull.foreground", (event) => records.push(event));
+  assert.ok(observer);
+  const first = "0123456789abcdef-01234567-89ab-4def-89ab-0123456789ab";
+  const retry = "fedcba9876543210-01234567-89ab-4def-89ab-0123456789ab";
+  observer.onSubmit(first);
+  observer.onSubmit(retry);
+  observer.returned({ outcome: "applied", message: "private backup path" }, true);
+  assert.deepEqual(
+    records,
+    [
+      [first, "started"],
+      [first, "blocked"],
+      [retry, "started"],
+      [retry, "completed"],
+    ].map(([operationId, outcome]) => ({ event: "job", operation: "pull.foreground", operationId, outcome })),
+  );
+});
 
 test.each(["abort", "replace"] as const)("%s fences a pending request's late diagnostic", (boundary) =>
   withTempHome(async (root) => {

@@ -14,6 +14,7 @@ import { beforeEach, describe, test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { loadConfig } from "../src/settings/config.js";
+import { readClientDebug } from "./client-debug-records.js";
 import { snapshot, v3WebDavSettings } from "./helpers.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
@@ -101,6 +102,7 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
     const settings = {
       ...v3WebDavSettings({ include: action === "review-push" ? ["managed"] : ["AGENTS.md"] }),
       skipSecretScan: action === "review-push",
+      debug: direction !== undefined,
     };
     if (action === "review-push") {
       const thumbnails = join(agentDir, "managed", "docs", "screenshots", "thumbs");
@@ -248,7 +250,23 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
       releaseRead.resolve();
       assert.equal(selected, action !== "review-push", frames.join("\n\n"));
       assert.deepEqual(confirmations, []);
-      if (direction) assert.deepEqual(menus.slice(menuCountAtActivation), []);
+      if (direction) {
+        assert.deepEqual(menus.slice(menuCountAtActivation), []);
+        const outcome = action === "apply" ? "completed" : action === "cancel" ? "cancelled" : "failed";
+        const jobs = (await readClientDebug(agentDir))
+          .filter((entry) => entry.event === "job")
+          .filter((entry) => entry.operation === `${direction}.foreground`);
+        const id = jobs[0]?.operationId;
+        assert.ok(id);
+        assert.deepEqual(
+          jobs.map((entry) => [entry.operationId, entry.outcome]),
+          [
+            [id, "started"],
+            [id, outcome],
+          ],
+        );
+        assert.doesNotMatch(JSON.stringify(jobs), /AGENTS\.md|\/latest\.json|backup|fixture version/iu);
+      }
       const notices = context.notifications.slice(noticeStart);
       const requests = server.requests.slice(requestStart);
       if (action !== "block") assert.ok(!notices.some(({ level }) => level === "error"), JSON.stringify(notices));

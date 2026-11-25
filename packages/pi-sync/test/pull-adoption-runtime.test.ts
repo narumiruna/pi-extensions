@@ -14,6 +14,7 @@ import { validateSettingsDocument } from "@narumitw/pi-sync-daemon/engine/settin
 import { aroundEach, test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
+import { readClientDebug } from "./client-debug-records.js";
 import { v3WebDavSettings } from "./data-fixtures.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
@@ -65,6 +66,7 @@ async function preparePullAdoption(cleanup: AsyncDisposableStack, signal: AbortS
   const settings = validateSettingsDocument({
     ...base,
     version: 8,
+    debug: true,
     syncSetups: {
       home: {
         ...base.syncSetups.home,
@@ -238,6 +240,18 @@ async function preparePullAdoption(cleanup: AsyncDisposableStack, signal: AbortS
     assert.notEqual(replacement.identity.pid, owner.identity.pid);
     assert.equal(reloads, 0);
     assert.ok(listener.requests.length > 0 && listener.requests.every(({ method }) => method === "GET"));
+    const jobs = (await readClientDebug(root))
+      .filter((entry) => entry.event === "job")
+      .filter((entry) => entry.operation === "pull.foreground");
+    assert.deepEqual(
+      jobs.map((entry) => entry.outcome),
+      ["started", "failed", "started", "completed"],
+    );
+    assert.ok(jobs[0]?.operationId && jobs[2]?.operationId);
+    assert.equal(jobs[0].operationId, jobs[1]?.operationId);
+    assert.equal(jobs[2].operationId, jobs[3]?.operationId);
+    assert.notEqual(jobs[0].operationId, jobs[2].operationId);
+    assert.doesNotMatch(JSON.stringify(jobs), /Another live Pi session|notes\.md|recorded/u);
   };
 }
 

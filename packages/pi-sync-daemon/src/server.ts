@@ -8,7 +8,7 @@ import { DAEMON_BUILD_VERSION } from "./build-version.js";
 import { ConsentPublicationError, readConsent } from "./consent.js";
 import type { DaemonDiagnosticSink } from "./daemon-debug.js";
 import { endpointOwner } from "./endpoint.js";
-import { debugOperation } from "./engine/debug-log.js";
+import { debugJobResult, debugOperation } from "./engine/debug-log.js";
 import { SyncDecisionRequiredError } from "./engine/sync/sync-errors.js";
 import { isForegroundDirection, isForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import {
@@ -503,7 +503,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         }
         job.view.result = result;
         job.view.phase = "done";
-        note(result === "cancelled" ? "cancelled" : (job.debugOutcome ?? "completed"));
+        note(debugJobResult(operation, result) ?? job.debugOutcome ?? "completed");
       })
       .catch((error) => {
         if (error instanceof ConsentPublicationError) consentPublicationFailed = true;
