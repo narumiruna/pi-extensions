@@ -9,6 +9,7 @@ import {
   writeSync,
 } from "node:fs";
 import path from "node:path";
+import { isForegroundDirection, isForegroundQueueOutcome } from "../foreground-queue-outcome.js";
 import { DEBUG_LOG_FILENAME } from "./paths.js";
 import { isStartupTimingReport } from "./sync/startup-timings.js";
 
@@ -21,6 +22,8 @@ const OPERATIONS = [
   "history",
   "push",
   "pull",
+  "push.foreground",
+  "pull.foreground",
   "sync",
   "startup-transfer",
   "shutdown",
@@ -59,6 +62,22 @@ export type DebugEvent =
 
 export function debugOperation(operation: string): DebugOperation | undefined {
   return OPERATIONS.find((known) => known === operation);
+}
+
+export function debugJobResult(
+  operation: string,
+  result: unknown,
+): "completed" | "cancelled" | "blocked" | "failed" | undefined {
+  if (!isForegroundDirection(operation)) return result === "cancelled" ? "cancelled" : undefined;
+  if (isForegroundQueueOutcome(result)) {
+    if (result.foregroundQueueCleanup !== "verified-result") return "blocked";
+    result = result.result;
+  }
+  if (result && typeof result === "object" && "outcome" in result) {
+    if (result.outcome === "applied") return "completed";
+    if (result.outcome === "cancelled") return "cancelled";
+  }
+  return "failed";
 }
 
 function safeFields(event: DebugEvent): DebugEvent | undefined {

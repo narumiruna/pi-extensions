@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
-import { appendDebugEvent, type DebugEvent, debugOperation } from "../src/engine/debug-log.js";
+import { appendDebugEvent, type DebugEvent, debugJobResult, debugOperation } from "../src/engine/debug-log.js";
 import { DEBUG_LOG_FILENAME } from "../src/engine/paths.js";
 
 const operationId = "0123456789abcdef-01234567-89ab-4def-89ab-0123456789ab";
@@ -73,6 +73,21 @@ test("the shared log permits only bounded diagnostic fields", () =>
     assert.equal(records[3].operationId, undefined);
     if (process.platform !== "win32") assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
   }));
+
+test.each([
+  ["push.foreground", { outcome: "applied", message: "private backup path" }, "completed"],
+  ["pull.foreground", { outcome: "cancelled" }, "cancelled"],
+  ["pull.foreground", { foregroundQueueCleanup: "resume-adoption", journal: "a".repeat(64) }, "blocked"],
+  ["push.foreground", { foregroundQueueCleanup: "before-mutation" }, "blocked"],
+  ["pull.foreground", { foregroundQueueCleanup: "verified-result", result: { outcome: "applied" } }, "completed"],
+  ["push.foreground", { foregroundQueueCleanup: "verified-result", result: { outcome: "cancelled" } }, "cancelled"],
+  ["pull.foreground", { foregroundQueueCleanup: "resume-adoption", journal: "invalid" }, "failed"],
+  ["pull.foreground", { outcome: "unknown" }, "failed"],
+  ["pull", "cancelled", "cancelled"],
+  ["sync", { outcome: "applied" }, undefined],
+] as const)("%s classifies %j for diagnostics as %s", (operation, result, outcome) => {
+  assert.equal(debugJobResult(operation, result), outcome);
+});
 
 test("missing root or a directory at the log path does not interfere with sync", () =>
   fixture(async (root, target) => {

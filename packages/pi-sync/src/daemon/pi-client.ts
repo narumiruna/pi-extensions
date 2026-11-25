@@ -967,8 +967,7 @@ export class PiDaemonClient {
             },
           )
         : await connection.run(operation, payload, runSignal, onCommit, diagnostics?.onSubmit);
-      if (runSignal.aborted || reload?.signal.aborted) diagnostics?.rejected(undefined, true);
-      else diagnostics?.returned(result);
+      diagnostics?.returned(result, runSignal.aborted || reload?.signal.aborted);
       if (request?.received && reload && !this.paused && !reload.signal.aborted && !signal?.aborted) {
         this.validate();
         this.pendingReload = reload;
