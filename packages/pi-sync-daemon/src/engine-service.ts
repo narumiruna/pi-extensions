@@ -486,18 +486,25 @@ async function runForegroundDirectional(
     !ctx.hasUI ||
     !["tui", "rpc"].includes(ctx.mode) ||
     !record(payload) ||
-    Object.keys(payload).some((key) => !["setup", "fingerprint", "retryCheckpoint"].includes(key)) ||
+    Object.keys(payload).some(
+      (key) => !["setup", "fingerprint", "retryCheckpoint", "retryAdoptionJournal"].includes(key),
+    ) ||
     typeof payload.setup !== "string" ||
     !payload.setup ||
     payload.setup.length > 512 ||
     typeof payload.fingerprint !== "string" ||
     !fingerprintPattern.test(payload.fingerprint) ||
     (payload.retryCheckpoint !== undefined &&
-      (typeof payload.retryCheckpoint !== "string" || !fingerprintPattern.test(payload.retryCheckpoint)))
+      (typeof payload.retryCheckpoint !== "string" || !fingerprintPattern.test(payload.retryCheckpoint))) ||
+    (payload.retryAdoptionJournal !== undefined &&
+      (direction !== "pull" ||
+        payload.retryCheckpoint !== undefined ||
+        typeof payload.retryAdoptionJournal !== "string" ||
+        !fingerprintPattern.test(payload.retryAdoptionJournal)))
   ) {
     throw new Error("Invalid foreground directional request.");
   }
-  const { setup, fingerprint, retryCheckpoint } = payload;
+  const { setup, fingerprint, retryCheckpoint, retryAdoptionJournal } = payload;
   const { withStateDirectoryAccess } = await import("./engine/state/state-directory.js");
   const { withLock } = await import("./engine/state/lock.js");
   const { loadConfigForCheck, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
@@ -512,7 +519,7 @@ async function runForegroundDirectional(
   execution.validate();
   return withStateDirectoryAccess(async () => {
     validate(await loadConfigForCheck(undefined, execution.signal));
-    if (retryCheckpoint === undefined) {
+    if (retryCheckpoint === undefined && retryAdoptionJournal === undefined) {
       await requireHandover(execution);
       validate(await loadConfigForCheck(undefined, execution.signal));
       await initialize(ctx, execution, false);
@@ -521,21 +528,31 @@ async function runForegroundDirectional(
         throw new Error("Daemon handover is no longer valid; the transfer was not replayed.");
       await requireStartupRecoveryCleared(execution);
     }
-    return host.runForeground(execution, () =>
+    return host.runForeground(execution, (setAdoptionResume) =>
       withLock(direction, async () => {
         validate(await loadConfigForCheck(undefined, execution.signal));
         let message: string | undefined;
+        let adoptionRecovery = false;
         const outcome = await operations[direction](ctx, {
           ...optionsFrom({ setup, args: [] }, execution, false),
           directionalAction: {
             validate,
+            expectedAdoptionJournal: retryAdoptionJournal,
+            setAdoptionResume(journal) {
+              if (adoptionRecovery) setAdoptionResume(journal);
+            },
             async checkpoint(current) {
               execution.validate();
               if (retryCheckpoint !== undefined && retryCheckpoint !== current)
                 throw new Error(
                   "The transfer source or destination changed during recovery. The transfer was not replayed.",
                 );
-              if ((await execution.request("directional-checkpoint", { fingerprint: current })) !== true)
+              const accepted = await execution.request("directional-checkpoint", {
+                fingerprint: current,
+                ...(direction === "pull" ? { adoptionRecovery: 1 } : {}),
+              });
+              adoptionRecovery = direction === "pull" && record(accepted) && accepted.adoptionRecovery === 1;
+              if (accepted !== true && !adoptionRecovery)
                 throw new Error("The original transfer could not be retained for recovery. No transfer was started.");
               execution.validate();
             },

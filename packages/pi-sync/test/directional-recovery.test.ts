@@ -4,6 +4,7 @@ import { test, vi } from "vitest";
 import {
   CompletedDirectionalRecoveryError,
   type DirectionalCheckpoint,
+  type PendingAdoptionRecovery,
   runDirectionalRecovery,
 } from "../src/daemon/directional-recovery.js";
 
@@ -40,6 +41,82 @@ test("the same foreground action verifies a checkpoint and retries only once aft
   assert.equal(second?.[1], scope);
   assert.equal(recover.mock.calls.length, 1);
   assert.equal(required.mock.calls.length, 2);
+});
+
+test("a blocked adoption can be retried from the same owner without replaying the original request", async () => {
+  const journal = "f".repeat(64);
+  let pending: PendingAdoptionRecovery | undefined;
+  const retain = (result: PendingAdoptionRecovery | undefined) => {
+    pending = result;
+  };
+  const controller = new AbortController();
+  const run = vi.fn(async (checkpoint: DirectionalCheckpoint, retry?: string, resume?: string) => {
+    if (resume === undefined) {
+      capture(checkpoint);
+      return { foregroundQueueCleanup: "resume-adoption", journal };
+    }
+    assert.equal(retry, undefined);
+    assert.equal(resume, journal);
+    assert.equal(checkpoint.connection, replacement);
+    return verified;
+  });
+  await assert.rejects(
+    runDirectionalRecovery(
+      original,
+      controller.signal,
+      run,
+      async () => {
+        throw new Error("Another live Pi session uses this daemon.");
+      },
+      () => {},
+      { retain },
+    ),
+    /Pull recovery stopped.*journal was kept.*Another live Pi session/u,
+  );
+  assert.deepEqual(pending, { owner: original, job: "job", journal });
+  assert.equal(run.mock.calls.length, 1);
+  await assert.rejects(
+    runDirectionalRecovery(
+      replacement,
+      controller.signal,
+      run,
+      async () => replacement,
+      () => {},
+      { pending, retain },
+    ),
+    /daemon changed/u,
+  );
+  const recover = vi.fn(async () => replacement);
+  assert.equal(
+    await runDirectionalRecovery(original, controller.signal, run, recover, () => {}, { pending, retain }),
+    verified,
+  );
+  assert.deepEqual(recover.mock.calls[0]?.slice(0, 2), [original, "job"]);
+  assert.equal(run.mock.calls.length, 2);
+  assert.equal(pending, undefined);
+});
+
+test("cancelling after owner exit does not submit the adoption again", async () => {
+  const controller = new AbortController();
+  const pending = { owner: original, job: "job", journal: "f".repeat(64) };
+  const retain = vi.fn();
+  const run = vi.fn(async () => verified);
+  await assert.rejects(
+    runDirectionalRecovery(
+      original,
+      controller.signal,
+      run,
+      async () => {
+        controller.abort();
+        return replacement;
+      },
+      () => {},
+      { pending, retain },
+    ),
+    { name: "AbortError" },
+  );
+  assert.equal(run.mock.calls.length, 0);
+  assert.deepEqual(retain.mock.calls, [[pending], [undefined]]);
 });
 
 test("a missing checkpoint or an already cancelled action cannot restart or replay", async () => {

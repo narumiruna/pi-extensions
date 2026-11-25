@@ -105,6 +105,8 @@ For the manager's explicit **Push to remote** and **Pull from remote** actions, 
 
 ## Recover from uncertain daemon cleanup
 
+If a reviewed Pull saves an ignore-rule adoption journal but cannot start applying the files, Pi Sync can recover from an unconfirmed file-queue release when the original Pi session still owns the result and all stop checks pass. Use the same **Pull from remote** action if that option remains available. Pi Sync reconnects only after the original owner exits and asks you to review the recorded snapshot before continuing. It does not publish a new snapshot, change automatic-transfer permission, or require `/reload` on this path.
+
 **Stop daemon for recovery…** in `/sync` remains a diagnostic fallback when automatic recovery cannot verify cleanup or daemon cleanup blocks initialization. In TUI or RPC, `/sync daemon recover` opens the same
 review without starting or upgrading the daemon. The review identifies the
 agent directory and PID before requesting permission to stop work for every

@@ -145,6 +145,10 @@ export async function verifyAdoptionBackup(journal: AdoptionJournal, signal?: Ab
   }
 }
 
+export function adoptionJournalFingerprint(journal: AdoptionJournal): string {
+  return createHash("sha256").update(JSON.stringify(journal)).digest("hex");
+}
+
 export async function createAdoptionJournal(journal: AdoptionJournal) {
   requireNoPendingAdoption();
   const target = journalPath();
@@ -152,19 +156,19 @@ export async function createAdoptionJournal(journal: AdoptionJournal) {
   await syncDirectory(path.dirname(path.dirname(target)));
 }
 
-async function assertCurrentJournal(journal: AdoptionJournal) {
+export async function assertCurrentAdoptionJournal(journal: AdoptionJournal) {
   if (JSON.stringify(await loadAdoptionJournal()) !== JSON.stringify(journal)) throw new Error(recoveryMessage);
 }
 
 export async function recordInstalledIdentity(journal: AdoptionJournal, identity: string) {
-  await assertCurrentJournal(journal);
+  await assertCurrentAdoptionJournal(journal);
   const next = { ...journal, installedIdentity: identity };
   await writeJson(journalPath(), next, { maxBytes: MAX_BYTES });
   return next;
 }
 
 export async function completeAdoptionJournal(journal: AdoptionJournal) {
-  await assertCurrentJournal(journal);
+  await assertCurrentAdoptionJournal(journal);
   const target = journalPath();
   const backups = path.join(path.dirname(target), "backups");
   if (!(await fs.lstat(backups)).isDirectory()) throw new Error(recoveryMessage);

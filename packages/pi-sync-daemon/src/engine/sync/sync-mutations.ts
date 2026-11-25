@@ -8,7 +8,11 @@ import {
 } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
-import { loadAdoptionJournal, requireNoPendingAdoption } from "../ignore/adoption-journal.js";
+import {
+  adoptionJournalFingerprint,
+  loadAdoptionJournal,
+  requireNoPendingAdoption,
+} from "../ignore/adoption-journal.js";
 import { loadConfig, loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import {
@@ -450,6 +454,11 @@ export async function pull(
   if (action && initial) throw new Error("Single-action Pull cannot be used for initial-source selection.");
   const adoptionReview = !initial && canReviewAdoption(ctx, options);
   const journal = adoptionReview ? await loadAdoptionJournal() : undefined;
+  if (
+    action?.expectedAdoptionJournal !== undefined &&
+    (!journal || adoptionJournalFingerprint(journal) !== action.expectedAdoptionJournal)
+  )
+    throw new Error("The recorded Pull changed during recovery. No transfer was started.");
   if (!adoptionReview) requireNoPendingAdoption();
   const validateOwner = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);

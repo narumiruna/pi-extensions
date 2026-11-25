@@ -6,13 +6,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
+import { DaemonError } from "../src/client.js";
 import type { LatestPointer } from "../src/engine/backends/backend-types.js";
 import { WebDavSyncBackend } from "../src/engine/backends/webdav/webdav-backend.js";
 import { ignorePolicyFingerprint } from "../src/engine/ignore/ignore-source.js";
 import { configFromSettings, syncCheckConfigFingerprint } from "../src/engine/settings/config.js";
 import type { AnySyncConfig, PiSyncSettingsV3 } from "../src/engine/settings/settings-types.js";
 import { createEngineService } from "../src/engine-service.js";
-import type { Callback } from "../src/protocol.js";
+import { type Callback, OWNERSHIP_CLEANUP_REQUIRED } from "../src/protocol.js";
 import { withRpcServer } from "./rpc-server-fixture.js";
 
 const command = { args: [] };
@@ -24,6 +25,7 @@ async function fixture(
     saveSettings: (document: PiSyncSettingsV3) => Promise<void>;
     readHead: (name?: string) => { snapshot: LatestPointer; bytes: Buffer };
     run: (operation: string, options?: object) => Promise<unknown>;
+    afterRestart: (action: (retry: (options: object) => Promise<unknown>) => Promise<void>) => Promise<void>;
     foregroundPayload: () => Promise<{ setup: string; fingerprint: string }>;
     onCallback: (answer: (callback: Callback) => Promise<unknown>) => void;
     onBackend: (action: (method: string, url: string) => Promise<void>) => void;
@@ -132,7 +134,7 @@ async function fixture(
       return assert.fail(`Unexpected callback: ${request.kind}`);
     };
     try {
-      await withRpcServer(root, service.execute, async ({ createConnection }) => {
+      await withRpcServer(root, service.execute, async ({ server, createConnection }) => {
         const client = await createConnection(
           {
             id: randomUUID(),
@@ -154,6 +156,25 @@ async function fixture(
           requests,
           run: (operation, options) =>
             client.run(operation, operation.endsWith(".foreground") ? options : { ...command, ...options }),
+          afterRestart: async (action) => {
+            await client.dispose();
+            await server.close();
+            await service.hooks.close();
+            const replacement = createEngineService(root, true);
+            try {
+              await withRpcServer(root, replacement.execute, async ({ createConnection }) => {
+                const connection = await createConnection(
+                  { ...client.facts, id: randomUUID() },
+                  {
+                    callback: (request) => callback(request),
+                  },
+                ).attach();
+                await action((options) => connection.run("pull.foreground", options));
+              });
+            } finally {
+              await replacement.hooks.close();
+            }
+          },
           foregroundPayload: async () => {
             const { config } = (await client.run("initialize", {})) as { config: AnySyncConfig };
             return { setup: config.setupName, fingerprint: syncCheckConfigFingerprint(config) };
@@ -323,6 +344,108 @@ test("the daemon previews a policy conflict, and only confirmed Pull adopts it w
     assert.deepEqual(readHead().bytes, head);
     assert.ok(requests.length > 0 && requests.every(([method]) => method === "GET"));
   }));
+
+test.each(["older client", "resume adoption", "after managed writes"] as const)(
+  "queue failure after journal creation: %s",
+  (mode) =>
+    fixture(async ({ root, run, afterRestart, foregroundPayload, loadSettings, onCallback, requests }) => {
+      await run("push", { yes: true });
+      const backend = fixtureBackend(loadSettings());
+      const original = await backend.readHead();
+      assert.ok(original);
+      const snapshot = await backend.readSnapshot(original.snapshotRef);
+      assert.ok(snapshot.selection?.version === 4);
+      const text = "/private.md\n";
+      await backend.publishSnapshot(
+        {
+          ...snapshot,
+          id: "remote-adoption",
+          files: [snapshotFile("notes.md", "incoming")],
+          ignoreRules: { filename: ".syncignore", text },
+          selection: { ...snapshot.selection, fingerprint: ignorePolicyFingerprint(text, false) },
+        },
+        { kind: "revision", revision: original.revision },
+      );
+      const payload = await foregroundPayload();
+      const rule = path.join(root, ".syncignore");
+      const before = await fs.readFile(rule, "utf8");
+      const journal = path.join(root, "pi-sync", "ignore-adoption.json");
+      const callbacks: string[] = [];
+      onCallback(async ({ kind }) => {
+        callbacks.push(kind);
+        if (kind === "queue-acquire" && mode !== "after managed writes") {
+          await fs.stat(journal);
+          throw new Error("Injected queue acquisition failure");
+        }
+        if (kind === "directional-checkpoint" && mode !== "older client") return { adoptionRecovery: 1 };
+        return kind !== "queue-release";
+      });
+      requests.length = 0;
+      let fingerprint: string | undefined;
+      if (mode !== "resume adoption") {
+        await assert.rejects(run("pull.foreground", payload), (error: unknown) => {
+          assert.ok(error instanceof DaemonError);
+          assert.match(
+            error.message,
+            mode === "older client"
+              ? /File-queue release and transfer outcome could not be verified/u
+              : /Daemon ownership cleanup is uncertain/u,
+          );
+          assert.equal(error.remote.properties?.code, OWNERSHIP_CLEANUP_REQUIRED);
+          return true;
+        });
+      } else {
+        const result = (await run("pull.foreground", payload)) as { foregroundQueueCleanup: string; journal: string };
+        assert.equal(result.foregroundQueueCleanup, "resume-adoption");
+        assert.match(result.journal, /^[a-f0-9]{64}$/u);
+        fingerprint = result.journal;
+      }
+      assert.deepEqual(callbacks, ["confirm", "directional-checkpoint", "queue-acquire", "queue-release"]);
+      await fs.stat(journal);
+      assert.equal(await fs.readFile(rule, "utf8"), before);
+      assert.equal(
+        await fs.readFile(path.join(root, "notes.md"), "utf8"),
+        mode === "after managed writes" ? "incoming" : "local notes\n",
+      );
+      assert.ok(requests.length > 0 && requests.every(([method]) => method === "GET"));
+      if (!fingerprint) return;
+      const pinned = await backend.readHead();
+      assert.ok(pinned);
+      const recorded = await backend.readSnapshot(pinned.snapshotRef);
+      await backend.publishSnapshot(
+        { ...recorded, id: "unreviewed-new-head", files: [snapshotFile("notes.md", "not approved")] },
+        { kind: "revision", revision: pinned.revision },
+      );
+      let approve = false;
+      const reviews: string[] = [];
+      onCallback(async ({ kind, payload }) => {
+        if (kind === "confirm") {
+          reviews.push((payload as { title: string }).title);
+          return approve;
+        }
+        return true;
+      });
+      await afterRestart(async (retry) => {
+        requests.length = 0;
+        await assert.rejects(retry({ ...payload, retryAdoptionJournal: "f".repeat(64) }), /recorded Pull changed/u);
+        const saved = await fs.readFile(journal);
+        await fs.unlink(journal);
+        await assert.rejects(retry({ ...payload, retryAdoptionJournal: fingerprint }), /recorded Pull changed/u);
+        await fs.writeFile(journal, saved, { mode: 0o600 });
+        assert.equal(requests.length, 0);
+        const bound = { ...payload, retryAdoptionJournal: fingerprint };
+        assert.deepEqual(await retry(bound), { outcome: "cancelled" });
+        await fs.stat(journal);
+        assert.equal(await fs.readFile(rule, "utf8"), before);
+        approve = true;
+        assert.equal(((await retry(bound)) as { outcome: string }).outcome, "applied");
+        assert.equal(await fs.readFile(rule, "utf8"), text);
+        assert.equal(await fs.readFile(path.join(root, "notes.md"), "utf8"), "incoming");
+        assert.deepEqual(reviews, ["Resume reviewed ignore-rule Pull?", "Resume reviewed ignore-rule Pull?"]);
+        assert.ok(requests.length > 0 && requests.every(([method]) => method === "GET"));
+      });
+    }),
+);
 
 test("a foreground request rejects unbound actions or replay under a different checkpoint", () =>
   fixture(async ({ run, foregroundPayload, requests, root, onCallback }) => {

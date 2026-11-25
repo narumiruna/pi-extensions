@@ -20,6 +20,8 @@ export type DaemonRecoveryTarget = Pick<Identity, "root" | "pid" | "instance">;
 
 type ForegroundJob = { job: string; client: string; generation: string; birth?: string };
 
+export class ForegroundStopRefusedError extends Error {}
+
 export async function stopDaemonAfterForegroundQueueFailure(
   paths: RuntimePaths,
   identity: Identity,
@@ -62,12 +64,9 @@ export async function stopDaemonAfterForegroundQueueFailure(
       if (!(await requireCurrent())) return;
       throw error;
     }
-    if (!record(checked) || checked.eligible !== true)
-      throw new Error(
-        record(checked) && typeof checked.blocked === "string"
-          ? checked.blocked
-          : "Daemon queue cleanup could not be verified.",
-      );
+    if (record(checked) && typeof checked.blocked === "string" && checked.eligible !== true)
+      throw new ForegroundStopRefusedError(checked.blocked);
+    if (!record(checked) || checked.eligible !== true) throw new Error("Daemon queue cleanup could not be verified.");
     if (!(await requireCurrent())) return;
     signal.throwIfAborted();
     await recordUpgradeOwner(paths, barrier);

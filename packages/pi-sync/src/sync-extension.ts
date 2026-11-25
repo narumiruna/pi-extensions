@@ -65,15 +65,23 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
               }
               const commands = await loaders.commands();
               if (signal.aborted || owner !== client) return;
-              await commands.handleCommand(
-                args,
-                ctx,
-                commandSignal,
-                loaders,
-                attention,
-                undefined,
-                needsDaemonRecovery,
-              );
+              const recoveryMenu = !command && client.pendingPullReview;
+              if (recoveryMenu) await client.setBusy("command", true, false);
+              try {
+                if (signal.aborted || owner !== client) return;
+                await commands.handleCommand(
+                  args,
+                  ctx,
+                  commandSignal,
+                  loaders,
+                  attention,
+                  undefined,
+                  needsDaemonRecovery,
+                );
+              } finally {
+                if (recoveryMenu && !signal.aborted && owner === client)
+                  await client.setBusy("command", false, !needsDaemonRecovery()).catch(() => {});
+              }
               return;
             }
             const requiresContact = !["help", "unlock", "migrate-state"].includes(command ?? "");

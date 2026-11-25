@@ -27,7 +27,10 @@ export async function showSyncManager(
   ctx: ExtensionCommandContext,
   runRoute: RunRoute,
   sessionSignal?: AbortSignal,
-  options: SyncManagerAttentionOptions & { needsDaemonRecovery?: () => boolean } = {},
+  options: SyncManagerAttentionOptions & {
+    needsDaemonRecovery?: () => boolean;
+    getPendingPullReview?: () => { setupName: string; fingerprint: string } | undefined;
+  } = {},
 ): Promise<void> {
   if (!ctx.hasUI) {
     await runRoute("help");
@@ -80,6 +83,7 @@ export async function showSyncManager(
         cancelledMessage: direction === "push" ? "Push cancellation requested." : "Pull cancellation requested.",
         target: review.setupName,
         directionalFingerprint: review.fingerprint,
+        requirePendingAdoption: state.manager.recoveryPull,
         signal,
         isCurrent,
       },
@@ -347,7 +351,14 @@ export async function showSyncManager(
     const activate = menu.actions[action];
     menu.actions[action] = async (invocation) => {
       validateOwner();
-      const { configReview, settingsReview } = invocation.state.manager;
+      const { configReview, settingsReview, recoveryPull } = invocation.state.manager;
+      if (action === "pull" && recoveryPull) {
+        if (options.getPendingPullReview?.() !== configReview) {
+          ctx.ui.notify("The original Pull is no longer available for automatic recovery.", "warning");
+          return { kind: "stay" };
+        }
+        return activate(invocation);
+      }
       const review = action === "settings" ? (settingsReview ?? configReview) : configReview;
       let current = false;
       try {
@@ -392,15 +403,25 @@ export async function showSyncManager(
       "Pi Sync recovery required\nDaemon cleanup could not be confirmed. Stop the daemon before retrying a transfer.",
     actions: ["Stop daemon for recovery…", "Help"],
   };
+  const describeRecovery = (): State["manager"] => {
+    const configReview = options.getPendingPullReview?.();
+    if (!configReview) return recovery;
+    return {
+      title: "Pi Sync recovery required\nPull can try to recover the daemon and review the pending transfer.",
+      actions: ["Pull from remote", ...recovery.actions],
+      configReview,
+      recoveryPull: true,
+    };
+  };
   const describe = async (signal: AbortSignal) => {
-    if (options.needsDaemonRecovery?.()) return recovery;
+    if (options.needsDaemonRecovery?.()) return describeRecovery();
     const pendingAttention = options.getAttention?.();
     const observation = options.getObservation?.();
     const manager = await describeManagerState(signal, pendingAttention, undefined, observation, () =>
       ignoreFileSettingsAvailable(ctx, signal),
     );
     if (signal.aborted || !isCurrent()) return manager;
-    if (options.needsDaemonRecovery?.()) return recovery;
+    if (options.needsDaemonRecovery?.()) return describeRecovery();
     // A busy operation suppresses baseline reads, not the stored check-time hint.
     if (
       observation &&
