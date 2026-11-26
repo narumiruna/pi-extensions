@@ -86,33 +86,13 @@ export async function checkpointDirectionalAction(
 export function requireDirectionalSelection(
   config: AnySyncConfig,
   state: SyncState,
-  local: Snapshot,
+  _local: Snapshot,
   remote: Snapshot | undefined,
-  sessionDir: string | undefined,
+  _sessionDir: string | undefined,
 ) {
   if (!syncSelectionHasContent(config)) throw new Error("This setup has no managed content for the transfer.");
-  const current = config.ignorePolicy;
-  const remoteProjected = current && remote && filterSnapshotForConfigPolicy(remote, config, { sessionDir });
-  const managed = new Set([...local.files, ...(remoteProjected?.files ?? [])].map((file) => file.path));
-  const provesNarrowing = (priorPaths: readonly string[], priorSessions: boolean) => {
-    if (!current || (!priorSessions && current.sessions)) return false;
-    const prior = new Set(priorPaths);
-    return (
-      [...managed].every((item) => prior.has(item)) &&
-      ((priorSessions && !current.sessions) ||
-        priorPaths.some((item) => !managed.has(item) && current.matches(item, false)))
-    );
-  };
   if (remote) requireCompatibleRemoteSelection(config, remote);
-  if (
-    state.lastAppliedSnapshot &&
-    syncPolicyChanged(state, config) &&
-    !(
-      state.scope === config.scope &&
-      state.ignorePolicyKey &&
-      provesNarrowing(Object.keys(state.lastFileHashes), state.include?.includes("sessions") === true)
-    )
-  )
+  if (state.lastAppliedSnapshot && syncPolicyChanged(state, config))
     throw new Error(
       "Managed content policy changed and this transfer cannot prove that it only narrows the accepted selection. Review the new policy before transferring.",
     );
@@ -135,9 +115,6 @@ export function keepProtectedRemoteSessions(
   const files = [...upload.files.filter((file) => !protectedPaths.has(file.path)), ...retained];
   return {
     ...upload,
-    ...(upload.selection?.version === 4
-      ? { syncSessions: files.some((file) => file.path.startsWith("sessions/")) }
-      : {}),
     files: files.sort((a, b) => a.path.localeCompare(b.path)),
   };
 }
@@ -180,7 +157,7 @@ export function remoteRestoreGuidance(
 ) {
   const ref = head.snapshotRef === head.snapshotId ? "" : ` (reference ${safeTerminalText(head.snapshotRef)})`;
   const version = `${safeTerminalText(head.snapshotId)}${ref}`;
-  const eligible = config.ignorePolicy || syncSessionsSelected(config) ? previous : snapshotWithoutSessions(previous);
+  const eligible = syncSessionsSelected(config) ? previous : snapshotWithoutSessions(previous);
   const selected = filterSnapshotForConfigPolicy(eligible, config, { sessionDir });
   return selected.files.length === previous.files.length
     ? `Restore the previous remote version ${version} from /sync → History.`

@@ -82,6 +82,7 @@ export async function hello(paths: RuntimePaths, identity: Identity, signal?: Ab
     buildVersion,
     buildId,
     upgradeStop: value.upgradeStop === 1,
+    ignoreFilesRetired: value.ignoreFilesRetired === true,
     needsUpgrade: buildVersion === undefined || lt(buildVersion, DAEMON_BUILD_VERSION),
   };
 }

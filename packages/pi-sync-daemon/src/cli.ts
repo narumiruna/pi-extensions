@@ -7,6 +7,21 @@ import { inspectDaemonStatus } from "./daemon-status.js";
 import { privateDirectory, readIdentity, runtimePaths } from "./identity.js";
 import { openLifecycleLog } from "./lifecycle-log.js";
 
+async function retiredPolicyBlocker(root: string) {
+  const { RetiredIgnorePolicyError } = await import("./engine/settings/retired-ignore-policy.js");
+  try {
+    const { assertNoRetiredRuleJournal } = await import("./engine/settings/retired-ignore-recovery.js");
+    assertNoRetiredRuleJournal(root);
+    const { readLocalConfigForDiagnostics } = await import("./engine/settings/config-file.js");
+    const { validateSettingsDocument } = await import("./engine/settings/settings-validation.js");
+    const source = await readLocalConfigForDiagnostics(root);
+    if (source?.stillCurrent()) validateSettingsDocument(source.document.parsed);
+  } catch (error) {
+    if (error instanceof RetiredIgnorePolicyError) return error.message;
+  }
+  return undefined;
+}
+
 function reportLaunch(message: Parameters<NonNullable<typeof process.send>>[0]) {
   if (process.connected) process.send?.(message, () => {});
 }
@@ -15,7 +30,7 @@ export async function main(args: readonly string[]) {
   const [command = "help", flag, root, ...extra] = args;
   if (["help", "--help", "-h"].includes(command)) {
     console.log(
-      "pi-sync-daemon <start|status|stop|restart|repair-upgrade|serve> --root <canonical-agent-directory>\nLocal synchronization owner; no OS service registration. status/stop/repair-upgrade never start a service.\nrepair-upgrade revokes all retained unattended grants after verified exit and archives the pending upgrade records.",
+      "pi-sync-daemon <start|status|stop|restart|repair-upgrade|serve> --root <canonical-agent-directory>\nLocal synchronization owner; no OS service registration. status/stop/repair-upgrade never start a service.\nrepair-upgrade revokes all retained unattended grants after verified exit and archives the pending upgrade records.\nIf a retired ignore-file policy blocks sync, use /skill:configure-pi-sync in Pi or see the Pi Sync manual recovery guide.",
     );
     return;
   }
@@ -50,7 +65,7 @@ export async function main(args: readonly string[]) {
         log?.close(); /* Never follow a replaced diagnostic path. */
       }
     };
-    const service = createEngineService(paths.root, true);
+    const service = createEngineService(paths.root);
     let server: Awaited<ReturnType<typeof startServer>>;
     try {
       server = await startServer(paths.root, service.execute, {
@@ -101,7 +116,9 @@ export async function main(args: readonly string[]) {
     return;
   }
   if (command === "status") {
-    console.log(JSON.stringify(await inspectDaemonStatus(root)));
+    const status = await inspectDaemonStatus(root);
+    const retiredPolicy = await retiredPolicyBlocker(status.root);
+    console.log(JSON.stringify({ ...status, ...(retiredPolicy ? { retiredPolicy } : {}) }));
     return;
   }
   const paths = await runtimePaths(root);

@@ -1,27 +1,14 @@
-import { validateSnapshotIgnoreRules } from "../../ignore/snapshot-ignore-rules.js";
-import { assertAgentDirectorySettingsSize, MAX_AGENT_DIRECTORY_BYTES } from "../../snapshot/snapshot-bounds.js";
 import { materializeSnapshotFilePayload } from "../../snapshot/snapshot-payload.js";
-import {
-  isIgnoreSnapshotVersion,
-  isSupportedSnapshotVersion,
-  type Snapshot,
-  type SnapshotSelection,
-} from "../../snapshot/snapshot-types.js";
-import {
-  sameLocalFields,
-  validateIgnoreSnapshotIdentity,
-  validateIgnoreSnapshotSessionFlag,
-  validatePortableSnapshot,
-  validateSnapshotFieldPolicy,
-} from "../../sync/local-fields.js";
+import type { Snapshot, SnapshotSelection } from "../../snapshot/snapshot-types.js";
+import { sameLocalFields, validatePortableSnapshot, validateSnapshotFieldPolicy } from "../../sync/local-fields.js";
 import {
   assertAgentDirectoryPathLayout,
   assertSnapshotExcludesDebugLog,
   assertSnapshotPathExcludesDebugLog,
   configuredSnapshotPathMatcher,
   portableSnapshotSelection,
+  requireLegacyTransferPolicy,
   sameSnapshotSelection,
-  snapshotSelectionInclude,
   validateSnapshotSelection,
 } from "../../sync/sync-policy.js";
 
@@ -47,7 +34,6 @@ export interface GitManifest {
   syncSessions: boolean;
   snapshotSyncSessions?: boolean;
   selection?: SnapshotSelection;
-  ignoreRules?: Snapshot["ignoreRules"];
   localFields?: string[];
   files: GitManifestFile[];
 }
@@ -72,6 +58,7 @@ export function requireGitManifest(value: unknown): GitManifest {
     throw new Error("Git publication manifest is malformed.");
   }
   const manifest = value as Partial<GitManifest>;
+  requireLegacyTransferPolicy({ version: manifest.snapshotVersion, selection: manifest.selection });
   if (manifest.version === 1) {
     throw new Error(
       "Git publication uses the unsupported pre-release gzip format; recreate this pi-sync-owned test branch.",
@@ -79,7 +66,11 @@ export function requireGitManifest(value: unknown): GitManifest {
   }
   if (
     manifest.version !== GIT_MANIFEST_VERSION ||
-    !isSupportedSnapshotVersion(manifest.snapshotVersion) ||
+    (manifest.snapshotVersion !== 1 &&
+      manifest.snapshotVersion !== 2 &&
+      manifest.snapshotVersion !== 3 &&
+      manifest.snapshotVersion !== 4 &&
+      manifest.snapshotVersion !== 5) ||
     typeof manifest.snapshotId !== "string" ||
     manifest.snapshotId.length > 512 ||
     !/^[A-Za-z0-9._-]+$/u.test(manifest.snapshotId) ||
@@ -107,7 +98,6 @@ export function requireGitManifest(value: unknown): GitManifest {
       "syncSessions",
       ...(manifest.snapshotSyncSessions === undefined ? [] : ["snapshotSyncSessions"]),
       ...(manifest.selection === undefined ? [] : ["selection"]),
-      ...(Object.hasOwn(manifest, "ignoreRules") ? ["ignoreRules"] : []),
       ...(manifest.localFields === undefined ? [] : ["localFields"]),
       "files",
     ])
@@ -117,27 +107,8 @@ export function requireGitManifest(value: unknown): GitManifest {
   validateSnapshotFieldPolicy({ version: manifest.snapshotVersion, localFields: manifest.localFields });
   const selection = manifest.selection === undefined ? undefined : portableSnapshotSelection(manifest.selection);
   validateSnapshotSelection({ version: manifest.snapshotVersion, selection });
-  const policy = validateSnapshotIgnoreRules({
-    version: manifest.snapshotVersion,
-    selection,
-    ...(Object.hasOwn(manifest, "ignoreRules") ? { ignoreRules: manifest.ignoreRules } : {}),
-  });
-  const ignoreSnapshot = selection?.version === 4;
-  if (ignoreSnapshot) {
-    validateIgnoreSnapshotIdentity({
-      id: manifest.snapshotId,
-      createdAt: manifest.createdAt,
-      machine: manifest.machine,
-      profile: manifest.profile,
-    });
-    validateIgnoreSnapshotSessionFlag(selection, manifest.snapshotSyncSessions);
-  }
-  const selected = selection?.scope
-    ? configuredSnapshotPathMatcher(policy ? { ...selection, ignorePolicy: policy } : selection)
-    : undefined;
-  const byteLimit = ignoreSnapshot ? MAX_AGENT_DIRECTORY_BYTES : MAX_GIT_SNAPSHOT_BYTES;
+  const selected = selection?.scope ? configuredSnapshotPathMatcher(selection) : undefined;
   let total = 0;
-  let hasSessionFiles = false;
   const paths = new Set<string>();
   for (const rawFile of manifest.files) {
     if (!rawFile || typeof rawFile !== "object" || Array.isArray(rawFile)) {
@@ -150,7 +121,6 @@ export function requireGitManifest(value: unknown): GitManifest {
       !isSafeSnapshotPath(file.path) ||
       (selected !== undefined && !selected(file.path)) ||
       typeof file.sha256 !== "string" ||
-      (ignoreSnapshot && file.sha256.length !== 64) ||
       !/^[0-9a-f]{64}$/u.test(file.sha256) ||
       typeof file.size !== "number" ||
       !isGitPayloadSizeAllowed(file.size) ||
@@ -159,17 +129,10 @@ export function requireGitManifest(value: unknown): GitManifest {
       throw new Error("Git publication manifest file is malformed.");
     }
     total += file.size;
-    if (!Number.isSafeInteger(total) || total > byteLimit) {
-      throw new Error(`Git snapshot content exceeds the ${byteLimit}-byte limit.`);
-    }
-    if (ignoreSnapshot) {
-      if (file.path === "settings.json") assertAgentDirectorySettingsSize(file.size);
-      if (file.path.startsWith("sessions/")) hasSessionFiles = true;
+    if (!Number.isSafeInteger(total) || total > MAX_GIT_SNAPSHOT_BYTES) {
+      throw new Error(`Git snapshot content exceeds the ${MAX_GIT_SNAPSHOT_BYTES}-byte limit.`);
     }
     paths.add(file.path);
-  }
-  if (ignoreSnapshot && manifest.syncSessions !== (manifest.snapshotSyncSessions === true || hasSessionFiles)) {
-    throw new Error("Invalid Git ignore snapshot session metadata.");
   }
   if (selected) assertAgentDirectoryPathLayout(paths);
   else assertNoPathConflicts([...paths]);
@@ -190,9 +153,6 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
     snapshot.syncSessions !== manifest.snapshotSyncSessions ||
     syncSessions !== manifest.syncSessions ||
     !sameSnapshotSelection(snapshot.selection, manifest.selection) ||
-    (snapshot.ignoreRules === null) !== (manifest.ignoreRules === null) ||
-    snapshot.ignoreRules?.filename !== manifest.ignoreRules?.filename ||
-    snapshot.ignoreRules?.text !== manifest.ignoreRules?.text ||
     prepared.length !== manifest.files.length ||
     prepared.some((file, index) => {
       const expected = manifest.files[index];
@@ -205,7 +165,6 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
 
 export function prepareGitSnapshot(snapshot: Snapshot, namespace: string) {
   assertSnapshotExcludesDebugLog(snapshot);
-  if (!isIgnoreSnapshotVersion(snapshot.version)) snapshotSelectionInclude(snapshot);
   validatePortableSnapshot(snapshot);
   if (
     typeof snapshot.id !== "string" ||

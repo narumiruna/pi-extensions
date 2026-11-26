@@ -3,8 +3,6 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { test } from "vitest";
 import { prepareGitSnapshot, requireGitManifest } from "../src/engine/backends/git/git-storage.js";
-import { compileEffectiveIgnorePolicy } from "../src/engine/ignore/effective-ignore-policy.js";
-import { validateIgnoreFilename } from "../src/engine/ignore/ignore-source.js";
 import { isDeniedPath } from "../src/engine/paths.js";
 import { applySnapshot } from "../src/engine/snapshot/snapshot-apply.js";
 import { decodeSnapshot, encodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
@@ -33,25 +31,17 @@ function oldSnapshot(path: string): Snapshot {
   };
 }
 
-test("both directory policies keep the root log local despite broad re-inclusion", () => {
-  const ignorePolicy = compileEffectiveIgnorePolicy(
-    { filename: ".syncignore", text: "*\n!pi-sync.log\n!portable.md\n", sourceDigest: "test", present: false },
-    { sessions: false, configuredFilenames: [] },
-  );
-  for (const config of [directory, { ...directory, ignorePolicy }]) {
-    const matches = configuredSnapshotPathMatcher(config);
-    const traverse = compileSyncPolicyTraversal(config);
-    assert.equal(matches("portable.md"), true);
-    for (const alias of aliases) {
-      assert.equal(matches(alias), false, alias);
-      assert.equal(traverse(alias), false, alias);
-      assert.equal(isDeniedPath(alias), true, alias);
-      assert.throws(() => normalizeSyncInclude([alias]), /cannot be synced/u, alias);
-    }
+test("directory policy keeps the root log local despite broad re-inclusion", () => {
+  const matches = configuredSnapshotPathMatcher(directory);
+  const traverse = compileSyncPolicyTraversal(directory);
+  assert.equal(matches("portable.md"), true);
+  for (const alias of aliases) {
+    assert.equal(matches(alias), false, alias);
+    assert.equal(traverse(alias), false, alias);
+    assert.equal(isDeniedPath(alias), true, alias);
+    assert.throws(() => normalizeSyncInclude([alias]), /cannot be synced/u, alias);
   }
-  for (const name of ["pi-sync.log", "PI-SYNC.LOG"])
-    assert.throws(() => validateIgnoreFilename(name), /reserved filename/u);
-  assert.equal(isDeniedPath("notes/pi-sync.log"), false);
+  for (const _name of ["pi-sync.log", "PI-SYNC.LOG"]) assert.equal(isDeniedPath("notes/pi-sync.log"), false);
 });
 
 test("old object and Git snapshots containing the log are rejected without applying or rewriting", async () => {

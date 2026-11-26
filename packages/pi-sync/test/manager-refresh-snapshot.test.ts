@@ -3,7 +3,6 @@ import path from "node:path";
 import { configureEngineHost, engineHost } from "@narumitw/pi-sync-daemon/engine/host";
 import { expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import { loadConfigForCheck, syncCheckConfigFingerprint } from "../src/settings/config.js";
 import { type LocalConfigDocument, withConfigPublicationReadyHookForTest } from "../src/settings/config-file.js";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
 import { describeManagerState } from "../src/ui/manager-state.js";
@@ -133,90 +132,33 @@ test("missing settings have no read side effects", () =>
     await expect(fs.lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
   }));
 
-test("mixed settings skip invalid rules and stop after the first usable alternate", () =>
+test("a retired inactive setup blocks writes and points to the configuration skill", () =>
   withTempHome(async (root) => {
-    const filename = await save(
-      root,
-      settings({
-        missing: setup("missing", ".syncignore"),
-        invalid: setup("invalid", "invalid.rules"),
-        usable: setup("usable", "usable.rules"),
-        later: setup("later", "later.rules"),
-        home: setup("home"),
-      }),
-    );
-    await fs.writeFile(path.join(root, "invalid.rules"), "unsupported\\/separator\n");
-    await fs.writeFile(path.join(root, "usable.rules"), "/auth.json\n");
-    await fs.writeFile(path.join(root, "later.rules"), "/auth.json\n");
-    const open = vi.spyOn(fs, "open");
-    try {
-      const manager = await describeManagerState(undefined, undefined, free);
-      expect(manager.actions).toContain("Switch sync setup");
-      expect(open.mock.calls.map(([file]) => file)).toEqual([
-        filename,
-        path.join(root, "invalid.rules"),
-        path.join(root, "usable.rules"),
-      ]);
-      expect(manager.configReview?.fingerprint).toBe(syncCheckConfigFingerprint(await loadConfigForCheck()));
-    } finally {
-      open.mockRestore();
-    }
-  }));
-
-test("active ignore-file fingerprints match the action loader without migrating the settings file", () =>
-  withTempHome(async (root) => {
-    const filename = await save(root, settings({ work: setup("work"), home: setup("home", "home.rules") }));
-    const legacy = path.join(root, "pi-sync.local.json");
-    await fs.rename(filename, legacy);
-    await fs.writeFile(path.join(root, "home.rules"), "/auth.json\n");
-    const open = vi.spyOn(fs, "open");
-    try {
-      const manager = await describeManagerState(undefined, undefined, free);
-      expect(manager.actions).toContain("Switch sync setup");
-      expect(open.mock.calls.map(([file]) => file)).toEqual([legacy, path.join(root, "home.rules")]);
-      expect(manager.configReview?.fingerprint).toBe(syncCheckConfigFingerprint(await loadConfigForCheck()));
-      await expect(fs.lstat(filename)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      open.mockRestore();
-    }
-  }));
-
-test.each(["invalid", "missing"] as const)("%s rules do not count as a switchable alternate", (problem) =>
-  withTempHome(async (root) => {
-    await save(root, settings({ home: setup("home"), work: setup("work", ".syncignore") }));
-    if (problem === "invalid") await fs.writeFile(path.join(root, ".syncignore"), "\0");
+    const filename = await save(root, settings({ home: setup("home"), retired: setup("retired", "legacy.rules") }));
     const manager = await describeManagerState(undefined, undefined, free);
-    expect(manager.actions).not.toContain("Switch sync setup");
-    expect(manager.actions).toContain("Settings");
-  }),
-);
+    expect(manager.title).toContain(filename);
+    expect(manager.title).toContain("/skill:configure-pi-sync");
+    expect(manager.actions).toEqual(["Help"]);
+  }));
 
-test.each(["busy", "unsupported", "cancelled"] as const)(
-  "%s refresh performs no alternate eligibility reads",
-  (status) =>
-    withTempHome(async (root) => {
-      const filename = await save(root, settings({ home: setup("home"), work: setup("work", "work.rules") }));
-      await fs.writeFile(path.join(root, "work.rules"), "/auth.json\n");
-      const open = vi.spyOn(fs, "open");
-      try {
-        const controller = new AbortController();
-        const describe = describeManagerState(
-          controller.signal,
-          undefined,
-          async () => {
-            if (status === "cancelled") controller.abort(new Error("Refresh cancelled"));
-            return status === "busy" ? { kind: "recoverable-unreadable" } : { kind: "free" };
-          },
-          undefined,
-          async () => status !== "unsupported",
-        );
-        if (status === "cancelled") await expect(describe).rejects.toThrow("Refresh cancelled");
-        else expect((await describe).actions).not.toContain("Switch sync setup");
-        expect(open.mock.calls.map(([file]) => file)).toEqual([filename]);
-      } finally {
-        open.mockRestore();
-      }
-    }),
+test.each(["busy", "cancelled"] as const)("%s refresh performs no alternate eligibility reads", (status) =>
+  withTempHome(async (root) => {
+    const filename = await save(root, settings({ home: setup("home"), work: setup("work") }));
+    await fs.writeFile(path.join(root, "work.rules"), "/auth.json\n");
+    const open = vi.spyOn(fs, "open");
+    try {
+      const controller = new AbortController();
+      const describe = describeManagerState(controller.signal, undefined, async () => {
+        if (status === "cancelled") controller.abort(new Error("Refresh cancelled"));
+        return status === "busy" ? { kind: "recoverable-unreadable" } : { kind: "free" };
+      });
+      if (status === "cancelled") await expect(describe).rejects.toThrow("Refresh cancelled");
+      else expect((await describe).actions).not.toContain("Switch sync setup");
+      expect(open.mock.calls.map(([file]) => file)).toEqual([filename]);
+    } finally {
+      open.mockRestore();
+    }
+  }),
 );
 
 test("refresh observes a settings save queued before it", () =>
@@ -265,16 +207,12 @@ test("the displayed snapshot survives a concurrent removal but cannot authorize 
     expect(JSON.parse(await fs.readFile(filename, "utf8")).activeSyncSetup).toBe("home");
   }));
 
-test.each(["settings", "rules"] as const)("a switch rechecks %s changed after the exact preview", (change) =>
+test("a switch rechecks settings changed after the exact preview", () =>
   withTempHome(async (root) => {
-    const ruleFile = "work.rules";
-    const filename = await save(root, settings({ home: setup("home"), work: setup("work", ruleFile) }));
-    const rulePath = path.join(root, ruleFile);
-    await fs.writeFile(rulePath, "/auth.json\n");
+    const filename = await save(root, settings({ home: setup("home"), work: setup("work") }));
     expect((await describeManagerState(undefined, undefined, free)).actions).toContain("Switch sync setup");
     const confirm = vi.fn(async () => {
-      if (change === "settings") await save(root, settings({ home: setup("home"), work: setup("changed", ruleFile) }));
-      else await fs.unlink(rulePath);
+      await save(root, settings({ home: setup("home"), work: setup("changed") }));
       return true;
     });
     const { ctx, notifications } = createMockContext({ mode: "rpc", confirm });
@@ -284,5 +222,4 @@ test.each(["settings", "rules"] as const)("a switch rechecks %s changed after th
     expect(notifications.at(-1)?.message).toMatch(/was not switched.*(?:changed|does not exist)/u);
     expect(JSON.parse(await fs.readFile(filename, "utf8")).activeSyncSetup).toBe("home");
     expect(runRoute).not.toHaveBeenCalled();
-  }),
-);
+  }));

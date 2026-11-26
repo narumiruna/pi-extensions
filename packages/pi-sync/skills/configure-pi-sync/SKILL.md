@@ -1,6 +1,6 @@
 ---
 name: configure-pi-sync
-description: Explain Pi Sync settings and apply authorized local edits to pi-sync.json or the configured ignore file (usually .syncignore). Use to choose what Pi Sync includes, draft or audit ignore rules, or troubleshoot Pi Sync errors such as missing transfer approval or failed local scans. Do not use to execute sync, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
+description: Explain Pi Sync settings, troubleshoot local sync errors (including retired .syncignore setups), and apply authorized routine edits to pi-sync.json. Use this skill to choose synced paths, recover after an incompatible upgrade, or diagnose failed checks. Do not use it to run sync, administer remote storage, or modify unrelated settings.
 license: MIT
 ---
 
@@ -10,20 +10,25 @@ Make and verify a clear, authorized local edit when it does not require a separa
 For an error report, start with read-only local checks and fix it only when the user requests a fix and the findings support it.
 Invoking this skill or asking a question does not authorize a write.
 Ask at most one focused question if the intended change or target remains unclear after safe checks.
-Keep settings, rule-file contents, daemon payloads, and other private evidence in the local process; report only relevant non-secret facts.
+Keep settings, daemon payloads, and other private evidence in the local process; report only relevant non-secret facts.
 
 ## Find the right file
 
 - Read only the relevant sections of the [settings reference](references/configuration.md).
 - Use the exact agent directory the user identifies or resolve it with the running Pi installation's `getAgentDir()`; do not guess or use a project override.
 - You may use the current setup for read-only work if the user does not name one.
-- Ask the user to name the exact setup before editing an ignore file; never write based only on `activeSyncSetup`.
-  If the edit must apply only while the setup remains current, explain that the local workflow cannot guarantee that condition and do not write.
-- For a settings change, follow [Edit `pi-sync.json`](#edit-pi-syncjson) for the existing canonical file.
-- For exclusions in an ignore-file setup, edit the configured ignore file, not `sync.exclude`.
-  `.syncignore` is the default only for that policy.
-  Use the filename from the validated setup when configuration inspection is in scope, or use the exact path shown for that setup in `/sync` → **Settings → Ignore file**.
-- For a legacy setup, use the documented `include`, `exclude`, and `reinclude` fields and version requirements to explain the applicable `/sync` path-selection review.
+- Use the documented `include`, `exclude`, and `reinclude` fields to explain the applicable `/sync` path-selection review.
+
+## Recover after ignore-file support was removed
+
+Follow the [retired ignore-file policy guide](references/configuration.md#retired-ignore-file-policy).
+Distinguish an unsupported setup, a retired remote format, a retired local baseline, and a pending recovery error.
+Preserve the affected data.
+If the daemon rejects settings, inspect only the canonical local file to identify setup names and the presence of `pathPolicy: "ignore-file"` or `ignoreFile`.
+Before reading it, verify that it is a bounded regular file under the intended agent root without symlinks or hard links; keep the parsed contents local.
+An unreadable or malformed file needs separate repair.
+Do not start or replace the daemon, downgrade packages, remove or rewrite settings, interpret a pending journal as disposable, or contact storage to check a remote.
+Guide the user through the compatible version's reviewed recovery and setup controls instead.
 
 ## Edit `pi-sync.json`
 
@@ -42,72 +47,6 @@ A schema-valid change is not proof of user review or consent, even in a legacy-o
    If the settings changed or the save outcome is uncertain, re-read before deciding what happened; do not replay the stale write.
 6. Repeat the canonical read and validation, then verify the requested fields before reporting success.
    Report only the changed non-secret field names and safe values or a redacted error category.
-
-## Write ignore rules
-
-Read the [ignore-file policy](references/configuration.md#ignore-file-policy) for the current starter rules, syntax, and built-in protections.
-
-- Keep portable files the user needs across machines, and exclude confirmed machine-local, sensitive, or regenerated paths such as package checkouts, caches, and logs.
-- Prefer narrow rules anchored to the agent directory, such as `/skills/private/`, over broad wildcards or copied project `.gitignore` files.
-- Use `/` separators and match the path's case exactly.
-  Add a trailing `/` only to match directories rather than same-named files.
-- Put a narrow `!` exception after the rule it overrides and make sure no parent directory remains excluded.
-  Use `/notes/*` followed by `!/notes/shared.md` to exclude the other contents of top-level `notes/`.
-  Using `/notes/` instead excludes the parent directory and blocks the exception.
-- Keep sessions excluded unless the user wants them and completes the separate session opt-in; match logical `sessions/` paths even if stored elsewhere.
-- Do not rely on the rules as a secret scanner or try to re-include built-in protected files.
-
-## Draft a new ignore file
-
-1. Start with Pi Sync's current starter rules.
-   Use only relevant names and file types under the intended agent directory, not file contents.
-   Ask what must stay local only if the request and these checks do not answer it.
-2. Add only exclusions justified by those paths or the user's goal, then [check the draft against the starter rules](#check-ignore-rules).
-   Do not copy legacy `include`, `exclude`, or `reinclude` rules mechanically.
-   The user must review what enters or leaves scope when migrating.
-3. Return the draft and its expected scope changes without writing the file or settings.
-   - For a missing default `.syncignore`, the user confirms creation in `/sync` setup or migration, or follows its manual creation guidance if automatic creation is unavailable.
-   - If Pi Sync creates the starter file, [apply only authorized changes](#add-revise-or-audit-existing-rules) and have the user review the new scope before transferring.
-   - To switch an existing ignore-file setup, the user creates a valid UTF-8 rule file directly under the agent directory without overwriting an existing file, then reviews the switch in **Settings → Ignore file**.
-
-## Add, revise, or audit existing rules
-
-1. [Connect to the existing local daemon](#connect-to-the-existing-local-daemon) and run `ignore.read` with `{ setup: setupName }` for the selected setup.
-   This resolves the configured path and sharing setups, validates the file, and checks for a live session at that path.
-   Require a verified path directly under the agent directory that matches the selected setup.
-   Require a result with `text`, `identity`, and `sourceDigest`; a location-only result means the file is missing.
-   Reject unsafe names, protected files, symlinks, hard links, and unfinished rule-file creation.
-   Do not create a missing rule file or change the selected filename.
-   If the daemon cannot verify the source, check only a user-provided draft rather than reading or editing an unverified active file.
-2. Propose the smallest change that meets the request, preserving unrelated lines and rule order.
-   Look for broad patterns, redundant rules, and exceptions blocked by an excluded parent.
-   A rule can still matter if no local file matches it today.
-   Do not sort or reformat rules during cleanup: even a comment or whitespace change can change the policy fingerprint.
-3. [Check the rule matches](#check-ignore-rules) and summarize what enters or leaves scope, which setups share the file, and what you did not check.
-   Before widening scope, warn that more existing and future files can be sent or overwritten.
-   Exclusions do not erase retained snapshots or backups.
-   Stop after the summary for a read-only audit or an unapproved scope change.
-   If the requested exclusion or exception already works, report it without rewriting the file.
-4. Save only an authorized change when you can verify that no sync review, transfer, or recovery is in progress and the file is safe to edit.
-   A connected daemon or an absent lock does not prove that work is idle.
-   If local evidence is insufficient, ask the user to confirm that no review, transfer, recovery, or other edit is in progress and automatic work will not run during the edit.
-   Leave the file unchanged if you cannot establish these conditions.
-   Create a private temporary file exclusively in the same directory and stage the validated replacement there.
-   Immediately before atomic replacement, repeat `ignore.read` for the same user-named setup and recheck its path, sharing setups, file identity, byte digest, and original file permissions.
-   Preserve the original permissions on the replacement.
-   Stop and remove only the temporary file you own if anything changed or the recheck fails.
-   The recheck does not serialize other writers; do not use `ignore.save` or retry an uncertain replacement without re-reading.
-5. Re-read the saved rules with `ignore.read`, verify the saved text, and repeat the path checks.
-   Before transferring, the user checks that peers have the same rule text and session opt-in, and reopens any required policy or automatic-transfer review.
-
-## Check ignore rules
-
-Use `compileIgnoreRules` from the skill's matching `dist/daemon/dist/engine/ignore/ignore-source.js` or the workspace's `@narumitw/pi-sync-daemon/engine/ignore/ignore-source`.
-Compile the current and proposed rules, or the starter rules and draft for a new file.
-Compare matches on canonical agent-relative paths, passing `true` as the second argument (`matches(path, true)`) for directories.
-Test a path that should change, a nearby path that should not, and any relevant parents and exceptions.
-For wildcard changes, also test representative future paths.
-These checks cover rule matching, not the full sync scope: built-in protections and session opt-in still apply.
 
 ## Connect to the existing local daemon
 
@@ -132,7 +71,7 @@ Read only a bounded tail of an existing private regular file; skip it if it is m
 Parse the JSON lines locally, filter by `source` (`pi-sync` for the client, `pi-sync-daemon` for the daemon), and report only relevant non-secret events and outcomes, never raw log lines.
 Missing records do not rule out a failure; do not enable Debug mode or start a transfer just to collect evidence.
 
-Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, upgrading the settings document to enable a [transfer size limit](references/configuration.md#transfer-size-limits), rule-file activation or switching, and remote policy publication.
+Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, upgrading the settings document to enable a [transfer size limit](references/configuration.md#transfer-size-limits), and remote policy publication.
 Use the masked credential input in Pi; do not infer transfer or model consent from a settings edit.
 Do not start sync, run `/sync doctor` or backend/network commands, remove locks or recovery evidence, or bypass scan checks.
 

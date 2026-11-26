@@ -1,8 +1,8 @@
 import type { EngineContext } from "../host.js";
-import { hasPendingAdoption } from "../ignore/adoption-journal.js";
-import { loadConfig } from "../settings/config.js";
+import { configFromSettings, loadConfig } from "../settings/config.js";
 import { isMissingConfigError } from "../settings/config-errors.js";
 import { consumeLocalConfigMigrationNotice } from "../settings/config-file.js";
+import { assertNoRetiredRuleJournal } from "../settings/retired-ignore-recovery.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
 import { effectiveSessionRoot, sessionDirFromContext, snapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { pendingTransactionEntries } from "../snapshot/snapshot-transaction-directory.js";
@@ -28,29 +28,15 @@ export async function initializeSync(
       const stateNotice = stateDirectoryMigrationNotice();
       if (stateNotice && ctx.hasUI) ctx.ui.notify(stateNotice, "warning");
       await timings.measure("transaction recovery", async () => {
+        assertNoRetiredRuleJournal();
         const pending = await pendingTransactionEntries();
         validate();
-        if (hasPendingAdoption()) {
-          if (pending.length) {
-            const { recoverAdoptionFilesOnStartup } = await import("./ignore-adoption-recovery.js");
-            validate();
-            await recoverAdoptionFilesOnStartup(ctx, signal, validate);
-            validate();
-          }
-          if (ctx.hasUI)
-            ctx.ui.notify(
-              "Ignore-rule adoption is pending. Resume from the originating setup with /sync pull.",
-              "warning",
-            );
-          return;
-        }
         if (!pending.some((entry) => entry.isDirectory())) return;
         const { recoverSnapshotTransactionsOnStartup } = await import("../snapshot/snapshot-transaction.js");
         validate();
         const settings = await readLocalConfigObject();
         validate();
-        const config = settings?.activeSyncSetup ? await loadConfig() : undefined;
-        validate();
+        const config = settings?.activeSyncSetup ? configFromSettings(settings) : undefined;
         const sessionDir =
           config?.scope === "agent-directory"
             ? await effectiveSessionRoot(ctx, config, signal)

@@ -53,17 +53,6 @@ test("selected sides are independent; Pull counts only the protected session ver
   );
 });
 
-test("rule metadata counts by UTF-8 size only when present, independently from directory limits", () => {
-  const ignoreRules = { filename: ".syncignore", text: "é".repeat(mib / 2) };
-  assert.doesNotThrow(() => requireTransferSize(limits, { side: "Remote", files: [], ignoreRules }));
-  ignoreRules.text += "界";
-  assert.throws(() => requireTransferSize(limits, { side: "Remote", files: [], ignoreRules }), /1048579 bytes/u);
-  assert.doesNotThrow(() => requireTransferSize(limits, { side: "Remote", files: [], ignoreRules: null }));
-  assert.doesNotThrow(() =>
-    requireTransferSize({ maxDirectorySizeMiB: 1 }, { side: "Remote", files: [], ignoreRules }),
-  );
-});
-
 test("diagnostics are deterministic, safe, and bounded", () => {
   const sample = file("", mib + 1);
   const files = Array.from({ length: 30 }, (_, index) => ({
@@ -71,14 +60,14 @@ test("diagnostics are deterministic, safe, and bounded", () => {
     path: `entry-${String(index).padStart(2, "0")}`,
   }));
   files.push({ ...sample, path: `a\n\u001b\u202esafe-${"q".repeat(1000)}` });
-  const config = { maxFileSizeMiB: 1, pathPolicy: "ignore-file" as const };
+  const config = { maxFileSizeMiB: 1 };
   const details = transferSizeDetails(config, [{ side: "Local", files }]);
   assert.ok(details);
   assert.equal(details, transferSizeDetails(config, [{ side: "Local", files: [...files].reverse() }]));
   assert.ok(details.length < 900);
   assert.ok(!details.includes("\n") && !details.includes("\u001b") && !details.includes("\u202e"));
   assert.match(details, /23 additional findings omitted/u);
-  assert.match(details, /\/sync diff.*\.syncignore.*Push or Pull/u);
+  assert.match(details, /\/sync diff.*exclusions.*Push or Pull/u);
   const hostile = files.map((file, index) => ({ ...file, path: `${index}-"${"\u202e".repeat(250)}` }));
   assert.throws(
     () => requireTransferSize(config, { side: "Local", files: hostile }),

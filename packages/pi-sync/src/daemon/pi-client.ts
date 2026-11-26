@@ -44,17 +44,13 @@ import {
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { PiApplyGate } from "./apply-gate.js";
 import { observeDebugJob } from "./client-debug.js";
-import {
-  type DirectionalCheckpoint,
-  isForegroundDirection,
-  type PendingAdoptionRecovery,
-  runDirectionalRecovery,
-} from "./directional-recovery.js";
+import { type DirectionalCheckpoint, isForegroundDirection, runDirectionalRecovery } from "./directional-recovery.js";
 import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui.js";
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
 
 type DaemonAddress = Pick<Awaited<ReturnType<typeof ensureDaemon>>, "paths" | "identity" | "needsUpgrade"> & {
+  ignoreFilesRetired?: boolean;
   upgradeStop?: boolean;
 };
 
@@ -280,11 +276,6 @@ export class PiDaemonClient {
   private reloadRequest?: { received: boolean };
   private pendingReload?: AbortController;
   private directionalCheckpoint?: DirectionalCheckpoint;
-  private adoptionRecovery?: {
-    pending: PendingAdoptionRecovery;
-    review: { setupName: string; fingerprint: string };
-    assertRoot(): void;
-  };
   private recoveringDirectionalOwner = false;
   private readonly busy = new Set<string>();
   private initialized = false;
@@ -534,7 +525,11 @@ export class PiDaemonClient {
           : await this.ensureWithSessionProtection(startupSignal, validateStartup);
         validateStartup();
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
-        const protectionOnly = daemon.needsUpgrade === true;
+        if (!existing && !daemon.needsUpgrade && !daemon.ignoreFilesRetired)
+          throw new Error(
+            "The running daemon still supports retired ignore-file policies. Restart with the matching Pi Sync daemon, then /reload. See /skill:configure-pi-sync.",
+          );
+        const protectionOnly = daemon.needsUpgrade || !daemon.ignoreFilesRetired;
         const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
           callback: (callback, signal) => this.callback(connection, callback, signal, protectionOnly),
           mergeReview:
@@ -825,20 +820,7 @@ export class PiDaemonClient {
   get ownershipCleanupRequired() {
     return this.cleanupRequired;
   }
-  get pendingPullReview() {
-    const recovery = this.adoptionRecovery;
-    if (
-      !this.cleanupRequired ||
-      !recovery ||
-      this.paused ||
-      recovery.pending.owner !== this.connection ||
-      !recovery.pending.owner.canRecoverForeground(recovery.pending.job)
-    )
-      return undefined;
-    return recovery.review;
-  }
   confirmRecoveryExit(owner: DaemonRecoveryTarget) {
-    this.adoptionRecovery = undefined;
     this.cleanupRequired = true;
     this.recoveredOwner = owner;
   }
@@ -861,17 +843,10 @@ export class PiDaemonClient {
     ctx = this.ctx,
     onCommit?: () => void,
     reload?: AbortController,
-    requirePendingAdoption = false,
   ) {
     const diagnostics = this.debug ? observeDebugJob(operation, (event) => this.recordDebug(event)) : undefined;
-    const adoptionRecovery =
-      operation === "pull.foreground" && this.pendingPullReview ? this.adoptionRecovery : undefined;
     const result = this.work
-      .then(() => {
-        if (requirePendingAdoption && !adoptionRecovery)
-          throw new Error("The original Pull is no longer available for automatic recovery.");
-        return this.runCurrent(operation, payload, signal, ctx, onCommit, reload, diagnostics, adoptionRecovery);
-      })
+      .then(() => this.runCurrent(operation, payload, signal, ctx, onCommit, reload, diagnostics))
       .catch((error: unknown) => {
         diagnostics?.rejected(error, Boolean(signal?.aborted || reload?.signal.aborted));
         this.recordOwnershipFailure(error);
@@ -923,11 +898,8 @@ export class PiDaemonClient {
     onCommit?: () => void,
     reload?: AbortController,
     diagnostics?: ReturnType<typeof observeDebugJob>,
-    adoptionRecovery?: PiDaemonClient["adoptionRecovery"],
   ) {
     this.validate();
-    if (adoptionRecovery && (this.adoptionRecovery !== adoptionRecovery || !this.pendingPullReview))
-      throw new Error("The original Pull is no longer available for automatic recovery.");
     signal?.throwIfAborted();
     reload?.signal.throwIfAborted();
     if (this.pendingReload) throw new Error("Pi resources are about to reload.");
@@ -956,39 +928,17 @@ export class PiDaemonClient {
     runSignal.addEventListener("abort", clearForeground, { once: true });
     try {
       const root = isForegroundDirection(operation) ? lstatSync(this.root) : undefined;
-      const assertRoot =
-        adoptionRecovery?.assertRoot ??
-        (() => {
-          const current = lstatSync(this.root);
-          if (!root || !current.isDirectory() || current.dev !== root.dev || current.ino !== root.ino)
-            throw new Error("The agent directory changed during the transfer.");
-        });
+      const assertRoot = () => {
+        const current = lstatSync(this.root);
+        if (!root || !current.isDirectory() || current.dev !== root.dev || current.ino !== root.ino)
+          throw new Error("The agent directory changed during the transfer.");
+      };
       const intent = root ? structuredClone(payload) : payload;
-      const pull = operation === "pull.foreground" ? (intent as { setup: string; fingerprint: string }) : undefined;
-      if (
-        adoptionRecovery &&
-        (!pull ||
-          pull.setup !== adoptionRecovery.review.setupName ||
-          pull.fingerprint !== adoptionRecovery.review.fingerprint)
-      )
-        throw new Error("The sync setup changed before Pull recovery.");
-      if (adoptionRecovery) {
-        assertRoot();
-        const { createSettingsConfigView, syncCheckConfigFingerprint } = await import("../settings/config.js");
-        this.validateFactsScope(connection, runSignal);
-        const document = await peekLocalConfigDocument();
-        this.validateFactsScope(connection, runSignal);
-        const config = document && (await createSettingsConfigView(document).observe(undefined, runSignal));
-        this.validateFactsScope(connection, runSignal);
-        assertRoot();
-        if (!config || syncCheckConfigFingerprint(config) !== adoptionRecovery.review.fingerprint)
-          throw new Error("The sync setup changed before Pull recovery.");
-      }
       const result = root
         ? await runDirectionalRecovery(
             connection,
             runSignal,
-            async (checkpoint, retryCheckpoint, retryAdoptionJournal) => {
+            async (checkpoint, retryCheckpoint) => {
               const current = checkpoint.connection;
               this.validateFactsScope(current, runSignal);
               assertRoot();
@@ -996,11 +946,7 @@ export class PiDaemonClient {
               try {
                 return await current.run(
                   operation,
-                  retryAdoptionJournal !== undefined
-                    ? { ...pull, retryAdoptionJournal }
-                    : retryCheckpoint === undefined
-                      ? intent
-                      : { ...(intent as object), retryCheckpoint },
+                  retryCheckpoint === undefined ? intent : { ...(intent as object), retryCheckpoint },
                   runSignal,
                   onCommit,
                   (id) => {
@@ -1015,16 +961,6 @@ export class PiDaemonClient {
             (owner, job, recoverySignal) => this.recoverDirectionalOwner(owner, job, recoverySignal, assertRoot),
             () => {
               this.cleanupRequired = true;
-            },
-            pull && {
-              pending: adoptionRecovery?.pending,
-              retain: (pending) => {
-                this.adoptionRecovery = pending && {
-                  pending,
-                  review: { setupName: pull.setup, fingerprint: pull.fingerprint },
-                  assertRoot,
-                };
-              },
             },
           )
         : await connection.run(operation, payload, runSignal, onCommit, diagnostics?.onSubmit);
@@ -1210,7 +1146,6 @@ export class PiDaemonClient {
       helpText?: string;
       background?: boolean;
       fingerprint?: string;
-      adoptionRecovery?: number;
     };
     if (callback.kind === "queue-release") {
       if (typeof payload?.reservation !== "string") throw new Error("Invalid queue release.");
@@ -1224,7 +1159,7 @@ export class PiDaemonClient {
       this.validateFactsScope(connection, this.runSignal);
       if (protectionOnly || this.directionalCheckpoint?.accept(connection, callback.job, payload?.fingerprint) !== true)
         return false;
-      return payload.adoptionRecovery === 1 ? { adoptionRecovery: 1 } : true;
+      return true;
     }
     if (callback.kind === "queue-acquire") {
       if (this.pendingReload) throw new Error("Pi resources are about to reload.");

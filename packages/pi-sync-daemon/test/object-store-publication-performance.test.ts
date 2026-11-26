@@ -9,7 +9,6 @@ import { expectedRemoteHead, SyncBackendConflictError } from "../src/engine/back
 import { WebDavSyncBackend } from "../src/engine/backends/webdav/webdav-backend.js";
 import { encodeSnapshot } from "../src/engine/snapshot/snapshot-codec.js";
 import type { Snapshot } from "../src/engine/snapshot/snapshot-types.js";
-import { validatePortableSnapshot } from "../src/engine/sync/local-fields.js";
 
 vi.mock(import("../src/engine/snapshot/snapshot-codec.js"), async (importOriginal) => {
   const original = await importOriginal();
@@ -262,35 +261,6 @@ test.each(kinds)("%s refuses to replace an active head with unsafe History evide
     assert.ok(!store.requests.some(({ method, path }) => method === "PUT" && path.endsWith("/latest.json")));
     assert.equal((await backend.readHead())?.revision, first.head.revision);
   } finally {
-    await store.close();
-  }
-});
-
-test.each(kinds)("%s hashes v6 file bytes once per publication and read", async (kind) => {
-  const store = new ObjectStoreFixture(kind, {});
-  const payload = Buffer.from("checksum-work sentinel", "utf8");
-  const image: Snapshot = {
-    ...snapshot(),
-    version: 6,
-    selection: { version: 4, scope: "agent-directory", fingerprint: "a".repeat(64), sessions: false },
-    files: [{ path: "test.txt", contentBase64: payload.toString("base64"), sha256: objectEtag(payload).slice(1, -1) }],
-  };
-  const update = vi.spyOn(Object.getPrototypeOf(createHash("sha256")), "update");
-  const checks = () => update.mock.calls.filter(([value]) => Buffer.isBuffer(value) && value.equals(payload)).length;
-  try {
-    const backend = await store.start("./");
-    const { head } = await backend.publishSnapshot(image, { kind: "missing" });
-    assert.equal(checks(), 1);
-    update.mockClear();
-    const decoded = await backend.readSnapshot(head.snapshotRef);
-    validatePortableSnapshot(decoded);
-    assert.equal(checks(), 1);
-    const [file] = decoded.files;
-    assert.ok(file);
-    file.contentBase64 = Buffer.from("different bytes").toString("base64");
-    assert.throws(() => validatePortableSnapshot(decoded), /checksum or encoding mismatch/);
-  } finally {
-    update.mockRestore();
     await store.close();
   }
 });

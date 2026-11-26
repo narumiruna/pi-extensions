@@ -77,11 +77,9 @@ test("the shared log permits only bounded diagnostic fields", () =>
 test.each([
   ["push.foreground", { outcome: "applied", message: "private backup path" }, "completed"],
   ["pull.foreground", { outcome: "cancelled" }, "cancelled"],
-  ["pull.foreground", { foregroundQueueCleanup: "resume-adoption", journal: "a".repeat(64) }, "blocked"],
   ["push.foreground", { foregroundQueueCleanup: "before-mutation" }, "blocked"],
   ["pull.foreground", { foregroundQueueCleanup: "verified-result", result: { outcome: "applied" } }, "completed"],
   ["push.foreground", { foregroundQueueCleanup: "verified-result", result: { outcome: "cancelled" } }, "cancelled"],
-  ["pull.foreground", { foregroundQueueCleanup: "resume-adoption", journal: "invalid" }, "failed"],
   ["pull.foreground", { outcome: "unknown" }, "failed"],
   ["pull", "cancelled", "cancelled"],
   ["sync", { outcome: "applied" }, undefined],

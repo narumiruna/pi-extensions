@@ -1707,7 +1707,6 @@
 "packages/pi-sync-daemon/src/build-version.ts"	ada52afc7bbc59fd7d6f7cb64ae3a348d833d24ef84de6789251d009af6c54e6
 "packages/pi-sync-daemon/src/cli.ts"	26328d8b716d8fa0f67bfc7b530d938204c12c6811f5b3dcf7d8a489449729e1
 "packages/pi-sync-daemon/src/cli.ts"	2c4e3a2f66d00e095fc1505490f62378b4755b6c486d55473e9db177b00fea88
-"packages/pi-sync-daemon/src/cli.ts"	abcd112b0339c5ef5bb398d3697bf5e55677096ba20ab0caa558aa25de475993
 "packages/pi-sync-daemon/src/cli.ts"	b846b1b88d1c483c25728f0d63ba3dd733ccbd95fb36eda62b3ca0f9d508d04c
 "packages/pi-sync-daemon/src/cli.ts"	d8c567a9237975c49ffee30a1e5a599f05010e595ba8fb647b416efc795af71f
 "packages/pi-sync-daemon/src/client.ts"	0df5e3b6b109f9ee312d844f632904a08cd0a1a02cab09455588a153565c112b
@@ -1978,7 +1977,6 @@
 "packages/pi-sync-daemon/src/engine/sync/json-document.ts"	f7548d46a994cc794f18b8a3a988701088ddd62790862e6a24dcef76325633f4
 "packages/pi-sync-daemon/src/engine/sync/local-field-policy.ts"	dee8ff29877420a7d37d96390c413142dfa213c73f94c05a5163dd15630285b3
 "packages/pi-sync-daemon/src/engine/sync/local-fields.ts"	00307ce046a47c69e79e73661a26d1659c68889b118b89a92405150dde73e481
-"packages/pi-sync-daemon/src/engine/sync/local-fields.ts"	fb8b35334adb85c32dd97f63d78e660dfadbacd42eb3e52675bf3ddcc8853140
 "packages/pi-sync-daemon/src/engine/sync/merge-apply.ts"	240fe6e7a4bbeb2f4d246afc475e2d2fec64d94064791085ec7179a6344ef51f
 "packages/pi-sync-daemon/src/engine/sync/merge-apply.ts"	3850b3be6f8238ce0022dc3d8036672c30d9d34629835dd4605313d869260472
 "packages/pi-sync-daemon/src/engine/sync/merge-apply.ts"	50cf7ba3af9cb7ff0c7d01c378f585dfbd8bd80789d60e782ddca12be550d22f

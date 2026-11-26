@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { backendIdentityCoordinates } from "../backends/backend-identity.js";
 import { safeName } from "../paths.js";
+import { retiredIgnorePolicy } from "../settings/retired-ignore-policy.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { readJsonIfExists, writeJson } from "./json-file.js";
 import { stateDir } from "./state-directory.js";
@@ -30,8 +31,10 @@ export async function writeState(profile: string, state: SyncState) {
 }
 
 export async function readStateForConfig(config: AnySyncConfig): Promise<SyncState> {
+  const state = await readJsonIfExists<SyncState>(statePathForConfig(config));
+  if (state && Object.hasOwn(state, "ignorePolicyKey")) throw retiredIgnorePolicy("baseline");
   return (
-    (await readJsonIfExists<SyncState>(statePathForConfig(config))) ?? {
+    state ?? {
       version: STATE_VERSION,
       profile: config.snapshotIdentity,
       lastFileHashes: {},

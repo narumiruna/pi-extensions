@@ -2,7 +2,6 @@ import type { EngineContext as ExtensionContext } from "../host.js";
 import { loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
-import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
 import { withLock } from "../state/lock.js";
 import { withStateDirectoryAccess } from "../state/state-directory.js";
 import { readStateForConfig } from "../state/sync-state-store.js";
@@ -23,7 +22,7 @@ import {
 } from "./continuous-record.js";
 import { continuousBinding, hashContinuous } from "./continuous-storage.js";
 import { watchContinuous } from "./continuous-watch.js";
-import { assertMergeJournalPolicy, readMergeJournal } from "./merge-journal.js";
+import { readMergeJournal } from "./merge-journal.js";
 import { createStartupTimings, type StartupTimingPublisher, type StartupTimings } from "./startup-timings.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 import { captureMutationOwner } from "./sync-local.js";
@@ -288,7 +287,6 @@ export function createContinuousSync(
           return;
         validate();
         if (syncCheckConfigFingerprint(latest) !== syncCheckConfigFingerprint(config)) {
-          if (config.reservedIgnoreNames !== undefined || latest.reservedIgnoreNames !== undefined) return;
           explicitRetry = false;
           closeWatch();
           config = latest;
@@ -305,12 +303,7 @@ export function createContinuousSync(
           await updateContinuousRecord(binding, lease, (current) => normalizeContinuousClock(current, now));
           validate();
         }
-        const configuration = hashContinuous([
-          config.ignorePolicy
-            ? syncCheckConfigFingerprint(config)
-            : { ...config, showStatus: undefined, debug: undefined },
-          ctx.model,
-        ]);
+        const configuration = hashContinuous([{ ...config, showStatus: undefined, debug: undefined }, ctx.model]);
         const controlChanged = record.configuration !== configuration;
         if (controlChanged || explicitRetry) {
           record.next = 0;
@@ -492,7 +485,6 @@ export function createContinuousSync(
     // A newly pending journal may prove an uncertain commit. It is never authority to republish.
     const pending = await guardedLock("continuous-journal", () => readMergeJournal(config));
     validate();
-    if (pending) assertMergeJournalPolicy(pending, config);
     if (
       !force &&
       !pending &&
@@ -508,8 +500,6 @@ export function createContinuousSync(
         validate();
         const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, signal);
         validate();
-        const validateIgnore = ignorePolicyValidator({ ...snapshotOptions, validateMutation: validate });
-        if (validateIgnore) await validateIgnore();
         await refresh();
         const inspection = await inspectionModule.inspectSync(config, snapshotOptions, signal, undefined, timings);
         await refresh();
@@ -523,7 +513,6 @@ export function createContinuousSync(
         }
         const journal = await readMergeJournal(config);
         validate();
-        if (journal) assertMergeJournalPolicy(journal, config);
         return { inspection, journal, localIdentity };
       }),
     );

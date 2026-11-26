@@ -21,7 +21,7 @@ async function withRecoveryUI(
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "pi-sync-release-ui-"));
   const connections: FakeConnection[] = [];
-  const owner = { paths: { root }, identity: {}, needsUpgrade: protectionOnly };
+  const owner = { ignoreFilesRetired: !protectionOnly, paths: { root }, identity: {}, needsUpgrade: protectionOnly };
   const ensure = vi.fn(async () => owner);
   vi.stubEnv("PI_CODING_AGENT_DIR", root);
   vi.resetModules();

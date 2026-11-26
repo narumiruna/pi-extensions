@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { ignorePolicyFingerprint } from "@narumitw/pi-sync-daemon/engine/ignore/ignore-source";
 import { test } from "vitest";
 import type { ResolvedS3Backend } from "../src/backends/backend-types.js";
 import { historyKey, latestKey, S3SyncBackend, snapshotKey } from "../src/backends/s3/s3-backend.js";
@@ -62,8 +61,6 @@ test("WebDAV root publications and probe cleanup stay under the configured colle
 for (const [kind, version] of [
   ["r2", 1],
   ["s3-compatible", 1],
-  ["r2", 7],
-  ["s3-compatible", 7],
 ] as const) {
   test(`${kind} root uses plain keys and retains version ${version} history across instances`, async () => {
     const config: ResolvedS3Backend = {
@@ -106,23 +103,7 @@ for (const [kind, version] of [
         : new Response(null, { status: 404 });
     };
     try {
-      const text = "\uFEFF# exact S3 rule text\r\n/private/\r\n# no final newline";
-      const first = {
-        ...snapshot([{ path: "settings.json", content: Buffer.from("root") }]),
-        profile: "root",
-        ...(version === 7
-          ? {
-              version,
-              ignoreRules: { filename: ".syncignore", text },
-              selection: {
-                version: 4 as const,
-                scope: "agent-directory" as const,
-                sessions: false,
-                fingerprint: ignorePolicyFingerprint(text, false),
-              },
-            }
-          : {}),
-      };
+      const first = { ...snapshot([{ path: "settings.json", content: Buffer.from("root") }]), profile: "root" };
       const result = await new S3SyncBackend(config).publishSnapshot(first, { kind: "missing" });
       assert.deepEqual(
         [...objects.keys()].sort(),
@@ -130,7 +111,6 @@ for (const [kind, version] of [
       );
       const fresh = new S3SyncBackend(config);
       assert.deepEqual(await fresh.readSnapshot(first.id), first);
-      assert.doesNotMatch(JSON.stringify(await fresh.readHead()), /exact S3 rule text|\.syncignore/u);
       const second = { ...first, id: "second" };
       await fresh.publishSnapshot(second, expectedRemoteHead(result.head));
       assert.deepEqual(

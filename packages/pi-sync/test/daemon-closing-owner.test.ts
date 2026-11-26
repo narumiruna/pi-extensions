@@ -66,6 +66,7 @@ async function fixture(agentDir: string) {
   const exited = Promise.withResolvers<void>();
   const events: string[] = [];
   const addresses = ["old", "new", "unexpected-third"].map((instance) => ({
+    ignoreFilesRetired: true,
     paths: {
       root,
       directory: path.join(root, "runtime"),
@@ -302,6 +303,13 @@ test("a second closing attach exhausts the single retry without submitting the o
       assert.equal(connection.run.mock.calls.length, 0);
       assert.equal(connection.update.mock.calls.length, 0);
     }
+  }));
+
+test("an otherwise compatible daemon cannot handle sync when it lacks the retired-policy guard", () =>
+  withClient(async (f) => {
+    transport.ensure.mockResolvedValueOnce({ ...f.addresses[0], ignoreFilesRetired: undefined });
+    await assert.rejects(f.client.run("initialize", {}), /\/skill:configure-pi-sync/u);
+    assert.equal(f.connections.length, 0);
   }));
 
 test("a closing error from an already submitted operation is not retried or replayed", () =>

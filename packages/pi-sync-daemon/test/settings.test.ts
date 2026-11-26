@@ -123,7 +123,7 @@ test("passive settings clients cannot approve handover but can add an exclusion 
     assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), next);
   }));
 
-test("a passive editor can change a preference in an existing ignore-file setup without changing the rule source", () =>
+test("retired settings block activation, reads and CAS without changing either file", () =>
   fixture(async (root, connect) => {
     const file = path.join(await fs.realpath(root), "pi-sync.json");
     const rule = path.join(root, ".syncignore");
@@ -147,11 +147,17 @@ test("a passive editor can change a preference in an existing ignore-file setup 
     const editor = await connect(true);
     const source = (await editor.run("settings.repair-read", {})) as DocumentView;
     assert.equal(source.path, file);
-    const next = { ...source.parsed, debug: true };
-    await editor.run("settings.cas", { expected: documentFingerprint(source), next });
+    const next = { ...template, debug: true };
+    await assert.rejects(editor.run("settings.read", {}), /ignore-file.*configure-pi-sync/iu);
+    await assert.rejects(
+      editor.run("settings.cas", { expected: documentFingerprint(source), next }),
+      /ignore-file.*configure-pi-sync/iu,
+    );
+    await assert.rejects(owner.run("ignore.migrate", {}), /configure-pi-sync/u);
     const saved = (await editor.run("settings.repair-read", {})) as DocumentView;
     assert.equal(saved.path, file);
-    assert.deepEqual(saved.parsed, { ...original, debug: true });
+    assert.deepEqual(saved.parsed, original);
+    assert.equal(await fs.readFile(file, "utf8"), JSON.stringify(original));
     assert.equal(await fs.readFile(rule, "utf8"), rules);
   }));
 

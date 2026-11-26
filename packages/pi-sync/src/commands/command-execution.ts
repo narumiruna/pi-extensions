@@ -13,7 +13,6 @@ import type { SyncLoaders } from "../sync/sync-loaders.js";
 import { RemoteSelectionMismatchError, syncSessionsSelected } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
 import type { RunRouteResult } from "../ui/cancellable-operation.js";
-import { manualIgnoreFileGuidance } from "../ui/ignore-file-guidance.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
 import { startupTransferSummary } from "../ui/sync-behavior.js";
 import { setSyncStatus } from "../ui/sync-status.js";
@@ -77,7 +76,6 @@ export async function executeCommand(
   onDialog?: (active: boolean) => void,
   retryRefusal = false,
   directionalFingerprint?: string,
-  requirePendingAdoption?: boolean,
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
   try {
@@ -85,8 +83,6 @@ export async function executeCommand(
     const command = await resolveSyncCommand(rawArgs, ctx);
     if (signal?.aborted || !command) return { kind: "completed" };
     const { subcommand, rest } = command;
-    if (requirePendingAdoption && (!directionalClient || subcommand !== "pull"))
-      throw new Error("Pull recovery requires the original directional action.");
     if (directionalClient && directionalFingerprint !== undefined) {
       if ((subcommand !== "push" && subcommand !== "pull") || rest.length || !setup || retryRefusal)
         throw new Error("Invalid directional action.");
@@ -98,7 +94,6 @@ export async function executeCommand(
         directionalFingerprint,
         signal,
         onCommit,
-        requirePendingAdoption,
       );
     }
     const options = parseOptions(rest);
@@ -256,14 +251,11 @@ async function runDirectionalAction(
   fingerprint: string,
   signal: AbortSignal | undefined,
   onCommit: (() => void) | undefined,
-  requirePendingAdoption?: boolean,
 ): Promise<RunRouteResult> {
   try {
     const operation = `${direction}.foreground`;
     const intent = { setup, fingerprint };
-    const result = (await (requirePendingAdoption
-      ? client.run(operation, intent, signal, ctx, onCommit, undefined, true)
-      : client.run(operation, intent, signal, ctx, onCommit))) as
+    const result = (await client.run(operation, intent, signal, ctx, onCommit)) as
       | { outcome?: "applied" | "cancelled"; message?: string }
       | undefined;
     if (!client.canReportDirectionalResult() || (signal?.aborted && result?.outcome !== "applied"))
@@ -342,14 +334,12 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `autonomous sync: ${config.agentMode ? "On" : "Off"}`,
       `continuous sync: ${config.continuous ? (config.agentMode ? "On" : "paused; Autonomous sync is Off") : "Off"}`,
       config.scope ? "sync scope: Pi agent directory" : `included content: ${config.include.join(", ") || "none"}`,
-      ...(config.pathPolicy === "ignore-file"
-        ? ["path policy: local ignore file", manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore")]
-        : config.scope
-          ? [
-              `excluded paths: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}`,
-              `re-included paths: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
-            ]
-          : []),
+      ...(config.scope
+        ? [
+            `excluded paths: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}`,
+            `re-included paths: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
+          ]
+        : []),
       `sessions: ${syncSessionsSelected(config) ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,
       ...warnings,

@@ -10,9 +10,9 @@ const MIB = 1024 ** 2;
 const MAX_FINDINGS = 8;
 
 type SizeLimits = Pick<AnySyncConfig, "maxFileSizeMiB" | "maxDirectorySizeMiB">;
-type SizePolicy = SizeLimits & Pick<AnySyncConfig, "pathPolicy">;
+type SizePolicy = SizeLimits;
 
-type SizeImage = Pick<Snapshot, "files" | "ignoreRules"> & {
+type SizeImage = Pick<Snapshot, "files"> & {
   side: "Local" | "Remote" | "Local input" | "Remote input";
 };
 
@@ -24,16 +24,10 @@ export function selectedPublicationImage(snapshot: Snapshot, config: AnySyncConf
   return {
     side: "Remote",
     files: filterSnapshotForConfigPolicy(snapshot, config, { sessionDir }).files,
-    ignoreRules: snapshot.ignoreRules,
   };
 }
 
-export function selectedPullImage(
-  incoming: Snapshot,
-  local: Snapshot,
-  protectedPaths: ReadonlySet<string>,
-  ignoreRules?: Snapshot["ignoreRules"],
-): SizeImage {
+export function selectedPullImage(incoming: Snapshot, local: Snapshot, protectedPaths: ReadonlySet<string>): SizeImage {
   return {
     side: "Local",
     files: protectedPaths.size
@@ -42,7 +36,6 @@ export function selectedPullImage(
           ...local.files.filter((file) => protectedPaths.has(file.path)),
         ]
       : incoming.files,
-    ignoreRules,
   };
 }
 
@@ -66,7 +59,7 @@ export function transferSizeDetails(config: SizePolicy, images: readonly SizeIma
   const directoryLimit = (config.maxDirectorySizeMiB ?? Infinity) * MIB;
   const findings: Finding[] = [];
   let count = 0;
-  for (const { side, files, ignoreRules } of images) {
+  for (const { side, files } of images) {
     const directories = new Map<string, number>();
     const seen = new Set<string>();
     const measure = (path: string, size: number, kind: Finding["kind"], limit: number) => {
@@ -85,7 +78,6 @@ export function transferSizeDetails(config: SizePolicy, images: readonly SizeIma
       if (directoryLimit !== Infinity)
         for (const parent of parentPaths(path)) directories.set(parent, (directories.get(parent) ?? 0) + size);
     };
-    if (ignoreRules) measureFile(ignoreRules.filename, Buffer.byteLength(ignoreRules.text, "utf8"));
     for (const file of files) measureFile(file.path, snapshotBase64Size(file.contentBase64, file.path));
     for (const [path, size] of directories) measure(path, size, "directory", directoryLimit);
   }
@@ -98,7 +90,7 @@ export function transferSizeDetails(config: SizePolicy, images: readonly SizeIma
       return `${side} ${kind} "${label.slice(0, 240)}${shortened ? "…" : ""}": ${size} bytes (limit ${limit} bytes).`;
     }),
     ...(omitted ? [`${omitted} additional ${omitted === 1 ? "finding" : "findings"} omitted.`] : []),
-    `Use /sync diff, adjust ${config.pathPolicy === "ignore-file" ? ".syncignore (or your configured rule file)" : "exclusions in /sync → Settings"}, then review a Push or Pull.`,
+    `Use /sync diff, adjust exclusions in /sync → Settings, then review a Push or Pull.`,
   ].join(" ");
 }
 

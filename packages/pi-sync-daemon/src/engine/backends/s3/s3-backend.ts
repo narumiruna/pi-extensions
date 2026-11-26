@@ -106,14 +106,14 @@ export class S3SyncBackend implements SyncBackend {
     throwIfAborted(options.signal);
     const image = capturePublicationImage(snapshot);
     assertSnapshotIdentity(image, this.config.destination.namespace);
-    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    if (options.validatePublication) await options.validatePublication();
     throwIfAborted(options.signal);
     const encoded = await encodeForPublication(image, () => verifyS3Conditions(this.config, options.signal));
     throwIfAborted(options.signal);
     const stagedKey = snapshotKey(this.config, image.id);
     const pointer = pointerFor(this.config, image, sha256(encoded));
     const cancellableClient = new S3Client(this.config, options.signal);
-    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    if (options.validatePublication) await options.validatePublication();
     throwIfAborted(options.signal);
     try {
       await cancellableClient.putBuffer(stagedKey, encoded, "application/gzip", {
@@ -151,7 +151,7 @@ export class S3SyncBackend implements SyncBackend {
         );
       }
     }
-    if (options.validateIgnorePolicy) await options.validateIgnorePolicy();
+    if (options.validatePublication) await options.validatePublication();
     throwIfAborted(options.signal);
     options.onCommit?.();
 

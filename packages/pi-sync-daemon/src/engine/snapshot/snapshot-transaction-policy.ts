@@ -1,49 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_IGNORE_FILENAME, validateIgnoreFilename } from "../ignore/ignore-source.js";
 import { assertWithinRoot, isDeniedPath, isPathInside } from "../paths.js";
+import { retiredIgnorePolicy } from "../settings/retired-ignore-policy.js";
 import { normalizeSyncExclude, sameSyncExclude } from "../sync/exclude-policy.js";
 import { mergePathIdentity } from "../sync/file-merge-planner.js";
-import {
-  localIgnorePolicyKey,
-  portableSnapshotSelection,
-  type SyncSelectionConfig,
-  sameSnapshotSelection,
-  selectionForSnapshot,
-  syncDirectoryPolicyKey,
-} from "../sync/sync-policy.js";
+import { portableSnapshotSelection, type SyncSelectionConfig, syncDirectoryPolicyKey } from "../sync/sync-policy.js";
 import { agentDir } from "./session-paths.js";
 import { isCaseReplacement } from "./snapshot-case-replacement.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 import { type SessionRootTransition, validateSessionRootTransition } from "./snapshot-root-transition.js";
-import type { EffectiveIgnorePolicy, SnapshotOptions, SnapshotSelection } from "./snapshot-types.js";
+import type { SnapshotOptions, SnapshotSelection } from "./snapshot-types.js";
 
 export const LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION = 8;
 export const FIXED_WORKSPACE_JOURNAL_VERSION = 9;
 export const AGENT_DIRECTORY_JOURNAL_VERSION = 10;
-export const IGNORE_POLICY_JOURNAL_VERSION = 11;
-export const BOUND_DIRECTORY_JOURNAL_VERSION = 12;
-export const BOUND_INCLUDED_PATHS_JOURNAL_VERSION = 13;
-
-function isLocallyBoundJournal(journal: TransactionJournalPolicy) {
-  return (
-    journal.version === BOUND_DIRECTORY_JOURNAL_VERSION || journal.version === BOUND_INCLUDED_PATHS_JOURNAL_VERSION
-  );
-}
-
-type RecoveryPolicyBinding = Pick<SnapshotOptions, "setupName" | "ignoreSourceIdentity" | "recoverySetupKey">;
-
-export function recoveryPolicyKey(options: SyncSelectionConfig & RecoveryPolicyBinding) {
-  return options.setupName || options.reservedIgnoreNames !== undefined ? localIgnorePolicyKey(options) : undefined;
-}
-
 export function isScopedJournal(journal: TransactionJournalPolicy) {
   return [
     LEGACY_AGENT_DIRECTORY_JOURNAL_VERSION,
     FIXED_WORKSPACE_JOURNAL_VERSION,
     AGENT_DIRECTORY_JOURNAL_VERSION,
-    IGNORE_POLICY_JOURNAL_VERSION,
-    BOUND_DIRECTORY_JOURNAL_VERSION,
   ].includes(journal.version);
 }
 
@@ -61,132 +36,25 @@ export function isScopedIdentity(value: unknown): value is string {
   return typeof value === "string" && /^\d{1,20}:[1-9]\d{0,19}:\d{1,20}$/u.test(value);
 }
 
-interface IgnoreSourceBinding {
-  version: 1;
-  filename: string;
-  sourceDigest: string;
-  reservedNames: string[];
-}
-
 export interface TransactionJournalPolicy {
   version: number;
   exclude?: string[];
   selection?: SnapshotSelection;
-  ignoreSource?: IgnoreSourceBinding;
-  localPolicyKey?: string;
 }
 
-export function ignoreSourceBinding(
-  policy: Pick<EffectiveIgnorePolicy, "filename" | "sourceDigest" | "reservedNames">,
-): IgnoreSourceBinding {
-  const filename = validateIgnoreFilename(policy.filename);
-  if (
-    typeof policy.sourceDigest !== "string" ||
-    policy.sourceDigest.length !== 64 ||
-    !/^[0-9a-f]{64}$/u.test(policy.sourceDigest)
-  )
-    throw new Error("Invalid ignore policy source digest.");
-  return {
-    version: 1,
-    filename,
-    sourceDigest: policy.sourceDigest,
-    reservedNames: [
-      ...new Set(
-        [DEFAULT_IGNORE_FILENAME, filename, ...policy.reservedNames].map((name) =>
-          validateIgnoreFilename(name).toLowerCase(),
-        ),
-      ),
-    ].sort(),
+export type TransactionOptions = SyncSelectionConfig &
+  Pick<SnapshotOptions, "signal" | "validateMutation" | "validateApplyReview"> & {
+    sessionDir?: string;
+    protectedTargets?: readonly string[];
+    expectedPreimages?: ReadonlyMap<string, string>;
+    resolveConfiguredSessionDir?: boolean;
   };
-}
-
-function sameIgnoreSource(left: IgnoreSourceBinding, right: IgnoreSourceBinding) {
-  return (
-    left.version === right.version &&
-    left.filename === right.filename &&
-    left.sourceDigest === right.sourceDigest &&
-    left.reservedNames.length === right.reservedNames.length &&
-    left.reservedNames.every((name, index) => name === right.reservedNames[index])
-  );
-}
-
-type TransactionGuards = Pick<SnapshotOptions, "validateIgnorePolicy" | "signal" | "validateMutation">;
-
-export interface TransactionOptions
-  extends SyncSelectionConfig,
-    TransactionGuards,
-    RecoveryPolicyBinding,
-    Pick<SnapshotOptions, "validateApplyReview"> {
-  sessionDir?: string;
-  exclude?: readonly string[];
-  protectedTargets?: readonly string[];
-  expectedPreimages?: ReadonlyMap<string, string>;
-  resolveConfiguredSessionDir?: boolean;
-}
-
-export class StaleIgnorePolicyError extends Error {}
-
-export function ignorePolicyValidator(options: SyncSelectionConfig & TransactionGuards) {
-  const scopedIgnore = options.ignorePolicy !== undefined || options.version === 4;
-  if (!scopedIgnore && options.reservedIgnoreNames === undefined && !options.validateIgnorePolicy) return;
-  const validateIgnorePolicy = options.validateIgnorePolicy;
-  if (
-    (scopedIgnore && (!options.ignorePolicy || options.scope !== "agent-directory")) ||
-    typeof validateIgnorePolicy !== "function"
-  )
-    throw new Error("Ignore-file mutation requires an explicit local policy and a freshness check.");
-  return async () => {
-    options.validateMutation?.();
-    options.signal?.throwIfAborted();
-    try {
-      const pending = validateIgnorePolicy();
-      if (typeof pending?.then !== "function") throw new Error("The ignore policy freshness check must be async.");
-      await pending;
-    } catch (cause) {
-      throw new StaleIgnorePolicyError(
-        "Pi Sync ignore policy changed or could not be verified; preserve any transaction evidence and reopen the review.",
-        { cause },
-      );
-    }
-    options.validateMutation?.();
-    options.signal?.throwIfAborted();
-  };
-}
 
 export function validateJournalPolicy(journal: TransactionJournalPolicy) {
-  if (
-    !journal ||
-    (![1, 2, 3, 4, 5, 6, 7].includes(journal.version) && !isScopedJournal(journal) && !isLocallyBoundJournal(journal))
-  )
+  if (journal && ([11, 12, 13].includes(journal.version) || Object.hasOwn(journal, "ignoreSource")))
+    throw retiredIgnorePolicy("recovery");
+  if (!journal || (![1, 2, 3, 4, 5, 6, 7].includes(journal.version) && !isScopedJournal(journal)))
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
-  if (
-    isLocallyBoundJournal(journal)
-      ? typeof journal.localPolicyKey !== "string" || !/^[0-9a-f]{64}$/u.test(journal.localPolicyKey)
-      : journal.localPolicyKey !== undefined
-  )
-    throw new Error("Invalid transaction local policy binding; preserve evidence for review.");
-  if (
-    journal.version === IGNORE_POLICY_JOURNAL_VERSION ||
-    (journal.version === BOUND_DIRECTORY_JOURNAL_VERSION && journal.selection?.version === 4)
-  ) {
-    const binding = journal.ignoreSource;
-    try {
-      if (
-        journal.exclude === undefined &&
-        portableSnapshotSelection(journal.selection).version === 4 &&
-        binding &&
-        Array.isArray(binding.reservedNames) &&
-        Object.keys(binding).length === 4 &&
-        sameIgnoreSource(binding, ignoreSourceBinding(binding))
-      )
-        return;
-    } catch (cause) {
-      throw new Error("Invalid ignore-file transaction policy; preserve evidence for review.", { cause });
-    }
-    throw new Error("Invalid ignore-file transaction policy; preserve evidence for review.");
-  }
-  if (journal.ignoreSource !== undefined)
-    throw new Error("Unsupported transaction ignore source binding; preserve evidence for review.");
   if (isScopedJournal(journal)) {
     if (journal.exclude !== undefined || portableSnapshotSelection(journal.selection).version !== 3)
       throw new Error("Invalid agent-directory transaction policy; preserve evidence.");
@@ -199,24 +67,6 @@ export function validateJournalPolicy(journal: TransactionJournalPolicy) {
 }
 
 export function assertRecoveryPolicy(journal: TransactionJournalPolicy, options: TransactionOptions) {
-  const localKey = recoveryPolicyKey(options);
-  if (journal.localPolicyKey !== localKey)
-    throw new Error(
-      "Pending transaction has different setup or ignore policy evidence; preserve its backup for reviewed recovery.",
-    );
-  if (journal.ignoreSource || options.ignorePolicy || options.version === 4) {
-    if (
-      journal.ignoreSource &&
-      options.scope === "agent-directory" &&
-      options.ignorePolicy &&
-      sameIgnoreSource(journal.ignoreSource, ignoreSourceBinding(options.ignorePolicy)) &&
-      sameSnapshotSelection(journal.selection, selectionForSnapshot(undefined, undefined, options))
-    )
-      return;
-    throw new Error(
-      "Pending transaction has a different ignore-file policy; preserve its backup for reviewed recovery.",
-    );
-  }
   const directoryKey = syncDirectoryPolicyKey(journal.selection ?? {});
   const effectiveDirectoryKey = syncDirectoryPolicyKey(options);
   if (
@@ -263,15 +113,14 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
     throw new Error("Unsupported pi-sync transaction journal; preserve evidence for review.");
   if (
     journal.completed !== undefined &&
-    ((!wholeDirectory && ![6, 7, BOUND_INCLUDED_PATHS_JOURNAL_VERSION].includes(journal.version)) ||
-      journal.completed !== true)
+    ((!wholeDirectory && ![6, 7].includes(journal.version)) || journal.completed !== true)
   )
     throw new Error("Invalid transaction completion evidence.");
   const root = path.resolve(agentDir());
   if (typeof journal.root !== "string" || path.resolve(journal.root) !== root)
     throw new Error("Transaction root no longer matches the Pi agent directory.");
   if (journal.sessionRootTransition !== undefined) {
-    if (![7, BOUND_INCLUDED_PATHS_JOURNAL_VERSION].includes(journal.version) || typeof journal.sessionRoot !== "string")
+    if (![7].includes(journal.version) || typeof journal.sessionRoot !== "string")
       throw new Error("Invalid session root-transition version.");
     validateSessionRootTransition(journal.sessionRootTransition);
   } else if (journal.version === 7) throw new Error("Missing session root-transition evidence.");
@@ -305,7 +154,7 @@ export function validateJournal(directory: string, journal: TransactionJournal, 
     assertAllowedTarget(root, journal.sessionRoot, entry.target);
     if (
       entry.afterTarget !== undefined &&
-      ((!wholeDirectory && ![5, 6, 7, BOUND_INCLUDED_PATHS_JOURNAL_VERSION].includes(journal.version)) ||
+      ((!wholeDirectory && ![5, 6, 7].includes(journal.version)) ||
         typeof entry.afterTarget !== "string" ||
         !isCaseReplacement(root, entry.target, entry.afterTarget) ||
         path.resolve(entry.afterTarget) !== entry.afterTarget ||

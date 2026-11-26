@@ -147,18 +147,6 @@ async function withJitiFixture(
         ...(["continuous", "after-exit"].includes(trigger) ? { continuous: true } : {}),
       });
       const settings = validateSettingsDocument(legacy);
-      if (trigger === "retry") {
-        mock.ctx.sessionManager.getSessionDir = () => path.join(agentDir, "sessions");
-        settings.version = 8;
-        settings.onSwitch = "switch-only";
-        settings.syncSetups.home.sync = {
-          scope: "agent-directory",
-          pathPolicy: "ignore-file",
-          automatic: false,
-          agentMode: true,
-        };
-        await fs.writeFile(path.join(agentDir, ".syncignore"), "/*\n!/AGENTS.md\n");
-      }
       await fs.writeFile(localConfigPath(), JSON.stringify(settings));
       signal.throwIfAborted();
       await fs.writeFile(path.join(agentDir, "AGENTS.md"), "base\n");
@@ -211,44 +199,21 @@ async function withJitiFixture(
       assert.ok(command);
       const runCommand = (args: string) => command.handler(args, mock.ctx as ExtensionCommandContext);
       const retry = "Retry refused model result…";
-      const approvePolicy = "Yes, Approve automatic transfers";
       if (foreground) {
         for (const start of loadedExtension.handlers.get("session_start") ?? [])
           await start({ type: "session_start", reason: "startup" }, mock.ctx);
         signal.throwIfAborted();
       }
       if (trigger === "retry") {
-        const consentFile = path.join(agentDir, "pi-sync/daemon.json");
-        const beforeApproval = await fs.readFile(consentFile);
-        const choices = [retry, approvePolicy, undefined];
-        mock.ctx.ui.select = async () => choices.shift();
-        await runCommand("");
-        assert.deepEqual(choices, []);
-        assert.equal(resolver.requests.length, 0, "No cached refusal exists yet.");
         await runCommand("sync");
         signal.throwIfAborted();
         assert.equal(resolver.requests.length, 1, JSON.stringify(mock.notifications));
         assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
-        // Restore handover-only consent without changing the settings or invalidating the cached refusal.
-        await fs.writeFile(consentFile, beforeApproval);
-        const decline = [retry, "No, cancel", undefined];
-        const titles: string[] = [];
-        mock.ctx.ui.select = async (title) => {
-          titles.push(title);
-          return decline.shift();
-        };
-        await runCommand("");
-        signal.throwIfAborted();
-        assert.deepEqual(decline, []);
-        assert.match(titles[1] ?? "", /Allow the enabled automatic sync modes for this setup\?/u);
-        assert.ok(titles.every((title) => !/Retry refused model result\?/u.test(title)));
-        assert.equal(resolver.requests.length, 1);
-        assert.deepEqual(await fs.readFile(consentFile), beforeApproval);
       }
       await use(async () => {
         if (foreground) {
           if (trigger === "retry") {
-            const choices = [retry, approvePolicy, "Yes, Send one fresh request", undefined];
+            const choices = [retry, "Yes, Send one fresh request", undefined];
             const reviews: Array<{ title: string; choices: string[]; requests: number }> = [];
             mock.ctx.ui.select = async (title, items) => {
               reviews.push({ title, choices: items, requests: resolver.requests.length });
@@ -257,13 +222,8 @@ async function withJitiFixture(
             await runCommand("");
             signal.throwIfAborted();
             assert.deepEqual(choices, []);
-            assert.match(reviews[1]?.title ?? "", /Allow the enabled automatic sync modes for this setup\?/u);
-            assert.deepEqual(reviews[1]?.choices.slice(0, 2), ["No, cancel", approvePolicy]);
-            assert.match(reviews[2]?.title ?? "", /Retry refused model result\?/u);
-            assert.deepEqual(
-              reviews.slice(1, 3).map((review) => review.requests),
-              [1, 1],
-            );
+            assert.match(reviews[1]?.title ?? "", /Retry refused model result\?/u);
+            assert.equal(reviews[1]?.requests, 1);
             const candidates = await fs.readdir(path.join(agentDir, "pi-sync/agent-resolver"));
             assert.ok(
               candidates.some((name) => name.includes(".refusal-")),

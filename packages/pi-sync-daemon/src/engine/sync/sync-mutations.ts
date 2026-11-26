@@ -8,11 +8,6 @@ import {
 } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
-import {
-  adoptionJournalFingerprint,
-  loadAdoptionJournal,
-  requireNoPendingAdoption,
-} from "../ignore/adoption-journal.js";
 import { loadConfig, loadConfigForCheck, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import {
@@ -29,7 +24,6 @@ import {
 } from "../snapshot/snapshot.js";
 import { applySnapshot } from "../snapshot/snapshot-apply.js";
 import { pendingTransactionEntries } from "../snapshot/snapshot-transaction-directory.js";
-import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { pruneMergeBaselines } from "../state/merge-baseline-store.js";
 import type { SyncState } from "../state/state-types.js";
@@ -51,8 +45,6 @@ import {
   validateDirectionalSettings,
 } from "./directional-action.js";
 import { confirmFieldMigration } from "./field-migration.js";
-import { adoptionSettingsFingerprint, adoptRemoteRules, canReviewAdoption } from "./ignore-adoption.js";
-import { withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { readMergeJournal, requireNoMergeJournal, retireMergeJournal } from "./merge-journal.js";
 import { mergeSync } from "./merged-sync.js";
@@ -77,7 +69,7 @@ import {
   maybeReload,
   protectedSessionPaths,
 } from "./sync-local.js";
-import { inspectRemoteSelection, syncSelectionHasContent, syncSessionsSelected } from "./sync-policy.js";
+import { syncSelectionHasContent, syncSessionsSelected } from "./sync-policy.js";
 import {
   acceptedSelection,
   canPullRemoteSessionsOnFirstSync,
@@ -95,7 +87,6 @@ import {
 import {
   checkLiveProtection,
   directionalApplyGuards,
-  requireIgnoreBaselineReview,
   requireResolvedDirectionalProgress,
   validateDirectionalPublication,
 } from "./transfer-freshness.js";
@@ -125,7 +116,6 @@ export async function push(
   input?: PushInput,
   factory: SyncBackendFactory = createSyncBackend,
 ) {
-  requireNoPendingAdoption();
   const validateOwner = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);
   const action = foregroundDirectionalAction(ctx, options);
@@ -145,10 +135,7 @@ export async function push(
   requireResolvedDirectionalProgress(state, options);
   if (
     options.auto &&
-    (config.scope === "agent-directory" ||
-      state.scope !== undefined ||
-      config.reservedIgnoreNames !== undefined ||
-      state.ignorePolicyKey !== undefined) &&
+    (config.scope === "agent-directory" || state.scope !== undefined) &&
     (options.force || !state.lastAppliedSnapshot || syncPolicyChanged(state, config))
   ) {
     throw new Error("Automatic push requires an accepted baseline with matching content policy.");
@@ -159,37 +146,26 @@ export async function push(
   const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
   if (action) snapshotOptions.sessionDir = await effectiveSessionRoot(ctx, config, options.signal);
   validateMutation();
-  const validateIgnorePolicy = ignorePolicyValidator({ ...snapshotOptions, validateMutation });
   const localRaw = input?.local ?? (await createSnapshot(config.snapshotIdentity, snapshotOptions));
   const local = portableSnapshot(localRaw, config.localFields);
   const reviewedProtectedPaths = action ? protectedSessionPaths(ctx, snapshotOptions.sessionDir) : new Set<string>();
-  if (validateIgnorePolicy) await validateIgnorePolicy();
+
   throwIfAborted(options.signal);
 
   let head = await backend.readHead(options.signal);
   let remoteForUpload =
     action && head
-      ? await readSnapshotForHead(backend, head, options.signal, config)
+      ? await readSnapshotForHead(backend, head, options.signal)
       : await readRemoteSnapshotForUpload(backend, config, head, state, options);
   validateMutation();
-  const policyOverwrite = Boolean(
-    config.ignorePolicy &&
-      remoteForUpload &&
-      inspectRemoteSelection(config.include, remoteForUpload, config.exclude, config).kind === "different",
-  );
-  if (policyOverwrite && remoteForUpload && (options.auto || options.background || options.yes || !ctx.hasUI))
-    requireCompatibleRemoteSelection(config, remoteForUpload);
-  if (action && !policyOverwrite)
-    requireDirectionalSelection(config, state, localRaw, remoteForUpload, snapshotOptions.sessionDir);
-  else requireIgnoreBaselineReview(ctx, config, state, options);
-  if (!action && remoteForUpload && !options.force && !policyOverwrite) {
+  if (action) requireDirectionalSelection(config, state, localRaw, remoteForUpload, snapshotOptions.sessionDir);
+  if (!action && remoteForUpload && !options.force) {
     requireCompatibleRemoteSelection(config, remoteForUpload);
   }
   if (
     !action &&
     remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)) &&
-    !options.force &&
-    !policyOverwrite
+    !options.force
   ) {
     const remoteForConflict = remoteForUpload
       ? filterSnapshotForConfigPolicy(remoteForUpload, config, snapshotOptions)
@@ -209,7 +185,7 @@ export async function push(
   }
 
   if (!remoteForUpload && head && (config.localFields !== undefined || !options.yes))
-    remoteForUpload = await readSnapshotForHead(backend, head, options.signal, config);
+    remoteForUpload = await readSnapshotForHead(backend, head, options.signal);
   validateMutation();
   if (!(await confirmFieldMigration(ctx, config, state, remoteForUpload, options.force, options.signal))) {
     setSyncStatus(ctx, undefined);
@@ -237,18 +213,17 @@ export async function push(
     );
     validatePortableSnapshot(upload);
   }
-  upload = await withPublishedIgnoreRules(upload, config, options.signal);
   validateMutation();
   checkUpload(upload);
   if (!config.skipSecretScan) {
-    const secrets = scanSnapshot({ ...local, ...(upload.ignoreRules ? { ignoreRules: upload.ignoreRules } : {}) });
+    const secrets = scanSnapshot(local);
     if (secrets.length > 0) {
       throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
     }
   }
 
   if (
-    (!action || policyOverwrite) &&
+    !action &&
     !(await confirmPush(ctx, options, config, backend, local, upload, head, remoteForUpload, validateMutation))
   ) {
     return "cancelled" as const;
@@ -271,9 +246,8 @@ export async function push(
     const refreshedHead = await backend.readHead(options.signal);
     validateMutation();
     if (!sameRemoteHead(backend, head, refreshedHead)) {
-      if (config.ignorePolicy) throw new Error("Remote changed during ignore-file push review; reopen the review.");
       head = refreshedHead;
-      remoteForUpload = head ? await readSnapshotForHead(backend, head, options.signal, config) : undefined;
+      remoteForUpload = head ? await readSnapshotForHead(backend, head, options.signal) : undefined;
       validateMutation();
       if (!(await confirmFieldMigration(ctx, config, state, remoteForUpload, options.force, options.signal))) {
         setSyncStatus(ctx, undefined);
@@ -307,7 +281,6 @@ export async function push(
   if (
     !action &&
     (config.scope === "agent-directory" ||
-      validateIgnorePolicy ||
       !options.yes ||
       config.localFields !== undefined ||
       (await readMergeJournal(config)))
@@ -317,7 +290,7 @@ export async function push(
       throw new Error("Local content changed during push review; retry from current bytes.");
   }
   const currentState = await readStateForConfig(config);
-  if ((validateIgnorePolicy || !options.yes) && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
+  if (!options.yes && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
     throw new Error("Baseline changed during push review.");
   requireResolvedDirectionalProgress(currentState, options);
   if (
@@ -328,7 +301,7 @@ export async function push(
   validateMutation();
   await validateSettings();
   const validatePublication =
-    validateIgnorePolicy || options.background || action
+    options.background || action
       ? async () => {
           if (action && !sameRemoteHead(backend, head, await backend.readHead(options.signal)))
             throw new Error("Remote changed before Push could publish.");
@@ -341,20 +314,16 @@ export async function push(
             fileHashMap(localRaw),
             action
               ? async () => {
-                  await validateIgnorePolicy?.();
                   await validateDirectionalSettings(options, config, validateMutation);
                   checkLiveProtection(ctx, snapshotOptions.sessionDir, reviewedProtectedPaths);
                 }
-              : (validateIgnorePolicy ?? validateSettings),
+              : validateSettings,
             "push",
             Boolean(action),
           );
         }
       : validateSettings;
-  if (validateIgnorePolicy) {
-    validatePortableSnapshot(upload);
-    await validateIgnorePolicy();
-  }
+
   if (action) await validatePublication?.();
   const accepted = action ? filterSnapshotForConfigPolicy(upload, config, snapshotOptions) : local;
   const restore =
@@ -373,7 +342,7 @@ export async function push(
             startedPublication = true;
           }
         : options.onCommit,
-      validateIgnorePolicy: validatePublication,
+      validatePublication,
     });
   } catch (error) {
     if (!action || (!startedPublication && options.signal?.aborted)) throw error;
@@ -452,14 +421,6 @@ export async function pull(
 ) {
   const action = foregroundDirectionalAction(ctx, options);
   if (action && initial) throw new Error("Single-action Pull cannot be used for initial-source selection.");
-  const adoptionReview = !initial && canReviewAdoption(ctx, options);
-  const journal = adoptionReview ? await loadAdoptionJournal() : undefined;
-  if (
-    action?.expectedAdoptionJournal !== undefined &&
-    (!journal || adoptionJournalFingerprint(journal) !== action.expectedAdoptionJournal)
-  )
-    throw new Error("The recorded Pull changed during recovery. No transfer was started.");
-  if (!adoptionReview) requireNoPendingAdoption();
   const validateOwner = captureMutationOwner(ctx, options.signal);
   const validateCommittedOwner = captureMutationOwner(ctx);
   const config = action ? await loadConfigForCheck(undefined, options.signal) : await loadConfig(options.setup);
@@ -472,7 +433,7 @@ export async function pull(
   if (initial && initial.configIdentity !== configIdentity)
     throw new Error("Settings changed before initial pull; run sync again.");
   await requireNoMergeJournal(config, options);
-  if (action && !journal && (await pendingTransactionEntries()).length)
+  if (action && (await pendingTransactionEntries()).length)
     throw new Error("A pending local transaction must be reconciled before Pull; its evidence was retained.");
   validateMutation();
   setSyncStatus(ctx, `pulling ${config.setupName}`, { activity: "pulling" });
@@ -485,31 +446,6 @@ export async function pull(
   const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
   if (action) snapshotOptions.sessionDir = await effectiveSessionRoot(ctx, config, options.signal);
   validateMutation();
-  if (journal) {
-    if (
-      journal.setupName !== config.setupName ||
-      journal.setupFingerprint !== adoptionSettingsFingerprint(config) ||
-      config.pathPolicy !== "ignore-file"
-    )
-      throw new Error(
-        "Pending rule adoption belongs to a different setup. Preserve its journal and use the originating setup.",
-      );
-    const remote = await readSnapshotForHead(backend, journal.head, options.signal, config);
-    validateMutation();
-    return adoptRemoteRules({
-      ctx,
-      options,
-      config,
-      backend,
-      state,
-      head: journal.head,
-      remote,
-      snapshotOptions,
-      validateMutation,
-      journal,
-    });
-  }
-  const validateIgnorePolicy = ignorePolicyValidator({ ...snapshotOptions, validateMutation });
   if (initial && initial.sessionDir !== snapshotOptions.sessionDir)
     throw new Error("Pi session storage changed before initial pull; run sync again.");
   const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
@@ -517,46 +453,20 @@ export async function pull(
   if (initial && !sameHashes(initial.localHashes, fileHashMap(local)))
     throw new Error("Local bytes changed before initial pull; run sync again.");
   let preimageRemote: Snapshot | undefined;
-  let adoption: Snapshot | undefined;
   const { head, snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal, {
     ...snapshotOptions,
-    ...(action || (adoptionReview && config.ignorePolicy)
+    ...(action
       ? {
           validateSelection: (raw: Snapshot) => {
-            const comparison = inspectRemoteSelection(
-              config.include,
-              raw,
-              config.exclude,
-              config,
-            ).ignorePolicyComparison;
-            if (adoptionReview && comparison === "mismatch") {
-              adoption = raw;
-            } else if (action) {
-              requireDirectionalSelection(config, state, local, raw, snapshotOptions.sessionDir);
-              preimageRemote = raw;
-            } else {
-              requireCompatibleRemoteSelection(config, raw);
-            }
+            requireDirectionalSelection(config, state, local, raw, snapshotOptions.sessionDir);
+            preimageRemote = raw;
           },
         }
       : {}),
   });
   validateMutation();
-  if (adoption && head)
-    return adoptRemoteRules({
-      ctx,
-      options,
-      config,
-      backend,
-      state,
-      head,
-      remote: adoption,
-      snapshotOptions,
-      validateMutation,
-    });
   if (initial && !matchesInitialHead(initial, backend, head))
     throw new Error("Remote changed before initial pull; run sync again.");
-  if (!action) requireIgnoreBaselineReview(ctx, config, state, options);
   const localChanged = hasLocalChanges(local, state, config);
   if (!remote) {
     throw createSyncDecision({
@@ -687,10 +597,7 @@ export async function pull(
     if (recoveringMerge) await requireFreshRecovery();
     const currentState = await readStateForConfig(config);
     validateMutation();
-    if (
-      (validateIgnorePolicy || initial || !options.yes) &&
-      syncStateFingerprint(currentState) !== syncStateFingerprint(state)
-    )
+    if ((initial || !options.yes) && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
       throw new Error("Baseline changed during pull review.");
     requireResolvedDirectionalProgress(currentState, options);
     if (!action && !options.yes) await revalidateCaseCleanup(caseCleanup, physical, snapshotOptions);
@@ -703,11 +610,7 @@ export async function pull(
     if (!action && configIdentity !== syncCheckConfigFingerprint(await loadConfig(options.setup)))
       throw new Error("Settings changed during pull review.");
     validateMutation();
-    if (validateIgnorePolicy) {
-      if (!sameRemoteHead(backend, head, await backend.readHead(options.signal)))
-        throw new Error("Remote changed during pull review.");
-      await validateIgnorePolicy();
-    }
+
     const protectedPaths = protectedSessionPaths(ctx, snapshotOptions.sessionDir);
     const validateApplySettings = async () => {
       if (configIdentity !== syncCheckConfigFingerprint(await loadConfig(options.setup, options.signal)))
@@ -731,25 +634,22 @@ export async function pull(
           }
         : options.onCommit,
       validateMutation,
-      validateIgnorePolicy: action
+      validateSettings: action
         ? async () => {
             await restorePoint?.validate();
-            await validateIgnorePolicy?.();
             await validateActionBoundary?.();
           }
-        : validateIgnorePolicy,
-      validateSettings: action ? undefined : validateApplySettings,
+        : validateApplySettings,
+      strictReview: Boolean(action),
       effectiveRoot: Boolean(action),
     });
     applyGuards.validateMutation();
-    if (!validateIgnorePolicy && !action) options.onCommit?.();
+    if (!action) options.onCommit?.();
     const lastFileHashes = await applySnapshot(physical, protectedPaths, {
       ...snapshotOptions,
       sessionDir: applySessionDir,
       ...applyGuards,
-      ...(action || config.scope === "agent-directory" || validateIgnorePolicy || sizeLimited
-        ? { reviewedLocal: local }
-        : {}),
+      ...(action || config.scope === "agent-directory" || sizeLimited ? { reviewedLocal: local } : {}),
       expectedFileHashes: config.localFields?.length
         ? { "settings.json": fileHashMap(local)["settings.json"] ?? null }
         : undefined,
@@ -808,7 +708,6 @@ export async function syncBoth(
   options: CommandOptions,
   factory: SyncBackendFactory = createSyncBackend,
 ) {
-  requireNoPendingAdoption();
   if (options.directionalAction) throw new Error("Single-action transfer cannot authorize bidirectional Sync.");
   const validateMutation = captureMutationOwner(ctx, options.signal);
   const config = await loadConfig(options.setup);
@@ -888,8 +787,6 @@ export async function syncBoth(
       )
         throw new Error("Settings or Pi session storage changed before baseline acceptance; run sync again.");
       validateMutation();
-      const validateIgnorePolicy = ignorePolicyValidator({ ...snapshotOptions, validateMutation });
-      if (validateIgnorePolicy) await validateIgnorePolicy();
     }
     const accepted = portableSnapshot(snapshot, config.localFields);
     await writeStateForConfig(

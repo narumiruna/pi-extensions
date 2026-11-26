@@ -2,7 +2,6 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-factory.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionContext } from "../host.js";
-import { requireNoPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { confirmMergeReview } from "../ui/merge-review.js";
@@ -16,7 +15,6 @@ export async function showConflicts(
   options: CommandOptions,
   factory: SyncBackendFactory = createSyncBackend,
 ) {
-  requireNoPendingAdoption();
   const validate = captureMutationOwner(ctx, options.signal);
   const config = await loadConfig(options.setup);
   validate();

@@ -205,12 +205,11 @@ try {
   assert.doesNotMatch(latestUserMessage(), /<skill name=/u, "plain requests do not expand the skill eagerly");
   const requestsToExpand = [
     "Turn on debug logging in pi-sync.json.",
-    "Exclude npm/ from the ignore file for my home setup.",
-    "Exclude npm/ from my active ignore file only if this setup remains current.",
-    "Draft a .syncignore without writing it.",
-    "Audit my ignore rules for blocked exceptions without editing the file.",
-    "Turn on Autonomous sync in my legacy-only setup.",
-    "The running daemon is older. Can you still edit my active ignore file?",
+    "An upgrade says my inactive setup still uses .syncignore. What should I do?",
+    "My old remote is ahead and uses snapshot version 7. Can I keep the data?",
+    "Pi Sync says an old recovery is pending. Should I remove the journal?",
+    "Keep npm/ local without changing my sync setup automatically.",
+    "Turn on Autonomous sync in my Selected paths setup.",
     "Error: Agent directory changed or has an unsafe filesystem layout; no snapshot was collected.",
     "Where do I enter my WebDAV app password?",
     "What does ./ mean for R2 and S3?",
@@ -228,9 +227,8 @@ try {
     assert.ok(request.includes("Make and verify a clear, authorized local edit"));
     assert.ok(request.includes("expected: documentFingerprint(document), next"));
     assert.ok(request.includes("start with read-only local checks"));
-    assert.ok(request.includes("Draft a new ignore file"));
-    assert.ok(request.includes("Add, revise, or audit existing rules"));
-    assert.ok(request.includes("never write based only on `activeSyncSetup`"));
+    assert.ok(request.includes("Recover after ignore-file support was removed"));
+    assert.ok(request.includes("Do not start or replace the daemon, downgrade packages, remove or rewrite settings"));
     assert.ok(request.includes("needsUpgrade: false"));
     assert.ok(request.includes("A schema-valid change is not proof of user review or consent"));
   }

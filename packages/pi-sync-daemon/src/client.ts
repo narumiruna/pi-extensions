@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { DaemonError, requestDaemon } from "./client-transport.js";
-import { ForegroundStopRefusedError, stopDaemonAfterForegroundQueueFailure } from "./daemon-recovery.js";
+import { stopDaemonAfterForegroundQueueFailure } from "./daemon-recovery.js";
 import { isForegroundDirection, isForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import { canonicalRootGuard, type RuntimePaths, readProcessBirth } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
@@ -89,7 +89,6 @@ export class DaemonConnection {
     assertRoot(): void;
     birth?: string;
     attempted?: true;
-    retryOnRefusal: boolean;
   };
   private observesState = false;
   private stateRevision?: string;
@@ -337,7 +336,6 @@ export class DaemonConnection {
           generation,
           birth,
           assertRoot,
-          retryOnRefusal: job.result.foregroundQueueCleanup === "resume-adoption",
         };
       return job.result;
     };
@@ -449,17 +447,7 @@ export class DaemonConnection {
     target.assertRoot();
     target.attempted = true;
     const owned = AbortSignal.any([signal, this.controller.signal, AbortSignal.timeout(FOREGROUND_RECOVERY_MS)]);
-    try {
-      await stopDaemonAfterForegroundQueueFailure(
-        this.paths,
-        this.identity,
-        { ...target, client: this.facts.id },
-        owned,
-      );
-    } catch (error) {
-      if (target.retryOnRefusal && error instanceof ForegroundStopRefusedError) delete target.attempted;
-      throw error;
-    }
+    await stopDaemonAfterForegroundQueueFailure(this.paths, this.identity, { ...target, client: this.facts.id }, owned);
     await this.closeLocal();
     target.assertRoot();
   }

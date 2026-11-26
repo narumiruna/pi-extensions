@@ -5,8 +5,6 @@ import { loadConfig, loadSettingsConfig, syncCheckConfigFingerprint } from "../s
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
-import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
-import { showIgnoreMigrationPrompt } from "./ignore-migration-prompt.js";
 import {
   attentionMainMenuItems,
   blockedSyncMenuItem,
@@ -29,7 +27,6 @@ export async function showSyncManager(
   sessionSignal?: AbortSignal,
   options: SyncManagerAttentionOptions & {
     needsDaemonRecovery?: () => boolean;
-    getPendingPullReview?: () => { setupName: string; fingerprint: string } | undefined;
   } = {},
 ): Promise<void> {
   if (!ctx.hasUI) {
@@ -83,7 +80,6 @@ export async function showSyncManager(
         cancelledMessage: direction === "push" ? "Push cancellation requested." : "Pull cancellation requested.",
         target: review.setupName,
         directionalFingerprint: review.fingerprint,
-        requirePendingAdoption: state.manager.recoveryPull,
         signal,
         isCurrent,
       },
@@ -218,7 +214,7 @@ export async function showSyncManager(
       },
       settings: async ({ state, signal: actionSignal }) => {
         const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
-        const review = state.manager.settingsReview ?? state.manager.configReview;
+        const review = state.manager.configReview;
         const result = await showSyncSettings(ctx, runRoute, signal, review?.setupName);
         return { kind: result === "exit" ? "close" : "stay" };
       },
@@ -351,15 +347,7 @@ export async function showSyncManager(
     const activate = menu.actions[action];
     menu.actions[action] = async (invocation) => {
       validateOwner();
-      const { configReview, settingsReview, recoveryPull } = invocation.state.manager;
-      if (action === "pull" && recoveryPull) {
-        if (options.getPendingPullReview?.() !== configReview) {
-          ctx.ui.notify("The original Pull is no longer available for automatic recovery.", "warning");
-          return { kind: "stay" };
-        }
-        return activate(invocation);
-      }
-      const review = action === "settings" ? (settingsReview ?? configReview) : configReview;
+      const review = invocation.state.manager.configReview;
       let current = false;
       try {
         const config = await (action === "settings" ? loadSettingsConfig() : loadConfig());
@@ -397,31 +385,18 @@ export async function showSyncManager(
         }, customOptions),
     },
   };
-  let firstOpen = true;
   const recovery: State["manager"] = {
     title:
       "Pi Sync recovery required\nDaemon cleanup could not be confirmed. Stop the daemon before retrying a transfer.",
     actions: ["Stop daemon for recovery…", "Help"],
   };
-  const describeRecovery = (): State["manager"] => {
-    const configReview = options.getPendingPullReview?.();
-    if (!configReview) return recovery;
-    return {
-      title: "Pi Sync recovery required\nPull can try to recover the daemon and review the pending transfer.",
-      actions: ["Pull from remote", ...recovery.actions],
-      configReview,
-      recoveryPull: true,
-    };
-  };
   const describe = async (signal: AbortSignal) => {
-    if (options.needsDaemonRecovery?.()) return describeRecovery();
+    if (options.needsDaemonRecovery?.()) return recovery;
     const pendingAttention = options.getAttention?.();
     const observation = options.getObservation?.();
-    const manager = await describeManagerState(signal, pendingAttention, undefined, observation, () =>
-      ignoreFileSettingsAvailable(ctx, signal),
-    );
+    const manager = await describeManagerState(signal, pendingAttention, undefined, observation);
     if (signal.aborted || !isCurrent()) return manager;
-    if (options.needsDaemonRecovery?.()) return describeRecovery();
+    if (options.needsDaemonRecovery?.()) return recovery;
     // A busy operation suppresses baseline reads, not the stored check-time hint.
     if (
       observation &&
@@ -437,20 +412,7 @@ export async function showSyncManager(
     return manager;
   };
   await runMenu(menuContext, menu, {
-    getState: async ({ signal }) => {
-      const offerOnOpen = firstOpen;
-      firstOpen = false;
-      let manager = await describe(signal);
-      if (
-        offerOnOpen &&
-        manager.operation?.kind === "free" &&
-        manager.configReview &&
-        (await showIgnoreMigrationPrompt(ctx, manager.configReview.setupName, signal, isCurrent))
-      ) {
-        if (!signal.aborted && isCurrent()) manager = await describe(signal);
-      }
-      return { manager };
-    },
+    getState: async ({ signal }) => ({ manager: await describe(signal) }),
     signal: sessionSignal,
     isCurrent,
   });

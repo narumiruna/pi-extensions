@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
-  automaticPolicyAuthorized,
   ConsentPublicationError,
   consentFingerprint,
   participantBinding,
@@ -29,16 +28,6 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
   let authorizationFailed = false;
   let scheduled = false;
   let settingsGeneration = 0;
-  let blockedParticipants: string | undefined;
-  const participatingSessions = () =>
-    JSON.stringify(
-      server
-        ?.participants()
-        .map(({ id, generation }) => `${id}:${generation}`)
-        .sort() ?? [],
-    );
-  const policyNeedsReview = () => blockedParticipants === participatingSessions();
-  let monitoredPolicy: string | undefined;
   const retries = new Map<string, { fingerprint: string; owner: string; signal: AbortSignal }>();
   const retryOwner = (peer: ClientFacts) =>
     JSON.stringify([peer.generation, peer.cwd, peer.sessionId, peer.sessionFile, peer.sessionDir, peer.model]);
@@ -77,7 +66,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     await current.promise;
   }
   function unattendedGrant(config: AnySyncConfig) {
-    if (!config.continuous || !config.agentMode || !automaticPolicyAuthorized(root, config)) return undefined;
+    if (!config.continuous || !config.agentMode) return undefined;
     const saved = readConsent(root)?.setups[config.setupName];
     return saved?.afterExit && saved.fingerprint === consentFingerprint(root, config) ? saved : undefined;
   }
@@ -88,7 +77,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       if (!consent || !Object.values(consent.setups).some((saved) => saved.afterExit)) return "exit";
       const config = await loadConfigForCheck();
       if (closed || authorizationFailed) return "pause";
-      return !policyNeedsReview() && unattendedGrant(config) ? "keep" : "exit";
+      return unattendedGrant(config) ? "keep" : "exit";
     } catch {
       // Invalid evidence is not an implicit revocation or permission to discard a safety barrier.
       return "pause";
@@ -97,7 +86,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
   async function start() {
     const service = server;
     if (!service) return;
-    if (closed || authorizationFailed || policyNeedsReview() || task || !service.isIdle()) return;
+    if (closed || authorizationFailed || task || !service.isIdle()) return;
     const generation = settingsGeneration;
     const participants = service.participantGeneration?.();
     const participantsToken = participantBinding(service);
@@ -105,7 +94,6 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     const sameAuthorization = () =>
       !closed &&
       !authorizationFailed &&
-      !policyNeedsReview() &&
       server === service &&
       generation === settingsGeneration &&
       participants === service.participantGeneration?.() &&
@@ -114,7 +102,7 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     const available = () => !task && service.isIdle() && sameAuthorization();
     if (!consentToken || !available()) return;
     const config = await loadConfigForCheck();
-    if (!available() || !automaticPolicyAuthorized(root, config)) return;
+    if (!available()) return;
     if (!config.continuous || !config.agentMode) {
       retries.clear();
       return;
@@ -124,8 +112,6 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
     const peers = service.participants();
     if (peers.some((peer) => !peer.idle || peer.ready !== true)) return;
     const fingerprint = syncCheckConfigFingerprint(config);
-    if (config.reservedIgnoreNames !== undefined && monitoredPolicy !== undefined && monitoredPolicy !== fingerprint)
-      return;
     const authorized = unattendedGrant(config);
     const selected = peers.toSorted((a, b) => a.id.localeCompare(b.id))[0];
     if (!selected && !authorized) return;
@@ -247,7 +233,6 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
         const resolver = await prepareResolverHost(root, binding, controller.signal);
         try {
           await refresh();
-          if (config.reservedIgnoreNames !== undefined) monitoredPolicy = fingerprint;
           ctx.model = resolver.model;
           ctx.modelUnavailableReason = resolver.unavailable;
           ctx.modelRegistry = {
@@ -312,14 +297,9 @@ export function createMonitor(root: string, host: ReturnType<typeof installServi
       const fingerprint = syncCheckConfigFingerprint(config);
       retries.set(peer.id, { fingerprint, owner: retryOwner(peer), signal: execution.signal });
     },
-    reviewedPolicy(config: AnySyncConfig) {
-      blockedParticipants = undefined;
-      monitoredPolicy = config.reservedIgnoreNames === undefined ? undefined : syncCheckConfigFingerprint(config);
-    },
-    settingsCommitted(blockNewPolicy: boolean) {
+    settingsCommitted() {
       settingsGeneration++;
       retries.clear();
-      if (blockNewPolicy) blockedParticipants = participatingSessions();
       task?.controller.abort(new DOMException("Sync settings committed", "AbortError"));
     },
     async pause() {

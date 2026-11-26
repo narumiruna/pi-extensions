@@ -8,7 +8,6 @@ import { safeTerminalText } from "../ui/terminal-text.js";
 import { sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { throwIfAborted } from "./signals.js";
 import {
-  formatIgnorePolicyComparison,
   inspectRemoteSelection,
   type RemoteSelectionState,
   remoteSelectionMismatch,
@@ -36,104 +35,19 @@ function validateSnapshotForHead(snapshot: Snapshot, head: RemoteHead) {
   return snapshot;
 }
 
-export async function readSnapshotForHead(
-  backend: SyncBackend,
-  head: RemoteHead,
-  signal?: AbortSignal,
-  config?: AnySyncConfig,
-) {
-  const snapshot = await readValidatedSnapshotForHead(backend, head, signal);
-  if (!config) requireLegacyTransferPolicy(snapshot);
-  else if (!config.ignorePolicy && snapshot.selection?.version === 4)
-    requireCompatibleRemoteSelection(config, snapshot);
-  return snapshot;
-}
-
-export async function readRemoteSnapshotForUpload(
-  backend: SyncBackend,
-  config: AnySyncConfig,
-  head: RemoteHead | undefined,
-  state: SyncState,
-  options: { force?: boolean; signal?: AbortSignal },
-) {
-  if (!head) return undefined;
-  if (
-    config.ignorePolicy ||
-    head.selection?.version === 4 ||
-    head.snapshotId !== state.lastAppliedSnapshot ||
-    syncPolicyChanged(state, config) ||
-    (state.lastRemoteRevision && !backend.sameRevision(head.revision, state.lastRemoteRevision)) ||
-    (!options.force &&
-      (config.scope === "agent-directory" ||
-        (head.selection &&
-          inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config)
-            .kind === "different")))
-  )
-    return readSnapshotForHead(backend, head, options.signal, config);
-  return undefined;
-}
-
-export async function snapshotForUpload(
-  backend: SyncBackend,
-  config: AnySyncConfig,
-  local: Snapshot,
-  head: RemoteHead | undefined,
-  remote: Snapshot | undefined,
-  options: SnapshotOptions,
-) {
-  if (config.ignorePolicy) return filterSnapshotForConfigPolicy(local, config, { ...options, regenerateId: true });
-  if (!head)
-    return config.reservedIgnoreNames === undefined ? local : filterSnapshotForConfigPolicy(local, config, options);
-  const snapshot = remote ?? (await readSnapshotForHead(backend, head, options.signal, config));
-  const remoteScoped = snapshot.selection?.version === 3;
-  if (remoteScoped !== (config.scope === "agent-directory")) {
-    throw new Error(
-      "Converting an existing remote between included paths and agent-directory scope is not supported. Use a separate storage location.",
-    );
-  }
-  return mergeRemotePreservedFiles(local, snapshot, config, options);
-}
-
-export function sameRemoteHead(backend: SyncBackend, left: RemoteHead | undefined, right: RemoteHead | undefined) {
-  if (!left || !right) return left === right;
-  return (
-    left.snapshotId === right.snapshotId &&
-    left.snapshotRef === right.snapshotRef &&
-    backend.sameRevision(left.revision, right.revision) &&
-    sameSnapshotSelection(left.selection, right.selection)
-  );
-}
-
 export function requireCompatibleRemoteSelection(config: AnySyncConfig, snapshot: Snapshot) {
-  const state = inspectRemoteSelection(config.include, snapshot, config.exclude, config);
-  if (state.kind === "different" && state.ignorePolicyComparison) throw selectionMismatch(config, state);
   if (!sameLocalFields(config.localFields, snapshot.localFields))
     throw new Error(
       "Remote local-field policy differs; confirm a reviewed directional migration. Old history is not erased.",
     );
-  if (state.kind === "different") throw selectionMismatch(config, state);
-}
-
-export async function inspectHeadSelection(
-  backend: SyncBackend,
-  config: AnySyncConfig,
-  head: RemoteHead,
-  signal?: AbortSignal,
-) {
-  const remote =
-    !head.selection && config.ignorePolicy
-      ? await readValidatedSnapshotForHead(backend, head, signal)
-      : { selection: head.selection, files: [] };
-  return inspectRemoteSelection(config.include, remote, config.exclude, config);
-}
-
-function selectionMismatch(config: AnySyncConfig, state: Extract<RemoteSelectionState, { kind: "different" }>) {
-  return remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config), state.exclude, state);
+  const state = inspectRemoteSelection(config.include, snapshot, config.exclude, config);
+  if (state.kind === "different") {
+    throw remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config), state.exclude, state);
+  }
 }
 
 export function formatRemoteSelectionStatus(state: RemoteSelectionState | undefined) {
   if (!state) return "remote included content: unavailable (remote is empty)";
-  if (state.ignorePolicyComparison) return formatIgnorePolicyComparison(state.ignorePolicyComparison);
   if (state.kind === "same") return "remote included content: matches this setup";
   if (state.kind === "legacy") {
     return `remote included content: unavailable in legacy snapshot (${state.discovered.length} path${state.discovered.length === 1 ? "" : "s"} discovered, partial)`;
@@ -169,11 +83,14 @@ export async function readRemoteSnapshot(
   const selectionState = inspectRemoteSelection(config.include, rawSnapshot, config.exclude, config);
   if (options.validateSelection) options.validateSelection(rawSnapshot);
   else if (!options.allowSelectionDifference && selectionState.kind === "different")
-    throw selectionMismatch(config, selectionState);
-  const snapshot =
-    selectionState.ignorePolicyComparison === "local-legacy-remote-ignore"
-      ? undefined
-      : filterSnapshotForConfigPolicy(rawSnapshot, config, { sessionDir: options.sessionDir });
+    throw remoteSelectionMismatch(
+      config,
+      selectionState.include,
+      syncConfigReviewFingerprint(config),
+      selectionState.exclude,
+      selectionState,
+    );
+  const snapshot = filterSnapshotForConfigPolicy(rawSnapshot, config, { sessionDir: options.sessionDir });
   return { head, snapshot, selectionState };
 }
 
@@ -187,4 +104,71 @@ async function readCurrentSnapshot(backend: SyncBackend, singleObservation: bool
   const head = await backend.readHead(signal);
   throwIfAborted(signal);
   return head && { head, snapshot: await readValidatedSnapshotForHead(backend, head, signal) };
+}
+
+export async function readSnapshotForHead(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {
+  const snapshot = await readValidatedSnapshotForHead(backend, head, signal);
+  requireLegacyTransferPolicy(snapshot);
+  return snapshot;
+}
+
+export async function readRemoteSnapshotForUpload(
+  backend: SyncBackend,
+  config: AnySyncConfig,
+  head: RemoteHead | undefined,
+  state: SyncState,
+  options: { force?: boolean; signal?: AbortSignal },
+) {
+  if (!head) return undefined;
+  if (
+    !head.selection ||
+    head.snapshotId !== state.lastAppliedSnapshot ||
+    syncPolicyChanged(state, config) ||
+    (state.lastRemoteRevision && !backend.sameRevision(head.revision, state.lastRemoteRevision)) ||
+    (!options.force &&
+      (config.scope === "agent-directory" ||
+        inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config)
+          .kind === "different"))
+  )
+    return readSnapshotForHead(backend, head, options.signal);
+  return undefined;
+}
+
+export async function snapshotForUpload(
+  backend: SyncBackend,
+  config: AnySyncConfig,
+  local: Snapshot,
+  head: RemoteHead | undefined,
+  remote: Snapshot | undefined,
+  options: SnapshotOptions,
+) {
+  if (!head) return local;
+  const snapshot = remote ?? (await readSnapshotForHead(backend, head, options.signal));
+  if ((snapshot.selection?.version === 3) !== (config.scope === "agent-directory"))
+    throw new Error(
+      "Converting an existing remote between included paths and agent-directory scope is not supported. Use a separate storage location.",
+    );
+  return mergeRemotePreservedFiles(local, snapshot, config, options);
+}
+
+export function sameRemoteHead(backend: SyncBackend, left: RemoteHead | undefined, right: RemoteHead | undefined) {
+  if (!left || !right) return left === right;
+  return (
+    left.snapshotId === right.snapshotId &&
+    left.snapshotRef === right.snapshotRef &&
+    backend.sameRevision(left.revision, right.revision) &&
+    sameSnapshotSelection(left.selection, right.selection)
+  );
+}
+
+export async function inspectHeadSelection(
+  backend: SyncBackend,
+  config: AnySyncConfig,
+  head: RemoteHead,
+  signal?: AbortSignal,
+) {
+  const remote = head.selection
+    ? { selection: head.selection, files: [] }
+    : await readSnapshotForHead(backend, head, signal);
+  return inspectRemoteSelection(config.include, remote, config.exclude, config);
 }

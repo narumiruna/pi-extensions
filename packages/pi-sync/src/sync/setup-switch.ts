@@ -62,9 +62,7 @@ export async function useSyncSetup(
   validate();
   const operationIdentity = syncCheckConfigFingerprint(loadedConfig);
   if (expectedOperationIdentity !== undefined && operationIdentity !== expectedOperationIdentity) {
-    throw new Error(
-      "Setup settings or local rule source changed while the switch preview was open; reopen it and review again.",
-    );
+    throw new Error("Setup settings changed while the switch preview was open; reopen it and review again.");
   }
   const switchResult: { action: OnSwitchAction; switched: boolean } = {
     action: "ask-before-pull",
@@ -89,7 +87,6 @@ export async function useSyncSetup(
     if (expectedAction !== undefined && switchResult.action !== expectedAction) {
       throw new Error("Setup-switch behavior changed while the preview was open; reopen it and retry.");
     }
-    if (loadedConfig.reservedIgnoreNames !== undefined) switchResult.action = "switch-only";
     if (switchResult.action === "pull-after-switch" && !ctx.hasUI) {
       throw new SetupPullRequiresUiError(
         `Automatic setup pulls require interactive confirmation; sync setup “${safeTerminalText(normalized)}” was not switched. Use TUI or RPC mode.`,

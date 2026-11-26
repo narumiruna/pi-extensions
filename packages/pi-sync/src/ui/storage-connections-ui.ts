@@ -1,16 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import {
   addStorageConnection,
   removeStorageConnection,
   updateStorageConnection,
 } from "../settings/settings-management.js";
-import { isCloudflareR2Endpoint, normalizeS3Endpoint, ownRecord } from "../settings/settings-validation.js";
+import {
+  isCloudflareR2Endpoint,
+  normalizeS3Endpoint,
+  ownRecord,
+  validateSettingsDocument,
+} from "../settings/settings-validation.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
-import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
-import { ignoreSetupRecovery, loadSettingsCatalog } from "./settings-review.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./setup/git-ui.js";
 import { applyS3CredentialUpdate, chooseS3Credentials, chooseS3CredentialUpdate } from "./setup/s3-credentials-ui.js";
 import { promptResourceName } from "./setup/setup-prompts.js";
@@ -43,11 +47,11 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
           kind: "actions",
           title: "Storage connections",
           lines: state.supportedVersion
-            ? (state.recovery ?? ["Server addresses and sign-in details, reusable across sync setups."])
+            ? ["Server addresses and sign-in details, reusable across sync setups."]
             : ["Create supported pi-sync settings before managing storage connections."],
           items: state.supportedVersion
             ? [
-                ...(state.recovery ? [] : [{ id: "add", label: "Add storage connection", action: "add" as const }]),
+                { id: "add", label: "Add storage connection", action: "add" as const },
                 ...names.map((name, index) => {
                   const id = `connection:${index}`;
                   nameById.set(id, name);
@@ -69,8 +73,8 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         lines: state.selected?.lines ?? ["This storage connection no longer exists."],
         items: state.selected
           ? [
-              ...(state.recovery ? [] : [{ id: "edit", label: "Edit storage connection…", action: "edit" as const }]),
-              ...(!state.recovery && state.selected.usedBy.length === 0
+              { id: "edit", label: "Edit storage connection…", action: "edit" },
+              ...(state.selected.usedBy.length === 0
                 ? [
                     {
                       id: "remove",
@@ -86,8 +90,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
       }),
     },
     actions: {
-      add: async ({ state }) => {
-        if (state.recovery) return { kind: "rejected" };
+      add: async () => {
         try {
           await showAddStorageConnection(ctx, signal);
         } catch (error) {
@@ -102,7 +105,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         return selectedName ? { kind: "to", screen: "detail" } : { kind: "rejected" };
       },
       edit: async ({ state }) => {
-        if (state.recovery || !state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
+        if (!state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
         try {
           await editStorageConnection(ctx, state.selected.name, state.selected.profile, state.selected.usedBy, signal);
         } catch (error) {
@@ -111,7 +114,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
         return { kind: "stay" };
       },
       remove: async ({ state, signal: actionSignal }) => {
-        if (state.recovery || !state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
+        if (!state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
         const name = state.selected.name;
         const confirmed = await ctx.ui.confirm(
           "Remove storage connection?",
@@ -138,35 +141,23 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
     },
   });
   await runMenu(ctx, menu, {
-    getState: ({ signal: loadSignal }) => loadStorageMenuState(ctx, selectedName, loadSignal),
+    getState: ({ signal: loadSignal }) => loadStorageMenuState(selectedName, loadSignal),
     signal,
     isCurrent,
   });
 }
 
-async function loadStorageMenuState(
-  ctx: ExtensionCommandContext,
-  selectedName: string | undefined,
-  signal: AbortSignal,
-) {
-  const catalog = await loadSettingsCatalog();
+async function loadStorageMenuState(selectedName: string | undefined, signal?: AbortSignal) {
+  const document = await readActiveLocalConfigDocumentForRepair();
   signal?.throwIfAborted();
-  const raw = catalog?.settings;
-  const profiles = raw?.storageConnections ?? {};
-  const recovery =
-    catalog?.ignoreSetups.length && !(await ignoreFileSettingsAvailable(ctx, signal))
-      ? [
-          "Connection changes are unavailable while any setup uses an ignore file.",
-          ...ignoreSetupRecovery(catalog.path),
-        ]
-      : undefined;
-  signal.throwIfAborted();
+  const raw = document && validateSettingsDocument(document.parsed);
+  if (signal?.aborted) throw signal.reason;
+  const profiles = ownRecord(raw?.storageConnections) ?? {};
   const profile = selectedName ? ownRecord(profiles[selectedName]) : undefined;
   if (!selectedName || !profile) {
     return {
       supportedVersion: raw !== undefined,
       profiles,
-      recovery,
       selected: undefined,
     };
   }
@@ -174,18 +165,16 @@ async function loadStorageMenuState(
   return {
     supportedVersion: raw !== undefined,
     profiles,
-    recovery,
     selected: {
       name: selectedName,
       profile,
       usedBy,
       lines: [
-        ...(recovery ?? []),
         `Type: ${connectionType(profile)}`,
         `Endpoint: ${connectionEndpoint(profile)}`,
         `Credentials: ${credentialSource(profile)}`,
         `Used by: ${usedBy.length > 0 ? usedBy.map(safeTerminalText).join(", ") : "No sync setups"}`,
-        ...(!recovery && usedBy.length > 0
+        ...(usedBy.length > 0
           ? [
               "Remove unavailable: remove the listed sync setups first. Switch away from a current setup before removing it if other setups remain.",
             ]

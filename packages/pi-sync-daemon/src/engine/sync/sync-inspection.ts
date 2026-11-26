@@ -39,9 +39,7 @@ export async function inspectSync(
     selectionState,
     localFiles: local.files.length,
     localChanged: hasLocalChanges(local, state, config),
-    remoteChanged:
-      (selectionState?.kind === "different" && !!selectionState.ignorePolicyComparison) ||
-      remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)),
+    remoteChanged: remoteChangedSinceState(head, state, config, (left, right) => backend.sameRevision(left, right)),
     firstSync: !state.lastAppliedSnapshot,
     emptyInclude: !syncSelectionHasContent(config),
     stateIdentity: syncStateFingerprint(state),

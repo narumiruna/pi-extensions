@@ -120,18 +120,18 @@ test("limits advance an old document only when first enabled; clearing them neve
     if (process.platform !== "win32") assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
   }));
 
-test("creating a setup can opt in or preserve version 9 across ignore-file setup edits", () =>
+test("creating a setup can opt in or preserve version 9 across directory setup edits", () =>
   fixture(async () => {
     const limited = withLimit(originalSetup, "maxDirectorySizeMiB", 10);
     const saved = await saveNewV3Settings({ setupName: "home", connectionName: "origin", connection, setup: limited });
     assert.equal(saved.version, 9);
     const rulesSetup: SyncSetupSettings = {
       storage: { ...originalSetup.storage, path: "work" },
-      sync: { scope: "agent-directory", pathPolicy: "ignore-file", automatic: false },
+      sync: { scope: "agent-directory", automatic: false },
     };
     await addSyncSetup("work", rulesSetup);
     await updateSyncSetup("work", (setup) => {
-      assert.equal(setup.sync.pathPolicy, "ignore-file");
+      assert.equal(setup.sync.scope, "agent-directory");
       return { ...setup, sync: { ...setup.sync, sessions: true } };
     });
     const persisted = await readLocalConfigObject();

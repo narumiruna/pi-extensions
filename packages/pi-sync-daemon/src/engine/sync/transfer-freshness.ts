@@ -4,7 +4,6 @@ import type { EngineContext } from "../host.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { effectiveSessionRoot, resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
-import { StaleIgnorePolicyError } from "../snapshot/snapshot-transaction-policy.js";
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import type { SyncState } from "../state/state-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
@@ -12,31 +11,13 @@ import { ContinuousError } from "./continuous-errors.js";
 import { preflightMergedTargets } from "./merge-apply.js";
 import { sameRemoteHead } from "./remote-snapshot.js";
 import { protectedSessionPaths } from "./sync-local.js";
-import { fileHashMap, sameHashes, syncPolicyChanged } from "./sync-state.js";
+import { fileHashMap, sameHashes } from "./sync-state.js";
 
 export function requireResolvedDirectionalProgress(state: SyncState, options: CommandOptions, allowForce = true) {
   if (state.unresolved?.length && (options.auto || !options.force || !allowForce))
     throw new Error(
       "Unresolved partial conflicts remain. Review /sync conflicts or explicitly choose push --force or pull --force; automatic transfer and rollback cannot accept unresolved groups.",
     );
-}
-
-export function requireIgnoreBaselineReview(
-  ctx: EngineContext,
-  config: AnySyncConfig,
-  state: SyncState,
-  options: CommandOptions,
-) {
-  if (
-    (config.ignorePolicy || config.reservedIgnoreNames !== undefined || state.ignorePolicyKey !== undefined) &&
-    state.lastAppliedSnapshot &&
-    syncPolicyChanged(state, config) &&
-    (options.auto || options.yes || !ctx.hasUI)
-  ) {
-    throw new Error(
-      "Local ignore-file policy or source changed since the last accepted baseline. Review a foreground directional transfer.",
-    );
-  }
 }
 
 export async function validateDirectionalPublication(
@@ -68,7 +49,7 @@ export async function validateDirectionalPublication(
 export function checkLiveProtection(ctx: EngineContext, sessionDir: string | undefined, reviewed: ReadonlySet<string>) {
   const current = protectedSessionPaths(ctx, sessionDir);
   if (current.size !== reviewed.size || [...current].some((item) => !reviewed.has(item)))
-    throw new StaleIgnorePolicyError("Live session protection changed during review; reopen the review.");
+    throw new Error("Live session protection changed during review; reopen the review.");
 }
 
 export function directionalApplyGuards({
@@ -81,7 +62,7 @@ export function directionalApplyGuards({
   protectedPaths,
   signal,
   validateMutation,
-  validateIgnorePolicy,
+  strictReview,
   validateSettings,
   onCommit,
   effectiveRoot = false,
@@ -95,12 +76,12 @@ export function directionalApplyGuards({
   protectedPaths: ReadonlySet<string>;
   signal?: AbortSignal;
   validateMutation: () => void;
-  validateIgnorePolicy?: () => Promise<void>;
+  strictReview?: boolean;
   validateSettings?: () => Promise<void>;
   onCommit?: () => void;
   effectiveRoot?: boolean;
 }) {
-  if (!validateIgnorePolicy) return { validateMutation, validateApplyReview: validateSettings };
+  if (!strictReview) return { validateMutation, validateApplyReview: validateSettings };
   const validateOwner = () => {
     validateMutation();
     checkLiveProtection(ctx, sessionDir, protectedPaths);
@@ -110,18 +91,17 @@ export function directionalApplyGuards({
     validateMutation: validateOwner,
     validateApplyReview: async () => {
       if (!sameRemoteHead(backend, head, await backend.readHead(signal)))
-        throw new StaleIgnorePolicyError("Remote changed before local apply; reopen the review.");
+        throw new Error("Remote changed before local apply; reopen the review.");
       if (syncStateFingerprint(await readStateForConfig(config)) !== syncStateFingerprint(state))
-        throw new StaleIgnorePolicyError("Baseline changed before local apply; reopen the review.");
+        throw new Error("Baseline changed before local apply; reopen the review.");
       if (
         sessionDir !==
         (effectiveRoot
           ? await effectiveSessionRoot(ctx, config, signal)
           : (await resolvedSnapshotOptionsForContext(ctx, config, signal)).sessionDir)
       )
-        throw new StaleIgnorePolicyError("Pi session storage changed before local apply; reopen the review.");
+        throw new Error("Pi session storage changed before local apply; reopen the review.");
       await validateSettings?.();
-      await validateIgnorePolicy();
       validateOwner();
       if (!committed) {
         onCommit?.();

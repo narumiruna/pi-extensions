@@ -7,7 +7,6 @@ import { test, vi } from "vitest";
 import { expectedRemoteHead, type RemoteHead, type SyncBackend } from "../src/engine/backends/sync-backend.js";
 import type { CommandOptions } from "../src/engine/commands/command-types.js";
 import { configureEngineHost, type EngineContext } from "../src/engine/host.js";
-import { loadEffectiveIgnorePolicy } from "../src/engine/ignore/effective-ignore-policy.js";
 import { configFromSettings, loadConfig } from "../src/engine/settings/config.js";
 import { resolvedSnapshotOptionsForContext } from "../src/engine/snapshot/session-paths.js";
 import { createSnapshot, observeSnapshot } from "../src/engine/snapshot/snapshot.js";
@@ -79,7 +78,7 @@ function remoteFixture(initial: Snapshot) {
   });
   const publishSnapshot = vi.fn<SyncBackend["publishSnapshot"]>(async (candidate, expected, opts) => {
     assert.deepEqual(expected, expectedRemoteHead(head()));
-    await opts?.validateIgnorePolicy?.();
+    await opts?.validatePublication?.();
     opts?.onCommit?.();
     snapshot = candidate;
     return { head: head(), warnings: [] };
@@ -152,22 +151,14 @@ function countSentinelEncodes(scanBuffersOnly = false) {
   return () => encodes;
 }
 
-for (const selection of ["selected", "directory", "ignore"] as const) {
+for (const selection of ["selected", "directory"] as const) {
   test(`hash-only ${selection} inspection preserves ordered raw hashes and portable change detection`, () =>
-    fixture(async (root, ctx) => {
+    fixture(async (root, _ctx) => {
       const scoped = selection === "selected" ? undefined : "agent-directory";
       const base = configFromSettings(document(scoped));
-      const ignorePolicy =
-        selection === "ignore"
-          ? await fs
-              .writeFile(path.join(root, ".syncignore"), "*.omit\n")
-              .then(() =>
-                loadEffectiveIgnorePolicy(root, { filename: ".syncignore", sessions: false, configuredFilenames: [] }),
-              )
-          : undefined;
-      const config = { ...base, ignorePolicy };
-      const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config);
-      await fs.writeFile(path.join(root, "scratch.omit"), "ignored in the ignore selection");
+      const config = base;
+      const snapshotOptions = { include: config.include, scope: config.scope };
+      await fs.writeFile(path.join(root, "scratch.omit"), "outside selected paths");
       const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
       const accepted = portableSnapshot(local, config.localFields);
       const remote = remoteFixture(accepted);

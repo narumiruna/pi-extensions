@@ -65,23 +65,15 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
               }
               const commands = await loaders.commands();
               if (signal.aborted || owner !== client) return;
-              const recoveryMenu = !command && client.pendingPullReview;
-              if (recoveryMenu) await client.setBusy("command", true, false);
-              try {
-                if (signal.aborted || owner !== client) return;
-                await commands.handleCommand(
-                  args,
-                  ctx,
-                  commandSignal,
-                  loaders,
-                  attention,
-                  undefined,
-                  needsDaemonRecovery,
-                );
-              } finally {
-                if (recoveryMenu && !signal.aborted && owner === client)
-                  await client.setBusy("command", false, !needsDaemonRecovery()).catch(() => {});
-              }
+              await commands.handleCommand(
+                args,
+                ctx,
+                commandSignal,
+                loaders,
+                attention,
+                undefined,
+                needsDaemonRecovery,
+              );
               return;
             }
             const daemonStatus = command === "daemon" && (!action || action === "status");

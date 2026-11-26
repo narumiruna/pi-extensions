@@ -2,7 +2,6 @@ import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-
 import { expectedRemoteHead, type SyncBackend, SyncBackendConflictError } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext, EngineContext as ExtensionContext } from "../host.js";
-import { requireNoPendingAdoption } from "../ignore/adoption-journal.js";
 import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import {
@@ -19,7 +18,6 @@ import {
   scanSnapshot,
   snapshotWithObservedInventory,
 } from "../snapshot/snapshot.js";
-import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
 import { hasCurrentMergeBaseline, pruneMergeBaselines, readMergeAncestors } from "../state/merge-baseline-store.js";
 import { readStateForConfig, statePathForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { confirmMergeReview } from "../ui/merge-review.js";
@@ -38,18 +36,14 @@ import { pruneCompletedConflicts } from "./conflict-retention.js";
 import { resolveContentConflicts } from "./content-conflicts.js";
 import { ContinuousError, TransferSizeError } from "./continuous-errors.js";
 import { planFileMerge } from "./file-merge-planner.js";
-import { ignorePublicationNotice, withPublishedIgnoreRules } from "./ignore-publication.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields } from "./local-fields.js";
 import { acceptedState, matchesAcceptedState, writeAcceptedState } from "./merge-acceptance.js";
 import { applyMergedSnapshot, preflightMergedTargets } from "./merge-apply.js";
 import {
-  assertMergeJournalPolicy,
   clearMergeJournal,
   type MergeJournal,
   mergeJournalIdentity,
-  mergeJournalPolicy,
   readMergeJournal,
-  reviewInactiveIgnoreMerge,
   sameMergeRecoveryHead,
   writeMergeJournal,
 } from "./merge-journal.js";
@@ -67,7 +61,6 @@ import { backupSnapshot, captureMutationOwner, protectedSessionPaths } from "./s
 import { configuredSnapshotPathMatcher, inspectRemoteSelection, syncSessionsSelected } from "./sync-policy.js";
 import { fileHashMap, hasLocalChanges, hasRemoteChanges, sameHashes, syncPolicyChanged } from "./sync-state.js";
 import { TEXT_MERGE_WORK_LIMIT } from "./text-merge.js";
-import { checkLiveProtection, validateMergeApplyReview, validateMergedPublication } from "./transfer-freshness.js";
 import {
   requireTransferSize,
   selectedPublicationImage,
@@ -84,7 +77,6 @@ export async function mergeSync(
   factory: SyncBackendFactory = createSyncBackend,
   resolution?: ConflictResolution,
 ) {
-  requireNoPendingAdoption();
   const timings = options.startupTimings ?? createStartupTimings();
   const sessionOwner = captureMutationOwner(ctx, options.signal);
   const validateOwner = (config?: AnySyncConfig) => {
@@ -109,8 +101,7 @@ export async function mergeSync(
   };
   const config = await loadConfig(options.setup);
   validateOwner(config);
-  if (config.pathPolicy === "ignore-file" && !config.ignorePolicy)
-    throw new Error("Merged sync requires the resolved local ignore-file policy.");
+
   validateRetryAuthorization(config);
   const configToken = syncCheckConfigFingerprint(config);
   const modelToken = JSON.stringify(ctx.model);
@@ -143,27 +134,12 @@ export async function mergeSync(
       if (options.auto && (!startupTransferEnabled(latest) || !ctx.isIdle()))
         throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
     });
-  const validateIgnore = ignorePolicyValidator({
-    ...config,
-    signal: options.signal,
-    validateMutation: () => {
-      validateOwner();
-      if (options.auto && !ctx.isIdle())
-        throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
-    },
-  });
-  const validateFresh = validateIgnore
-    ? async () => {
-        await validate();
-        await validateIgnore();
-      }
-    : validate;
+  const validateFresh = validate;
   await validateFresh();
   const pending = await timings.measure("transfer journal read", () => readMergeJournal(config));
   await validate();
   if (pending && options.agentRetryRefusal)
     throw new Error("A pending merge journal requires ordinary Sync now before retrying a refused candidate.");
-  if (pending) assertMergeJournalPolicy(pending, config);
   const backend = await timings.measure("transfer backend initialization", () => factory(config));
   await validate();
   if (pending) {
@@ -179,7 +155,6 @@ export async function mergeSync(
         resolution ? undefined : isCurrent,
       ),
     );
-    if (recovered === "archived" || recovered === "cancelled") return recovered;
     if (!recovered) {
       if ((options.auto || !options.silent) && !options.signal?.aborted)
         ctx.ui.notify(
@@ -252,9 +227,7 @@ export async function mergeSync(
         }
       }
       const rawRemote = head
-        ? await timings.measure("transfer snapshot download", () =>
-            readSnapshotForHead(backend, head, options.signal, config),
-          )
+        ? await timings.measure("transfer snapshot download", () => readSnapshotForHead(backend, head, options.signal))
         : undefined;
       await validate();
       if (rawRemote) {
@@ -510,8 +483,8 @@ export async function mergeSync(
         !sameHashes(fileHashMap(publication), fileHashMap(remote)) ||
         Boolean(config.partialSync && rawRemote.version < 3);
       const candidate = mergeRemotePreservedFiles(publication, rawRemote, config, { sessionDir: sessionRoot });
-      const upload = publish ? await withPublishedIgnoreRules(candidate, config, options.signal) : candidate;
-      if (config.ignorePolicy && publish) await validate();
+      const upload = candidate;
+
       const apply = !sameHashes(fileHashMap(localRaw), fileHashMap(after));
       if (!publish && !apply) {
         const beforeEvidence = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
@@ -607,16 +580,15 @@ export async function mergeSync(
           decisions: plan.decisions,
           capability: backend.capability,
         });
-        const notice = ignorePublicationNotice(upload);
         if (
           !(await confirmMergeReview(
             ctx,
             summary.title,
-            notice ? `${notice}\n\n${summary.content}` : summary.content,
+            summary.content,
             options.signal,
             isCurrent,
             summary.confirmationLabel,
-            notice ? [notice, "", ...summary.lines] : summary.lines,
+            summary.lines,
           ))
         )
           return "cancelled" as const;
@@ -648,7 +620,7 @@ export async function mergeSync(
       );
       await validateFresh();
       const journal: MergeJournal = {
-        ...mergeJournalPolicy(config),
+        version: 1,
         identity: mergeJournalIdentity(config, backend.identity),
         before: localRaw,
         after,
@@ -700,20 +672,7 @@ export async function mergeSync(
             backend.publishSnapshot(upload, expectedRemoteHead(head), {
               signal: options.signal,
               onCommit: options.onCommit,
-              ...(validateIgnore
-                ? {
-                    validateIgnorePolicy: () =>
-                      validateMergedPublication(
-                        ctx,
-                        config,
-                        snapshotOptions,
-                        localRaw,
-                        after,
-                        journal.stateIdentity,
-                        validateFresh,
-                      ),
-                  }
-                : { validateIgnorePolicy: validateFresh }),
+              validatePublication: validateFresh,
             }),
           );
           journal.committedHead = result.head;
@@ -778,7 +737,7 @@ async function completeJournal(
   }: { validate: () => Promise<void>; validateFresh: () => Promise<void>; validateOwner: () => void },
   timings: StartupTimings,
   options: CommandOptions,
-  isCurrent?: () => boolean,
+  _isCurrent?: () => boolean,
 ) {
   const { auto, signal } = options;
   const validateMutation = () => {
@@ -792,7 +751,6 @@ async function completeJournal(
     throw new Error(
       "Merge journal belongs to a different setup, selection or local-field policy; preserve it for reviewed recovery.",
     );
-  assertMergeJournalPolicy(journal, config);
   await validateFresh();
   const sessionRoot =
     config.scope === "agent-directory" || syncSessionsSelected(config)
@@ -835,7 +793,6 @@ async function completeJournal(
     if (
       matchesAcceptedState(state, config, journal.committedHead, journal.accepted ?? journal.after, journal.progress)
     ) {
-      if (journal.localPolicyKey) await validateFresh();
       await clearMergeJournal(config);
       await validate();
       await pruneMergeBaselines(config, state, captureMutationOwner(ctx, signal));
@@ -843,36 +800,16 @@ async function completeJournal(
       return true;
     }
   }
-  if (
-    head &&
-    (journal.ignoreSource || head.selection?.version === 4) &&
-    inspectRemoteSelection(config.include, { selection: head.selection, files: [] }, config.exclude, config).kind !==
-      "same"
-  )
-    throw new Error("Remote ignore-file policy differs or is unavailable; preserve the pending merge for review.");
+
   if (
     !journal.committedHead &&
     head &&
     (backend.sameRevision(head.revision, journal.expectedHead.revision) ||
       backend.matchesUncommittedRecoveryHead?.(head, journal.expectedHead))
   ) {
-    if (
-      journal.ignoreSource &&
-      (head.snapshotId !== journal.expectedHead.snapshotId ||
-        head.snapshotRef !== journal.expectedHead.snapshotRef ||
-        head.snapshotId === journal.upload.id)
-    )
-      throw new Error("Cannot verify that the ignore-file candidate is inactive; preserve the journal and backup.");
     const { sameBaseline, sameLocal } = await readRetirementEvidence();
     validateMutation();
     if (!sameBaseline || !sameLocal) {
-      if (journal.ignoreSource) {
-        if (!sameBaseline)
-          throw new Error(
-            "Sync baseline changed after uncertain publication; preserve the journal and backup for review.",
-          );
-        return reviewInactiveIgnoreMerge(ctx, config, backend, journal, head, options, validateFresh, isCurrent);
-      }
       throw new Error(
         "Uncertain publication is not active, but local content or baseline changed; keep the journal for reviewed recovery.",
       );
@@ -899,16 +836,13 @@ async function completeJournal(
     );
   }
   const observed = await timings.measure("transfer snapshot download", () =>
-    readSnapshotForHead(backend, head, signal, config),
+    readSnapshotForHead(backend, head, signal),
   );
   requireCompatibleRemoteSelection(config, observed);
   if (
     !sameHashes(fileHashMap(observed), fileHashMap(journal.upload)) ||
     JSON.stringify(observed.selection) !== JSON.stringify(journal.upload.selection) ||
-    observed.version !== journal.upload.version ||
-    (observed.ignoreRules === null) !== (journal.upload.ignoreRules === null) ||
-    observed.ignoreRules?.filename !== journal.upload.ignoreRules?.filename ||
-    observed.ignoreRules?.text !== journal.upload.ignoreRules?.text
+    observed.version !== journal.upload.version
   )
     throw new Error("Remote snapshot does not match the recorded merge publication.");
   const state = await timings.measure("transfer state read", () => readStateForConfig(config));
@@ -947,17 +881,13 @@ async function completeJournal(
   const protectedPaths = protectedSessionPaths(ctx, sessionRoot);
   const validateApply = () => {
     validateMutation();
-    if (journal.localPolicyKey) checkLiveProtection(ctx, sessionRoot, protectedPaths);
   };
-  const validateApplyReview = journal.localPolicyKey
-    ? () => validateMergeApplyReview(backend, config, head, journal.stateIdentity, validateFresh, signal)
-    : undefined;
   await timings.measure("transfer local apply", () =>
     applyMergedSnapshot(
       journal.before,
       journal.after,
       protectedPaths,
-      { ...snapshotOptions, validateMutation: validateApply, validateApplyReview, requireReviewedApplyImage },
+      { ...snapshotOptions, validateMutation: validateApply, requireReviewedApplyImage },
       validate,
       ctx.sessionManager.getSessionFile?.(),
     ),

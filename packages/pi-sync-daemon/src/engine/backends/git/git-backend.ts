@@ -1,10 +1,9 @@
-import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { posixJoin } from "../../paths.js";
 import { snapshotFileFromBlob } from "../../snapshot/snapshot-payload.js";
-import { isIgnoreSnapshotVersion, type Snapshot, type SnapshotFile } from "../../snapshot/snapshot-types.js";
+import type { Snapshot, SnapshotFile } from "../../snapshot/snapshot-types.js";
 import { stateDir } from "../../state/state-directory.js";
 import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
@@ -173,7 +172,6 @@ export class GitSyncBackend implements SyncBackend {
       profile: manifest.profile,
       ...(manifest.snapshotSyncSessions === undefined ? {} : { syncSessions: manifest.snapshotSyncSessions }),
       ...(manifest.selection === undefined ? {} : { selection: structuredClone(manifest.selection) }),
-      ...(manifest.ignoreRules === undefined ? {} : { ignoreRules: structuredClone(manifest.ignoreRules) }),
       ...(manifest.localFields === undefined ? {} : { localFields: [...manifest.localFields] }),
       files,
     };
@@ -206,7 +204,6 @@ export class GitSyncBackend implements SyncBackend {
       syncSessions: snapshot.syncSessions === true || snapshot.files.some((file) => file.path.startsWith("sessions/")),
       ...(snapshot.syncSessions === undefined ? {} : { snapshotSyncSessions: snapshot.syncSessions }),
       ...(snapshot.selection === undefined ? {} : { selection: snapshot.selection }),
-      ...(snapshot.ignoreRules === undefined ? {} : { ignoreRules: snapshot.ignoreRules }),
       ...(snapshot.localFields === undefined ? {} : { localFields: snapshot.localFields }),
       files: files.map(({ path: filePath, sha256: fileSha, size }) => ({
         path: filePath,
@@ -232,8 +229,8 @@ export class GitSyncBackend implements SyncBackend {
         );
       }
     }
-    if (options.validateIgnorePolicy) {
-      await options.validateIgnorePolicy();
+    if (options.validatePublication) {
+      await options.validatePublication();
       throwIfAborted(options.signal);
     }
     options.onCommit?.();
@@ -655,19 +652,18 @@ export class GitSyncBackend implements SyncBackend {
       (await this.git(["show", `${commit}:${this.manifestPath()}`], { signal, maxOutputBytes: MAX_GIT_MANIFEST_BYTES }))
         .stdout;
     const manifest = parseGitManifest(bytes);
-    const entries = await this.readPublicationTree(commit, signal, isIgnoreSnapshotVersion(manifest.snapshotVersion));
+    const entries = await this.readPublicationTree(commit, signal);
     const payloadEntries = validateGitPublicationTree(entries, manifest, this.manifestPath(), (filePath) =>
       this.filePath(filePath),
     );
     return { manifest, payloadEntries };
   }
 
-  private async readPublicationTree(commit: string, signal?: AbortSignal, strictUtf8 = false) {
+  private async readPublicationTree(commit: string, signal?: AbortSignal) {
     const result = await this.git(["ls-tree", "-r", "-z", commit], {
       signal,
       maxOutputBytes: MAX_GIT_TREE_OUTPUT_BYTES,
     });
-    if (strictUtf8 && !isUtf8(result.stdout)) throw new Error("Git snapshot tree paths must be valid UTF-8.");
     return parseGitTree(result.stdout);
   }
 
@@ -720,15 +716,6 @@ function parseGitManifest(bytes: Buffer): GitManifest {
     parsed = JSON.parse(bytes.toString("utf8"));
   } catch (error) {
     throw new Error("Git publication manifest is malformed.", { cause: error });
-  }
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    "snapshotVersion" in parsed &&
-    isIgnoreSnapshotVersion(parsed.snapshotVersion) &&
-    !isUtf8(bytes)
-  ) {
-    throw new Error("Git publication manifest is not valid UTF-8.");
   }
   return requireGitManifest(parsed);
 }

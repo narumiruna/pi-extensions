@@ -11,11 +11,11 @@ import {
   normalizeWebDavUrl,
   validateWebDavCredentials,
 } from "../backends/webdav/webdav-config.js";
-import { validateIgnoreFilename } from "../ignore/ignore-source.js";
 import { normalizeSyncExclude } from "../sync/exclude-policy.js";
 import { normalizeLocalFields } from "../sync/local-field-policy.js";
 import { normalizeDirectoryRules, normalizeSyncInclude } from "../sync/sync-policy.js";
 import { CONFIG_FILE_NAME } from "./config-file.js";
+import { retiredIgnorePolicy } from "./retired-ignore-policy.js";
 import type {
   OnSwitchAction,
   PiSyncSettingsV3,
@@ -188,6 +188,8 @@ function validateSyncSetup(
   );
   const storage = requireRecord(value.storage, `storage for sync setup “${name}”`);
   const sync = requireRecord(value.sync, `sync policy for sync setup “${name}”`);
+  if (sync.pathPolicy === "ignore-file" || Object.hasOwn(sync, "ignoreFile")) throw retiredIgnorePolicy("settings");
+  if (Object.hasOwn(sync, "pathPolicy")) throw new Error("Invalid pi-sync settings: unsupported sync.pathPolicy.");
   rejectLegacyFields(storage, ["profile", "prefix", "directory", "namespace"], `storage for sync setup “${name}”`);
   rejectLegacyFields(
     sync,
@@ -219,25 +221,15 @@ function validateSyncSetup(
     }
   }
   const localFields = normalizeLocalFields(sync.localFields);
-  if (Object.hasOwn(sync, "pathPolicy")) {
-    if (sync.pathPolicy !== "ignore-file") throw new Error("Invalid pi-sync settings: unsupported sync.pathPolicy.");
-    if (version < 8) throw new Error("sync.pathPolicy requires explicit settings version 8.");
-    if (!Object.hasOwn(sync, "scope") || sync.scope !== "agent-directory")
-      throw new Error("Invalid pi-sync settings: sync.pathPolicy requires agent-directory scope.");
-    for (const key of ["include", "exclude", "reinclude"]) {
-      if (Object.hasOwn(sync, key))
-        throw new Error(`Invalid pi-sync settings: ignore-file policy cannot use sync.${key}.`);
-    }
-    if (Object.hasOwn(sync, "ignoreFile")) validateIgnoreFilename(sync.ignoreFile);
-  } else if (Object.hasOwn(sync, "ignoreFile")) {
-    throw new Error("Invalid pi-sync settings: sync.ignoreFile requires ignore-file pathPolicy.");
-  } else if (Object.hasOwn(sync, "scope")) {
+  if (Object.hasOwn(sync, "scope")) {
     if (sync.scope !== "agent-directory") throw new Error("Invalid pi-sync settings: unsupported sync.scope.");
     if (version < 7) throw new Error("sync.scope requires explicit settings version 7.");
     if (Object.hasOwn(sync, "include"))
       throw new Error("Invalid pi-sync settings: agent-directory scope cannot use sync.include.");
     normalizeDirectoryRules(sync.exclude);
     normalizeDirectoryRules(sync.reinclude);
+    if (sync.sessions !== undefined && typeof sync.sessions !== "boolean")
+      throw new Error("Invalid pi-sync settings: sync.sessions must be boolean.");
   } else {
     if (Object.hasOwn(sync, "sessions") || Object.hasOwn(sync, "reinclude"))
       throw new Error("Invalid pi-sync settings: sync.sessions and sync.reinclude require agent-directory scope.");
@@ -248,8 +240,6 @@ function validateSyncSetup(
     if (localFields.length > 0 && !include.includes("settings.json"))
       throw new Error("Nonempty localFields requires settings.json in sync.include.");
   }
-  if (sync.sessions !== undefined && typeof sync.sessions !== "boolean")
-    throw new Error("Invalid pi-sync settings: sync.sessions must be boolean.");
   if (sync.localFields !== undefined && version < 4)
     throw new Error("localFields requires explicit settings version 4; older binaries must refuse portable state.");
   if (sync.exclude !== undefined && version < 6)
