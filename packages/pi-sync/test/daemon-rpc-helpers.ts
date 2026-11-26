@@ -47,7 +47,7 @@ export class SyncRpc {
     });
     void this.ready.catch(() => {});
     this.child = fork(
-      new URL("./fixtures/rpc-client.mjs", import.meta.url),
+      path.resolve("packages/pi-sync/test/fixtures/rpc-client.mjs"),
       [
         "--mode",
         "rpc",

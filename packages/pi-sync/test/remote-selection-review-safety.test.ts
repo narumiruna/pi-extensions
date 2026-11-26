@@ -72,7 +72,7 @@ for (const [kind, field] of [
   ["s3", "storage-path"],
   ["s3", "bucket"],
   ["git", "branch"],
-  ["s3", "agent-mode"],
+  ["s3", "automatic-transfer"],
   ["s3", "automatic"],
   ["s3", "secret-scan"],
 ] as const) {
@@ -88,7 +88,7 @@ for (const [kind, field] of [
           if (field === "storage-path") setup.storage.path = "other/home";
           if (field === "bucket") setup.storage.bucket = "other-bucket";
           if (field === "branch") setup.storage.branch = "pi-sync/other";
-          if (field === "agent-mode") setup.sync.agentMode = true;
+          if (field === "automatic-transfer") setup.sync.automaticTransfer = true;
           if (field === "automatic") setup.sync.automatic = true;
           if (field === "secret-scan") settings.skipSecretScan = true;
           if (connection.type === "s3") {
@@ -140,7 +140,7 @@ for (const [kind, field] of [
   });
 }
 
-for (const change of ["connection", "agent-mode"] as const) {
+for (const change of ["connection", "automatic-transfer"] as const) {
   test(`saved-list continuation refuses a changed ${change}`, async () => {
     await configured("s3", async () => {
       const backend = new MemorySyncBackend();
@@ -167,7 +167,7 @@ for (const change of ["connection", "agent-mode"] as const) {
           const connection = settings.storageConnections.r2;
           assert.ok(setup && connection?.type === "s3");
           if (change === "connection") connection.endpoint = "https://other.example.com";
-          else setup.sync.agentMode = true;
+          else setup.sync.automaticTransfer = true;
           return settings;
         });
         tui.press("tui.select.confirm");

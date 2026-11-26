@@ -260,7 +260,8 @@ export function usage() {
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
-    "Continuous sync is a separate default-Off opt-in in Settings. It requires Autonomous sync and can incur recurring network/model costs. After the last Pi exits, the service closes after a 30-second grace period unless a valid /sync daemon allow-after-exit grant applies. Zero-client work still requires that separate review. Safety blocks and durable automatic request limits remain.",
+    "Autonomous sync and Continuous sync are retired. Saved flags no longer transfer files or call a model. Use Sync now to review a transfer or enable Startup transfer for one eligible startup sync.",
+    "New after-exit grants are not supported. Use /sync daemon revoke-after-exit to clear a retained grant.",
     "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");
 }

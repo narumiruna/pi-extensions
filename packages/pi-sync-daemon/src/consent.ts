@@ -251,7 +251,7 @@ export async function requireHandover(execution: Execution) {
   const accepted = await execution.request("confirm", {
     title: "Adopt pi-sync-daemon as the synchronization owner?",
     message:
-      "Close or upgrade every older Pi process before continuing. An idle older Pi cannot be detected from an absent sync lock. The daemon will own transfers; Pi keeps presentation and live file queues. Autonomous resolution uses independently available auth.json/models.json configuration and the environment captured when the service starts, not Pi runtime accounts or providers. Credential commands run non-interactively from the canonical agent root. Review this independent provider/account configuration; restart the service after changing its environment. This does not authorize transfers or model requests after the last Pi exits.",
+      "Close or upgrade every older Pi process before continuing. An idle older Pi cannot be detected from an absent sync lock. The daemon will own transfers; Pi keeps presentation and live file queues. This does not authorize new transfers after the last Pi exits.",
   });
   execution.validate();
   if (accepted !== true) {
@@ -274,6 +274,7 @@ export async function requireHandover(execution: Execution) {
 export async function authorizeAfterExit(execution: Execution, payload: unknown) {
   if (!record(payload) || typeof payload.afterExit !== "boolean" || typeof payload.fingerprint !== "string")
     throw new Error("Invalid daemon authorization.");
+  if (payload.afterExit) throw new Error("Continuous sync was retired. New after-exit grants are not supported.");
   await requireHandover(execution);
   const peers = participantBinding(execution);
   const { loadConfigForCheck } = await import("./engine/settings/config.js");
@@ -285,8 +286,6 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   const fingerprint = consentFingerprint(execution.root, config);
   const policyGeneration = JSON.stringify(readConsent(execution.root));
   if (fingerprint !== payload.fingerprint) throw new Error("Setup changed; reopen the daemon authorization review.");
-  if (payload.afterExit && (!config.continuous || !config.agentMode))
-    throw new Error("Enable the reviewed Autonomous and Continuous policies first.");
   const paths = (rules?: readonly string[]) => rules?.map(safeTerminalText).join(", ") || "none";
   const selection =
     config.scope === "agent-directory"
@@ -298,8 +297,8 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
         ].join("\n")
       : `Selected content: ${paths(config.include)}`;
   const accepted = await execution.request("confirm", {
-    title: payload.afterExit ? "Allow continuous sync after all Pi clients exit?" : "Revoke unattended sync?",
-    message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\nModel: ${safeTerminalText(facts?.model?.provider ?? "unavailable")}/${safeTerminalText(facts?.model?.id ?? "unavailable")}\n\n${payload.afterExit ? `The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission.` : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
+    title: "Revoke unattended sync?",
+    message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\n\nThis clears the retained after-exit grant without transferring files.`,
   });
   execution.validate();
   if (accepted !== true) {

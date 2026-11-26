@@ -142,11 +142,8 @@ export async function describeManagerState(
     const canSwitch = !changesBlocked && (alternateUsable || (await hasAnotherSwitchableSetup(view, signal)));
     signal?.throwIfAborted();
     const mainActions: string[] = [...MAIN_MENU_ACTIONS];
-    if (config.agentMode && !noSyncedContent) mainActions.splice(1, 0, "Retry refused model result…");
     if (canSwitch) mainActions.push("Switch sync setup");
     if (syncState?.unresolved?.length) mainActions.unshift("Review unresolved conflicts");
-    const background = changesBlocked ? [] : await backgroundSummary(config);
-    signal?.throwIfAborted();
     const ordinaryTitle = [
       "Manage sync",
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
@@ -172,12 +169,9 @@ export async function describeManagerState(
           ? [`Observed ${safeTerminalText(currentObservation.checkedAt)}: ${observationSummary(currentObservation)}`]
           : ["Remote status: Not checked"]),
       `Last applied: ${lastAppliedSnapshot}`,
-      ...(config.agentMode
-        ? ["Auto-apply: On · AI requests may incur costs"]
-        : config.automaticTransfer || (config.automatic && syncSessionsSelected(config))
-          ? ["Automatic transfer permission: On · see Settings"]
-          : []),
-      ...background,
+      ...(config.automaticTransfer || (config.automatic && syncSessionsSelected(config))
+        ? ["Automatic transfer permission: On · see Settings"]
+        : []),
       ...(noSyncedContent
         ? ["", "No included content is selected. Choose included content in Settings before syncing."]
         : []),
@@ -211,29 +205,6 @@ export async function describeManagerState(
       ].join("\n"),
       actions: ["Sync setups…", "Storage connections…", "History", "Help"],
     };
-  }
-}
-
-async function backgroundSummary(config: AnySyncConfig): Promise<string[]> {
-  if (!config.continuous) return [];
-  if (!config.agentMode) return ["Background sync: Paused · enable Autonomous sync"];
-  try {
-    const { continuousBinding, readContinuousPrivateDocument } = await import("../sync/continuous-storage.js");
-    const recordApi: typeof import("../sync/continuous-record.js") = await import("../sync/continuous-record.js");
-    const binding = await continuousBinding(config);
-    const document = await readContinuousPrivateDocument(`${binding}.json`);
-    if (!document) return ["Background sync: Enabled · not yet observed"];
-    recordApi.validateContinuousRecord(document.value, binding);
-    const record = document.value;
-    const phases = { waiting: "Waiting", syncing: "Syncing", retry: "Retry", blocked: "Blocked" };
-    return [
-      `Background sync (recorded): ${phases[record.phase]}${record.error ? ` · ${record.error}` : ""}`,
-      ...(record.transferred === undefined
-        ? []
-        : [`Last background transfer: Success · ${new Date(record.transferred).toISOString()}`]),
-    ];
-  } catch {
-    return ["Background sync: Unknown · open Diagnostics"];
   }
 }
 

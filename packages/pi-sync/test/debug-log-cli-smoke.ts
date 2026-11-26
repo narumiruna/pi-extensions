@@ -39,10 +39,10 @@ try {
   const settings = path.join(fixture.agent, "pi-sync.json");
   const target = path.join(fixture.agent, "pi-sync.log");
   const input = path.join(fixture.agent, "AGENTS.md");
-  async function preference(debug: boolean, enableContinuous = false) {
+  async function preference(debug: boolean, legacy = false) {
     const next = JSON.parse(await fs.readFile(settings, "utf8"));
     next.debug = debug;
-    if (enableContinuous) Object.assign(next.syncSetups.home.sync, { agentMode: true, continuous: true });
+    if (legacy) Object.assign(next.syncSetups.home.sync, { agentMode: true, continuous: true });
     const temporary = `${settings}.smoke`;
     await fs.writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
     await fs.rename(temporary, settings);
@@ -91,9 +91,12 @@ try {
   await preference(true, true);
   const second = await fixture.connect();
   await second.start();
-  await second.command("/sync daemon allow-after-exit", () => true);
-  const grant = JSON.parse(await fs.readFile(path.join(fixture.agent, "pi-sync", "daemon.json"), "utf8"));
-  assert.equal(grant.setups.home.afterExit, true);
+  await second.command("/sync daemon allow-after-exit", () => {
+    throw new Error("A retired grant must not ask for approval.");
+  });
+  assert.ok(second.records.some((record) => String(record.message).includes("Continuous sync was retired")));
+  const consent = JSON.parse(await fs.readFile(path.join(fixture.agent, "pi-sync", "daemon.json"), "utf8"));
+  assert.deepEqual(consent.setups, {});
   assert.ok(
     second.records.some(
       (record) =>
@@ -105,18 +108,9 @@ try {
   await second.close();
   const baseline = latest();
   assert.ok(baseline);
-  const initialCycles = (await records()).filter((record) => record.event === "continuous-cycle").length;
   await fs.writeFile(input, "after Pi disconnected\n");
-  await until("unattended publication and diagnostics", async () => {
-    const head = latest();
-    if (!head || head.equals(baseline)) return undefined;
-    const cycles = (await records()).filter((record) => record.event === "continuous-cycle");
-    return cycles.length > initialCycles &&
-      cycles.at(-1)?.pid === owner.identity.pid &&
-      cycles.at(-1)?.outcome === "completed"
-      ? true
-      : undefined;
-  });
+  assert.deepEqual(latest(), baseline);
+  assert.ok((await records()).every((record) => record.event !== "continuous-cycle"));
   assert.equal((await findDaemon(fixture.agent))?.identity.instance, owner.identity.instance);
 
   await preference(false);
@@ -134,7 +128,7 @@ try {
       result: "PASS",
       rpcFraming: true,
       correlatedRecords: true,
-      unattendedDiagnostics: true,
+      retiredGrantRejected: true,
       disabledSameDaemon: true,
       providerRequests: 0,
     }),

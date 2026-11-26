@@ -22,6 +22,7 @@ async function fixture(testContext: TestContext, disposeError?: Error) {
   assert.ok(root, "The isolated Vitest setup must provide an agent directory before import");
   const address = {
     ignoreFilesRetired: true,
+    autonomousSyncRetired: true,
     paths: { root },
     identity: { version: 1, root, instance: "fixture", pid: process.pid, token: "fixture" },
   };

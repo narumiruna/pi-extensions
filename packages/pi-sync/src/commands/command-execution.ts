@@ -101,10 +101,7 @@ export async function executeCommand(
     if (signal) options.signal = signal;
     if (onCommit) options.onCommit = onCommit;
     validateCommandOptions(subcommand, options);
-    if (retryRefusal) {
-      if (subcommand !== "sync") throw new Error("A refused-model retry is available only for merged sync.");
-      options.agentRetryRefusal = true;
-    }
+    if (retryRefusal) throw new Error("Model retries are no longer supported. Use reviewed manual sync.");
 
     switch (subcommand) {
       case "daemon": {
@@ -116,14 +113,12 @@ export async function executeCommand(
           await recoverDaemonOwnership(ctx, client, signal);
         } else if (action === "handover") {
           await client.run("daemon.handover", {}, options.signal);
-        } else if (action === "allow-after-exit" || action === "revoke-after-exit") {
+        } else if (action === "allow-after-exit") {
+          throw new Error("Continuous sync was retired. New after-exit grants are not supported.");
+        } else if (action === "revoke-after-exit") {
           await client.run("daemon.handover", {}, options.signal);
           const policy = (await client.run("daemon.policy", {}, options.signal)) as { fingerprint: string };
-          await client.run(
-            "daemon.authorize",
-            { fingerprint: policy.fingerprint, afterExit: action === "allow-after-exit" },
-            options.signal,
-          );
+          await client.run("daemon.authorize", { fingerprint: policy.fingerprint, afterExit: false }, options.signal);
         } else if (action === "status") {
           await showDaemonStatus(ctx, client, options.signal);
         } else throw new Error("Use /sync daemon status|recover|handover|allow-after-exit|revoke-after-exit.");
@@ -331,8 +326,7 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `settings field merge: ${config.mergeSettings ? "On" : "Off"}`,
       `machine-local settings.json fields: ${(config.localFields ?? []).map(safeTerminalText).join(", ") || "none"}`,
       `startup transfer: ${startupTransferSummary(config)}`,
-      `autonomous sync: ${config.agentMode ? "On" : "Off"}`,
-      `continuous sync: ${config.continuous ? (config.agentMode ? "On" : "paused; Autonomous sync is Off") : "Off"}`,
+      "Autonomous sync and Continuous sync are retired. Saved legacy flags have no effect.",
       config.scope ? "sync scope: Pi agent directory" : `included content: ${config.include.join(", ") || "none"}`,
       ...(config.scope
         ? [

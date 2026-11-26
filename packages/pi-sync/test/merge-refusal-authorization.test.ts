@@ -44,7 +44,7 @@ for (const denied of ["automatic", "background", "no-ui", "print", "agent-off"] 
     assert.deepEqual(await readStateForConfig(config), state);
   });
 
-test("refused-candidate retry cannot reconcile a newly pending journal before consent", async () => {
+test("a retired model retry does not reconcile a pending journal", async () => {
   const { agentDir, f, config } = fixture();
   const mock = agentContext(selectRemote);
   await fs.writeFile(path.join(agentDir, "AGENTS.md"), "pending publication\n");
@@ -57,7 +57,7 @@ test("refused-candidate retry cannot reconcile a newly pending journal before co
   const publish = vi.spyOn(f.backend, "publishSnapshot");
   await assert.rejects(
     mergeSync(mock.ctx, { ...mergeOptions, agentRetryRefusal: true }, () => f.backend),
-    /pending merge journal requires ordinary Sync now/,
+    /requires foreground Autonomous sync in TUI or RPC/,
   );
   assert.equal(read.mock.calls.length, 0);
   assert.equal(publish.mock.calls.length, 0);

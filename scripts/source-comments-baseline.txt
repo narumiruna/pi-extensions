@@ -2063,9 +2063,6 @@
 "packages/pi-sync-daemon/src/lifecycle-log.ts"	c8c4363bf79b06f595fda3e477c7e387ce617f69f16afde1309cbb7ef9f27438
 "packages/pi-sync-daemon/src/lifecycle.ts"	12ba573023589cd2541d8d7c2ba2f9d5d651a8809e9dec2d893dd6779d7fe23b
 "packages/pi-sync-daemon/src/model-signature.ts"	c60d99a5df5f13c16b53e156827c9554212b60f4943c080843b8bdc26aad233e
-"packages/pi-sync-daemon/src/monitor.ts"	01f11aa2c4bf86d1b35114e13dd89527a23b80f4a042d1604cdbe7b7d90d4918
-"packages/pi-sync-daemon/src/monitor.ts"	0c329854c6965a7d3c3e8daf807bc39e7312f0ed1ddd0b1042159079dd0b8964
-"packages/pi-sync-daemon/src/monitor.ts"	778f2babca234b635f418183ac61dc7eb98d7fbea5c6b6f895a3a7cad908a38b
 "packages/pi-sync-daemon/src/participant-admission.ts"	4efbdea86b706cc72905ea8809122c7f521cff5282c181b0c1b45a0816f79817
 "packages/pi-sync-daemon/src/protocol.ts"	2197588f5d388f4bce605129c2b0cfbca2ed4e2ef54c99407127e4c85743b44a
 "packages/pi-sync-daemon/src/protocol.ts"	25a21caf1cc670e62f1950f4533554e3b5f348da1ba646c27e56ea9ae9c8baed
@@ -2176,7 +2173,6 @@
 "packages/pi-sync/src/sync/startup-check.ts"	873b700be576c6f3892f18239db14528b92f7d518e36ae148d5de112036a5048
 "packages/pi-sync/src/sync/startup-check.ts"	9886bad29a2259aee972446d855485a06bcf36267491cd2ad5218787e69af623
 "packages/pi-sync/src/types.ts"	03f236260570cd8419472bdafc5ebbe667e79f3158726d22a5f3de142e9fefa0
-"packages/pi-sync/src/ui/agent-mode-setting.ts"	1fc5ef01627557789c65a16c413f62219e47d6310a9be213cb6d33edeb9bd859
 "packages/pi-sync/src/ui/automatic-sync-summary.ts"	185c8249889f16d65d13c85a5b51d25bb9bdca37bdf4a00f1dce9c6128446e14
 "packages/pi-sync/src/ui/cancellable-operation.ts"	164d413e9dddef277f90418c97d8a88486c460933e4d53028868498d1c2d620e
 "packages/pi-sync/src/ui/cancellable-operation.ts"	73a2acca35373c8c4473b38f6fc0e78e72d3fca0dd80c8d8aabcc240545fdbdd
@@ -2212,10 +2208,7 @@
 "packages/pi-sync/src/ui/settings-frame.ts"	4dd4bed871239d0465f5aa4cd5b9e4eb5432873b332688d3c7bc83a50d739dc7
 "packages/pi-sync/src/ui/settings-frame.ts"	5aca512cf3a43293ea692dedd904c1ed344b4075da7b0d38908cc78a9253df11
 "packages/pi-sync/src/ui/settings-frame.ts"	f51a13589b0efd560de8af01e222c1b095ed16e6ebdcbdca1037db011db19b92
-"packages/pi-sync/src/ui/settings-ui.ts"	676d098fc4aa7809d60bc80729d45ea57cd13ab9f5973a8c037cfb1e0a15c9a8
-"packages/pi-sync/src/ui/settings-ui.ts"	afe52ad24e83c91c10ae5a57be8487907ec89950df65f76ae7e539426aacc783
 "packages/pi-sync/src/ui/settings-ui.ts"	b1cfb14c83804a87a930b173224ab13ab375fc418d4e0142c4d0f807fa055a72
-"packages/pi-sync/src/ui/settings-ui.ts"	c43084b3f04f947bece9daf9ebd8213a3841cd46bc18d0d01b24c574aa80e393
 "packages/pi-sync/src/ui/settings-ui.ts"	d39940084291bd7b609869ed64fd052c7075215d922136f4faf6cc57ed23eaae
 "packages/pi-sync/src/ui/settings-ui.ts"	e43069d1104b82039df063d4afd46e7b975c5ab641cac0828e05f23b353b8f7c
 "packages/pi-sync/src/ui/settings-ui.ts"	f0be820b764e7176ce7a817f2846681569318388d756322f79e460ed13599d2f

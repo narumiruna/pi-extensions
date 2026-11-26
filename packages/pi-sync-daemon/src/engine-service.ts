@@ -12,8 +12,9 @@ import type { EngineContext } from "./engine/host.js";
 import { retiredIgnorePolicy } from "./engine/settings/retired-ignore-policy.js";
 import { assertNoRetiredRuleJournal } from "./engine/settings/retired-ignore-recovery.js";
 import { captureStartupReviewLock } from "./engine/state/lock.js";
-import { createMonitor } from "./monitor.js";
+import { createLegacyConsentGuard } from "./legacy-consent-guard.js";
 import { type Execute, type Execution, MAX_SETTINGS_BYTES, record } from "./protocol.js";
+import type { startServer } from "./server.js";
 import { createServiceContext, installServiceHost } from "./service-host.js";
 
 function optionsFrom(
@@ -62,12 +63,12 @@ function optionsFrom(
 /** Engine dispatch is loaded only by the service, never by the public IPC client. */
 export function createEngineService(root: string) {
   const host = installServiceHost(root);
-  const monitor = createMonitor(root, host);
+  const consentGuard = createLegacyConsentGuard(root);
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
   const execute: Execute = (operation, payload, execution) =>
     host.run(execution, async () => {
       if (operation.startsWith("ignore.") || operation === "daemon.authorize-connected")
         throw retiredIgnorePolicy("settings");
-      await monitor.pause();
       execution.validate();
       if (operation !== "settings.repair-read" && operation !== "monitor.pause") assertNoRetiredRuleJournal();
       if (operation === "daemon.authorize") {
@@ -82,20 +83,7 @@ export function createEngineService(root: string) {
         const config = await loadConfigForCheck(undefined, execution.signal);
         execution.validate();
         const fingerprint = consentFingerprint(root, config);
-        const saved = readConsent(root)?.setups[config.setupName];
-        const facts = execution.facts();
-        return {
-          setup: config.setupName,
-          fingerprint,
-          automatic: true,
-          afterExit: Boolean(
-            saved?.afterExit &&
-              saved.fingerprint === fingerprint &&
-              JSON.stringify(saved.model) === JSON.stringify(facts?.model) &&
-              saved.sessionDir === facts?.sessionDir &&
-              saved.cwd === facts?.cwd,
-          ),
-        };
+        return { setup: config.setupName, fingerprint, automatic: true, afterExit: false };
       }
       if (operation === "monitor.pause") return;
       if (operation === "settings.read" || operation === "settings.repair-read") {
@@ -148,10 +136,7 @@ export function createEngineService(root: string) {
           execution.signal,
           validateSource,
         );
-        if (!original || JSON.stringify(original.parsed) !== JSON.stringify(saved)) {
-          monitor.settingsCommitted();
-          execution.committed();
-        }
+        if (!original || JSON.stringify(original.parsed) !== JSON.stringify(saved)) execution.committed();
         return saved;
       }
       const ctx = createServiceContext(execution);
@@ -199,6 +184,8 @@ export function createEngineService(root: string) {
       if (!supported.includes(operation)) throw new Error("Unsupported engine operation.");
       const isAutomatic = operation === "startup-transfer" || operation === "shutdown";
       const options = optionsFrom(payload, execution, isAutomatic);
+      if (options.agentRetryRefusal)
+        throw new Error("Model retries are no longer supported. Use reviewed manual sync.");
       if (!options.reload) ctx.reload = undefined;
       if (operation === "shutdown") {
         const { loadConfigForCheck } = await import("./engine/settings/config.js");
@@ -270,84 +257,35 @@ export function createEngineService(root: string) {
           options.reload = false;
         }
         if (operation === "sync" || operation === "startup-transfer") {
-          const run = async () => {
-            const { prepareResolverHost } = await import("./resolver-host.js");
-            const { loadConfig, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
-            const config = await loadConfig(options.setup, execution.signal);
-            await automatic?.refresh();
-            automatic?.validate(config);
-            execution.validate();
-            if (options.agentRetryRefusal) {
-              const fingerprint = syncCheckConfigFingerprint(config);
-              options.validateAgentRetryPolicy = (current) => {
+          const run = () =>
+            withLock("sync", async () => {
+              execution.validate();
+              if (operation === "startup-transfer") {
+                if (!automatic) throw new Error("Missing startup transfer authorization.");
+                const { startupTransferEnabled } = await import("./engine/sync/agent-policy.js");
+                const { inspectSync } = await import("./engine/sync/sync-inspection.js");
+                const { snapshotOptionsForContext } = await import("./engine/snapshot/session-paths.js");
+                await automatic.refresh();
+                const config = automatic.config;
+                const inspection = await inspectSync(config, snapshotOptionsForContext(ctx, config), options.signal);
+                await automatic.refresh();
                 execution.validate();
-                if (syncCheckConfigFingerprint(current) !== fingerprint)
-                  throw new Error("Sync setup changed; reopen the retry.");
-              };
-            } else if (operation === "sync") monitor.explicitSync(config, execution);
-            const binding = JSON.stringify(execution.facts()?.model);
-            const resolver = await prepareResolverHost(
-              root,
-              config.agentMode ? execution.facts()?.model : undefined,
-              execution.signal,
-            );
-            try {
-              await automatic?.refresh();
-              ctx.modelUnavailableReason = resolver.unavailable;
-              Object.defineProperty(ctx, "model", {
-                get: () => (JSON.stringify(execution.facts()?.model) === binding ? resolver.model : undefined),
-              });
-              ctx.validateModel = async () => {
-                const fresh = await execution.request("model-binding", {});
-                await automatic?.refresh();
-                execution.validate();
-                if (JSON.stringify(fresh ?? undefined) !== binding)
-                  throw new Error("Selected provider/model capability changed before dispatch.");
-              };
-              ctx.modelRegistry = {
-                streamSimple: (model, context, options) => {
-                  automatic?.validate();
-                  execution.validate();
-                  if (JSON.stringify(execution.facts()?.model) !== binding)
-                    throw new Error("Selected model changed before dispatch.");
-                  if (resolver.unavailable) throw new Error(resolver.unavailable);
-                  return resolver.registry.streamSimple(model, context, options);
-                },
-              };
-              const { withAgentSyncLock } = await import("./engine/sync/agent-sync.js");
-              return await withAgentSyncLock(ctx, options, async (current) => {
-                if (operation === "startup-transfer") {
-                  const { startupTransferEnabled } = await import("./engine/sync/agent-policy.js");
-                  if (!automatic) throw new Error("Missing startup transfer authorization.");
-                  await automatic.refresh();
-                  const config = automatic.config;
-                  execution.validate();
-                  const { inspectSync } = await import("./engine/sync/sync-inspection.js");
-                  const { snapshotOptionsForContext } = await import("./engine/snapshot/session-paths.js");
-                  await automatic.refresh();
-                  const inspection = await inspectSync(config, snapshotOptionsForContext(ctx, config), current.signal);
-                  await automatic.refresh();
-                  execution.validate();
-                  if (
-                    !startupTransferEnabled(config) ||
-                    !ctx.isIdle() ||
-                    execution.participants().some((peer) => peer.ready !== true) ||
-                    inspection.firstSync ||
-                    !inspection.head ||
-                    inspection.selectionState?.kind !== "same"
-                  ) {
-                    execution.noteDebugOutcome?.("blocked");
-                    throw new Error(
-                      "Startup transfer requires a fresh initialized baseline, matching selection, and idle ready clients; use the reviewed foreground command.",
-                    );
-                  }
+                if (
+                  !startupTransferEnabled(config) ||
+                  !ctx.isIdle() ||
+                  execution.participants().some((peer) => peer.ready !== true) ||
+                  inspection.firstSync ||
+                  !inspection.head ||
+                  inspection.selectionState?.kind !== "same"
+                ) {
+                  execution.noteDebugOutcome?.("blocked");
+                  throw new Error(
+                    "Startup transfer requires a fresh initialized baseline, matching selection, and idle ready clients; use the reviewed foreground command.",
+                  );
                 }
-                return operations.syncBoth(ctx, current);
-              });
-            } finally {
-              await resolver.settle();
-            }
-          };
+              }
+              return operations.syncBoth(ctx, options);
+            });
           return operation === "startup-transfer"
             ? withJobTimings(ctx, execution, "daemon transfer", async (timings) => {
                 options.startupTimings = timings;
@@ -366,7 +304,9 @@ export function createEngineService(root: string) {
     });
   return {
     execute,
-    bind: monitor.bind,
+    bind(value: Awaited<ReturnType<typeof startServer>>) {
+      server = value;
+    },
     hooks: {
       diagnostic: createDaemonDebug(root),
       startup: {
@@ -376,14 +316,13 @@ export function createEngineService(root: string) {
           return captureStartupBootstrap(root, fingerprint, signal, reviewLock);
         },
       },
-      factsChanged: monitor.factsChanged,
-      idle: monitor.schedule,
-      close: monitor.close,
-      lifetime: () => (host.cleanupRequired() ? Promise.resolve("pause" as const) : monitor.lifetime()),
-      quiesce: monitor.pause,
-      failure: monitor.blockAutomatic,
-      foregroundRecoveryAllowed: monitor.foregroundRecoveryAllowed,
-      upgradeAllowed: () => !host.cleanupRequired() && monitor.foregroundRecoveryAllowed(),
+      async factsChanged() {
+        if (server) consentGuard.factsChanged(server.participants());
+      },
+      lifetime: () => (host.cleanupRequired() ? Promise.resolve("pause" as const) : consentGuard.lifetime()),
+      failure: consentGuard.block,
+      foregroundRecoveryAllowed: consentGuard.allowsRecovery,
+      upgradeAllowed: () => !host.cleanupRequired() && consentGuard.allowsRecovery(),
     },
   };
 }

@@ -1,8 +1,8 @@
 import type { AnySyncConfig } from "../settings/settings-types.js";
 
 /** One policy for startup scheduling and commit-time authorization. */
-export function startupTransferEnabled(config: Pick<AnySyncConfig, "automaticTransfer" | "agentMode">) {
-  return Boolean(config.automaticTransfer || config.agentMode);
+export function startupTransferEnabled(config: Pick<AnySyncConfig, "automaticTransfer">) {
+  return Boolean(config.automaticTransfer);
 }
 
 export const AGENT_TIMEOUT_MS = 20_000;

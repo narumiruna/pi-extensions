@@ -126,25 +126,27 @@ test("the package rename preserves the consent digest and an existing unattended
   }
 });
 
-test("unattended permission defaults off and reviewed enable/revoke preserves unknown fields", () =>
+test("a retained grant is inert and a reviewed revoke preserves unknown fields", () =>
   fixture(async ({ root, client }) => {
     const target = path.join(root, "pi-sync", "daemon.json");
     const existing = JSON.parse(await fs.readFile(target, "utf8"));
     existing.future = { retain: true };
-    existing.setups.home = { future: "retained", fingerprint: "f".repeat(64), afterExit: false };
-    await fs.writeFile(target, JSON.stringify(existing), { mode: 0o600 });
     const policy = await readPolicy(client);
-    assert.equal(policy.afterExit, false);
-    assert.equal(await client.run("daemon.authorize", { ...policy, afterExit: true }), true);
-    assert.equal((await readPolicy(client)).afterExit, true);
+    existing.setups.home = { future: "retained", fingerprint: policy.fingerprint, afterExit: true };
+    const original = JSON.stringify(existing);
+    await fs.writeFile(target, original, { mode: 0o600 });
+    assert.equal((await readPolicy(client)).afterExit, false);
+    await assert.rejects(client.run("daemon.authorize", { ...policy, afterExit: true }), /retired/u);
+    assert.equal(await fs.readFile(target, "utf8"), original);
     assert.equal(await client.run("daemon.authorize", { ...policy, afterExit: false }), true);
     assert.equal((await readPolicy(client)).afterExit, false);
     const saved = JSON.parse(await fs.readFile(target, "utf8"));
     assert.deepEqual(saved.future, { retain: true });
     assert.equal(saved.setups.home.future, "retained");
+    assert.equal(saved.setups.home.afterExit, false);
   }));
 
-test("unattended authorization review shows the directory scope and separate session opt-in", () =>
+test("unattended revocation review shows the directory scope and separate session opt-in", () =>
   fixture(async ({ root, client, approve }) => {
     const home = config.syncSetups.home;
     await fs.writeFile(
@@ -175,7 +177,7 @@ test("unattended authorization review shows the directory scope and separate ses
       message = payload.message;
       return false;
     });
-    assert.equal(await client.run("daemon.authorize", { ...policy, afterExit: true }), false);
+    assert.equal(await client.run("daemon.authorize", { ...policy, afterExit: false }), false);
     assert.match(message ?? "", /all eligible files in the Pi agent directory/);
     assert.match(
       message ?? "",
@@ -205,7 +207,7 @@ for (const change of ["config", "model", "consent"] as const)
         }
         return true;
       });
-      await assert.rejects(client.run("daemon.authorize", { ...policy, afterExit: true }));
+      await assert.rejects(client.run("daemon.authorize", { ...policy, afterExit: false }));
       const saved = JSON.parse(await fs.readFile(path.join(root, "pi-sync", "daemon.json"), "utf8"));
       assert.equal(saved.setups.home, undefined);
       if (change === "consent") assert.equal(saved.future, "external edit");
@@ -214,12 +216,20 @@ for (const change of ["config", "model", "consent"] as const)
 test("a changed interactive model permanently revokes the prior grant across restart", () =>
   fixture(async ({ root, client }) => {
     const policy = await readPolicy(client);
-    await client.run("daemon.authorize", { ...policy, afterExit: true });
+    const target = path.join(root, "pi-sync", "daemon.json");
+    const existing = JSON.parse(await fs.readFile(target, "utf8"));
+    existing.setups.home = {
+      fingerprint: policy.fingerprint,
+      afterExit: true,
+      model: client.facts.model,
+      cwd: client.facts.cwd,
+    };
+    await fs.writeFile(target, JSON.stringify(existing), { mode: 0o600 });
     const original = client.facts.model;
     assert.ok(original);
     await client.update({ ...client.facts, model: { ...original, signature: "c".repeat(64) } });
     await client.update({ ...client.facts, model: original });
-    assert.equal((await readPolicy(client)).afterExit, false);
+    assert.equal(JSON.parse(await fs.readFile(target, "utf8")).setups.home.afterExit, false);
     await client.dispose();
     await stopDaemon(root);
     const owner = await ensureDaemon(root);
@@ -255,6 +265,6 @@ test("obsolete policy review is rejected before asking for approval", () =>
     const changed = structuredClone(config);
     changed.syncSetups.home.sync.include = ["AGENTS.md"];
     await fs.writeFile(path.join(root, "pi-sync.json"), JSON.stringify(changed), { mode: 0o600 });
-    await assert.rejects(client.run("daemon.authorize", { ...policy, afterExit: true }), /Setup changed/u);
+    await assert.rejects(client.run("daemon.authorize", { ...policy, afterExit: false }), /Setup changed/u);
     assert.equal(approvals, 0);
   }));
