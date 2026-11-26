@@ -193,7 +193,8 @@ describe("retired automation in real Pi RPC", () => {
     } finally {
       cancelReview();
     }
-    assert.ok(confirmations.length > 0, "manual sync still asks before publishing");
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0] ?? "", /^Update 1 remote file\?/u);
     assert.equal(writes(), beforeReview);
     assert.equal(await fs.readFile(file, "utf8"), local);
     assert.equal(await fs.readFile(settingsFile, "utf8"), before);
@@ -202,21 +203,36 @@ describe("retired automation in real Pi RPC", () => {
   });
 
   test("an independently enabled Startup transfer still publishes with legacy flags present", async () => {
-    const { agent, requests, storage } = owned;
+    const { agent, requests } = owned;
     await client.command("/sync push --yes", () => false);
     await client.close();
-    const latest = () => [...storage.resources].find(([name]) => name.endsWith("/latest.json"))?.[1];
-    const initial = latest();
-    assert.ok(initial);
     const file = path.join(agent, "pi-sync.json");
     const settings = JSON.parse(await fs.readFile(file, "utf8"));
+    const config = configFromSettings(validateSettingsDocument(settings));
+    assert.equal(config.backend.type, "webdav");
+    const backend = new WebDavSyncBackend(config.backend);
+    const initial = await backend.readHead();
+    assert.ok(initial);
     settings.syncSetups.home.sync.automaticTransfer = true;
     const raw = JSON.stringify(settings);
     await fs.writeFile(file, raw);
-    await fs.writeFile(path.join(agent, "AGENTS.md"), "A new startup transfer.\n");
+    const edited = "A new startup transfer.\n";
+    await fs.writeFile(path.join(agent, "AGENTS.md"), edited);
     const next = await owned.connect();
     await next.start();
-    await vi.waitFor(() => assert.notDeepEqual(latest(), initial), { timeout: 1_000, interval: 10 });
+    const head = await vi.waitFor(
+      async () => {
+        const current = await backend.readHead();
+        assert.ok(current, "startup must leave a valid remote head");
+        assert.notEqual(current.snapshotRef, initial.snapshotRef);
+        return current;
+      },
+      { timeout: 1_000, interval: 10 },
+    );
+    const published = await backend.readSnapshot(head.snapshotRef);
+    const fileEntry = published.files.find((entry) => entry.path === "AGENTS.md");
+    assert.ok(fileEntry);
+    assert.equal(Buffer.from(fileEntry.contentBase64, "base64").toString("utf8"), edited);
     assert.equal(requests.length, 0);
     assert.equal(await fs.readFile(file, "utf8"), raw);
   });

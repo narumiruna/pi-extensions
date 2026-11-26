@@ -7,6 +7,7 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import { withStateDirectoryAccess } from "../src/state/state-directory.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { readMergeJournal } from "../src/sync/merge-journal.js";
+import { isSyncDecisionRequiredError } from "../src/sync/sync-decision.js";
 import { syncBoth } from "../src/sync/sync-mutations.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
 import { withTempHome } from "./helpers.js";
@@ -27,7 +28,7 @@ for (const legacy of [false, true])
       const mock = agentContext(selectRemote);
       await assert.rejects(
         withStateDirectoryAccess(() => syncBoth(mock.ctx, mergeOptions, () => f.backend)),
-        /review/u,
+        (error) => isSyncDecisionRequiredError(error) && error.decision.kind === "both-changed",
       );
       assert.equal(mock.requests.length, 0);
       assert.deepEqual(await f.backend.readHead(), head);

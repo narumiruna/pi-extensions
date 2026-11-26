@@ -10,6 +10,7 @@ import { updateLocalConfig } from "../src/settings/settings-store.js";
 import { withStateDirectoryAccess } from "../src/state/state-directory.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
 import { readMergeJournal } from "../src/sync/merge-journal.js";
+import { isSyncDecisionRequiredError } from "../src/sync/sync-decision.js";
 import { pull, push, rollback, syncBoth } from "../src/sync/sync-mutations.js";
 import { RemoteSelectionMismatchError, selectionForSnapshot } from "../src/sync/sync-policy.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
@@ -295,6 +296,10 @@ test("legacy flags do not disclose excluded content or publish a conflict", asyn
     const head = await backend.readHead();
     assert.ok(head);
     const base = await backend.readSnapshot(head.snapshotRef);
+    assert.deepEqual(
+      base.files.map(({ path: name }) => name),
+      ["skills/public.md"],
+    );
     await fs.writeFile(path.join(root, "skills/public.md"), "conflicting local text");
     await backend.publishSnapshot(
       {
@@ -308,7 +313,7 @@ test("legacy flags do not disclose excluded content or publish a conflict", asyn
     const mock = agentContext(selectRemote);
     await assert.rejects(
       withStateDirectoryAccess(() => syncBoth(mock.ctx, mergeOptions, () => backend)),
-      /review/u,
+      (error) => isSyncDecisionRequiredError(error) && error.decision.kind === "both-changed",
     );
     assert.deepEqual(await backend.readHead(), remoteHead);
     assert.equal(await fs.readFile(path.join(root, "skills/public.md"), "utf8"), "conflicting local text");

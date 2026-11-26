@@ -197,7 +197,7 @@ test("Settings hides retired automation controls and retains merge policy warnin
     });
     assert.equal(descriptions.size, 4);
     for (const label of ["Autonomous sync", "Continuous sync"])
-      assert.doesNotMatch(descriptions.get(label) ?? "", /\b(?:On|Off)\b/u);
+      assert.match(descriptions.get(label) ?? "", /No matching settings/u);
     const mergeSettings = descriptions.get("Merge settings fields") ?? "";
     assert.match(mergeSettings, /opt-in: merge independent global settings\.json root fields/);
     assert.match(mergeSettings, /Arrays and nested objects remain atomic/);

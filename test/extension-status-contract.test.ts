@@ -97,7 +97,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function configure(showStatus = true) {
+async function configure(showStatus = true, debug = false) {
   await writeFile(
     join(agentDir, "pi-sync.json"),
     JSON.stringify({
@@ -105,6 +105,7 @@ async function configure(showStatus = true) {
       activeSyncSetup: "offline",
       onSwitch: "ask-before-pull",
       showStatus,
+      debug,
       storageConnections: {
         offline: { type: "webdav", url: storage.url, credentials: { username: "test", password: "test" } },
       },
@@ -339,9 +340,19 @@ test("a failed startup check respects Show sync status Off without hiding warnin
 
   // The existing preference is read again on session start; no private settings API is used.
   await emit(producer, "session_shutdown", context.ctx);
-  await configure(false);
+  await configure(false, true);
   storage.options.password = "invalid";
   const blockedNotice = deferred();
+  const disabledCheckFinished = deferred();
+  const { appendEntry } = producer.rawPi;
+  producer.rawPi.appendEntry = (type, data) => {
+    appendEntry(type, data);
+    if (
+      type === "pi-sync-startup-timings" &&
+      (data as { report?: string }).report?.startsWith("pi-sync debug: background startup (stopped)\n")
+    )
+      disabledCheckFinished.resolve();
+  };
   const disabled = await makeContext();
   const disabledCtx = disabled.ctx as ExtensionCommandContext;
   const notify = disabledCtx.ui.notify.bind(disabledCtx.ui);
@@ -353,6 +364,7 @@ test("a failed startup check respects Show sync status Off without hiding warnin
   const before = updates.length;
   await emit(producer, "session_start", disabled.ctx);
   await blockedNotice.promise;
+  await disabledCheckFinished.promise;
   assert.equal(disabled.statuses.get("sync"), undefined);
   assert.equal(
     updates.slice(before).some((entry) => entry.value !== undefined),
