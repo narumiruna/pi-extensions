@@ -112,8 +112,7 @@ function referencedObjective(lineage: readonly SessionEntry[], sourceId: string,
       if (!isCanonicalEntry(entry) || lineage.findIndex((candidate) => candidate.id === sourceId) !== index) {
         return undefined;
       }
-      const data = entry.data;
-      const source = isRecord(data) && !Object.hasOwn(data, "objectiveEntryId") ? data.goal : undefined;
+      const source = isRecord(entry.data) ? entry.data.goal : undefined;
       return isStoredGoal(source) && source.id === goalId ? source.text : undefined;
     }
     if (!isCanonicalEntry(entry)) continue;

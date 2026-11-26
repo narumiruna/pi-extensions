@@ -217,9 +217,10 @@ Canonical Goal state is stored in `goal-state` session entries. Every new checkp
 its full objective in `goal.text`. A clear writes `{ goal: null }`.
 
 The reader also accepts a checkpoint that omits `goal.text` and names a full snapshot of the same
-Goal in `objectiveEntryId`. The source and checkpoint must be on the same branch. Every Goal
-checkpoint between them must refer to the same source and Goal. An unresolved reference restores
-no Goal; it does not fall back to an older checkpoint.
+Goal in `objectiveEntryId`. A full snapshot uses its own `goal.text` even if it has a reference
+field. The source and checkpoint must be on the same branch. Every Goal checkpoint between them
+must refer to the same source and Goal. An unresolved reference restores no Goal; it does not fall
+back to an older checkpoint.
 
 Older versions cannot read reference checkpoints. Before switching to one, use a version that
 reads references and writes full snapshots to reopen the session on the branch you need or to fork

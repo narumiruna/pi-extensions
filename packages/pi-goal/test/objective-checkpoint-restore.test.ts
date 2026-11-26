@@ -71,6 +71,7 @@ test("invalid compact references do not restore an older Goal", () => {
     "missing source": [leaf],
     "empty reference": [source, { ...leaf, data: compact(goal, "") }],
     "source without full state": [{ ...source, data: { goal: { id: goal.id, text: goal.text } } }, leaf],
+    "source is a reference": [{ ...source, data: compact(goal, "earlier") }, leaf],
     "reference to another Goal": [source, { ...leaf, data: compact({ ...goal, id: "other" }, source.id) }],
     "non-string status": [{ ...source, data: { goal: { ...goal, status: { toString: null } } } }, leaf],
     "checkpoint after a clear": [source, entry("clear", source.id, { goal: null }), { ...leaf, parentId: "clear" }],
@@ -120,6 +121,10 @@ test("a full checkpoint wins over a stray reference, and compact completion does
     loadGoalStateFromSession({ sessionManager: { getBranch: () => [source, full] } }).goal?.text,
     "New objective",
   );
+  const reference = entry("reference", full.id, compact({ ...goal, tokensUsed: 42 }, full.id));
+  const restored = loadGoalStateFromSession({ sessionManager: { getBranch: () => [source, full, reference] } }).goal;
+  assert.equal(restored?.text, "New objective");
+  assert.equal(restored?.tokensUsed, 42);
   assert.equal(loadGoalStateFromSession({ sessionManager: { getBranch: () => [source, complete] } }).goal, undefined);
 });
 
