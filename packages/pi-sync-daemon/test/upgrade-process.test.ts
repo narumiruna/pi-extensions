@@ -212,11 +212,11 @@ test.runIf(process.platform === "linux")(
     await listenOlderDaemon(owner, () => {
       if (++hellos === 2) linux.ticks++;
     });
-    await assert.rejects(ensureDaemon(owner.paths.root), /could not upgrade/u);
+    await assert.rejects(ensureDaemon(owner.paths.root), /could not replace the daemon safely/u);
     const saved = await fs.readFile(owner.file, "utf8");
     assert.equal(JSON.parse(saved).birth, birth);
     assert.equal(Object.hasOwn(JSON.parse(saved), "token"), false);
-    await assert.rejects(ensureDaemon(owner.paths.root), /could not upgrade/u);
+    await assert.rejects(ensureDaemon(owner.paths.root), /could not replace the daemon safely/u);
     assert.equal(await fs.readFile(owner.file, "utf8"), saved);
   },
 );
@@ -239,7 +239,7 @@ test.runIf(process.platform === "linux")("a sample taken only after hello cannot
   await listenOlderDaemon(owner, () => {
     linux.available = true;
   });
-  await assert.rejects(ensureDaemon(owner.paths.root), /could not upgrade/u);
+  await assert.rejects(ensureDaemon(owner.paths.root), /could not replace the daemon safely/u);
   const recorded = await readUpgradeOwner(owner.paths);
   assert.equal(recorded?.pid, pid);
   assert.equal(Object.hasOwn(recorded ?? {}, "birth"), false);

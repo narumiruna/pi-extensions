@@ -48,7 +48,7 @@ Pi loads `dist/index.ts` from the package directory, so build Kit and complete t
 
 Extensions run with Pi's permissions, so install only packages from sources you trust.
 
-Update Pi Sync to get a newer bundled daemon. Updating the standalone package does not change the copy in Pi Sync. Revoke retained unattended permission before updating, then use `/reload` in open Pi sessions. If the upgrade is blocked or the old owner's exit is uncertain, follow the [daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
+Update Pi Sync to get a newer bundled daemon. Updating the standalone package does not change this copy. Revoke retained unattended permission before updating, then start Pi or use `/reload`. The next eligible interactive connection replaces an older daemon and reports the running version after attaching. Use `/sync daemon status` to compare the running and expected builds. For same-version build differences, blocked upgrades, or uncertain exit, follow the [daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
 
 Use a Pi runtime that satisfies this package’s declared peer floor. Installing an extension dependency does not upgrade a separately installed Pi runtime. The declared Kit floor supplies exact scrolling/paginated review and configured-keybinding support.
 
@@ -337,7 +337,7 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | --- | --- |
 | `/sync` | Set up storage, manage synced content, and review sync operations or recovery. |
 | `/sync help` | Show command usage. |
-| `/sync daemon [status\|handover\|allow-after-exit\|revoke-after-exit]` | Connect to the service or review ownership and unattended permission; no argument connects and shows status. |
+| `/sync daemon [status\|handover\|allow-after-exit\|revoke-after-exit]` | Connect and compare daemon builds, or review ownership and unattended permission; no argument is the same as `status`. |
 | `/sync daemon recover` | Diagnostic fallback: review and stop the current daemon in TUI or RPC without starting a replacement or retrying a transfer. |
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
@@ -369,7 +369,7 @@ node "/path/to/installed/pi-sync/dist/daemon/dist/cli.js" status --root "/path/t
 
 If Pi Sync reports uncertain daemon cleanup, open `/sync` and choose **Stop daemon for recovery…**. After the confirmed stop, use `/reload` and follow the [cleanup recovery steps](./docs/daemon-migration.md#recover-from-uncertain-daemon-cleanup).
 
-Use the directory containing the installed Pi Sync `package.json` and the agent directory of the owner you want to inspect. `status` does not start a service. `stop` drains the service; reload Pi to reattach afterward. CLI `start` without clients follows the same 30-second grace policy. If ownership, consent, or cleanup is uncertain, follow the [recovery guide](./docs/daemon-migration.md#diagnostics-and-rollback) instead of forcing a restart. Print/JSON never launch a service.
+Use the directory containing the installed Pi Sync `package.json` and the agent directory of the owner you want to inspect. CLI `status` does not start a service. `stop` drains the service; reload Pi to reattach afterward. CLI `start` without clients follows the same 30-second grace policy. If ownership, consent, or cleanup is uncertain, follow the [recovery guide](./docs/daemon-migration.md#diagnostics-and-rollback) instead of forcing a restart. Print/JSON never launch a service.
 
 All routes support TUI and RPC; RPC settings and included-content screens are read-only.
 Print and JSON modes reject `/sync`.

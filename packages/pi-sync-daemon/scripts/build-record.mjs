@@ -3,6 +3,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export const buildRecordName = ".daemon-build.json";
+const buildIdName = "build-id.json";
 
 export async function recordDaemonBuild(root, before) {
   const files = await runtimeFiles(root);
@@ -10,7 +11,9 @@ export async function recordDaemonBuild(root, before) {
   if (JSON.stringify(before.hashes) !== JSON.stringify(hashes)) {
     throw new Error("Daemon build inputs changed during compilation; rebuild @narumitw/pi-sync-daemon.");
   }
-  await writeFile(join(root, buildRecordName), JSON.stringify(buildRecord(before.hashes, files)));
+  const record = buildRecord(before.hashes, files);
+  await writeFile(join(root, "dist", buildIdName), buildIdBytes(record));
+  await writeFile(join(root, buildRecordName), JSON.stringify(record));
 }
 
 export async function readDaemonBuild(root) {
@@ -20,9 +23,14 @@ export async function readDaemonBuild(root) {
   });
   const files = await runtimeFiles(root);
   const { hashes, manifest } = await captureDaemonInputs(root);
-  if (recorded !== JSON.stringify(buildRecord(hashes, files))) {
+  const record = buildRecord(hashes, files);
+  if (recorded !== JSON.stringify(record)) {
     throw new Error("Stale or mismatched workspace daemon build; rebuild @narumitw/pi-sync-daemon first.");
   }
+  const id = await readFile(join(root, "dist", buildIdName), "utf8");
+  if (id !== buildIdBytes(record))
+    throw new Error("Mismatched daemon build identifier; rebuild @narumitw/pi-sync-daemon.");
+  files.set(buildIdName, Buffer.from(id));
   return { manifest: manifest.toString("utf8"), files };
 }
 
@@ -36,6 +44,11 @@ export async function captureDaemonInputs(root) {
 
 function buildRecord(inputs, runtime) {
   return { inputs, runtime: [...runtime].map(([file, bytes]) => [file, hash(bytes)]) };
+}
+
+function buildIdBytes(record) {
+  const executables = record.runtime.filter(([file]) => file.endsWith(".js"));
+  return `${JSON.stringify(hash(JSON.stringify(executables)))}\n`;
 }
 
 async function runtimeFiles(root) {

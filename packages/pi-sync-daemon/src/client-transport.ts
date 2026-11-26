@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
 import { lt, valid } from "semver";
-import { DAEMON_BUILD_VERSION } from "./build-version.js";
+import { DAEMON_BUILD_VERSION, isDaemonBuildId } from "./build-version.js";
 import { daemonPaths, type RuntimePaths, readJsonBody } from "./identity.js";
 import { type Identity, MAX_MESSAGE_BYTES, type RemoteError, record } from "./protocol.js";
 
@@ -73,9 +73,10 @@ export async function hello(paths: RuntimePaths, identity: Identity, signal?: Ab
     value.pid !== identity.pid
   )
     throw new Error("Daemon handshake mismatch.");
-  const version = value.buildVersion;
-  if (Object.hasOwn(value, "buildVersion") && (typeof version !== "string" || valid(version) !== version))
+  const buildVersion = value.buildVersion;
+  if (buildVersion !== undefined && (typeof buildVersion !== "string" || valid(buildVersion) !== buildVersion))
     throw new Error("Invalid daemon build version.");
-
-  return { needsUpgrade: typeof version !== "string" || lt(version, DAEMON_BUILD_VERSION) };
+  const buildId = value.buildId;
+  if (buildId !== undefined && !isDaemonBuildId(buildId)) throw new Error("Invalid daemon build identifier.");
+  return { buildVersion, buildId, needsUpgrade: buildVersion === undefined || lt(buildVersion, DAEMON_BUILD_VERSION) };
 }

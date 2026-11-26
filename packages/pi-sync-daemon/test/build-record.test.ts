@@ -68,12 +68,25 @@ test("daemon build record checks local output against the selected source and ve
     await recordDaemonBuild(root, await captureDaemonInputs(root));
     const { manifest, files } = await readDaemonBuild(root);
     assert.equal(manifest, await readFile(join(root, "package.json"), "utf8"));
-    assert.deepEqual([...files.keys()], ["index.js", "index.js.map"]);
+    assert.deepEqual([...files.keys()], ["index.js", "index.js.map", "build-id.json"]);
+    const id = files.get("build-id.json")?.toString();
+    assert.match(JSON.parse(id ?? "null"), /^[a-f0-9]{64}$/u);
+    await writeFile(join(root, "dist/build-id.json"), '"wrong"');
+    await assert.rejects(readDaemonBuild(root), /Mismatched daemon build identifier/u);
+    await writeFile(join(root, "dist/build-id.json"), id ?? "");
     for (const path of [...inputs, ...outputs]) {
       await writeFile(join(root, path), "changed");
       await assert.rejects(readDaemonBuild(root), /Stale or mismatched workspace daemon build/u);
       await writeFile(join(root, path), path);
     }
+    await writeFile(join(root, "dist/index.js.map"), "different source map");
+    await recordDaemonBuild(root, await captureDaemonInputs(root));
+    assert.equal((await readDaemonBuild(root)).files.get("build-id.json")?.toString(), id);
+    await writeFile(join(root, "dist/index.js"), "different executable");
+    await recordDaemonBuild(root, await captureDaemonInputs(root));
+    const next = await readDaemonBuild(root);
+    assert.notEqual(next.files.get("build-id.json")?.toString(), id);
+    assert.equal(next.manifest, manifest);
     await writeFile(join(root, "dist/stale.js"), "stale");
     await assert.rejects(readDaemonBuild(root), /Stale or mismatched workspace daemon build/u);
     await rm(join(root, "dist/stale.js"));

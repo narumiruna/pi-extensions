@@ -18,13 +18,14 @@ If you installed the [standalone daemon package](https://www.npmjs.com/package/@
 
 The daemon remains a separate process. Pi uses one detached service per canonical agent directory and does not install an OS service. Updating the standalone package does not update the build bundled in Pi Sync. To get a newer bundled daemon, install a Pi Sync release that includes it.
 
-After an update, use `/reload` in open Pi sessions. On the next active connection, the client
-checks the owner's daemon build version, not the Pi Sync version, over authenticated, compatible
-IPC. It reuses a compatible owner on the same or a newer build. For an older or unversioned owner,
-the client checks that no retained unattended permission blocks the upgrade. It then requests a stop
-and starts the replacement only after the owner releases its identity and exits. If any check fails,
-follow manual recovery. The upgrade does not run a transfer, replay an operation, or change sync
-settings. Passive print, JSON, and shutdown paths do not replace an older owner. If an upgrade fails
+After an update, start Pi or use `/reload` in open sessions. On the next eligible interactive connection,
+the client checks the owner's daemon version, not the Pi Sync version, over authenticated IPC.
+It reuses a compatible owner on the same or a newer version. For an older or unversioned owner,
+the client checks for retained unattended permission, then requests a stop. A stop can cancel uncommitted work;
+it drains committed writes and queue releases. The replacement starts only after identity release and verified exit.
+Pi reports the running version after it attaches to the replacement. `/sync daemon status` shows both builds
+and reports a blocker even when it cannot connect. The replacement itself does not transfer data, replay a request,
+change settings, or grant consent. Existing authorized startup and Continuous sync retain their own rules. Passive print, JSON, and shutdown paths do not replace an older owner. If an upgrade fails
 while switching sessions, Pi Sync reports the failure and tries to attach the new session to the
 same owner for file protection only. That attachment cannot submit sync work. Use `/reload`
 after recovery.
@@ -61,8 +62,13 @@ Manual recovery:
    fails, keep the records. Do not edit or delete them to force startup.
 5. Use `/reload`, then `/sync daemon status`. Review after-exit permission again if you need it.
 
-Stop the service before rebuilding a local checkout in place. A source rebuild without a package
-version change does not trigger automatic replacement.
+Stop the service before rebuilding the files it runs from in place. For a separately built checkout, `/sync daemon status`
+compares the loaded daemon build with the running owner. The build ID identifies compiled engine code; it does not order
+builds. A missing ID means the match is unverified, and different IDs at the same version do not trigger an automatic restart.
+To switch explicitly, close or reload other Pi clients as appropriate and run `restart --root <agent-directory>` with the
+[daemon CLI](#daemon-cli) from the intended build. It uses the same guarded drain, refuses to downgrade a newer owner,
+and does not bypass retained unattended permission or pending recovery. Then load that Pi Sync build and use
+`/sync daemon status` to verify the match.
 
 Before the first daemon-owned transfer, close or upgrade every older Pi process and review `/sync daemon handover`. The existing operation lock excludes observed transfers, but an idle older client cannot be detected from an absent lock. Older binaries cannot be made to honor a new handover record retroactively. Do not run an old and new engine as interchangeable writers.
 

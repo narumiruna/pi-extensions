@@ -231,6 +231,19 @@ async function withJitiFixture(
         assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
         // Restore handover-only consent without changing the settings or invalidating the cached refusal.
         await fs.writeFile(consentFile, beforeApproval);
+        const decline = [retry, "No, cancel", undefined];
+        const titles: string[] = [];
+        mock.ctx.ui.select = async (title) => {
+          titles.push(title);
+          return decline.shift();
+        };
+        await runCommand("");
+        signal.throwIfAborted();
+        assert.deepEqual(decline, []);
+        assert.match(titles[1] ?? "", /Allow the enabled automatic sync modes for this setup\?/u);
+        assert.ok(titles.every((title) => !/Retry refused model result\?/u.test(title)));
+        assert.equal(resolver.requests.length, 1);
+        assert.deepEqual(await fs.readFile(consentFile), beforeApproval);
       }
       await use(async () => {
         if (foreground) {
