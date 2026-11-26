@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { showDaemonStatus } from "../daemon/daemon-status-ui.js";
 import { CompletedDirectionalRecoveryError } from "../daemon/directional-recovery.js";
 import { type PiDaemonClient, piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
 import { loadSettingsConfig, sessionTokenWarnings, syncSessionsWarnings } from "../settings/config.js";
@@ -129,15 +130,7 @@ export async function executeCommand(
             options.signal,
           );
         } else if (action === "status") {
-          const connection = await client.verifyConnection(options.signal);
-          const guidance = client.ownershipCleanupRequired
-            ? "Use /sync daemon recover to review and stop the daemon."
-            : "Use pi-sync-daemon status/stop/restart --root <agent-directory> for explicit lifecycle control.";
-          const state = client.ownershipCleanupRequired ? "connected; recovery required" : "connected";
-          ctx.ui.notify(
-            `pi-sync-daemon: ${state}\nPID: ${connection.identity.pid}\nInstance: ${connection.identity.instance}\n${guidance}`,
-            "info",
-          );
+          await showDaemonStatus(ctx, client, options.signal);
         } else throw new Error("Use /sync daemon status|recover|handover|allow-after-exit|revoke-after-exit.");
         return { kind: "completed" };
       }

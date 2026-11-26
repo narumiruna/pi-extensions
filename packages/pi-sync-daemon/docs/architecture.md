@@ -186,8 +186,10 @@ S3 and WebDAV encode an owned publication image while checking remote conditiona
 
 ## Package upgrades
 
-The authenticated `hello` response reports the running package build separately from its protocol
-version. Older releases did not report a build. During active startup, the client holds the existing
+The authenticated `hello` response reports the daemon package version separately from the protocol
+version. The optional build ID hashes the ordered compiled engine files and is captured at module load.
+The embedded distribution copies that ID from the standalone build. It identifies, but does not order,
+engine code at the same version. During active startup, the client holds the existing
 startup lock, sends an authenticated `stop` to an older or unversioned owner, and waits for owner exit
 and identity release. A private exit record survives cancellation and timeout. It keeps the PID
 and, when available, a verified Linux process birth marker. For a marked owner, `ESRCH` confirms
@@ -199,6 +201,9 @@ implicit replacement because a legacy owner cannot report a failed revocation. T
 consent under the state migration guard and releases it before sending stop. Passive attachment can
 protect live sessions without starting a replacement or submitting sync operations on the old build.
 An interactive session switch attempts the same protection-only attachment if the upgrade fails.
+The initiating Pi client reports the replacement after attaching to a verified new owner.
+Explicit CLI `restart` uses the same lock, consent checks, and drain, revalidates its target under the lock,
+and refuses to replace a newer owner. A same-version mismatch is diagnostic only until an explicit restart.
 
 For a blocked pending upgrade, `repair-upgrade` checks exit under the startup and owner locks.
 It revokes retained unattended grants under the state migration guard on all platforms. On

@@ -4,7 +4,7 @@ import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import lockfile from "proper-lockfile";
-import { DAEMON_BUILD_VERSION } from "./build-version.js";
+import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "./build-version.js";
 import { ConsentPublicationError, readConsent } from "./consent.js";
 import type { DaemonDiagnosticSink } from "./daemon-debug.js";
 import { endpointOwner } from "./endpoint.js";
@@ -782,6 +782,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       return {
         version: PROTOCOL_VERSION,
         buildVersion: DAEMON_BUILD_VERSION,
+        ...(DAEMON_BUILD_ID && { buildId: DAEMON_BUILD_ID }),
         root: identity.root,
         instance: identity.instance,
         pid: identity.pid,

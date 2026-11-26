@@ -52,6 +52,8 @@ import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
 
+type DaemonAddress = Pick<Awaited<ReturnType<typeof ensureDaemon>>, "paths" | "identity" | "needsUpgrade">;
+
 const scope = new AsyncLocalStorage<{ client: PiDaemonClient; reload?: AbortController }>();
 const clients = new WeakMap<ExtensionContext["sessionManager"], PiDaemonClient>();
 export function currentPiDaemonClient() {
@@ -238,6 +240,7 @@ function remoteErrorNamed(error: unknown, name: string) {
 export class PiDaemonClient {
   private connection?: DaemonConnection;
   private protectionOnly = false;
+  private blockedUpgrade?: { instance: string; reason: string };
   private partialConnection?: DaemonConnection;
   private work = Promise.resolve();
   private factsQueue = Promise.resolve();
@@ -389,6 +392,9 @@ export class PiDaemonClient {
     })();
     return this.pausing;
   }
+  blockedUpgradeReason(instance: string) {
+    return this.blockedUpgrade?.instance === instance ? this.blockedUpgrade.reason : undefined;
+  }
   async attachExisting({ allowUpgrade = false } = {}) {
     this.validate();
     this.assertNoDirectionalRecovery();
@@ -426,6 +432,7 @@ export class PiDaemonClient {
     } finally {
       if (upgradeFailure !== undefined) {
         this.validate();
+        this.blockedUpgrade = { instance: address.identity.instance, reason: upgradeFailure };
         this.ctx.ui.notify(`pi-sync daemon upgrade failed: ${upgradeFailure}`, "error");
       }
     }
@@ -448,11 +455,11 @@ export class PiDaemonClient {
     if (this.recoveringDirectionalOwner)
       throw new Error("Pi Sync is recovering the daemon for a transfer. Retry after recovery finishes.");
   }
-  async connect(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
+  async connect(existing?: DaemonAddress, requestSignal?: AbortSignal) {
     this.assertNoDirectionalRecovery();
     return this.attachConnection(existing, requestSignal);
   }
-  private async attachConnection(existing?: Awaited<ReturnType<typeof ensureDaemon>>, requestSignal?: AbortSignal) {
+  private async attachConnection(existing?: DaemonAddress, requestSignal?: AbortSignal) {
     const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
     const validateStartup = () => {
       this.validate();
@@ -483,7 +490,9 @@ export class PiDaemonClient {
       let retried = false;
       for (;;) {
         validateStartup();
-        const daemon = existing ?? (await ensureDaemon(this.root, startupSignal));
+        const daemon = existing
+          ? { ...existing, replacedOwner: false, buildVersion: undefined }
+          : await ensureDaemon(this.root, startupSignal);
         validateStartup();
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
         const protectionOnly = daemon.needsUpgrade === true;
@@ -551,7 +560,17 @@ export class PiDaemonClient {
         this.validate();
         this.connection = connection;
         this.protectionOnly = protectionOnly;
+        if (!protectionOnly) this.blockedUpgrade = undefined;
         this.partialConnection = undefined;
+        if (
+          daemon.replacedOwner &&
+          daemon.buildVersion &&
+          this.ownsContactUI() &&
+          !startupSignal.aborted &&
+          this.ctx.hasUI &&
+          (this.ctx.mode === "tui" || this.ctx.mode === "rpc")
+        )
+          this.ctx.ui.notify(`Pi Sync daemon replaced. Running version ${daemon.buildVersion}.`, "info");
         return connection;
       }
     })().then(

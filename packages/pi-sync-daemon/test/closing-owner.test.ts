@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import { test, vi } from "vitest";
+import { DAEMON_BUILD_ID } from "../dist/build-version.js";
 import { main as daemonCli } from "../dist/cli.js";
 import {
   DaemonConnection,
@@ -341,6 +342,7 @@ for (const buildVersion of [undefined, "0.0.0"]) {
           assert.notEqual(next.identity.instance, owner.identity.instance);
           assert.equal(next.identity.instance, other.identity.instance);
           assert.equal(next.needsUpgrade, false);
+          assert.equal(Number(next.replacedOwner) + Number(other.replacedOwner), 1);
           assert.equal(launches.mock.calls.length, 1);
           await owner.preserved();
         } finally {
@@ -357,7 +359,12 @@ for (const buildVersion of [DAEMON_BUILD_VERSION, "999.0.0"]) {
   test(`startup reuses an owner on build ${buildVersion} without a downgrade`, () =>
     fixture(
       async (owner) => {
-        assert.equal((await ensureDaemon(owner.root)).identity.instance, owner.identity.instance);
+        const reused = await ensureDaemon(owner.root);
+        assert.equal(reused.identity.instance, owner.identity.instance);
+        assert.equal(reused.replacedOwner, false);
+        assert.equal(reused.buildId, undefined);
+        if (buildVersion === "999.0.0")
+          await assert.rejects(daemonCli(["restart", "--root", owner.root]), /running daemon is newer/u);
         await owner.unchanged();
       },
       "upgrade",
@@ -468,6 +475,8 @@ test("a new caller waits for the old PID after cancellation and identity release
     assert.deepEqual(await cliResult("status", owner.root), {
       running: false,
       root: owner.root,
+      expectedBuildVersion: DAEMON_BUILD_VERSION,
+      expectedBuildId: DAEMON_BUILD_ID,
       pendingUpgradePid: owner.identity.pid,
     });
     await assert.rejects(daemonCli(["repair-upgrade", "--root", owner.root]), /cannot verify.*exit/iu);
@@ -624,6 +633,8 @@ for (const stateDirectory of ["pi-sync", ".pisync"]) {
       const messages: unknown[] = [];
       owner.child.on("message", (value) => messages.push(value));
       await assert.rejects(ensureDaemon(owner.root), /revoke unattended Pi Sync permission/iu);
+      await assert.rejects(daemonCli(["restart", "--root", owner.root]), /revoke unattended Pi Sync permission/iu);
+      assert.equal(await readUpgradeOwner(owner.paths), undefined);
       await owner.command("probe");
       assert.ok(!messages.some((value) => (value as { type?: string }).type === "stop"));
       assert.deepEqual(await fs.readFile(owner.paths.identity), owner.identityBytes);

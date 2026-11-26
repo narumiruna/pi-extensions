@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { test } from "vitest";
+import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "../dist/build-version.js";
 import { ensureDaemon, requestDaemon } from "../dist/client.js";
 import { privateDirectory, publishIdentity, recordUpgradeOwner, runtimePaths, upgradeFile } from "../src/identity.js";
 
@@ -81,6 +82,11 @@ test("simultaneous first clients share a detached owner that survives launcher e
     assert.equal(status.running, true);
     assert.equal(status.pid, connected.identity.pid);
     assert.equal(status.recordedPid, connected.identity.pid);
+    assert.equal(status.buildVersion, DAEMON_BUILD_VERSION);
+    assert.equal(status.expectedBuildVersion, DAEMON_BUILD_VERSION);
+    assert.match(status.buildId, /^[a-f0-9]{64}$/u);
+    assert.equal(status.expectedBuildId, status.buildId);
+    assert.equal(status.buildComparison, "match");
     assert.equal(Object.hasOwn(status, "token"), false);
     assert.equal(stdout.includes(connected.identity.token), false);
     assert.equal(stderr, "");
@@ -107,6 +113,8 @@ for (const pending of [false, true]) {
       assert.deepEqual(JSON.parse(stdout), {
         running: null,
         root,
+        expectedBuildVersion: DAEMON_BUILD_VERSION,
+        expectedBuildId: DAEMON_BUILD_ID,
         recordedPid: identity.pid,
         ...(pending && { pendingUpgradePid: identity.pid }),
       });
@@ -124,6 +132,19 @@ test("status, stop, and repair-upgrade never start an absent daemon", () =>
       JSON.parse((await exec(process.execPath, [cli, command, "--root", root])).stdout);
     assert.deepEqual(await run("repair-upgrade"), { repaired: false });
     for (const command of ["status", "stop"]) assert.equal((await run(command)).running, false);
+    assert.deepEqual(await fs.readdir(root), []);
+  }));
+
+test("restart and startup use the same lock and restart waits for the old owner to exit", () =>
+  fixture(async (root) => {
+    const old = await ensureDaemon(root);
+    const run = async (command: string) =>
+      JSON.parse((await exec(process.execPath, [cli, command, "--root", root])).stdout);
+    const replacement = await run("restart");
+    assert.notEqual(replacement.instance, old.identity.instance);
+    assert.throws(() => process.kill(old.identity.pid, 0), { code: "ESRCH" });
+    assert.equal((await run("start")).instance, replacement.instance);
+    assert.equal((await run("status")).buildComparison, "match");
     assert.deepEqual(await fs.readdir(root), []);
   }));
 

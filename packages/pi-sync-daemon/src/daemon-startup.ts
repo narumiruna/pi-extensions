@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
+import { gt } from "semver";
+import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "./build-version.js";
 import { DaemonError, hello, requestDaemon } from "./client-transport.js";
 import {
   canonicalRootGuard,
@@ -63,14 +65,21 @@ async function drainForUpgrade(
   await checkUpgradeConsent(paths, assertRoot, signal);
   const barrier = recorded ?? { ...owner, birth };
   try {
-    if (!recorded) await recordUpgradeOwner(paths, barrier);
+    if (!recorded) {
+      const current = await readIdentity(paths);
+      if (current?.instance !== owner.instance || current.pid !== owner.pid || current.token !== owner.token)
+        throw new Error("Daemon owner changed before stop.");
+      signal?.throwIfAborted();
+      assertRoot();
+      await recordUpgradeOwner(paths, barrier);
+    }
     assertRoot();
     const reply = await requestDaemon(paths, owner, "stop", {}, signal);
     if (!record(reply) || reply.stopping !== true) throw new Error("Daemon did not acknowledge stop.");
   } catch (error) {
     signal?.throwIfAborted();
     throw new Error(
-      "Pi Sync could not upgrade the older daemon safely. Check `pi-sync-daemon status --root <agent-directory>`. Do not force a second owner or remove recovery files.",
+      "Pi Sync could not replace the daemon safely. Check `pi-sync-daemon status --root <agent-directory>`. Do not force a second owner or remove recovery files.",
       { cause: error },
     );
   }
@@ -98,25 +107,49 @@ export async function acquireStartupLock(paths: RuntimePaths, signal?: AbortSign
   }
 }
 
-export async function ensureDaemon(root: string, signal?: AbortSignal, options?: { compatibleOnly: true }) {
+export function ensureDaemon(root: string, signal?: AbortSignal, options?: { compatibleOnly: true }) {
+  return startDaemon(root, signal, options?.compatibleOnly ? "compatible-only" : "ensure");
+}
+
+export function restartDaemon(root: string, signal?: AbortSignal) {
+  return startDaemon(root, signal, "restart");
+}
+
+async function startDaemon(
+  root: string,
+  signal: AbortSignal | undefined,
+  intent: "ensure" | "compatible-only" | "restart",
+) {
   const paths = await runtimePaths(root);
   const assertRoot = canonicalRootGuard(paths.root);
   signal?.throwIfAborted();
   await privateDirectory(paths.directory);
+  const restartTarget = intent === "restart" ? { identity: await readIdentity(paths) } : undefined;
   signal?.throwIfAborted();
   const release = await acquireStartupLock(paths, signal);
   try {
     signal?.throwIfAborted();
     let waited = false;
     let upgraded = false;
+    let verifyRestartTarget = restartTarget !== undefined;
     for (;;) {
       signal?.throwIfAborted();
       const upgrade = await readUpgradeOwner(paths);
-      if (upgrade && options?.compatibleOnly)
+      if (upgrade && intent === "compatible-only")
         throw new Error("A daemon upgrade or recovery is pending; no replacement was attempted.");
       if (upgrade && (await upgradeRepairStarted(paths, upgrade)))
         throw new Error("A daemon upgrade repair is incomplete. Run `pi-sync-daemon repair-upgrade` for this root.");
       const existing = await readIdentity(paths);
+      if (verifyRestartTarget) {
+        const target = restartTarget?.identity;
+        if (
+          existing?.instance !== target?.instance ||
+          existing?.pid !== target?.pid ||
+          existing?.token !== target?.token
+        )
+          throw new Error("Daemon owner changed while waiting to restart. Check status before retrying.");
+        verifyRestartTarget = false;
+      }
       if (upgrade && existing?.instance === upgrade.instance && existing.pid !== upgrade.pid)
         throw new Error("The recorded upgrade owner changed; private state was retained.");
       if (upgrade && (existing?.instance !== upgrade.instance || (await processExited(upgrade)))) {
@@ -155,11 +188,14 @@ export async function ensureDaemon(root: string, signal?: AbortSignal, options?:
       }
       signal?.throwIfAborted();
       assertRoot();
-      if (!status.needsUpgrade) {
+      const restart = intent === "restart" && !upgraded;
+      if (restart && status.buildVersion && gt(status.buildVersion, DAEMON_BUILD_VERSION))
+        throw new Error("The running daemon is newer than this CLI. Use the intended Pi Sync build to restart it.");
+      if (!status.needsUpgrade && !restart) {
         if (upgrade) throw new Error("The recorded upgrade owner changed; private state was retained.");
-        return { paths: daemonPaths(paths, existing.instance), identity: existing, ...status };
+        return { paths: daemonPaths(paths, existing.instance), identity: existing, ...status, replacedOwner: false };
       }
-      if (options?.compatibleOnly)
+      if (intent === "compatible-only")
         throw new Error("A compatible daemon could not be attached; an older owner was left unchanged.");
       if (upgraded)
         throw new Error("An older Pi Sync daemon started again. Close or upgrade other Pi sessions, then use /reload.");
@@ -225,8 +261,9 @@ export async function ensureDaemon(root: string, signal?: AbortSignal, options?:
     const status = await hello(paths, ready, signal);
     signal?.throwIfAborted();
     assertRoot();
-    if (status.needsUpgrade) throw new Error("The daemon installation changed during startup. Use /reload to retry.");
-    return { paths: daemonPaths(paths, ready.instance), identity: ready, ...status };
+    if (status.buildVersion !== DAEMON_BUILD_VERSION || status.buildId !== DAEMON_BUILD_ID)
+      throw new Error("The daemon installation changed during startup. Use /reload to retry.");
+    return { paths: daemonPaths(paths, ready.instance), identity: ready, ...status, replacedOwner: upgraded };
   } finally {
     await release();
   }

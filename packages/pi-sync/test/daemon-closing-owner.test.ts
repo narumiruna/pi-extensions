@@ -579,6 +579,8 @@ test("a failed interactive upgrade reports its error and protects the replacemen
     f.attachErrors.length = 0;
 
     assert.equal(await f.client.attachExisting({ allowUpgrade: true }), false);
+    assert.equal(f.client.blockedUpgradeReason(oldOwner.identity.instance), "Unattended permission needs review?");
+    assert.equal(f.client.blockedUpgradeReason("another-instance"), undefined);
     assert.deepEqual(f.notifications, [
       { message: "pi-sync daemon upgrade failed: Unattended permission needs review?", level: "error" },
     ]);
