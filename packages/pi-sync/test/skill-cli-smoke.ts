@@ -89,7 +89,8 @@ try {
       "--no-mcp",
       "--no-context-files",
       "--no-prompt-templates",
-      "--no-tools",
+      "--tools",
+      "read",
       "--offline",
       "--provider",
       "skill-smoke",
@@ -174,20 +175,34 @@ try {
     const settled = waitFor((record) => record.type === "agent_settled");
     await Promise.all([send("prompt", { message }), settled]);
   }
-  function latestUserMessage() {
+  function latestMessages() {
     const messages = requests.at(-1)?.messages;
     assert.ok(Array.isArray(messages));
-    const latest = messages.filter((message) => message.role === "user").at(-1);
+    return messages;
+  }
+  function latestUserMessage() {
+    const latest = latestMessages()
+      .filter((message) => message.role === "user")
+      .at(-1);
     assert.ok(latest);
     return JSON.stringify(latest);
   }
-  await prompt("Transport control prompt; do not call tools.");
+  function latestSystemPrompt() {
+    return JSON.stringify(latestMessages().filter(({ role }) => role === "system" || role === "developer"));
+  }
+  function assertSkillCatalog(systemPrompt: string) {
+    assert.match(systemPrompt, /<name>configure-pi-sync<\/name>/u);
+    assert.match(systemPrompt, /<description>Explain Pi Sync settings/u);
+    assert.doesNotMatch(systemPrompt, /Make and verify a clear, authorized local edit/u);
+  }
+  await prompt("How do I compare two Git branches without changing them?");
   assert.equal(requests.length, 1);
-  assert.doesNotMatch(
-    JSON.stringify(requests[0]),
-    /configure-pi-sync/u,
-    "manual-only metadata must not enter ordinary prompts",
-  );
+  const systemPrompt = latestSystemPrompt();
+  assertSkillCatalog(systemPrompt);
+  await prompt("Where can I check which folders Pi Sync skips?");
+  assert.equal(requests.length, 2);
+  assert.equal(latestSystemPrompt(), systemPrompt, "ordinary turns must preserve the system prompt");
+  assert.doesNotMatch(latestUserMessage(), /<skill name=/u, "plain requests do not expand the skill eagerly");
   const requestsToExpand = [
     "Turn on debug logging in pi-sync.json.",
     "Exclude npm/ from the ignore file for my home setup.",
@@ -224,6 +239,8 @@ try {
   const afterReload = await send("get_commands");
   assert.match(JSON.stringify(afterReload), /skill:configure-pi-sync/u);
   assert.equal(requests.length, beforeReload, "reload must not contact the provider");
+  await prompt("Where can I check which folders Pi Sync skips?");
+  assertSkillCatalog(latestSystemPrompt());
   await prompt("/skill:configure-pi-sync What changed after reload?");
   assert.match(latestUserMessage(), /Make and verify a clear, authorized local edit/u);
   assert.match(latestUserMessage(), /What changed after reload\?/u);
@@ -243,7 +260,7 @@ try {
       explicitRequests: requestsToExpand.length,
       localFixtureRequests: requests.length,
       externalProviderRequests: 0,
-      tools: "disabled",
+      tools: "read only; not called by fixture",
       privateSettingsCreated: false,
       syncStateCreated: false,
       publicContextReload: true,

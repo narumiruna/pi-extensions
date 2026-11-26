@@ -1,8 +1,7 @@
 ---
 name: configure-pi-sync
-description: Apply authorized local edits to pi-sync.json or the configured ignore file (usually .syncignore). Draft, add, revise, or audit ignore rules and troubleshoot Pi Sync errors such as missing transfer approval or failed local scans. Do not use to execute sync, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
+description: Explain Pi Sync settings and apply authorized local edits to pi-sync.json or the configured ignore file (usually .syncignore). Use to choose what Pi Sync includes, draft or audit ignore rules, or troubleshoot Pi Sync errors such as missing transfer approval or failed local scans. Do not use to execute sync, administer remote storage, develop pi-sync source code, or change unrelated Pi settings.
 license: MIT
-disable-model-invocation: true
 ---
 
 # Configure Pi Sync
