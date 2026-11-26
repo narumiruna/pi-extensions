@@ -213,7 +213,7 @@ The first implementation resolves bounded overlapping `AGENTS.md` and prompt/ski
 
 See the [TUI behavior contract and wording verification](./docs/tui-contract.md) for settings and review behavior.
 
-Ordinary **Sync now** reuses a cached refusal. Use **Retry refused model result…** in the manager to review and authorize one fresh request for the current refusal. This can incur another charge; it does not reset automatic request limits. Known unsupported conflicts stop before inference when partial sync is off. See [retry and cancellation boundaries](./docs/agent-continuous-hardening.md) and the [synthetic merge-quality corpus](./docs/agent-quality-verification.md).
+Ordinary **Sync now** reuses a cached refusal. Use **Retry refused model result…** in the manager to review and authorize one fresh request for the current refusal. If automatic-transfer approval is missing or stale, the retry opens that review first. Approving it saves permission for the enabled automatic modes, but sending conflict evidence again still needs separate confirmation. A retry can incur another charge and does not reset automatic request limits. Known unsupported conflicts stop before inference when partial sync is off. See [retry and cancellation boundaries](./docs/agent-continuous-hardening.md) and the [synthetic merge-quality corpus](./docs/agent-quality-verification.md).
 
 <a id="experimental-continuous-sync"></a>
 
