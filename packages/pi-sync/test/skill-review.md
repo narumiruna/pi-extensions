@@ -1,6 +1,6 @@
 # Configuration skill verification
 
-The skill is loaded on explicit invocation. It saves authorized routine preferences through the existing daemon and uses the daemon to verify the active ignore file before editing it locally. Questions and error reports do not authorize edits.
+Pi advertises the skill's description so a model can load it for a matching request. Explicit invocation remains available. The skill saves authorized routine preferences through the existing daemon and uses the daemon to verify the configured ignore file before editing it locally. Questions and error reports do not authorize edits.
 The authoritative configuration text is the [bundled settings reference](../skills/configure-pi-sync/references/configuration.md).
 
 ## Representative question review
@@ -44,20 +44,20 @@ npm --workspace @narumitw/pi-sync run build --if-present
 node packages/pi-sync/test/skill-cli-smoke.ts
 ```
 
-`test/skill.test.ts` checks real Pi discovery through package and root manifests, reload, exclusion from ordinary model prompts, reference boundaries, retained legacy fragments in the authoritative reference, and JSON examples against the real validator.
+`test/skill.test.ts` checks real Pi discovery through package and root manifests, skill catalog visibility before and after reload, reference boundaries, retained legacy fragments in the authoritative reference, and JSON examples against the real validator.
 Its negative cases cover unsupported versions, missing required policy fields, invalid booleans, and forbidden version downgrades.
 
 `test/skill-cli-smoke.ts` reads the installed Pi package's `bin.pi` entry and starts it with `process.execPath`, without a global `pi` or npm's PATH changes.
 It starts the real `pi -e <package-directory>` process in RPC mode with a temporary HOME, workspace, agent directory, and loopback-only canned provider.
-It verifies one ordinary request without manual-only skill metadata, explicit expansions for JSON edits, rule edits, rule drafts and audits, troubleshooting, and configuration questions, and a further expansion after public `ctx.reload()` through a temporary test-only extension command.
-The smoke uses only a loopback fixture and has tools disabled.
+It verifies that ordinary requests advertise only skill metadata, that the system prompt stays stable across ordinary turns, and that explicit requests still expand the skill instructions. It checks that both paths still work after public `ctx.reload()` through a temporary test-only extension command.
+The smoke uses only a loopback fixture and enables only the built-in `read` tool, which Pi needs to advertise skills. The fixture does not call it.
 It verifies that no private Pi Sync settings, sync state, or workspace content was created.
 It closes the child, drains its exit, closes the HTTP fixture, clears timers, and removes its temporary files on success and failure.
 Failure-injection runs replaced `spawn` through a temporary Node preload with an immediately exiting child and a missing executable.
 Both runs failed as expected and left no owned smoke directories behind.
 The operation deadline starts only after the RPC readiness handshake.
 
-The canned provider verifies transport and instruction loading, not whether a live model follows the skill or gives correct answers.
+The canned provider verifies catalog visibility and explicit instruction loading, not whether a live model selects the skill for a matching request or gives correct answers.
 The source-grounded review above is separate evidence and does not establish a model success rate.
 Native TUI `/reload` and masked credential input are not exercised by this non-interactive smoke; loader reload and real public command-context reload are exercised instead.
 Live provider behavior, production backend access, and operating systems other than the verification host remain unverified.

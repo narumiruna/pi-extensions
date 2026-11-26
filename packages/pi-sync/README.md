@@ -325,7 +325,9 @@ Read the [settings reference](./skills/configure-pi-sync/references/configuratio
 
 ## 🧠 Skills
 
-Run `/skill:configure-pi-sync` with the edit you want, the rule draft or audit you need, or the error you saw. For example, use `/skill:configure-pi-sync exclude npm/ from the ignore file for my home setup` or `/skill:configure-pi-sync draft a .syncignore without writing it`. The [configuration skill](./skills/configure-pi-sync/SKILL.md) loads only on request. It applies authorized edits to `pi-sync.json` through the running local daemon for routine preferences, or verifies the ignore file for a setup you name through the daemon before editing it. For an error, it checks the local cause before proposing a change.
+Pi can automatically load the [configuration skill](./skills/configure-pi-sync/SKILL.md) when you ask about Pi Sync settings, ignore rules, or local errors. For example, ask “How do I keep my cache folder off other devices with Pi Sync?” Use `/skill:configure-pi-sync` to load the skill explicitly.
+
+The skill applies authorized edits to `pi-sync.json` through the running local daemon for routine preferences, or verifies the ignore file for a setup you name through the daemon before editing it. Loading the skill does not authorize edits.
 
 Use `/sync` for initial setup, masked credential entry, and operations that require a separate review. The skill does not run backend diagnostics, check remote connectivity, or start transfers. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for manual configuration and troubleshooting.
 

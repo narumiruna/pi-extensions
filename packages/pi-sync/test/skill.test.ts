@@ -64,7 +64,7 @@ function configurationExample(): Record<string, unknown> {
   return example;
 }
 
-test("manifest publishes one manual-only skill without changing the extension entrypoint", () => {
+test("manifest publishes one model-invocable skill without changing the extension entrypoint", () => {
   assert.deepEqual(manifest.pi.extensions, ["./dist/index.ts"]);
   assert.deepEqual(manifest.pi.skills, ["./skills"]);
   assert.ok(manifest.files.includes("skills"));
@@ -73,12 +73,13 @@ test("manifest publishes one manual-only skill without changing the extension en
   assert.equal(loaded.skills.length, 1);
   assert.equal(loaded.skills[0]?.name, "configure-pi-sync");
   assert.equal(loaded.skills[0]?.baseDir, skillDirectory);
-  assert.equal(loaded.skills[0]?.disableModelInvocation, true);
-  assert.equal(formatSkillsForPrompt(loaded.skills), "");
+  assert.equal(loaded.skills[0]?.disableModelInvocation, false);
   for (const phrase of [
+    "Explain Pi Sync settings",
     "pi-sync.json",
     ".syncignore",
-    "Apply authorized local edits",
+    "apply authorized local edits",
+    "choose what Pi Sync includes",
     "troubleshoot Pi Sync errors",
     "Do not use to execute sync",
     "administer remote storage",
@@ -91,7 +92,7 @@ test("manifest publishes one manual-only skill without changing the extension en
 });
 
 for (const source of ["package", "root"] as const) {
-  test(`${source} package discovery and reload retain the explicit-only skill`, async () => {
+  test(`${source} package discovery and reload advertise the skill to the model`, async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "pi-sync-skill-loader-"));
     const previousHome = process.env.HOME;
     process.env.HOME = directory;
@@ -112,8 +113,11 @@ for (const source of ["package", "root"] as const) {
         assert.deepEqual(result.diagnostics, [], pass);
         const skills = result.skills.filter(({ name }) => name === "configure-pi-sync");
         assert.equal(skills.length, 1, pass);
-        assert.equal(skills[0]?.disableModelInvocation, true);
-        assert.equal(formatSkillsForPrompt(skills), "");
+        assert.equal(skills[0]?.disableModelInvocation, false);
+        const catalog = formatSkillsForPrompt(skills);
+        assert.match(catalog, /<name>configure-pi-sync<\/name>/u, pass);
+        assert.match(catalog, /<description>Explain Pi Sync settings/u, pass);
+        assert.doesNotMatch(catalog, /Make and verify a clear, authorized local edit/u, pass);
       }
       assert.deepEqual(readdirSync(directory), [], "resource discovery must not materialize user settings");
     } finally {
@@ -177,7 +181,8 @@ test("bundled links stay inside the skill and identify existing reference fragme
     }
   }
   assert.match(reference, /authoritative public settings reference/u);
-  assert.match(readme, /loads only on request/u);
+  assert.match(readme, /automatically load/u);
+  assert.match(readme, /Loading the skill does not authorize edits/u);
   assert.match(readme, /applies authorized edits to `pi-sync\.json` through the running local daemon/u);
   assert.match(readme, /\/skill:configure-pi-sync/u);
   assert.match(readme, /skills\/configure-pi-sync\/references\/configuration\.md/u);
