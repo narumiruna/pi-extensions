@@ -97,7 +97,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function configure(showStatus = true) {
+async function configure(showStatus = true, debug = false) {
   await writeFile(
     join(agentDir, "pi-sync.json"),
     JSON.stringify({
@@ -105,13 +105,14 @@ async function configure(showStatus = true) {
       activeSyncSetup: "offline",
       onSwitch: "ask-before-pull",
       showStatus,
+      debug,
       storageConnections: {
         offline: { type: "webdav", url: storage.url, credentials: { username: "test", password: "test" } },
       },
       syncSetups: {
         offline: {
           storage: { connection: "offline", path: showStatus ? "status-contract" : "status-contract-disabled" },
-          sync: { include: ["AGENTS.md"], automatic: false, agentMode: true, continuous: true },
+          sync: { include: ["AGENTS.md"], automatic: true },
         },
       },
     }),
@@ -187,7 +188,7 @@ function observe(bus: ReturnType<typeof createEventBus>) {
   return updates;
 }
 
-function nextActivity(bus: ReturnType<typeof createEventBus>, activity: string) {
+function nextActivity(bus: ReturnType<typeof createEventBus>, activity: string | undefined) {
   let unsubscribe = () => {};
   const promise = new Promise<Update>((resolve) => {
     unsubscribe = bus.on(UPDATE, (data) => {
@@ -214,7 +215,7 @@ const unusedLoaders = {
 };
 
 for (const order of ["sync-first", "statusline-first"] as const) {
-  test(`${order}: real factories share live activity and read-only snapshots without hiding raw standby`, async () => {
+  test(`${order}: real factories share startup activity, snapshots, and raw fallback`, async () => {
     await configure();
     const bus = createEventBus();
     const updates = observe(bus);
@@ -237,7 +238,7 @@ for (const order of ["sync-first", "statusline-first"] as const) {
         }),
       ]);
     };
-    const registerProducer = () => sync(producer.pi, { ...unusedLoaders, loadSyncInspection: unexpectedLoader });
+    const registerProducer = () => sync(producer.pi, unusedLoaders);
     if (order === "statusline-first") statusline(consumer.pi);
     registerProducer();
     if (order === "sync-first") statusline(consumer.pi);
@@ -257,7 +258,7 @@ for (const order of ["sync-first", "statusline-first"] as const) {
     host ??= mount(context);
     const consumerRequestId = requests.at(-1)?.requestId;
     assert.ok(consumerRequestId);
-    assert.equal(context.statuses.get("sync"), "sync checking");
+    assert.equal(context.statuses.get("sync"), "sync ...");
     assert.match(host.text(), /🔄 …/u);
 
     const requestId = {};
@@ -268,10 +269,10 @@ for (const order of ["sync-first", "statusline-first"] as const) {
     assert.equal(snapshot?.value, context.statuses.get("sync"));
     assert.equal(inspections, 1, "snapshots do not inspect storage or restart work");
 
-    const idle = nextActivity(bus, "idle");
+    const idle = nextActivity(bus, undefined);
     release.resolve();
     await idle;
-    assert.equal(context.statuses.get("sync"), "sync waiting for changes", "native/RPC raw text is retained");
+    assert.equal(context.statuses.get("sync"), undefined);
     assert.equal(host.text(), "");
 
     context.statuses.set("unrelated", "unrelated raw standby");
@@ -309,43 +310,61 @@ for (const order of ["sync-first", "statusline-first"] as const) {
   });
 }
 
-test("actual blocked publication retains its reason; Show sync status Off suppresses raw and metadata", async () => {
+test("a failed startup check respects Show sync status Off without hiding warnings", async () => {
   await configure();
   const bus = createEventBus();
   const updates = observe(bus);
   const producer = mockOn(bus);
   const consumer = mockOn(bus);
   storage.options.password = "invalid";
-  sync(producer.pi, { ...unusedLoaders, loadSyncInspection: unexpectedLoader });
+  sync(producer.pi, unusedLoaders);
   statusline(consumer.pi);
   const context = await makeContext();
   cleanup.push(() => emit(producer, "session_shutdown", context.ctx));
   cleanup.push(() => emit(consumer, "session_shutdown", context.ctx));
   await emit(consumer, "session_start", context.ctx);
   const host = mount(context);
-  const blocked = nextActivity(bus, "blocked");
+  const finished = deferred();
+  const activeCtx = context.ctx as ExtensionCommandContext;
+  const activeNotify = activeCtx.ui.notify.bind(activeCtx.ui);
+  activeCtx.ui.notify = (message, level) => {
+    activeNotify(message, level);
+    if (message.includes("startup check skipped")) finished.resolve();
+  };
+  const checked = nextActivity(bus, "checking");
   await emit(producer, "session_start", context.ctx);
-  const update = await blocked;
-  assert.equal(update.reason, "auth");
-  assert.equal(context.statuses.get("sync"), "sync blocked: authentication");
-  assert.match(host.text(), /🔄 ! auth/u);
+  await checked;
+  await finished.promise;
+  assert.ok(updates.some((update) => update.activity === "checking"));
+  assert.doesNotMatch(host.text(), /authentication/u);
 
   // The existing preference is read again on session start; no private settings API is used.
   await emit(producer, "session_shutdown", context.ctx);
-  await configure(false);
+  await configure(false, true);
   storage.options.password = "invalid";
   const blockedNotice = deferred();
+  const disabledCheckFinished = deferred();
+  const { appendEntry } = producer.rawPi;
+  producer.rawPi.appendEntry = (type, data) => {
+    appendEntry(type, data);
+    if (
+      type === "pi-sync-startup-timings" &&
+      (data as { report?: string }).report?.startsWith("pi-sync debug: background startup (stopped)\n")
+    )
+      disabledCheckFinished.resolve();
+  };
   const disabled = await makeContext();
   const disabledCtx = disabled.ctx as ExtensionCommandContext;
   const notify = disabledCtx.ui.notify.bind(disabledCtx.ui);
   disabledCtx.ui.notify = (message, level) => {
     notify(message, level);
-    if (message.includes("Continuous sync blocked")) blockedNotice.resolve();
+    if (message.includes("startup check skipped")) blockedNotice.resolve();
   };
   cleanup.push(() => emit(producer, "session_shutdown", disabled.ctx));
   const before = updates.length;
   await emit(producer, "session_start", disabled.ctx);
   await blockedNotice.promise;
+  await disabledCheckFinished.promise;
   assert.equal(disabled.statuses.get("sync"), undefined);
   assert.equal(
     updates.slice(before).some((entry) => entry.value !== undefined),
@@ -359,10 +378,10 @@ test("actual blocked publication retains its reason; Show sync status Off suppre
 
   await configure();
   storage.options.password = "invalid";
-  const reenabled = nextActivity(bus, "blocked");
+  const reenabled = nextActivity(bus, "checking");
   await emit(producer, "session_start", disabled.ctx);
   await reenabled;
-  assert.equal(disabled.statuses.get("sync"), "sync blocked: authentication");
+  assert.equal(disabled.statuses.get("sync"), "sync ...");
 });
 
 test("footer disposal, replacement, reload, and shutdown reject old-session metadata and snapshots", async () => {

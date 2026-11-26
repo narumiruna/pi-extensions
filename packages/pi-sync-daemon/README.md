@@ -12,7 +12,7 @@
 - One authenticated local owner per canonical agent directory, shared by multiple Pi clients.
 - Existing Git, WebDAV, S3, and Cloudflare R2 engine formats and recovery evidence.
 - Enforces optional per-file and per-directory limits on the selected bytes of new transfers, without changing snapshot formats.
-- Separate process lifetime, transfer permission, and isolated-model permission.
+- Separates service lifetime from transfer permission and retains reviewed revocation of legacy grants.
 - Explicit lifecycle control without an OS service, supervisor, database, or public TCP listener.
 
 ## 📦 Install
@@ -59,7 +59,7 @@ permission needs review. Connecting alone does not configure a backend or author
 
 `pi-sync-daemon <start|status|stop|restart|repair-upgrade|serve> --root <agent-directory>` uses an explicit root. `status`, `stop`, and `repair-upgrade` never launch a service. `start` upgrades older owners that support guarded upgrades, but defers while sync work is active. `restart` uses the same startup lock and exit checks and can replace a same-version owner. For older owners without guarded upgrades, run explicit `restart` only after sync work has finished. Replacement cannot downgrade a newer owner or bypass incompatible or unreachable ownership, retained unattended permission, or unresolved recovery. `serve` is the internal foreground launch target, not an OS registration command. Use `repair-upgrade` only for a blocked, pending upgrade. It verifies the old owner's exit, revokes all retained unattended grants for the root, and archives the recovery records.
 
-Pi starts the service only after configured interactive synchronization is needed or an explicit setup/command authorizes it. Closing Pi detaches that client; the daemon owns the shared lifetime decision. After no registered live client PID remains for that canonical root, a fixed 30-second grace period starts unless a valid after-exit grant keeps the service running. Explicit CLI `start` without clients follows the same rule. A client arriving before shutdown becomes final cancels automatic exit. `/new`, `/reload`, fork, and resume retain protection while their Pi process is alive. Use `/sync daemon` for status, reviewed old-process handover, and setup-bound unattended authorization.
+Pi starts the service only after configured interactive synchronization is needed or an explicit setup/command authorizes it. Closing Pi detaches that client; the daemon owns the shared lifetime decision. After no registered live client PID remains for that canonical root, a fixed 30-second grace period starts. Explicit CLI `start` without clients follows the same rule. A client arriving before shutdown becomes final cancels automatic exit. `/new`, `/reload`, fork, and resume retain protection while their Pi process is alive. Use `/sync daemon` for status, reviewed old-process handover, and revocation of legacy unattended grants.
 
 ## ⚙️ Settings
 
@@ -67,7 +67,7 @@ Pi starts the service only after configured interactive synchronization is neede
 
 Existing `pi-sync.json`, canonical `pi-sync/`, and legacy `.pisync/` remain in the selected agent directory. There is no second backend or credential configuration format. The daemon is the authoritative Pi Sync settings writer; stale reviews must reopen rather than overwrite a newer document. Settings version 7 and snapshot version 5 support [agent-directory scope](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#agent-directory-scope). Older clients must refuse these formats, and existing selected-path setups do not change scope automatically.
 
-Automatic, Autonomous, and Continuous defaults remain unchanged. Old permission for work while Pi is open does not permit work after the last client exits. `/sync daemon allow-after-exit` reviews that extra permission for the current setup and selected independently reproducible provider/model; `/sync daemon revoke-after-exit` revokes it. Setup changes invalidate the saved digest. Changes to an interactive client’s model, working directory, or session-directory binding revoke older unattended grants, including across restart. Print/JSON never launch a service; passive attachment to an existing service protects their sessions and pauses automatic work. Registered live PIDs keep the service alive, including passive, disconnected, publishing, and orderly retired clients. A valid explicit after-exit grant for the active setup keeps service lifetime under the existing fingerprint and binding rules; it does not expand transfer or model permission. Temporary provider or backend unavailability does not itself revoke that grant. Lifetime checks do not call a model, contact a provider or storage, or execute credential commands. There is no new setting, environment variable, or keep-alive flag.
+**Retired:** Autonomous sync, Continuous sync, and unattended sync no longer run. The daemon accepts but ignores existing `sync.agentMode` and `sync.continuous` booleans; it does not enable Startup transfer on their behalf. Retained after-exit grants still block replacement of an older owner until safely revoked. See the [daemon upgrade guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#ownership-and-upgrade). Print/JSON never launch a service. Registered live PIDs still keep it alive, including passive, disconnected, publishing, and orderly retired clients.
 
 ### Transfer size limits
 
@@ -77,9 +77,9 @@ Enabling either limit requires settings document version 9 for the whole agent d
 
 ### Debug mode
 
-The daemon reads the top-level `debug` boolean in `pi-sync.json` for its agent directory (`--root` in the CLI). It defaults to `false`. Use **/sync → Settings → Debug mode** in Pi or edit the settings file. The daemon applies the validated value at its next owner, job, or Continuous sync cycle boundary; no restart is needed.
+The daemon reads the top-level `debug` boolean in `pi-sync.json` for its agent directory (`--root` in the CLI). It defaults to `false`. Use **/sync → Settings → Debug mode** in Pi or edit the settings file. The daemon applies the validated value at its next owner or job boundary; no restart is needed.
 
-When enabled, the owner appends selected lifecycle, startup timing, job, and Continuous sync records to the private `<agent-directory>/pi-sync.log`. This includes already-authorized work after Pi exits but grants no new permission. Repeated successful unchanged polls do not add records. Filter the JSON lines by `source` to isolate `pi-sync-daemon` records from `pi-sync` client records.
+When enabled, the owner appends selected lifecycle, startup timing, and job records to the private `<agent-directory>/pi-sync.log`. Filter the JSON lines by `source` to isolate `pi-sync-daemon` records from `pi-sync` client records.
 
 The file is local-only. Records omit raw errors, credentials, addresses, paths, synced contents, and model data. Logging is best effort, not a recovery journal. Turning it off leaves existing records in place; retention is manual. See the [Pi Sync Debug mode reference](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#debug-mode) for cleanup and older snapshots.
 
@@ -87,11 +87,9 @@ The file is local-only. Records omit raw errors, credentials, addresses, paths, 
 
 IPC uses a private root-bound Unix socket on POSIX or a user/root-bound named pipe on Windows. Requests negotiate protocol, instance, root, and a private capability token. Do not share runtime identity files. The service has the same filesystem and network permissions as your user.
 
-Sync content, session conversations, storage credentials, and conflict evidence can be sensitive. Keep the existing secret scan, session inclusion review, exclusions, backups, and journals. A model receives isolated conflict evidence, not the parent conversation or tools. Parent-only provider registrations and runtime keys are not copied; unavailable capabilities preserve conflicts instead of selecting a fallback.
+Sync content, session conversations, storage credentials, and conflict evidence can be sensitive. Keep the secret scan, session inclusion review, exclusions, backups, and journals. The daemon does not send conflict evidence to a model.
 
 ## 🚧 Limitations
-
-Autonomous conflict resolution requires the host and daemon to agree on the full model definition and independent authentication source. If the daemon rejects a model, align the Pi host and daemon’s bundled catalogs or verify a model with the same definition and auth source on both. Matching IDs alone are not enough. This check does not affect ordinary sync without model resolution.
 
 A daemon does not lock every editor or shell command. Cooperating Pi clients reserve their actual public mutation queues; unregistered writers still require freshness checks and can cause safe refusal. Active sessions remain protected when contact is lost but their process is still alive. A heartbeat timeout is not proof of process exit.
 

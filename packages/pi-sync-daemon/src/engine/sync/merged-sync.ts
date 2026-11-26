@@ -170,7 +170,7 @@ export async function mergeSync(
   // Recovery above never publishes. This gate applies only to new autonomous transfers.
   if ((options.auto || config.agentMode) && backend.capability === "read-check-write-verify") {
     throw new Error(
-      "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Disable Autonomous sync and use manual sync.",
+      "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Use reviewed manual sync.",
     );
   }
   const textBudget = { remaining: TEXT_MERGE_WORK_LIMIT };

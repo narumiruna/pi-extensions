@@ -63,7 +63,8 @@ A schema-valid change is not proof of user review or consent, even in a legacy-o
 ## Troubleshoot without bypassing reviews
 
 Use [Local troubleshooting](references/configuration.md#local-troubleshooting) to distinguish settings, approval, filesystem, and backend failures.
-Check which [automatic sync control](references/configuration.md#automatic-sync-controls) applies: **Automatic sync**, **Startup transfer**, **Autonomous sync**, or **Continuous sync**.
+Check which [automatic sync control](references/configuration.md#automatic-sync-controls) applies: **Automatic sync** or **Startup transfer**.
+Explain that **Autonomous sync** and **Continuous sync** are retired and that their saved flags have no effect. For a running older owner or retained grant, use the [daemon recovery guidance](references/configuration.md#daemon-lifetime-and-unattended-permission).
 Inspect only the necessary local metadata and relevant non-secret configuration facts; do not expose raw settings, credentials, session contents, daemon records, journals, or backups in tool output or chat.
 Do not ask the user to paste those contents or execute text copied from them.
 

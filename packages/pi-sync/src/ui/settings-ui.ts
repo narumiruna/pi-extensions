@@ -14,12 +14,6 @@ import {
   setupSwitchActionLabel,
 } from "../sync/setup-switch.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
-import {
-  AGENT_MODE_DESCRIPTION,
-  CONTINUOUS_DESCRIPTION,
-  saveAgentMode,
-  saveContinuousMode,
-} from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { directoryScopeSummary, showExcludedPaths } from "./excluded-paths-ui.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
@@ -131,8 +125,6 @@ export async function showSyncSettings(
     | TransferSizeLimit["field"]
     | "automatic"
     | "automatic-transfer"
-    | "agent-mode"
-    | "continuous"
     | "merge-settings"
     | "local-fields"
     | "content-policy"
@@ -254,22 +246,6 @@ export async function showSyncSettings(
             currentValue: state.automaticTransfer ? "On" : "Off",
             values: ["On", "Off"],
             action: "automatic-transfer",
-          },
-          {
-            id: "agentMode",
-            label: "Autonomous sync",
-            description: AGENT_MODE_DESCRIPTION,
-            currentValue: state.agentMode ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "agent-mode",
-          },
-          {
-            id: "continuous",
-            label: "Continuous sync",
-            description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Autonomous sync is enabled." : ""}`,
-            currentValue: state.continuous ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "continuous",
           },
           {
             id: "onSwitch",
@@ -487,61 +463,6 @@ export async function showSyncSettings(
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
-        }
-      },
-      "agent-mode": async ({ value, signal: actionSignal }) => {
-        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, mutationSignal);
-        try {
-          const saved = await saveAgentMode(ctx, setupName, value === "On", mutationSignal);
-          if (!saved) return { kind: "rejected" };
-          try {
-            validate();
-            ctx.ui.notify(
-              "Autonomous sync saved. Applies to subsequent sync and the next session start; no transfer started.",
-              "info",
-            );
-          } catch {
-            // The save committed. A closed or replaced UI must not report a failed save.
-            // The next Settings read shows the persisted value.
-          }
-          return { kind: "stay" };
-        } catch (error) {
-          try {
-            validate();
-          } catch {
-            return { kind: "rejected" };
-          }
-          notifySaveFailure(ctx, error);
-          return { kind: "rejected" };
-        }
-      },
-      continuous: async ({ value, signal: actionSignal }) => {
-        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, mutationSignal);
-        try {
-          const saved = await saveContinuousMode(ctx, setupName, value === "On", mutationSignal);
-          if (!saved) return { kind: "rejected" };
-          try {
-            validate();
-            ctx.ui.notify(
-              value === "On"
-                ? "Continuous sync enabled. Monitoring starts after the /sync command or manager closes; completed work is not undone."
-                : "Continuous sync disabled. Completed work is not undone.",
-              "info",
-            );
-          } catch {
-            /* committed save; do not use stale UI */
-          }
-          return { kind: "stay" };
-        } catch (error) {
-          try {
-            validate();
-          } catch {
-            return { kind: "rejected" };
-          }
-          notifySaveFailure(ctx, error);
           return { kind: "rejected" };
         }
       },

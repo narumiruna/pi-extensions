@@ -145,6 +145,7 @@ test("root-bound local handshake rejects a second live daemon and authenticates 
       assert.deepEqual(await requestDaemon(server.paths, server.identity, "hello", {}), {
         version: 1,
         ignoreFilesRetired: true,
+        autonomousSyncRetired: true,
         buildVersion: DAEMON_BUILD_VERSION,
         ...(DAEMON_BUILD_ID && { buildId: DAEMON_BUILD_ID }),
         upgradeStop: 1,

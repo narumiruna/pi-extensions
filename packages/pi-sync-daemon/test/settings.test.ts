@@ -161,6 +161,34 @@ test("retired settings block activation, reads and CAS without changing either f
     assert.equal(await fs.readFile(rule, "utf8"), rules);
   }));
 
+test("legacy Autonomous and Continuous settings do not authorize work and are preserved by unrelated saves", () =>
+  fixture(async (root, connect) => {
+    const file = path.join(root, "pi-sync.json");
+    const original = {
+      ...template,
+      activeSyncSetup: "home",
+      storageConnections: { git: { type: "git", remote: "git@example.invalid:owner/sync.git" } },
+      syncSetups: {
+        home: {
+          storage: { connection: "git", branch: "sync", path: "./" },
+          sync: { include: ["AGENTS.md"], automatic: false, agentMode: true, continuous: true },
+        },
+      },
+    };
+    const bytes = `${JSON.stringify(original, null, 2)}\n`;
+    await fs.writeFile(file, bytes, { mode: 0o600 });
+    const client = await connect();
+    await assert.rejects(client.run("daemon.authorize", { fingerprint: "old", afterExit: true }), /retired/u);
+    await assert.rejects(client.run("sync", { args: [], agentRetryRefusal: true }), /no longer supported/u);
+    await client.run("daemon.handover", {});
+    await assert.rejects(client.run("startup-transfer", { args: [] }), /no longer authorized or idle/u);
+    assert.equal(await fs.readFile(file, "utf8"), bytes);
+    const source = (await client.run("settings.read", {})) as DocumentView;
+    const next = { ...original, debug: true };
+    await client.run("settings.cas", { expected: documentFingerprint(source), next });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), next);
+  }));
+
 test("repeated canonical saves round-trip exact bytes without temporary files", () =>
   fixture(async (root, connect) => {
     const client = await connect();

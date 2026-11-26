@@ -67,6 +67,7 @@ async function fixture(agentDir: string) {
   const events: string[] = [];
   const addresses = ["old", "new", "unexpected-third"].map((instance) => ({
     ignoreFilesRetired: true,
+    autonomousSyncRetired: true,
     paths: {
       root,
       directory: path.join(root, "runtime"),
@@ -305,12 +306,20 @@ test("a second closing attach exhausts the single retry without submitting the o
     }
   }));
 
-test("an otherwise compatible daemon cannot handle sync when it lacks the retired-policy guard", () =>
-  withClient(async (f) => {
-    transport.ensure.mockResolvedValueOnce({ ...f.addresses[0], ignoreFilesRetired: undefined });
-    await assert.rejects(f.client.run("initialize", {}), /\/skill:configure-pi-sync/u);
-    assert.equal(f.connections.length, 0);
-  }));
+for (const capability of ["ignoreFilesRetired", "autonomousSyncRetired"] as const) {
+  for (const buildVersion of ["0.13.3", "99.0.0"]) {
+    test(`a ${buildVersion} daemon without ${capability} only protects files`, () =>
+      withClient(async (f) => {
+        f.attachErrors.length = 0;
+        transport.ensure.mockResolvedValueOnce({ ...f.addresses[0], buildVersion, [capability]: undefined });
+        await assert.rejects(f.client.run("initialize", {}), /only protecting.*incompatible/u);
+        await assert.rejects(f.client.run("sync", {}), /only protecting/u);
+        assert.equal(f.connections.length, 1);
+        assert.equal(f.connections[0]?.run.mock.calls.length, 0);
+        assert.equal(f.connections[0]?.update.mock.calls.length, 0);
+      }));
+  }
+}
 
 test("a closing error from an already submitted operation is not retried or replayed", () =>
   withClient(async (f) => {

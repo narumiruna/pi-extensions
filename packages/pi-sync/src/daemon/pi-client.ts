@@ -49,8 +49,12 @@ import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
 
+const PROTECTION_ONLY_GUIDANCE =
+  "This session is only protecting its files on an incompatible Pi Sync daemon. Stop it safely, then use /reload with the matching build.";
+
 type DaemonAddress = Pick<Awaited<ReturnType<typeof ensureDaemon>>, "paths" | "identity" | "needsUpgrade"> & {
   ignoreFilesRetired?: boolean;
+  autonomousSyncRetired?: boolean;
   upgradeStop?: boolean;
 };
 
@@ -497,10 +501,7 @@ export class PiDaemonClient {
     validateStartup();
     if (!existing && this.blockedUpgrade?.error !== undefined) throw this.blockedUpgrade.error;
     if (this.connection) {
-      if (!existing && this.protectionOnly)
-        throw new Error(
-          "This session is only protecting its files on an older Pi Sync daemon. Use /reload to upgrade.",
-        );
+      if (!existing && this.protectionOnly) throw new Error(PROTECTION_ONLY_GUIDANCE);
       return this.connection;
     }
     this.connecting ??= (async () => {
@@ -525,11 +526,7 @@ export class PiDaemonClient {
           : await this.ensureWithSessionProtection(startupSignal, validateStartup);
         validateStartup();
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
-        if (!existing && !daemon.needsUpgrade && !daemon.ignoreFilesRetired)
-          throw new Error(
-            "The running daemon still supports retired ignore-file policies. Restart with the matching Pi Sync daemon, then /reload. See /skill:configure-pi-sync.",
-          );
-        const protectionOnly = daemon.needsUpgrade || !daemon.ignoreFilesRetired;
+        const protectionOnly = daemon.needsUpgrade || !daemon.ignoreFilesRetired || !daemon.autonomousSyncRetired;
         const connection = new DaemonConnection(daemon.paths, daemon.identity, this.facts(protectionOnly), {
           callback: (callback, signal) => this.callback(connection, callback, signal, protectionOnly),
           mergeReview:
@@ -626,8 +623,7 @@ export class PiDaemonClient {
     const connection = await this.connecting;
     validateStartup();
     if (!existing && this.blockedUpgrade?.error !== undefined) throw this.blockedUpgrade.error;
-    if (!existing && this.protectionOnly)
-      throw new Error("This session is only protecting its files on an older Pi Sync daemon. Use /reload to upgrade.");
+    if (!existing && this.protectionOnly) throw new Error(PROTECTION_ONLY_GUIDANCE);
     return connection;
   }
   private ownsContactUI() {
@@ -791,7 +787,7 @@ export class PiDaemonClient {
     this.assertNoDirectionalRecovery();
     const connection = this.connection;
     if (!connection) return;
-    if (this.protectionOnly) throw new Error("This session is only protecting its files on an older Pi Sync daemon.");
+    if (this.protectionOnly) throw new Error(PROTECTION_ONLY_GUIDANCE);
     await this.publishFacts(connection, signal);
     this.validateFactsScope(connection, signal);
     this.assertNoDirectionalRecovery();
@@ -884,6 +880,7 @@ export class PiDaemonClient {
       assertRoot();
       const attached = await this.attachConnection(replacement, signal);
       this.validateFactsScope(attached, signal);
+      if (this.protectionOnly) throw new Error(PROTECTION_ONLY_GUIDANCE);
       assertRoot();
       return attached;
     } finally {

@@ -26,7 +26,6 @@ const setupActions = [
   ["Check remote status", "status"],
   ["History", "history"],
   ["Diagnostics", "doctor"],
-  ["Retry refused model result…", "sync"],
   ["Review unresolved conflicts", "conflicts"],
   ["Settings", undefined],
 ] as const;
@@ -45,15 +44,6 @@ async function configured(run: (agentDir: string) => Promise<void>) {
 }
 
 async function exposeAction(label: string) {
-  if (label === "Retry refused model result…")
-    await updateLocalConfig((settings) => {
-      const setup = settings.syncSetups.home;
-      assert.ok(setup);
-      return {
-        ...settings,
-        syncSetups: { ...settings.syncSetups, home: { ...setup, sync: { ...setup.sync, agentMode: true } } },
-      };
-    });
   if (label === "Review unresolved conflicts")
     await writeStateForConfig(await loadConfig("home"), {
       version: 2,
@@ -131,7 +121,7 @@ for (const [label, route] of setupActions) {
   });
 }
 
-for (const change of ["agent-mode", "connection", "included-paths", "secret-scan"] as const) {
+for (const change of ["automatic-transfer", "connection", "included-paths", "secret-scan"] as const) {
   test(`manager refuses changed ${change} even when the active setup name is unchanged`, async () => {
     await configured(async () => {
       let selected = false;
@@ -161,7 +151,7 @@ for (const change of ["agent-mode", "connection", "included-paths", "secret-scan
                   ...setup,
                   sync: {
                     ...setup.sync,
-                    ...(change === "agent-mode" ? { agentMode: true } : { include: ["AGENTS.md"] }),
+                    ...(change === "automatic-transfer" ? { automaticTransfer: true } : { include: ["AGENTS.md"] }),
                   },
                 },
               },

@@ -1,6 +1,6 @@
 # Continuous sync verification
 
-This record describes implementation evidence and test scope. The [settings reference](../skills/configure-pi-sync/references/configuration.md#continuous-sync) owns current user-facing behavior, limits and recovery.
+This is a historical verification record. Continuous sync is retired; tests and commands below describe the original implementation and may no longer exist. See the [settings reference](../skills/configure-pi-sync/references/configuration.md#continuous-sync) for current recovery guidance.
 
 Later recovery classification, deadline propagation, confirmed-refusal retry, and read-only allowance/capacity diagnostics are documented in [Autonomous and Continuous sync recovery boundaries](agent-continuous-hardening.md). Historical verification below retains the former **Agent mode** name for Autonomous sync and the maturity labels used at that time; recorded results are unchanged.
 

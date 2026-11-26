@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { findDaemon } from "@narumitw/pi-sync-daemon";
+import { findDaemon, stopDaemon, waitForDaemonExit } from "@narumitw/pi-sync-daemon";
 import { createRpcFixture } from "./daemon-rpc-fixture.js";
 
 // Real packaged Pi/daemon smoke with loopback storage and no model prompts.
@@ -39,10 +39,10 @@ try {
   const settings = path.join(fixture.agent, "pi-sync.json");
   const target = path.join(fixture.agent, "pi-sync.log");
   const input = path.join(fixture.agent, "AGENTS.md");
-  async function preference(debug: boolean, enableContinuous = false) {
+  async function preference(debug: boolean, legacy = false) {
     const next = JSON.parse(await fs.readFile(settings, "utf8"));
     next.debug = debug;
-    if (enableContinuous) Object.assign(next.syncSetups.home.sync, { agentMode: true, continuous: true });
+    if (legacy) Object.assign(next.syncSetups.home.sync, { agentMode: true, continuous: true });
     const temporary = `${settings}.smoke`;
     await fs.writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
     await fs.rename(temporary, settings);
@@ -65,7 +65,8 @@ try {
   assert.ok(await first.call({ type: "get_commands" }));
   await first.command("/sync daemon handover", () => true);
   await first.command("/sync push --yes", () => true);
-  assert.ok(latest(), "the push seeds an accepted baseline");
+  const baseline = latest();
+  assert.ok(baseline, "the push seeds an accepted baseline");
   const owner = await findDaemon(fixture.agent);
   assert.ok(owner);
   await until("correlated client and daemon push", async () => {
@@ -91,9 +92,12 @@ try {
   await preference(true, true);
   const second = await fixture.connect();
   await second.start();
-  await second.command("/sync daemon allow-after-exit", () => true);
-  const grant = JSON.parse(await fs.readFile(path.join(fixture.agent, "pi-sync", "daemon.json"), "utf8"));
-  assert.equal(grant.setups.home.afterExit, true);
+  await second.command("/sync daemon allow-after-exit", () => {
+    throw new Error("A retired grant must not ask for approval.");
+  });
+  assert.ok(second.records.some((record) => String(record.message).includes("Continuous sync was retired")));
+  const consent = JSON.parse(await fs.readFile(path.join(fixture.agent, "pi-sync", "daemon.json"), "utf8"));
+  assert.deepEqual(consent.setups, {});
   assert.ok(
     second.records.some(
       (record) =>
@@ -103,20 +107,7 @@ try {
     ),
   );
   await second.close();
-  const baseline = latest();
-  assert.ok(baseline);
-  const initialCycles = (await records()).filter((record) => record.event === "continuous-cycle").length;
   await fs.writeFile(input, "after Pi disconnected\n");
-  await until("unattended publication and diagnostics", async () => {
-    const head = latest();
-    if (!head || head.equals(baseline)) return undefined;
-    const cycles = (await records()).filter((record) => record.event === "continuous-cycle");
-    return cycles.length > initialCycles &&
-      cycles.at(-1)?.pid === owner.identity.pid &&
-      cycles.at(-1)?.outcome === "completed"
-      ? true
-      : undefined;
-  });
   assert.equal((await findDaemon(fixture.agent))?.identity.instance, owner.identity.instance);
 
   await preference(false);
@@ -126,6 +117,10 @@ try {
   await third.command("/sync status", () => true);
   await third.close();
   assert.equal((await findDaemon(fixture.agent))?.identity.instance, owner.identity.instance);
+  assert.ok(await stopDaemon(fixture.agent));
+  await waitForDaemonExit(owner.identity, controller.signal);
+  assert.deepEqual(latest(), baseline);
+  assert.ok((await records()).every((record) => record.event !== "continuous-cycle"));
   assert.deepEqual(await fs.readFile(target), disabledBytes);
   assert.equal(fixture.requests.length, 0);
   assert.doesNotMatch(disabledBytes.toString(), /after Pi disconnected|owned-loopback-fixture|\/latest\.json/u);
@@ -134,7 +129,7 @@ try {
       result: "PASS",
       rpcFraming: true,
       correlatedRecords: true,
-      unattendedDiagnostics: true,
+      retiredGrantRejected: true,
       disabledSameDaemon: true,
       providerRequests: 0,
     }),

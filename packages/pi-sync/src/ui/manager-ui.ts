@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { type ActionMenuItem, defineMenu, type MenuDefinition, runDocumentReview, runMenu } from "@narumitw/pi-tui-kit";
+import { type ActionMenuItem, defineMenu, type MenuDefinition, runMenu } from "@narumitw/pi-tui-kit";
 import { loadConfig, loadSettingsConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
@@ -46,7 +46,6 @@ export async function showSyncManager(
   type Action =
     | "activate"
     | "review-attention"
-    | "retry-refusal"
     | "sync"
     | "switch"
     | "settings"
@@ -186,28 +185,6 @@ export async function showSyncManager(
         const disposition = await dispatchManagerResult(ctx, result, "sync", runRoute, sessionSignal);
         return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
       },
-      "retry-refusal": async ({ state, signal: actionSignal }) => {
-        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, signal);
-        validate();
-        const retryRoute: RunRoute = (route, operationSignal, onCommit, target, onDialog) =>
-          runRoute(route, operationSignal, onCommit, target, onDialog, true);
-        const result = await runCancellableOperation(ctx, "Checking cached refusal…", "sync", retryRoute, {
-          commitAware: true,
-          cancelAcrossDialogs: true,
-          signal,
-          target: state.manager.configReview?.setupName,
-          cancelledMessage: "Model retry cancelled. Submitted requests and committed writes cannot be undone.",
-        });
-        if (signal.aborted) return { kind: "close" };
-        validate();
-        if (result.kind === "decision-required" || result.kind === "remote-selection-required")
-          ctx.ui.notify(
-            "Model retry needs an established source and matching synced content. Use Sync now to review changed selection or recovery before retrying.",
-            "warning",
-          );
-        return { kind: result.kind === "closed" ? "close" : "stay" };
-      },
       switch: async () => {
         const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
         return result === "pull-attempted" || result === "closed" ? { kind: "close" } : { kind: "stay" };
@@ -257,30 +234,6 @@ export async function showSyncManager(
         const validate = captureMutationOwner(ctx, signal);
         const config = await loadConfig(state.manager.configReview?.setupName);
         validate();
-        if (config.continuous) {
-          const { continuousStatusLines } = await import("../sync/continuous-record.js");
-          validate();
-          const lines = await continuousStatusLines(config);
-          validate();
-          const review = await runDocumentReview(ctx, {
-            title: "Sync diagnostics",
-            lines: [`Setup: ${safeTerminalText(config.setupName)} · local observations only`],
-            content: lines.join("\n"),
-            confirmation: { label: "Continue to backend checks…" },
-            hint: "back",
-            signal,
-            isCurrent,
-          });
-          validate();
-          if (review.kind === "cancelled") return { kind: review.reason === "close" ? "close" : "stay" };
-          if (review.kind !== "confirmed") return { kind: "stay" };
-          const current = await loadConfig();
-          validate();
-          if (syncCheckConfigFingerprint(config) !== syncCheckConfigFingerprint(current)) {
-            ctx.ui.notify("Setup changed during diagnostics review; reopen Diagnostics.", "warning");
-            return { kind: "stay" };
-          }
-        }
         const confirmed = await ctx.ui.confirm(
           "Run diagnostics?",
           `Setup: ${safeTerminalText(config.setupName)}\nStorage: ${backendStorageDescription(config)}\nS3/R2 reads the latest pointer without writing. Git reads remote snapshots and checks its cache. WebDAV probes conditional writes and cleanup, and can repair a missing history entry. Possible-secret checks still run. This is not the read-only Check remote status action.`,
@@ -334,7 +287,6 @@ export async function showSyncManager(
   for (const action of [
     "review-attention",
     "sync",
-    "retry-refusal",
     "settings",
     "pull",
     "push",
@@ -423,7 +375,6 @@ function syncMainMenuItem(
 ): ActionMenuItem<
   "main",
   | "sync"
-  | "retry-refusal"
   | "pull"
   | "push"
   | "diff"
@@ -443,7 +394,6 @@ function syncMainMenuItem(
 > {
   const actions = {
     "Sync now": "sync",
-    "Retry refused model result…": "retry-refusal",
     "Pull from remote": "pull",
     "Push to remote": "push",
     "View differences": "diff",
@@ -470,7 +420,6 @@ function syncMainMenuItem(
     action,
     description: {
       sync: "Merge changes on both sides.",
-      "retry-refusal": "Retry model; may incur costs.",
       pull: "Remote → this device; replaces conflicting local files.",
       push: "This device → remote; replaces conflicting remote files.",
       diff: "Inspect changes; no transfer.",

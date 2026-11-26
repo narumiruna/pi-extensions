@@ -60,23 +60,15 @@ for (const agentMode of [false, true])
       const config = context.notifications.find((entry) => entry.message.startsWith("pi-sync config:"))?.message ?? "";
       const help = context.notifications.find((entry) => entry.message.startsWith("Usage:"))?.message ?? "";
       const detail = frames.find((frame) => frame.includes("Sync setup “home”")) ?? "";
-      const autonomous = agentMode ? "On (autonomous merged sync)" : "Off";
-      const continuous = agentMode
-        ? "On (recurring requests and transfers)"
-        : "Saved On; paused until Autonomous sync is enabled";
       for (const review of [detail, switchReview]) {
-        assert.ok(review.includes(`Autonomous sync: ${autonomous}`), review);
-        assert.ok(review.includes(`Continuous sync: ${continuous}`), review);
+        assert.match(review, /Automatic sync:/u);
+        assert.doesNotMatch(review, /Autonomous sync|Continuous sync/u);
       }
-      assert.equal(manager.title.includes("Auto-apply: On · AI requests may incur costs"), agentMode);
-      if (!agentMode) assert.match(manager.title, /Background sync: Paused · enable Autonomous sync/);
-      assert.doesNotMatch(manager.title, /Scheduler|Automatic requests|Accounting:/);
-      assert.match(config, new RegExp(`^autonomous sync: ${agentMode ? "On" : "Off"}$`, "m"));
+      assert.doesNotMatch(manager.title, /Auto-apply:|Background sync:|Scheduler|Automatic requests|Accounting:/u);
+      assert.ok(!manager.actions.includes("Retry refused model result…"));
+      assert.match(config, /Autonomous sync and Continuous sync are retired/u);
       assert.match(config, /^settings field merge: On$/m);
-      assert.ok(config.includes(`continuous sync: ${agentMode ? "On" : "paused; Autonomous sync is Off"}`));
-      assert.match(help, /Continuous sync is a separate default-Off opt-in in Settings\. It requires Autonomous sync/);
-      assert.match(help, /recurring network\/model costs/);
-      assert.match(help, /Safety blocks and durable automatic request limits remain/);
+      assert.match(help, /Use Sync now to review a transfer or enable Startup transfer/u);
       assert.doesNotMatch(
         [manager.title, config, help, detail, switchReview].join("\n"),
         /experimental|agent[ -]mode/i,

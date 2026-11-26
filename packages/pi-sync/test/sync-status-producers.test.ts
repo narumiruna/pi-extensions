@@ -1,14 +1,7 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import { ContinuousError } from "../src/sync/continuous-errors.js";
-import { acquireContinuousLease } from "../src/sync/continuous-lease.js";
-import { readContinuousRecord } from "../src/sync/continuous-record.js";
-import { continuousBinding, continuousRoot } from "../src/sync/continuous-storage.js";
-import { createContinuousSync } from "../src/sync/continuous-sync.js";
 import { createStartupCheck } from "../src/sync/startup-check.js";
 import { createSyncLoaders } from "../src/sync/sync-loaders.js";
 import { pull, push } from "../src/sync/sync-mutations.js";
@@ -16,8 +9,6 @@ import { diff, status } from "../src/sync/sync-queries.js";
 import { showRemoteSelectionReview } from "../src/ui/remote-selection-ui.js";
 import { createSyncAttentionController } from "../src/ui/sync-attention.js";
 import { createSyncStatusPublisher } from "../src/ui/sync-status.js";
-import { agentContext, selectRemote } from "./agent-test-helpers.js";
-import { ContinuousTestClock, continuousLoaders, enableContinuous, waitStatus } from "./continuous-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { createMergeFixture, mergeOptions } from "./merged-sync-fixture.js";
 import { deferred } from "./startup-check-helpers.js";
@@ -42,131 +33,6 @@ function monitor(ctx: ExtensionContext, statuses: ReadonlyMap<string, string | u
     },
   };
 }
-
-for (const [kind, activity, reason] of [
-  ["transient", "retry", "temp"],
-  ["contention", "retry", "busy"],
-  ["stale", "retry", "stale"],
-  ["authentication", "blocked", "auth"],
-  ["storage", "blocked", "storage"],
-  ["unsafe", "blocked", "review"],
-  ["model", "blocked", "model"],
-  ["budget", "retry", "limit"],
-  ["unknown", "blocked", "unknown"],
-] as const) {
-  test(`continuous ${kind} branch publishes ${activity}/${reason} without changing its durable category`, async () =>
-    withTempHome(async (agentDir) => {
-      const fixture = await createMergeFixture(agentDir);
-      const config = await enableContinuous();
-      const mock = agentContext(selectRemote);
-      const observed = monitor(mock.ctx, mock.statuses);
-      const service = createContinuousSync(
-        continuousLoaders(fixture.backend, {
-          loadSyncInspection: async () => ({
-            inspectSync: async () => {
-              throw new ContinuousError(kind, "private provider detail");
-            },
-          }),
-        }),
-        new ContinuousTestClock(),
-      );
-      try {
-        service.start(mock.ctx, new AbortController().signal);
-        await waitStatus(
-          mock.statuses,
-          new RegExp(activity === "retry" ? `retry scheduled: ${kind}` : `blocked: ${kind}`),
-        );
-        const latest = observed.updates.at(-1);
-        assert.equal(latest?.activity, activity);
-        assert.equal(latest?.reason, reason);
-        assert.equal(latest?.value, mock.statuses.get("sync"));
-        const durable = await readContinuousRecord(await continuousBinding(config));
-        assert.equal(durable.phase, activity);
-        assert.equal(durable.error, kind);
-        assert.equal(mock.requests.length, 0);
-        assert.equal(JSON.stringify(observed.updates).includes("private provider detail"), false);
-        observed.assertRawFirst();
-      } finally {
-        await service.stop();
-        assert.equal(observed.updates.at(-1)?.value, undefined);
-        observed.dispose();
-      }
-    }));
-}
-
-test("continuous checking, work, model resolution and normal standby use explicit activities", async () =>
-  withTempHome(async (agentDir) => {
-    const fixture = await createMergeFixture(agentDir);
-    await enableContinuous();
-    await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
-    await fixture.remoteEdit("AGENTS.md", "remote\n");
-    const mock = agentContext(selectRemote);
-    const observed = monitor(mock.ctx, mock.statuses);
-    const service = createContinuousSync(continuousLoaders(fixture.backend), new ContinuousTestClock());
-    try {
-      service.start(mock.ctx, new AbortController().signal);
-      await waitStatus(mock.statuses, /waiting for changes/u);
-      for (const [value, activity] of [
-        ["sync checking", "checking"],
-        ["sync syncing", "working"],
-        ["sync resolving", "resolving"],
-        ["sync waiting for changes", "idle"],
-      ])
-        assert.ok(observed.updates.some((update) => update.value === value && update.activity === activity));
-      assert.equal(mock.requests.length, 1);
-      observed.assertRawFirst();
-    } finally {
-      await service.stop();
-      observed.dispose();
-    }
-  }));
-
-test("another owner's lease publishes idle without changing the election predicate", async () =>
-  withTempHome(async (agentDir) => {
-    const fixture = await createMergeFixture(agentDir);
-    const config = await enableContinuous();
-    const lease = await acquireContinuousLease(await continuousBinding(config));
-    assert.ok(lease);
-    const mock = agentContext(selectRemote);
-    const observed = monitor(mock.ctx, mock.statuses);
-    const service = createContinuousSync(continuousLoaders(fixture.backend), new ContinuousTestClock());
-    try {
-      service.start(mock.ctx, new AbortController().signal);
-      await waitStatus(mock.statuses, /waiting: another local owner/u);
-      assert.equal(observed.updates.at(-1)?.activity, "idle");
-      assert.equal(observed.updates.at(-1)?.value, "sync waiting: another local owner");
-      assert.equal(mock.requests.length, 0);
-      lease.assert();
-    } finally {
-      await service.stop();
-      await lease.release();
-      observed.dispose();
-    }
-  }));
-
-test("private-state repair publishes blocked/repair without replacing invalid evidence", async () =>
-  withTempHome(async (agentDir) => {
-    const fixture = await createMergeFixture(agentDir);
-    const config = await enableContinuous();
-    const binding = await continuousBinding(config);
-    await fs.mkdir(continuousRoot(), { recursive: true, mode: 0o700 });
-    const file = path.join(continuousRoot(), `${binding}.json`);
-    await fs.writeFile(file, "{broken-private-evidence", { mode: 0o600 });
-    const mock = agentContext(selectRemote);
-    const observed = monitor(mock.ctx, mock.statuses);
-    const service = createContinuousSync(continuousLoaders(fixture.backend), new ContinuousTestClock());
-    try {
-      service.start(mock.ctx, new AbortController().signal);
-      await waitStatus(mock.statuses, /blocked: private state or settings need repair/u);
-      assert.equal(observed.updates.at(-1)?.activity, "blocked");
-      assert.equal(observed.updates.at(-1)?.reason, "repair");
-      assert.equal(await fs.readFile(file, "utf8"), "{broken-private-evidence");
-      assert.equal(mock.requests.length, 0);
-    } finally {
-      await service.stop();
-      observed.dispose();
-    }
-  }));
 
 for (const operation of ["push", "pull", "status", "diff", "remote-selection"] as const) {
   test(`${operation} producer preserves its readable status and supplies its activity`, async () =>

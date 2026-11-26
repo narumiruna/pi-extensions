@@ -7,7 +7,6 @@ import { beforeEach, describe, test, vi } from "vitest";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { configFromSettings } from "../src/settings/config.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
-import type { ContinuousRecord } from "../src/sync/continuous-record.js";
 import { createRpcFixture, type RpcFixture } from "./daemon-rpc-fixture.js";
 import type { SyncRpc } from "./daemon-rpc-helpers.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
@@ -150,7 +149,7 @@ for (const transition of [false, true])
     });
   });
 
-describe("Continuous retry", () => {
+describe("retired automation in real Pi RPC", () => {
   let client: SyncRpc;
   beforeEach(() =>
     owned.prepare(async () => {
@@ -166,39 +165,76 @@ describe("Continuous retry", () => {
     }),
   );
 
-  test("a real explicit sync resumes Continuous after repaired authentication without resetting accounting", async () => {
+  test("legacy flags leave storage and model idle until an explicit transfer and preserve manual review", async () => {
     const { agent, requests, storage } = owned;
-    const directory = path.join(agent, "pi-sync", "continuous");
-    const record = async () => {
-      const names = (await fs.readdir(directory)).filter((name) => /^[a-f0-9]{64}\.json$/u.test(name));
-      assert.equal(names.length, 1);
-      const name = names[0];
-      assert.ok(name);
-      return JSON.parse(await fs.readFile(path.join(directory, name), "utf8")) as ContinuousRecord;
-    };
-    const phase = async (stage: string, expected: ContinuousRecord["phase"], error?: string) =>
-      vi.waitFor(
-        async () => {
-          const current = await record();
-          assert.equal(current.phase, expected, `${stage}: ${JSON.stringify(current)}`);
-          assert.equal(current.error, error);
-        },
-        { timeout: 1_000, interval: 5 },
-      );
-    await client.command("/sync push --yes", () => false);
-    await phase("accepted baseline", "waiting");
-    storage.options.deny = true;
-    await client.command("/sync status", () => false);
-    await phase("backend failure", "blocked", "authentication");
-    const before = await record();
-    storage.options.deny = false;
-    await client.command("/sync sync", () => false);
-    await phase("explicit retry", "waiting");
-    const after = await record();
-    assert.deepEqual(after.calls, before.calls);
-    assert.deepEqual(after.attempts, before.attempts);
-    assert.equal(after.binding, before.binding);
+    const settingsFile = path.join(agent, "pi-sync.json");
+    const before = await fs.readFile(settingsFile, "utf8");
+    assert.equal(storage.requests.length, 0);
     assert.equal(requests.length, 0);
+    await client.command("/sync push --yes", () => false);
+    const file = path.join(agent, "AGENTS.md");
+    const local = "A local edit after the accepted baseline.\n";
+    await fs.writeFile(file, local);
+    const writes = () => storage.requests.filter(({ method }) => !["GET", "PROPFIND"].includes(method)).length;
+    const beforeReview = writes();
+    const confirmations: string[] = [];
+    const cancelReview = client.onRecord((record) => {
+      if (record.type !== "extension_ui_request" || record.method !== "select" || typeof record.id !== "string") return;
+      confirmations.push(String(record.title));
+      client.child.stdin?.write(
+        `${JSON.stringify({ type: "extension_ui_response", id: record.id, cancelled: true })}\n`,
+      );
+    });
+    try {
+      await client.command("/sync sync", (title) => {
+        confirmations.push(title);
+        return false;
+      });
+    } finally {
+      cancelReview();
+    }
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0] ?? "", /^Update 1 remote file\?/u);
+    assert.equal(writes(), beforeReview);
+    assert.equal(await fs.readFile(file, "utf8"), local);
+    assert.equal(await fs.readFile(settingsFile, "utf8"), before);
+    assert.equal(requests.length, 0);
+    await assert.rejects(fs.stat(path.join(agent, "pi-sync", "continuous")), { code: "ENOENT" });
+  });
+
+  test("an independently enabled Startup transfer still publishes with legacy flags present", async () => {
+    const { agent, requests } = owned;
+    await client.command("/sync push --yes", () => false);
+    await client.close();
+    const file = path.join(agent, "pi-sync.json");
+    const settings = JSON.parse(await fs.readFile(file, "utf8"));
+    const config = configFromSettings(validateSettingsDocument(settings));
+    assert.equal(config.backend.type, "webdav");
+    const backend = new WebDavSyncBackend(config.backend);
+    const initial = await backend.readHead();
+    assert.ok(initial);
+    settings.syncSetups.home.sync.automaticTransfer = true;
+    const raw = JSON.stringify(settings);
+    await fs.writeFile(file, raw);
+    const edited = "A new startup transfer.\n";
+    await fs.writeFile(path.join(agent, "AGENTS.md"), edited);
+    const next = await owned.connect();
+    await next.start();
+    const head = await vi.waitFor(
+      async () => {
+        const current = await backend.readHead();
+        assert.ok(current, "startup must leave a valid remote head");
+        assert.notEqual(current.snapshotRef, initial.snapshotRef);
+        return current;
+      },
+      { timeout: 1_000, interval: 10 },
+    );
+    const published = await backend.readSnapshot(head.snapshotRef);
+    const fileEntry = published.files.find((entry) => entry.path === "AGENTS.md");
+    assert.ok(fileEntry);
+    assert.equal(Buffer.from(fileEntry.contentBase64, "base64").toString("utf8"), edited);
+    assert.equal(requests.length, 0);
+    assert.equal(await fs.readFile(file, "utf8"), raw);
   });
 });
 

@@ -197,13 +197,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
         client.disableQueueReleaseUI();
         releaseStatus();
       }
-      if (
-        ready &&
-        !signal.aborted &&
-        owner === client &&
-        !(ready.continuous && ready.agentMode) &&
-        (ready.automatic || startupTransferEnabled(ready))
-      )
+      if (ready && !signal.aborted && owner === client && (ready.automatic || startupTransferEnabled(ready)))
         await withPiDaemonClient(ctx, async () => {
           check.start(
             ctx,

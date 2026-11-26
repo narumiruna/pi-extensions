@@ -126,8 +126,6 @@ const settingLabels = [
   "Manage storage connections",
   "Automatic sync",
   "Startup transfer",
-  "Autonomous sync",
-  "Continuous sync",
   "On setup switch",
   "Merge settings fields",
   "Content merge / partial progress",
@@ -161,11 +159,11 @@ test("content-policy cancellation retains the schema and saved policy", async ()
     assert.deepEqual(context.notifications, []);
   }));
 
-test("all four opt-in Settings descriptions omit maturity markers and retain policy warnings", async () =>
+test("Settings hides retired automation controls and retains merge policy warnings", async () =>
   withTempHome(async (root) => {
     mkdirSync(root, { recursive: true });
     const settings = v3S3Settings();
-    Object.assign(settings.syncSetups.home.sync, { continuous: true });
+    Object.assign(settings.syncSetups.home.sync, { agentMode: true, continuous: true });
     const before = JSON.stringify(settings);
     writeFileSync(localConfigPath(), before);
     const descriptions = new Map<string, string>();
@@ -184,7 +182,7 @@ test("all four opt-in Settings descriptions omit maturity markers and retain pol
             harness.handleInput("\u0015");
             harness.handleInput(`\u001b[200~${label}\u001b[201~`);
             descriptions.set(label, harness.render().join("\n").replace(/\s+/gu, " "));
-            if (label === "Autonomous sync")
+            if (label === "Merge settings fields")
               for (const width of [0, 1, 12, 24, 40, 48, 100]) narrow.push({ width, lines: harness.render(width) });
           }
           harness.handleInput("\u0003");
@@ -198,21 +196,8 @@ test("all four opt-in Settings descriptions omit maturity markers and retain pol
       throw new Error("Settings must not start a transfer");
     });
     assert.equal(descriptions.size, 4);
-    for (const [label, description] of descriptions) {
-      assert.ok(description.includes(label), description);
-      assert.doesNotMatch(description, /experimental|agent[ -]mode/i);
-    }
-    const autonomous = descriptions.get("Autonomous sync") ?? "";
-    assert.match(autonomous, /Autonomous sync\s+Off/);
-    assert.match(autonomous, /startup and on Sync now without transfer confirmation.*selected Pi model/);
-    assert.match(autonomous, /sent to its provider and incur costs/);
-    assert.match(autonomous, /replaced or deleted/);
-    assert.match(autonomous, /Unresolved conflicts pause unless partial sync permits independent progress/);
-    assert.match(autonomous, /Continuous sync is a separate opt-in\. No automatic reload/);
-    const continuous = descriptions.get("Continuous sync") ?? "";
-    assert.match(continuous, /Continuous sync\s+On/);
-    assert.match(continuous, /Requires Autonomous sync/);
-    assert.match(continuous, /Saved On, but paused until Autonomous sync is enabled/);
+    for (const label of ["Autonomous sync", "Continuous sync"])
+      assert.match(descriptions.get(label) ?? "", /No matching settings/u);
     const mergeSettings = descriptions.get("Merge settings fields") ?? "";
     assert.match(mergeSettings, /opt-in: merge independent global settings\.json root fields/);
     assert.match(mergeSettings, /Arrays and nested objects remain atomic/);
@@ -227,7 +212,7 @@ test("all four opt-in Settings descriptions omit maturity markers and retain pol
         lines.every((line) => visibleWidth(line) <= width),
         `${width}: ${lines.join("\n")}`,
       );
-    assert.ok(narrow.find((frame) => frame.width === 48)?.lines.some((line) => line.includes("Autonomous sync")));
+    assert.ok(narrow.find((frame) => frame.width === 48)?.lines.some((line) => line.includes("Merge settings fields")));
     assert.equal(readFileSync(localConfigPath(), "utf8"), before);
     assert.deepEqual(context.notifications, []);
   }));

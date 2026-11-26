@@ -9,8 +9,8 @@ import { localConfigPath } from "../src/settings/config-file.js";
 import { updateLocalConfig } from "../src/settings/settings-store.js";
 import { withStateDirectoryAccess } from "../src/state/state-directory.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
-import { withAgentSyncLock } from "../src/sync/agent-sync.js";
 import { readMergeJournal } from "../src/sync/merge-journal.js";
+import { isSyncDecisionRequiredError } from "../src/sync/sync-decision.js";
 import { pull, push, rollback, syncBoth } from "../src/sync/sync-mutations.js";
 import { RemoteSelectionMismatchError, selectionForSnapshot } from "../src/sync/sync-policy.js";
 import { agentContext, selectRemote } from "./agent-test-helpers.js";
@@ -280,54 +280,43 @@ for (const changedPolicy of [false, true])
       assert.equal(await fs.readFile(path.join(root, "skills/private/a.md"), "utf8"), "local-private");
     }));
 
-for (const stale of [false, true])
-  test(`model evidence omits excluded text and policy edits invalidate authorization: ${stale}`, async () =>
-    withTempHome(async (root) => {
-      const { ctx } = await prepare(root);
-      await updateLocalConfig((current) => {
-        const setup = current.syncSetups.home;
-        assert.ok(setup);
-        setup.sync.agentMode = true;
-        return current;
-      });
-      const privateText = "EXCLUDED-CONVERSATION-DO-NOT-SEND";
-      await fs.writeFile(path.join(root, "skills/private/a.md"), privateText);
-      const backend = new MemorySyncBackend();
-      await push(ctx, options, undefined, () => backend);
-      const head = await backend.readHead();
-      assert.ok(head);
-      const base = await backend.readSnapshot(head.snapshotRef);
-      await fs.writeFile(path.join(root, "skills/public.md"), "conflicting local text");
-      await backend.publishSnapshot(
-        {
-          ...base,
-          id: "model-remote",
-          files: snapshot([{ path: "skills/public.md", content: Buffer.from("conflicting remote text") }]).files,
-        },
-        { kind: "revision", revision: head.revision },
-      );
-      const remoteHead = await backend.readHead();
-      const mock = agentContext(async (units) => {
-        if (stale)
-          await updateLocalConfig((current) => {
-            const setup = current.syncSetups.home;
-            assert.ok(setup);
-            setup.sync.exclude = ["skills/private", "skills/public.md"];
-            return current;
-          });
-        return selectRemote(units);
-      });
-      const run = () =>
-        withStateDirectoryAccess(() =>
-          withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => backend)),
-        );
-      if (stale) {
-        await assert.rejects(run(), /changed|stale|resolver failed/i);
-        assert.ok((await loadConfig()).exclude?.includes("skills/public.md"));
-        assert.deepEqual(await backend.readHead(), remoteHead);
-        assert.equal(await fs.readFile(path.join(root, "skills/public.md"), "utf8"), "conflicting local text");
-      } else assert.equal(await run(), "applied");
-      assert.equal(mock.requests.length, 1);
-      assert.doesNotMatch(JSON.stringify(mock.requests), /EXCLUDED-CONVERSATION|skills\/private/);
-      assert.equal(await fs.readFile(path.join(root, "skills/private/a.md"), "utf8"), privateText);
-    }));
+test("legacy flags do not disclose excluded content or publish a conflict", async () =>
+  withTempHome(async (root) => {
+    const { ctx } = await prepare(root);
+    await updateLocalConfig((current) => {
+      const setup = current.syncSetups.home;
+      assert.ok(setup);
+      setup.sync.agentMode = true;
+      return current;
+    });
+    const privateText = "EXCLUDED-CONVERSATION-DO-NOT-SEND";
+    await fs.writeFile(path.join(root, "skills/private/a.md"), privateText);
+    const backend = new MemorySyncBackend();
+    await push(ctx, options, undefined, () => backend);
+    const head = await backend.readHead();
+    assert.ok(head);
+    const base = await backend.readSnapshot(head.snapshotRef);
+    assert.deepEqual(
+      base.files.map(({ path: name }) => name),
+      ["skills/public.md"],
+    );
+    await fs.writeFile(path.join(root, "skills/public.md"), "conflicting local text");
+    await backend.publishSnapshot(
+      {
+        ...base,
+        id: "model-remote",
+        files: snapshot([{ path: "skills/public.md", content: Buffer.from("conflicting remote text") }]).files,
+      },
+      { kind: "revision", revision: head.revision },
+    );
+    const remoteHead = await backend.readHead();
+    const mock = agentContext(selectRemote);
+    await assert.rejects(
+      withStateDirectoryAccess(() => syncBoth(mock.ctx, mergeOptions, () => backend)),
+      (error) => isSyncDecisionRequiredError(error) && error.decision.kind === "both-changed",
+    );
+    assert.deepEqual(await backend.readHead(), remoteHead);
+    assert.equal(await fs.readFile(path.join(root, "skills/public.md"), "utf8"), "conflicting local text");
+    assert.equal(mock.requests.length, 0);
+    assert.equal(await fs.readFile(path.join(root, "skills/private/a.md"), "utf8"), privateText);
+  }));

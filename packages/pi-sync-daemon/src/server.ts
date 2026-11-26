@@ -815,6 +815,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       return {
         version: PROTOCOL_VERSION,
         ignoreFilesRetired: true,
+        autonomousSyncRetired: true,
         buildVersion: DAEMON_BUILD_VERSION,
         ...(DAEMON_BUILD_ID && { buildId: DAEMON_BUILD_ID }),
         upgradeStop: 1,
