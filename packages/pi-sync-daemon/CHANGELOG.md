@@ -1,5 +1,13 @@
 # @narumitw/pi-sync-daemon
 
+## 0.13.3
+
+### Patch Changes
+
+- 5025148: Defer daemon replacement while a sync review, transfer, or cleanup is active, and protect the open session file on the existing daemon. Start the new daemon's readiness deadline after it signals that it is booting. Use the intended daemon CLI to restart idle older owners that do not support the new guard. `/sync daemon status` now reports the running build and upgrade blockers without launching or replacing a daemon.
+- 8e555ed: Open the missing automatic-transfer review directly from Pi Sync's refused-model retry. Keep approval of the enabled automatic modes separate from confirmation to send a fresh model request.
+- d10a00c: Report the verified Pi Sync daemon build after an update and compare the running and expected builds in daemon status. For a same-version local build, use the explicit daemon restart, which now shares the guarded upgrade path and refuses to downgrade a newer owner.
+
 ## 0.13.2
 
 ### Patch Changes
