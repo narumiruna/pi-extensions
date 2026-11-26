@@ -186,24 +186,13 @@ S3 and WebDAV encode an owned publication image while checking remote conditiona
 
 ## Package upgrades
 
-The authenticated `hello` response reports the daemon package version separately from the protocol
-version. The optional build ID hashes the ordered compiled engine files and is captured at module load.
-The embedded distribution copies that ID from the standalone build. It identifies, but does not order,
-engine code at the same version. During active startup, the client holds the existing
-startup lock, sends an authenticated `stop` to an older or unversioned owner, and waits for owner exit
-and identity release. A private exit record survives cancellation and timeout. It keeps the PID
-and, when available, a verified Linux process birth marker. For a marked owner, `ESRCH` confirms
-absence only in the recorded PID namespace. A PID-only record still requires `ESRCH`. Later callers
-use the record even if the old identity file is gone. Concurrent startup can wait for the drain
-under a bounded, cancellable lock wait. The client checks the root again before launching a replacement.
-It does not stop a newer build or start a replacement for an unreachable live owner. A retained unattended grant blocks
-implicit replacement because a legacy owner cannot report a failed revocation. The client reads
-consent under the state migration guard and releases it before sending stop. Passive attachment can
-protect live sessions without starting a replacement or submitting sync operations on the old build.
-An interactive session switch attempts the same protection-only attachment if the upgrade fails.
-The initiating Pi client reports the replacement after attaching to a verified new owner.
-Explicit CLI `restart` uses the same lock, consent checks, and drain, revalidates its target under the lock,
-and refuses to replace a newer owner. A same-version mismatch is diagnostic only until an explicit restart.
+Authenticated `hello` reports the daemon version separately from the wire version. The optional build ID hashes the ordered compiled engine files, is captured at module load, and identifies rather than orders builds of the same version. The bundled daemon copies the standalone build ID. Only an older compatible owner advertising `upgradeStop: 1` can be automatically stopped for an update. Explicit CLI `restart` can also replace a same-version owner, refuses a newer owner, and is the only replacement route that may send a generic `stop` to an authenticated legacy owner.
+
+The launcher serializes replacement under the canonical root startup lock. It verifies installed metadata and reads consent under the state migration guard, releasing that guard before IPC. The launcher publishes a private token-free exit record before stopping the owner. The guarded owner validates that record, the exact published identity, and its activity and consent again at the final admission boundary. It fences new submissions in the same turn it accepts the stop. Active work or review returns a confirmed deferral without changing ownership; uncertain consent or cleanup blocks replacement. Only a verified deferral tied to the same owner and record clears the record without verifying exit. A lost response or cancellation does not.
+
+Before starting a successor, verify that the recorded PID exited, that the old identity and lifetime lock were released, and that no retained after-exit grant exists. The record includes the PID and, where available, a verified Linux process birth marker. For a marked owner, `ESRCH` confirms absence only in the recorded PID namespace. A PID-only record still requires `ESRCH`. Concurrent callers can resume the same pending exit even if its socket or identity file is gone. They cannot start a replacement for an unreachable live owner. The launcher gives the child up to 60 seconds to confirm bootstrap and starts a separate 15-second readiness deadline only when the child reports it is booting. The child verifies the expected build before that report; the launcher checks the published identity and authenticated build after readiness. The initiating Pi reports success after attachment. Inspection can repair contact with an already attached owner but does not start a service.
+
+If the same guarded owner defers or blocks an upgrade, the Pi client can send `protect-session` to that authenticated owner. Under the same admission fence as attachment, the daemon records the live PID and session file as protection only. This does not change the active participant generation, request a queue grant, or authorize a job. Protection remains until the PID exits, including across daemon restart. A legacy owner does not support this request; Pi uses its existing protection-only attachment with no ready, UI, or model capability.
 
 For a blocked pending upgrade, `repair-upgrade` checks exit under the startup and owner locks.
 It revokes retained unattended grants under the state migration guard on all platforms. On
@@ -217,7 +206,7 @@ clear the barrier without manual repair.
 
 Acquire target queues in deterministic client-ID and canonical-target order. Each reservation has a job-bound ID and the peer's session generation. The client holds Pi's public queues until the daemon acknowledges completion with a `queue-release` callback. Release uses the reservation ID even if the grant response was lost. A cancelled UI callback does not release an acquired grant. If IPC disappears, hold the grant until explicit release or proof that its daemon process exited. A timeout is not such proof.
 
-Batch reservations cover the transaction, not only each rename. `Execution.withParticipants()` fences attach publication from the peer snapshot through every grant, nested write, and acknowledged release. Nested reservations share that fence instead of reacquiring it. An attach queued behind an apply cannot finish startup until the reservation ends; the next batch includes that client. Cancelled waiters cannot publish later, and shutdown drains admission. Attach has no idle request timeout: a legitimate long apply must not let startup escape the fence. Transport disconnection cancels queued admission, and the Pi adapter pauses or disposes its partial connection without waiting for attach to finish. Other local requests retain their timeout. Monitoring hooks run outside the fence because they can await a queued background reservation.
+Batch reservations cover the transaction, not only each rename. `Execution.withParticipants()` fences attach publication from the peer snapshot through every grant, nested write, and acknowledged release. Nested reservations share that fence instead of reacquiring it. An attach queued behind an apply cannot finish startup until the reservation ends; the next batch includes that client. Cancelled waiters cannot publish later, and shutdown drains admission. Attach and protection-only requests have no idle request timeout: a legitimate long apply must not let startup escape the fence. Transport disconnection cancels queued admission, and the Pi adapter pauses or disposes its partial connection without waiting for attach to finish. Other local requests retain their timeout. Monitoring hooks run outside the fence because they can await a queued background reservation.
 
 When Pi successfully releases a queue, `DaemonConnection` can resend the same
 `answer` after a transient local transport failure. It does not rerun the

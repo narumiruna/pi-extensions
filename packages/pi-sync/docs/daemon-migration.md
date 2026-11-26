@@ -18,17 +18,11 @@ If you installed the [standalone daemon package](https://www.npmjs.com/package/@
 
 The daemon remains a separate process. Pi uses one detached service per canonical agent directory and does not install an OS service. Updating the standalone package does not update the build bundled in Pi Sync. To get a newer bundled daemon, install a Pi Sync release that includes it.
 
-After an update, start Pi or use `/reload` in open sessions. On the next eligible interactive connection,
-the client checks the owner's daemon version, not the Pi Sync version, over authenticated IPC.
-It reuses a compatible owner on the same or a newer version. For an older or unversioned owner,
-the client checks for retained unattended permission, then requests a stop. A stop can cancel uncommitted work;
-it drains committed writes and queue releases. The replacement starts only after identity release and verified exit.
-Pi reports the running version after it attaches to the replacement. `/sync daemon status` shows both builds
-and reports a blocker even when it cannot connect. The replacement itself does not transfer data, replay a request,
-change settings, or grant consent. Existing authorized startup and Continuous sync retain their own rules. Passive print, JSON, and shutdown paths do not replace an older owner. If an upgrade fails
-while switching sessions, Pi Sync reports the failure and tries to attach the new session to the
-same owner for file protection only. That attachment cannot submit sync work. Use `/reload`
-after recovery.
+After an update, start Pi or use `/reload`. The next eligible interactive connection checks the daemon version, not the Pi Sync version. It reuses a compatible owner at the same or a newer version. An older owner that supports guarded upgrades refuses to stop while reviews, jobs, or queue releases are active. Finish the work and use `/reload` again if the update is deferred. If Continuous sync keeps the old owner busy, close the other Pi sessions on that root and try again. A retained after-exit grant on any setup blocks replacement.
+
+For an older or unversioned owner that does not support guarded upgrades, wait for all sync work to finish and close the Pi sessions that could submit more work. Run `restart --root <agent-directory>` using the [daemon CLI](#daemon-cli) from the intended build, then start Pi or use `/reload`. This is the one-time upgrade step for a legacy owner: it cannot check for new work before accepting a manual stop.
+
+The replacement starts only after the old owner releases its identity and lock and its exit is verified. Pi reports the new version after it attaches to the expected build. `/sync daemon status` shows both builds and any known blocker without starting or replacing the owner. Other open sessions retain their registered file protection and can `/reload` to attach to the new instance. If a guarded upgrade is deferred, Pi registers the open session file for protection without joining the old owner's sync work. On a legacy owner, Pi uses a protection-only connection; it cannot submit sync work. The restart does not transfer data, replay a request, change settings, or grant consent. Existing startup and Continuous sync retain their own authorization checks. Print, JSON, and shutdown paths do not replace an older owner.
 
 Manual recovery:
 

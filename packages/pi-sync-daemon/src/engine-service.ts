@@ -488,6 +488,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
       quiesce: monitor.pause,
       failure: monitor.blockAutomatic,
       foregroundRecoveryAllowed: monitor.foregroundRecoveryAllowed,
+      upgradeAllowed: () => !host.cleanupRequired() && monitor.foregroundRecoveryAllowed(),
     },
   };
 }

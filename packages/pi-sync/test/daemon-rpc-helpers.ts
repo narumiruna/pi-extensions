@@ -36,6 +36,7 @@ export class SyncRpc {
     extension: string,
     sessionDir?: string,
     private readonly signal?: AbortSignal,
+    sessionFile?: string,
   ) {
     signal?.throwIfAborted();
     let ready!: () => void;
@@ -62,6 +63,7 @@ export class SyncRpc {
         "--model",
         "fixture",
         ...(sessionDir ? ["--session-dir", sessionDir] : []),
+        ...(sessionFile ? ["--session", sessionFile] : []),
         "-e",
         extension,
       ],

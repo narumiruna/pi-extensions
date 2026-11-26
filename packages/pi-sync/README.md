@@ -48,7 +48,7 @@ Pi loads `dist/index.ts` from the package directory, so build Kit and complete t
 
 Extensions run with Pi's permissions, so install only packages from sources you trust.
 
-Update Pi Sync to get a newer bundled daemon. Updating the standalone package does not change this copy. Revoke retained unattended permission before updating, then start Pi or use `/reload`. The next eligible interactive connection replaces an older daemon and reports the running version after attaching. Use `/sync daemon status` to compare the running and expected builds. For same-version build differences, blocked upgrades, or uncertain exit, follow the [daemon upgrade guide](./docs/daemon-migration.md#ownership-and-upgrade).
+Update Pi Sync to get a newer bundled daemon; updating the standalone package does not change this copy. Revoke retained unattended permission before updating, then start Pi or use `/reload`. An older daemon that supports guarded upgrades is replaced only when no sync work is active. If the update is deferred, wait for the work to finish and use `/reload` again. Older builds without this check require a one-time [manual restart](./docs/daemon-migration.md#ownership-and-upgrade). `/sync daemon status` compares the running and expected builds without starting or replacing a daemon.
 
 Use a Pi runtime that satisfies this package’s declared peer floor. Installing an extension dependency does not upgrade a separately installed Pi runtime. The declared Kit floor supplies exact scrolling/paginated review and configured-keybinding support.
 

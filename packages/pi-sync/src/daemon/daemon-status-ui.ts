@@ -8,7 +8,7 @@ export async function showDaemonStatus(ctx: ExtensionContext, client: PiDaemonCl
   let attachedInstance: string | undefined;
   let connectionError: string | undefined;
   try {
-    attachedInstance = (await client.verifyConnection(signal)).identity.instance;
+    attachedInstance = (await client.verifyConnection(signal))?.identity.instance;
   } catch (error) {
     connectionError = safeTerminalText(errorMessage(error).slice(0, 1200));
   }
@@ -40,9 +40,14 @@ export async function showDaemonStatus(ctx: ExtensionContext, client: PiDaemonCl
   if (client.ownershipCleanupRequired) lines.push("Use /sync daemon recover to review and stop the daemon.");
   else if (recovery || status.running === null)
     lines.push("Check daemon CLI status and follow daemon recovery. Do not force a restart.");
-  else if (status.running && (status.buildComparison === "older" || status.buildComparison === "unversioned"))
-    lines.push("Daemon upgrade is required. Follow any blocker above, then use /reload.");
-  else if (status.running && status.buildComparison === "different")
+  else if (status.running && (status.buildComparison === "older" || status.buildComparison === "unversioned")) {
+    if (!blocked)
+      lines.push(
+        status.guardedUpgrade
+          ? "Daemon upgrade is required. Use /reload when sync work is idle."
+          : "This owner does not support guarded upgrades. When sync work is idle, use the intended daemon CLI restart, then /reload.",
+      );
+  } else if (status.running && status.buildComparison === "different")
     lines.push("Same version, different build. Use the intended build's daemon CLI restart, then /reload.");
   else if (status.running && status.buildComparison === "unverified")
     lines.push(

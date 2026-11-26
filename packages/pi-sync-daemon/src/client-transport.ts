@@ -55,7 +55,7 @@ export async function requestDaemon(
       },
     );
 
-    request.setTimeout(method === "attach" || method === "resume-contact" ? 0 : 30_000, () =>
+    request.setTimeout(["attach", "protect-session", "resume-contact"].includes(method) ? 0 : 30_000, () =>
       request.destroy(new Error("Daemon request timed out.")),
     );
     request.once("error", reject);
@@ -78,5 +78,10 @@ export async function hello(paths: RuntimePaths, identity: Identity, signal?: Ab
     throw new Error("Invalid daemon build version.");
   const buildId = value.buildId;
   if (buildId !== undefined && !isDaemonBuildId(buildId)) throw new Error("Invalid daemon build identifier.");
-  return { buildVersion, buildId, needsUpgrade: buildVersion === undefined || lt(buildVersion, DAEMON_BUILD_VERSION) };
+  return {
+    buildVersion,
+    buildId,
+    upgradeStop: value.upgradeStop === 1,
+    needsUpgrade: buildVersion === undefined || lt(buildVersion, DAEMON_BUILD_VERSION),
+  };
 }

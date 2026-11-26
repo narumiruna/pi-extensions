@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { lstat } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
 import { gt } from "semver";
-import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "./build-version.js";
+import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION, readInstalledDaemonBuild } from "./build-version.js";
 import { DaemonError, hello, requestDaemon } from "./client-transport.js";
 import {
   canonicalRootGuard,
@@ -23,7 +24,49 @@ import {
 } from "./identity.js";
 import { type Identity, OWNERSHIP_CLEANUP_REQUIRED, record } from "./protocol.js";
 
-export async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () => void, signal?: AbortSignal) {
+const upgradeBlockers = {
+  busy: "Daemon update deferred while sync work is active. Let it finish, then use /reload or retry the daemon CLI.",
+  repair:
+    "Daemon update blocked by uncertain consent or queue cleanup. Follow the daemon recovery guide before retrying.",
+  unattended: "Review or revoke unattended Pi Sync permission before stopping or replacing the daemon.",
+  legacy:
+    "This older daemon does not support guarded upgrades. Let sync work finish, run restart from the intended daemon CLI, then /reload.",
+};
+
+export class DaemonUpgradeBlockedError extends Error {
+  constructor(
+    readonly instance: string,
+    reason: keyof typeof upgradeBlockers,
+  ) {
+    super(upgradeBlockers[reason]);
+    this.name = "DaemonUpgradeBlockedError";
+  }
+}
+
+function matchesBuild(version?: string, id?: string) {
+  return version === DAEMON_BUILD_VERSION && id === DAEMON_BUILD_ID;
+}
+
+function assertInstalledBuild() {
+  const { version, id } = readInstalledDaemonBuild();
+  if (!matchesBuild(version, id))
+    throw new Error("The daemon installation changed. Reload the intended Pi Sync build before retrying.");
+}
+
+const sameIdentity = (left?: Identity, right?: Identity) =>
+  left?.instance === right?.instance && left?.pid === right?.pid && left?.token === right?.token;
+const sameBarrier = (left: UpgradeOwner | undefined, right: UpgradeOwner) =>
+  left?.instance === right.instance &&
+  left.pid === right.pid &&
+  left.birth === right.birth &&
+  left.purpose === right.purpose;
+
+export async function checkUpgradeConsent(
+  paths: RuntimePaths,
+  assertRoot: () => void,
+  signal?: AbortSignal,
+  instance?: string,
+) {
   const { readConsent } = await import("./consent.js");
   const { withStateDirectoryGuardForRoot } = await import("./engine/state/state-directory.js");
   signal?.throwIfAborted();
@@ -31,8 +74,10 @@ export async function checkUpgradeConsent(paths: RuntimePaths, assertRoot: () =>
     signal?.throwIfAborted();
     assertRoot();
     const consent = readConsent(paths.root);
-    if (consent && Object.values(consent.setups).some((setup) => setup.afterExit))
-      throw new Error("Review or revoke unattended Pi Sync permission before stopping or replacing the daemon.");
+    if (consent && Object.values(consent.setups).some((setup) => setup.afterExit)) {
+      if (instance) throw new DaemonUpgradeBlockedError(instance, "unattended");
+      throw new Error(upgradeBlockers.unattended);
+    }
   });
   signal?.throwIfAborted();
   assertRoot();
@@ -47,9 +92,17 @@ export async function finishUpgrade(
   await waitForProcessExit(owner, signal);
   const current = await readIdentity(paths);
   if (current?.instance === owner.instance) throw new Error("The daemon exited without releasing its identity.");
-  if (current && owner.purpose === "cleanup")
-    throw new Error("Daemon owner changed during recovery. Review the current owner before retrying.");
+  if (current) throw new Error("Daemon owner changed during recovery. Review the current owner before retrying.");
+  const ownerLock = await lstat(paths.owner).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (ownerLock) throw new Error("The daemon exited without releasing its owner lock. Follow daemon recovery.");
   await checkUpgradeConsent(paths, assertRoot, signal);
+  if (!sameBarrier(await readUpgradeOwner(paths), owner))
+    throw new Error("Daemon upgrade record changed; private state was retained.");
+  signal?.throwIfAborted();
+  assertRoot();
   await clearUpgradeOwner(paths);
   signal?.throwIfAborted();
   assertRoot();
@@ -58,24 +111,25 @@ export async function finishUpgrade(
 async function drainForUpgrade(
   paths: RuntimePaths,
   owner: Identity,
-  { recorded, birth }: { recorded?: UpgradeOwner; birth?: string },
+  { recorded, birth, guarded }: { recorded?: UpgradeOwner; birth?: string; guarded: boolean },
   assertRoot: () => void,
   signal?: AbortSignal,
 ) {
-  await checkUpgradeConsent(paths, assertRoot, signal);
+  await checkUpgradeConsent(paths, assertRoot, signal, owner.instance);
   const barrier = recorded ?? { ...owner, birth };
+  if (!sameIdentity(await readIdentity(paths), owner)) throw new Error("Daemon owner changed before stop.");
+  signal?.throwIfAborted();
+  assertRoot();
+  assertInstalledBuild();
+  if (!recorded) await recordUpgradeOwner(paths, barrier);
+  let reply: unknown;
   try {
-    if (!recorded) {
-      const current = await readIdentity(paths);
-      if (current?.instance !== owner.instance || current.pid !== owner.pid || current.token !== owner.token)
-        throw new Error("Daemon owner changed before stop.");
-      signal?.throwIfAborted();
-      assertRoot();
-      await recordUpgradeOwner(paths, barrier);
-    }
+    signal?.throwIfAborted();
     assertRoot();
-    const reply = await requestDaemon(paths, owner, "stop", {}, signal);
-    if (!record(reply) || reply.stopping !== true) throw new Error("Daemon did not acknowledge stop.");
+    assertInstalledBuild();
+    reply = await requestDaemon(paths, owner, guarded ? "upgrade-stop" : "stop", {}, signal);
+    if (!record(reply) || (reply.stopping !== true && (!guarded || !isDeferral(reply.deferred))))
+      throw new Error("Daemon did not acknowledge stop.");
   } catch (error) {
     signal?.throwIfAborted();
     throw new Error(
@@ -83,7 +137,21 @@ async function drainForUpgrade(
       { cause: error },
     );
   }
+  if (guarded && isDeferral(reply.deferred) && reply.stopping !== true) {
+    const current = await readIdentity(paths);
+    const pending = await readUpgradeOwner(paths);
+    signal?.throwIfAborted();
+    assertRoot();
+    if (!sameIdentity(current, owner) || !sameBarrier(pending, barrier))
+      throw new Error("Daemon owner or upgrade record changed; private state was retained.");
+    await clearUpgradeOwner(paths);
+    throw new DaemonUpgradeBlockedError(owner.instance, reply.deferred);
+  }
   await finishUpgrade(paths, barrier, assertRoot, signal);
+}
+
+function isDeferral(value: unknown): value is "busy" | "unattended" | "repair" {
+  return value === "busy" || value === "unattended" || value === "repair";
 }
 
 export async function acquireStartupLock(paths: RuntimePaths, signal?: AbortSignal) {
@@ -141,12 +209,7 @@ async function startDaemon(
         throw new Error("A daemon upgrade repair is incomplete. Run `pi-sync-daemon repair-upgrade` for this root.");
       const existing = await readIdentity(paths);
       if (verifyRestartTarget) {
-        const target = restartTarget?.identity;
-        if (
-          existing?.instance !== target?.instance ||
-          existing?.pid !== target?.pid ||
-          existing?.token !== target?.token
-        )
+        if (!sameIdentity(existing, restartTarget?.identity))
           throw new Error("Daemon owner changed while waiting to restart. Check status before retrying.");
         verifyRestartTarget = false;
       }
@@ -199,18 +262,34 @@ async function startDaemon(
         throw new Error("A compatible daemon could not be attached; an older owner was left unchanged.");
       if (upgraded)
         throw new Error("An older Pi Sync daemon started again. Close or upgrade other Pi sessions, then use /reload.");
+      if (!status.upgradeStop && !restart) throw new DaemonUpgradeBlockedError(existing.instance, "legacy");
       const birth = beforeHello === undefined ? undefined : await readProcessBirth(existing.pid);
-      if (birth !== undefined && birth !== beforeHello)
+      if (birth !== beforeHello || (upgrade?.birth !== undefined && (await processExited(upgrade))))
         throw new Error("The daemon process changed during authentication; private state was retained.");
-      await drainForUpgrade(paths, existing, { recorded: upgrade, birth }, assertRoot, signal);
+      await drainForUpgrade(
+        paths,
+        existing,
+        { recorded: upgrade, birth, guarded: status.upgradeStop },
+        assertRoot,
+        signal,
+      );
       upgraded = true;
     }
     signal?.throwIfAborted();
     assertRoot();
+    assertInstalledBuild();
     const executable = process.versions.bun ? "node" : process.execPath;
     const child = spawn(
       executable,
-      [fileURLToPath(new URL("./cli.js", import.meta.url)), "serve", "--root", paths.root],
+      [
+        fileURLToPath(new URL("./cli.js", import.meta.url)),
+        "serve",
+        "--root",
+        paths.root,
+        "--expect-build",
+        DAEMON_BUILD_VERSION,
+        DAEMON_BUILD_ID ?? "",
+      ],
       {
         detached: true,
         stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -218,13 +297,15 @@ async function startDaemon(
       },
     );
     const ready = await new Promise<Identity>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let booting = false;
+      let timer = setTimeout(() => failed(new Error("Daemon bootstrap timed out before the child handshake.")), 60_000);
+      timer.unref?.();
       const abort = () => {
         cleanup();
         reject(signal?.reason);
       };
       const cleanup = () => {
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
         child.off("message", message);
         child.off("error", failed);
@@ -238,15 +319,20 @@ async function startDaemon(
         failed(new Error(`Daemon startup exited (${code}); private state was retained.`));
       const message = (value: unknown) => {
         if (!record(value)) return;
-        if (value.type === "booting") {
+        if (value.type === "booting" && !booting) {
+          booting = true;
+          clearTimeout(timer);
           timer = setTimeout(() => failed(new Error("Daemon readiness timed out.")), 15_000);
           timer.unref?.();
         }
         if (value.type === "error")
           failed(new Error(typeof value.message === "string" ? value.message : "Daemon startup failed."));
-        if (value.type === "ready" && record(value.identity)) {
+        if (value.type === "ready") {
+          const candidate = value.identity;
+          if (!record(candidate) || candidate.pid !== child.pid || candidate.root !== paths.root)
+            return failed(new Error("Daemon readiness identity did not match the launched process."));
           cleanup();
-          resolve(value.identity as unknown as Identity);
+          resolve(candidate as unknown as Identity);
         }
       };
       signal?.addEventListener("abort", abort, { once: true });
@@ -255,13 +341,16 @@ async function startDaemon(
       child.once("exit", exited);
       if (signal?.aborted) abort();
     }).finally(() => {
+      if (!child.pid) child.once("error", () => {});
       if (child.connected) child.disconnect();
       child.unref();
     });
-    const status = await hello(paths, ready, signal);
+    const published = await readIdentity(paths);
+    if (!published || !sameIdentity(published, ready)) throw new Error("Ready daemon was not the published owner.");
+    const status = await hello(paths, published, signal);
     signal?.throwIfAborted();
     assertRoot();
-    if (status.buildVersion !== DAEMON_BUILD_VERSION || status.buildId !== DAEMON_BUILD_ID)
+    if (!matchesBuild(status.buildVersion, status.buildId))
       throw new Error("The daemon installation changed during startup. Use /reload to retry.");
     return { paths: daemonPaths(paths, ready.instance), identity: ready, ...status, replacedOwner: upgraded };
   } finally {
@@ -284,7 +373,8 @@ async function waitForProcessExit(owner: Parameters<typeof processExited>[0], si
   signal?.throwIfAborted();
 }
 
-export async function findDaemon(root: string) {
+export async function findDaemon(root: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   let paths: RuntimePaths;
   try {
     paths = await runtimePaths(root);
@@ -293,9 +383,10 @@ export async function findDaemon(root: string) {
     throw error;
   }
   const identity = await readIdentity(paths);
+  signal?.throwIfAborted();
   if (!identity || !processExists(identity.pid)) return undefined;
   try {
-    const status = await hello(paths, identity);
+    const status = await hello(paths, identity, signal);
     return { paths: daemonPaths(paths, identity.instance), identity, ...status };
   } catch (error) {
     if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return undefined;
